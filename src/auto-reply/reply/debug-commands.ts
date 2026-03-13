@@ -1,5 +1,4 @@
-import { parseSetUnsetCommand } from "./commands-setunset.js";
-import { parseSlashCommandOrNull } from "./commands-slash-parse.js";
+import { parseStandardSetUnsetSlashCommand } from "./commands-setunset-standard.js";
 
 export type DebugCommand =
   | { action: "show" }
@@ -9,36 +8,19 @@ export type DebugCommand =
   | { action: "error"; message: string };
 
 export function parseDebugCommand(raw: string): DebugCommand | null {
-  const parsed = parseSlashCommandOrNull(raw, "/debug", {
+  return parseStandardSetUnsetSlashCommand<DebugCommand>({
+    raw,
+    slash: "/debug",
     invalidMessage: "Invalid /debug syntax.",
-  });
-  if (!parsed) {
-    return null;
-  }
-  if (!parsed.ok) {
-    return { action: "error", message: parsed.message };
-  }
-  const { action, args } = parsed;
-
-  switch (action) {
-    case "show":
-      return { action: "show" };
-    case "reset":
-      return { action: "reset" };
-    case "unset":
-    case "set": {
-      const parsed = parseSetUnsetCommand({ slash: "/debug", action, args });
-      if (parsed.kind === "error") {
-        return { action: "error", message: parsed.message };
+    usageMessage: "Usage: /debug show|set|unset|reset",
+    onKnownAction: (action) => {
+      if (action === "show") {
+        return { action: "show" };
       }
-      return parsed.kind === "set"
-        ? { action: "set", path: parsed.path, value: parsed.value }
-        : { action: "unset", path: parsed.path };
-    }
-    default:
-      return {
-        action: "error",
-        message: "Usage: /debug show|set|unset|reset",
-      };
-  }
+      if (action === "reset") {
+        return { action: "reset" };
+      }
+      return undefined;
+    },
+  });
 }

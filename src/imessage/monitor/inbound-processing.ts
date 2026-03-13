@@ -20,12 +20,19 @@ import {
   resolveChannelGroupRequireMention,
 } from "../../config/group-policy.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
+import {
+  DM_GROUP_ACCESS_REASON,
+  resolveDmGroupAccessWithLists,
+} from "../../security/dm-policy-shared.js";
+import { sanitizeTerminalText } from "../../terminal/safe-text.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import {
   formatIMessageChatTarget,
   isAllowedIMessageSender,
   normalizeIMessageHandle,
 } from "../targets.js";
+import { detectReflectedContent } from "./reflection-guard.js";
+import type { SelfChatCache } from "./self-chat-cache.js";
 import type { MonitorIMessageOpts, IMessagePayload } from "./types.js";
 
 type IMessageReplyContext = {
@@ -95,7 +102,8 @@ export function resolveIMessageInboundDecision(params: {
   storeAllowFrom: string[];
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
-  echoCache?: { has: (scope: string, text: string) => boolean };
+  echoCache?: { has: (scope: string, lookup: { text?: string; messageId?: string }) => boolean };
+  selfChatCache?: SelfChatCache;
   logVerbose?: (msg: string) => void;
 }): IMessageInboundDecision {
   const senderRaw = params.message.sender ?? "";
@@ -104,13 +112,10 @@ export function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "missing sender" };
   }
   const senderNormalized = normalizeIMessageHandle(sender);
-  if (params.message.is_from_me) {
-    return { kind: "drop", reason: "from me" };
-  }
-
   const chatId = params.message.chat_id ?? undefined;
   const chatGuid = params.message.chat_guid ?? undefined;
   const chatIdentifier = params.message.chat_identifier ?? undefined;
+  const createdAt = params.message.created_at ? Date.parse(params.message.created_at) : undefined;
 
   const groupIdCandidate = chatId !== undefined ? String(chatId) : undefined;
   const groupListPolicy = groupIdCandidate
@@ -133,76 +138,77 @@ export function resolveIMessageInboundDecision(params: {
     groupIdCandidate && groupListPolicy.allowlistEnabled && groupListPolicy.groupConfig,
   );
   const isGroup = Boolean(params.message.is_group) || treatAsGroupByConfig;
+  const selfChatLookup = {
+    accountId: params.accountId,
+    isGroup,
+    chatId,
+    sender,
+    text: params.bodyText,
+    createdAt,
+  };
+  if (params.message.is_from_me) {
+    params.selfChatCache?.remember(selfChatLookup);
+    return { kind: "drop", reason: "from me" };
+  }
   if (isGroup && !chatId) {
     return { kind: "drop", reason: "group without chat_id" };
   }
 
   const groupId = isGroup ? groupIdCandidate : undefined;
-  const effectiveDmAllowFrom = Array.from(new Set([...params.allowFrom, ...params.storeAllowFrom]))
-    .map((v) => String(v).trim())
-    .filter(Boolean);
-  // Keep DM pairing-store authorization scoped to DMs; group access must come from explicit group allowlist config.
-  const effectiveGroupAllowFrom = Array.from(new Set(params.groupAllowFrom))
-    .map((v) => String(v).trim())
-    .filter(Boolean);
+  const accessDecision = resolveDmGroupAccessWithLists({
+    isGroup,
+    dmPolicy: params.dmPolicy,
+    groupPolicy: params.groupPolicy,
+    allowFrom: params.allowFrom,
+    groupAllowFrom: params.groupAllowFrom,
+    storeAllowFrom: params.storeAllowFrom,
+    groupAllowFromFallbackToAllowFrom: false,
+    isSenderAllowed: (allowFrom) =>
+      isAllowedIMessageSender({
+        allowFrom,
+        sender,
+        chatId,
+        chatGuid,
+        chatIdentifier,
+      }),
+  });
+  const effectiveDmAllowFrom = accessDecision.effectiveAllowFrom;
+  const effectiveGroupAllowFrom = accessDecision.effectiveGroupAllowFrom;
 
-  if (isGroup) {
-    if (params.groupPolicy === "disabled") {
-      params.logVerbose?.("Blocked iMessage group message (groupPolicy: disabled)");
-      return { kind: "drop", reason: "groupPolicy disabled" };
-    }
-    if (params.groupPolicy === "allowlist") {
-      if (effectiveGroupAllowFrom.length === 0) {
+  if (accessDecision.decision !== "allow") {
+    if (isGroup) {
+      if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED) {
+        params.logVerbose?.("Blocked iMessage group message (groupPolicy: disabled)");
+        return { kind: "drop", reason: "groupPolicy disabled" };
+      }
+      if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST) {
         params.logVerbose?.(
           "Blocked iMessage group message (groupPolicy: allowlist, no groupAllowFrom)",
         );
         return { kind: "drop", reason: "groupPolicy allowlist (empty groupAllowFrom)" };
       }
-      const allowed = isAllowedIMessageSender({
-        allowFrom: effectiveGroupAllowFrom,
-        sender,
-        chatId,
-        chatGuid,
-        chatIdentifier,
-      });
-      if (!allowed) {
+      if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED) {
         params.logVerbose?.(`Blocked iMessage sender ${sender} (not in groupAllowFrom)`);
         return { kind: "drop", reason: "not in groupAllowFrom" };
       }
+      params.logVerbose?.(`Blocked iMessage group message (${accessDecision.reason})`);
+      return { kind: "drop", reason: accessDecision.reason };
     }
-    if (groupListPolicy.allowlistEnabled && !groupListPolicy.allowed) {
-      params.logVerbose?.(
-        `imessage: skipping group message (${groupId ?? "unknown"}) not in allowlist`,
-      );
-      return { kind: "drop", reason: "group id not in allowlist" };
-    }
-  }
-
-  const dmHasWildcard = effectiveDmAllowFrom.includes("*");
-  const dmAuthorized =
-    params.dmPolicy === "open"
-      ? true
-      : dmHasWildcard ||
-        (effectiveDmAllowFrom.length > 0 &&
-          isAllowedIMessageSender({
-            allowFrom: effectiveDmAllowFrom,
-            sender,
-            chatId,
-            chatGuid,
-            chatIdentifier,
-          }));
-
-  if (!isGroup) {
-    if (params.dmPolicy === "disabled") {
+    if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.DM_POLICY_DISABLED) {
       return { kind: "drop", reason: "dmPolicy disabled" };
     }
-    if (!dmAuthorized) {
-      if (params.dmPolicy === "pairing") {
-        return { kind: "pairing", senderId: senderNormalized };
-      }
-      params.logVerbose?.(`Blocked iMessage sender ${sender} (dmPolicy=${params.dmPolicy})`);
-      return { kind: "drop", reason: "dmPolicy blocked" };
+    if (accessDecision.decision === "pairing") {
+      return { kind: "pairing", senderId: senderNormalized };
     }
+    params.logVerbose?.(`Blocked iMessage sender ${sender} (dmPolicy=${params.dmPolicy})`);
+    return { kind: "drop", reason: "dmPolicy blocked" };
+  }
+
+  if (isGroup && groupListPolicy.allowlistEnabled && !groupListPolicy.allowed) {
+    params.logVerbose?.(
+      `imessage: skipping group message (${groupId ?? "unknown"}) not in allowlist`,
+    );
+    return { kind: "drop", reason: "group id not in allowlist" };
   }
 
   const route = resolveAgentRoute({
@@ -221,23 +227,52 @@ export function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "empty body" };
   }
 
-  // Echo detection: check if the received message matches a recently sent message (within 5 seconds).
+  if (
+    params.selfChatCache?.has({
+      ...selfChatLookup,
+      text: bodyText,
+    })
+  ) {
+    const preview = sanitizeTerminalText(truncateUtf16Safe(bodyText, 50));
+    params.logVerbose?.(`imessage: dropping self-chat reflected duplicate: "${preview}"`);
+    return { kind: "drop", reason: "self-chat echo" };
+  }
+
+  // Echo detection: check if the received message matches a recently sent message.
   // Scope by conversation so same text in different chats is not conflated.
-  if (params.echoCache && messageText) {
+  const inboundMessageId = params.message.id != null ? String(params.message.id) : undefined;
+  if (params.echoCache && (messageText || inboundMessageId)) {
     const echoScope = buildIMessageEchoScope({
       accountId: params.accountId,
       isGroup,
       chatId,
       sender,
     });
-    if (params.echoCache.has(echoScope, messageText)) {
-      params.logVerbose?.(describeIMessageEchoDropLog({ messageText }));
+    if (
+      params.echoCache.has(echoScope, {
+        text: messageText || undefined,
+        messageId: inboundMessageId,
+      })
+    ) {
+      params.logVerbose?.(
+        describeIMessageEchoDropLog({ messageText, messageId: inboundMessageId }),
+      );
       return { kind: "drop", reason: "echo" };
     }
   }
 
+  // Reflection guard: drop inbound messages that contain assistant-internal
+  // metadata markers. These indicate outbound content was reflected back as
+  // inbound, which causes recursive echo amplification.
+  const reflection = detectReflectedContent(messageText);
+  if (reflection.isReflection) {
+    params.logVerbose?.(
+      `imessage: dropping reflected assistant content (markers: ${reflection.matchedLabels.join(", ")})`,
+    );
+    return { kind: "drop", reason: "reflected assistant content" };
+  }
+
   const replyContext = describeReplyContext(params.message);
-  const createdAt = params.message.created_at ? Date.parse(params.message.created_at) : undefined;
   const historyKey = isGroup
     ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
     : undefined;
@@ -254,10 +289,11 @@ export function resolveIMessageInboundDecision(params: {
   const canDetectMention = mentionRegexes.length > 0;
 
   const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
+  const commandDmAllowFrom = isGroup ? params.allowFrom : effectiveDmAllowFrom;
   const ownerAllowedForCommands =
-    effectiveDmAllowFrom.length > 0
+    commandDmAllowFrom.length > 0
       ? isAllowedIMessageSender({
-          allowFrom: effectiveDmAllowFrom,
+          allowFrom: commandDmAllowFrom,
           sender,
           chatId,
           chatGuid,
@@ -278,13 +314,13 @@ export function resolveIMessageInboundDecision(params: {
   const commandGate = resolveControlCommandGate({
     useAccessGroups,
     authorizers: [
-      { configured: effectiveDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
+      { configured: commandDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
       { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
     ],
     allowTextCommands: true,
     hasControlCommand: hasControlCommandInMessage,
   });
-  const commandAuthorized = isGroup ? commandGate.commandAuthorized : dmAuthorized;
+  const commandAuthorized = commandGate.commandAuthorized;
   if (isGroup && commandGate.shouldBlock) {
     if (params.logVerbose) {
       logInboundDrop({
@@ -478,6 +514,11 @@ export function buildIMessageEchoScope(params: {
   return `${params.accountId}:${params.isGroup ? formatIMessageChatTarget(params.chatId) : `imessage:${params.sender}`}`;
 }
 
-export function describeIMessageEchoDropLog(params: { messageText: string }): string {
-  return `imessage: skipping echo message (matches recently sent text within 5s): "${truncateUtf16Safe(params.messageText, 50)}"`;
+export function describeIMessageEchoDropLog(params: {
+  messageText: string;
+  messageId?: string;
+}): string {
+  const preview = truncateUtf16Safe(params.messageText, 50);
+  const messageIdPart = params.messageId ? ` id=${params.messageId}` : "";
+  return `imessage: skipping echo message${messageIdPart}: "${preview}"`;
 }

@@ -1,8 +1,13 @@
 import crypto from "node:crypto";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { stripMarkdown } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
+import { stripMarkdown } from "openclaw/plugin-sdk/bluebubbles";
 import { resolveBlueBubblesAccount } from "./accounts.js";
-import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import {
+  getCachedBlueBubblesPrivateApiStatus,
+  isBlueBubblesPrivateApiStatusEnabled,
+} from "./probe.js";
+import { warnBlueBubbles } from "./runtime.js";
+import { normalizeSecretInputString } from "./secret-input.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
 import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
 import {
@@ -69,6 +74,51 @@ function resolveEffectId(raw?: string): string | undefined {
     return EFFECT_MAP[compact];
   }
   return raw;
+}
+
+type PrivateApiDecision = {
+  canUsePrivateApi: boolean;
+  throwEffectDisabledError: boolean;
+  warningMessage?: string;
+};
+
+function resolvePrivateApiDecision(params: {
+  privateApiStatus: boolean | null;
+  wantsReplyThread: boolean;
+  wantsEffect: boolean;
+}): PrivateApiDecision {
+  const { privateApiStatus, wantsReplyThread, wantsEffect } = params;
+  const needsPrivateApi = wantsReplyThread || wantsEffect;
+  const canUsePrivateApi =
+    needsPrivateApi && isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
+  const throwEffectDisabledError = wantsEffect && privateApiStatus === false;
+  if (!needsPrivateApi || privateApiStatus !== null) {
+    return { canUsePrivateApi, throwEffectDisabledError };
+  }
+  const requested = [
+    wantsReplyThread ? "reply threading" : null,
+    wantsEffect ? "message effects" : null,
+  ]
+    .filter(Boolean)
+    .join(" + ");
+  return {
+    canUsePrivateApi,
+    throwEffectDisabledError,
+    warningMessage: `Private API status unknown; sending without ${requested}. Run a status probe to restore private-api features.`,
+  };
+}
+
+async function parseBlueBubblesMessageResponse(res: Response): Promise<BlueBubblesSendResult> {
+  const body = await res.text();
+  if (!body) {
+    return { messageId: "ok" };
+  }
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    return { messageId: extractBlueBubblesMessageId(parsed) };
+  } catch {
+    return { messageId: "ok" };
+  }
 }
 
 type BlueBubblesChatRecord = Record<string, unknown>;
@@ -305,16 +355,7 @@ async function createNewChatWithMessage(params: {
     }
     throw new Error(`BlueBubbles create chat failed (${res.status}): ${errorText || "unknown"}`);
   }
-  const body = await res.text();
-  if (!body) {
-    return { messageId: "ok" };
-  }
-  try {
-    const parsed = JSON.parse(body) as unknown;
-    return { messageId: extractBlueBubblesMessageId(parsed) };
-  } catch {
-    return { messageId: "ok" };
-  }
+  return parseBlueBubblesMessageResponse(res);
 }
 
 export async function sendMessageBlueBubbles(
@@ -336,8 +377,12 @@ export async function sendMessageBlueBubbles(
     cfg: opts.cfg ?? {},
     accountId: opts.accountId,
   });
-  const baseUrl = opts.serverUrl?.trim() || account.config.serverUrl?.trim();
-  const password = opts.password?.trim() || account.config.password?.trim();
+  const baseUrl =
+    normalizeSecretInputString(opts.serverUrl) ||
+    normalizeSecretInputString(account.config.serverUrl);
+  const password =
+    normalizeSecretInputString(opts.password) ||
+    normalizeSecretInputString(account.config.password);
   if (!baseUrl) {
     throw new Error("BlueBubbles serverUrl is required");
   }
@@ -372,30 +417,36 @@ export async function sendMessageBlueBubbles(
   const effectId = resolveEffectId(opts.effectId);
   const wantsReplyThread = Boolean(opts.replyToMessageGuid?.trim());
   const wantsEffect = Boolean(effectId);
-  const needsPrivateApi = wantsReplyThread || wantsEffect;
-  const canUsePrivateApi = needsPrivateApi && privateApiStatus !== false;
-  if (wantsEffect && privateApiStatus === false) {
+  const privateApiDecision = resolvePrivateApiDecision({
+    privateApiStatus,
+    wantsReplyThread,
+    wantsEffect,
+  });
+  if (privateApiDecision.throwEffectDisabledError) {
     throw new Error(
       "BlueBubbles send failed: reply/effect requires Private API, but it is disabled on the BlueBubbles server.",
     );
+  }
+  if (privateApiDecision.warningMessage) {
+    warnBlueBubbles(privateApiDecision.warningMessage);
   }
   const payload: Record<string, unknown> = {
     chatGuid,
     tempGuid: crypto.randomUUID(),
     message: strippedText,
   };
-  if (canUsePrivateApi) {
+  if (privateApiDecision.canUsePrivateApi) {
     payload.method = "private-api";
   }
 
   // Add reply threading support
-  if (wantsReplyThread && canUsePrivateApi) {
+  if (wantsReplyThread && privateApiDecision.canUsePrivateApi) {
     payload.selectedMessageGuid = opts.replyToMessageGuid;
     payload.partIndex = typeof opts.replyToPartIndex === "number" ? opts.replyToPartIndex : 0;
   }
 
   // Add message effects support
-  if (effectId) {
+  if (effectId && privateApiDecision.canUsePrivateApi) {
     payload.effectId = effectId;
   }
 
@@ -417,14 +468,5 @@ export async function sendMessageBlueBubbles(
     const errorText = await res.text();
     throw new Error(`BlueBubbles send failed (${res.status}): ${errorText || "unknown"}`);
   }
-  const body = await res.text();
-  if (!body) {
-    return { messageId: "ok" };
-  }
-  try {
-    const parsed = JSON.parse(body) as unknown;
-    return { messageId: extractBlueBubblesMessageId(parsed) };
-  } catch {
-    return { messageId: "ok" };
-  }
+  return parseBlueBubblesMessageResponse(res);
 }

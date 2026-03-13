@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Component, TUI } from "@mariozechner/pi-tui";
+import type { Component, SelectItem, TUI } from "@mariozechner/pi-tui";
 import {
   formatThinkingLevels,
   normalizeUsageDisplay,
@@ -16,6 +16,7 @@ import {
   createSettingsList,
 } from "./components/selectors.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
+import { sanitizeRenderableText } from "./tui-formatters.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
   AgentSummary,
@@ -43,6 +44,7 @@ type CommandHandlerContext = {
   applySessionInfoFromPatch: (result: SessionsPatchResult) => void;
   noteLocalRunId: (runId: string) => void;
   forgetLocalRunId?: (runId: string) => void;
+  requestExit: () => void;
 };
 
 export function createCommandHandlers(context: CommandHandlerContext) {
@@ -65,11 +67,35 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     applySessionInfoFromPatch,
     noteLocalRunId,
     forgetLocalRunId,
+    requestExit,
   } = context;
 
   const setAgent = async (id: string) => {
     state.currentAgentId = normalizeAgentId(id);
     await setSession("");
+  };
+
+  const closeOverlayAndRender = () => {
+    closeOverlay();
+    tui.requestRender();
+  };
+
+  const openSelector = (
+    selector: {
+      onSelect?: (item: SelectItem) => void;
+      onCancel?: () => void;
+    },
+    onSelect: (value: string) => Promise<void>,
+  ) => {
+    selector.onSelect = (item) => {
+      void (async () => {
+        await onSelect(item.value);
+        closeOverlayAndRender();
+      })();
+    };
+    selector.onCancel = closeOverlayAndRender;
+    openOverlay(selector as Component);
+    tui.requestRender();
   };
 
   const openModelSelector = async () => {
@@ -86,29 +112,19 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         description: model.name && model.name !== model.id ? model.name : "",
       }));
       const selector = createSearchableSelectList(items, 9);
-      selector.onSelect = (item) => {
-        void (async () => {
-          try {
-            const result = await client.patchSession({
-              key: state.currentSessionKey,
-              model: item.value,
-            });
-            chatLog.addSystem(`model set to ${item.value}`);
-            applySessionInfoFromPatch(result);
-            await refreshSessionInfo();
-          } catch (err) {
-            chatLog.addSystem(`model set failed: ${String(err)}`);
-          }
-          closeOverlay();
-          tui.requestRender();
-        })();
-      };
-      selector.onCancel = () => {
-        closeOverlay();
-        tui.requestRender();
-      };
-      openOverlay(selector);
-      tui.requestRender();
+      openSelector(selector, async (value) => {
+        try {
+          const result = await client.patchSession({
+            key: state.currentSessionKey,
+            model: value,
+          });
+          chatLog.addSystem(`model set to ${value}`);
+          applySessionInfoFromPatch(result);
+          await refreshSessionInfo();
+        } catch (err) {
+          chatLog.addSystem(`model set failed: ${String(err)}`);
+        }
+      });
     } catch (err) {
       chatLog.addSystem(`model list failed: ${String(err)}`);
       tui.requestRender();
@@ -128,19 +144,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       description: agent.id === state.agentDefaultId ? "default" : "",
     }));
     const selector = createSearchableSelectList(items, 9);
-    selector.onSelect = (item) => {
-      void (async () => {
-        closeOverlay();
-        await setAgent(item.value);
-        tui.requestRender();
-      })();
-    };
-    selector.onCancel = () => {
-      closeOverlay();
-      tui.requestRender();
-    };
-    openOverlay(selector);
-    tui.requestRender();
+    openSelector(selector, async (value) => {
+      await setAgent(value);
+    });
   };
 
   const openSessionSelector = async () => {
@@ -181,19 +187,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         };
       });
       const selector = createFilterableSelectList(items, 9);
-      selector.onSelect = (item) => {
-        void (async () => {
-          closeOverlay();
-          await setSession(item.value);
-          tui.requestRender();
-        })();
-      };
-      selector.onCancel = () => {
-        closeOverlay();
-        tui.requestRender();
-      };
-      openOverlay(selector);
-      tui.requestRender();
+      openSelector(selector, async (value) => {
+        await setSession(value);
+      });
     } catch (err) {
       chatLog.addSystem(`sessions list failed: ${String(err)}`);
       tui.requestRender();
@@ -349,6 +345,27 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem(`verbose failed: ${String(err)}`);
         }
         break;
+      case "fast":
+        if (!args || args === "status") {
+          chatLog.addSystem(`fast mode: ${state.sessionInfo.fastMode ? "on" : "off"}`);
+          break;
+        }
+        if (args !== "on" && args !== "off") {
+          chatLog.addSystem("usage: /fast <status|on|off>");
+          break;
+        }
+        try {
+          const result = await client.patchSession({
+            key: state.currentSessionKey,
+            fastMode: args === "on",
+          });
+          chatLog.addSystem(`fast mode ${args === "on" ? "enabled" : "disabled"}`);
+          applySessionInfoFromPatch(result);
+          await refreshSessionInfo();
+        } catch (err) {
+          chatLog.addSystem(`fast failed: ${String(err)}`);
+        }
+        break;
       case "reasoning":
         if (!args) {
           chatLog.addSystem("usage: /reasoning <on|off>");
@@ -428,6 +445,23 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         break;
       case "new":
+        try {
+          // Clear token counts immediately to avoid stale display (#1523)
+          state.sessionInfo.inputTokens = null;
+          state.sessionInfo.outputTokens = null;
+          state.sessionInfo.totalTokens = null;
+          tui.requestRender();
+
+          // Generate unique session key to isolate this TUI client (#39217)
+          // This ensures /new creates a fresh session that doesn't broadcast
+          // to other connected TUI clients sharing the original session key.
+          const uniqueKey = `tui-${randomUUID()}`;
+          await setSession(uniqueKey);
+          chatLog.addSystem(`new session: ${uniqueKey}`);
+        } catch (err) {
+          chatLog.addSystem(`new session failed: ${sanitizeRenderableText(String(err))}`);
+        }
+        break;
       case "reset":
         try {
           // Clear token counts immediately to avoid stale display (#1523)
@@ -440,7 +474,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem(`session ${state.currentSessionKey} reset`);
           await loadHistory();
         } catch (err) {
-          chatLog.addSystem(`reset failed: ${String(err)}`);
+          chatLog.addSystem(`reset failed: ${sanitizeRenderableText(String(err))}`);
         }
         break;
       case "abort":
@@ -451,9 +485,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "exit":
       case "quit":
-        client.stop();
-        tui.stop();
-        process.exit(0);
+        requestExit();
         break;
       default:
         await sendMessage(raw);
@@ -463,6 +495,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   };
 
   const sendMessage = async (text: string) => {
+    if (!state.isConnected) {
+      chatLog.addSystem("not connected to gateway — message not sent");
+      setActivityStatus("disconnected");
+      tui.requestRender();
+      return;
+    }
     try {
       chatLog.addUser(text);
       tui.requestRender();
@@ -470,6 +508,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       noteLocalRunId(runId);
       state.activeChatRunId = runId;
       setActivityStatus("sending");
+      tui.requestRender();
       await client.sendChat({
         sessionKey: state.currentSessionKey,
         message: text,
@@ -479,6 +518,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         runId,
       });
       setActivityStatus("waiting");
+      tui.requestRender();
     } catch (err) {
       if (state.activeChatRunId) {
         forgetLocalRunId?.(state.activeChatRunId);
@@ -486,8 +526,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       state.activeChatRunId = null;
       chatLog.addSystem(`send failed: ${String(err)}`);
       setActivityStatus("error");
+      tui.requestRender();
     }
-    tui.requestRender();
   };
 
   return {

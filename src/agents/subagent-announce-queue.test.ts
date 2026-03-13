@@ -27,6 +27,7 @@ function createRetryingSend() {
 
 describe("subagent-announce-queue", () => {
   afterEach(() => {
+    vi.useRealTimers();
     resetAnnounceQueuesForTests();
   });
 
@@ -115,5 +116,53 @@ describe("subagent-announce-queue", () => {
     expect(sender.prompts[1]).toContain("queued item one");
     expect(sender.prompts[1]).toContain("Queued #2");
     expect(sender.prompts[1]).toContain("queued item two");
+  });
+
+  it("uses debounce floor for retries when debounce exceeds backoff", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const previousFast = process.env.OPENCLAW_TEST_FAST;
+    delete process.env.OPENCLAW_TEST_FAST;
+
+    try {
+      const attempts: number[] = [];
+      const send = vi.fn(async () => {
+        attempts.push(Date.now());
+        if (attempts.length === 1) {
+          throw new Error("transient timeout");
+        }
+      });
+
+      enqueueAnnounce({
+        key: "announce:test:retry-debounce-floor",
+        item: {
+          prompt: "subagent completed",
+          enqueuedAt: Date.now(),
+          sessionKey: "agent:main:telegram:dm:u1",
+        },
+        settings: { mode: "followup", debounceMs: 5_000 },
+        send,
+      });
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(send).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(send).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(send).toHaveBeenCalledTimes(2);
+      const [firstAttempt, secondAttempt] = attempts;
+      if (firstAttempt === undefined || secondAttempt === undefined) {
+        throw new Error("expected two retry attempts");
+      }
+      expect(secondAttempt - firstAttempt).toBeGreaterThanOrEqual(5_000);
+    } finally {
+      if (previousFast === undefined) {
+        delete process.env.OPENCLAW_TEST_FAST;
+      } else {
+        process.env.OPENCLAW_TEST_FAST = previousFast;
+      }
+    }
   });
 });

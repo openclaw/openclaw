@@ -24,8 +24,11 @@ export type AgentEvent = {
   data?: Record<string, unknown>;
 };
 
+export type ResponseUsageMode = "on" | "off" | "tokens" | "full";
+
 export type SessionInfo = {
   thinkingLevel?: string;
+  fastMode?: boolean;
   verboseLevel?: string;
   reasoningLevel?: string;
   model?: string;
@@ -34,7 +37,7 @@ export type SessionInfo = {
   inputTokens?: number | null;
   outputTokens?: number | null;
   totalTokens?: number | null;
-  responseUsage?: "on" | "off" | "tokens" | "full";
+  responseUsage?: ResponseUsageMode;
   updatedAt?: number | null;
   displayName?: string;
 };
@@ -47,6 +50,7 @@ export type AgentSummary = {
 };
 
 export type GatewayStatusSummary = {
+  runtimeVersion?: string | null;
   linkChannel?: {
     id?: string;
     label?: string;

@@ -15,15 +15,15 @@
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2026.2.16</string>
+	<string>$(OPENCLAW_MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>20260216</string>
+	<string>$(OPENCLAW_BUILD_VERSION)</string>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionAttributes</key>
 		<dict>
 			<key>WKAppBundleIdentifier</key>
-			<string>ai.openclaw.ios.watchkitapp</string>
+			<string>$(OPENCLAW_WATCH_APP_BUNDLE_ID)</string>
 		</dict>
 		<key>NSExtensionPointIdentifier</key>
 		<string>com.apple.watchkit</string>

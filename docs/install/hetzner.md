@@ -17,6 +17,14 @@ Run a persistent OpenClaw Gateway on a Hetzner VPS using Docker, with durable st
 If you want “OpenClaw 24/7 for ~$5”, this is the simplest reliable setup.
 Hetzner pricing changes; pick the smallest Debian/Ubuntu VPS and scale up if you hit OOMs.
 
+Security model reminder:
+
+- Company-shared agents are fine when everyone is in the same trust boundary and the runtime is business-only.
+- Keep strict separation: dedicated VPS/runtime + dedicated accounts; no personal Apple/Google/browser/password-manager profiles on that host.
+- If users are adversarial to each other, split by gateway/host/OS user.
+
+See [Security](/gateway/security) and [VPS hosting](/vps).
+
 ## What are we doing (simple terms)?
 
 - Rent a small Linux server (Hetzner VPS)
@@ -219,7 +227,7 @@ If you add new skills later that depend on additional binaries, you must:
 **Example Dockerfile**
 
 ```dockerfile
-FROM node:22-bookworm
+FROM node:24-bookworm
 
 RUN apt-get update && apt-get install -y socat && rm -rf /var/lib/apt/lists/*
 

@@ -59,6 +59,19 @@ describe("agent delivery helpers", () => {
     expect(resolved.resolvedTo).toBe("+1999");
   });
 
+  it("does not inject a default deliverable channel when session has none", () => {
+    const plan = resolveAgentDeliveryPlan({
+      sessionEntry: undefined,
+      requestedChannel: "last",
+      explicitTo: undefined,
+      accountId: undefined,
+      wantsDelivery: true,
+    });
+
+    expect(plan.resolvedChannel).toBe("webchat");
+    expect(plan.deliveryTargetMode).toBeUndefined();
+  });
+
   it("skips outbound target resolution when explicit target validation is disabled", () => {
     const plan = resolveAgentDeliveryPlan({
       sessionEntry: {
@@ -82,5 +95,42 @@ describe("agent delivery helpers", () => {
 
     expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
     expect(resolved.resolvedTo).toBe("+1555");
+  });
+
+  it("prefers turn-source delivery context over session last route", () => {
+    const plan = resolveAgentDeliveryPlan({
+      sessionEntry: {
+        sessionId: "s4",
+        updatedAt: 4,
+        deliveryContext: { channel: "slack", to: "U_WRONG", accountId: "wrong" },
+      },
+      requestedChannel: "last",
+      turnSourceChannel: "whatsapp",
+      turnSourceTo: "+17775550123",
+      turnSourceAccountId: "work",
+      accountId: undefined,
+      wantsDelivery: true,
+    });
+
+    expect(plan.resolvedChannel).toBe("whatsapp");
+    expect(plan.resolvedTo).toBe("+17775550123");
+    expect(plan.resolvedAccountId).toBe("work");
+  });
+
+  it("does not reuse mutable session to when only turnSourceChannel is provided", () => {
+    const plan = resolveAgentDeliveryPlan({
+      sessionEntry: {
+        sessionId: "s5",
+        updatedAt: 5,
+        deliveryContext: { channel: "slack", to: "U_WRONG" },
+      },
+      requestedChannel: "last",
+      turnSourceChannel: "whatsapp",
+      accountId: undefined,
+      wantsDelivery: true,
+    });
+
+    expect(plan.resolvedChannel).toBe("whatsapp");
+    expect(plan.resolvedTo).toBeUndefined();
   });
 });

@@ -2,14 +2,15 @@ import {
   BLUEBUBBLES_ACTION_NAMES,
   BLUEBUBBLES_ACTIONS,
   createActionGate,
+  extractToolSend,
   jsonResult,
   readNumberParam,
+  readBooleanParam,
   readReactionParams,
   readStringParam,
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
-  type ChannelToolSend,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/bluebubbles";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
 import {
@@ -24,6 +25,7 @@ import {
 import { resolveBlueBubblesMessageId } from "./monitor.js";
 import { getCachedBlueBubblesPrivateApiStatus, isMacOS26OrHigher } from "./probe.js";
 import { sendBlueBubblesReaction } from "./reactions.js";
+import { normalizeSecretInputString } from "./secret-input.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import { normalizeBlueBubblesHandle, parseBlueBubblesTarget } from "./targets.js";
 import type { BlueBubblesSendTarget } from "./types.js";
@@ -50,23 +52,6 @@ function mapTarget(raw: string): BlueBubblesSendTarget {
 
 function readMessageText(params: Record<string, unknown>): string | undefined {
   return readStringParam(params, "text") ?? readStringParam(params, "message");
-}
-
-function readBooleanParam(params: Record<string, unknown>, key: string): boolean | undefined {
-  const raw = params[key];
-  if (typeof raw === "boolean") {
-    return raw;
-  }
-  if (typeof raw === "string") {
-    const trimmed = raw.trim().toLowerCase();
-    if (trimmed === "true") {
-      return true;
-    }
-    if (trimmed === "false") {
-      return false;
-    }
-  }
-  return undefined;
 }
 
 /** Supported action names for BlueBubbles */
@@ -112,25 +97,14 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
     return Array.from(actions);
   },
   supportsAction: ({ action }) => SUPPORTED_ACTIONS.has(action),
-  extractToolSend: ({ args }): ChannelToolSend | null => {
-    const action = typeof args.action === "string" ? args.action.trim() : "";
-    if (action !== "sendMessage") {
-      return null;
-    }
-    const to = typeof args.to === "string" ? args.to : undefined;
-    if (!to) {
-      return null;
-    }
-    const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
-    return { to, accountId };
-  },
+  extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
   handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
     const account = resolveBlueBubblesAccount({
       cfg: cfg,
       accountId: accountId ?? undefined,
     });
-    const baseUrl = account.config.serverUrl?.trim();
-    const password = account.config.password?.trim();
+    const baseUrl = normalizeSecretInputString(account.config.serverUrl);
+    const password = normalizeSecretInputString(account.config.password);
     const opts = { cfg: cfg, accountId: accountId ?? undefined };
     const assertPrivateApiEnabled = () => {
       if (getCachedBlueBubblesPrivateApiStatus(account.accountId) === false) {

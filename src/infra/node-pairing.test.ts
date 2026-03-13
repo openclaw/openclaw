@@ -28,6 +28,28 @@ async function setupPairedNode(baseDir: string): Promise<string> {
 }
 
 describe("node pairing tokens", () => {
+  test("reuses existing pending requests for the same node", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-node-pairing-"));
+    const first = await requestNodePairing(
+      {
+        nodeId: "node-1",
+        platform: "darwin",
+      },
+      baseDir,
+    );
+    const second = await requestNodePairing(
+      {
+        nodeId: "node-1",
+        platform: "darwin",
+      },
+      baseDir,
+    );
+
+    expect(first.created).toBe(true);
+    expect(second.created).toBe(false);
+    expect(second.request.requestId).toBe(first.request.requestId);
+  });
+
   test("generates base64url node tokens with 256-bit entropy output length", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-node-pairing-"));
     const token = await setupPairedNode(baseDir);

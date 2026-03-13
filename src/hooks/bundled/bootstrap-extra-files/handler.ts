@@ -1,11 +1,13 @@
 import {
   filterBootstrapFilesForSession,
-  loadExtraBootstrapFiles,
+  loadExtraBootstrapFilesWithDiagnostics,
 } from "../../../agents/workspace.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { resolveHookConfig } from "../../config.js";
 import { isAgentBootstrapEvent, type HookHandler } from "../../hooks.js";
 
 const HOOK_KEY = "bootstrap-extra-files";
+const log = createSubsystemLogger("bootstrap-extra-files");
 
 function normalizeStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
@@ -43,7 +45,19 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
   }
 
   try {
-    const extras = await loadExtraBootstrapFiles(context.workspaceDir, patterns);
+    const { files: extras, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(
+      context.workspaceDir,
+      patterns,
+    );
+    if (diagnostics.length > 0) {
+      log.debug("skipped extra bootstrap candidates", {
+        skipped: diagnostics.length,
+        reasons: diagnostics.reduce<Record<string, number>>((counts, item) => {
+          counts[item.reason] = (counts[item.reason] ?? 0) + 1;
+          return counts;
+        }, {}),
+      });
+    }
     if (extras.length === 0) {
       return;
     }
@@ -52,7 +66,7 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
       context.sessionKey,
     );
   } catch (err) {
-    console.warn(`[bootstrap-extra-files] failed: ${String(err)}`);
+    log.warn(`failed: ${String(err)}`);
   }
 };
 

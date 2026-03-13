@@ -7,6 +7,7 @@ import {
 } from "../logging/subsystem.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createChannelManager } from "./server-channels.js";
@@ -87,7 +88,7 @@ function installTestRegistry(plugin: ChannelPlugin<TestAccount>) {
   setActivePluginRegistry(registry);
 }
 
-function createManager() {
+function createManager(options?: { channelRuntime?: PluginRuntime["channel"] }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
   const channelLogs = { discord: log } as Record<ChannelId, SubsystemLogger>;
   const runtime = runtimeForLogger(log);
@@ -96,6 +97,7 @@ function createManager() {
     loadConfig: () => ({}),
     channelLogs,
     channelRuntimeEnvs,
+    ...(options?.channelRuntime ? { channelRuntime: options.channelRuntime } : {}),
   });
 }
 
@@ -124,7 +126,7 @@ describe("server-channels auto restart", () => {
     const manager = createManager();
 
     await manager.startChannels();
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(200);
 
     expect(startAccount).toHaveBeenCalledTimes(11);
     const snapshot = manager.getRuntimeSnapshot();
@@ -132,7 +134,7 @@ describe("server-channels auto restart", () => {
     expect(account?.running).toBe(false);
     expect(account?.reconnectAttempts).toBe(10);
 
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(200);
     expect(startAccount).toHaveBeenCalledTimes(11);
   });
 
@@ -149,7 +151,7 @@ describe("server-channels auto restart", () => {
     vi.runAllTicks();
     await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
 
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(200);
     expect(startAccount).toHaveBeenCalledTimes(1);
   });
 
@@ -164,5 +166,18 @@ describe("server-channels auto restart", () => {
     const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(account?.enabled).toBe(true);
     expect(account?.configured).toBe(true);
+  });
+
+  it("passes channelRuntime through channel gateway context when provided", async () => {
+    const channelRuntime = { marker: "channel-runtime" } as unknown as PluginRuntime["channel"];
+    const startAccount = vi.fn(async (ctx) => {
+      expect(ctx.channelRuntime).toBe(channelRuntime);
+    });
+
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({ channelRuntime });
+
+    await manager.startChannels();
+    expect(startAccount).toHaveBeenCalledTimes(1);
   });
 });

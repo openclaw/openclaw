@@ -1,29 +1,18 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { withTempHome } from "../../test/helpers/temp-home.js";
-
-const { noteSpy } = vi.hoisted(() => ({
-  noteSpy: vi.fn(),
-}));
+import { withTempHomeConfig } from "../config/test-helpers.js";
+import { note } from "../terminal/note.js";
 
 vi.mock("../terminal/note.js", () => ({
-  note: noteSpy,
+  note: vi.fn(),
 }));
 
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 
+const noteSpy = vi.mocked(note);
+
 describe("doctor include warning", () => {
   it("surfaces include confinement hint for escaped include paths", async () => {
-    await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      await fs.writeFile(
-        path.join(configDir, "openclaw.json"),
-        JSON.stringify({ $include: "/etc/passwd" }, null, 2),
-        "utf-8",
-      );
-
+    await withTempHomeConfig({ $include: "/etc/passwd" }, async () => {
       await loadAndMaybeMigrateDoctorConfig({
         options: { nonInteractive: true },
         confirm: async () => false,

@@ -3,17 +3,40 @@ import { runTasksWithConcurrency } from "./run-with-concurrency.js";
 
 describe("runTasksWithConcurrency", () => {
   it("preserves task order with bounded worker count", async () => {
+    const flushMicrotasks = async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    };
     let running = 0;
     let peak = 0;
-    const tasks = [25, 10, 5, 15].map((delayMs, index) => async (): Promise<number> => {
+    const resolvers: Array<(() => void) | undefined> = [];
+    const tasks = [0, 1, 2, 3].map((index) => async (): Promise<number> => {
       running += 1;
       peak = Math.max(peak, running);
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await new Promise<void>((resolve) => {
+        resolvers[index] = resolve;
+      });
       running -= 1;
       return index + 1;
     });
 
-    const result = await runTasksWithConcurrency({ tasks, limit: 2 });
+    const resultPromise = runTasksWithConcurrency({ tasks, limit: 2 });
+    await flushMicrotasks();
+    expect(typeof resolvers[0]).toBe("function");
+    expect(typeof resolvers[1]).toBe("function");
+
+    resolvers[1]?.();
+    await flushMicrotasks();
+    expect(typeof resolvers[2]).toBe("function");
+
+    resolvers[0]?.();
+    await flushMicrotasks();
+    expect(typeof resolvers[3]).toBe("function");
+
+    resolvers[2]?.();
+    resolvers[3]?.();
+
+    const result = await resultPromise;
     expect(result.hasError).toBe(false);
     expect(result.firstError).toBeUndefined();
     expect(result.results).toEqual([1, 2, 3, 4]);

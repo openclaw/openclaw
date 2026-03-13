@@ -1,3 +1,5 @@
+import { resolveGlobalMap } from "../shared/global-singleton.js";
+
 /**
  * In-memory cache of sent message IDs per chat.
  * Used to identify bot's own messages for reaction filtering ("own" mode).
@@ -6,11 +8,16 @@
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 type CacheEntry = {
-  messageIds: Set<number>;
   timestamps: Map<number, number>;
 };
 
-const sentMessages = new Map<string, CacheEntry>();
+/**
+ * Keep sent-message tracking shared across bundled chunks so Telegram reaction
+ * filters see the same sent-message history regardless of which chunk recorded it.
+ */
+const TELEGRAM_SENT_MESSAGES_KEY = Symbol.for("openclaw.telegramSentMessages");
+
+const sentMessages = resolveGlobalMap<string, CacheEntry>(TELEGRAM_SENT_MESSAGES_KEY);
 
 function getChatKey(chatId: number | string): string {
   return String(chatId);
@@ -20,7 +27,6 @@ function cleanupExpired(entry: CacheEntry): void {
   const now = Date.now();
   for (const [msgId, timestamp] of entry.timestamps) {
     if (now - timestamp > TTL_MS) {
-      entry.messageIds.delete(msgId);
       entry.timestamps.delete(msgId);
     }
   }
@@ -33,13 +39,12 @@ export function recordSentMessage(chatId: number | string, messageId: number): v
   const key = getChatKey(chatId);
   let entry = sentMessages.get(key);
   if (!entry) {
-    entry = { messageIds: new Set(), timestamps: new Map() };
+    entry = { timestamps: new Map() };
     sentMessages.set(key, entry);
   }
-  entry.messageIds.add(messageId);
   entry.timestamps.set(messageId, Date.now());
   // Periodic cleanup
-  if (entry.messageIds.size > 100) {
+  if (entry.timestamps.size > 100) {
     cleanupExpired(entry);
   }
 }
@@ -55,7 +60,7 @@ export function wasSentByBot(chatId: number | string, messageId: number): boolea
   }
   // Clean up expired entries on read
   cleanupExpired(entry);
-  return entry.messageIds.has(messageId);
+  return entry.timestamps.has(messageId);
 }
 
 /**

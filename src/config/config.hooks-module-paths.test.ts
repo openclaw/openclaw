@@ -2,57 +2,78 @@ import { describe, expect, it } from "vitest";
 import { validateConfigObjectWithPlugins } from "./config.js";
 
 describe("config hooks module paths", () => {
-  it("rejects absolute hooks.mappings[].transform.module", () => {
-    const res = validateConfigObjectWithPlugins({
-      agents: { list: [{ id: "pi" }] },
-      hooks: {
-        mappings: [
-          {
-            match: { path: "custom" },
-            action: "agent",
-            transform: { module: "/tmp/transform.mjs" },
-          },
-        ],
-      },
-    });
+  const expectRejectedIssuePath = (config: Record<string, unknown>, expectedPath: string) => {
+    const res = validateConfigObjectWithPlugins(config);
     expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues.some((iss) => iss.path === "hooks.mappings.0.transform.module")).toBe(true);
+    if (res.ok) {
+      throw new Error("expected validation failure");
     }
+    expect(res.issues.some((iss) => iss.path === expectedPath)).toBe(true);
+  };
+
+  it("rejects absolute hooks.mappings[].transform.module", () => {
+    expectRejectedIssuePath(
+      {
+        agents: { list: [{ id: "pi" }] },
+        hooks: {
+          mappings: [
+            {
+              match: { path: "custom" },
+              action: "agent",
+              transform: { module: "/tmp/transform.mjs" },
+            },
+          ],
+        },
+      },
+      "hooks.mappings.0.transform.module",
+    );
   });
 
   it("rejects escaping hooks.mappings[].transform.module", () => {
-    const res = validateConfigObjectWithPlugins({
-      agents: { list: [{ id: "pi" }] },
-      hooks: {
-        mappings: [
-          {
-            match: { path: "custom" },
-            action: "agent",
-            transform: { module: "../escape.mjs" },
-          },
-        ],
+    expectRejectedIssuePath(
+      {
+        agents: { list: [{ id: "pi" }] },
+        hooks: {
+          mappings: [
+            {
+              match: { path: "custom" },
+              action: "agent",
+              transform: { module: "../escape.mjs" },
+            },
+          ],
+        },
       },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues.some((iss) => iss.path === "hooks.mappings.0.transform.module")).toBe(true);
-    }
+      "hooks.mappings.0.transform.module",
+    );
   });
 
   it("rejects absolute hooks.internal.handlers[].module", () => {
-    const res = validateConfigObjectWithPlugins({
-      agents: { list: [{ id: "pi" }] },
-      hooks: {
-        internal: {
-          enabled: true,
-          handlers: [{ event: "command:new", module: "/tmp/handler.mjs" }],
+    expectRejectedIssuePath(
+      {
+        agents: { list: [{ id: "pi" }] },
+        hooks: {
+          internal: {
+            enabled: true,
+            handlers: [{ event: "command:new", module: "/tmp/handler.mjs" }],
+          },
         },
       },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues.some((iss) => iss.path === "hooks.internal.handlers.0.module")).toBe(true);
-    }
+      "hooks.internal.handlers.0.module",
+    );
+  });
+
+  it("rejects escaping hooks.internal.handlers[].module", () => {
+    expectRejectedIssuePath(
+      {
+        agents: { list: [{ id: "pi" }] },
+        hooks: {
+          internal: {
+            enabled: true,
+            handlers: [{ event: "command:new", module: "../handler.mjs" }],
+          },
+        },
+      },
+      "hooks.internal.handlers.0.module",
+    );
   });
 });

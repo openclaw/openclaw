@@ -19,6 +19,40 @@ const baseConfig = {
 } satisfies OpenClawConfig;
 
 describe("gmail hook config", () => {
+  function resolveWithGmailOverrides(
+    overrides: Partial<NonNullable<OpenClawConfig["hooks"]>["gmail"]>,
+  ) {
+    return resolveGmailHookRuntimeConfig(
+      {
+        hooks: {
+          token: "hook-token",
+          gmail: {
+            account: "openclaw@gmail.com",
+            topic: "projects/demo/topics/gog-gmail-watch",
+            pushToken: "push-token",
+            ...overrides,
+          },
+        },
+      },
+      {},
+    );
+  }
+
+  function expectResolvedPaths(
+    result: ReturnType<typeof resolveGmailHookRuntimeConfig>,
+    expected: { servePath: string; publicPath: string; target?: string },
+  ) {
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.value.serve.path).toBe(expected.servePath);
+    expect(result.value.tailscale.path).toBe(expected.publicPath);
+    if (expected.target !== undefined) {
+      expect(result.value.tailscale.target).toBe(expected.target);
+    }
+  }
+
   it("builds default hook url", () => {
     expect(buildDefaultHookUrl("/hooks", DEFAULT_GATEWAY_PORT)).toBe(
       `http://127.0.0.1:${DEFAULT_GATEWAY_PORT}/hooks/gmail`,
@@ -62,97 +96,32 @@ describe("gmail hook config", () => {
   });
 
   it("defaults serve path to / when tailscale is enabled", () => {
-    const result = resolveGmailHookRuntimeConfig(
-      {
-        hooks: {
-          token: "hook-token",
-          gmail: {
-            account: "openclaw@gmail.com",
-            topic: "projects/demo/topics/gog-gmail-watch",
-            pushToken: "push-token",
-            tailscale: { mode: "funnel" },
-          },
-        },
-      },
-      {},
-    );
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value.serve.path).toBe("/");
-      expect(result.value.tailscale.path).toBe("/gmail-pubsub");
-    }
+    const result = resolveWithGmailOverrides({ tailscale: { mode: "funnel" } });
+    expectResolvedPaths(result, { servePath: "/", publicPath: "/gmail-pubsub" });
   });
 
   it("keeps the default public path when serve path is explicit", () => {
-    const result = resolveGmailHookRuntimeConfig(
-      {
-        hooks: {
-          token: "hook-token",
-          gmail: {
-            account: "openclaw@gmail.com",
-            topic: "projects/demo/topics/gog-gmail-watch",
-            pushToken: "push-token",
-            serve: { path: "/gmail-pubsub" },
-            tailscale: { mode: "funnel" },
-          },
-        },
-      },
-      {},
-    );
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value.serve.path).toBe("/");
-      expect(result.value.tailscale.path).toBe("/gmail-pubsub");
-    }
+    const result = resolveWithGmailOverrides({
+      serve: { path: "/gmail-pubsub" },
+      tailscale: { mode: "funnel" },
+    });
+    expectResolvedPaths(result, { servePath: "/", publicPath: "/gmail-pubsub" });
   });
 
   it("keeps custom public path when serve path is set", () => {
-    const result = resolveGmailHookRuntimeConfig(
-      {
-        hooks: {
-          token: "hook-token",
-          gmail: {
-            account: "openclaw@gmail.com",
-            topic: "projects/demo/topics/gog-gmail-watch",
-            pushToken: "push-token",
-            serve: { path: "/custom" },
-            tailscale: { mode: "funnel" },
-          },
-        },
-      },
-      {},
-    );
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value.serve.path).toBe("/");
-      expect(result.value.tailscale.path).toBe("/custom");
-    }
+    const result = resolveWithGmailOverrides({
+      serve: { path: "/custom" },
+      tailscale: { mode: "funnel" },
+    });
+    expectResolvedPaths(result, { servePath: "/", publicPath: "/custom" });
   });
 
   it("keeps serve path when tailscale target is set", () => {
-    const result = resolveGmailHookRuntimeConfig(
-      {
-        hooks: {
-          token: "hook-token",
-          gmail: {
-            account: "openclaw@gmail.com",
-            topic: "projects/demo/topics/gog-gmail-watch",
-            pushToken: "push-token",
-            serve: { path: "/custom" },
-            tailscale: {
-              mode: "funnel",
-              target: "http://127.0.0.1:8788/custom",
-            },
-          },
-        },
-      },
-      {},
-    );
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value.serve.path).toBe("/custom");
-      expect(result.value.tailscale.path).toBe("/custom");
-      expect(result.value.tailscale.target).toBe("http://127.0.0.1:8788/custom");
-    }
+    const target = "http://127.0.0.1:8788/custom";
+    const result = resolveWithGmailOverrides({
+      serve: { path: "/custom" },
+      tailscale: { mode: "funnel", target },
+    });
+    expectResolvedPaths(result, { servePath: "/custom", publicPath: "/custom", target });
   });
 });

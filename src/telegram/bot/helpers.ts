@@ -1,12 +1,14 @@
 import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
 import { formatLocationText, type NormalizedLocation } from "../../channels/location.js";
-import type { TelegramGroupConfig, TelegramTopicConfig } from "../../config/types.js";
+import { resolveTelegramPreviewStreamMode } from "../../config/discord-preview-streaming.js";
+import type {
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
+} from "../../config/types.js";
 import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
-import {
-  firstDefined,
-  normalizeAllowFromWithStore,
-  type NormalizedAllowFrom,
-} from "../bot-access.js";
+import { normalizeAccountId } from "../../routing/session-key.js";
+import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
 import type { TelegramStreamMode } from "./types.js";
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
@@ -19,43 +21,52 @@ export type TelegramThreadSpec = {
 export async function resolveTelegramGroupAllowFromContext(params: {
   chatId: string | number;
   accountId?: string;
+  isGroup?: boolean;
   isForum?: boolean;
   messageThreadId?: number | null;
   groupAllowFrom?: Array<string | number>;
   resolveTelegramGroupConfig: (
     chatId: string | number,
     messageThreadId?: number,
-  ) => { groupConfig?: TelegramGroupConfig; topicConfig?: TelegramTopicConfig };
+  ) => {
+    groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+    topicConfig?: TelegramTopicConfig;
+  };
 }): Promise<{
   resolvedThreadId?: number;
+  dmThreadId?: number;
   storeAllowFrom: string[];
-  groupConfig?: TelegramGroupConfig;
+  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
   groupAllowOverride?: Array<string | number>;
   effectiveGroupAllow: NormalizedAllowFrom;
   hasGroupAllowOverride: boolean;
 }> {
-  const resolvedThreadId = resolveTelegramForumThreadId({
+  const accountId = normalizeAccountId(params.accountId);
+  // Use resolveTelegramThreadSpec to handle both forum groups AND DM topics
+  const threadSpec = resolveTelegramThreadSpec({
+    isGroup: params.isGroup ?? false,
     isForum: params.isForum,
     messageThreadId: params.messageThreadId,
   });
-  const storeAllowFrom = await readChannelAllowFromStore(
-    "telegram",
-    process.env,
-    params.accountId,
-  ).catch(() => []);
+  const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
+  const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
+  const threadIdForConfig = resolvedThreadId ?? dmThreadId;
+  const storeAllowFrom = await readChannelAllowFromStore("telegram", process.env, accountId).catch(
+    () => [],
+  );
   const { groupConfig, topicConfig } = params.resolveTelegramGroupConfig(
     params.chatId,
-    resolvedThreadId,
+    threadIdForConfig,
   );
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
-  const effectiveGroupAllow = normalizeAllowFromWithStore({
-    allowFrom: groupAllowOverride ?? params.groupAllowFrom,
-    storeAllowFrom,
-  });
+  // Group sender access must remain explicit (groupAllowFrom/per-group allowFrom only).
+  // DM pairing store entries are not a group authorization source.
+  const effectiveGroupAllow = normalizeAllowFrom(groupAllowOverride ?? params.groupAllowFrom);
   const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
   return {
     resolvedThreadId,
+    dmThreadId,
     storeAllowFrom,
     groupConfig,
     topicConfig,
@@ -154,17 +165,32 @@ export function buildTypingThreadParams(messageThreadId?: number) {
 }
 
 export function resolveTelegramStreamMode(telegramCfg?: {
-  streamMode?: TelegramStreamMode;
+  streaming?: unknown;
+  streamMode?: unknown;
 }): TelegramStreamMode {
-  const raw = telegramCfg?.streamMode?.trim().toLowerCase();
-  if (raw === "off" || raw === "partial" || raw === "block") {
-    return raw;
-  }
-  return "partial";
+  return resolveTelegramPreviewStreamMode(telegramCfg);
 }
 
 export function buildTelegramGroupPeerId(chatId: number | string, messageThreadId?: number) {
   return messageThreadId != null ? `${chatId}:topic:${messageThreadId}` : String(chatId);
+}
+
+/**
+ * Resolve the direct-message peer identifier for Telegram routing/session keys.
+ *
+ * In some Telegram DM deliveries (for example certain business/chat bridge flows),
+ * `chat.id` can differ from the actual sender user id. Prefer sender id when present
+ * so per-peer DM scopes isolate users correctly.
+ */
+export function resolveTelegramDirectPeerId(params: {
+  chatId: number | string;
+  senderId?: number | string | null;
+}) {
+  const senderId = params.senderId != null ? String(params.senderId).trim() : "";
+  if (senderId) {
+    return senderId;
+  }
+  return String(params.chatId);
 }
 
 export function buildTelegramGroupFrom(chatId: number | string, messageThreadId?: number) {
@@ -254,18 +280,52 @@ export function buildGroupLabel(msg: Message, chatId: number | string, messageTh
   return `group:${chatId}${topicSuffix}`;
 }
 
+export type TelegramTextEntity = NonNullable<Message["entities"]>[number];
+
+export function getTelegramTextParts(
+  msg: Pick<Message, "text" | "caption" | "entities" | "caption_entities">,
+): {
+  text: string;
+  entities: TelegramTextEntity[];
+} {
+  const text = msg.text ?? msg.caption ?? "";
+  const entities = msg.entities ?? msg.caption_entities ?? [];
+  return { text, entities };
+}
+
+function isTelegramMentionWordChar(char: string | undefined): boolean {
+  return char != null && /[a-z0-9_]/i.test(char);
+}
+
+function hasStandaloneTelegramMention(text: string, mention: string): boolean {
+  let startIndex = 0;
+  while (startIndex < text.length) {
+    const idx = text.indexOf(mention, startIndex);
+    if (idx === -1) {
+      return false;
+    }
+    const prev = idx > 0 ? text[idx - 1] : undefined;
+    const next = text[idx + mention.length];
+    if (!isTelegramMentionWordChar(prev) && !isTelegramMentionWordChar(next)) {
+      return true;
+    }
+    startIndex = idx + 1;
+  }
+  return false;
+}
+
 export function hasBotMention(msg: Message, botUsername: string) {
-  const text = (msg.text ?? msg.caption ?? "").toLowerCase();
-  if (text.includes(`@${botUsername}`)) {
+  const { text, entities } = getTelegramTextParts(msg);
+  const mention = `@${botUsername}`.toLowerCase();
+  if (hasStandaloneTelegramMention(text.toLowerCase(), mention)) {
     return true;
   }
-  const entities = msg.entities ?? msg.caption_entities ?? [];
   for (const ent of entities) {
     if (ent.type !== "mention") {
       continue;
     }
-    const slice = (msg.text ?? msg.caption ?? "").slice(ent.offset, ent.offset + ent.length);
-    if (slice.toLowerCase() === `@${botUsername}`) {
+    const slice = text.slice(ent.offset, ent.offset + ent.length);
+    if (slice.toLowerCase() === mention) {
       return true;
     }
   }
@@ -321,6 +381,8 @@ export type TelegramReplyTarget = {
   sender: string;
   body: string;
   kind: "reply" | "quote";
+  /** Forward context if the reply target was itself a forwarded message (issue #9619). */
+  forwardedFrom?: TelegramForwardedContext;
 };
 
 export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
@@ -359,11 +421,17 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   const sender = replyLike ? buildSenderName(replyLike) : undefined;
   const senderLabel = sender ?? "unknown sender";
 
+  // Extract forward context from the resolved reply target (reply_to_message or external_reply).
+  const forwardedFrom = replyLike?.forward_origin
+    ? (resolveForwardOrigin(replyLike.forward_origin) ?? undefined)
+    : undefined;
+
   return {
     id: replyLike?.message_id ? String(replyLike.message_id) : undefined,
     sender: senderLabel,
     body,
     kind,
+    forwardedFrom,
   };
 }
 

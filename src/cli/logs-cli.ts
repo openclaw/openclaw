@@ -2,7 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { Command } from "commander";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
-import { formatLocalIsoWithOffset } from "../logging/timestamps.js";
+import { formatLocalIsoWithOffset, isValidTimeZone } from "../logging/timestamps.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import { createSafeStreamWriter } from "../terminal/stream-writer.js";
@@ -223,7 +223,8 @@ export function registerLogsCli(program: Command) {
     const jsonMode = Boolean(opts.json);
     const pretty = !jsonMode && Boolean(process.stdout.isTTY) && !opts.plain;
     const rich = isRich() && opts.color !== false;
-    const localTime = Boolean(opts.localTime);
+    const localTime =
+      Boolean(opts.localTime) || (!!process.env.TZ && isValidTimeZone(process.env.TZ));
 
     while (true) {
       let payload: LogsTailPayload;

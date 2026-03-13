@@ -54,6 +54,16 @@ export type ManagedRunStdin = {
   destroyed?: boolean;
 };
 
+export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
+  pid?: number;
+  stdin?: ManagedRunStdin;
+  onStdout: (listener: (chunk: string) => void) => void;
+  onStderr: (listener: (chunk: string) => void) => void;
+  wait: () => Promise<{ code: number | null; signal: WaitSignal }>;
+  kill: (signal?: NodeJS.Signals) => void;
+  dispose: () => void;
+};
+
 type SpawnBaseInput = {
   runId?: string;
   sessionId: string;

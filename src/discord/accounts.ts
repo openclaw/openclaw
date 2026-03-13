@@ -1,6 +1,8 @@
+import { createAccountActionGate } from "../channels/plugins/account-action-gate.js";
 import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DiscordAccountConfig, DiscordActionConfig } from "../config/types.js";
+import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { resolveDiscordToken } from "./token.js";
 
@@ -17,22 +19,21 @@ const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("di
 export const listDiscordAccountIds = listAccountIds;
 export const resolveDefaultDiscordAccountId = resolveDefaultAccountId;
 
-function resolveAccountConfig(
+export function resolveDiscordAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): DiscordAccountConfig | undefined {
-  const accounts = cfg.channels?.discord?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return undefined;
-  }
-  return accounts[accountId] as DiscordAccountConfig | undefined;
+  return resolveAccountEntry(cfg.channels?.discord?.accounts, accountId);
 }
 
-function mergeDiscordAccountConfig(cfg: OpenClawConfig, accountId: string): DiscordAccountConfig {
+export function mergeDiscordAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): DiscordAccountConfig {
   const { accounts: _ignored, ...base } = (cfg.channels?.discord ?? {}) as DiscordAccountConfig & {
     accounts?: unknown;
   };
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
+  const account = resolveDiscordAccountConfig(cfg, accountId) ?? {};
   return { ...base, ...account };
 }
 
@@ -41,19 +42,10 @@ export function createDiscordActionGate(params: {
   accountId?: string | null;
 }): (key: keyof DiscordActionConfig, defaultValue?: boolean) => boolean {
   const accountId = normalizeAccountId(params.accountId);
-  const baseActions = params.cfg.channels?.discord?.actions;
-  const accountActions = resolveAccountConfig(params.cfg, accountId)?.actions;
-  return (key, defaultValue = true) => {
-    const accountValue = accountActions?.[key];
-    if (accountValue !== undefined) {
-      return accountValue;
-    }
-    const baseValue = baseActions?.[key];
-    if (baseValue !== undefined) {
-      return baseValue;
-    }
-    return defaultValue;
-  };
+  return createAccountActionGate({
+    baseActions: params.cfg.channels?.discord?.actions,
+    accountActions: resolveDiscordAccountConfig(params.cfg, accountId)?.actions,
+  });
 }
 
 export function resolveDiscordAccount(params: {
@@ -74,6 +66,20 @@ export function resolveDiscordAccount(params: {
     tokenSource: tokenResolution.source,
     config: merged,
   };
+}
+
+export function resolveDiscordMaxLinesPerMessage(params: {
+  cfg: OpenClawConfig;
+  discordConfig?: DiscordAccountConfig | null;
+  accountId?: string | null;
+}): number | undefined {
+  if (typeof params.discordConfig?.maxLinesPerMessage === "number") {
+    return params.discordConfig.maxLinesPerMessage;
+  }
+  return resolveDiscordAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  }).config.maxLinesPerMessage;
 }
 
 export function listEnabledDiscordAccounts(cfg: OpenClawConfig): ResolvedDiscordAccount[] {

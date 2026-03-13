@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
 vi.mock("../../config/sessions.js", () => ({
@@ -8,6 +8,16 @@ vi.mock("../../config/sessions.js", () => ({
   resolveSessionResetPolicy: vi.fn().mockReturnValue({ mode: "idle", idleMinutes: 60 }),
 }));
 
+vi.mock("../../agents/bootstrap-cache.js", () => ({
+  clearBootstrapSnapshot: vi.fn(),
+  clearBootstrapSnapshotOnSessionRollover: vi.fn(({ sessionKey, previousSessionId }) => {
+    if (sessionKey && previousSessionId) {
+      clearBootstrapSnapshot(sessionKey);
+    }
+  }),
+}));
+
+import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { loadSessionStore, evaluateSessionFreshness } from "../../config/sessions.js";
 import { resolveCronSession } from "./session.js";
 
@@ -40,6 +50,10 @@ function resolveWithStoredEntry(params?: {
 }
 
 describe("resolveCronSession", () => {
+  beforeEach(() => {
+    vi.mocked(clearBootstrapSnapshot).mockReset();
+  });
+
   it("preserves modelOverride and providerOverride from existing session entry", () => {
     const result = resolveWithStoredEntry({
       sessionKey: "agent:main:cron:test-job",
@@ -100,6 +114,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.sessionId).toBe("existing-session-id-123");
       expect(result.isNewSession).toBe(false);
       expect(result.systemSent).toBe(true);
+      expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
     });
 
     it("creates new sessionId when session is stale", () => {
@@ -121,6 +136,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.modelOverride).toBe("gpt-4.1-mini");
       expect(result.sessionEntry.providerOverride).toBe("openai");
       expect(result.sessionEntry.sendPolicy).toBe("allow");
+      expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
     });
 
     it("creates new sessionId when forceNew is true", () => {
@@ -141,6 +157,95 @@ describe("resolveCronSession", () => {
       expect(result.systemSent).toBe(false);
       expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
       expect(result.sessionEntry.providerOverride).toBe("anthropic");
+      expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
+    });
+
+    it("clears delivery routing metadata and deliveryContext when forceNew is true", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-789",
+          updatedAt: NOW_MS - 1000,
+          systemSent: true,
+          lastChannel: "slack" as never,
+          lastTo: "channel:C0XXXXXXXXX",
+          lastAccountId: "acct-123",
+          lastThreadId: "1737500000.123456",
+          deliveryContext: {
+            channel: "slack",
+            to: "channel:C0XXXXXXXXX",
+            threadId: "1737500000.123456",
+          },
+          modelOverride: "gpt-5.2",
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      // Delivery routing state must be cleared to prevent thread leaking.
+      // deliveryContext must also be cleared because normalizeSessionEntryDelivery
+      // repopulates lastThreadId from deliveryContext.threadId on store writes.
+      expect(result.sessionEntry.lastChannel).toBeUndefined();
+      expect(result.sessionEntry.lastTo).toBeUndefined();
+      expect(result.sessionEntry.lastAccountId).toBeUndefined();
+      expect(result.sessionEntry.lastThreadId).toBeUndefined();
+      expect(result.sessionEntry.deliveryContext).toBeUndefined();
+      // Per-session overrides must be preserved
+      expect(result.sessionEntry.modelOverride).toBe("gpt-5.2");
+    });
+
+    it("clears delivery routing metadata when session is stale", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "old-session-id",
+          updatedAt: NOW_MS - 86_400_000,
+          lastChannel: "slack" as never,
+          lastTo: "channel:C0XXXXXXXXX",
+          lastThreadId: "1737500000.999999",
+          deliveryContext: {
+            channel: "slack",
+            to: "channel:C0XXXXXXXXX",
+            threadId: "1737500000.999999",
+          },
+        },
+        fresh: false,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.lastChannel).toBeUndefined();
+      expect(result.sessionEntry.lastTo).toBeUndefined();
+      expect(result.sessionEntry.lastAccountId).toBeUndefined();
+      expect(result.sessionEntry.lastThreadId).toBeUndefined();
+      expect(result.sessionEntry.deliveryContext).toBeUndefined();
+    });
+
+    it("preserves delivery routing metadata when reusing fresh session", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-101",
+          updatedAt: NOW_MS - 1000,
+          systemSent: true,
+          lastChannel: "slack" as never,
+          lastTo: "channel:C0XXXXXXXXX",
+          lastThreadId: "1737500000.123456",
+          deliveryContext: {
+            channel: "slack",
+            to: "channel:C0XXXXXXXXX",
+            threadId: "1737500000.123456",
+          },
+        },
+        fresh: true,
+      });
+
+      expect(result.isNewSession).toBe(false);
+      expect(result.sessionEntry.lastChannel).toBe("slack");
+      expect(result.sessionEntry.lastTo).toBe("channel:C0XXXXXXXXX");
+      expect(result.sessionEntry.lastThreadId).toBe("1737500000.123456");
+      expect(result.sessionEntry.deliveryContext).toEqual({
+        channel: "slack",
+        to: "channel:C0XXXXXXXXX",
+        threadId: "1737500000.123456",
+      });
     });
 
     it("creates new sessionId when entry exists but has no sessionId", () => {
