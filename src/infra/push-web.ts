@@ -89,25 +89,40 @@ async function persistState(state: WebPushRegistrationState, baseDir?: string): 
 // --- VAPID keys ---
 
 export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> {
-  const filePath = resolveVapidKeysPath(baseDir);
-  const existing = await readJsonFile<VapidKeyPair>(filePath);
-  if (existing?.publicKey && existing?.privateKey) {
+  // Env vars take precedence — allows operators to share a stable VAPID
+  // identity across multiple gateway instances.
+  const envPublic = resolveVapidPublicKeyFromEnv();
+  const envPrivate = resolveVapidPrivateKeyFromEnv();
+  if (envPublic && envPrivate) {
     return {
-      publicKey: existing.publicKey,
-      privateKey: existing.privateKey,
-      subject: existing.subject || resolveVapidSubjectFromEnv(),
+      publicKey: envPublic,
+      privateKey: envPrivate,
+      subject: resolveVapidSubjectFromEnv(),
     };
   }
 
-  // Auto-generate and persist.
-  const keys = webPush.generateVAPIDKeys();
-  const pair: VapidKeyPair = {
-    publicKey: keys.publicKey,
-    privateKey: keys.privateKey,
-    subject: resolveVapidSubjectFromEnv(),
-  };
-  await writeJsonAtomic(filePath, pair, { trailingNewline: true });
-  return pair;
+  // Fall back to persisted keys, generating on first use under a lock to
+  // prevent concurrent bootstraps from writing different keypairs.
+  return await withLock(async () => {
+    const filePath = resolveVapidKeysPath(baseDir);
+    const existing = await readJsonFile<VapidKeyPair>(filePath);
+    if (existing?.publicKey && existing?.privateKey) {
+      return {
+        publicKey: existing.publicKey,
+        privateKey: existing.privateKey,
+        subject: existing.subject || resolveVapidSubjectFromEnv(),
+      };
+    }
+
+    const keys = webPush.generateVAPIDKeys();
+    const pair: VapidKeyPair = {
+      publicKey: keys.publicKey,
+      privateKey: keys.privateKey,
+      subject: resolveVapidSubjectFromEnv(),
+    };
+    await writeJsonAtomic(filePath, pair, { trailingNewline: true });
+    return pair;
+  });
 }
 
 function resolveVapidSubjectFromEnv(): string {

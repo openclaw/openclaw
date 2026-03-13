@@ -49,6 +49,26 @@ describe("resolveVapidKeys", () => {
     expect(keys2.publicKey).toBe(keys.publicKey);
     expect(keys2.privateKey).toBe(keys.privateKey);
   });
+
+  it("prefers env vars over persisted keys", async () => {
+    // Persist keys first.
+    await resolveVapidKeys(tmpDir);
+
+    // Set env overrides.
+    process.env.OPENCLAW_VAPID_PUBLIC_KEY = "env-public";
+    process.env.OPENCLAW_VAPID_PRIVATE_KEY = "env-private";
+    process.env.OPENCLAW_VAPID_SUBJECT = "mailto:env@test.com";
+    try {
+      const keys = await resolveVapidKeys(tmpDir);
+      expect(keys.publicKey).toBe("env-public");
+      expect(keys.privateKey).toBe("env-private");
+      expect(keys.subject).toBe("mailto:env@test.com");
+    } finally {
+      delete process.env.OPENCLAW_VAPID_PUBLIC_KEY;
+      delete process.env.OPENCLAW_VAPID_PRIVATE_KEY;
+      delete process.env.OPENCLAW_VAPID_SUBJECT;
+    }
+  });
 });
 
 describe("subscription CRUD", () => {
