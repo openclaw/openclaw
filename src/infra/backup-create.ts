@@ -1,5 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -29,10 +30,11 @@ type BackupManifestAsset = {
   kind: BackupAsset["kind"];
   sourcePath: string;
   archivePath: string;
+  sha256: string;
 };
 
 type BackupManifest = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   createdAt: string;
   archiveRoot: string;
   runtimeVersion: string;
@@ -187,12 +189,61 @@ async function canonicalizePathForContainment(targetPath: string): Promise<strin
   }
 }
 
+async function hashFile(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(filePath);
+    stream.on("data", (chunk: Buffer) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", () => resolve(hash.digest("hex")));
+  });
+}
+
+async function collectFileHashes(
+  dirPath: string,
+): Promise<Array<{ relativePath: string; sha256: string }>> {
+  const results: Array<{ relativePath: string; sha256: string }> = [];
+
+  async function walk(currentPath: string): Promise<void> {
+    const entries = await fs.readdir(currentPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(currentPath, entry.name);
+      if (entry.isDirectory()) {
+        await walk(fullPath);
+      } else if (entry.isFile()) {
+        const relativePath = path.relative(dirPath, fullPath).replaceAll("\\", "/");
+        const sha256 = await hashFile(fullPath);
+        results.push({ relativePath, sha256 });
+      }
+    }
+  }
+
+  await walk(dirPath);
+  results.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+  return results;
+}
+
+async function computeAssetHash(sourcePath: string): Promise<string> {
+  const stat = await fs.stat(sourcePath);
+  if (stat.isFile()) {
+    return hashFile(sourcePath);
+  }
+  // For directories, compute a Merkle-like hash from sorted file entries
+  const fileHashes = await collectFileHashes(sourcePath);
+  const hash = createHash("sha256");
+  for (const entry of fileHashes) {
+    hash.update(`${entry.relativePath}\0${entry.sha256}\n`);
+  }
+  return hash.digest("hex");
+}
+
 function buildManifest(params: {
   createdAt: string;
   archiveRoot: string;
   includeWorkspace: boolean;
   onlyConfig: boolean;
   assets: BackupAsset[];
+  assetChecksums: Map<string, string>;
   skipped: BackupCreateResult["skipped"];
   stateDir: string;
   configPath: string;
@@ -200,7 +251,7 @@ function buildManifest(params: {
   workspaceDirs: string[];
 }): BackupManifest {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     createdAt: params.createdAt,
     archiveRoot: params.archiveRoot,
     runtimeVersion: resolveRuntimeServiceVersion(),
@@ -220,6 +271,7 @@ function buildManifest(params: {
       kind: asset.kind,
       sourcePath: asset.sourcePath,
       archivePath: asset.archivePath,
+      sha256: params.assetChecksums.get(asset.sourcePath) ?? "",
     })),
     skipped: params.skipped.map((entry) => ({
       kind: entry.kind,
@@ -328,12 +380,21 @@ export async function createBackupArchive(
   const manifestPath = path.join(tempDir, "manifest.json");
   const tempArchivePath = buildTempArchivePath(outputPath);
   try {
+    const assetChecksums = new Map<string, string>();
+    await Promise.all(
+      result.assets.map(async (asset) => {
+        const sha256 = await computeAssetHash(asset.sourcePath);
+        assetChecksums.set(asset.sourcePath, sha256);
+      }),
+    );
+
     const manifest = buildManifest({
       createdAt,
       archiveRoot,
       includeWorkspace,
       onlyConfig,
       assets: result.assets,
+      assetChecksums,
       skipped: result.skipped,
       stateDir: plan.stateDir,
       configPath: plan.configPath,

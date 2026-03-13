@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import * as tar from "tar";
 import type { RuntimeEnv } from "../runtime.js";
@@ -9,6 +10,7 @@ type BackupManifestAsset = {
   kind: string;
   sourcePath: string;
   archivePath: string;
+  sha256?: string;
 };
 
 type BackupManifest = {
@@ -49,6 +51,8 @@ export type BackupVerifyResult = {
   runtimeVersion: string;
   assetCount: number;
   entryCount: number;
+  schemaVersion: number;
+  checksumsVerified: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -105,7 +109,7 @@ function parseManifest(raw: string): BackupManifest {
   if (!isRecord(parsed)) {
     throw new Error("Backup manifest must be an object.");
   }
-  if (parsed.schemaVersion !== 1) {
+  if (parsed.schemaVersion !== 1 && parsed.schemaVersion !== 2) {
     throw new Error(`Unsupported backup manifest schemaVersion: ${String(parsed.schemaVersion)}`);
   }
   if (typeof parsed.archiveRoot !== "string" || !parsed.archiveRoot.trim()) {
@@ -136,11 +140,12 @@ function parseManifest(raw: string): BackupManifest {
       kind: asset.kind,
       sourcePath: asset.sourcePath,
       archivePath: asset.archivePath,
+      sha256: typeof asset.sha256 === "string" && asset.sha256.trim() ? asset.sha256 : undefined,
     });
   }
 
   return {
-    schemaVersion: 1,
+    schemaVersion: parsed.schemaVersion,
     archiveRoot: parsed.archiveRoot,
     createdAt: parsed.createdAt,
     runtimeVersion:
@@ -252,15 +257,118 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
   }
 }
 
+async function extractEntryContent(params: {
+  archivePath: string;
+  entryPath: string;
+}): Promise<Buffer> {
+  let resultPromise: Promise<Buffer> | undefined;
+  await tar.t({
+    file: params.archivePath,
+    gzip: true,
+    onentry: (entry) => {
+      if (entry.path !== params.entryPath) {
+        entry.resume();
+        return;
+      }
+      resultPromise = new Promise<Buffer>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        entry.on("data", (chunk: Buffer | string) => {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
+        entry.on("error", reject);
+        entry.on("end", () => resolve(Buffer.concat(chunks)));
+      });
+    },
+  });
+  if (!resultPromise) {
+    throw new Error(`Archive is missing entry: ${params.entryPath}`);
+  }
+  return resultPromise;
+}
+
+async function verifyAssetChecksums(params: {
+  archivePath: string;
+  manifest: BackupManifest;
+  normalizedEntries: string[];
+}): Promise<void> {
+  for (const asset of params.manifest.assets) {
+    if (!asset.sha256) {
+      continue;
+    }
+
+    const assetArchivePath = normalizeArchivePath(asset.archivePath, "Asset archive path");
+
+    // Collect all archive entries that belong to this asset
+    const assetEntries = params.normalizedEntries
+      .filter((entry) => entry === assetArchivePath || isArchivePathWithin(entry, assetArchivePath))
+      .filter((entry) => !entry.endsWith("/"))
+      .toSorted();
+
+    if (assetEntries.length === 0) {
+      throw new Error(
+        `Checksum verification failed: no entries found for asset ${asset.kind} (${asset.sourcePath})`,
+      );
+    }
+
+    if (assetEntries.length === 1 && assetEntries[0] === assetArchivePath) {
+      // Single file asset
+      const content = await extractEntryContent({
+        archivePath: params.archivePath,
+        entryPath: assetEntries[0],
+      });
+      const computed = createHash("sha256").update(content).digest("hex");
+      if (computed !== asset.sha256) {
+        throw new Error(
+          `Checksum mismatch for asset ${asset.kind} (${asset.sourcePath}): expected ${asset.sha256}, got ${computed}`,
+        );
+      }
+    } else {
+      // Directory asset: compute Merkle-like hash from sorted file entries
+      const fileHashes: Array<{ relativePath: string; sha256: string }> = [];
+
+      for (const entryPath of assetEntries) {
+        const relativePath = path.posix.relative(assetArchivePath, entryPath);
+        if (!relativePath) {
+          continue;
+        }
+        const content = await extractEntryContent({
+          archivePath: params.archivePath,
+          entryPath,
+        });
+        const sha256 = createHash("sha256").update(content).digest("hex");
+        fileHashes.push({ relativePath, sha256 });
+      }
+
+      fileHashes.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+      const hash = createHash("sha256");
+      for (const entry of fileHashes) {
+        hash.update(`${entry.relativePath}\0${entry.sha256}\n`);
+      }
+      const computed = hash.digest("hex");
+      if (computed !== asset.sha256) {
+        throw new Error(
+          `Checksum mismatch for asset ${asset.kind} (${asset.sourcePath}): expected ${asset.sha256}, got ${computed}`,
+        );
+      }
+    }
+  }
+}
+
 function formatResult(result: BackupVerifyResult): string {
-  return [
+  const lines = [
     `Backup archive OK: ${result.archivePath}`,
     `Archive root: ${result.archiveRoot}`,
     `Created at: ${result.createdAt}`,
     `Runtime version: ${result.runtimeVersion}`,
     `Assets verified: ${result.assetCount}`,
     `Archive entries scanned: ${result.entryCount}`,
-  ].join("\n");
+  ];
+  if (result.checksumsVerified) {
+    lines.push("Content checksums: verified");
+  } else {
+    lines.push("Content checksums: not present (schema v1 archive)");
+  }
+  return lines.join("\n");
 }
 
 function findDuplicateNormalizedEntryPath(
@@ -309,6 +417,16 @@ export async function backupVerifyCommand(
   const manifest = parseManifest(manifestRaw);
   verifyManifestAgainstEntries(manifest, normalizedEntrySet);
 
+  const hasChecksums = manifest.schemaVersion >= 2 && manifest.assets.some((asset) => asset.sha256);
+
+  if (hasChecksums) {
+    await verifyAssetChecksums({
+      archivePath,
+      manifest,
+      normalizedEntries: [...normalizedEntrySet],
+    });
+  }
+
   const result: BackupVerifyResult = {
     ok: true,
     archivePath,
@@ -317,6 +435,8 @@ export async function backupVerifyCommand(
     runtimeVersion: manifest.runtimeVersion,
     assetCount: manifest.assets.length,
     entryCount: rawEntries.length,
+    schemaVersion: manifest.schemaVersion,
+    checksumsVerified: hasChecksums,
   };
 
   runtime.log(opts.json ? JSON.stringify(result, null, 2) : formatResult(result));
