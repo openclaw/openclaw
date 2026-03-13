@@ -196,6 +196,26 @@ export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
     maxMs: number;
     timeoutCount: number;
   };
+  latency?: {
+    sampleCount: number;
+    segments: Partial<
+      Record<
+        | "dispatchToQueue"
+        | "queueToRun"
+        | "acpEnsureToRun"
+        | "runToFirstEvent"
+        | "firstEventToFirstVisible"
+        | "runToFirstVisible"
+        | "firstVisibleToFinal"
+        | "endToEnd",
+        {
+          avgMs: number;
+          p95Ms: number;
+          maxMs: number;
+        }
+      >
+    >;
+  };
 };
 
 export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {

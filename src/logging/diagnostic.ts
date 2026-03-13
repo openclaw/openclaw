@@ -1,3 +1,4 @@
+import type { TurnLatencyStageInfo } from "../auto-reply/types.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
@@ -20,6 +21,34 @@ const webhookStats = {
   errors: 0,
   lastReceived: 0,
 };
+const FIRST_VISIBLE_SAMPLE_LIMIT = 50;
+const LATENCY_SAMPLE_LIMIT = 50;
+const FIRST_VISIBLE_TIMEOUT_MS = 4_000;
+const MIN_FIRST_VISIBLE_WARN_MS = 250;
+const MAX_FIRST_VISIBLE_WARN_MS = 10 * 60 * 1000;
+const firstVisibleSamples: number[] = [];
+let firstVisibleTimeoutCount = 0;
+type LatencySegmentName =
+  | "dispatchToQueue"
+  | "queueToRun"
+  | "acpEnsureToRun"
+  | "runToFirstEvent"
+  | "firstEventToFirstVisible"
+  | "runToFirstVisible"
+  | "firstVisibleToFinal"
+  | "endToEnd";
+type TurnLatencySnapshot = Partial<Record<TurnLatencyStageInfo["stage"], number>>;
+const latencySamples: Record<LatencySegmentName, number[]> = {
+  dispatchToQueue: [],
+  queueToRun: [],
+  acpEnsureToRun: [],
+  runToFirstEvent: [],
+  firstEventToFirstVisible: [],
+  runToFirstVisible: [],
+  firstVisibleToFinal: [],
+  endToEnd: [],
+};
+const turnLatencySnapshots = new Map<string, TurnLatencySnapshot>();
 
 let lastActivityAt = 0;
 const DEFAULT_STUCK_SESSION_WARN_MS = 120_000;
@@ -38,6 +67,142 @@ function markActivity() {
   lastActivityAt = Date.now();
 }
 
+function recordFirstVisibleSample(durationMs: number) {
+  firstVisibleSamples.push(durationMs);
+  if (firstVisibleSamples.length > FIRST_VISIBLE_SAMPLE_LIMIT) {
+    firstVisibleSamples.splice(0, firstVisibleSamples.length - FIRST_VISIBLE_SAMPLE_LIMIT);
+  }
+}
+
+function buildFirstVisibleSummary():
+  | {
+      sampleCount: number;
+      avgMs: number;
+      p95Ms: number;
+      maxMs: number;
+      timeoutCount: number;
+    }
+  | undefined {
+  if (firstVisibleSamples.length === 0) {
+    return undefined;
+  }
+  const ordered = [...firstVisibleSamples].toSorted((left, right) => left - right);
+  const total = ordered.reduce((sum, value) => sum + value, 0);
+  const p95Index = Math.min(ordered.length - 1, Math.max(0, Math.ceil(ordered.length * 0.95) - 1));
+  return {
+    sampleCount: ordered.length,
+    avgMs: Math.round(total / ordered.length),
+    p95Ms: ordered[p95Index] ?? ordered[ordered.length - 1] ?? 0,
+    maxMs: ordered[ordered.length - 1] ?? 0,
+    timeoutCount: firstVisibleTimeoutCount,
+  };
+}
+
+function recordLatencySample(segment: LatencySegmentName, durationMs: number) {
+  if (!Number.isFinite(durationMs) || durationMs < 0) {
+    return;
+  }
+  const bucket = latencySamples[segment];
+  bucket.push(Math.round(durationMs));
+  if (bucket.length > LATENCY_SAMPLE_LIMIT) {
+    bucket.splice(0, bucket.length - LATENCY_SAMPLE_LIMIT);
+  }
+}
+
+function buildLatencySummary():
+  | {
+      sampleCount: number;
+      segments: Partial<
+        Record<
+          LatencySegmentName,
+          {
+            avgMs: number;
+            p95Ms: number;
+            maxMs: number;
+          }
+        >
+      >;
+    }
+  | undefined {
+  const segments = Object.entries(latencySamples).reduce<
+    Partial<Record<LatencySegmentName, { avgMs: number; p95Ms: number; maxMs: number }>>
+  >((acc, [name, samples]) => {
+    if (samples.length === 0) {
+      return acc;
+    }
+    const ordered = [...samples].toSorted((left, right) => left - right);
+    const total = ordered.reduce((sum, value) => sum + value, 0);
+    const p95Index = Math.min(
+      ordered.length - 1,
+      Math.max(0, Math.ceil(ordered.length * 0.95) - 1),
+    );
+    acc[name as LatencySegmentName] = {
+      avgMs: Math.round(total / ordered.length),
+      p95Ms: ordered[p95Index] ?? ordered[ordered.length - 1] ?? 0,
+      maxMs: ordered[ordered.length - 1] ?? 0,
+    };
+    return acc;
+  }, {});
+  const sampleCount = latencySamples.endToEnd.length;
+  if (sampleCount === 0 && Object.keys(segments).length === 0) {
+    return undefined;
+  }
+  return {
+    sampleCount,
+    segments,
+  };
+}
+
+function recordTurnLatencyStageSample(params: {
+  turnLatencyId: string;
+  stage: TurnLatencyStageInfo["stage"];
+  durationMs?: number;
+}) {
+  if (typeof params.durationMs !== "number" || !Number.isFinite(params.durationMs)) {
+    return;
+  }
+  const snapshot = turnLatencySnapshots.get(params.turnLatencyId) ?? {};
+  snapshot[params.stage] = params.durationMs;
+  turnLatencySnapshots.set(params.turnLatencyId, snapshot);
+  if (params.stage !== "completed") {
+    return;
+  }
+  const queueAt = snapshot.queue_arbitrated;
+  const runAt = snapshot.run_started;
+  const acpEnsureAt = snapshot.acp_ensure_session_completed;
+  const acpFirstEventAt = snapshot.acp_first_event;
+  const acpFirstVisibleAt = snapshot.acp_first_visible_output;
+  const firstVisibleAt = snapshot.first_visible_emitted;
+  const finalAt = snapshot.final_dispatched;
+  const completedAt = snapshot.completed;
+
+  if (typeof queueAt === "number") {
+    recordLatencySample("dispatchToQueue", queueAt);
+  }
+  if (typeof runAt === "number") {
+    recordLatencySample("queueToRun", runAt - (queueAt ?? 0));
+  }
+  if (typeof runAt === "number" && typeof acpEnsureAt === "number") {
+    recordLatencySample("acpEnsureToRun", runAt - acpEnsureAt);
+  }
+  if (typeof runAt === "number" && typeof acpFirstEventAt === "number") {
+    recordLatencySample("runToFirstEvent", acpFirstEventAt - runAt);
+  }
+  if (typeof acpFirstEventAt === "number" && typeof acpFirstVisibleAt === "number") {
+    recordLatencySample("firstEventToFirstVisible", acpFirstVisibleAt - acpFirstEventAt);
+  }
+  if (typeof runAt === "number" && typeof firstVisibleAt === "number") {
+    recordLatencySample("runToFirstVisible", firstVisibleAt - runAt);
+  }
+  if (typeof firstVisibleAt === "number" && typeof finalAt === "number") {
+    recordLatencySample("firstVisibleToFinal", finalAt - firstVisibleAt);
+  }
+  if (typeof completedAt === "number") {
+    recordLatencySample("endToEnd", completedAt);
+  }
+  turnLatencySnapshots.delete(params.turnLatencyId);
+}
+
 export function resolveStuckSessionWarnMs(config?: OpenClawConfig): number {
   const raw = config?.diagnostics?.stuckSessionWarnMs;
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
@@ -46,6 +211,18 @@ export function resolveStuckSessionWarnMs(config?: OpenClawConfig): number {
   const rounded = Math.floor(raw);
   if (rounded < MIN_STUCK_SESSION_WARN_MS || rounded > MAX_STUCK_SESSION_WARN_MS) {
     return DEFAULT_STUCK_SESSION_WARN_MS;
+  }
+  return rounded;
+}
+
+export function resolveFirstVisibleWarnMs(config?: OpenClawConfig): number {
+  const raw = config?.diagnostics?.firstVisibleWarnMs;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return FIRST_VISIBLE_TIMEOUT_MS;
+  }
+  const rounded = Math.floor(raw);
+  if (rounded < MIN_FIRST_VISIBLE_WARN_MS || rounded > MAX_FIRST_VISIBLE_WARN_MS) {
+    return FIRST_VISIBLE_TIMEOUT_MS;
   }
   return rounded;
 }
@@ -187,6 +364,123 @@ export function logMessageProcessed(params: {
     outcome: params.outcome,
     reason: params.reason,
     error: params.error,
+  });
+  markActivity();
+}
+
+export function logMessageFirstVisible(params: {
+  channel: string;
+  messageId?: number | string;
+  chatId?: number | string;
+  sessionId?: string;
+  sessionKey?: string;
+  kind: "tool" | "block" | "status" | "final";
+  dispatchToFirstVisibleMs: number;
+}) {
+  if (diag.isEnabled("debug")) {
+    diag.debug(
+      `message first visible: channel=${params.channel} chatId=${params.chatId ?? "unknown"} messageId=${
+        params.messageId ?? "unknown"
+      } sessionId=${params.sessionId ?? "unknown"} sessionKey=${params.sessionKey ?? "unknown"} kind=${
+        params.kind
+      } dispatchToFirstVisible=${params.dispatchToFirstVisibleMs}ms`,
+    );
+  }
+  emitDiagnosticEvent({
+    type: "message.first_visible",
+    channel: params.channel,
+    chatId: params.chatId,
+    messageId: params.messageId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    kind: params.kind,
+    dispatchToFirstVisibleMs: params.dispatchToFirstVisibleMs,
+  });
+  recordFirstVisibleSample(params.dispatchToFirstVisibleMs);
+  markActivity();
+}
+
+export function getFirstVisibleWatchdogMs(): number {
+  try {
+    return resolveFirstVisibleWarnMs(loadConfig());
+  } catch {
+    return FIRST_VISIBLE_TIMEOUT_MS;
+  }
+}
+
+export function logMessageFirstVisibleTimeout(params: {
+  channel: string;
+  messageId?: number | string;
+  chatId?: number | string;
+  sessionId?: string;
+  sessionKey?: string;
+  thresholdMs?: number;
+}) {
+  const thresholdMs = params.thresholdMs ?? FIRST_VISIBLE_TIMEOUT_MS;
+  firstVisibleTimeoutCount += 1;
+  diag.warn(
+    `message first visible timeout: channel=${params.channel} chatId=${params.chatId ?? "unknown"} messageId=${
+      params.messageId ?? "unknown"
+    } sessionId=${params.sessionId ?? "unknown"} sessionKey=${params.sessionKey ?? "unknown"} threshold=${thresholdMs}ms`,
+  );
+  emitDiagnosticEvent({
+    type: "message.first_visible_timeout",
+    channel: params.channel,
+    chatId: params.chatId,
+    messageId: params.messageId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    thresholdMs,
+  });
+  markActivity();
+}
+
+export function logTurnLatencyStage(
+  params: TurnLatencyStageInfo & {
+    turnLatencyId: string;
+    channel: string;
+    messageId?: number | string;
+    chatId?: number | string;
+    sessionId?: string;
+    sessionKey?: string;
+    originatingChannel?: string;
+    routed?: boolean;
+    replyGeneration?: number;
+  },
+) {
+  if (diag.isEnabled("debug")) {
+    diag.debug(
+      `turn latency stage: id=${params.turnLatencyId} stage=${params.stage} channel=${params.channel} sessionKey=${
+        params.sessionKey ?? "unknown"
+      } duration=${params.durationMs ?? 0}ms`,
+    );
+  }
+  emitDiagnosticEvent({
+    type: "turn.latency.stage",
+    turnLatencyId: params.turnLatencyId,
+    stage: params.stage,
+    channel: params.channel,
+    messageId: params.messageId,
+    chatId: params.chatId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    originatingChannel: params.originatingChannel,
+    routed: params.routed,
+    replyGeneration: params.replyGeneration,
+    durationMs: params.durationMs,
+    queueModeConfigured: params.queueModeConfigured,
+    queueModeFinal: params.queueModeFinal,
+    supervisorAction: params.supervisorAction,
+    supervisorRelation: params.supervisorRelation,
+    firstVisibleKind: params.firstVisibleKind,
+    provider: params.provider,
+    model: params.model,
+    backend: params.backend,
+  });
+  recordTurnLatencyStageSample({
+    turnLatencyId: params.turnLatencyId,
+    stage: params.stage,
+    durationMs: params.durationMs,
   });
   markActivity();
 }
@@ -369,8 +663,18 @@ export function startDiagnosticHeartbeat(config?: OpenClawConfig) {
       return;
     }
 
+    const firstVisible = buildFirstVisibleSummary();
+    const latency = buildLatencySummary();
     diag.debug(
-      `heartbeat: webhooks=${webhookStats.received}/${webhookStats.processed}/${webhookStats.errors} active=${activeCount} waiting=${waitingCount} queued=${totalQueued}`,
+      `heartbeat: webhooks=${webhookStats.received}/${webhookStats.processed}/${webhookStats.errors} active=${activeCount} waiting=${waitingCount} queued=${totalQueued}${
+        firstVisible
+          ? ` firstVisible=${firstVisible.sampleCount} avg=${firstVisible.avgMs}ms p95=${firstVisible.p95Ms}ms max=${firstVisible.maxMs}ms`
+          : ""
+      }${
+        latency?.segments.endToEnd
+          ? ` latency.endToEnd=${latency.sampleCount} avg=${latency.segments.endToEnd.avgMs}ms p95=${latency.segments.endToEnd.p95Ms}ms max=${latency.segments.endToEnd.maxMs}ms`
+          : ""
+      }`,
     );
     emitDiagnosticEvent({
       type: "diagnostic.heartbeat",
@@ -382,6 +686,8 @@ export function startDiagnosticHeartbeat(config?: OpenClawConfig) {
       active: activeCount,
       waiting: waitingCount,
       queued: totalQueued,
+      firstVisible,
+      latency,
     });
 
     void loadCommandPollBackoffRuntime()
@@ -426,6 +732,12 @@ export function resetDiagnosticStateForTest(): void {
   webhookStats.processed = 0;
   webhookStats.errors = 0;
   webhookStats.lastReceived = 0;
+  firstVisibleSamples.length = 0;
+  firstVisibleTimeoutCount = 0;
+  for (const segment of Object.keys(latencySamples) as LatencySegmentName[]) {
+    latencySamples[segment].length = 0;
+  }
+  turnLatencySnapshots.clear();
   lastActivityAt = 0;
   stopDiagnosticHeartbeat();
 }

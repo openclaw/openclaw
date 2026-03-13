@@ -9,8 +9,12 @@ import {
   resetDiagnosticSessionStateForTest,
 } from "./diagnostic-session-state.js";
 import {
+  logMessageFirstVisibleTimeout,
+  logMessageFirstVisible,
+  logTurnLatencyStage,
   logSessionStateChange,
   resetDiagnosticStateForTest,
+  resolveFirstVisibleWarnMs,
   resolveStuckSessionWarnMs,
   startDiagnosticHeartbeat,
 } from "./diagnostic.js";
@@ -132,9 +136,186 @@ describe("stuck session diagnostics threshold", () => {
     expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(0);
   });
 
+  it("uses the configured diagnostics.firstVisibleWarnMs threshold", () => {
+    expect(resolveFirstVisibleWarnMs({ diagnostics: { firstVisibleWarnMs: 6_000 } })).toBe(6_000);
+  });
+
+  it("includes recent first-visible summary in heartbeat events", () => {
+    const events: Array<{
+      type: string;
+      firstVisible?: {
+        sampleCount: number;
+        avgMs: number;
+        p95Ms: number;
+        maxMs: number;
+        timeoutCount: number;
+      };
+      latency?: {
+        sampleCount: number;
+        segments?: Record<string, { avgMs: number; p95Ms: number; maxMs: number }>;
+      };
+    }> = [];
+    const unsubscribe = onDiagnosticEvent((event) => {
+      if (event.type === "diagnostic.heartbeat") {
+        events.push({
+          type: event.type,
+          firstVisible: event.firstVisible,
+          latency: event.latency,
+        });
+      }
+    });
+    try {
+      startDiagnosticHeartbeat({
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs: 30_000,
+        },
+      });
+      logMessageFirstVisible({
+        channel: "slack",
+        sessionKey: "agent:main:main",
+        kind: "final",
+        dispatchToFirstVisibleMs: 1200,
+      });
+      logMessageFirstVisible({
+        channel: "slack",
+        sessionKey: "agent:main:main",
+        kind: "final",
+        dispatchToFirstVisibleMs: 2200,
+      });
+      logMessageFirstVisibleTimeout({
+        channel: "slack",
+        sessionKey: "agent:main:main",
+        thresholdMs: 4000,
+      });
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.at(-1)).toEqual({
+      type: "diagnostic.heartbeat",
+      firstVisible: {
+        sampleCount: 2,
+        avgMs: 1700,
+        p95Ms: 2200,
+        maxMs: 2200,
+        timeoutCount: 1,
+      },
+      latency: undefined,
+    });
+  });
+
+  it("includes recent turn latency segment summaries in heartbeat events", () => {
+    const events: Array<{
+      type: string;
+      latency?: {
+        sampleCount: number;
+        segments?: Record<string, { avgMs: number; p95Ms: number; maxMs: number }>;
+      };
+    }> = [];
+    const unsubscribe = onDiagnosticEvent((event) => {
+      if (event.type === "diagnostic.heartbeat") {
+        events.push({
+          type: event.type,
+          latency: event.latency,
+        });
+      }
+    });
+    try {
+      startDiagnosticHeartbeat({
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs: 30_000,
+        },
+      });
+      logTurnLatencyStage({
+        turnLatencyId: "turn-1",
+        stage: "queue_arbitrated",
+        channel: "slack",
+        sessionKey: "agent:main:main",
+        durationMs: 100,
+      });
+      logTurnLatencyStage({
+        turnLatencyId: "turn-1",
+        stage: "run_started",
+        channel: "slack",
+        sessionKey: "agent:main:main",
+        durationMs: 400,
+      });
+      logTurnLatencyStage({
+        turnLatencyId: "turn-1",
+        stage: "acp_ensure_session_completed",
+        channel: "slack",
+        sessionKey: "agent:main:main",
+        durationMs: 250,
+      });
+      logTurnLatencyStage({
+        turnLatencyId: "turn-1",
+        stage: "acp_first_event",
+        channel: "slack",
+        sessionKey: "agent:main:main",
+        durationMs: 900,
+      });
+      logTurnLatencyStage({
+        turnLatencyId: "turn-1",
+        stage: "acp_first_visible_output",
+        channel: "slack",
+        sessionKey: "agent:main:main",
+        durationMs: 1200,
+        firstVisibleKind: "block",
+      });
+      logTurnLatencyStage({
+        turnLatencyId: "turn-1",
+        stage: "first_visible_emitted",
+        channel: "slack",
+        sessionKey: "agent:main:main",
+        durationMs: 1200,
+        firstVisibleKind: "block",
+      });
+      logTurnLatencyStage({
+        turnLatencyId: "turn-1",
+        stage: "final_dispatched",
+        channel: "slack",
+        sessionKey: "agent:main:main",
+        durationMs: 1800,
+      });
+      logTurnLatencyStage({
+        turnLatencyId: "turn-1",
+        stage: "completed",
+        channel: "slack",
+        sessionKey: "agent:main:main",
+        durationMs: 2000,
+      });
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.at(-1)).toEqual({
+      type: "diagnostic.heartbeat",
+      latency: {
+        sampleCount: 1,
+        segments: {
+          dispatchToQueue: { avgMs: 100, p95Ms: 100, maxMs: 100 },
+          queueToRun: { avgMs: 300, p95Ms: 300, maxMs: 300 },
+          acpEnsureToRun: { avgMs: 150, p95Ms: 150, maxMs: 150 },
+          runToFirstEvent: { avgMs: 500, p95Ms: 500, maxMs: 500 },
+          firstEventToFirstVisible: { avgMs: 300, p95Ms: 300, maxMs: 300 },
+          runToFirstVisible: { avgMs: 800, p95Ms: 800, maxMs: 800 },
+          firstVisibleToFinal: { avgMs: 600, p95Ms: 600, maxMs: 600 },
+          endToEnd: { avgMs: 2000, p95Ms: 2000, maxMs: 2000 },
+        },
+      },
+    });
+  });
+
   it("uses default threshold for invalid values", () => {
     expect(resolveStuckSessionWarnMs({ diagnostics: { stuckSessionWarnMs: -1 } })).toBe(120_000);
     expect(resolveStuckSessionWarnMs({ diagnostics: { stuckSessionWarnMs: 0 } })).toBe(120_000);
     expect(resolveStuckSessionWarnMs()).toBe(120_000);
+    expect(resolveFirstVisibleWarnMs({ diagnostics: { firstVisibleWarnMs: -1 } })).toBe(4_000);
+    expect(resolveFirstVisibleWarnMs({ diagnostics: { firstVisibleWarnMs: 0 } })).toBe(4_000);
+    expect(resolveFirstVisibleWarnMs()).toBe(4_000);
   });
 });
