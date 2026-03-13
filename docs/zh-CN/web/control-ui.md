@@ -84,7 +84,6 @@ openclaw devices approve <requestId>
 
 - `chat.send` 是**非阻塞的**：它立即以 `{ runId, status: "started" }` 确认，响应通过 `chat` 事件流式传输。
 - 使用相同的 `idempotencyKey` 重新发送在运行时返回 `{ status: "in_flight" }`，完成后返回 `{ status: "ok" }`。
-- 聊天里的上下文百分比和 `/usage` 优先使用新鲜的 `totalTokens` 快照（`totalTokensFresh !== false` 时）。只有在没有新鲜总量时，UI 才回退到累计 `inputTokens`，因为长工具循环后的累计输入很容易高估当前上下文窗口占用。
 - `chat.inject` 将助手备注附加到会话转录，并为仅 UI 更新广播 `chat` 事件（无智能体运行，无渠道投递）。
 - 停止：
   - 点击**停止**（调用 `chat.abort`）

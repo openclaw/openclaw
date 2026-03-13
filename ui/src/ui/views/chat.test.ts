@@ -382,6 +382,70 @@ describe("chat view", () => {
     expect(container.querySelector(".context-notice")).toBeNull();
   });
 
+  it("renders the context notice from fresh total tokens when the fresh snapshot is above threshold", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sessionKey: "agent:warden:main",
+          sessions: {
+            ...createSessions(),
+            defaults: { model: null, contextTokens: 272_000 },
+            sessions: [
+              {
+                key: "agent:warden:main",
+                kind: "direct",
+                updatedAt: Date.now(),
+                inputTokens: 529_712,
+                totalTokens: 240_000,
+                totalTokensFresh: true,
+                contextTokens: 272_000,
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    const notice = container.querySelector(".context-notice");
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent).toContain("88% context used");
+    expect(notice?.textContent).toContain("240k / 272k");
+  });
+
+  it("falls back to accumulated input tokens for the context notice when fresh totals are unavailable", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sessionKey: "agent:warden:main",
+          sessions: {
+            ...createSessions(),
+            defaults: { model: null, contextTokens: 272_000 },
+            sessions: [
+              {
+                key: "agent:warden:main",
+                kind: "direct",
+                updatedAt: Date.now(),
+                inputTokens: 240_000,
+                totalTokens: 130_364,
+                totalTokensFresh: false,
+                contextTokens: 272_000,
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    const notice = container.querySelector(".context-notice");
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent).toContain("88% context used");
+    expect(notice?.textContent).toContain("240k / 272k");
+  });
+
   it("renders fallback-cleared indicator shortly after transition", () => {
     const container = document.createElement("div");
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
