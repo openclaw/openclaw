@@ -1,9 +1,5 @@
-import {
-  getOAuthApiKey,
-  getOAuthProviders,
-  type OAuthCredentials,
-  type OAuthProvider,
-} from "@mariozechner/pi-ai/oauth";
+import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
+import { getOAuthApiKey, getOAuthProviders } from "@mariozechner/pi-ai/oauth";
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { withFileLock } from "../../infra/file-lock.js";
@@ -11,6 +7,7 @@ import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { normalizeProviderId } from "../model-selection.js";
+import { refreshOpenAICodexOAuthToken } from "../openai-codex-oauth.js";
 import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
@@ -188,18 +185,23 @@ async function refreshOAuthTokenWithLock(params: {
             });
             return { apiKey: newCredentials.access, newCredentials };
           })()
-        : String(cred.provider) === "qwen-portal"
+        : String(cred.provider) === "openai-codex"
           ? await (async () => {
-              const newCredentials = await refreshQwenPortalCredentials(cred);
+              const newCredentials = await refreshOpenAICodexOAuthToken(cred.refresh);
               return { apiKey: newCredentials.access, newCredentials };
             })()
-          : await (async () => {
-              const oauthProvider = resolveOAuthProvider(cred.provider);
-              if (!oauthProvider) {
-                return null;
-              }
-              return await getOAuthApiKey(oauthProvider, oauthCreds);
-            })();
+          : String(cred.provider) === "qwen-portal"
+            ? await (async () => {
+                const newCredentials = await refreshQwenPortalCredentials(cred);
+                return { apiKey: newCredentials.access, newCredentials };
+              })()
+            : await (async () => {
+                const oauthProvider = resolveOAuthProvider(cred.provider);
+                if (!oauthProvider) {
+                  return null;
+                }
+                return await getOAuthApiKey(oauthProvider, oauthCreds);
+              })();
     if (!result) {
       return null;
     }
