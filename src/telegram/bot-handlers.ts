@@ -1281,10 +1281,8 @@ export const registerTelegramHandlers = ({
 
         // Parse list callback: list_{provider}_{page}
         const listMatch = defModelData.match(/^list_([a-z0-9_-]+)_(\d+)$/i);
-        // Parse select callback (standard): sel_{provider/model}
+        // Parse select callback: sel_{provider/model}
         const selMatch = defModelData.match(/^sel_(.+)$/);
-        // Parse select callback (compact): sc/{provider}/{model}
-        const compactSelMatch = defModelData.match(/^sc\/([^/]+)\/(.+)$/);
 
         const modelData = await buildModelsProviderData(cfg, defSessionState.agentId);
         const { byProvider } = modelData;
@@ -1324,18 +1322,8 @@ export const registerTelegramHandlers = ({
 
           const rows: ButtonRow[] = [];
           for (const model of pageModels) {
-            // Standard format
-            const standardCallback = `defmdl_sel_${provider}/${model}`;
-            // Compact fallback: defmdl_sc/{provider_short}/{model} where provider_short is hashed if too long
-            const providerShort = provider.length > 8 ? provider.slice(0, 6) : provider;
-            const compactCallback = `defmdl_sc/${providerShort}/${model}`;
-            const callbackData =
-              Buffer.byteLength(standardCallback, "utf-8") <= 64
-                ? standardCallback
-                : Buffer.byteLength(compactCallback, "utf-8") <= 64
-                  ? compactCallback
-                  : null;
-            if (callbackData) {
+            const callbackData = `defmdl_sel_${provider}/${model}`;
+            if (Buffer.byteLength(callbackData, "utf-8") <= 64) {
               rows.push([{ text: model, callback_data: callbackData }]);
             }
           }
@@ -1365,11 +1353,7 @@ export const registerTelegramHandlers = ({
           return;
         }
 
-        const resolvedSelModel = selMatch
-          ? selMatch[1]
-          : compactSelMatch
-            ? `${compactSelMatch[1]}/${compactSelMatch[2]}`
-            : null;
+        const resolvedSelModel = selMatch ? selMatch[1] : null;
 
         if (resolvedSelModel) {
           // Authorization check: config writes require allowlist-level access
