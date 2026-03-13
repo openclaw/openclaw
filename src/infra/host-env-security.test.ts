@@ -12,6 +12,30 @@ import {
 } from "./host-env-security.js";
 import { OPENCLAW_CLI_ENV_VALUE } from "./openclaw-exec-env.js";
 
+function getSystemGitPath() {
+  if (process.platform === "win32") {
+    return null;
+  }
+  const gitPath = "/usr/bin/git";
+  return fs.existsSync(gitPath) ? gitPath : null;
+}
+
+function clearMarker(marker: string) {
+  try {
+    fs.unlinkSync(marker);
+  } catch {
+    // no-op
+  }
+}
+
+async function runGitLsRemote(gitPath: string, target: string, env: NodeJS.ProcessEnv) {
+  await new Promise<void>((resolve) => {
+    const child = spawn(gitPath, ["ls-remote", target], { env, stdio: "ignore" });
+    child.once("error", () => resolve());
+    child.once("close", () => resolve());
+  });
+}
+
 describe("isDangerousHostEnvVarName", () => {
   it("matches dangerous keys and prefixes case-insensitively", () => {
     expect(isDangerousHostEnvVarName("BASH_ENV")).toBe(true);
@@ -275,11 +299,8 @@ describe("shell wrapper exploit regression", () => {
 
 describe("git env exploit regression", () => {
   it("blocks inherited GIT_EXEC_PATH so git cannot execute helper payloads", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const gitPath = "/usr/bin/git";
-    if (!fs.existsSync(gitPath)) {
+    const gitPath = getSystemGitPath();
+    if (!gitPath) {
       return;
     }
 
@@ -292,11 +313,7 @@ describe("git env exploit regression", () => {
       `openclaw-git-exec-path-marker-${process.pid}-${Date.now()}`,
     );
     try {
-      try {
-        fs.unlinkSync(marker);
-      } catch {
-        // no-op
-      }
+      clearMarker(marker);
       fs.writeFileSync(helperPath, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 1\n`, "utf8");
       fs.chmodSync(helperPath, 0o755);
 
@@ -307,24 +324,16 @@ describe("git env exploit regression", () => {
         GIT_TERMINAL_PROMPT: "0",
       };
 
-      await new Promise<void>((resolve) => {
-        const child = spawn(gitPath, ["ls-remote", target], { env: unsafeEnv, stdio: "ignore" });
-        child.once("error", () => resolve());
-        child.once("close", () => resolve());
-      });
+      await runGitLsRemote(gitPath, target, unsafeEnv);
 
       expect(fs.existsSync(marker)).toBe(true);
-      fs.unlinkSync(marker);
+      clearMarker(marker);
 
       const safeEnv = sanitizeHostExecEnv({
         baseEnv: unsafeEnv,
       });
 
-      await new Promise<void>((resolve) => {
-        const child = spawn(gitPath, ["ls-remote", target], { env: safeEnv, stdio: "ignore" });
-        child.once("error", () => resolve());
-        child.once("close", () => resolve());
-      });
+      await runGitLsRemote(gitPath, target, safeEnv);
 
       expect(fs.existsSync(marker)).toBe(false);
     } finally {
@@ -334,20 +343,13 @@ describe("git env exploit regression", () => {
   });
 
   it("blocks GIT_SSH_COMMAND override so git cannot execute helper payloads", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const gitPath = "/usr/bin/git";
-    if (!fs.existsSync(gitPath)) {
+    const gitPath = getSystemGitPath();
+    if (!gitPath) {
       return;
     }
 
     const marker = path.join(os.tmpdir(), `openclaw-git-ssh-command-${process.pid}-${Date.now()}`);
-    try {
-      fs.unlinkSync(marker);
-    } catch {
-      // no-op
-    }
+    clearMarker(marker);
 
     const target = "ssh://127.0.0.1:1/does-not-matter";
     const exploitValue = `touch ${JSON.stringify(marker)}; false`;
@@ -361,14 +363,10 @@ describe("git env exploit regression", () => {
       GIT_SSH_COMMAND: exploitValue,
     };
 
-    await new Promise<void>((resolve) => {
-      const child = spawn(gitPath, ["ls-remote", target], { env: unsafeEnv, stdio: "ignore" });
-      child.once("error", () => resolve());
-      child.once("close", () => resolve());
-    });
+    await runGitLsRemote(gitPath, target, unsafeEnv);
 
     expect(fs.existsSync(marker)).toBe(true);
-    fs.unlinkSync(marker);
+    clearMarker(marker);
 
     const safeEnv = sanitizeHostExecEnv({
       baseEnv,
@@ -377,11 +375,7 @@ describe("git env exploit regression", () => {
       },
     });
 
-    await new Promise<void>((resolve) => {
-      const child = spawn(gitPath, ["ls-remote", target], { env: safeEnv, stdio: "ignore" });
-      child.once("error", () => resolve());
-      child.once("close", () => resolve());
-    });
+    await runGitLsRemote(gitPath, target, safeEnv);
 
     expect(fs.existsSync(marker)).toBe(false);
   });
