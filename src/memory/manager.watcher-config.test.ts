@@ -126,7 +126,7 @@ describe("memory watcher config", () => {
             sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
             query: { minScore: 0, hybrid: { enabled: false } },
             extraPaths: [extraDir],
-            multimodal: { enabled: true, modalities: ["image", "audio"] },
+            multimodal: { enabled: true, modalities: ["image", "audio", "video", "pdf"] },
           },
         },
         list: [{ id: "main", default: true }],
@@ -149,6 +149,9 @@ describe("memory watcher config", () => {
       expect.arrayContaining([
         path.join(extraDir, "**", "*.[pP][nN][gG]"),
         path.join(extraDir, "**", "*.[wW][aA][vV]"),
+        path.join(extraDir, "**", "*.[mM][pP][44]"),
+        path.join(extraDir, "**", "*.[mM][oO][vV]"),
+        path.join(extraDir, "**", "*.[pP][dD][fF]"),
       ]),
     );
   });

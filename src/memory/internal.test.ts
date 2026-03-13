@@ -45,7 +45,7 @@ describe("listMemoryFiles", () => {
   const getTmpDir = setupTempDirLifecycle("memory-test-");
   const multimodal: MemoryMultimodalSettings = {
     enabled: true,
-    modalities: ["image", "audio"],
+    modalities: ["image", "audio", "video", "pdf"],
     maxFileBytes: DEFAULT_MEMORY_MULTIMODAL_MAX_FILE_BYTES,
   };
 
@@ -142,17 +142,27 @@ describe("listMemoryFiles", () => {
     expect(memoryMatches).toHaveLength(1);
   });
 
-  it("includes image and audio files from extra paths when multimodal is enabled", async () => {
+  it("includes image, audio, video, and PDF files from extra paths when multimodal is enabled", async () => {
     const tmpDir = getTmpDir();
     const extraDir = path.join(tmpDir, "media");
     await fs.mkdir(extraDir, { recursive: true });
     await fs.writeFile(path.join(extraDir, "diagram.png"), Buffer.from("png"));
     await fs.writeFile(path.join(extraDir, "note.wav"), Buffer.from("wav"));
+    await fs.writeFile(path.join(extraDir, "clip.mp4"), Buffer.from("mp4"));
+    await fs.writeFile(path.join(extraDir, "brief.pdf"), Buffer.from("%PDF-1.4"));
+    await fs.writeFile(path.join(extraDir, "UPPER.MP4"), Buffer.from("mp4"));
+    await fs.writeFile(path.join(extraDir, "TRAILER.MOV"), Buffer.from("mov"));
+    await fs.writeFile(path.join(extraDir, "REPORT.PDF"), Buffer.from("%PDF-1.4"));
     await fs.writeFile(path.join(extraDir, "ignore.bin"), Buffer.from("bin"));
 
     const files = await listMemoryFiles(tmpDir, [extraDir], multimodal);
     expect(files.some((file) => file.endsWith("diagram.png"))).toBe(true);
     expect(files.some((file) => file.endsWith("note.wav"))).toBe(true);
+    expect(files.some((file) => file.endsWith("clip.mp4"))).toBe(true);
+    expect(files.some((file) => file.endsWith("brief.pdf"))).toBe(true);
+    expect(files.some((file) => file.endsWith("UPPER.MP4"))).toBe(true);
+    expect(files.some((file) => file.endsWith("TRAILER.MOV"))).toBe(true);
+    expect(files.some((file) => file.endsWith("REPORT.PDF"))).toBe(true);
     expect(files.some((file) => file.endsWith("ignore.bin"))).toBe(false);
   });
 });
@@ -161,7 +171,7 @@ describe("buildFileEntry", () => {
   const getTmpDir = setupTempDirLifecycle("memory-build-entry-");
   const multimodal: MemoryMultimodalSettings = {
     enabled: true,
-    modalities: ["image", "audio"],
+    modalities: ["image", "audio", "video", "pdf"],
     maxFileBytes: DEFAULT_MEMORY_MULTIMODAL_MAX_FILE_BYTES,
   };
 
@@ -197,6 +207,70 @@ describe("buildFileEntry", () => {
       modality: "image",
       mimeType: "image/png",
       contentText: "Image file: diagram.png",
+    });
+  });
+
+  it("returns multimodal metadata for eligible PDF files", async () => {
+    const tmpDir = getTmpDir();
+    const target = path.join(tmpDir, "brief.pdf");
+    await fs.writeFile(target, Buffer.from("%PDF-1.4"));
+
+    const entry = await buildFileEntry(target, tmpDir, multimodal);
+
+    expect(entry).toMatchObject({
+      path: "brief.pdf",
+      kind: "multimodal",
+      modality: "pdf",
+      mimeType: "application/pdf",
+      contentText: "PDF file: brief.pdf",
+    });
+  });
+
+  it("returns multimodal metadata for eligible uppercase PDF files", async () => {
+    const tmpDir = getTmpDir();
+    const target = path.join(tmpDir, "REPORT.PDF");
+    await fs.writeFile(target, Buffer.from("%PDF-1.4"));
+
+    const entry = await buildFileEntry(target, tmpDir, multimodal);
+
+    expect(entry).toMatchObject({
+      path: "REPORT.PDF",
+      kind: "multimodal",
+      modality: "pdf",
+      mimeType: "application/pdf",
+      contentText: "PDF file: REPORT.PDF",
+    });
+  });
+
+  it("returns multimodal metadata for eligible video files", async () => {
+    const tmpDir = getTmpDir();
+    const target = path.join(tmpDir, "clip.mp4");
+    await fs.writeFile(target, Buffer.from("mp4"));
+
+    const entry = await buildFileEntry(target, tmpDir, multimodal);
+
+    expect(entry).toMatchObject({
+      path: "clip.mp4",
+      kind: "multimodal",
+      modality: "video",
+      mimeType: "video/mp4",
+      contentText: "Video file: clip.mp4",
+    });
+  });
+
+  it("returns multimodal metadata for eligible uppercase MOV files", async () => {
+    const tmpDir = getTmpDir();
+    const target = path.join(tmpDir, "TRAILER.MOV");
+    await fs.writeFile(target, Buffer.from("mov"));
+
+    const entry = await buildFileEntry(target, tmpDir, multimodal);
+
+    expect(entry).toMatchObject({
+      path: "TRAILER.MOV",
+      kind: "multimodal",
+      modality: "video",
+      mimeType: "video/quicktime",
+      contentText: "Video file: TRAILER.MOV",
     });
   });
 

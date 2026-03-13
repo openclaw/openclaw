@@ -321,10 +321,10 @@ export type MemorySearchConfig = {
   extraPaths?: string[];
   /** Optional multimodal file indexing for selected extra paths. */
   multimodal?: {
-    /** Enable image/audio embeddings from extraPaths. */
+    /** Enable image/audio/video/PDF embeddings from extraPaths. */
     enabled?: boolean;
     /** Which non-text file types to index. */
-    modalities?: Array<"image" | "audio" | "all">;
+    modalities?: Array<"image" | "audio" | "video" | "pdf" | "all">;
     /** Max bytes allowed per multimodal file before it is skipped. */
     maxFileBytes?: number;
   };

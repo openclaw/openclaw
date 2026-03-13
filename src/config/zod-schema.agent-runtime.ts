@@ -569,7 +569,15 @@ export const MemorySearchSchema = z
       .object({
         enabled: z.boolean().optional(),
         modalities: z
-          .array(z.union([z.literal("image"), z.literal("audio"), z.literal("all")]))
+          .array(
+            z.union([
+              z.literal("image"),
+              z.literal("audio"),
+              z.literal("video"),
+              z.literal("pdf"),
+              z.literal("all"),
+            ]),
+          )
           .optional(),
         maxFileBytes: z.number().int().positive().optional(),
       })

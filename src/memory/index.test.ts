@@ -17,7 +17,9 @@ vi.mock("./embeddings.js", () => {
     const beta = lower.split("beta").length - 1;
     const image = lower.split("image").length - 1;
     const audio = lower.split("audio").length - 1;
-    return [alpha, beta, image, audio];
+    const video = lower.split("video").length - 1;
+    const pdf = lower.split("pdf").length - 1;
+    return [alpha, beta, image, audio, video, pdf];
   };
   return {
     createEmbeddingProvider: async (options: {
@@ -61,11 +63,26 @@ vi.mock("./embeddings.js", () => {
                     }
                     const mimeType =
                       inlineData?.type === "inline-data" ? inlineData.mimeType : undefined;
+                    if (input.text.toLowerCase().includes("reject.pdf")) {
+                      throw new Error("400 pdf page limit exceeded");
+                    }
+                    if (input.text.toLowerCase().includes("generic400.pdf")) {
+                      throw new Error("400 bad request");
+                    }
+                    if (input.text.toLowerCase().includes("outage.mp4")) {
+                      throw new Error("503 upstream unavailable");
+                    }
                     if (mimeType?.startsWith("image/")) {
-                      return [0, 0, 1, 0];
+                      return [0, 0, 1, 0, 0, 0];
                     }
                     if (mimeType?.startsWith("audio/")) {
-                      return [0, 0, 0, 1];
+                      return [0, 0, 0, 1, 0, 0];
+                    }
+                    if (mimeType?.startsWith("video/")) {
+                      return [0, 0, 0, 0, 1, 0];
+                    }
+                    if (mimeType === "application/pdf") {
+                      return [0, 0, 0, 0, 0, 1];
                     }
                     return embedText(input.text);
                   });
@@ -188,7 +205,7 @@ describe("memory index", () => {
     outputDimensionality?: number;
     multimodal?: {
       enabled?: boolean;
-      modalities?: Array<"image" | "audio" | "all">;
+      modalities?: Array<"image" | "audio" | "video" | "pdf" | "all">;
       maxFileBytes?: number;
     };
     vectorEnabled?: boolean;
@@ -290,18 +307,20 @@ describe("memory index", () => {
     );
   });
 
-  it("indexes multimodal image and audio files from extra paths with Gemini structured inputs", async () => {
+  it("indexes multimodal image, audio, video, and PDF files from extra paths with Gemini structured inputs", async () => {
     const mediaDir = path.join(workspaceDir, "media-memory");
     await fs.mkdir(mediaDir, { recursive: true });
     await fs.writeFile(path.join(mediaDir, "diagram.png"), Buffer.from("png"));
     await fs.writeFile(path.join(mediaDir, "meeting.wav"), Buffer.from("wav"));
+    await fs.writeFile(path.join(mediaDir, "clip.mp4"), Buffer.from("mp4"));
+    await fs.writeFile(path.join(mediaDir, "brief.pdf"), Buffer.from("%PDF-1.4"));
 
     const cfg = createCfg({
       storePath: indexMultimodalPath,
       provider: "gemini",
       model: "gemini-embedding-2-preview",
       extraPaths: [mediaDir],
-      multimodal: { enabled: true, modalities: ["image", "audio"] },
+      multimodal: { enabled: true, modalities: ["image", "audio", "video", "pdf"] },
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
@@ -313,6 +332,12 @@ describe("memory index", () => {
 
     const audioResults = await manager.search("audio");
     expect(audioResults.some((result) => result.path.endsWith("meeting.wav"))).toBe(true);
+
+    const videoResults = await manager.search("video");
+    expect(videoResults.some((result) => result.path.endsWith("clip.mp4"))).toBe(true);
+
+    const pdfResults = await manager.search("pdf");
+    expect(pdfResults.some((result) => result.path.endsWith("brief.pdf"))).toBe(true);
   });
 
   it("skips oversized multimodal inputs without aborting sync", async () => {
@@ -336,6 +361,72 @@ describe("memory index", () => {
 
     const alphaResults = await manager.search("alpha");
     expect(alphaResults.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
+
+    await manager.close?.();
+  });
+
+  it("skips multimodal provider validation errors without aborting sync", async () => {
+    const mediaDir = path.join(workspaceDir, "media-validation-skip");
+    await fs.mkdir(mediaDir, { recursive: true });
+    await fs.writeFile(path.join(mediaDir, "reject.pdf"), Buffer.from("%PDF-1.4"));
+    await fs.writeFile(path.join(mediaDir, "diagram.png"), Buffer.from("png"));
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, `index-validation-${randomUUID()}.sqlite`),
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      extraPaths: [mediaDir],
+      multimodal: { enabled: true, modalities: ["image", "pdf"] },
+    });
+    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    await manager.sync({ reason: "test" });
+
+    const pdfResults = await manager.search("pdf");
+    expect(pdfResults.some((result) => result.path.endsWith("reject.pdf"))).toBe(false);
+
+    const imageResults = await manager.search("image");
+    expect(imageResults.some((result) => result.path.endsWith("diagram.png"))).toBe(true);
+
+    const alphaResults = await manager.search("alpha");
+    expect(alphaResults.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
+
+    await manager.close?.();
+  });
+
+  it("preserves sync failure behavior for multimodal systemic provider errors", async () => {
+    const mediaDir = path.join(workspaceDir, "media-systemic-error");
+    await fs.mkdir(mediaDir, { recursive: true });
+    await fs.writeFile(path.join(mediaDir, "outage.mp4"), Buffer.from("mp4"));
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, `index-systemic-${randomUUID()}.sqlite`),
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      extraPaths: [mediaDir],
+      multimodal: { enabled: true, modalities: ["video"] },
+    });
+    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+
+    await expect(manager.sync({ reason: "test" })).rejects.toThrow(/503 upstream unavailable/);
+
+    await manager.close?.();
+  });
+
+  it("fails sync for generic multimodal 400 provider errors", async () => {
+    const mediaDir = path.join(workspaceDir, "media-generic-400");
+    await fs.mkdir(mediaDir, { recursive: true });
+    await fs.writeFile(path.join(mediaDir, "generic400.pdf"), Buffer.from("%PDF-1.4"));
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, `index-generic-400-${randomUUID()}.sqlite`),
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      extraPaths: [mediaDir],
+      multimodal: { enabled: true, modalities: ["pdf"] },
+    });
+    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+
+    await expect(manager.sync({ reason: "test" })).rejects.toThrow(/400 bad request/);
 
     await manager.close?.();
   });

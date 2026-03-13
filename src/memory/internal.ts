@@ -10,6 +10,7 @@ import { isFileMissingError } from "./fs-utils.js";
 import {
   buildMemoryMultimodalLabel,
   classifyMemoryMultimodalPath,
+  isSupportedMemoryMultimodalMimeType,
   type MemoryMultimodalModality,
   type MemoryMultimodalSettings,
 } from "./multimodal.js";
@@ -216,7 +217,7 @@ export async function buildFileEntry(
       throw err;
     }
     const mimeType = await detectMime({ buffer: buffer.subarray(0, 512), filePath: absPath });
-    if (!mimeType || !mimeType.startsWith(`${modality}/`)) {
+    if (!mimeType || !isSupportedMemoryMultimodalMimeType(modality, mimeType)) {
       return null;
     }
     const contentText = buildMemoryMultimodalLabel(modality, normalizedPath);

@@ -801,6 +801,26 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     );
   }
 
+  private isMultimodalProviderValidationError(message: string): boolean {
+    return /(page limit|too many pages|mime type|unsupported (file|media|mime|codec|format)|invalid (mime|codec|format|duration|media|file)|codec|duration|media type|file type|(audio|video).*(too long|duration)|(too long|duration).*(audio|video))/i.test(
+      message,
+    );
+  }
+
+  private isSkippableMultimodalInputError(message: string): boolean {
+    if (
+      /(401|403|429|quota|rate[_ ]limit|too many requests|5\d\d|timed? out|timeout|network|econn|enotfound|service unavailable|unavailable)/i.test(
+        message,
+      )
+    ) {
+      return false;
+    }
+    return (
+      this.isStructuredInputTooLargeError(message) ||
+      this.isMultimodalProviderValidationError(message)
+    );
+  }
+
   protected async indexFile(
     entry: MemoryFileEntry | SessionFileEntry,
     options: { source: MemorySource; content?: string },
@@ -848,9 +868,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       if (
         "kind" in entry &&
         entry.kind === "multimodal" &&
-        this.isStructuredInputTooLargeError(message)
+        this.isSkippableMultimodalInputError(message)
       ) {
-        log.warn("memory embeddings: skipping multimodal file rejected as too large", {
+        const skipReason = this.isStructuredInputTooLargeError(message)
+          ? "rejected as too large"
+          : "rejected by provider validation";
+        log.warn(`memory embeddings: skipping multimodal file ${skipReason}`, {
           path: entry.path,
           bytes: structuredInputBytes,
           provider: this.provider.id,
