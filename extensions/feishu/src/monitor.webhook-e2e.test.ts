@@ -50,6 +50,14 @@ function encryptFeishuPayload(encryptKey: string, payload: Record<string, unknow
   return Buffer.concat([iv, encrypted]).toString("base64");
 }
 
+async function postSignedPayload(url: string, payload: Record<string, unknown>) {
+  return await fetch(url, {
+    method: "POST",
+    headers: signFeishuPayload({ encryptKey: "encrypt_key", payload }),
+    body: JSON.stringify(payload),
+  });
+}
+
 afterEach(() => {
   stopFeishuMonitor();
 });
@@ -143,11 +151,7 @@ describe("Feishu webhook signed-request e2e", () => {
       monitorFeishuProvider,
       async (url) => {
         const payload = { type: "url_verification", challenge: "challenge-token" };
-        const response = await fetch(url, {
-          method: "POST",
-          headers: signFeishuPayload({ encryptKey: "encrypt_key", payload }),
-          body: JSON.stringify(payload),
-        });
+        const response = await postSignedPayload(url, payload);
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({ challenge: "challenge-token" });
@@ -172,11 +176,7 @@ describe("Feishu webhook signed-request e2e", () => {
           header: { event_type: "unknown.event" },
           event: {},
         };
-        const response = await fetch(url, {
-          method: "POST",
-          headers: signFeishuPayload({ encryptKey: "encrypt_key", payload }),
-          body: JSON.stringify(payload),
-        });
+        const response = await postSignedPayload(url, payload);
 
         expect(response.status).toBe(200);
         expect(await response.text()).toContain("no unknown.event event handle");
@@ -202,11 +202,7 @@ describe("Feishu webhook signed-request e2e", () => {
             challenge: "encrypted-challenge-token",
           }),
         };
-        const response = await fetch(url, {
-          method: "POST",
-          headers: signFeishuPayload({ encryptKey: "encrypt_key", payload }),
-          body: JSON.stringify(payload),
-        });
+        const response = await postSignedPayload(url, payload);
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({
