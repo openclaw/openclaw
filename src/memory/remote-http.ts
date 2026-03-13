@@ -1,4 +1,7 @@
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import {
+  fetchWithSsrFGuard,
+  withTrustedEnvProxyGuardedFetchMode,
+} from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 
 export function buildRemoteBaseUrlPolicy(baseUrl: string): SsrFPolicy | undefined {
@@ -26,12 +29,15 @@ export async function withRemoteHttpResponse<T>(params: {
   auditContext?: string;
   onResponse: (response: Response) => Promise<T>;
 }): Promise<T> {
-  const { response, release } = await fetchWithSsrFGuard({
+  // Memory embedding endpoints are operator-configured (API keys, base URLs),
+  // so they are trusted and should honor env proxy settings (HTTPS_PROXY etc).
+  const guardedParams = withTrustedEnvProxyGuardedFetchMode({
     url: params.url,
     init: params.init,
     policy: params.ssrfPolicy,
     auditContext: params.auditContext ?? "memory-remote",
   });
+  const { response, release } = await fetchWithSsrFGuard(guardedParams);
   try {
     return await params.onResponse(response);
   } finally {

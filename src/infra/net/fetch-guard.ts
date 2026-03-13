@@ -1,7 +1,7 @@
 import { EnvHttpProxyAgent, type Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { bindAbortRelay } from "../../utils/fetch-timeout.js";
-import { hasProxyEnvConfigured } from "./proxy-env.js";
+import { hasEnvHttpProxyConfigured } from "./proxy-env.js";
 import {
   closeDispatcher,
   createPinnedDispatcher,
@@ -193,11 +193,19 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         lookupFn: params.lookupFn,
         policy: params.policy,
       });
+      const requestProtocol = parsedUrl.protocol === "https:" ? "https" : "http";
       const canUseTrustedEnvProxy =
-        mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
+        mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasEnvHttpProxyConfigured(requestProtocol);
       if (canUseTrustedEnvProxy) {
-        dispatcher = new EnvHttpProxyAgent();
-      } else if (params.pinDns !== false) {
+        try {
+          dispatcher = new EnvHttpProxyAgent();
+        } catch (err) {
+          logWarn(
+            `network: failed to initialize trusted env proxy dispatcher, falling back to pinned DNS (${String(err)})`,
+          );
+        }
+      }
+      if (!dispatcher && params.pinDns !== false) {
         dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy);
       }
 
