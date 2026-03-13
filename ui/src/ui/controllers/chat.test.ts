@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { handleSendChat } from "../app-chat.ts";
 import { CHAT_HISTORY_RENDER_LIMIT } from "../chat/history-limits.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
   navigateChatInputHistory,
+  recordNonTranscriptInputHistory,
   resetChatInputHistoryNavigation,
   type ChatInputHistoryState,
 } from "../chat/input-history.ts";
@@ -624,6 +626,7 @@ function createChatHistoryState(
     chatLoading: false,
     chatMessage: "",
     chatMessages: [],
+    chatLocalInputHistoryBySession: {},
     sessionKey: "main",
     chatInputHistorySessionKey: null,
     chatInputHistoryItems: null,
@@ -712,6 +715,23 @@ describe("chat input history navigation", () => {
 
     expect(navigateChatInputHistory(host, "up")).toBe(true);
     expect(host.chatMessage).toBe("other-user");
+  });
+
+  it("includes non-transcript local inputs in session history recall", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(2_000);
+    const host = createChatHistoryState({
+      chatMessage: "",
+      chatMessages: [textMessage("user", "older-user-message")],
+    });
+
+    recordNonTranscriptInputHistory(host, "/status");
+
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("/status");
+
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("older-user-message");
+    now.mockRestore();
   });
 
   it("clears internal navigation state on explicit reset", () => {
@@ -884,6 +904,43 @@ describe("chat input history navigation", () => {
     expect(host.chatInputHistoryIndex).toBe(-1);
     expect(host.chatMessage).toBe("");
   });
+
+  it("records locally handled slash commands for subsequent ArrowUp recall", async () => {
+    const onSlashAction = vi.fn();
+    const now = vi.spyOn(Date, "now").mockReturnValue(3_000);
+    const host = {
+      connected: true,
+      client: null,
+      chatStream: null,
+      chatLoading: false,
+      chatMessage: "/focus",
+      chatMessages: [],
+      chatLocalInputHistoryBySession: {},
+      chatInputHistorySessionKey: null,
+      chatInputHistoryItems: null,
+      chatInputHistoryIndex: -1,
+      chatDraftBeforeHistory: null,
+      chatAttachments: [],
+      chatQueue: [],
+      chatRunId: null,
+      chatSending: false,
+      lastError: null,
+      basePath: "",
+      hello: null,
+      chatAvatarUrl: null,
+      refreshSessionsAfterChat: new Set<string>(),
+      sessionKey: "main",
+      onSlashAction,
+    };
+
+    await handleSendChat(host, undefined, undefined);
+
+    expect(onSlashAction).toHaveBeenCalledWith("toggle-focus");
+    expect(host.chatMessage).toBe("");
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("/focus");
+    now.mockRestore();
+  });
 });
 
 describe("loadChatHistory", () => {
@@ -927,6 +984,7 @@ describe("loadChatHistory", () => {
         sessionKey: "next",
         chatMessages: [{ role: "user", content: [{ type: "text", text: "old-session-entry" }] }],
       }),
+      chatLocalInputHistoryBySession: {},
       chatInputHistorySessionKey: null,
       chatInputHistoryItems: null,
       chatInputHistoryIndex: -1,
@@ -956,6 +1014,7 @@ describe("loadChatHistory", () => {
         sessionKey: "next",
         chatMessages: [{ role: "user", content: [{ type: "text", text: "old-session-entry" }] }],
       }),
+      chatLocalInputHistoryBySession: {},
       chatInputHistorySessionKey: null,
       chatInputHistoryItems: null,
       chatInputHistoryIndex: -1,

@@ -171,6 +171,7 @@ export class OpenClawApp extends LitElement {
   @state() chatManualRefreshInFlight = false;
   @state() navDrawerOpen = false;
   onSlashAction?: (action: string) => void;
+  chatLocalInputHistoryBySession: Record<string, Array<{ text: string; ts: number }>> = {};
   chatInputHistorySessionKey: string | null = null;
   chatInputHistoryItems: string[] | null = null;
   @state() chatInputHistoryIndex = -1;

@@ -7,6 +7,7 @@ import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
   navigateChatInputHistory,
+  recordNonTranscriptInputHistory,
   resetChatInputHistoryNavigation,
   type ChatInputHistoryKeyInput,
   type ChatInputHistoryKeyResult,
@@ -220,6 +221,9 @@ export async function handleSendChat(
   }
 
   if (isChatStopCommand(message)) {
+    if (messageOverride == null) {
+      recordNonTranscriptInputHistory(host, message);
+    }
     await handleAbortChat(host);
     return;
   }
@@ -229,8 +233,10 @@ export async function handleSendChat(
   if (parsed?.command.executeLocal) {
     if (isChatBusy(host) && shouldQueueLocalSlashCommand(parsed.command.name)) {
       if (messageOverride == null) {
+        recordNonTranscriptInputHistory(host, message);
         host.chatMessage = "";
         host.chatAttachments = [];
+        resetChatInputHistoryNavigation(host);
       }
       enqueueChatMessage(host, message, undefined, isChatResetCommand(message), {
         args: parsed.args,
@@ -240,8 +246,10 @@ export async function handleSendChat(
     }
     const prevDraft = messageOverride == null ? previousDraft : undefined;
     if (messageOverride == null) {
+      recordNonTranscriptInputHistory(host, message);
       host.chatMessage = "";
       host.chatAttachments = [];
+      resetChatInputHistoryNavigation(host);
     }
     await dispatchSlashCommand(host, parsed.command.name, parsed.args, {
       previousDraft: prevDraft,

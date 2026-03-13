@@ -1,11 +1,17 @@
 import { CHAT_HISTORY_RENDER_LIMIT } from "./history-limits.ts";
 import { extractText } from "./message-extract.ts";
 
+type ChatLocalInputHistoryEntry = {
+  text: string;
+  ts: number;
+};
+
 export type ChatInputHistoryState = {
   sessionKey: string;
   chatLoading: boolean;
   chatMessage: string;
   chatMessages: unknown[];
+  chatLocalInputHistoryBySession: Record<string, ChatLocalInputHistoryEntry[]>;
   chatInputHistorySessionKey: string | null;
   chatInputHistoryItems: string[] | null;
   chatInputHistoryIndex: number;
@@ -46,13 +52,16 @@ export type ChatInputHistoryKeyResult = {
   valueLength: number;
 };
 
-function collectUserInputHistory(messages: unknown[]): string[] {
-  if (messages.length === 0) {
+function collectUserInputHistory(
+  messages: unknown[],
+  localEntries: ChatLocalInputHistoryEntry[],
+): string[] {
+  if (messages.length === 0 && localEntries.length === 0) {
     return [];
   }
   // Keep input recall aligned with what chat UI renders: only consider the visible history window.
   const start = Math.max(0, messages.length - CHAT_HISTORY_RENDER_LIMIT);
-  const items: string[] = [];
+  const candidates: Array<{ text: string; ts: number }> = [...localEntries];
   for (let i = messages.length - 1; i >= start; i--) {
     const message = messages[i];
     if (!message || typeof message !== "object") {
@@ -67,9 +76,39 @@ function collectUserInputHistory(messages: unknown[]): string[] {
     if (!text || !text.trim()) {
       continue;
     }
-    items.push(text);
+    const timestamp =
+      typeof (message as { timestamp?: unknown }).timestamp === "number"
+        ? ((message as { timestamp?: number }).timestamp ?? 0)
+        : 0;
+    candidates.push({ text, ts: timestamp });
+  }
+
+  candidates.sort((a, b) => b.ts - a.ts);
+  const items: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    if (seen.has(candidate.text)) {
+      continue;
+    }
+    seen.add(candidate.text);
+    items.push(candidate.text);
   }
   return items;
+}
+
+export function recordNonTranscriptInputHistory(state: ChatInputHistoryState, text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return;
+  }
+  const sessionEntries = state.chatLocalInputHistoryBySession[state.sessionKey] ?? [];
+  if (sessionEntries[0]?.text === trimmed) {
+    return;
+  }
+  state.chatLocalInputHistoryBySession[state.sessionKey] = [
+    { text: trimmed, ts: Date.now() },
+    ...sessionEntries,
+  ].slice(0, CHAT_HISTORY_RENDER_LIMIT);
 }
 
 export function resetChatInputHistoryNavigation(state: ChatInputHistoryState) {
@@ -92,7 +131,10 @@ function ensureChatInputHistorySnapshot(state: ChatInputHistoryState): string[] 
     return state.chatInputHistoryItems;
   }
   // Snapshot once per navigation round so incoming chat events don't shift arrow-key traversal order.
-  const items = collectUserInputHistory(state.chatMessages);
+  const items = collectUserInputHistory(
+    state.chatMessages,
+    state.chatLocalInputHistoryBySession[state.sessionKey] ?? [],
+  );
   state.chatInputHistoryItems = items;
   state.chatInputHistorySessionKey = state.sessionKey;
   state.chatInputHistoryIndex = -1;
