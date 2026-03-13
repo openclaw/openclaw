@@ -4,6 +4,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   normalizeOptionalSecretInput,
   normalizeSecretInput,
@@ -17,10 +18,16 @@ import {
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
 import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
-import { OLLAMA_LOCAL_AUTH_MARKER } from "./model-auth-markers.js";
+import {
+  isKnownEnvApiKeyMarker,
+  isNonSecretApiKeyMarker,
+  OLLAMA_LOCAL_AUTH_MARKER,
+} from "./model-auth-markers.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
+
+const log = createSubsystemLogger("model-auth");
 
 const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
@@ -57,6 +64,49 @@ export function getCustomProviderApiKey(
   return normalizeOptionalSecretInput(entry?.apiKey);
 }
 
+type ResolvedCustomProviderApiKey = {
+  apiKey: string;
+  source: string;
+};
+
+export function resolveUsableCustomProviderApiKey(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  env?: NodeJS.ProcessEnv;
+}): ResolvedCustomProviderApiKey | null {
+  const customKey = getCustomProviderApiKey(params.cfg, params.provider);
+  if (!customKey) {
+    return null;
+  }
+  if (!isNonSecretApiKeyMarker(customKey)) {
+    return { apiKey: customKey, source: "models.json" };
+  }
+  if (!isKnownEnvApiKeyMarker(customKey)) {
+    return null;
+  }
+  const envValue = normalizeOptionalSecretInput((params.env ?? process.env)[customKey]);
+  if (!envValue) {
+    return null;
+  }
+  const applied = new Set(getShellEnvAppliedKeys());
+  return {
+    apiKey: envValue,
+    source: resolveEnvSourceLabel({
+      applied,
+      envVars: [customKey],
+      label: `${customKey} (models.json marker)`,
+    }),
+  };
+}
+
+export function hasUsableCustomProviderApiKey(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  env?: NodeJS.ProcessEnv,
+): boolean {
+  return Boolean(resolveUsableCustomProviderApiKey({ cfg, provider, env }));
+}
+
 function resolveProviderAuthOverride(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -67,42 +117,6 @@ function resolveProviderAuthOverride(
     return auth;
   }
   return undefined;
-}
-
-function hasExplicitAuthProfileConfig(cfg: OpenClawConfig | undefined, provider: string): boolean {
-  const providerKey = normalizeProviderId(provider);
-  return Object.values(cfg?.auth?.profiles ?? {}).some(
-    (profile) => normalizeProviderId(profile?.provider ?? "") === providerKey,
-  );
-}
-
-function hasExplicitAuthOrder(cfg: OpenClawConfig | undefined, provider: string): boolean {
-  const providerKey = normalizeProviderId(provider);
-  return Object.entries(cfg?.auth?.order ?? {}).some(
-    ([key, order]) =>
-      normalizeProviderId(key) === providerKey && Array.isArray(order) && order.length > 0,
-  );
-}
-
-function shouldPreferDirectAnthropicApiKey(params: {
-  provider: string;
-  cfg: OpenClawConfig | undefined;
-  envResolved: EnvApiKeyResult | null;
-  customKey: string | undefined;
-}): boolean {
-  if (normalizeProviderId(params.provider) !== "anthropic") {
-    return false;
-  }
-  if (hasExplicitAuthProfileConfig(params.cfg, params.provider)) {
-    return false;
-  }
-  if (hasExplicitAuthOrder(params.cfg, params.provider)) {
-    return false;
-  }
-  if (params.envResolved?.source.includes("ANTHROPIC_API_KEY")) {
-    return true;
-  }
-  return Boolean(params.customKey);
 }
 
 function resolveSyntheticLocalProviderAuth(params: {
@@ -234,28 +248,6 @@ export async function resolveApiKeyForProvider(params: {
     return resolveAwsSdkAuthInfo();
   }
 
-  const envResolved = resolveEnvApiKey(provider);
-  const customKey = getCustomProviderApiKey(cfg, provider);
-
-  if (
-    !profileId &&
-    shouldPreferDirectAnthropicApiKey({
-      provider,
-      cfg,
-      envResolved,
-      customKey,
-    })
-  ) {
-    if (envResolved?.source.includes("ANTHROPIC_API_KEY")) {
-      return {
-        apiKey: envResolved.apiKey,
-        source: envResolved.source,
-        mode: "api-key",
-      };
-    }
-    return { apiKey: customKey, source: "models.json", mode: "api-key" };
-  }
-
   const order = resolveAuthProfileOrder({
     cfg,
     store,
@@ -279,9 +271,12 @@ export async function resolveApiKeyForProvider(params: {
           mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
         };
       }
-    } catch {}
+    } catch (err) {
+      log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
+    }
   }
 
+  const envResolved = resolveEnvApiKey(provider);
   if (envResolved) {
     return {
       apiKey: envResolved.apiKey,
@@ -290,8 +285,9 @@ export async function resolveApiKeyForProvider(params: {
     };
   }
 
+  const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
   if (customKey) {
-    return { apiKey: customKey, source: "models.json", mode: "api-key" };
+    return { apiKey: customKey.apiKey, source: customKey.source, mode: "api-key" };
   }
 
   const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
@@ -411,7 +407,7 @@ export function resolveModelAuthMode(
     return envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
   }
 
-  if (getCustomProviderApiKey(cfg, resolved)) {
+  if (hasUsableCustomProviderApiKey(cfg, resolved)) {
     return "api-key";
   }
 

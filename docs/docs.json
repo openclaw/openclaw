@@ -104,6 +104,10 @@
       "destination": "/providers/opencode"
     },
     {
+      "source": "/opencode-go",
+      "destination": "/providers/opencode-go"
+    },
+    {
       "source": "/qianfan",
       "destination": "/providers/qianfan"
     },
@@ -872,6 +876,7 @@
                 "group": "Hosting and deployment",
                 "pages": [
                   "vps",
+                  "install/kubernetes",
                   "install/fly",
                   "install/hetzner",
                   "install/gcp",
@@ -1112,6 +1117,7 @@
                   "providers/nvidia",
                   "providers/ollama",
                   "providers/openai",
+                  "providers/opencode-go",
                   "providers/opencode",
                   "providers/openrouter",
                   "providers/qianfan",

@@ -684,6 +684,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
 
         const replyToId = replyReference.use();
         await deliverDiscordReply({
+          cfg,
           replies: [payload],
           target: deliverTarget,
           token,
@@ -767,6 +768,19 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
             return;
           }
           await statusReactions.setTool(payload.name);
+        },
+        onCompactionStart: async () => {
+          if (isProcessAborted(abortSignal)) {
+            return;
+          }
+          await statusReactions.setCompacting();
+        },
+        onCompactionEnd: async () => {
+          if (isProcessAborted(abortSignal)) {
+            return;
+          }
+          statusReactions.cancelPending();
+          await statusReactions.setThinking();
         },
       },
     });

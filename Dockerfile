@@ -14,14 +14,14 @@
 #   Slim (bookworm-slim):    docker build --build-arg OPENCLAW_VARIANT=slim .
 ARG OPENCLAW_EXTENSIONS=""
 ARG OPENCLAW_VARIANT=default
-ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:22-bookworm@sha256:b501c082306a4f528bc4038cbf2fbb58095d583d0419a259b2114b5ac53d12e9"
-ARG OPENCLAW_NODE_BOOKWORM_DIGEST="sha256:b501c082306a4f528bc4038cbf2fbb58095d583d0419a259b2114b5ac53d12e9"
-ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:22-bookworm-slim@sha256:9c2c405e3ff9b9afb2873232d24bb06367d649aa3e6259cbe314da59578e81e9"
-ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:9c2c405e3ff9b9afb2873232d24bb06367d649aa3e6259cbe314da59578e81e9"
+ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
+ARG OPENCLAW_NODE_BOOKWORM_DIGEST="sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
+ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:24-bookworm-slim@sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"
+ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"
 
 # Base images are pinned to SHA256 digests for reproducible builds.
 # Trade-off: digests must be updated manually when upstream tags move.
-# To update, run: docker manifest inspect node:22-bookworm (or podman)
+# To update, run: docker buildx imagetools inspect node:24-bookworm (or podman)
 # and replace the digest below with the current multi-arch manifest list entry.
 
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS ext-deps
@@ -39,8 +39,18 @@ RUN mkdir -p /out && \
 # ── Stage 2: Build ──────────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
 
-# Install Bun (required for build scripts)
-RUN curl -fsSL https://bun.sh/install | bash
+# Install Bun (required for build scripts). Retry the whole bootstrap flow to
+# tolerate transient 5xx failures from bun.sh/GitHub during CI image builds.
+RUN set -eux; \
+    for attempt in 1 2 3 4 5; do \
+      if curl --retry 5 --retry-all-errors --retry-delay 2 -fsSL https://bun.sh/install | bash; then \
+        break; \
+      fi; \
+      if [ "$attempt" -eq 5 ]; then \
+        exit 1; \
+      fi; \
+      sleep $((attempt * 2)); \
+    done
 ENV PATH="/root/.bun/bin:${PATH}"
 
 RUN corepack enable
@@ -92,21 +102,17 @@ RUN CI=true pnpm prune --prod && \
 # ── Runtime base images ─────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS base-default
 ARG OPENCLAW_NODE_BOOKWORM_DIGEST
-LABEL org.opencontainers.image.base.name="docker.io/library/node:22-bookworm" \
+LABEL org.opencontainers.image.base.name="docker.io/library/node:24-bookworm" \
   org.opencontainers.image.base.digest="${OPENCLAW_NODE_BOOKWORM_DIGEST}"
 
 FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-slim
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST
-LABEL org.opencontainers.image.base.name="docker.io/library/node:22-bookworm-slim" \
+LABEL org.opencontainers.image.base.name="docker.io/library/node:24-bookworm-slim" \
   org.opencontainers.image.base.digest="${OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST}"
 
 # ── Stage 3: Runtime ────────────────────────────────────────────
 FROM base-${OPENCLAW_VARIANT}
 ARG OPENCLAW_VARIANT
-ARG TERRAFORM_VERSION=1.14.5
-ARG OPENCLAW_INSTALL_FOUNDRY=""
-ARG OPENCLAW_FOUNDRY_VERSION=""
-ARG TARGETARCH
 
 # OCI base-image metadata for downstream image consumers.
 # If you change these annotations, also update:
@@ -127,19 +133,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      procps hostname curl git openssl postgresql-client ripgrep unzip && \
-    arch="${TARGETARCH:-$(dpkg --print-architecture)}" && \
-    case "$arch" in \
-      amd64) terraform_arch="amd64" ;; \
-      arm64) terraform_arch="arm64" ;; \
-      *) echo "Unsupported arch: $arch" >&2; exit 1 ;; \
-    esac && \
-    curl -fsSL -o /tmp/terraform.zip "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_${terraform_arch}.zip" && \
-    unzip -p /tmp/terraform.zip terraform >/usr/local/bin/terraform && \
-    chmod +x /usr/local/bin/terraform && \
-    rg --version >/dev/null && \
-    terraform version -json >/dev/null && \
-    rm -f /tmp/terraform.zip
+      procps hostname curl git openssl
 
 RUN chown node:node /app
 
@@ -157,7 +151,15 @@ COPY --from=runtime-assets --chown=node:node /app/docs ./docs
 ENV COREPACK_HOME=/usr/local/share/corepack
 RUN install -d -m 0755 "$COREPACK_HOME" && \
     corepack enable && \
-    corepack prepare "$(node -p "require('./package.json').packageManager")" --activate && \
+    for attempt in 1 2 3 4 5; do \
+      if corepack prepare "$(node -p "require('./package.json').packageManager")" --activate; then \
+        break; \
+      fi; \
+      if [ "$attempt" -eq 5 ]; then \
+        exit 1; \
+      fi; \
+      sleep $((attempt * 2)); \
+    done && \
     chmod -R a+rX "$COREPACK_HOME"
 
 # Install additional system packages needed by your skills or extensions.
@@ -184,33 +186,6 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
       chown -R node:node /home/node/.cache/ms-playwright; \
-    fi
-
-# Optionally install Foundry CLI tools for onchain debugging workflows.
-# Build with:
-#   docker build --build-arg OPENCLAW_INSTALL_FOUNDRY=1 ...
-# Optional:
-#   docker build --build-arg OPENCLAW_FOUNDRY_VERSION=1.3.1 ...
-# Trust boundary: the installer script itself is fetched over HTTPS and piped to
-# bash. foundryup then verifies downloaded release binaries via GitHub
-# attestations before activation.
-RUN if [ "$OPENCLAW_INSTALL_FOUNDRY" = "1" ]; then \
-      export FOUNDRY_DIR=/opt/foundry && \
-      curl -fsSL https://foundry.paradigm.xyz | bash && \
-      if [ -n "$OPENCLAW_FOUNDRY_VERSION" ]; then \
-        /opt/foundry/bin/foundryup --install "$OPENCLAW_FOUNDRY_VERSION"; \
-      else \
-        /opt/foundry/bin/foundryup; \
-      fi && \
-      chmod -R a+rX /opt/foundry && \
-      ln -sf /opt/foundry/bin/forge /usr/local/bin/forge && \
-      ln -sf /opt/foundry/bin/cast /usr/local/bin/cast && \
-      ln -sf /opt/foundry/bin/anvil /usr/local/bin/anvil && \
-      ln -sf /opt/foundry/bin/chisel /usr/local/bin/chisel && \
-      forge --version >/dev/null && \
-      cast --version >/dev/null && \
-      anvil --version >/dev/null && \
-      chisel --version >/dev/null; \
     fi
 
 # Optionally install Docker CLI for sandbox container management.
@@ -252,7 +227,7 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
 ENV NODE_ENV=production
 
 # Security hardening: Run as non-root user
-# The node:22-bookworm image includes a 'node' user (uid 1000)
+# The node:24-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
 USER node
 

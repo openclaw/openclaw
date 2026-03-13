@@ -1,0 +1,68 @@
+import type { CommandArgs } from "../../auto-reply/commands-registry.js";
+import { type DiscordChannelConfigResolved, type DiscordGuildEntryResolved } from "./allow-list.js";
+export type BuildDiscordNativeCommandContextParams = {
+    prompt: string;
+    commandArgs: CommandArgs;
+    sessionKey: string;
+    commandTargetSessionKey: string;
+    accountId?: string | null;
+    interactionId: string;
+    channelId: string;
+    threadParentId?: string;
+    guildName?: string;
+    channelTopic?: string;
+    channelConfig?: DiscordChannelConfigResolved | null;
+    guildInfo?: DiscordGuildEntryResolved | null;
+    allowNameMatching?: boolean;
+    commandAuthorized: boolean;
+    isDirectMessage: boolean;
+    isGroupDm: boolean;
+    isGuild: boolean;
+    isThreadChannel: boolean;
+    user: {
+        id: string;
+        username: string;
+        globalName?: string | null;
+    };
+    sender: {
+        id: string;
+        name?: string;
+        tag?: string;
+    };
+    timestampMs?: number;
+};
+export declare function buildDiscordNativeCommandContext(params: BuildDiscordNativeCommandContextParams): {
+    Body: string;
+    BodyForAgent: string;
+    RawBody: string;
+    CommandBody: string;
+    CommandArgs: CommandArgs;
+    From: string;
+    To: string;
+    SessionKey: string;
+    CommandTargetSessionKey: string;
+    AccountId: string | undefined;
+    ChatType: string;
+    ConversationLabel: string;
+    GroupSubject: string | undefined;
+    GroupSystemPrompt: string | undefined;
+    UntrustedContext: string[] | undefined;
+    OwnerAllowFrom: string[] | undefined;
+    SenderName: string;
+    SenderId: string;
+    SenderUsername: string;
+    SenderTag: string | undefined;
+    Provider: "discord";
+    Surface: "discord";
+    WasMentioned: boolean;
+    MessageSid: string;
+    MessageThreadId: string | undefined;
+    Timestamp: number;
+    CommandAuthorized: boolean;
+    CommandSource: "native";
+    OriginatingChannel: "discord";
+    OriginatingTo: string;
+    ThreadParentId: string | undefined;
+} & Omit<import("../../auto-reply/templating.ts").MsgContext, "CommandAuthorized"> & {
+    CommandAuthorized: boolean;
+};

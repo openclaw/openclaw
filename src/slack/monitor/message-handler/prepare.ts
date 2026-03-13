@@ -146,6 +146,7 @@ async function resolveSlackConversationContext(params: {
         channelKeys: ctx.channelsConfigKeys,
         defaultRequireMention: ctx.defaultRequireMention,
         defaultAllowImplicitMention: ctx.defaultAllowImplicitMention,
+        allowNameMatching: ctx.allowNameMatching,
       })
     : null;
   const allowBots =

@@ -1,0 +1,25 @@
+{
+  "generatedBy": "scripts/write-cli-startup-metadata.ts",
+  "channelOptions": [
+    "telegram",
+    "whatsapp",
+    "discord",
+    "irc",
+    "googlechat",
+    "slack",
+    "signal",
+    "imessage",
+    "feishu",
+    "nostr",
+    "msteams",
+    "mattermost",
+    "nextcloud-talk",
+    "matrix",
+    "bluebubbles",
+    "line",
+    "zalo",
+    "zalouser",
+    "synology-chat",
+    "tlon"
+  ]
+}

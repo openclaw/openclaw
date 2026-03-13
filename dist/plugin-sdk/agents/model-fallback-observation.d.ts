@@ -1,0 +1,22 @@
+import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
+import type { FailoverReason } from "./pi-embedded-helpers.js";
+export declare function logModelFallbackDecision(params: {
+    decision: "skip_candidate" | "probe_cooldown_candidate" | "candidate_failed" | "candidate_succeeded";
+    runId?: string;
+    requestedProvider: string;
+    requestedModel: string;
+    candidate: ModelCandidate;
+    attempt?: number;
+    total?: number;
+    reason?: FailoverReason | null;
+    status?: number;
+    code?: string;
+    error?: string;
+    nextCandidate?: ModelCandidate;
+    isPrimary?: boolean;
+    requestedModelMatched?: boolean;
+    fallbackConfigured?: boolean;
+    allowTransientCooldownProbe?: boolean;
+    profileCount?: number;
+    previousAttempts?: FallbackAttempt[];
+}): void;

@@ -12,7 +12,7 @@ type StreamPayload = {
 };
 
 function runOpenRouterPayload(payload: StreamPayload, modelId: string) {
-  const baseStreamFn: StreamFn = (_model, _context, options) => {
+  const baseStreamFn: StreamFn = (model, _context, options) => {
     options?.onPayload?.(payload, model);
     return createAssistantMessageEventStream();
   };

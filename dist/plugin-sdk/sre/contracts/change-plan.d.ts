@@ -1,0 +1,73 @@
+import type { ProvenanceRef } from "./entity.js";
+export type RepoOwnershipEntry = {
+    repoId: string;
+    githubRepo?: string;
+    localPath: string;
+    ownedGlobs: string[];
+    sourceOfTruthDomains: string[];
+    dependentRepos: string[];
+    ciChecks: string[];
+    validationCommands: string[];
+    rollbackHints: string[];
+    impactedApps?: string[];
+    deployments?: string[];
+    charts?: string[];
+    branchBase?: string;
+    validationProfiles?: Record<string, string[]>;
+    reviewers?: string[];
+    canaryStrategy?: string;
+};
+export type RepoOwnershipRule = RepoOwnershipEntry;
+export type RepoOwnershipMap = {
+    version: "sre.repo-ownership-map.v1";
+    generatedAt: string;
+    repos: RepoOwnershipEntry[];
+};
+export type ChangePlanStep = {
+    repoId: string;
+    summary: string;
+    ownedGlobs: string[];
+    validationCommands: string[];
+    repoSlug?: string;
+    localPath?: string;
+    baseSha?: string;
+    changeType?: string;
+    validationProfile?: string;
+    impactedApps?: string[];
+    rationale?: string;
+    files?: string[];
+    rollback?: string;
+    pr?: {
+        title?: string;
+        commit?: string;
+        base?: string;
+        body?: string;
+        branch?: string;
+        draft?: boolean;
+        labels?: string[];
+    };
+    dependsOn?: string[];
+};
+export type ChangePlan = {
+    version: "sre.change-plan.v1";
+    planId: string;
+    incidentId: string;
+    requestId?: string;
+    summary: string;
+    rootCauseSummary?: string;
+    status: "approved" | "completed" | "draft" | "executing" | "rejected";
+    generatedAt: string;
+    repos: string[];
+    steps: ChangePlanStep[];
+    interRepoDependencies?: Array<{
+        repoId: string;
+        dependsOn: string[];
+    }>;
+    provenance: ProvenanceRef[];
+};
+export declare function createChangePlanId(params: Pick<ChangePlan, "incidentId" | "generatedAt"> & {
+    repoIds: string[];
+}): string;
+export declare function createRepoOwnershipMap(params: Omit<RepoOwnershipMap, "repos" | "version"> & {
+    repos: RepoOwnershipEntry[];
+}): RepoOwnershipMap;

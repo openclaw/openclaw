@@ -9,12 +9,10 @@ import {
   isAnthropicBillingError,
   isAnthropicRateLimitError,
 } from "./live-auth-keys.js";
-import {
-  isMiniMaxModelNotFoundErrorMessage,
-  isModelNotFoundErrorMessage,
-} from "./live-model-errors.js";
+import { isMiniMaxModelNotFoundErrorMessage } from "./live-model-errors.js";
 import { isModernModelRef } from "./live-model-filter.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
+import { shouldSuppressBuiltInModel } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { isRateLimitErrorMessage } from "./pi-embedded-helpers/errors.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
@@ -85,6 +83,35 @@ function isGoogleModelNotFoundError(err: unknown): boolean {
   }
   return false;
 }
+
+function isModelNotFoundErrorMessage(raw: string): boolean {
+  const msg = raw.trim();
+  if (!msg) {
+    return false;
+  }
+  if (/\b404\b/.test(msg) && /not(?:[\s_-]+)?found/i.test(msg)) {
+    return true;
+  }
+  if (/not_found_error/i.test(msg)) {
+    return true;
+  }
+  if (/model:\s*[a-z0-9._-]+/i.test(msg) && /not(?:[\s_-]+)?found/i.test(msg)) {
+    return true;
+  }
+  return false;
+}
+
+describe("isModelNotFoundErrorMessage", () => {
+  it("matches whitespace-separated not found errors", () => {
+    expect(isModelNotFoundErrorMessage("404 model not found")).toBe(true);
+    expect(isModelNotFoundErrorMessage("model: minimax-text-01 not found")).toBe(true);
+  });
+
+  it("still matches underscore and hyphen variants", () => {
+    expect(isModelNotFoundErrorMessage("404 model not_found")).toBe(true);
+    expect(isModelNotFoundErrorMessage("404 model not-found")).toBe(true);
+  });
+});
 
 function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
   const msg = raw.toLowerCase();
@@ -177,6 +204,31 @@ function resolveTestReasoning(
   return "low";
 }
 
+function resolveLiveSystemPrompt(model: Model<Api>): string | undefined {
+  if (model.provider === "openai-codex") {
+    return "You are a concise assistant. Follow the user's instruction exactly.";
+  }
+  return undefined;
+}
+
+describe("resolveLiveSystemPrompt", () => {
+  it("adds instructions for openai-codex probes", () => {
+    expect(
+      resolveLiveSystemPrompt({
+        provider: "openai-codex",
+      } as Model<Api>),
+    ).toContain("Follow the user's instruction exactly.");
+  });
+
+  it("keeps other providers unchanged", () => {
+    expect(
+      resolveLiveSystemPrompt({
+        provider: "openai",
+      } as Model<Api>),
+    ).toBeUndefined();
+  });
+});
+
 async function completeSimpleWithTimeout<TApi extends Api>(
   model: Model<TApi>,
   context: Parameters<typeof completeSimple<TApi>>[1],
@@ -221,6 +273,7 @@ async function completeOkWithRetry(params: {
     const res = await completeSimpleWithTimeout(
       params.model,
       {
+        systemPrompt: resolveLiveSystemPrompt(params.model),
         messages: [
           {
             role: "user",
@@ -292,6 +345,9 @@ describeLive("live models (profile keys)", () => {
       }> = [];
 
       for (const model of models) {
+        if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
+          continue;
+        }
         if (providers && !providers.has(model.provider)) {
           continue;
         }
@@ -500,7 +556,9 @@ describeLive("live models (profile keys)", () => {
             }
             if (
               ok.text.length === 0 &&
-              (model.provider === "openrouter" || model.provider === "opencode")
+              (model.provider === "openrouter" ||
+                model.provider === "opencode" ||
+                model.provider === "opencode-go")
             ) {
               skipped.push({
                 model: id,
@@ -592,7 +650,7 @@ describeLive("live models (profile keys)", () => {
             }
             if (
               allowNotFoundSkip &&
-              model.provider === "opencode" &&
+              (model.provider === "opencode" || model.provider === "opencode-go") &&
               isRateLimitErrorMessage(message)
             ) {
               skipped.push({ model: id, reason: message });

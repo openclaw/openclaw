@@ -98,100 +98,6 @@ NODE
   fi
 }
 
-read_github_cli_token() {
-  if [[ -n "${GH_TOKEN:-}" ]]; then
-    printf '%s' "$GH_TOKEN"
-    return 0
-  fi
-  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-    printf '%s' "$GITHUB_TOKEN"
-    return 0
-  fi
-  if ! command -v gh >/dev/null 2>&1; then
-    return 0
-  fi
-
-  local token=""
-  token="$(gh auth token 2>/dev/null || true)"
-  token="${token//$'\r'/}"
-  token="${token//$'\n'/}"
-  printf '%s' "$token"
-}
-
-sync_github_token_file() {
-  local token="$1"
-  local token_file="$2"
-  local token_dir
-  local tmp
-
-  if [[ -z "$token" ]]; then
-    return 0
-  fi
-
-  token_dir="$(dirname "$token_file")"
-  mkdir -p "$token_dir"
-
-  if [[ -f "$token_file" ]]; then
-    local existing=""
-    existing="$(tr -d '\r\n' < "$token_file" 2>/dev/null || true)"
-    if [[ "$existing" == "$token" ]]; then
-      return 0
-    fi
-  fi
-
-  tmp="$(mktemp "$token_dir/github-token.XXXXXX")"
-  printf '%s\n' "$token" >"$tmp"
-  chmod 600 "$tmp"
-  mv "$tmp" "$token_file"
-}
-
-install_github_auth_sync_launchagent() {
-  local config_dir="$1"
-  local token_file="$2"
-  if [[ "$(uname -s)" != "Darwin" ]] || ! command -v launchctl >/dev/null 2>&1; then
-    return 0
-  fi
-
-  local agent_dir="$HOME/Library/LaunchAgents"
-  local agent_label="ai.openclaw.github-auth-sync"
-  local agent_plist="$agent_dir/${agent_label}.plist"
-  mkdir -p "$agent_dir"
-
-  cat >"$agent_plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>${agent_label}</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/bash</string>
-    <string>${ROOT_DIR}/scripts/sync-github-auth.sh</string>
-    <string>--config-dir</string>
-    <string>${config_dir}</string>
-    <string>--token-file</string>
-    <string>${token_file}</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>StartInterval</key>
-  <integer>300</integer>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PATH</key>
-    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-  </dict>
-</dict>
-</plist>
-EOF
-
-  launchctl bootout "gui/$(id -u)" "$agent_plist" >/dev/null 2>&1 || true
-  launchctl bootstrap "gui/$(id -u)" "$agent_plist" >/dev/null 2>&1 || true
-  launchctl enable "gui/$(id -u)/${agent_label}" >/dev/null 2>&1 || true
-  echo "Installed launchd GitHub auth sync agent: ${agent_label}"
-}
-
 read_env_gateway_token() {
   local env_path="$1"
   local line=""
@@ -331,8 +237,6 @@ export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-lan}"
 export OPENCLAW_IMAGE="$IMAGE_NAME"
 export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
 export OPENCLAW_EXTENSIONS="${OPENCLAW_EXTENSIONS:-}"
-export OPENCLAW_INSTALL_FOUNDRY="${OPENCLAW_INSTALL_FOUNDRY:-}"
-export OPENCLAW_FOUNDRY_VERSION="${OPENCLAW_FOUNDRY_VERSION:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
 export OPENCLAW_HOME_VOLUME="$HOME_VOLUME_NAME"
 export OPENCLAW_ALLOW_INSECURE_PRIVATE_WS="${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}"
@@ -545,8 +449,6 @@ if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   docker build \
     --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
     --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
-    --build-arg "OPENCLAW_INSTALL_FOUNDRY=${OPENCLAW_INSTALL_FOUNDRY:-}" \
-    --build-arg "OPENCLAW_FOUNDRY_VERSION=${OPENCLAW_FOUNDRY_VERSION:-}" \
     --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
     -t "$IMAGE_NAME" \
     -f "$ROOT_DIR/Dockerfile" \

@@ -1,0 +1,10 @@
+import type { StreamFn } from "@mariozechner/pi-agent-core";
+type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
+export declare function resolveOpenAIServiceTier(extraParams: Record<string, unknown> | undefined): OpenAIServiceTier | undefined;
+export declare function resolveOpenAIFastMode(extraParams: Record<string, unknown> | undefined): boolean | undefined;
+export declare function createOpenAIResponsesContextManagementWrapper(baseStreamFn: StreamFn | undefined, extraParams: Record<string, unknown> | undefined): StreamFn;
+export declare function createOpenAIFastModeWrapper(baseStreamFn: StreamFn | undefined): StreamFn;
+export declare function createOpenAIServiceTierWrapper(baseStreamFn: StreamFn | undefined, serviceTier: OpenAIServiceTier): StreamFn;
+export declare function createCodexDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn;
+export declare function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn;
+export {};

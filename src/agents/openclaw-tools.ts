@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginTools } from "../plugins/tools.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
@@ -16,44 +16,16 @@ import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
-import { createRelationshipExplainTool } from "./tools/relationship-explain.js";
-import { createRelationshipLookupTool } from "./tools/relationship-lookup.js";
-import { createRelationshipNeighborsTool } from "./tools/relationship-neighbors.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
+import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
-
-function resolveRequesterAgentId(options?: {
-  agentSessionKey?: string;
-  requesterAgentIdOverride?: string;
-  config?: OpenClawConfig;
-}): string {
-  const override = options?.requesterAgentIdOverride?.trim();
-  if (override) {
-    return normalizeAgentId(override);
-  }
-  return resolveSessionAgentId({
-    sessionKey: options?.agentSessionKey,
-    config: options?.config,
-  });
-}
-
-function shouldExposeRelationshipTools(options?: {
-  agentSessionKey?: string;
-  requesterAgentIdOverride?: string;
-  config?: OpenClawConfig;
-}): boolean {
-  if (options?.config?.sre?.relationshipIndex?.enabled !== true) {
-    return false;
-  }
-  return resolveRequesterAgentId(options).startsWith("sre");
-}
 
 export function createOpenClawTools(
   options?: {
@@ -99,9 +71,22 @@ export function createOpenClawTools(
     senderIsOwner?: boolean;
     /** Ephemeral session UUID — regenerated on /new and /reset. */
     sessionId?: string;
+    /**
+     * Workspace directory to pass to spawned subagents for inheritance.
+     * Defaults to workspaceDir. Use this to pass the actual agent workspace when the
+     * session itself is running in a copied-workspace sandbox (`ro` or `none`) so
+     * subagents inherit the real workspace path instead of the sandbox copy.
+     */
+    spawnWorkspaceDir?: string;
+    /** Callback invoked when sessions_yield tool is called. */
+    onYield?: (message: string) => Promise<void> | void;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
+  const spawnWorkspaceDir = resolveWorkspaceRoot(
+    options?.spawnWorkspaceDir ?? options?.workspaceDir,
+  );
+  const runtimeWebTools = getActiveRuntimeWebToolsMetadata();
   const imageTool = options?.agentDir?.trim()
     ? createImageTool({
         config: options?.config,
@@ -130,10 +115,12 @@ export function createOpenClawTools(
   const webSearchTool = createWebSearchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
+    runtimeWebSearch: runtimeWebTools?.search,
   });
   const webFetchTool = createWebFetchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
+    runtimeFirecrawl: runtimeWebTools?.fetch.firecrawl,
   });
   const messageTool = options?.disableMessageTool
     ? null
@@ -151,13 +138,6 @@ export function createOpenClawTools(
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         requesterSenderId: options?.requesterSenderId ?? undefined,
       });
-  const relationshipTools = shouldExposeRelationshipTools(options)
-    ? [
-        createRelationshipLookupTool(),
-        createRelationshipNeighborsTool(),
-        createRelationshipExplainTool(),
-      ]
-    : [];
   const tools: AnyAgentTool[] = [
     createBrowserTool({
       sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
@@ -204,6 +184,10 @@ export function createOpenClawTools(
       agentChannel: options?.agentChannel,
       sandboxed: options?.sandboxed,
     }),
+    createSessionsYieldTool({
+      sessionId: options?.sessionId,
+      onYield: options?.onYield,
+    }),
     createSessionsSpawnTool({
       agentSessionKey: options?.agentSessionKey,
       agentChannel: options?.agentChannel,
@@ -215,7 +199,7 @@ export function createOpenClawTools(
       agentGroupSpace: options?.agentGroupSpace,
       sandboxed: options?.sandboxed,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
-      workspaceDir,
+      workspaceDir: spawnWorkspaceDir,
     }),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,
@@ -223,8 +207,8 @@ export function createOpenClawTools(
     createSessionStatusTool({
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
+      sandboxed: options?.sandboxed,
     }),
-    ...relationshipTools,
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),

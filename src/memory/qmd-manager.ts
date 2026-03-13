@@ -8,11 +8,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { writeFileWithinRoot } from "../infra/fs-safe.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isFileMissingError, statRegularFile } from "./fs-utils.js";
-import {
-  isWindowsCommandShimEinval,
-  resolveCliSpawnInvocation,
-  runCliCommand,
-} from "./qmd-process.js";
+import { resolveCliSpawnInvocation, runCliCommand } from "./qmd-process.js";
 import { deriveQmdScopeChannel, deriveQmdScopeChatType, isQmdScopeAllowed } from "./qmd-scope.js";
 import {
   listSessionFilesForAgent,
@@ -867,8 +863,12 @@ export class QmdMemoryManager implements MemorySearchManager {
   async sync(params?: {
     reason?: string;
     force?: boolean;
+    sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
+    if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
+      log.debug("qmd sync ignoring targeted sessionFiles hint; running regular update");
+    }
     if (params?.progress) {
       params.progress({ completed: 0, total: 1, label: "Updating QMD index…" });
     }
@@ -1244,50 +1244,21 @@ export class QmdMemoryManager implements MemorySearchManager {
     args: string[],
     opts?: { timeoutMs?: number },
   ): Promise<{ stdout: string; stderr: string }> {
-    const runWithInvocation = async (spawnInvocation: {
-      command: string;
-      argv: string[];
-      shell?: boolean;
-      windowsHide?: boolean;
-    }): Promise<{ stdout: string; stderr: string }> =>
-      await runCliCommand({
-        commandSummary: `${spawnInvocation.command} ${spawnInvocation.argv.join(" ")}`,
-        spawnInvocation,
-        // Keep mcporter and direct qmd commands on the same agent-scoped XDG state.
-        env: this.env,
-        cwd: this.workspaceDir,
-        timeoutMs: opts?.timeoutMs,
-        maxOutputChars: this.maxQmdOutputChars,
-      });
-
-    const primaryInvocation = resolveCliSpawnInvocation({
+    const spawnInvocation = resolveCliSpawnInvocation({
       command: "mcporter",
       args,
       env: this.env,
       packageName: "mcporter",
     });
-    try {
-      return await runWithInvocation(primaryInvocation);
-    } catch (err) {
-      if (
-        !isWindowsCommandShimEinval({
-          err,
-          command: primaryInvocation.command,
-          commandBase: "mcporter",
-        })
-      ) {
-        throw err;
-      }
-      // Some Windows npm cmd shims can still throw EINVAL on spawn; retry through
-      // shell command resolution so PATH/PATHEXT can select a runnable entrypoint.
-      log.warn("mcporter.cmd spawn returned EINVAL on Windows; retrying with bare mcporter");
-      return await runWithInvocation({
-        command: "mcporter",
-        argv: args,
-        shell: true,
-        windowsHide: true,
-      });
-    }
+    return await runCliCommand({
+      commandSummary: `${spawnInvocation.command} ${spawnInvocation.argv.join(" ")}`,
+      spawnInvocation,
+      // Keep mcporter and direct qmd commands on the same agent-scoped XDG state.
+      env: this.env,
+      cwd: this.workspaceDir,
+      timeoutMs: opts?.timeoutMs,
+      maxOutputChars: this.maxQmdOutputChars,
+    });
   }
 
   private async runQmdSearchViaMcporter(params: {

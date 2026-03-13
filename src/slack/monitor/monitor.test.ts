@@ -102,36 +102,29 @@ describe("resolveSlackChannelConfig", () => {
     expect(res).toMatchObject({ allowed: true, requireMention: false });
   });
 
-  it("can disable implicit mentions per channel", () => {
+  it("blocks channel-name route matches by default", () => {
     const res = resolveSlackChannelConfig({
       channelId: "C1",
-      channels: { C1: { allow: true, requireMention: true, allowImplicitMention: false } },
+      channelName: "ops-room",
+      channels: { "ops-room": { allow: true, requireMention: false } },
       defaultRequireMention: true,
-      defaultAllowImplicitMention: true,
+    });
+    expect(res).toMatchObject({ allowed: false, requireMention: true });
+  });
+
+  it("allows channel-name route matches when dangerous name matching is enabled", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channelName: "ops-room",
+      channels: { "ops-room": { allow: true, requireMention: false } },
+      defaultRequireMention: true,
+      allowNameMatching: true,
     });
     expect(res).toMatchObject({
       allowed: true,
-      requireMention: true,
-      allowImplicitMention: false,
-    });
-  });
-
-  it("resolves incident ingress policy from channel config", () => {
-    const res = resolveSlackChannelConfig({
-      channelId: "C1",
-      channels: {
-        C1: {
-          allow: true,
-          incidentRootOnly: true,
-          incidentIgnoreResolved: true,
-          incidentDedupeWindowSeconds: 300,
-        },
-      },
-    });
-    expect(res).toMatchObject({
-      incidentRootOnly: true,
-      incidentIgnoreResolved: true,
-      incidentDedupeWindowSeconds: 300,
+      requireMention: false,
+      matchKey: "ops-room",
+      matchSource: "direct",
     });
   });
 });

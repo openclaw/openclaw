@@ -105,6 +105,7 @@ export function resolveSlackChannelConfig(params: {
   channelKeys?: string[];
   defaultRequireMention?: boolean;
   defaultAllowImplicitMention?: boolean;
+  allowNameMatching?: boolean;
 }): SlackChannelConfigResolved | null {
   const {
     channelId,
@@ -113,6 +114,7 @@ export function resolveSlackChannelConfig(params: {
     channelKeys,
     defaultRequireMention,
     defaultAllowImplicitMention,
+    allowNameMatching,
   } = params;
   const entries = channels ?? {};
   const keys = channelKeys ?? Object.keys(entries);
@@ -128,9 +130,9 @@ export function resolveSlackChannelConfig(params: {
     channelId,
     channelIdLower !== channelId ? channelIdLower : undefined,
     channelIdUpper !== channelId ? channelIdUpper : undefined,
-    channelName ? `#${directName}` : undefined,
-    directName,
-    normalizedName,
+    allowNameMatching ? (channelName ? `#${directName}` : undefined) : undefined,
+    allowNameMatching ? directName : undefined,
+    allowNameMatching ? normalizedName : undefined,
   );
   const match = resolveChannelEntryMatchWithFallback({
     entries,

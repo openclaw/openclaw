@@ -950,6 +950,7 @@ async function agentCommandInternal(
         catalog: modelCatalog,
         defaultProvider,
         defaultModel,
+        agentId: sessionAgentId,
       });
       allowedModelKeys = allowed.allowedKeys;
       allowedModelCatalog = allowed.allowedCatalog;
@@ -1068,7 +1069,6 @@ async function agentCommandInternal(
         sessionId,
         sessionKey: sessionKey ?? sessionId,
         sessionEntry,
-        storePath,
         agentId: sessionAgentId,
         threadId: opts.threadId,
       });
