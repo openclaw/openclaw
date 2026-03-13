@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RobotConfig",
+  "description": "Schema for OpenClaw robot kinematic configuration files",
+  "type": "object",
+  "required": ["id", "version", "manufacturer", "model", "dof", "joints"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema":        { "type": "string" },
+    "id":             { "type": "string" },
+    "version":        { "type": "string" },
+    "manufacturer":   { "type": "string" },
+    "model":          { "type": "string" },
+    "description":    { "type": "string" },
+    "glbFile":        { "type": "string" },
+    "dof":            { "type": "integer", "minimum": 1, "maximum": 12 },
+    "mechanismType":  { "type": "string", "enum": ["serial","serial_6dof","scara","delta","parallel","coupled"] },
+    "joints": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["index","id","type","min","max","home"],
+        "additionalProperties": false,
+        "properties": {
+          "index":  { "type": "integer", "minimum": 0 },
+          "id":     { "type": "string" },
+          "label":  { "type": "string" },
+          "type":   { "type": "string", "enum": ["revolute","prismatic"] },
+          "min":    { "type": "number" },
+          "max":    { "type": "number" },
+          "speed":  { "type": "number", "minimum": 0 },
+          "home":   { "type": "number" },
+          "axis":   { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+          "unit":   { "type": "string", "enum": ["deg","rad","mm","m"] }
+        }
+      }
+    },
+    "dhParameters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["jointId","d","theta","a","alpha"],
+        "additionalProperties": false,
+        "properties": {
+          "jointId": { "type": "string" },
+          "d": { "type": "number" }, "theta": { "type": "number" },
+          "a": { "type": "number" }, "alpha": { "type": "number" }
+        }
+      }
+    },
+    "presets": {
+      "type": "object",
+      "additionalProperties": { "type": "array", "items": { "type": "number" } }
+    },
+    "sequences": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object", "required": ["steps"],
+        "additionalProperties": false,
+        "properties": {
+          "description": { "type": "string" },
+          "steps": {
+            "type": "array", "minItems": 1,
+            "items": {
+              "type": "object", "required": ["joints","durationMs"],
+              "additionalProperties": false,
+              "properties": {
+                "joints": { "type": "array", "items": { "type": "number" } },
+                "durationMs": { "type": "number", "minimum": 1 }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

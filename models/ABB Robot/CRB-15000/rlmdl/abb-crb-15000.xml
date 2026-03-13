@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rlmdl xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="rlmdl.xsd">
+	<model>
+		<manufacturer>ABB</manufacturer>
+		<name>CRB 15000</name>
+		<world id="world">
+			<rotation><x>0</x><y>0</y><z>0</z></rotation>
+			<translation><x>0</x><y>0</y><z>0</z></translation>
+			<g><x>0</x><y>0</y><z>9.81</z></g>
+		</world>
+		<body id="body0">
+			<ignore/>
+			<ignore idref="body1"/>
+		</body>
+		<frame id="frame0"/>
+		<frame id="frame1"/>
+		<body id="body1">
+			<cm><x>0</x><y>0</y><z>0</z></cm>
+			<i><xx>0</xx><yy>0</yy><zz>0</zz><yz>0</yz><xz>0</xz><xy>0</xy></i>
+			<ignore idref="body0"/>
+			<ignore idref="body2"/>
+			<m>0</m>
+		</body>
+		<frame id="frame2"/>
+		<frame id="frame3"/>
+		<body id="body2">
+			<cm><x>0</x><y>0</y><z>0</z></cm>
+			<i><xx>0</xx><yy>0</yy><zz>0</zz><yz>0</yz><xz>0</xz><xy>0</xy></i>
+			<ignore idref="body1"/>
+			<ignore idref="body3"/>
+			<m>0</m>
+		</body>
+		<frame id="frame4"/>
+		<frame id="frame5"/>
+		<body id="body3">
+			<cm><x>0</x><y>0</y><z>0</z></cm>
+			<i><xx>0</xx><yy>0</yy><zz>0</zz><yz>0</yz><xz>0</xz><xy>0</xy></i>
+			<ignore idref="body2"/>
+			<ignore idref="body4"/>
+			<m>0</m>
+		</body>
+		<frame id="frame6"/>
+		<frame id="frame7"/>
+		<body id="body4">
+			<cm><x>0</x><y>0</y><z>0</z></cm>
+			<i><xx>0</xx><yy>0</yy><zz>0</zz><yz>0</yz><xz>0</xz><xy>0</xy></i>
+			<ignore idref="body3"/>
+			<ignore idref="body5"/>
+			<m>0</m>
+		</body>
+		<frame id="frame8"/>
+		<frame id="frame9"/>
+		<body id="body5">
+			<cm><x>0</x><y>0</y><z>0</z></cm>
+			<i><xx>0</xx><yy>0</yy><zz>0</zz><yz>0</yz><xz>0</xz><xy>0</xy></i>
+			<ignore idref="body4"/>
+			<ignore idref="body6"/>
+			<m>0</m>
+		</body>
+		<frame id="frame10"/>
+		<frame id="frame11"/>
+		<body id="body6">
+			<cm><x>0</x><y>0</y><z>0</z></cm>
+			<i><xx>0</xx><yy>0</yy><zz>0</zz><yz>0</yz><xz>0</xz><xy>0</xy></i>
+			<ignore idref="body5"/>
+			<m>0</m>
+		</body>
+		<frame id="frame12"/>
+		<fixed id="fixed0">
+			<frame><a idref="world"/><b idref="body0"/></frame>
+			<rotation><x>0</x><y>0</y><z>0</z></rotation>
+			<translation><x>0</x><y>0</y><z>0</z></translation>
+		</fixed>
+		<fixed id="fixed1">
+			<frame><a idref="body0"/><b idref="frame0"/></frame>
+			<rotation><x>0</x><y>0</y><z>0</z></rotation>
+			<translation><x>0</x><y>0</y><z>0</z></translation>
+		</fixed>
+		<revolute id="joint0">
+			<frame><a idref="frame0"/><b idref="frame1"/></frame>
+			<max>180.0</max>
+			<min>-180.0</min>
+			<speed>250</speed>
+		</revolute>
+		<fixed id="fixed2">
+			<frame><a idref="frame1"/><b idref="body1"/></frame>
+			<rotation><x>0.00</x><y>0</y><z>0</z></rotation>
+			<translation><x>0.0000</x><y>0</y><z>0.0000</z></translation>
+		</fixed>
+		<revolute id="joint1">
+			<frame><a idref="body1"/><b idref="frame3"/></frame>
+			<max>180.0</max>
+			<min>-180.0</min>
+			<speed>250</speed>
+		</revolute>
+		<fixed id="fixed3">
+			<frame><a idref="frame3"/><b idref="body2"/></frame>
+			<rotation><x>0.00</x><y>0</y><z>0</z></rotation>
+			<translation><x>0.0000</x><y>0</y><z>10.0000</z></translation>
+		</fixed>
+		<revolute id="joint2">
+			<frame><a idref="body2"/><b idref="frame5"/></frame>
+			<max>180.0</max>
+			<min>-180.0</min>
+			<speed>250</speed>
+		</revolute>
+		<fixed id="fixed4">
+			<frame><a idref="frame5"/><b idref="body3"/></frame>
+			<rotation><x>0.00</x><y>0</y><z>0</z></rotation>
+			<translation><x>0.0000</x><y>0</y><z>0.0000</z></translation>
+		</fixed>
+		<revolute id="joint3">
+			<frame><a idref="body3"/><b idref="frame7"/></frame>
+			<max>85.0</max>
+			<min>-225.0</min>
+			<speed>320</speed>
+		</revolute>
+		<fixed id="fixed5">
+			<frame><a idref="frame7"/><b idref="body4"/></frame>
+			<rotation><x>0.00</x><y>0</y><z>0</z></rotation>
+			<translation><x>10.0000</x><y>0</y><z>0.0000</z></translation>
+		</fixed>
+		<revolute id="joint4">
+			<frame><a idref="body4"/><b idref="frame9"/></frame>
+			<max>180.0</max>
+			<min>-180.0</min>
+			<speed>320</speed>
+		</revolute>
+		<fixed id="fixed6">
+			<frame><a idref="frame9"/><b idref="body5"/></frame>
+			<rotation><x>0.00</x><y>0</y><z>0</z></rotation>
+			<translation><x>10.0000</x><y>0</y><z>0.0000</z></translation>
+		</fixed>
+		<revolute id="joint5">
+			<frame><a idref="body5"/><b idref="frame11"/></frame>
+			<max>180.0</max>
+			<min>-180.0</min>
+			<speed>420</speed>
+		</revolute>
+		<fixed id="fixed7">
+			<frame><a idref="frame11"/><b idref="body6"/></frame>
+			<rotation><x>0.00</x><y>0</y><z>0</z></rotation>
+			<translation><x>-0.0010</x><y>0</y><z>0.0000</z></translation>
+		</fixed>
+	</model>
+</rlmdl>

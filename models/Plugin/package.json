@@ -1,0 +1,29 @@
+{
+  "name": "@openclaw/robot-kinematic",
+  "version": "1.0.0",
+  "description": "OpenClaw plugin — robot kinematic viewer control via natural-language chat",
+  "type": "module",
+  "main": "index.ts",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "bridge": "node --import tsx src/ws-bridge.ts",
+    "bridge:bun": "bun src/ws-bridge.ts"
+  },
+  "dependencies": {
+    "ws": "^8.17.0"
+  },
+  "devDependencies": {
+    "openclaw": "*",
+    "@types/ws": "^8.5.10",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  }
+}
+

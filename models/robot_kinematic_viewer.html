@@ -1,0 +1,1596 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>机器人运动学 3D 查看器</title>
+    <style>
+        /* ================================================================
+           CSS 变量 — 深色主题 (默认)
+           ================================================================ */
+        :root, [data-theme="dark"] {
+            --bg-body: #181c28;
+            --bg-sidebar: #1e2336;
+            --bg-panel: #242940;
+            --bg-input: #1a1f30;
+            --bg-joint: #1e2336;
+            --bg-viewport: #181c28;
+            --border: #2c3250;
+            --border-light: #343a58;
+            --text: #c8cce0;
+            --text-dim: #7882a4;
+            --text-muted: #505878;
+            --accent: #5b9cf6;
+            --accent-hover: #7ab4ff;
+            --accent-bg: rgba(91,156,246,0.10);
+            --green: #66c06a;
+            --orange: #e0a040;
+            --title-color: #8ab4f8;
+            --slider-track: #2c3250;
+            --slider-thumb: #5b9cf6;
+            --btn-bg: #2c3250;
+            --btn-border: #3a4268;
+            --btn-text: #b0b8d0;
+            --btn-hover: #3a4268;
+            --btn-primary-bg: #2a5a9e;
+            --btn-primary-border: #3a6ab0;
+            --btn-primary-text: #d0e0ff;
+            --btn-primary-hover: #3a6ab0;
+            --drop-border: #343a58;
+            --drop-bg: #242940;
+            --drop-hover-border: #5b9cf6;
+            --drop-hover-bg: rgba(91,156,246,0.06);
+            --scrollbar-track: #1a1f30;
+            --scrollbar-thumb: #343a58;
+            --scrollbar-thumb-hover: #4a5278;
+            --handle-hover: #5b9cf6;
+            --grid-major: #2c3250;
+            --grid-minor: #1e2336;
+            --info-label: #7882a4;
+            --info-value: #66c06a;
+        }
+
+        /* ================================================================
+           CSS 变量 — 浅色主题
+           ================================================================ */
+        [data-theme="light"] {
+            --bg-body: #f0f2f5;
+            --bg-sidebar: #ffffff;
+            --bg-panel: #f5f6f8;
+            --bg-input: #ffffff;
+            --bg-joint: #f8f9fb;
+            --bg-viewport: #e8eaef;
+            --border: #d8dce6;
+            --border-light: #e2e5ee;
+            --text: #2c3040;
+            --text-dim: #6070a0;
+            --text-muted: #98a0b8;
+            --accent: #2a6dd8;
+            --accent-hover: #1a5cc0;
+            --accent-bg: rgba(42,109,216,0.08);
+            --green: #2a8a30;
+            --orange: #c08020;
+            --title-color: #2a6dd8;
+            --slider-track: #d0d4e0;
+            --slider-thumb: #2a6dd8;
+            --btn-bg: #e8eaef;
+            --btn-border: #d0d4e0;
+            --btn-text: #3a4060;
+            --btn-hover: #d8dce6;
+            --btn-primary-bg: #2a6dd8;
+            --btn-primary-border: #1a5cc0;
+            --btn-primary-text: #ffffff;
+            --btn-primary-hover: #1a5cc0;
+            --drop-border: #c8ccd8;
+            --drop-bg: #f5f6f8;
+            --drop-hover-border: #2a6dd8;
+            --drop-hover-bg: rgba(42,109,216,0.05);
+            --scrollbar-track: #eaecf0;
+            --scrollbar-thumb: #c0c4d0;
+            --scrollbar-thumb-hover: #a0a8b8;
+            --handle-hover: #2a6dd8;
+            --grid-major: #c8ccd8;
+            --grid-minor: #dde0e8;
+            --info-label: #6070a0;
+            --info-value: #2a8a30;
+        }
+
+        /* ================================================================ */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Microsoft YaHei UI', 'Segoe UI', sans-serif;
+            background: var(--bg-body); color: var(--text);
+            display: flex; height: 100vh; overflow: hidden;
+            transition: background 0.3s, color 0.3s;
+        }
+
+        /* ── 自定义滚动条 ── */
+        #sidebar::-webkit-scrollbar { width: 6px; }
+        #sidebar::-webkit-scrollbar-track { background: var(--scrollbar-track); border-radius: 3px; }
+        #sidebar::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
+        #sidebar::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+
+        /* ── 侧边栏 ── */
+        #sidebar {
+            width: 360px; min-width: 280px; max-width: 600px;
+            background: var(--bg-sidebar); padding: 14px 14px 14px 14px;
+            overflow-y: auto; overflow-x: hidden;
+            display: flex; flex-direction: column; gap: 10px;
+            border-right: 1px solid var(--border);
+            flex-shrink: 0; transition: background 0.3s;
+        }
+
+        /* ── 拖拽分割条 ── */
+        #resize-handle {
+            width: 4px; cursor: col-resize; background: transparent;
+            flex-shrink: 0; position: relative; z-index: 10;
+            transition: background 0.15s;
+        }
+        #resize-handle:hover, #resize-handle.active { background: var(--handle-hover); }
+
+        /* ── 3D 视口 ── */
+        #viewport { flex: 1; position: relative; background: var(--bg-viewport); }
+        canvas { display: block; }
+
+        /* ── 标题栏 ── */
+        .title-bar {
+            display: flex; align-items: center; justify-content: space-between;
+            padding-bottom: 8px; border-bottom: 1px solid var(--border);
+        }
+        .app-title { font-size: 14px; font-weight: 600; color: var(--title-color); }
+        .theme-toggle {
+            background: var(--btn-bg); border: 1px solid var(--btn-border);
+            color: var(--btn-text); width: 28px; height: 28px; border-radius: 50%;
+            cursor: pointer; font-size: 14px; display: flex; align-items: center;
+            justify-content: center; transition: all 0.2s; padding: 0;
+        }
+        .theme-toggle:hover { background: var(--btn-hover); }
+
+        /* ── 面板标题 ── */
+        .panel-title {
+            font-size: 11px; font-weight: 600; color: var(--title-color);
+            text-transform: uppercase; letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+
+        /* ── 通用面板 ── */
+        .panel {
+            background: var(--bg-panel); border-radius: 8px; padding: 12px;
+            border: 1px solid var(--border); transition: background 0.3s, border-color 0.3s;
+        }
+
+        /* ── 关节控制 ── */
+        .joint-ctrl {
+            background: var(--bg-joint); border-radius: 6px; padding: 8px 10px;
+            margin-bottom: 5px; border: 1px solid var(--border);
+            transition: background 0.3s, border-color 0.3s;
+        }
+        .joint-ctrl:hover { border-color: var(--border-light); }
+        .joint-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+        .joint-label { font-size: 12px; color: var(--text-dim); }
+        .joint-name { font-weight: 600; color: var(--accent); font-size: 13px; margin-right: 6px; }
+        .joint-val { font-size: 12px; color: var(--green); font-family: 'Consolas','Courier New', monospace; }
+        .joint-ctrl input[type=range] {
+            width: 100%; height: 4px; margin: 4px 0 2px 0;
+            -webkit-appearance: none; appearance: none;
+            background: var(--slider-track); border-radius: 2px; outline: none;
+            transition: background 0.3s;
+        }
+        .joint-ctrl input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none; width: 14px; height: 14px;
+            border-radius: 50%; background: var(--slider-thumb); cursor: pointer;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3); transition: background 0.2s;
+        }
+        .joint-ctrl input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.15); }
+        .range-label { font-size: 10px; color: var(--text-muted); }
+
+        /* ── 信息面板 ── */
+        #info-panel { font-size: 11px; line-height: 1.8; }
+        #info-panel b { color: var(--info-label); font-weight: 500; }
+        #info-panel span { color: var(--info-value); font-family: 'Consolas','Courier New', monospace; font-size: 11px; }
+
+        /* ── 拖放区 ── */
+        #drop-zone {
+            border: 2px dashed var(--drop-border); border-radius: 8px;
+            padding: 24px 16px; text-align: center; cursor: pointer;
+            transition: all 0.2s; background: var(--drop-bg);
+        }
+        #drop-zone:hover, #drop-zone.dragover {
+            border-color: var(--drop-hover-border); background: var(--drop-hover-bg);
+        }
+        #drop-zone p { color: var(--text-dim); font-size: 13px; }
+        #drop-zone .sub { font-size: 11px; margin-top: 4px; color: var(--text-muted); }
+
+        /* ── 按钮 ── */
+        .btn {
+            background: var(--btn-bg); color: var(--btn-text);
+            border: 1px solid var(--btn-border);
+            padding: 5px 14px; border-radius: 5px; cursor: pointer;
+            font-size: 12px; transition: all 0.15s;
+        }
+        .btn:hover { background: var(--btn-hover); }
+        .btn-primary {
+            background: var(--btn-primary-bg); border-color: var(--btn-primary-border);
+            color: var(--btn-primary-text);
+        }
+        .btn-primary:hover { background: var(--btn-primary-hover); }
+
+        /* ── 状态 ── */
+        #status { font-size: 11px; color: var(--green); padding: 2px 0; min-height: 16px; }
+
+        /* ── WebSocket 面板 ── */
+        .ws-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+        .ws-row:last-child { margin-bottom: 0; }
+        .ws-row label { font-size: 12px; color: var(--text-dim); }
+        .ws-row input[type=number] {
+            width: 70px; background: var(--bg-input); border: 1px solid var(--border);
+            color: var(--text); padding: 4px 6px; border-radius: 4px; font-size: 12px;
+            transition: background 0.3s, border-color 0.3s, color 0.3s;
+        }
+        .ws-row input[type=text] {
+            width: 120px; background: var(--bg-input); border: 1px solid var(--border);
+            color: var(--text); padding: 4px 6px; border-radius: 4px; font-size: 12px;
+            transition: background 0.3s, border-color 0.3s, color 0.3s;
+        }
+        .ws-dot {
+            display: inline-block; width: 8px; height: 8px;
+            border-radius: 50%; margin-right: 4px; flex-shrink: 0;
+        }
+        .ws-dot.off { background: var(--text-muted); }
+        .ws-dot.on { background: var(--green); }
+        .ws-dot.listening { background: var(--orange); }
+        .ws-status-text { font-size: 11px; color: var(--text-dim); }
+
+        /* ── 间距 ── */
+        .spacer { flex: 1; min-height: 8px; }
+    </style>
+</head>
+<body>
+    <div id="sidebar">
+        <div class="title-bar">
+            <div class="app-title">机器人运动学 3D 查看器</div>
+            <button class="theme-toggle" id="theme-btn" title="切换主题">🌙</button>
+        </div>
+
+        <!-- WebSocket 远程控制 -->
+        <div class="panel">
+            <div class="panel-title">远程控制 (WebSocket)</div>
+            <div class="ws-row">
+                <label>地址:</label>
+                <input type="text" id="ws-ip" value="127.0.0.1" placeholder="IP地址">
+                <label>端口:</label>
+                <input type="number" id="ws-port" value="9877" min="1" max="65535">
+            </div>
+            <div class="ws-row">
+                <button class="btn btn-primary" id="ws-toggle-btn">连接</button>
+                <span class="ws-dot off" id="ws-dot"></span>
+                <span class="ws-status-text" id="ws-status-text">未连接</span>
+            </div>
+        </div>
+
+        <!-- 文件拖放 -->
+        <div id="drop-zone">
+            <p>拖放 .glb 文件到此处</p>
+            <p class="sub">或点击选择文件</p>
+            <input type="file" id="file-input" accept=".glb" style="display:none">
+        </div>
+        <div id="status"></div>
+
+        <!-- 关节控制 -->
+        <div id="joints-panel" style="display:none;">
+            <div class="panel-title">关节控制</div>
+            <button class="btn" id="home-btn" style="margin-bottom:8px;">回到 Home 位</button>
+            <div id="joint-sliders"></div>
+        </div>
+
+        <div class="spacer"></div>
+
+        <!-- 模型信息 (底部) -->
+        <div id="info-panel" class="panel" style="display:none;">
+            <div class="panel-title">模型信息</div>
+            <div id="model-info"></div>
+        </div>
+    </div>
+
+    <div id="resize-handle"></div>
+    <div id="viewport"></div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"
+        }
+    }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+        // ================================================================
+        // 主题切换
+        // ================================================================
+        const themeBtn = document.getElementById('theme-btn');
+        let currentTheme = localStorage.getItem('viewer-theme') || 'dark';
+        applyTheme(currentTheme);
+
+        themeBtn.addEventListener('click', () => {
+            currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            applyTheme(currentTheme);
+            localStorage.setItem('viewer-theme', currentTheme);
+        });
+
+        function applyTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            themeBtn.textContent = theme === 'dark' ? '☀️' : '🌙';
+            themeBtn.title = theme === 'dark' ? '切换到浅色主题' : '切换到深色主题';
+            // 更新 3D 场景背景和网格
+            if (typeof updateSceneTheme === 'function') updateSceneTheme(theme);
+        }
+
+        // ── 侧边栏拖拽调整宽度 ──
+        const sidebar = document.getElementById('sidebar');
+        const handle = document.getElementById('resize-handle');
+        let resizing = false;
+
+        handle.addEventListener('mousedown', (e) => {
+            resizing = true;
+            handle.classList.add('active');
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+            e.preventDefault();
+        });
+        document.addEventListener('mousemove', (e) => {
+            if (!resizing) return;
+            const newWidth = Math.max(280, Math.min(600, e.clientX));
+            sidebar.style.width = newWidth + 'px';
+            resize();
+        });
+        document.addEventListener('mouseup', () => {
+            if (resizing) {
+                resizing = false;
+                handle.classList.remove('active');
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+            }
+        });
+
+        // ── 场景初始化 ──
+        const viewport = document.getElementById('viewport');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x181c28);
+
+        const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
+        camera.position.set(2, 1.5, 2);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.2;
+        viewport.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.target.set(0, 0.5, 0);
+
+        // 灯光
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        dirLight.position.set(5, 10, 7);
+        scene.add(dirLight);
+        const dirLight2 = new THREE.DirectionalLight(0x8888ff, 0.3);
+        dirLight2.position.set(-3, -2, -5);
+        scene.add(dirLight2);
+
+        // 网格地面
+        let grid = new THREE.GridHelper(4, 20, 0x4a5280, 0x333a5c);
+        scene.add(grid);
+
+        // 场景主题更新
+        window.updateSceneTheme = function(theme) {
+            if (theme === 'light') {
+                scene.background.set(0xe8eaef);
+                scene.remove(grid);
+                grid = new THREE.GridHelper(4, 20, 0xc8ccd8, 0xdde0e8);
+                scene.add(grid);
+                ambientLight.intensity = 0.7;
+                dirLight.intensity = 1.2;
+            } else {
+                scene.background.set(0x181c28);
+                scene.remove(grid);
+                grid = new THREE.GridHelper(4, 20, 0x4a5280, 0x333a5c);
+                scene.add(grid);
+                ambientLight.intensity = 0.5;
+                dirLight.intensity = 1.0;
+            }
+        };
+        // 初始化场景主题
+        updateSceneTheme(currentTheme);
+
+        // ── 尺寸适配 ──
+        function resize() {
+            const w = viewport.clientWidth;
+            const h = viewport.clientHeight;
+            if (w <= 0 || h <= 0) return;
+            camera.aspect = w / h;
+            camera.updateProjectionMatrix();
+            renderer.setSize(w, h);
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // ── 渲染循环 ──
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // ── 状态 ──
+        let jointNodes = [];
+        let robotModel = null;
+
+        // ── IndexedDB 持久化 ──
+        const DB_NAME = 'RobotViewerDB';
+        const DB_STORE = 'models';
+        const DB_KEY = 'lastModel';
+
+        function openDB() {
+            return new Promise((resolve, reject) => {
+                const req = indexedDB.open(DB_NAME, 1);
+                req.onupgradeneeded = () => req.result.createObjectStore(DB_STORE);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        async function saveModelToDB(arrayBuffer, fileName) {
+            try {
+                const db = await openDB();
+                const tx = db.transaction(DB_STORE, 'readwrite');
+                tx.objectStore(DB_STORE).put({ data: arrayBuffer, name: fileName }, DB_KEY);
+                await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
+                db.close();
+            } catch (e) { console.warn('保存模型到 IndexedDB 失败:', e); }
+        }
+
+        async function loadModelFromDB() {
+            try {
+                const db = await openDB();
+                const tx = db.transaction(DB_STORE, 'readonly');
+                const req = tx.objectStore(DB_STORE).get(DB_KEY);
+                const result = await new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = rej; });
+                db.close();
+                return result || null;
+            } catch (e) { return null; }
+        }
+
+        // ── 文件加载 ──
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            const file = e.dataTransfer.files[0];
+            if (file && file.name.endsWith('.glb')) loadFile(file);
+        });
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) loadFile(file);
+        });
+
+        function loadFile(file) {
+            const status = document.getElementById('status');
+            status.textContent = `正在加载: ${file.name} ...`;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const buffer = e.target.result;
+                loadFromBuffer(buffer, file.name);
+                saveModelToDB(buffer, file.name);
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function loadFromBuffer(arrayBuffer, fileName) {
+            const status = document.getElementById('status');
+            status.textContent = `正在加载: ${fileName} ...`;
+            const loader = new GLTFLoader();
+            loader.parse(arrayBuffer, '', (gltf) => {
+                processGLTF(gltf, fileName);
+            }, (error) => {
+                status.textContent = `加载失败: ${error.message}`;
+            });
+        }
+
+        function processGLTF(gltf, fileName) {
+            const status = document.getElementById('status');
+            const keep = [ambientLight, dirLight, dirLight2, grid];
+            scene.children.filter(c => !keep.includes(c)).forEach(c => scene.remove(c));
+            jointNodes = [];
+
+            const model = gltf.scene;
+            scene.add(model);
+
+            const box = new THREE.Box3().setFromObject(model);
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3());
+            const maxDim = Math.max(size.x, size.y, size.z);
+            controls.target.copy(center);
+            camera.position.set(center.x + maxDim, center.y + maxDim * 0.8, center.z + maxDim);
+            controls.update();
+
+            const extras = gltf.parser.json.extras || {};
+            robotModel = extras.robotModel || null;
+
+            model.traverse((node) => {
+                if (node.userData && node.userData.robotJoint) {
+                    const jd = node.userData.robotJoint;
+                    if (jd.type === 'revolute' || jd.type === 'prismatic') {
+                        jointNodes.push({
+                            node, index: jd.index, type: jd.type,
+                            axis: new THREE.Vector3(...(jd.axis || [0, 0, 1])),
+                            limits: jd.limits || [-180, 180],
+                            home: jd.home || 0,
+                            currentValue: jd.home || 0,
+                            homeQuaternion: node.quaternion.clone(),
+                            homePosition: node.position.clone(),
+                        });
+                    }
+                }
+            });
+
+            jointNodes.sort((a, b) => a.index - b.index);
+
+            // ── Delta 并联机器人初始化 ──
+            if (robotModel && robotModel.mechanismType === 'delta' && robotModel.deltaParams) {
+                initDeltaFK(model);
+            }
+
+            // ── Parallel (平行四边形连杆) 机器人初始化 ──
+            if (robotModel && robotModel.mechanismType === 'parallel' && robotModel.parallelCoupling) {
+                initParallelFK(model);
+            }
+
+            updateInfoPanel(fileName, extras);
+            buildJointSliders();
+            status.textContent = `已加载: ${fileName} (${jointNodes.length} 个可驱动关节)`;
+        }
+
+        /* ── 分析模型几何参数 ── */
+        function analyzeModelGeometry(model) {
+            const stats = {
+                meshCount: 0, vertexCount: 0, triangleCount: 0,
+                materialSet: new Set(), hasTextures: false,
+                maxDepth: 0, nodeCount: 0,
+                boundingBox: new THREE.Box3().setFromObject(model),
+            };
+            function walk(node, depth) {
+                stats.nodeCount++;
+                if (depth > stats.maxDepth) stats.maxDepth = depth;
+                if (node.isMesh) {
+                    stats.meshCount++;
+                    const geo = node.geometry;
+                    if (geo) {
+                        const pos = geo.attributes.position;
+                        if (pos) stats.vertexCount += pos.count;
+                        if (geo.index) stats.triangleCount += geo.index.count / 3;
+                        else if (pos) stats.triangleCount += pos.count / 3;
+                    }
+                    const mats = Array.isArray(node.material) ? node.material : [node.material];
+                    mats.forEach(m => {
+                        if (m) {
+                            stats.materialSet.add(m.uuid);
+                            if (m.map || m.normalMap || m.roughnessMap || m.metalnessMap || m.emissiveMap || m.aoMap)
+                                stats.hasTextures = true;
+                        }
+                    });
+                }
+                node.children.forEach(c => walk(c, depth + 1));
+            }
+            walk(model, 0);
+            return stats;
+        }
+
+        /* ── 分析关节运动学参数 ── */
+        function analyzeJointKinematics() {
+            if (jointNodes.length === 0) return null;
+            const kin = { linkLengths: [], jointAxes: [], totalROM: [], reach: 0 };
+            // 关节世界坐标
+            const worldPositions = jointNodes.map(j => {
+                const wp = new THREE.Vector3();
+                j.node.getWorldPosition(wp);
+                return wp;
+            });
+            // 连杆长度 (相邻关节间距)
+            for (let i = 1; i < worldPositions.length; i++) {
+                kin.linkLengths.push(worldPositions[i].distanceTo(worldPositions[i - 1]) * 1000);
+            }
+            // 关节轴方向 & 总运动范围
+            jointNodes.forEach(j => {
+                kin.jointAxes.push(j.axis.toArray().map(v => v.toFixed(2)).join(', '));
+                kin.totalROM.push(j.limits[1] - j.limits[0]);
+            });
+            // 估算最大臂展 (所有连杆长度之和)
+            kin.reach = kin.linkLengths.reduce((s, v) => s + v, 0);
+            return kin;
+        }
+
+        function updateInfoPanel(fileName, extras) {
+            const panel = document.getElementById('info-panel');
+            const info = document.getElementById('model-info');
+            panel.style.display = 'block';
+
+            const model = scene.children.find(c => c !== ambientLight && c !== dirLight && c !== dirLight2 && c !== grid);
+            const geo = model ? analyzeModelGeometry(model) : null;
+            const kin = analyzeJointKinematics();
+
+            let html = '';
+            // ── 基本信息 ──
+            html += `<div style="margin-bottom:6px;font-size:11px;color:var(--accent);font-weight:600;">📄 基本信息</div>`;
+            html += `<b>文件:</b> <span>${fileName}</span><br>`;
+            if (robotModel) {
+                html += `<b>名称:</b> <span>${robotModel.name}</span><br>`;
+                html += `<b>关节数:</b> <span>${robotModel.jointCount}</span><br>`;
+                html += `<b>Home:</b> <span>[${(robotModel.homeJoints||[]).map(v=>v.toFixed(1)).join(', ')}]</span><br>`;
+                html += `<b>类型:</b> <span>${(robotModel.jointTypes||[]).join(', ')}</span><br>`;
+                // 显示机构类型
+                const mechLabels = {
+                    'serial': '串联', 'serial_6dof': '串联6轴', 'scara': 'SCARA',
+                    'delta': 'Delta并联', 'parallel': '并联/耦合', 'coupled': '耦合'
+                };
+                html += `<b>机构:</b> <span>${mechLabels[robotModel.mechanismType] || robotModel.mechanismType}</span><br>`;
+                if (robotModel.passiveLinks && robotModel.passiveLinks.length > 0) {
+                    html += `<b>被动连杆:</b> <span>[${robotModel.passiveLinks.join(', ')}]</span><br>`;
+                }
+                const coord = robotModel.coordinateSystem || {};
+                html += `<b>坐标系:</b> <span>${coord.sourceUp || '?'}-up, ${coord.format || '?'}</span><br>`;
+                html += `<b>版本:</b> <span>${robotModel.version || '?'}</span><br>`;
+            } else {
+                html += `<span style="color:var(--orange);">未检测到 robotModel 元数据</span><br>`;
+            }
+
+            // ── 几何统计 ──
+            if (geo) {
+                const sz = geo.boundingBox.getSize(new THREE.Vector3());
+                html += `<div style="margin:8px 0 6px;font-size:11px;color:var(--accent);font-weight:600;">📐 几何参数</div>`;
+                html += `<b>包围盒:</b> <span>${(sz.x*1000).toFixed(0)} × ${(sz.y*1000).toFixed(0)} × ${(sz.z*1000).toFixed(0)} mm</span><br>`;
+                html += `<b>网格数:</b> <span>${geo.meshCount}</span><br>`;
+                html += `<b>顶点数:</b> <span>${geo.vertexCount.toLocaleString()}</span><br>`;
+                html += `<b>三角面:</b> <span>${Math.round(geo.triangleCount).toLocaleString()}</span><br>`;
+                html += `<b>材质数:</b> <span>${geo.materialSet.size}</span><br>`;
+                html += `<b>贴图:</b> <span>${geo.hasTextures ? '有' : '无'}</span><br>`;
+                html += `<b>节点数:</b> <span>${geo.nodeCount}</span><br>`;
+                html += `<b>层级深度:</b> <span>${geo.maxDepth}</span><br>`;
+            }
+
+            // ── 运动学参数 ──
+            if (kin && jointNodes.length > 0) {
+                html += `<div style="margin:8px 0 6px;font-size:11px;color:var(--accent);font-weight:600;">🦾 运动学参数</div>`;
+                html += `<b>臂展(估算):</b> <span>${kin.reach.toFixed(1)} mm</span><br>`;
+                // 连杆长度
+                if (kin.linkLengths.length > 0) {
+                    html += `<b>连杆长度:</b> <span>[${kin.linkLengths.map(v=>v.toFixed(1)).join(', ')}] mm</span><br>`;
+                }
+                // 关节详细表格
+                html += `<div style="margin-top:6px;overflow-x:auto;">`;
+                html += `<table style="width:100%;border-collapse:collapse;font-size:10px;">`;
+                html += `<tr style="border-bottom:1px solid var(--border);">`;
+                html += `<th style="text-align:left;padding:3px 4px;color:var(--text-dim);">关节</th>`;
+                html += `<th style="text-align:center;padding:3px 4px;color:var(--text-dim);">类型</th>`;
+                html += `<th style="text-align:center;padding:3px 4px;color:var(--text-dim);">轴向</th>`;
+                html += `<th style="text-align:center;padding:3px 4px;color:var(--text-dim);">范围</th>`;
+                html += `<th style="text-align:center;padding:3px 4px;color:var(--text-dim);">行程</th>`;
+                html += `</tr>`;
+                jointNodes.forEach((j, i) => {
+                    const isRev = j.type === 'revolute';
+                    const unit = isRev ? '°' : 'mm';
+                    html += `<tr style="border-bottom:1px solid var(--border);">`;
+                    html += `<td style="padding:2px 4px;color:var(--accent);font-weight:600;">J${i+1}</td>`;
+                    html += `<td style="text-align:center;padding:2px 4px;color:var(--text-dim);">${isRev ? '旋转' : '移动'}</td>`;
+                    html += `<td style="text-align:center;padding:2px 4px;color:var(--info-value);font-family:Consolas,monospace;">[${kin.jointAxes[i]}]</td>`;
+                    html += `<td style="text-align:center;padding:2px 4px;color:var(--info-value);font-family:Consolas,monospace;">${j.limits[0].toFixed(0)}~${j.limits[1].toFixed(0)}${unit}</td>`;
+                    html += `<td style="text-align:center;padding:2px 4px;color:var(--orange);font-family:Consolas,monospace;">${kin.totalROM[i].toFixed(0)}${unit}</td>`;
+                    html += `</tr>`;
+                });
+                html += `</table></div>`;
+            }
+
+            info.innerHTML = html;
+        }
+
+        function buildJointSliders() {
+            const panel = document.getElementById('joints-panel');
+            const container = document.getElementById('joint-sliders');
+            container.innerHTML = '';
+            if (jointNodes.length === 0) { panel.style.display = 'none'; return; }
+            panel.style.display = 'block';
+
+            jointNodes.forEach((j, idx) => {
+                const div = document.createElement('div');
+                div.className = 'joint-ctrl';
+                const isRev = j.type === 'revolute';
+                const unit = isRev ? '\u00B0' : 'mm';
+                const min = j.limits[0], max = j.limits[1], home = j.home;
+                const jNum = idx + 1;
+
+                div.innerHTML = `
+                    <div class="joint-header">
+                        <span class="joint-label"><span class="joint-name">J${jNum}</span>${j.node.name}</span>
+                        <span class="joint-val" id="jval-${idx}">${home.toFixed(1)}${unit}</span>
+                    </div>
+                    <input type="range" id="jslider-${idx}" min="${min}" max="${max}" step="0.5" value="${home}">
+                    <div class="range-label">${min.toFixed(0)} ~ ${max.toFixed(0)}${unit}</div>
+                `;
+                container.appendChild(div);
+
+                div.querySelector(`#jslider-${idx}`).addEventListener('input', (e) => {
+                    const val = parseFloat(e.target.value);
+                    document.getElementById(`jval-${idx}`).textContent = `${val.toFixed(1)}${unit}`;
+                    applyJointValue(j, val);
+                });
+            });
+
+            document.getElementById('home-btn').addEventListener('click', goHome);
+        }
+
+        /* ══════════════════════════════════════════════════════════════
+         * Parallel (平行四边形连杆) 机器人约束求解器
+         * 适用于 IRB-760 等含被动连杆的非Delta并联机器人
+         *
+         * IRB-760 机械结构 (11 links, 4 joints):
+         *   GLB 层级: Link_0 → Link_1(J0) → Link_2(J1) → Link_6(J2)
+         *                                     ├─ Link_8(被动)    → Link_5(J3)
+         *                                     └─ Link_9(被动)    ├─ Link_3(被动)
+         *                                                         ├─ Link_4(被动)
+         *                                                         ├─ Link_7(被动)
+         *                                                         └─ Link_10(被动)
+         *
+         * 被动连杆运动规律 (经 RoboDK 验证):
+         *   Link_3, 9: 绕 pivot(300,0,814.5) 旋转 -J1°, J2 不影响, 绝对方向不变
+         *   Link_4:    绕 Link_3 位置旋转 -J2° (半径 1350mm), 随 Link_3 平移
+         *   Link_7:    绕 Link_3 位置旋转 -J2° (半径 500mm, 反向), 随 Link_3 平移
+         *   Link_8:    位置不变, 旋转与 Link_2 相同 (J1)
+         *   Link_10:   位置随 Link_3 平移, Y旋转 = +J2
+         * ══════════════════════════════════════════════════════════════ */
+        let parallelState = null;
+
+        function initParallelFK(model) {
+            const pc = robotModel.parallelCoupling;
+            if (!pc) return;
+
+            // 收集所有 link 节点
+            const linkNodeMap = {};
+            model.traverse((node) => {
+                const m = node.name.match(/^Link_(\d+)$/);
+                if (m) linkNodeMap[parseInt(m[1])] = node;
+            });
+
+            // 记录每个 link 的 home 状态 (相对于父节点)
+            const allHomeStates = {};
+            for (const [idx, node] of Object.entries(linkNodeMap)) {
+                allHomeStates[idx] = {
+                    position: node.position.clone(),
+                    quaternion: node.quaternion.clone(),
+                };
+            }
+
+            // 从 parallelCoupling 数据中提取 Home 世界坐标
+            const homeWorldPositions = pc.linkHomePositions || [];
+
+            // 计算关键几何参数
+            // pivot = Link_2/Link_6 的 Home 世界坐标 (旋转中心)
+            const pivotWorld = homeWorldPositions[2] || [300, 0, 814.5];
+            // elbow = Link_3/Link_9 的 Home 世界坐标 (肘部)
+            const elbowWorld = homeWorldPositions[3] || [300, 0, 2094.5];
+            // 下臂长度 = pivot 到 elbow 的距离
+            const armLength = Math.sqrt(
+                (elbowWorld[0]-pivotWorld[0])**2 +
+                (elbowWorld[1]-pivotWorld[1])**2 +
+                (elbowWorld[2]-pivotWorld[2])**2
+            );
+
+            // 各被动 link 相对于 elbow (Link_3) 的 Home 偏移
+            const link4HomeFromElbow = homeWorldPositions[4] ? [
+                homeWorldPositions[4][0] - elbowWorld[0],
+                homeWorldPositions[4][1] - elbowWorld[1],
+                homeWorldPositions[4][2] - elbowWorld[2],
+            ] : [1350, 0, 0];
+            const link4RadiusFromElbow = Math.sqrt(
+                link4HomeFromElbow[0]**2 + link4HomeFromElbow[2]**2
+            );
+            const link4HomeAngle = Math.atan2(link4HomeFromElbow[2], link4HomeFromElbow[0]);
+
+            const link7HomeFromElbow = homeWorldPositions[7] ? [
+                homeWorldPositions[7][0] - elbowWorld[0],
+                homeWorldPositions[7][1] - elbowWorld[1],
+                homeWorldPositions[7][2] - elbowWorld[2],
+            ] : [-500, 0, 0];
+            const link7RadiusFromElbow = Math.sqrt(
+                link7HomeFromElbow[0]**2 + link7HomeFromElbow[2]**2
+            );
+            const link7HomeAngle = Math.atan2(link7HomeFromElbow[2], link7HomeFromElbow[0]);
+
+            const link5HomeFromElbow = homeWorldPositions[5] ? [
+                homeWorldPositions[5][0] - elbowWorld[0],
+                homeWorldPositions[5][1] - elbowWorld[1],
+                homeWorldPositions[5][2] - elbowWorld[2],
+            ] : [1640, 0, -269];
+
+            // Link_5 相对于 Link_4 的常量偏移 (法兰刚性连接在上臂末端)
+            const link4HomeWorld = homeWorldPositions[4] || [1650, 0, 2094.5];
+            const link5HomeWorld = homeWorldPositions[5] || [1940, 0, 1825.5];
+            const link5OffsetFromLink4 = [
+                link5HomeWorld[0] - link4HomeWorld[0],
+                link5HomeWorld[1] - link4HomeWorld[1],
+                link5HomeWorld[2] - link4HomeWorld[2],
+            ];
+
+            const link10HomeFromElbow = homeWorldPositions[10] ? [
+                homeWorldPositions[10][0] - elbowWorld[0],
+                homeWorldPositions[10][1] - elbowWorld[1],
+                homeWorldPositions[10][2] - elbowWorld[2],
+            ] : [413.7, 0, 347.1];
+
+            // Link_8 的 Home 世界坐标
+            const link8HomeWorld = homeWorldPositions[8] || [-117.2, 0, 983.1];
+
+            parallelState = {
+                coupling: pc,
+                linkNodes: linkNodeMap,
+                passiveLinks: robotModel.passiveLinks || [],
+                allHomeStates: allHomeStates,
+                homeWorldPositions: homeWorldPositions,
+                primaryLinkMap: robotModel.primaryLinkMap || [],
+                affectMatrix: robotModel.affectMatrix || [],
+                // 几何常量
+                pivotWorld: pivotWorld,
+                elbowWorld: elbowWorld,
+                armLength: armLength,
+                link4RadiusFromElbow: link4RadiusFromElbow,
+                link4HomeAngle: link4HomeAngle,
+                link7RadiusFromElbow: link7RadiusFromElbow,
+                link7HomeAngle: link7HomeAngle,
+                link5HomeFromElbow: link5HomeFromElbow,
+                link5OffsetFromLink4: link5OffsetFromLink4,
+                link10HomeFromElbow: link10HomeFromElbow,
+                link8HomeWorld: link8HomeWorld,
+            };
+
+            console.log('Parallel FK 初始化完成:', parallelState.passiveLinks.length, '个被动连杆',
+                        'pivot:', pivotWorld, 'armLen:', armLength.toFixed(1));
+        }
+
+        /* ══════════════════════════════════════════════════════════════
+         * Delta 并联机器人正运动学 (Forward Kinematics) 求解器
+         * ══════════════════════════════════════════════════════════════ */
+        let deltaState = null;  // Delta FK 状态, 非Delta机器人为null
+
+        function initDeltaFK(model) {
+            const dp = robotModel.deltaParams;
+            if (!dp) return;
+
+            // 收集所有 link 节点 (通过名称匹配)
+            const linkNodeMap = {};
+            model.traverse((node) => {
+                const m = node.name.match(/^Link_(\d+)$/);
+                if (m) linkNodeMap[parseInt(m[1])] = node;
+            });
+
+            // 标识各节点角色
+            const pli = robotModel.primaryLinkMap || [];
+            const armIndices = pli.slice(0, 3);          // 上臂 link 索引 [1,2,3]
+            const flangeIdx = dp.flangeIdx;                // 法兰 link 索引 [11]
+            const platformIdx = dp.platformIdx;            // 平台 link 索引 [10]
+            const barIndices = dp.barLinkIndices || [];    // 下臂杆 link 索引 [4,5,6,7,8,9]
+
+            const armNodeList = armIndices.map(i => linkNodeMap[i]);
+
+            deltaState = {
+                dp: dp,
+                linkNodes: linkNodeMap,
+                armIndices: armIndices,
+                flangeIdx: flangeIdx,
+                platformIdx: platformIdx,
+                barIndices: barIndices,
+                armNodes: armNodeList,
+                platformNode: linkNodeMap[platformIdx],
+                flangeNode: linkNodeMap[flangeIdx],
+                barNodes: barIndices.map(i => linkNodeMap[i]),
+            };
+
+            // ═══════════════════════════════════════════════════════════════
+            // 关键修复: 将上臂节点原点从"肘部"移至"电机轴心"
+            // RoboDK 的 link 位姿在肘部 (上臂末端), 但旋转应围绕电机轴心
+            // 否则与基座连接的电机壳体会在旋转时脱离基体
+            // ═══════════════════════════════════════════════════════════════
+            const motorPivots = dp.motorPivots;
+            if (motorPivots && motorPivots.length >= 3) {
+                for (let i = 0; i < 3; i++) {
+                    const armNode = armNodeList[i];
+                    if (!armNode) continue;
+
+                    // 电机轴心在 Link_0 本地坐标系: [mx, my, mz - baseZ]
+                    const mpLocal = new THREE.Vector3(
+                        motorPivots[i][0],
+                        motorPivots[i][1],
+                        motorPivots[i][2] - dp.baseZ
+                    );
+
+                    // 肘部→电机轴心 的偏移 (Link_0 帧)
+                    const elbowPos = armNode.position.clone();
+                    const offsetInParent = new THREE.Vector3().subVectors(elbowPos, mpLocal);
+
+                    // 转换到 arm 节点本地坐标系: R_home^(-1) * offset
+                    const invHomeQuat = armNode.quaternion.clone().invert();
+                    const offsetLocal = offsetInParent.clone().applyQuaternion(invHomeQuat);
+
+                    // 移动 arm 节点到电机轴心
+                    armNode.position.copy(mpLocal);
+
+                    // 补偿 Visual 子节点偏移: 加上 local 偏移量
+                    // (保证 home 位时网格世界坐标不变)
+                    armNode.traverse((child) => {
+                        if (child !== armNode && child.name && child.name.includes('Visual')) {
+                            child.position.add(offsetLocal);
+                            console.log(`Delta pivot fix: ${armNode.name} Visual 偏移补偿 +[${offsetLocal.x.toFixed(1)}, ${offsetLocal.y.toFixed(1)}, ${offsetLocal.z.toFixed(1)}]`);
+                        }
+                    });
+
+                    // 同步更新 jointNodes 中的 homePosition
+                    const jn = jointNodes.find(j => j.node === armNode);
+                    if (jn) jn.homePosition = mpLocal.clone();
+
+                    console.log(`Delta pivot fix: ${armNode.name} 从肘部[${elbowPos.x.toFixed(1)},${elbowPos.y.toFixed(1)},${elbowPos.z.toFixed(1)}] → 电机轴心[${mpLocal.x.toFixed(1)},${mpLocal.y.toFixed(1)},${mpLocal.z.toFixed(1)}]`);
+                }
+            }
+
+            console.log('Delta FK 初始化完成:', dp);
+        }
+
+        /**
+         * Delta 正运动学: 三球交线求平台中心
+         * 输入: theta[3] = [J1, J2, J3] 关节角度 (度)
+         * 返回: [x, y, z] 平台中心世界坐标 (mm), 或 null (无解)
+         */
+        function solveDeltaPlatformFK(theta) {
+            const dp = deltaState.dp;
+            const sb = dp.sb, sp = dp.sp, rf = dp.rf, re = dp.re;
+            const baseZ = dp.baseZ;
+            const chainAngles = dp.chainAngles;  // [0, -120, 120] degrees
+
+            // 对每条链, 计算约束球心 Q_i = elbow_i - sp_offset_i
+            // 其中 elbow_i = motor_pivot_i + rf * arm_direction(theta_i)
+            // sp_offset_i = [sp*cos(phi_i), sp*sin(phi_i), 0]
+            const Q = [];
+            for (let i = 0; i < 3; i++) {
+                const phi = chainAngles[i] * Math.PI / 180;
+                const th = theta[i] * Math.PI / 180;
+                const cosPhi = Math.cos(phi), sinPhi = Math.sin(phi);
+
+                // 电机轴心
+                const mx = sb * cosPhi;
+                const my = sb * sinPhi;
+                const mz = baseZ;
+
+                // 上臂末端(肘部) — θ=0时水平指向外侧, θ>0时向下摆
+                const ex = mx + rf * cosPhi * Math.cos(th);
+                const ey = my + rf * sinPhi * Math.cos(th);
+                const ez = mz - rf * Math.sin(th);
+
+                // 约束球心 = elbow - platform_offset
+                Q.push({
+                    x: ex - sp * cosPhi,
+                    y: ey - sp * sinPhi,
+                    z: ez
+                });
+            }
+
+            // 三球交解: |P - Q_i|² = re² for i=0,1,2
+            // 展开: Px² - 2*Q_ix*Px + Q_ix² + Py² - 2*Q_iy*Py + Q_iy² + Pz² - 2*Q_iz*Pz + Q_iz² = re²
+            // 减去球1: 2*(Q0x-Q1x)*Px + 2*(Q0y-Q1y)*Py + 2*(Q0z-Q1z)*Pz = |Q0|²-|Q1|²
+            const Q0sq = Q[0].x*Q[0].x + Q[0].y*Q[0].y + Q[0].z*Q[0].z;
+            const Q1sq = Q[1].x*Q[1].x + Q[1].y*Q[1].y + Q[1].z*Q[1].z;
+            const Q2sq = Q[2].x*Q[2].x + Q[2].y*Q[2].y + Q[2].z*Q[2].z;
+
+            // 线性方程组 (2个方程, 3个未知数):
+            // a1*Px + b1*Py + c1*Pz = d1   (球0 - 球1)
+            // a2*Px + b2*Py + c2*Pz = d2   (球0 - 球2)
+            const a1 = 2*(Q[0].x - Q[1].x), b1 = 2*(Q[0].y - Q[1].y), c1 = 2*(Q[0].z - Q[1].z);
+            const d1 = Q0sq - Q1sq;
+            const a2 = 2*(Q[0].x - Q[2].x), b2 = 2*(Q[0].y - Q[2].y), c2 = 2*(Q[0].z - Q[2].z);
+            const d2 = Q0sq - Q2sq;
+
+            // 用 Pz 参数化, 求 Px, Py = f(Pz):
+            // a1*Px + b1*Py = d1 - c1*Pz   ... (I)
+            // a2*Px + b2*Py = d2 - c2*Pz   ... (II)
+            const det = a1*b2 - a2*b1;
+            if (Math.abs(det) < 1e-10) {
+                // 退化情况 (三个约束球心共线)
+                return null;
+            }
+
+            // Px = (1/det) * [(d1-c1*Pz)*b2 - (d2-c2*Pz)*b1]
+            // Py = (1/det) * [a1*(d2-c2*Pz) - a2*(d1-c1*Pz)]
+            // => Px = Ax + Bx*Pz,  Py = Ay + By*Pz
+            const Ax = (d1*b2 - d2*b1) / det;
+            const Bx = (-c1*b2 + c2*b1) / det;
+            const Ay = (a1*d2 - a2*d1) / det;
+            const By = (a1*(-c2) - a2*(-c1)) / det;
+
+            // 代入球0方程: (Ax+Bx*Pz - Q0x)² + (Ay+By*Pz - Q0y)² + (Pz - Q0z)² = re²
+            const ex0 = Ax - Q[0].x, ey0 = Ay - Q[0].y;
+            // (ex0 + Bx*Pz)² + (ey0 + By*Pz)² + (Pz - Q0z)² = re²
+            const A_coeff = Bx*Bx + By*By + 1;
+            const B_coeff = 2*(ex0*Bx + ey0*By - Q[0].z);
+            const C_coeff = ex0*ex0 + ey0*ey0 + Q[0].z*Q[0].z - re*re;
+
+            const discriminant = B_coeff*B_coeff - 4*A_coeff*C_coeff;
+            if (discriminant < 0) {
+                return null;  // 无实数解 — 关节角超出可达范围
+            }
+
+            // 选择 Z 值更小的解 (Delta 机器人平台在基座下方)
+            const sqrtD = Math.sqrt(discriminant);
+            const Pz1 = (-B_coeff + sqrtD) / (2*A_coeff);
+            const Pz2 = (-B_coeff - sqrtD) / (2*A_coeff);
+            const Pz = Math.min(Pz1, Pz2);  // 取下方解
+
+            const Px = Ax + Bx * Pz;
+            const Py = Ay + By * Pz;
+
+            return [Px, Py, Pz];
+        }
+
+        /**
+         * 计算指定链的肘部(上臂末端)位置
+         */
+        function getDeltaElbow(chainIdx, thetaDeg) {
+            const dp = deltaState.dp;
+            const phi = dp.chainAngles[chainIdx] * Math.PI / 180;
+            const th  = thetaDeg * Math.PI / 180;
+            const cosPhi = Math.cos(phi), sinPhi = Math.sin(phi);
+
+            return [
+                dp.sb * cosPhi + dp.rf * cosPhi * Math.cos(th),
+                dp.sb * sinPhi + dp.rf * sinPhi * Math.cos(th),
+                dp.baseZ       - dp.rf * Math.sin(th)
+            ];
+        }
+
+        /**
+         * 更新整个 Delta 机器人的可视位姿
+         */
+        function updateDeltaFK() {
+            if (!deltaState) return;
+
+            const dp = deltaState.dp;
+            const theta = jointNodes.map(j => j.currentValue);
+
+            // 1. 旋转上臂 (Links 1, 2, 3) — 常规旋转关节
+            for (let i = 0; i < Math.min(3, jointNodes.length); i++) {
+                const j = jointNodes[i];
+                const dAngle = j.currentValue - j.home;
+                const dRad = THREE.MathUtils.degToRad(dAngle);
+                const dQuat = new THREE.Quaternion().setFromAxisAngle(j.axis, dRad);
+                j.node.quaternion.copy(j.homeQuaternion).premultiply(dQuat);
+            }
+
+            // 2. 求解平台位置
+            const platformPos = solveDeltaPlatformFK(theta);
+            if (!platformPos) {
+                console.warn('Delta FK: 无解 (关节角超出可达范围)');
+                return;
+            }
+
+            // 3. 更新平台节点 (Link_10) — 世界坐标更新
+            // 注: 节点坐标是相对于父节点(Link_0)的偏移, 单位mm
+            // Link_0 的位置 = [0, 0, baseZ], 所以 platform 相对 Link_0 的偏移:
+            if (deltaState.platformNode) {
+                deltaState.platformNode.position.set(
+                    platformPos[0],
+                    platformPos[1],
+                    platformPos[2] - dp.baseZ  // 相对于 Link_0
+                );
+            }
+
+            // 4. 更新法兰节点 (Link_11) — 相对于平台
+            // 法兰是平台的子节点, 位置由层级自动继承, 只需处理J4旋转
+            if (jointNodes.length > 3) {
+                const j4 = jointNodes[3];
+                const dAngle = j4.currentValue - j4.home;
+                const dRad = THREE.MathUtils.degToRad(dAngle);
+                const dQuat = new THREE.Quaternion().setFromAxisAngle(j4.axis, dRad);
+                j4.node.quaternion.copy(j4.homeQuaternion).premultiply(dQuat);
+            }
+
+            // 5. 更新下臂杆 (Links 4-9) — 每2条为一对平行四边形
+            const barNodes = deltaState.barNodes;
+            const paraHalf = dp.paraHalfWidth || 51;
+
+            for (let chain = 0; chain < 3; chain++) {
+                const elbow = getDeltaElbow(chain, theta[chain]);
+                const phi = dp.chainAngles[chain] * Math.PI / 180;
+                const cosPhi = Math.cos(phi), sinPhi = Math.sin(phi);
+
+                // 平台连接点(中心)
+                const attachX = platformPos[0] + dp.sp * cosPhi;
+                const attachY = platformPos[1] + dp.sp * sinPhi;
+                const attachZ = platformPos[2];
+
+                // 切向方向 (垂直于径向, 在XY平面)
+                const tanX = -sinPhi;
+                const tanY = cosPhi;
+
+                for (let bar = 0; bar < 2; bar++) {
+                    const barIdx = chain * 2 + bar;
+                    if (barIdx >= barNodes.length || !barNodes[barIdx]) continue;
+
+                    const sign = (bar === 0) ? 1 : -1;
+                    const halfW = sign * paraHalf;
+
+                    // 杆下端 (平台侧): 连接点 ± 平行四边形半宽
+                    const botX = attachX + halfW * tanX;
+                    const botY = attachY + halfW * tanY;
+                    const botZ = attachZ;
+
+                    // 杆上端 (肘部侧): 肘部 ± 同样偏移
+                    const topX = elbow[0] + halfW * tanX;
+                    const topY = elbow[1] + halfW * tanY;
+                    const topZ = elbow[2];
+
+                    // 杆方向 (从下端指向上端)
+                    const dirX = topX - botX;
+                    const dirY = topY - botY;
+                    const dirZ = topZ - botZ;
+                    const len = Math.sqrt(dirX*dirX + dirY*dirY + dirZ*dirZ);
+
+                    // 设置杆的位置 (下端, 相对于 Link_0)
+                    const barNode = barNodes[barIdx];
+                    barNode.position.set(botX, botY, botZ - dp.baseZ);
+
+                    // 设置杆的旋转 — 让 local +X 指向杆方向
+                    // 杆mesh在local frame中沿+X延伸(从home分析得出)
+                    if (len > 0.01) {
+                        const nx = dirX / len, ny = dirY / len, nz = dirZ / len;
+                        // 构造旋转: 将 [1,0,0] 旋转到 [nx,ny,nz]
+                        const from = new THREE.Vector3(1, 0, 0);
+                        const to = new THREE.Vector3(nx, ny, nz);
+                        const q = new THREE.Quaternion().setFromUnitVectors(from, to);
+                        barNode.quaternion.copy(q);
+                    }
+                }
+            }
+        }
+
+        function applyJointValue(joint, value) {
+            const delta = value - joint.home;
+            joint.currentValue = value;
+
+            // Delta 并联机器人: 使用专用 FK 求解器
+            if (deltaState) {
+                updateDeltaFK();
+                return;
+            }
+
+            // Parallel (平行四边形连杆) 机器人: 使用耦合补偿 FK
+            if (parallelState) {
+                updateParallelFK();
+                return;
+            }
+
+            if (joint.type === 'revolute') {
+                const deltaRad = THREE.MathUtils.degToRad(delta);
+                const deltaQuat = new THREE.Quaternion().setFromAxisAngle(joint.axis, deltaRad);
+                joint.node.quaternion.copy(joint.homeQuaternion).premultiply(deltaQuat);
+            } else {
+                // 棱柱关节: 根据GLB坐标单位决定缩放因子
+                // positionUnit=='mm'时节点位置已是mm, 滑块值也是mm, 无需缩放
+                // 否则假定GLB位置为米, 滑块值mm需乘0.001转米
+                const pu = (robotModel && robotModel.coordinateSystem &&
+                            robotModel.coordinateSystem.positionUnit) || '';
+                const scale = (pu === 'mm') ? 1.0 : 0.001;
+                const offset = joint.axis.clone().multiplyScalar(delta * scale);
+                joint.node.position.copy(joint.homePosition).add(offset);
+            }
+        }
+
+        /**
+         * Parallel (平行四边形连杆) 机器人正运动学
+         *
+         * IRB-760 结构特点:
+         *   - J0 (Link_1): 基座旋转, 独立
+         *   - J1 (Link_2): 下臂俯仰, 驱动 Link_2 绕 Y 轴旋转
+         *   - J2 (Link_6): 上臂俯仰, 通过平行四边形连杆驱动
+         *     关键: J2 控制上臂相对于地面的绝对角度, 不是相对于下臂!
+         *     当 J1 旋转 θ1 时, 平行四边形约束使 Link_6 保持绝对角度不变
+         *   - J3 (Link_5): 末端法兰旋转
+         *
+         * GLB 层级: Link_0 → Link_1(J0) → Link_2(J1) → Link_6(J2) → Link_5(J3)
+         *
+         * 补偿逻辑:
+         *   Link_6 是 Link_2 的子节点, J1 旋转 Link_2 时 Link_6 会被带动
+         *   但平行四边形约束要求 Link_6 保持绝对角度不变
+         *   所以: Link_6 的实际旋转 = J2 的角度 - J1 的角度 (反向补偿)
+         */
+        function updateParallelFK() {
+            if (!parallelState) return;
+
+            // 收集各关节当前值和 delta
+            const jointDeltas = jointNodes.map(j => j.currentValue - j.home);
+
+            // ── 第1步: 旋转所有主动关节 ──
+            for (let i = 0; i < jointNodes.length; i++) {
+                const j = jointNodes[i];
+                const delta = jointDeltas[i];
+
+                if (j.type === 'revolute') {
+                    let effectiveDelta = delta;
+
+                    // J2 (index=2) 需要平行四边形补偿:
+                    // Link_6 是 Link_2 的子节点, J1 旋转会带动 Link_6
+                    // 平行四边形约束: Link_6 绝对角度 = J2 角度 (不受 J1 影响)
+                    // 所以 Link_6 相对于 Link_2 的旋转 = J2 - J1
+                    if (i === 2 && jointNodes.length > 1) {
+                        effectiveDelta = delta - jointDeltas[1];
+                    }
+
+                    const dRad = THREE.MathUtils.degToRad(effectiveDelta);
+                    const dQuat = new THREE.Quaternion().setFromAxisAngle(j.axis, dRad);
+                    j.node.quaternion.copy(j.homeQuaternion).premultiply(dQuat);
+                } else {
+                    const pu = (robotModel && robotModel.coordinateSystem &&
+                                robotModel.coordinateSystem.positionUnit) || '';
+                    const scale = (pu === 'mm') ? 1.0 : 0.001;
+                    const offset = j.axis.clone().multiplyScalar(delta * scale);
+                    j.node.position.copy(j.homePosition).add(offset);
+                }
+            }
+
+            // ── 第2步: 更新被动连杆 (基于精确约束方程) ──
+            updateParallelPassiveLinks(jointDeltas);
+        }
+
+        /**
+         * 更新 Parallel 机器人的被动连杆 (精确约束求解)
+         *
+         * 基于 RoboDK 验证的运动规律:
+         *
+         * 所有运动都在 XZ 平面 (Y=0), 绕 Y 轴旋转
+         * pivot = (300, 0, 814.5) = Link_2/Link_6 的旋转中心
+         *
+         * Link_3, 9: 绕 pivot 旋转 -J1° (半径=1280mm), 绝对方向不变
+         * Link_4:    绕 Link_3 旋转 -J2° (半径=1350mm)
+         * Link_7:    绕 Link_3 旋转 -J2° (半径=500mm, 反向)
+         * Link_8:    位置不变, 旋转 = J1 (与 Link_2 相同)
+         * Link_10:   位置随 Link_3 平移, Y旋转 = +J2
+         * Link_5:    由 J3 控制 (主动关节), 位置跟随 Link_4
+         *
+         * 关键: 这些是世界坐标系下的运动规律
+         * 但 Three.js 节点位置是相对于父节点的
+         * 需要将世界坐标转换为相对于父节点的本地坐标
+         */
+        function updateParallelPassiveLinks(jointDeltas) {
+            if (!parallelState) return;
+
+            const ps = parallelState;
+            const linkNodes = ps.linkNodes;
+            const homeStates = ps.allHomeStates;
+            const pivot = ps.pivotWorld;
+            const elbowHome = ps.elbowWorld;
+
+            const j1Delta = jointDeltas[1] || 0;  // J1 (下臂)
+            const j2Delta = jointDeltas[2] || 0;  // J2 (上臂)
+            // Y 轴旋转: 正角度 → X 增大, Z 减小 (标准右手坐标系)
+            const j1Rad = THREE.MathUtils.degToRad(j1Delta);
+            const j2Rad = THREE.MathUtils.degToRad(j2Delta);
+
+            // J0 (基座旋转, 绕 Z 轴) — 需要将 XZ 平面的计算结果旋转到世界坐标
+            const j0Delta = jointDeltas[0] || 0;
+            const j0Rad = THREE.MathUtils.degToRad(j0Delta);
+            const cosJ0 = Math.cos(j0Rad), sinJ0 = Math.sin(j0Rad);
+
+            // ═══════════════════════════════════════════════════════════
+            // 计算各被动 link 的目标位置
+            //
+            // 策略: 在 RoboDK 帧 (Z-up) 中计算完整世界坐标 (含 J0 旋转)
+            // 然后通过 GLB 根节点的世界矩阵转换到 Three.js 世界坐标
+            // ═══════════════════════════════════════════════════════════
+
+            // 获取 GLB 根节点的世界矩阵 (包含 Z-up → Y-up 转换)
+            const glbRootNode = linkNodes[0] ? linkNodes[0].parent : null;
+            const rootWorldMat = new THREE.Matrix4();
+            if (glbRootNode) {
+                glbRootNode.updateWorldMatrix(true, false);
+                rootWorldMat.copy(glbRootNode.matrixWorld);
+            }
+
+            // 辅助: RoboDK 世界坐标 (Z-up, mm) → Three.js 世界坐标
+            function rdkToThree(rx, ry, rz) {
+                return new THREE.Vector3(rx, ry, rz).applyMatrix4(rootWorldMat);
+            }
+
+            const pivotRX = pivot[0], pivotRZ = pivot[2];
+
+            // elbow 在 RoboDK J0=0 帧中
+            const elbowRX0 = pivotRX + ps.armLength * Math.sin(j1Rad);
+            const elbowRZ0 = pivotRZ + ps.armLength * Math.cos(j1Rad);
+
+            // J0 旋转 (绕 RoboDK Z 轴): x'=x*cos-y*sin, y'=x*sin+y*cos (y=0)
+            const elbowRX = elbowRX0 * cosJ0;
+            const elbowRY = elbowRX0 * sinJ0;
+            const elbowRZ = elbowRZ0;
+            const elbowThree = rdkToThree(elbowRX, elbowRY, elbowRZ);
+
+            // Link_4: 绕 elbow 旋转 J2 (RoboDK Y 轴旋转)
+            const cosJ2 = Math.cos(j2Rad), sinJ2 = Math.sin(j2Rad);
+            const l4hx = ps.link4RadiusFromElbow * Math.cos(ps.link4HomeAngle);
+            const l4hz = ps.link4RadiusFromElbow * Math.sin(ps.link4HomeAngle);
+            // Ry(J2) 在 RoboDK 帧: x'=x*cos+z*sin, z'=-x*sin+z*cos
+            const l4offX = l4hx * cosJ2 + l4hz * sinJ2;
+            const l4offZ = -l4hx * sinJ2 + l4hz * cosJ2;
+            const l4RX0 = elbowRX0 + l4offX;
+            const l4RZ0 = elbowRZ0 + l4offZ;
+            const link4Three = rdkToThree(l4RX0 * cosJ0, l4RX0 * sinJ0, l4RZ0);
+
+            // Link_7: 绕 elbow 旋转 J2 (同 Link_4)
+            const l7hx = ps.link7RadiusFromElbow * Math.cos(ps.link7HomeAngle);
+            const l7hz = ps.link7RadiusFromElbow * Math.sin(ps.link7HomeAngle);
+            const l7offX = l7hx * cosJ2 + l7hz * sinJ2;
+            const l7offZ = -l7hx * sinJ2 + l7hz * cosJ2;
+            const l7RX0 = elbowRX0 + l7offX;
+            const l7RZ0 = elbowRZ0 + l7offZ;
+            const link7Three = rdkToThree(l7RX0 * cosJ0, l7RX0 * sinJ0, l7RZ0);
+
+            // Link_10: elbow + 常量偏移 (平行四边形保持绝对方向)
+            const l10RX0 = elbowRX0 + ps.link10HomeFromElbow[0];
+            const l10RZ0 = elbowRZ0 + ps.link10HomeFromElbow[2];
+            const link10Three = rdkToThree(l10RX0 * cosJ0, l10RX0 * sinJ0, l10RZ0);
+
+            // Link_5: Link_4 + 常量偏移
+            const l5off = ps.link5OffsetFromLink4 || [
+                ps.link5HomeFromElbow[0] - l4hx,
+                ps.link5HomeFromElbow[1],
+                ps.link5HomeFromElbow[2] - l4hz,
+            ];
+            const l5RX0 = l4RX0 + l5off[0];
+            const l5RZ0 = l4RZ0 + l5off[2];
+            const link5Three = rdkToThree(l5RX0 * cosJ0, l5RX0 * sinJ0, l5RZ0);
+
+            // ═══════════════════════════════════════════════════════════
+            // 将世界坐标转换为 Three.js 节点的本地坐标
+            // 需要考虑 GLB 层级: 每个节点的位置是相对于父节点的
+            // ═══════════════════════════════════════════════════════════
+
+            // 辅助函数: 将 Three.js 世界坐标设置到节点
+            function setNodeWorldPosition(node, threeWorldVec) {
+                if (!node || !node.parent) return;
+                const pos = threeWorldVec.clone();
+                node.parent.updateWorldMatrix(true, false);
+                pos.applyMatrix4(new THREE.Matrix4().copy(node.parent.matrixWorld).invert());
+                node.position.copy(pos);
+            }
+
+            // 辅助函数: 设置节点的世界旋转为指定四元数
+            // 本地旋转 = parentWorldQuat^-1 * targetWorldQuat
+            function setNodeWorldQuaternion(node, targetWorldQuat) {
+                if (!node || !node.parent) return;
+                node.parent.updateWorldMatrix(true, false);
+                const parentWorldQuat = new THREE.Quaternion();
+                node.parent.getWorldQuaternion(parentWorldQuat);
+                const localQuat = parentWorldQuat.clone().invert().multiply(targetWorldQuat);
+                node.quaternion.copy(localQuat);
+            }
+
+            // 基座旋转四元数 (J0 绕 RoboDK Z 轴)
+            // 在 Three.js 世界中, 需要通过根矩阵转换
+            // 被动连杆 Home 时世界旋转 = rootRotation (Z-up→Y-up)
+            // J0 旋转后: worldQuat = rootRotation * Rz(J0)
+            const rootQuat = new THREE.Quaternion();
+            if (glbRootNode) {
+                glbRootNode.getWorldQuaternion(rootQuat);
+            }
+            const rdkJ0Quat = new THREE.Quaternion().setFromAxisAngle(
+                new THREE.Vector3(0, 0, 1), j0Rad
+            );
+            // 被动连杆的目标世界旋转 = rootQuat * Rz(J0)
+            const passiveWorldQuat = rootQuat.clone().multiply(rdkJ0Quat);
+
+            // ── 更新各被动连杆 ──
+
+            // Link_3: 位置 = elbow, 绝对方向不变
+            if (linkNodes[3]) {
+                setNodeWorldPosition(linkNodes[3], elbowThree);
+                setNodeWorldQuaternion(linkNodes[3], passiveWorldQuat);
+            }
+
+            // Link_9: 位置 = elbow, 绝对方向不变
+            if (linkNodes[9]) {
+                setNodeWorldPosition(linkNodes[9], elbowThree);
+                setNodeWorldQuaternion(linkNodes[9], passiveWorldQuat);
+            }
+
+            // Link_4: 位置绕 elbow 旋转 J2, 绝对方向不变
+            if (linkNodes[4]) {
+                setNodeWorldPosition(linkNodes[4], link4Three);
+                setNodeWorldQuaternion(linkNodes[4], passiveWorldQuat);
+            }
+
+            // Link_7: 位置绕 elbow 旋转 J2, 绝对方向不变
+            if (linkNodes[7]) {
+                setNodeWorldPosition(linkNodes[7], link7Three);
+                setNodeWorldQuaternion(linkNodes[7], passiveWorldQuat);
+            }
+
+            // Link_8: 位置不变, 旋转与 Link_2 相同 (J1)
+            if (linkNodes[8]) {
+                const hs8 = homeStates[8];
+                if (hs8) {
+                    linkNodes[8].position.copy(hs8.position);
+                    // Link_8 旋转 = J1 (与 Link_2 相同)
+                    // 但 Link_8 是 Link_2 的子节点, Link_2 已经旋转了 J1
+                    // 所以 Link_8 的本地旋转保持 Home 不变即可
+                    linkNodes[8].quaternion.copy(hs8.quaternion);
+                }
+            }
+
+            // Link_10: 位置 = elbow + 常量偏移, Y旋转 = +J2 (在 J0 帧中)
+            if (linkNodes[10]) {
+                setNodeWorldPosition(linkNodes[10], link10Three);
+                // 世界旋转 = rootQuat * Rz(J0) * Ry(J2)
+                const rdkJ2Quat = new THREE.Quaternion().setFromAxisAngle(
+                    new THREE.Vector3(0, 1, 0), j2Rad
+                );
+                const link10RdkQuat = rdkJ0Quat.clone().multiply(rdkJ2Quat);
+                const link10WorldQuat = rootQuat.clone().multiply(link10RdkQuat);
+                setNodeWorldQuaternion(linkNodes[10], link10WorldQuat);
+            }
+
+            // Link_5 (法兰): 位置 = Link_4 + 常量偏移
+            // 旋转由 J3 控制, 加上腕部被动约束保持水平
+            if (linkNodes[5]) {
+                setNodeWorldPosition(linkNodes[5], link5Three);
+                const j3 = jointNodes[3];
+                if (j3) {
+                    const j3Delta = j3.currentValue - j3.home;
+                    const j3Rad = THREE.MathUtils.degToRad(j3Delta);
+                    // 世界旋转 = rootQuat * Rz(J0) * Raxis(J3)
+                    // J3 轴在 RoboDK 帧中
+                    const rdkJ3Quat = new THREE.Quaternion().setFromAxisAngle(
+                        new THREE.Vector3(0, 1, 0), j3Rad
+                    );
+                    const link5RdkQuat = rdkJ0Quat.clone().multiply(rdkJ3Quat);
+                    const link5WorldQuat = rootQuat.clone().multiply(link5RdkQuat);
+                    setNodeWorldQuaternion(linkNodes[5], link5WorldQuat);
+                } else {
+                    setNodeWorldQuaternion(linkNodes[5], passiveWorldQuat);
+                }
+            }
+        }
+
+        function goHome() {
+            jointNodes.forEach((j, idx) => {
+                const slider = document.getElementById(`jslider-${idx}`);
+                if (slider) {
+                    slider.value = j.home;
+                    document.getElementById(`jval-${idx}`).textContent =
+                        `${j.home.toFixed(1)}${j.type === 'revolute' ? '\u00B0' : 'mm'}`;
+                }
+                applyJointValue(j, j.home);
+            });
+        }
+
+        // ── 外部接口 ──
+        function setJoints(values) {
+            const count = Math.min(values.length, jointNodes.length);
+            for (let i = 0; i < count; i++) {
+                const j = jointNodes[i];
+                j.currentValue = values[i];
+                const slider = document.getElementById(`jslider-${i}`);
+                if (slider) {
+                    slider.value = values[i];
+                    const unit = j.type === 'revolute' ? '\u00B0' : 'mm';
+                    document.getElementById(`jval-${i}`).textContent = `${values[i].toFixed(1)}${unit}`;
+                }
+            }
+            // 批量更新后统一应用 FK
+            if (parallelState) {
+                updateParallelFK();
+            } else if (deltaState) {
+                updateDeltaFK();
+            } else {
+                for (let i = 0; i < count; i++) {
+                    applyJointValue(jointNodes[i], jointNodes[i].currentValue);
+                }
+            }
+        }
+        function getJoints() { return jointNodes.map(j => j.currentValue); }
+        function getJointCount() { return jointNodes.length; }
+        window.robotAPI = { setJoints, getJoints, getJointCount, goHome };
+
+        // ── WebSocket 客户端 ──
+        let wsConnection = null, wsReconnectTimer = null;
+        const wsToggleBtn = document.getElementById('ws-toggle-btn');
+        const wsIpInput = document.getElementById('ws-ip');
+        const wsPortInput = document.getElementById('ws-port');
+        const wsDot = document.getElementById('ws-dot');
+        const wsStatusText = document.getElementById('ws-status-text');
+        let wsActive = false;
+
+        wsToggleBtn.addEventListener('click', () => wsActive ? stopWsClient() : startWsClient());
+
+        function startWsClient() {
+            const ip = wsIpInput.value.trim() || '127.0.0.1';
+            const port = parseInt(wsPortInput.value) || 9877;
+            const url = `ws://${ip}:${port}`;
+            wsStatusText.textContent = `正在连接 ${url} ...`;
+            wsDot.className = 'ws-dot listening';
+            wsActive = true;
+            wsToggleBtn.textContent = '断开';
+            wsIpInput.disabled = true;
+            wsPortInput.disabled = true;
+            connectWs(url);
+        }
+
+        function connectWs(url) {
+            if (wsConnection) { wsConnection.onclose = null; wsConnection.close(); }
+            wsConnection = new WebSocket(url);
+            wsConnection.onopen = () => {
+                wsDot.className = 'ws-dot on';
+                wsStatusText.textContent = `已连接`;
+                if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+            };
+            wsConnection.onmessage = (e) => handleWsMessage(e.data);
+            wsConnection.onclose = () => {
+                if (!wsActive) return;
+                wsDot.className = 'ws-dot listening';
+                wsStatusText.textContent = `等待重连...`;
+                wsReconnectTimer = setTimeout(() => { if (wsActive) connectWs(url); }, 2000);
+            };
+            wsConnection.onerror = () => {};
+        }
+
+        function stopWsClient() {
+            wsActive = false;
+            if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+            if (wsConnection) { wsConnection.onclose = null; wsConnection.close(); wsConnection = null; }
+            wsDot.className = 'ws-dot off';
+            wsStatusText.textContent = '未连接';
+            wsToggleBtn.textContent = '连接';
+            wsIpInput.disabled = false;
+            wsPortInput.disabled = false;
+        }
+
+        function handleWsMessage(data) {
+            try {
+                const msg = JSON.parse(data);
+                if (msg.cmd === 'set_joints' && Array.isArray(msg.joints)) { setJoints(msg.joints); sendWsReply({cmd:'ok'}); }
+                else if (msg.cmd === 'get_joints') { sendWsReply({cmd:'joints', joints:getJoints()}); }
+                else if (msg.cmd === 'home') { goHome(); sendWsReply({cmd:'ok'}); }
+                else if (msg.cmd === 'get_info') { sendWsReply({cmd:'info', jointCount:getJointCount(), joints:getJoints(), hasModel:jointNodes.length>0}); }
+                else if (msg.cmd === 'ping') { sendWsReply({cmd:'pong'}); }
+            } catch (e) { console.warn('WS parse error:', e); }
+        }
+
+        function sendWsReply(obj) {
+            if (wsConnection && wsConnection.readyState === WebSocket.OPEN)
+                wsConnection.send(JSON.stringify(obj));
+        }
+
+        // ── 自动恢复上次模型 ──
+        (async () => {
+            const saved = await loadModelFromDB();
+            if (saved && saved.data && saved.name) {
+                document.getElementById('status').textContent = `正在恢复: ${saved.name} ...`;
+                loadFromBuffer(saved.data, saved.name);
+            }
+        })();
+    </script>
+</body>
+</html>

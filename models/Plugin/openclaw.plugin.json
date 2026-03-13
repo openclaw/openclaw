@@ -1,0 +1,14 @@
+{
+  "id": "robot-kinematic",
+  "channels": [],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "wsHost": { "type": "string" },
+      "wsPort": { "type": "number", "minimum": 1, "maximum": 65535 },
+      "defaultRobot": { "type": "string" }
+    }
+  }
+}
+
