@@ -43,17 +43,24 @@ function resolveProfile(config: ZalouserAccountConfig, accountId: string): strin
   return "default";
 }
 
-export async function resolveZalouserAccount(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): Promise<ResolvedZalouserAccount> {
+function resolveZalouserAccountBase(params: { cfg: OpenClawConfig; accountId?: string | null }) {
   const accountId = normalizeAccountId(params.accountId);
   const baseEnabled =
     (params.cfg.channels?.zalouser as ZalouserConfig | undefined)?.enabled !== false;
   const merged = mergeZalouserAccountConfig(params.cfg, accountId);
-  const accountEnabled = merged.enabled !== false;
-  const enabled = baseEnabled && accountEnabled;
-  const profile = resolveProfile(merged, accountId);
+  return {
+    accountId,
+    enabled: baseEnabled && merged.enabled !== false,
+    merged,
+    profile: resolveProfile(merged, accountId),
+  };
+}
+
+export async function resolveZalouserAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): Promise<ResolvedZalouserAccount> {
+  const { accountId, enabled, merged, profile } = resolveZalouserAccountBase(params);
   const authenticated = await checkZaloAuthenticated(profile);
 
   return {
@@ -70,13 +77,7 @@ export function resolveZalouserAccountSync(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedZalouserAccount {
-  const accountId = normalizeAccountId(params.accountId);
-  const baseEnabled =
-    (params.cfg.channels?.zalouser as ZalouserConfig | undefined)?.enabled !== false;
-  const merged = mergeZalouserAccountConfig(params.cfg, accountId);
-  const accountEnabled = merged.enabled !== false;
-  const enabled = baseEnabled && accountEnabled;
-  const profile = resolveProfile(merged, accountId);
+  const { accountId, enabled, merged, profile } = resolveZalouserAccountBase(params);
 
   return {
     accountId,
