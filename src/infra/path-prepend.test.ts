@@ -1,8 +1,20 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { mergePathPrepend, normalizePathPrepend } from "./path-prepend.js";
+import {
+  applyPathPrepend,
+  findPathKey,
+  mergePathPrepend,
+  normalizePathPrepend,
+} from "./path-prepend.js";
 
 describe("path prepend helpers", () => {
+  it("finds the actual PATH key while preserving original casing", () => {
+    expect(findPathKey({ PATH: "/usr/bin" })).toBe("PATH");
+    expect(findPathKey({ Path: "/usr/bin" })).toBe("Path");
+    expect(findPathKey({ PaTh: "/usr/bin" })).toBe("PaTh");
+    expect(findPathKey({ HOME: "/tmp" })).toBe("PATH");
+  });
+
   it("normalizes prepend lists by trimming, skipping blanks, and deduping", () => {
     expect(
       normalizePathPrepend([
@@ -29,5 +41,39 @@ describe("path prepend helpers", () => {
     expect(
       mergePathPrepend(` /usr/bin ${path.delimiter} ${path.delimiter} /opt/bin `, ["/custom/bin"]),
     ).toBe(["/custom/bin", "/usr/bin", "/opt/bin"].join(path.delimiter));
+  });
+
+  it("applies prepends to the discovered PATH key and preserves existing casing", () => {
+    const env = {
+      Path: [`/usr/bin`, `/opt/bin`].join(path.delimiter),
+    };
+
+    applyPathPrepend(env, ["/custom/bin", "/usr/bin"]);
+
+    expect(env).toEqual({
+      Path: ["/custom/bin", "/usr/bin", "/opt/bin"].join(path.delimiter),
+    });
+  });
+
+  it("respects requireExisting and ignores empty prepend lists", () => {
+    const envWithoutPath = { HOME: "/tmp/home" };
+    applyPathPrepend(envWithoutPath, ["/custom/bin"], { requireExisting: true });
+    expect(envWithoutPath).toEqual({ HOME: "/tmp/home" });
+
+    const envWithPath = { PATH: "/usr/bin" };
+    applyPathPrepend(envWithPath, [], { requireExisting: true });
+    applyPathPrepend(envWithPath, undefined, { requireExisting: true });
+    expect(envWithPath).toEqual({ PATH: "/usr/bin" });
+  });
+
+  it("creates PATH when prepends are provided and no path key exists", () => {
+    const env = { HOME: "/tmp/home" };
+
+    applyPathPrepend(env, ["/custom/bin"]);
+
+    expect(env).toEqual({
+      HOME: "/tmp/home",
+      PATH: "/custom/bin",
+    });
   });
 });
