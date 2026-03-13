@@ -49,4 +49,47 @@ describe("legacy state dir auto-migration", () => {
     expect(fs.readFileSync(path.join(root, ".moltbot", "marker.txt"), "utf-8")).toBe("ok");
     expect(fs.readFileSync(path.join(root, ".clawdbot", "marker.txt"), "utf-8")).toBe("ok");
   });
+
+  it("skips state-dir migration when OPENCLAW_STATE_DIR is explicitly set", async () => {
+    const root = await makeTempRoot();
+    const legacyDir = path.join(root, ".clawdbot");
+    fs.mkdirSync(legacyDir, { recursive: true });
+
+    const result = await autoMigrateLegacyStateDir({
+      env: { OPENCLAW_STATE_DIR: path.join(root, "custom-state") } as NodeJS.ProcessEnv,
+      homedir: () => root,
+    });
+
+    expect(result).toEqual({
+      migrated: false,
+      skipped: true,
+      changes: [],
+      warnings: [],
+    });
+    expect(fs.existsSync(legacyDir)).toBe(true);
+  });
+
+  it("only runs once per process until reset", async () => {
+    const root = await makeTempRoot();
+    const legacyDir = path.join(root, ".clawdbot");
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(path.join(legacyDir, "marker.txt"), "ok", "utf-8");
+
+    const first = await autoMigrateLegacyStateDir({
+      env: {} as NodeJS.ProcessEnv,
+      homedir: () => root,
+    });
+    const second = await autoMigrateLegacyStateDir({
+      env: {} as NodeJS.ProcessEnv,
+      homedir: () => root,
+    });
+
+    expect(first.migrated).toBe(true);
+    expect(second).toEqual({
+      migrated: false,
+      skipped: true,
+      changes: [],
+      warnings: [],
+    });
+  });
 });
