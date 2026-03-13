@@ -809,7 +809,15 @@ export async function runCronIsolatedAgentTurn(params: {
   const embeddedRunError = hasFatalError
     ? (lastErrorPayloadText ??
       (hasRunLevelError
-        ? `cron isolated run failed: ${typeof runLevelError === "object" && runLevelError !== null && "message" in runLevelError ? String((runLevelError as { message?: unknown }).message) : String(runLevelError)}`
+        ? `cron isolated run failed: ${
+            typeof runLevelError === "object" && runLevelError !== null
+              ? String(
+                  ("message" in runLevelError && (runLevelError as { message?: unknown }).message) ||
+                  ("kind" in runLevelError && (runLevelError as { kind?: unknown }).kind) ||
+                  JSON.stringify(runLevelError)
+                )
+              : String(runLevelError)
+          }`
         : "cron isolated run returned an error payload"))
     : undefined;
   const resolveRunOutcome = (params?: { delivered?: boolean; deliveryAttempted?: boolean }) =>
