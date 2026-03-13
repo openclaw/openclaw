@@ -101,6 +101,21 @@ function createSignedOutRemoteFetchMock() {
   });
 }
 
+function createDefaultOllamaConfig(primary: string) {
+  return {
+    agents: { defaults: { model: { primary } } },
+    models: { providers: { ollama: { baseUrl: "http://127.0.0.1:11434", models: [] } } },
+  };
+}
+
+function createRuntime() {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  } as unknown as RuntimeEnv;
+}
+
 describe("ollama setup", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -242,10 +257,7 @@ describe("ollama setup", () => {
       vi.stubGlobal("fetch", fetchMock);
 
       await ensureOllamaModelPulled({
-        config: {
-          agents: { defaults: { model: { primary: "ollama/glm-4.7-flash" } } },
-          models: { providers: { ollama: { baseUrl: "http://127.0.0.1:11434", models: [] } } },
-        },
+        config: createDefaultOllamaConfig("ollama/glm-4.7-flash"),
         prompter,
       });
 
@@ -260,10 +272,7 @@ describe("ollama setup", () => {
       vi.stubGlobal("fetch", fetchMock);
 
       await ensureOllamaModelPulled({
-        config: {
-          agents: { defaults: { model: { primary: "ollama/glm-4.7-flash" } } },
-          models: { providers: { ollama: { baseUrl: "http://127.0.0.1:11434", models: [] } } },
-        },
+        config: createDefaultOllamaConfig("ollama/glm-4.7-flash"),
         prompter,
       });
 
@@ -276,10 +285,7 @@ describe("ollama setup", () => {
       vi.stubGlobal("fetch", fetchMock);
 
       await ensureOllamaModelPulled({
-        config: {
-          agents: { defaults: { model: { primary: "ollama/kimi-k2.5:cloud" } } },
-          models: { providers: { ollama: { baseUrl: "http://127.0.0.1:11434", models: [] } } },
-        },
+        config: createDefaultOllamaConfig("ollama/kimi-k2.5:cloud"),
         prompter,
       });
 
@@ -308,12 +314,7 @@ describe("ollama setup", () => {
       pullResponse: new Response('{"error":"disk full"}\n', { status: 200 }),
     });
     vi.stubGlobal("fetch", fetchMock);
-
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as unknown as RuntimeEnv;
+    const runtime = createRuntime();
 
     const result = await configureOllamaNonInteractive({
       nextConfig: {
@@ -346,12 +347,7 @@ describe("ollama setup", () => {
       pullResponse: new Response('{"status":"success"}\n', { status: 200 }),
     });
     vi.stubGlobal("fetch", fetchMock);
-
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as unknown as RuntimeEnv;
+    const runtime = createRuntime();
 
     const result = await configureOllamaNonInteractive({
       nextConfig: {},
@@ -372,12 +368,7 @@ describe("ollama setup", () => {
   it("accepts cloud models in non-interactive mode without pulling", async () => {
     const fetchMock = createOllamaFetchMock({ tags: [] });
     vi.stubGlobal("fetch", fetchMock);
-
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as unknown as RuntimeEnv;
+    const runtime = createRuntime();
 
     const result = await configureOllamaNonInteractive({
       nextConfig: {},
