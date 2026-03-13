@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 
 const mocks = vi.hoisted(() => ({
   getDefaultMediaLocalRoots: vi.fn(() => []),
@@ -204,8 +205,8 @@ describe("executeSendAction", () => {
           url: "http://127.0.0.1:18789",
           token: "tok",
           timeoutMs: 5000,
-          clientName: "gateway",
-          mode: "gateway",
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
         },
       },
       to: "channel:123",
@@ -296,8 +297,8 @@ describe("executeSendAction", () => {
           url: "http://127.0.0.1:18789",
           token: "tok",
           timeoutMs: 5000,
-          clientName: "gateway",
-          mode: "gateway",
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
         },
       },
       to: "channel:123",
