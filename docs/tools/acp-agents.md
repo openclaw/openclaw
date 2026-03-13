@@ -147,9 +147,7 @@ This is useful when you want every message on a channel to route through an ACP 
     },
   ],
   acp: {
-    enabled: true,
-    backend: "acpx",
-    defaultAgent: "claude",
+    defaultAgent: "claude", // or "codex", "opencode", "gemini"
   },
 }
 ```
@@ -158,23 +156,22 @@ When a specific peer binding and a catch-all binding both match, the specific pe
 
 ### Quick start: route all channel messages through ACP
 
-Use `acp.defaultChannels` to make all conversations on a channel use ACP automatically. No `bindings[]` entries needed. Each conversation gets its own isolated ACP session.
+Use `acp.defaultChannels` to make all conversations on a channel use ACP automatically. No `bindings[]` entries needed. Each conversation gets its own isolated ACP session. This lets you reuse your existing Claude Code or Codex subscription as the agent engine.
 
-This lets you reuse your existing Claude Code or Codex subscription as the agent engine with a single config change.
-
-**CLI (one command):**
+**CLI (two commands):**
 
 ```sh
+openclaw config set acp.defaultAgent claude
 openclaw config set acp.defaultChannels '["feishu","qqbot"]'
 ```
+
+Replace `claude` with `codex`, `opencode`, or `gemini` to use a different agent CLI. The `acpx` backend plugin auto-enables when `defaultChannels` is set.
 
 **Config file (`openclaw.json`):**
 
 ```json5
 {
   acp: {
-    enabled: true,
-    backend: "acpx",
     defaultAgent: "claude", // or "codex", "opencode", "gemini"
     defaultChannels: ["feishu", "qqbot"],
   },

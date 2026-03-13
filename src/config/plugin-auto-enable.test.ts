@@ -328,6 +328,38 @@ describe("applyPluginAutoEnable", () => {
     expect(result.changes.join("\n")).toContain("ACP runtime configured, enabled automatically.");
   });
 
+  it("auto-enables acpx plugin when acp.defaultChannels is set", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        acp: {
+          defaultChannels: ["feishu", "qqbot"],
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.acpx?.enabled).toBe(true);
+    expect(result.changes.join("\n")).toContain("ACP runtime configured, enabled automatically.");
+  });
+
+  it("auto-enables acpx plugin when ACP bindings exist", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        bindings: [
+          {
+            type: "acp",
+            agentId: "main",
+            match: { channel: "feishu", accountId: "*" },
+          },
+        ],
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.acpx?.enabled).toBe(true);
+    expect(result.changes.join("\n")).toContain("ACP runtime configured, enabled automatically.");
+  });
+
   it("does not auto-enable acpx when a different ACP backend is configured", () => {
     const result = applyPluginAutoEnable({
       config: {

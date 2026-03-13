@@ -358,8 +358,15 @@ function resolveConfiguredPlugins(
   }
   const backendRaw =
     typeof cfg.acp?.backend === "string" ? cfg.acp.backend.trim().toLowerCase() : "";
+  const hasDefaultChannels =
+    Array.isArray(cfg.acp?.defaultChannels) && cfg.acp.defaultChannels.length > 0;
+  const hasAcpBindings = Array.isArray(cfg.bindings) && cfg.bindings.some((b) => b?.type === "acp");
   const acpConfigured =
-    cfg.acp?.enabled === true || cfg.acp?.dispatch?.enabled === true || backendRaw === "acpx";
+    cfg.acp?.enabled === true ||
+    cfg.acp?.dispatch?.enabled === true ||
+    backendRaw === "acpx" ||
+    hasDefaultChannels ||
+    hasAcpBindings;
   if (acpConfigured && (!backendRaw || backendRaw === "acpx")) {
     changes.push({
       pluginId: "acpx",
