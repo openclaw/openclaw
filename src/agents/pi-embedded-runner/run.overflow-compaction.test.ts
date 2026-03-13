@@ -301,7 +301,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     await expect(
       runEmbeddedPiAgent({
         ...overflowBaseRunParams,
-        cfg: {
+        config: {
           agents: {
             defaults: {
               model: {
