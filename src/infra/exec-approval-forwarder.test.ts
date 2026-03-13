@@ -424,7 +424,7 @@ describe("exec approval forwarder", () => {
           channel: "whatsapp",
           to: "+15555550123",
           accountId: "work",
-          threadId: "1739201675.123",
+          threadId: 1739201675,
         }),
       );
     } finally {
