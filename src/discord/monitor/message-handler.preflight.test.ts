@@ -514,6 +514,233 @@ describe("preflightDiscordMessage", () => {
     expect(result).not.toBeNull();
     expect(result?.wasMentioned).toBe(true);
   });
+
+  // Tests for Issue #44183: Discord thread mentions not working
+  describe("thread mention fallback (#44183)", () => {
+    it("detects mention via text fallback when mentionedUsers is empty", async () => {
+      const botUserId = "bot-123";
+      const channelId = "channel-1";
+      const client = createMockClient();
+      client.rest.getChannel = vi.fn(async () => ({
+        id: channelId,
+        type: ChannelType.GuildText,
+        name: "general",
+      }));
+
+      const message = createMockMessage({
+        id: "msg-1",
+        content: `Hello <@${botUserId}> please help`,
+        channelId,
+        // Simulate Discord thread behavior: mentionedUsers array is empty
+        // even though message text contains a valid mention
+        mentionedUsers: [],
+      });
+
+      const result = await preflightDiscordMessage(
+        createParams({
+          botUserId,
+          data: createEventData({
+            channelId,
+            guildId: "guild-1",
+            author: message.author,
+            message,
+          }),
+          client,
+          guildEntries: {
+            "guild-1": {
+              slug: "test-guild",
+              channels: {
+                [channelId]: { allowed: true },
+              },
+            },
+          },
+        }),
+      );
+
+      expect(result).not.toBeNull();
+      expect(result?.wasMentioned).toBe(true);
+    });
+
+    it("detects mention with nickname format via text fallback", async () => {
+      const botUserId = "bot-456";
+      const channelId = "channel-2";
+      const client = createMockClient();
+      client.rest.getChannel = vi.fn(async () => ({
+        id: channelId,
+        type: ChannelType.GuildText,
+        name: "support",
+      }));
+
+      const message = createMockMessage({
+        id: "msg-2",
+        // Use nickname mention format <@!id>
+        content: `<@!${botUserId}> can you review this?`,
+        channelId,
+        mentionedUsers: [],
+      });
+
+      const result = await preflightDiscordMessage(
+        createParams({
+          botUserId,
+          data: createEventData({
+            channelId,
+            guildId: "guild-1",
+            author: message.author,
+            message,
+          }),
+          client,
+          guildEntries: {
+            "guild-1": {
+              slug: "test-guild",
+              channels: {
+                [channelId]: { allowed: true },
+              },
+            },
+          },
+        }),
+      );
+
+      expect(result).not.toBeNull();
+      expect(result?.wasMentioned).toBe(true);
+    });
+
+    it("rejects mentions of other bots", async () => {
+      const botUserId = "bot-123";
+      const otherBotId = "bot-999";
+      const channelId = "channel-3";
+      const client = createMockClient();
+      client.rest.getChannel = vi.fn(async () => ({
+        id: channelId,
+        type: ChannelType.GuildText,
+        name: "general",
+      }));
+
+      const message = createMockMessage({
+        id: "msg-3",
+        // Mention a different bot
+        content: `Hello <@${otherBotId}> not you`,
+        channelId,
+        mentionedUsers: [],
+      });
+
+      const result = await preflightDiscordMessage(
+        createParams({
+          botUserId,
+          data: createEventData({
+            channelId,
+            guildId: "guild-1",
+            author: message.author,
+            message,
+          }),
+          client,
+          guildEntries: {
+            "guild-1": {
+              slug: "test-guild",
+              channels: {
+                [channelId]: { allowed: true, requireMention: true },
+              },
+            },
+          },
+        }),
+      );
+
+      // Should be dropped due to no mention (mention gating)
+      expect(result).toBeNull();
+    });
+
+    it("prioritizes mentionedUsers array over text when both present", async () => {
+      const botUserId = "bot-123";
+      const channelId = "channel-4";
+      const client = createMockClient();
+      client.rest.getChannel = vi.fn(async () => ({
+        id: channelId,
+        type: ChannelType.GuildText,
+        name: "general",
+      }));
+
+      const message = createMockMessage({
+        id: "msg-4",
+        content: `Hello <@${botUserId}>`,
+        channelId,
+        // Array is populated (normal case)
+        mentionedUsers: [
+          {
+            id: botUserId,
+            username: "TestBot",
+            discriminator: "0001",
+            bot: true,
+          },
+        ],
+      });
+
+      const result = await preflightDiscordMessage(
+        createParams({
+          botUserId,
+          data: createEventData({
+            channelId,
+            guildId: "guild-1",
+            author: message.author,
+            message,
+          }),
+          client,
+          guildEntries: {
+            "guild-1": {
+              slug: "test-guild",
+              channels: {
+                [channelId]: { allowed: true },
+              },
+            },
+          },
+        }),
+      );
+
+      expect(result).not.toBeNull();
+      expect(result?.wasMentioned).toBe(true);
+    });
+
+    it("handles empty baseText gracefully", async () => {
+      const botUserId = "bot-123";
+      const channelId = "channel-5";
+      const client = createMockClient();
+      client.rest.getChannel = vi.fn(async () => ({
+        id: channelId,
+        type: ChannelType.GuildText,
+        name: "general",
+      }));
+
+      const message = createMockMessage({
+        id: "msg-5",
+        content: "", // Empty message
+        channelId,
+        mentionedUsers: [],
+      });
+
+      const result = await preflightDiscordMessage(
+        createParams({
+          botUserId,
+          data: createEventData({
+            channelId,
+            guildId: "guild-1",
+            author: message.author,
+            message,
+          }),
+          client,
+          guildEntries: {
+            "guild-1": {
+              slug: "test-guild",
+              channels: {
+                [channelId]: { allowed: true, requireMention: true },
+              },
+            },
+          },
+        }),
+      );
+
+      // Should be dropped: requireMention is true but no bot mention detected
+      // (empty content → no text-based mention fallback → mention gating fails)
+      expect(result).toBeNull();
+    });
+  });
 });
 
 describe("shouldIgnoreBoundThreadWebhookMessage", () => {
