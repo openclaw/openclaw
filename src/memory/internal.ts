@@ -333,7 +333,7 @@ export async function buildMultimodalChunkForIndexing(
 
 export function chunkMarkdown(
   content: string,
-  chunking: { tokens: number; overlap: number },
+  chunking: { tokens: number; overlap: number; headingAware?: boolean },
 ): MemoryChunk[] {
   const lines = content.split("\n");
   if (lines.length === 0) {
@@ -342,9 +342,22 @@ export function chunkMarkdown(
   const maxChars = Math.max(32, chunking.tokens * 4);
   const overlapChars = Math.max(0, chunking.overlap * 4);
   const chunks: MemoryChunk[] = [];
+  const headingAware = chunking.headingAware ?? false;
+
+  // Helper to detect markdown headings
+  const isHeading = (line: string): boolean => {
+    return /^#{1,6}\s+/.test(line.trim());
+  };
+
+  // Get heading level (1-6) or 0 if not a heading
+  const getHeadingLevel = (line: string): number => {
+    const match = line.trim().match(/^(#{1,6})\s+/);
+    return match ? match[1].length : 0;
+  };
 
   let current: Array<{ line: string; lineNo: number }> = [];
   let currentChars = 0;
+  let currentSectionStart = 0;
 
   const flush = () => {
     if (current.length === 0) {
@@ -393,6 +406,13 @@ export function chunkMarkdown(
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
     const lineNo = i + 1;
+    
+    // Heading-aware: flush on heading (unless it's the first heading)
+    if (headingAware && isHeading(line) && current.length > 0) {
+      flush();
+      carryOverlap();
+    }
+    
     const segments: string[] = [];
     if (line.length === 0) {
       segments.push("");
@@ -403,9 +423,18 @@ export function chunkMarkdown(
     }
     for (const segment of segments) {
       const lineSize = segment.length + 1;
-      if (currentChars + lineSize > maxChars && current.length > 0) {
-        flush();
-        carryOverlap();
+      
+      // In heading-aware mode, only flush if segment exceeds maxChars (otherwise keep accumulating)
+      if (headingAware) {
+        if (lineSize > maxChars && current.length > 0) {
+          flush();
+          carryOverlap();
+        }
+      } else {
+        if (currentChars + lineSize > maxChars && current.length > 0) {
+          flush();
+          carryOverlap();
+        }
       }
       current.push({ line: segment, lineNo });
       currentChars += lineSize;
