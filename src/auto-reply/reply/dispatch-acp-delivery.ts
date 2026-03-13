@@ -53,6 +53,8 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   originatingChannel?: string;
   originatingTo?: string;
   onReplyStart?: () => Promise<void> | void;
+  /** Agent ID for per-agent TTS voice overrides. */
+  agentId?: string;
 }): AcpDispatchDeliveryCoordinator {
   const state: AcpDispatchDeliveryState = {
     startedReplyLifecycle: false,
@@ -138,6 +140,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       kind,
       inboundAudio: params.inboundAudio,
       ttsAuto: params.sessionTtsAuto,
+      agentId: params.agentId,
     });
 
     if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { TtsConfig } from "../config/types.tts.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_AGENT_ID,
@@ -39,6 +40,7 @@ type ResolvedAgentConfig = {
   subagents?: AgentEntry["subagents"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
+  tts?: TtsConfig;
 };
 
 let defaultAgentWarned = false;
@@ -141,6 +143,7 @@ export function resolveAgentConfig(
     subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,
     sandbox: entry.sandbox,
     tools: entry.tools,
+    tts: entry.tts,
   };
 }
 

@@ -17,6 +17,8 @@ const TtsToolSchema = Type.Object({
 export function createTtsTool(opts?: {
   config?: OpenClawConfig;
   agentChannel?: GatewayMessageChannel;
+  /** Agent ID for per-agent voice overrides. */
+  agentId?: string;
 }): AnyAgentTool {
   return {
     label: "TTS",
@@ -32,6 +34,7 @@ export function createTtsTool(opts?: {
         text,
         cfg,
         channel: channel ?? opts?.agentChannel,
+        agentId: opts?.agentId,
       });
 
       if (result.success && result.audioPath) {
