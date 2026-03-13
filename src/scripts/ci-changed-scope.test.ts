@@ -124,6 +124,16 @@ describe("detectChangedScope", () => {
     });
   });
 
+  it("runs platform lanes when the CI workflow changes", () => {
+    expect(detectChangedScope([".github/workflows/ci.yml"])).toEqual({
+      runNode: true,
+      runMacos: true,
+      runAndroid: true,
+      runWindows: true,
+      runSkillsPython: true,
+    });
+  });
+
   it("treats base and head as literal git args", () => {
     const markerPath = path.join(
       os.tmpdir(),
