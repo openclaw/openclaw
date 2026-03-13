@@ -53,7 +53,7 @@ const guildActions = new Set([
 
 const moderationActions = new Set(["timeout", "kick", "ban"]);
 
-const presenceActions = new Set(["setPresence"]);
+const presenceActions = new Set(["setPresence", "updateSelfProfile"]);
 
 export async function handleDiscordAction(
   params: Record<string, unknown>,
@@ -76,7 +76,7 @@ export async function handleDiscordAction(
     return await handleDiscordModerationAction(action, params, isActionEnabled);
   }
   if (presenceActions.has(action)) {
-    return await handleDiscordPresenceAction(action, params, isActionEnabled);
+    return await handleDiscordPresenceAction(action, params, isActionEnabled, options);
   }
   throw new Error(`Unknown action: ${action}`);
 }
