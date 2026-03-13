@@ -153,6 +153,82 @@ describe("channel plugin catalog", () => {
     );
     expect(ids).toContain("demo-channel");
   });
+
+  it("uses the provided env for external catalog path resolution", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-home-"));
+    const catalogPath = path.join(home, "catalog.json");
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/env-demo-channel",
+            openclaw: {
+              channel: {
+                id: "env-demo-channel",
+                label: "Env Demo Channel",
+                selectionLabel: "Env Demo Channel",
+                docsPath: "/channels/env-demo-channel",
+                blurb: "Env demo entry",
+                order: 1000,
+              },
+              install: {
+                npmSpec: "@openclaw/env-demo-channel",
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    const ids = listChannelPluginCatalogEntries({
+      env: {
+        ...process.env,
+        OPENCLAW_PLUGIN_CATALOG_PATHS: "~/catalog.json",
+        HOME: home,
+      },
+    }).map((entry) => entry.id);
+
+    expect(ids).toContain("env-demo-channel");
+  });
+
+  it("uses the provided env for default catalog paths", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-state-"));
+    const catalogPath = path.join(stateDir, "plugins", "catalog.json");
+    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/default-env-demo",
+            openclaw: {
+              channel: {
+                id: "default-env-demo",
+                label: "Default Env Demo",
+                selectionLabel: "Default Env Demo",
+                docsPath: "/channels/default-env-demo",
+                blurb: "Default env demo entry",
+              },
+              install: {
+                npmSpec: "@openclaw/default-env-demo",
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    const ids = listChannelPluginCatalogEntries({
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        CLAWDBOT_STATE_DIR: undefined,
+      },
+    }).map((entry) => entry.id);
+
+    expect(ids).toContain("default-env-demo");
+  });
 });
 
 const emptyRegistry = createTestRegistry([]);

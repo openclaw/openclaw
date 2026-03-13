@@ -169,6 +169,50 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("drops all final payloads when block pipeline streamed successfully", async () => {
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => true,
+      isAborted: () => false,
+      hasSentPayload: () => false,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+    };
+    // shouldDropFinalPayloads short-circuits to [] when the pipeline streamed
+    // without aborting, so hasSentPayload is never reached.
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      replyToMode: "all",
+      payloads: [{ text: "response", replyToId: "post-123" }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("deduplicates final payloads against directly sent block keys regardless of replyToId", async () => {
+    // When block streaming is not active but directlySentBlockKeys has entries
+    // (e.g. from pre-tool flush), the key should match even if replyToId differs.
+    const { createBlockReplyContentKey } = await import("./block-reply-pipeline.js");
+    const directlySentBlockKeys = new Set<string>();
+    directlySentBlockKeys.add(
+      createBlockReplyContentKey({ text: "response", replyToId: "post-1" }),
+    );
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+      replyToMode: "off",
+      payloads: [{ text: "response" }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
   it("does not suppress same-target replies when accountId differs", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,

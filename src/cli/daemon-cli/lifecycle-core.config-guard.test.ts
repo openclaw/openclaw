@@ -1,29 +1,14 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  defaultRuntime,
+  resetLifecycleRuntimeLogs,
+  resetLifecycleServiceMocks,
+  service,
+  stubEmptyGatewayEnv,
+} from "./test-helpers/lifecycle-core-harness.js";
 
 const readConfigFileSnapshotMock = vi.fn();
 const loadConfig = vi.fn(() => ({}));
-
-const runtimeLogs: string[] = [];
-const defaultRuntime = {
-  log: (message: string) => runtimeLogs.push(message),
-  error: vi.fn(),
-  exit: (code: number) => {
-    throw new Error(`__exit__:${code}`);
-  },
-};
-
-const service = {
-  label: "TestService",
-  loadedText: "loaded",
-  notLoadedText: "not loaded",
-  install: vi.fn(),
-  uninstall: vi.fn(),
-  stop: vi.fn(),
-  isLoaded: vi.fn(),
-  readCommand: vi.fn(),
-  readRuntime: vi.fn(),
-  restart: vi.fn(),
-};
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
@@ -50,7 +35,7 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
   });
 
   beforeEach(() => {
-    runtimeLogs.length = 0;
+    resetLifecycleRuntimeLogs();
     readConfigFileSnapshotMock.mockReset();
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
@@ -60,15 +45,8 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
     });
     loadConfig.mockReset();
     loadConfig.mockReturnValue({});
-    service.isLoaded.mockClear();
-    service.readCommand.mockClear();
-    service.restart.mockClear();
-    service.isLoaded.mockResolvedValue(true);
-    service.readCommand.mockResolvedValue({ environment: {} });
-    service.restart.mockResolvedValue(undefined);
-    vi.unstubAllEnvs();
-    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
-    vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "");
+    resetLifecycleServiceMocks();
+    stubEmptyGatewayEnv();
   });
 
   it("aborts restart when config is invalid", async () => {
@@ -152,7 +130,7 @@ describe("runServiceStart config pre-flight (#35862)", () => {
   });
 
   beforeEach(() => {
-    runtimeLogs.length = 0;
+    resetLifecycleRuntimeLogs();
     readConfigFileSnapshotMock.mockReset();
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
@@ -160,10 +138,7 @@ describe("runServiceStart config pre-flight (#35862)", () => {
       config: {},
       issues: [],
     });
-    service.isLoaded.mockClear();
-    service.restart.mockClear();
-    service.isLoaded.mockResolvedValue(true);
-    service.restart.mockResolvedValue(undefined);
+    resetLifecycleServiceMocks();
   });
 
   it("aborts start when config is invalid", async () => {

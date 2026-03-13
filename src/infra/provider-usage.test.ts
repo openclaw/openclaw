@@ -48,17 +48,21 @@ function createMinimaxOnlyFetch(payload: unknown) {
 
 async function expectMinimaxUsage(
   payload: unknown,
-  expectedUsedPercent: number,
-  expectedPlan?: string,
+  expected: {
+    usedPercent: number;
+    plan?: string;
+    label?: string;
+  },
 ) {
   const mockFetch = createMinimaxOnlyFetch(payload);
 
   const summary = await loadUsageWithAuth([{ provider: "minimax", token: "token-1b" }], mockFetch);
 
   const minimax = summary.providers.find((p) => p.provider === "minimax");
-  expect(minimax?.windows[0]?.usedPercent).toBe(expectedUsedPercent);
-  if (expectedPlan !== undefined) {
-    expect(minimax?.plan).toBe(expectedPlan);
+  expect(minimax?.windows[0]?.usedPercent).toBe(expected.usedPercent);
+  expect(minimax?.windows[0]?.label).toBe(expected.label ?? "5h");
+  if (expected.plan !== undefined) {
+    expect(minimax?.plan).toBe(expected.plan);
   }
   expect(mockFetch).toHaveBeenCalled();
 }
@@ -181,9 +185,10 @@ describe("provider usage loading", () => {
     expect(mockFetch).toHaveBeenCalled();
   });
 
-  it("handles nested MiniMax usage payloads", async () => {
-    await expectMinimaxUsage(
-      {
+  it.each([
+    {
+      name: "handles nested MiniMax usage payloads",
+      payload: {
         base_resp: { status_code: 0, status_msg: "ok" },
         data: {
           plan_name: "Coding Plan",
@@ -194,14 +199,11 @@ describe("provider usage loading", () => {
           },
         },
       },
-      75,
-      "Coding Plan",
-    );
-  });
-
-  it("prefers MiniMax count-based usage when percent looks inverted", async () => {
-    await expectMinimaxUsage(
-      {
+      expected: { usedPercent: 75, plan: "Coding Plan" },
+    },
+    {
+      name: "prefers MiniMax count-based usage when percent looks inverted",
+      payload: {
         base_resp: { status_code: 0, status_msg: "ok" },
         data: {
           prompt_limit: 200,
@@ -210,13 +212,11 @@ describe("provider usage loading", () => {
           next_reset_time: "2026-01-07T05:00:00Z",
         },
       },
-      25,
-    );
-  });
-
-  it("handles MiniMax model_remains usage payloads", async () => {
-    await expectMinimaxUsage(
-      {
+      expected: { usedPercent: 25 },
+    },
+    {
+      name: "handles MiniMax model_remains usage payloads",
+      payload: {
         base_resp: { status_code: 0, status_msg: "ok" },
         model_remains: [
           {
@@ -229,8 +229,25 @@ describe("provider usage loading", () => {
           },
         ],
       },
-      25,
-    );
+      expected: { usedPercent: 25 },
+    },
+    {
+      name: "keeps payload-level MiniMax plan metadata when the usage candidate is nested",
+      payload: {
+        base_resp: { status_code: 0, status_msg: "ok" },
+        data: {
+          plan_name: "Payload Plan",
+          nested: {
+            usage_ratio: "0.4",
+            window_hours: 2,
+            next_reset_time: "2026-01-07T05:00:00Z",
+          },
+        },
+      },
+      expected: { usedPercent: 40, plan: "Payload Plan", label: "2h" },
+    },
+  ])("$name", async ({ payload, expected }) => {
+    await expectMinimaxUsage(payload, expected);
   });
 
   it("discovers Claude usage from token auth profiles", async () => {

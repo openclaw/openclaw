@@ -2,6 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SecretInput } from "../config/types.secrets.js";
 import { encodePairingSetupCode, resolvePairingSetupFromConfig } from "./setup-code.js";
 
+vi.mock("../infra/device-bootstrap.js", () => ({
+  issueDeviceBootstrapToken: vi.fn(async () => ({
+    token: "bootstrap-123",
+    expiresAtMs: 123,
+  })),
+}));
+
 describe("pairing setup code", () => {
   function createTailnetDnsRunner() {
     return vi.fn(async () => ({
@@ -25,10 +32,12 @@ describe("pairing setup code", () => {
   it("encodes payload as base64url JSON", () => {
     const code = encodePairingSetupCode({
       url: "wss://gateway.example.com:443",
-      token: "abc",
+      bootstrapToken: "abc",
     });
 
-    expect(code).toBe("eyJ1cmwiOiJ3c3M6Ly9nYXRld2F5LmV4YW1wbGUuY29tOjQ0MyIsInRva2VuIjoiYWJjIn0");
+    expect(code).toBe(
+      "eyJ1cmwiOiJ3c3M6Ly9nYXRld2F5LmV4YW1wbGUuY29tOjQ0MyIsImJvb3RzdHJhcFRva2VuIjoiYWJjIn0",
+    );
   });
 
   it("resolves custom bind + token auth", async () => {
@@ -45,8 +54,7 @@ describe("pairing setup code", () => {
       ok: true,
       payload: {
         url: "ws://gateway.local:19001",
-        token: "tok_123",
-        password: undefined,
+        bootstrapToken: "bootstrap-123",
       },
       authLabel: "token",
       urlSource: "gateway.bind=custom",
@@ -81,7 +89,7 @@ describe("pairing setup code", () => {
     if (!resolved.ok) {
       throw new Error("expected setup resolution to succeed");
     }
-    expect(resolved.payload.password).toBe("resolved-password");
+    expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
     expect(resolved.authLabel).toBe("password");
   });
 
@@ -113,7 +121,7 @@ describe("pairing setup code", () => {
     if (!resolved.ok) {
       throw new Error("expected setup resolution to succeed");
     }
-    expect(resolved.payload.password).toBe("password-from-env");
+    expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
     expect(resolved.authLabel).toBe("password");
   });
 
@@ -145,7 +153,7 @@ describe("pairing setup code", () => {
       throw new Error("expected setup resolution to succeed");
     }
     expect(resolved.authLabel).toBe("token");
-    expect(resolved.payload.token).toBe("tok_123");
+    expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
   });
 
   it("resolves gateway.auth.token SecretRef for pairing payload", async () => {
@@ -177,7 +185,7 @@ describe("pairing setup code", () => {
       throw new Error("expected setup resolution to succeed");
     }
     expect(resolved.authLabel).toBe("token");
-    expect(resolved.payload.token).toBe("resolved-token");
+    expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
   });
 
   it("errors when gateway.auth.token SecretRef is unresolved in token mode", async () => {
@@ -239,7 +247,7 @@ describe("pairing setup code", () => {
       throw new Error("expected setup resolution to succeed");
     }
     expect(resolved.authLabel).toBe("password");
-    expect(resolved.payload.password).toBe("password-from-env");
+    expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
   });
 
   it("does not treat env-template token as plaintext in inferred mode", async () => {
@@ -250,8 +258,7 @@ describe("pairing setup code", () => {
       throw new Error("expected setup resolution to succeed");
     }
     expect(resolved.authLabel).toBe("password");
-    expect(resolved.payload.token).toBeUndefined();
-    expect(resolved.payload.password).toBe("password-from-env");
+    expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
   });
 
   it("requires explicit auth mode when token and password are both configured", async () => {
@@ -329,7 +336,7 @@ describe("pairing setup code", () => {
     if (!resolved.ok) {
       throw new Error("expected setup resolution to succeed");
     }
-    expect(resolved.payload.token).toBe("new-token");
+    expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
   });
 
   it("errors when gateway is loopback only", async () => {
@@ -366,8 +373,7 @@ describe("pairing setup code", () => {
       ok: true,
       payload: {
         url: "wss://mb-server.tailnet.ts.net",
-        token: undefined,
-        password: "secret",
+        bootstrapToken: "bootstrap-123",
       },
       authLabel: "password",
       urlSource: "gateway.tailscale.mode=serve",
@@ -395,8 +401,7 @@ describe("pairing setup code", () => {
       ok: true,
       payload: {
         url: "wss://remote.example.com:444",
-        token: "tok_123",
-        password: undefined,
+        bootstrapToken: "bootstrap-123",
       },
       authLabel: "token",
       urlSource: "gateway.remote.url",

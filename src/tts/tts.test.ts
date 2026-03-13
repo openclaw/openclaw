@@ -7,12 +7,15 @@ import type { OpenClawConfig } from "../config/config.js";
 import { withEnv } from "../test-utils/env.js";
 import * as tts from "./tts.js";
 
-vi.mock("@mariozechner/pi-ai", () => ({
-  completeSimple: vi.fn(),
-}));
+vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+  return {
+    ...original,
+    completeSimple: vi.fn(),
+  };
+});
 
 vi.mock("@mariozechner/pi-ai/oauth", () => ({
-  // Some auth helpers import oauth provider metadata at module load time.
   getOAuthProviders: () => [],
   getOAuthApiKey: vi.fn(async () => null),
 }));
@@ -87,6 +90,22 @@ const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMe
   stopReason: "stop",
   timestamp: Date.now(),
 });
+
+function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawConfig {
+  return {
+    messages: {
+      tts: {
+        provider: "openai",
+        openai: {
+          apiKey: "test-key",
+          model,
+          voice: "alloy",
+          instructions: "Speak warmly",
+        },
+      },
+    },
+  };
+}
 
 describe("tts", () => {
   beforeEach(() => {
@@ -589,25 +608,14 @@ describe("tts", () => {
       }
     };
 
-    it("omits instructions for unsupported speech models", async () => {
-      const cfg: OpenClawConfig = {
-        messages: {
-          tts: {
-            provider: "openai",
-            openai: {
-              apiKey: "test-key",
-              model: "tts-1",
-              voice: "alloy",
-              instructions: "Speak warmly",
-            },
-          },
-        },
-      };
-
+    async function expectTelephonyInstructions(
+      model: "tts-1" | "gpt-4o-mini-tts",
+      expectedInstructions: string | undefined,
+    ) {
       await withMockedTelephonyFetch(async (fetchMock) => {
         const result = await tts.textToSpeechTelephony({
           text: "Hello there, friendly caller.",
-          cfg,
+          cfg: createOpenAiTelephonyCfg(model),
         });
 
         expect(result.success).toBe(true);
@@ -615,38 +623,16 @@ describe("tts", () => {
         const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
         expect(typeof init.body).toBe("string");
         const body = JSON.parse(init.body as string) as Record<string, unknown>;
-        expect(body.instructions).toBeUndefined();
+        expect(body.instructions).toBe(expectedInstructions);
       });
+    }
+
+    it("omits instructions for unsupported speech models", async () => {
+      await expectTelephonyInstructions("tts-1", undefined);
     });
 
     it("includes instructions for gpt-4o-mini-tts", async () => {
-      const cfg: OpenClawConfig = {
-        messages: {
-          tts: {
-            provider: "openai",
-            openai: {
-              apiKey: "test-key",
-              model: "gpt-4o-mini-tts",
-              voice: "alloy",
-              instructions: "Speak warmly",
-            },
-          },
-        },
-      };
-
-      await withMockedTelephonyFetch(async (fetchMock) => {
-        const result = await tts.textToSpeechTelephony({
-          text: "Hello there, friendly caller.",
-          cfg,
-        });
-
-        expect(result.success).toBe(true);
-        expect(fetchMock).toHaveBeenCalledTimes(1);
-        const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-        expect(typeof init.body).toBe("string");
-        const body = JSON.parse(init.body as string) as Record<string, unknown>;
-        expect(body.instructions).toBe("Speak warmly");
-      });
+      await expectTelephonyInstructions("gpt-4o-mini-tts", "Speak warmly");
     });
   });
 

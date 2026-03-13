@@ -16,6 +16,7 @@ import {
   type OutboundDeliveryResult,
   type OutboundSendDeps,
 } from "./deliver.js";
+import type { OutboundMirror } from "./mirror.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 import { buildOutboundSessionContext } from "./session-context.js";
 import { resolveOutboundTarget } from "./targets.js";
@@ -47,12 +48,7 @@ type MessageSendParams = {
   cfg?: OpenClawConfig;
   gateway?: MessageGatewayOptions;
   idempotencyKey?: string;
-  mirror?: {
-    sessionKey: string;
-    agentId?: string;
-    text?: string;
-    mediaUrls?: string[];
-  };
+  mirror?: OutboundMirror;
   abortSignal?: AbortSignal;
   silent?: boolean;
 };
@@ -232,6 +228,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
             ...params.mirror,
             text: mirrorText || params.content,
             mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
+            idempotencyKey: params.mirror.idempotencyKey ?? params.idempotencyKey,
           }
         : undefined,
     });

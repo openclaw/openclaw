@@ -2,8 +2,10 @@ import { upsertAuthProfileWithLock } from "../agents/auth-profiles.js";
 import {
   OLLAMA_DEFAULT_BASE_URL,
   buildOllamaModelDefinition,
+  enrichOllamaModelsWithContext,
   fetchOllamaModels,
   resolveOllamaApiBase,
+  type OllamaModelWithContext,
 } from "../agents/ollama-models.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -239,14 +241,20 @@ async function pullOllamaModelNonInteractive(
   return true;
 }
 
-function buildOllamaModelsConfig(modelNames: string[]) {
-  return modelNames.map((name) => buildOllamaModelDefinition(name));
+function buildOllamaModelsConfig(
+  modelNames: string[],
+  discoveredModelsByName?: Map<string, OllamaModelWithContext>,
+) {
+  return modelNames.map((name) =>
+    buildOllamaModelDefinition(name, discoveredModelsByName?.get(name)?.contextWindow),
+  );
 }
 
 function applyOllamaProviderConfig(
   cfg: OpenClawConfig,
   baseUrl: string,
   modelNames: string[],
+  discoveredModelsByName?: Map<string, OllamaModelWithContext>,
 ): OpenClawConfig {
   return {
     ...cfg,
@@ -259,7 +267,7 @@ function applyOllamaProviderConfig(
           baseUrl,
           api: "ollama",
           apiKey: "OLLAMA_API_KEY", // pragma: allowlist secret
-          models: buildOllamaModelsConfig(modelNames),
+          models: buildOllamaModelsConfig(modelNames, discoveredModelsByName),
         },
       },
     },
@@ -281,7 +289,6 @@ async function storeOllamaCredential(agentDir?: string): Promise<void> {
 export async function promptAndConfigureOllama(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
-  agentDir?: string;
 }): Promise<{ config: OpenClawConfig; defaultModelId: string }> {
   const { prompter } = params;
 
@@ -299,7 +306,6 @@ export async function promptAndConfigureOllama(params: {
 
   // 2. Check reachability
   const { reachable, models } = await fetchOllamaModels(baseUrl);
-  const modelNames = models.map((m) => m.name);
 
   if (!reachable) {
     await prompter.note(
@@ -313,6 +319,10 @@ export async function promptAndConfigureOllama(params: {
     );
     throw new WizardCancelledError("Ollama not reachable");
   }
+
+  const enrichedModels = await enrichOllamaModelsWithContext(baseUrl, models.slice(0, 50));
+  const discoveredModelsByName = new Map(enrichedModels.map((model) => [model.name, model]));
+  const modelNames = models.map((m) => m.name);
 
   // 3. Mode selection
   const mode = (await prompter.select({
@@ -384,10 +394,13 @@ export async function promptAndConfigureOllama(params: {
     ...modelNames.filter((name) => !suggestedModels.includes(name)),
   ];
 
-  await storeOllamaCredential(params.agentDir);
-
   const defaultModelId = suggestedModels[0] ?? OLLAMA_DEFAULT_MODEL;
-  const config = applyOllamaProviderConfig(params.cfg, baseUrl, orderedModelNames);
+  const config = applyOllamaProviderConfig(
+    params.cfg,
+    baseUrl,
+    orderedModelNames,
+    discoveredModelsByName,
+  );
   return { config, defaultModelId };
 }
 
@@ -405,7 +418,6 @@ export async function configureOllamaNonInteractive(params: {
   const baseUrl = resolveOllamaApiBase(configuredBaseUrl);
 
   const { reachable, models } = await fetchOllamaModels(baseUrl);
-  const modelNames = models.map((m) => m.name);
   const explicitModel = normalizeOllamaModelName(opts.customModelId);
 
   if (!reachable) {
@@ -420,6 +432,10 @@ export async function configureOllamaNonInteractive(params: {
   }
 
   await storeOllamaCredential();
+
+  const enrichedModels = await enrichOllamaModelsWithContext(baseUrl, models.slice(0, 50));
+  const discoveredModelsByName = new Map(enrichedModels.map((model) => [model.name, model]));
+  const modelNames = models.map((m) => m.name);
 
   // Apply local suggested model ordering.
   const suggestedModels = OLLAMA_SUGGESTED_MODELS_LOCAL;
@@ -478,7 +494,12 @@ export async function configureOllamaNonInteractive(params: {
     }
   }
 
-  const config = applyOllamaProviderConfig(params.nextConfig, baseUrl, allModelNames);
+  const config = applyOllamaProviderConfig(
+    params.nextConfig,
+    baseUrl,
+    allModelNames,
+    discoveredModelsByName,
+  );
   const modelRef = `ollama/${defaultModelId}`;
   runtime.log(`Default Ollama model: ${defaultModelId}`);
   return applyAgentDefaultModelPrimary(config, modelRef);

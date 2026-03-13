@@ -1,16 +1,19 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   approveDevicePairing,
   clearDevicePairing,
+  ensureDeviceToken,
   getPairedDevice,
   removePairedDevice,
   requestDevicePairing,
   rotateDeviceToken,
   verifyDeviceToken,
+  type PairedDevice,
 } from "./device-pairing.js";
+import { resolvePairingPaths } from "./pairing-files.js";
 
 async function setupPairedOperatorDevice(baseDir: string, scopes: string[]) {
   const request = await requestDevicePairing(
@@ -49,6 +52,43 @@ function requireToken(token: string | undefined): string {
     throw new Error("expected operator token to be issued");
   }
   return token;
+}
+
+async function overwritePairedOperatorTokenScopes(baseDir: string, scopes: string[]) {
+  const { pairedPath } = resolvePairingPaths(baseDir, "devices");
+  const pairedByDeviceId = JSON.parse(await readFile(pairedPath, "utf8")) as Record<
+    string,
+    PairedDevice
+  >;
+  const device = pairedByDeviceId["device-1"];
+  expect(device?.tokens?.operator).toBeDefined();
+  if (!device?.tokens?.operator) {
+    throw new Error("expected paired operator token");
+  }
+  device.tokens.operator.scopes = scopes;
+  await writeFile(pairedPath, JSON.stringify(pairedByDeviceId, null, 2));
+}
+
+async function mutatePairedOperatorDevice(baseDir: string, mutate: (device: PairedDevice) => void) {
+  const { pairedPath } = resolvePairingPaths(baseDir, "devices");
+  const pairedByDeviceId = JSON.parse(await readFile(pairedPath, "utf8")) as Record<
+    string,
+    PairedDevice
+  >;
+  const device = pairedByDeviceId["device-1"];
+  expect(device).toBeDefined();
+  if (!device) {
+    throw new Error("expected paired operator device");
+  }
+  mutate(device);
+  await writeFile(pairedPath, JSON.stringify(pairedByDeviceId, null, 2));
+}
+
+async function clearPairedOperatorApprovalBaseline(baseDir: string) {
+  await mutatePairedOperatorDevice(baseDir, (device) => {
+    delete device.approvedScopes;
+    delete device.scopes;
+  });
 }
 
 describe("device pairing tokens", () => {
@@ -180,6 +220,26 @@ describe("device pairing tokens", () => {
     expect(after?.approvedScopes).toEqual(["operator.read"]);
   });
 
+  test("rejects scope escalation when ensuring a token and leaves state unchanged", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+    const before = await getPairedDevice("device-1", baseDir);
+
+    const ensured = await ensureDeviceToken({
+      deviceId: "device-1",
+      role: "operator",
+      scopes: ["operator.admin"],
+      baseDir,
+    });
+    expect(ensured).toBeNull();
+
+    const after = await getPairedDevice("device-1", baseDir);
+    expect(after?.tokens?.operator?.token).toEqual(before?.tokens?.operator?.token);
+    expect(after?.tokens?.operator?.scopes).toEqual(["operator.read"]);
+    expect(after?.scopes).toEqual(["operator.read"]);
+    expect(after?.approvedScopes).toEqual(["operator.read"]);
+  });
+
   test("verifies token and rejects mismatches", async () => {
     const { baseDir, token } = await setupOperatorToken(["operator.read"]);
 
@@ -199,6 +259,32 @@ describe("device pairing tokens", () => {
     expect(mismatch.reason).toBe("token-mismatch");
   });
 
+  test("rejects persisted tokens whose scopes exceed the approved scope baseline", async () => {
+    const { baseDir, token } = await setupOperatorToken(["operator.read"]);
+    await overwritePairedOperatorTokenScopes(baseDir, ["operator.admin"]);
+
+    await expect(
+      verifyOperatorToken({
+        baseDir,
+        token,
+        scopes: ["operator.admin"],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
+  });
+
+  test("fails closed when the paired device approval baseline is missing during verification", async () => {
+    const { baseDir, token } = await setupOperatorToken(["operator.read"]);
+    await clearPairedOperatorApprovalBaseline(baseDir);
+
+    await expect(
+      verifyOperatorToken({
+        baseDir,
+        token,
+        scopes: ["operator.read"],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
+  });
+
   test("accepts operator.read/operator.write requests with an operator.admin token scope", async () => {
     const { baseDir, token } = await setupOperatorToken(["operator.admin"]);
 
@@ -215,6 +301,57 @@ describe("device pairing tokens", () => {
       scopes: ["operator.write"],
     });
     expect(writeOk.ok).toBe(true);
+  });
+
+  test("accepts custom operator scopes under an operator.admin approval baseline", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    await setupPairedOperatorDevice(baseDir, ["operator.admin"]);
+
+    const rotated = await rotateDeviceToken({
+      deviceId: "device-1",
+      role: "operator",
+      scopes: ["operator.talk.secrets"],
+      baseDir,
+    });
+    expect(rotated?.scopes).toEqual(["operator.talk.secrets"]);
+
+    await expect(
+      verifyOperatorToken({
+        baseDir,
+        token: requireToken(rotated?.token),
+        scopes: ["operator.talk.secrets"],
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  test("fails closed when the paired device approval baseline is missing during ensure", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    await setupPairedOperatorDevice(baseDir, ["operator.admin"]);
+    await clearPairedOperatorApprovalBaseline(baseDir);
+
+    await expect(
+      ensureDeviceToken({
+        deviceId: "device-1",
+        role: "operator",
+        scopes: ["operator.admin"],
+        baseDir,
+      }),
+    ).resolves.toBeNull();
+  });
+
+  test("fails closed when the paired device approval baseline is missing during rotation", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    await setupPairedOperatorDevice(baseDir, ["operator.admin"]);
+    await clearPairedOperatorApprovalBaseline(baseDir);
+
+    await expect(
+      rotateDeviceToken({
+        deviceId: "device-1",
+        role: "operator",
+        scopes: ["operator.admin"],
+        baseDir,
+      }),
+    ).resolves.toBeNull();
   });
 
   test("treats multibyte same-length token input as mismatch without throwing", async () => {

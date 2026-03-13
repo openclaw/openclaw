@@ -49,6 +49,7 @@ export async function buildModelsProviderData(
     catalog,
     defaultProvider: resolvedDefault.provider,
     defaultModel: resolvedDefault.model,
+    agentId,
   });
 
   const aliasIndex = buildModelAliasIndex({
