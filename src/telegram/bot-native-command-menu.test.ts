@@ -281,16 +281,19 @@ describe("bot-native-command-menu", () => {
     );
   });
 
-    describe("Windows path validation (#44199)", () => {
+  describe("Windows path validation (#44199)", () => {
     it("rejects bare Windows extended-length path prefix", async () => {
       const path = await import("node:path");
       const fs = await import("node:fs/promises");
       const pathDirnameSpy = vi.spyOn(path, "dirname");
+      const pathIsAbsoluteSpy = vi.spyOn(path, "isAbsolute");
       const fsMkdirSpy = vi.spyOn(fs, "mkdir");
       const fsWriteFileSpy = vi.spyOn(fs, "writeFile");
       
       // Mock path.dirname to return the problematic bare prefix
       pathDirnameSpy.mockReturnValue("\\\\?");
+      // Mock path.isAbsolute to return false for invalid paths
+      pathIsAbsoluteSpy.mockReturnValue(false);
       
       // Mkdir and writeFile should not be called
       fsMkdirSpy.mockResolvedValue(undefined);
@@ -326,6 +329,7 @@ describe("bot-native-command-menu", () => {
       ]);
 
       pathDirnameSpy.mockRestore();
+      pathIsAbsoluteSpy.mockRestore();
       fsMkdirSpy.mockRestore();
       fsWriteFileSpy.mockRestore();
     });
@@ -334,11 +338,14 @@ describe("bot-native-command-menu", () => {
       const path = await import("node:path");
       const fs = await import("node:fs/promises");
       const pathDirnameSpy = vi.spyOn(path, "dirname");
+      const pathIsAbsoluteSpy = vi.spyOn(path, "isAbsolute");
       const fsMkdirSpy = vi.spyOn(fs, "mkdir");
       const fsWriteFileSpy = vi.spyOn(fs, "writeFile");
       
       // Mock path.dirname to return a VALID extended-length path
       pathDirnameSpy.mockReturnValue("\\\\?\\C:\\Users\\test\\.openclaw\\telegram");
+      // Mock path.isAbsolute to return true for valid absolute paths
+      pathIsAbsoluteSpy.mockReturnValue(true);
       
       fsMkdirSpy.mockResolvedValue(undefined);
       fsWriteFileSpy.mockResolvedValue(undefined);
@@ -370,6 +377,7 @@ describe("bot-native-command-menu", () => {
       expect(fsWriteFileSpy).toHaveBeenCalled();
 
       pathDirnameSpy.mockRestore();
+      pathIsAbsoluteSpy.mockRestore();
       fsMkdirSpy.mockRestore();
       fsWriteFileSpy.mockRestore();
     });
