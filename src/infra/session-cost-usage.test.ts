@@ -474,6 +474,35 @@ example
     });
   });
 
+  it("deduplicates sessions when both active .jsonl and reset archive coexist", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discover-dedup-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const userMsg = { type: "message", timestamp: "2026-03-12T10:00:00.000Z", message: { role: "user", content: "hello" } };
+
+    // Write both a reset archive AND a fresh active file for the same session ID
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-dup.jsonl.reset.2026-03-12T09-00-00.000Z"),
+      JSON.stringify(userMsg),
+      "utf-8",
+    );
+    // Active file has a later mtime — written after
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-dup.jsonl"),
+      JSON.stringify({ ...userMsg, message: { role: "user", content: "resumed" } }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const sessions = await discoverAllSessions();
+      // Must deduplicate: only one entry for sess-dup
+      expect(sessions.filter((s) => s.sessionId === "sess-dup").length).toBe(1);
+      // Should keep the active file (later mtime) — firstUserMessage from it
+      expect(sessions.find((s) => s.sessionId === "sess-dup")?.firstUserMessage).toBe("resumed");
+    });
+  });
+
   it("preserves totals and cumulative values when downsampling timeseries", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-timeseries-downsample-"));
     const sessionsDir = path.join(root, "agents", "main", "sessions");
