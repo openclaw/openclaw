@@ -16,10 +16,16 @@ export async function readServiceStatusSummary(
   fallbackLabel: string,
 ): Promise<ServiceStatusSummary> {
   try {
-    const [loaded, runtime, command] = await Promise.all([
-      service.isLoaded({ env: process.env }).catch(() => false),
-      service.readRuntime(process.env).catch(() => undefined),
-      service.readCommand(process.env).catch(() => null),
+    const command = await service.readCommand(process.env).catch(() => null);
+    const serviceEnv = command?.environment
+      ? ({
+          ...process.env,
+          ...command.environment,
+        } satisfies NodeJS.ProcessEnv)
+      : process.env;
+    const [loaded, runtime] = await Promise.all([
+      service.isLoaded({ env: serviceEnv }).catch(() => false),
+      service.readRuntime(serviceEnv).catch(() => undefined),
     ]);
     const managedByOpenClaw = command != null;
     const externallyManaged = !managedByOpenClaw && runtime?.status === "running";

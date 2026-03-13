@@ -41,6 +41,7 @@ Docs: https://docs.openclaw.ai
 - Agents/tool warnings: distinguish gated core tools like `apply_patch` from plugin-only unknown entries in `tools.profile` warnings, so unavailable core tools now report current runtime/provider/model/config gating instead of suggesting a missing plugin.
 - Slack/probe: keep `auth.test()` bot and team metadata mapping stable while simplifying the probe result path. (#44775) Thanks @Cafexss.
 - Dashboard/chat UI: restore the `chat-new-messages` class on the New messages scroll pill so the button uses its existing compact styling instead of rendering as a full-screen SVG overlay. (#44856) Thanks @Astro-Han.
+- Windows/gateway status: reuse the installed service command environment when reading runtime status, so startup-fallback gateways keep reporting the configured port and running state in `gateway status --json` instead of falling back to `gateway port unknown`.
 
 ## 2026.3.12
 
