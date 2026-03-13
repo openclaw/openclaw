@@ -1,38 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-
-// Mock external dependencies
-vi.mock("openclaw/plugin-sdk/synology-chat", () => ({
-  DEFAULT_ACCOUNT_ID: "default",
-  setAccountEnabledInConfigSection: vi.fn((_opts: any) => ({})),
-  registerPluginHttpRoute: vi.fn(() => vi.fn()),
-  buildChannelConfigSchema: vi.fn((schema: any) => ({ schema })),
-  createFixedWindowRateLimiter: vi.fn(() => ({
-    isRateLimited: vi.fn(() => false),
-    size: vi.fn(() => 0),
-    clear: vi.fn(),
-  })),
-}));
-
-vi.mock("./client.js", () => ({
-  sendMessage: vi.fn().mockResolvedValue(true),
-  sendFileUrl: vi.fn().mockResolvedValue(true),
-}));
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeSecurityAccount, registerPluginHttpRouteMock } from "./channel.test-mocks.js";
 
 vi.mock("./webhook-handler.js", () => ({
   createWebhookHandler: vi.fn(() => vi.fn()),
-}));
-
-vi.mock("./runtime.js", () => ({
-  getSynologyRuntime: vi.fn(() => ({
-    config: { loadConfig: vi.fn().mockResolvedValue({}) },
-    channel: {
-      reply: {
-        dispatchReplyWithBufferedBlockDispatcher: vi.fn().mockResolvedValue({
-          counts: {},
-        }),
-      },
-    },
-  })),
 }));
 
 vi.mock("zod", () => ({
@@ -44,24 +14,6 @@ vi.mock("zod", () => ({
 }));
 
 const { createSynologyChatPlugin } = await import("./channel.js");
-const { registerPluginHttpRoute } = await import("openclaw/plugin-sdk/synology-chat");
-
-function makeSecurityAccount(overrides: Record<string, unknown> = {}) {
-  return {
-    accountId: "default",
-    enabled: true,
-    token: "t",
-    incomingUrl: "https://nas/incoming",
-    nasHost: "h",
-    webhookPath: "/w",
-    dmPolicy: "allowlist" as const,
-    allowedUserIds: [],
-    rateLimitPerMinute: 30,
-    botName: "Bot",
-    allowInsecureSsl: false,
-    ...overrides,
-  };
-}
 
 describe("createSynologyChatPlugin", () => {
   it("returns a plugin object with all required sections", () => {
@@ -321,7 +273,7 @@ describe("createSynologyChatPlugin", () => {
     });
 
     it("startAccount refuses allowlist accounts with empty allowedUserIds", async () => {
-      const registerMock = vi.mocked(registerPluginHttpRoute);
+      const registerMock = registerPluginHttpRouteMock;
       registerMock.mockClear();
       const plugin = createSynologyChatPlugin();
       const { ctx, abortController } = makeStartAccountCtx({
@@ -341,7 +293,7 @@ describe("createSynologyChatPlugin", () => {
     it("deregisters stale route before re-registering same account/path", async () => {
       const unregisterFirst = vi.fn();
       const unregisterSecond = vi.fn();
-      const registerMock = vi.mocked(registerPluginHttpRoute);
+      const registerMock = registerPluginHttpRouteMock;
       registerMock.mockReturnValueOnce(unregisterFirst).mockReturnValueOnce(unregisterSecond);
 
       const plugin = createSynologyChatPlugin();
