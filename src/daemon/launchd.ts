@@ -461,7 +461,7 @@ export async function restartLaunchAgent({
     } catch {
       // Detached restarts deliberately outlive the current process tree.
     }
-    return;
+    return { outcome: "scheduled" };
   }
 
   const domain = resolveGuiDomain();
