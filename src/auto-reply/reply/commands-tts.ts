@@ -4,10 +4,10 @@ import {
   getTtsMaxLength,
   getTtsProvider,
   isSummarizationEnabled,
-  isTtsEnabled,
   isTtsProviderConfigured,
   resolveTtsApiKey,
   resolveTtsConfig,
+  resolveTtsAutoMode,
   resolveTtsPrefsPath,
   setLastTtsAttempt,
   setSummarizationEnabled,
@@ -278,15 +278,16 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   }
 
   if (action === "status") {
-    const enabled = isTtsEnabled(config, prefsPath);
+    const autoMode = resolveTtsAutoMode({ config, prefsPath });
     const provider = getTtsProvider(config, prefsPath);
     const hasKey = isTtsProviderConfigured(config, provider);
     const maxLength = getTtsMaxLength(prefsPath);
     const summarize = isSummarizationEnabled(prefsPath);
     const last = getLastTtsAttempt();
+    const stateText = autoMode === "off" ? "❌ disabled" : `✅ enabled (${autoMode})`;
     const lines = [
       "📊 TTS status",
-      `State: ${enabled ? "✅ enabled" : "❌ disabled"}`,
+      `State: ${stateText}`,
       `Provider: ${provider} (${hasKey ? "✅ configured" : "❌ not configured"})`,
       `Text limit: ${maxLength} chars`,
       `Auto-summary: ${summarize ? "on" : "off"}`,
