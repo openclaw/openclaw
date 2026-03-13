@@ -1010,11 +1010,21 @@ export async function compactEmbeddedPiSessionDirect(
             }
             // Retry with shorter timeout. If this also times out, the error propagates to the
             // outer catch which returns fail("Compaction timed out").
+            // Mirror the first-attempt guard: store the promise so we can abort and suppress
+            // the dangling rejection if the retry itself times out, preventing late session
+            // mutations after the write lock is released.
             retried = true;
-            result = await compactWithSafetyTimeout(
-              () => session.compact(params.customInstructions),
-              EMBEDDED_COMPACTION_RETRY_TIMEOUT_MS,
-            );
+            let retryCompact: ReturnType<typeof session.compact> | undefined;
+            try {
+              result = await compactWithSafetyTimeout(() => {
+                retryCompact = session.compact(params.customInstructions);
+                return retryCompact;
+              }, EMBEDDED_COMPACTION_RETRY_TIMEOUT_MS);
+            } catch (retryErr) {
+              session.abortCompaction();
+              retryCompact?.catch(() => {}); // suppress unhandled rejection from the aborted compact
+              throw retryErr;
+            }
             await runPostCompactionSideEffects({
               config: params.config,
               sessionKey: params.sessionKey,
