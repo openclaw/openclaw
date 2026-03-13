@@ -141,6 +141,26 @@ struct ExecAllowlistTests {
         #expect(resolutions.isEmpty)
     }
 
+    @Test func `resolve for allowlist fails closed on line-continued command substitution`() {
+        let command = ["/bin/sh", "-lc", "echo $\\\n(/usr/bin/touch /tmp/openclaw-allowlist-test-line-cont-subst)"]
+        let resolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: "echo $\\\n(/usr/bin/touch /tmp/openclaw-allowlist-test-line-cont-subst)",
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(resolutions.isEmpty)
+    }
+
+    @Test func `resolve for allowlist fails closed on chained line-continued command substitution`() {
+        let command = ["/bin/sh", "-lc", "echo ok && $\\\n(/usr/bin/touch /tmp/openclaw-allowlist-test-chained-line-cont-subst)"]
+        let resolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: "echo ok && $\\\n(/usr/bin/touch /tmp/openclaw-allowlist-test-chained-line-cont-subst)",
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(resolutions.isEmpty)
+    }
+
     @Test func `resolve for allowlist fails closed on quoted backticks`() {
         let command = ["/bin/sh", "-lc", "echo \"ok `/usr/bin/id`\""]
         let resolutions = ExecCommandResolution.resolveForAllowlist(
