@@ -10,6 +10,25 @@ import {
 } from "./slash-commands.js";
 
 describe("slash-commands", () => {
+  async function registerSingleStatusCommand(
+    request: (path: string, init?: { method?: string }) => Promise<unknown>,
+  ) {
+    const client = { request } as unknown as MattermostClient;
+    return registerSlashCommands({
+      client,
+      teamId: "team-1",
+      creatorUserId: "bot-user",
+      callbackUrl: "http://gateway/callback",
+      commands: [
+        {
+          trigger: "oc_status",
+          description: "status",
+          autoComplete: true,
+        },
+      ],
+    });
+  }
+
   it("parses application/x-www-form-urlencoded payloads", () => {
     const payload = parseSlashCommandPayload(
       "token=t1&team_id=team&channel_id=ch1&user_id=u1&command=%2Foc_status&text=now",
@@ -101,21 +120,7 @@ describe("slash-commands", () => {
       }
       throw new Error(`unexpected request path: ${path}`);
     });
-    const client = { request } as unknown as MattermostClient;
-
-    const result = await registerSlashCommands({
-      client,
-      teamId: "team-1",
-      creatorUserId: "bot-user",
-      callbackUrl: "http://gateway/callback",
-      commands: [
-        {
-          trigger: "oc_status",
-          description: "status",
-          autoComplete: true,
-        },
-      ],
-    });
+    const result = await registerSingleStatusCommand(request);
 
     expect(result).toHaveLength(1);
     expect(result[0]?.managed).toBe(false);
@@ -144,21 +149,7 @@ describe("slash-commands", () => {
       }
       throw new Error(`unexpected request path: ${path}`);
     });
-    const client = { request } as unknown as MattermostClient;
-
-    const result = await registerSlashCommands({
-      client,
-      teamId: "team-1",
-      creatorUserId: "bot-user",
-      callbackUrl: "http://gateway/callback",
-      commands: [
-        {
-          trigger: "oc_status",
-          description: "status",
-          autoComplete: true,
-        },
-      ],
-    });
+    const result = await registerSingleStatusCommand(request);
 
     expect(result).toHaveLength(0);
     expect(request).toHaveBeenCalledTimes(1);
