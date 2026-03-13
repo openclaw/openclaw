@@ -502,7 +502,7 @@ export function setSummarizationEnabled(prefsPath: string, enabled: boolean): vo
  */
 export function getTtsVoice(prefsPath: string, provider: string): string | undefined {
   const prefs = readPrefs(prefsPath);
-  return prefs.tts?.voices?.[provider] || undefined;
+  return prefs.tts?.voices?.[provider] ?? undefined;
 }
 
 /**
@@ -586,7 +586,7 @@ function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
  * Used to determine which voice to persist when `persist=true` is set in a directive.
  * When new providers are added, extend this function with their respective overrides key.
  */
-function resolveVoiceOverrideForPersist(
+export function resolveVoiceOverrideForPersist(
   overrides: TtsDirectiveOverrides,
   provider: string,
 ): string | undefined {
@@ -1033,7 +1033,5 @@ export const _test = {
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
-  getTtsVoice,
-  setTtsVoice,
   resolveVoiceOverrideForPersist,
 };

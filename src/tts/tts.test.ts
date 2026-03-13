@@ -58,6 +58,7 @@ const {
   getTtsProvider,
   getTtsVoice,
   setTtsVoice,
+  resolveVoiceOverrideForPersist,
 } = tts;
 
 const {
@@ -72,7 +73,6 @@ const {
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
-  resolveVoiceOverrideForPersist,
 } = _test;
 
 const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMessage => ({

@@ -326,7 +326,8 @@ export function parseTtsDirectives(
             break;
           case "persist":
             // persist=true: write the active voice override to user prefs after TTS succeeds.
-            if (rawValue === "true" || rawValue === "1") {
+            // Gated by allowVoice so the persist flag cannot bypass the voice policy.
+            if (policy.allowVoice && (rawValue === "true" || rawValue === "1")) {
               persist = true;
             }
             break;
