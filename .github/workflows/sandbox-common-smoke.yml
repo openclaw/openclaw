@@ -17,6 +17,9 @@ concurrency:
   group: sandbox-common-smoke-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   sandbox-common-smoke:
     runs-on: blacksmith-16vcpu-ubuntu-2404
