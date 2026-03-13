@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
-import { createReadStream } from "node:fs";
+import { constants as fsConstants, createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -189,56 +188,6 @@ async function canonicalizePathForContainment(targetPath: string): Promise<strin
   }
 }
 
-async function hashFile(filePath: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const hash = createHash("sha256");
-    const stream = createReadStream(filePath);
-    stream.on("data", (chunk: Buffer) => hash.update(chunk));
-    stream.on("error", reject);
-    stream.on("end", () => resolve(hash.digest("hex")));
-  });
-}
-
-async function collectFileHashes(
-  dirPath: string,
-): Promise<Array<{ relativePath: string; sha256: string }>> {
-  const results: Array<{ relativePath: string; sha256: string }> = [];
-
-  async function walk(currentPath: string): Promise<void> {
-    const entries = await fs.readdir(currentPath, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = path.join(currentPath, entry.name);
-      if (entry.isDirectory()) {
-        await walk(fullPath);
-      } else if (entry.isFile()) {
-        const relativePath = path.relative(dirPath, fullPath).replaceAll("\\", "/");
-        const sha256 = await hashFile(fullPath);
-        results.push({ relativePath, sha256 });
-      }
-    }
-  }
-
-  await walk(dirPath);
-  results.sort((a, b) =>
-    a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0,
-  );
-  return results;
-}
-
-async function computeAssetHash(sourcePath: string): Promise<string> {
-  const stat = await fs.stat(sourcePath);
-  if (stat.isFile()) {
-    return hashFile(sourcePath);
-  }
-  // For directories, compute a Merkle-like hash from sorted file entries
-  const fileHashes = await collectFileHashes(sourcePath);
-  const hash = createHash("sha256");
-  for (const entry of fileHashes) {
-    hash.update(`${entry.relativePath}\0${entry.sha256}\n`);
-  }
-  return hash.digest("hex");
-}
-
 function buildManifest(params: {
   createdAt: string;
   archiveRoot: string;
@@ -317,6 +266,53 @@ export function formatBackupCreateSummary(result: BackupCreateResult): string[] 
   return lines;
 }
 
+async function hashFile(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(filePath);
+    stream.on("data", (chunk: Buffer) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", () => resolve(hash.digest("hex")));
+  });
+}
+
+async function collectFileHashes(
+  dirPath: string,
+): Promise<Array<{ relativePath: string; sha256: string }>> {
+  const entries: Array<{ relativePath: string; sha256: string }> = [];
+  async function walk(dir: string): Promise<void> {
+    const items = await fs.readdir(dir, { withFileTypes: true });
+    for (const item of items) {
+      const fullPath = path.join(dir, item.name);
+      if (item.isDirectory()) {
+        await walk(fullPath);
+      } else if (item.isFile()) {
+        const sha256 = await hashFile(fullPath);
+        const relativePath = path.relative(dirPath, fullPath).replaceAll("\\", "/");
+        entries.push({ relativePath, sha256 });
+      }
+    }
+  }
+  await walk(dirPath);
+  entries.sort((a, b) =>
+    a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0,
+  );
+  return entries;
+}
+
+async function computeAssetHash(assetPath: string): Promise<string> {
+  const stat = await fs.stat(assetPath);
+  if (stat.isFile()) {
+    return hashFile(assetPath);
+  }
+  const fileHashes = await collectFileHashes(assetPath);
+  const hash = createHash("sha256");
+  for (const entry of fileHashes) {
+    hash.update(`${entry.relativePath}\0${entry.sha256}\n`);
+  }
+  return hash.digest("hex");
+}
+
 function remapArchiveEntryPath(params: {
   entryPath: string;
   manifestPath: string;
@@ -387,53 +383,76 @@ export async function createBackupArchive(
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-"));
   const manifestPath = path.join(tempDir, "manifest.json");
   const tempArchivePath = buildTempArchivePath(outputPath);
+  const initialArchivePath = `${tempArchivePath}.initial`;
   try {
-    // NOTE: Checksums are computed from the filesystem before tar.c() re-reads
-    // the files. A file modified between hashing and packing (TOCTOU) would
-    // produce a checksum that doesn't match the archived bytes. The window is
-    // very small in practice (state/config files rarely change during backup),
-    // and `--verify` catches any discrepancy by re-reading the written archive.
-    const assetChecksums = new Map<string, string>();
-    await Promise.all(
-      result.assets.map(async (asset) => {
-        const sha256 = await computeAssetHash(asset.sourcePath);
-        assetChecksums.set(asset.sourcePath, sha256);
-      }),
-    );
-
-    const manifest = buildManifest({
+    const manifestParams = {
       createdAt,
       archiveRoot,
       includeWorkspace,
       onlyConfig,
       assets: result.assets,
-      assetChecksums,
       skipped: result.skipped,
       stateDir: plan.stateDir,
       configPath: plan.configPath,
       oauthDir: plan.oauthDir,
       workspaceDirs: plan.workspaceDirs,
-    });
-    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    };
 
+    // --- Pass 1: Pack source files with placeholder checksums ---
+    // Checksums are zeroed out here; we derive real checksums from the archived
+    // bytes in pass 2 to avoid TOCTOU (a file changing between hash and pack).
+    const placeholderChecksums = new Map<string, string>();
+    for (const asset of result.assets) {
+      placeholderChecksums.set(asset.sourcePath, "0".repeat(64));
+    }
+    await fs.writeFile(
+      manifestPath,
+      `${JSON.stringify(buildManifest({ ...manifestParams, assetChecksums: placeholderChecksums }), null, 2)}\n`,
+      "utf8",
+    );
     await tar.c(
       {
-        file: tempArchivePath,
+        file: initialArchivePath,
         gzip: true,
         portable: true,
         preservePaths: true,
         onWriteEntry: (entry) => {
-          entry.path = remapArchiveEntryPath({
-            entryPath: entry.path,
-            manifestPath,
-            archiveRoot,
-          });
+          entry.path = remapArchiveEntryPath({ entryPath: entry.path, manifestPath, archiveRoot });
         },
       },
-      [manifestPath, ...result.assets.map((asset) => asset.sourcePath)],
+      [...result.assets.map((asset) => asset.sourcePath), manifestPath],
     );
+
+    // --- Pass 2: Extract, hash archived bytes, repack with correct checksums ---
+    // Hashing the extracted files (not the live source files) ensures checksums
+    // reflect the bytes actually archived, eliminating the TOCTOU window.
+    const stagingDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-stage-"));
+    try {
+      await tar.x({ file: initialArchivePath, cwd: stagingDir, gzip: true });
+
+      const assetChecksums = new Map<string, string>();
+      for (const asset of result.assets) {
+        const extractedPath = path.join(stagingDir, asset.archivePath);
+        assetChecksums.set(asset.sourcePath, await computeAssetHash(extractedPath));
+      }
+
+      const stagingManifestPath = path.join(stagingDir, archiveRoot, "manifest.json");
+      await fs.writeFile(
+        stagingManifestPath,
+        `${JSON.stringify(buildManifest({ ...manifestParams, assetChecksums }), null, 2)}\n`,
+        "utf8",
+      );
+
+      await tar.c({ file: tempArchivePath, gzip: true, portable: true, cwd: stagingDir }, [
+        archiveRoot,
+      ]);
+    } finally {
+      await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+
     await publishTempArchive({ tempArchivePath, outputPath });
   } finally {
+    await fs.rm(initialArchivePath, { force: true }).catch(() => undefined);
     await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }
