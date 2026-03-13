@@ -152,8 +152,10 @@ function matchesFilter(entry: CronHookEntry, job: CronJob, workflow: string): bo
 }
 
 async function loadHookModule(scriptPath: string): Promise<unknown> {
-  // URL-scheme specifiers (file://, data:, etc.) are passed through directly.
-  if (/^[a-z][a-z0-9+.-]*:/i.test(scriptPath)) {
+  // Check isAbsolute before the URL-scheme regex: Windows drive-letter paths like
+  // "C:\hooks\audit.cjs" match /^[a-z][a-z0-9+.-]*:/ and must not be treated as URLs.
+  if (!path.isAbsolute(scriptPath) && /^[a-z][a-z0-9+.-]*:/i.test(scriptPath)) {
+    // URL-scheme specifiers (file://, data:, etc.) are passed through directly.
     const mod = (await import(scriptPath)) as Record<string, unknown>;
     return mod.default ?? mod;
   }
