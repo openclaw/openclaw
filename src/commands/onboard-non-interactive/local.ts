@@ -118,7 +118,7 @@ export async function runNonInteractiveOnboardingLocal(params: {
               "Non-interactive local onboarding only waits for an already-running gateway unless you pass --install-daemon.",
               `Fix: start \`${formatCliCommand("openclaw gateway run")}\`, re-run with \`--install-daemon\`, or use \`--skip-health\`.`,
               process.platform === "win32"
-                ? "Native Windows managed gateway install currently uses Scheduled Tasks and may require running PowerShell as Administrator."
+                ? "Native Windows managed gateway install tries Scheduled Tasks first and falls back to a per-user Startup-folder login item when task creation is denied."
                 : undefined,
             ]
               .filter(Boolean)
