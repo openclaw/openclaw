@@ -30,6 +30,22 @@ export type BrowserSsrFPolicyConfig = {
    */
   hostnameAllowlist?: string[];
 };
+export type BrowserMcpConfig = {
+  /** Enable Chrome DevTools MCP server for agent sessions. Default: false */
+  enabled?: boolean;
+  /**
+   * Tool exposure mode.
+   * - "full": all 29 DevTools MCP tools (input, navigation, debugging, performance, network, emulation).
+   * - "slim": 3 essential tools only (navigate, evaluate_script, take_screenshot).
+   * Default: "full"
+   */
+  mode?: "full" | "slim";
+  /**
+   * Chrome channel to connect to.
+   * Default: "stable". Use "beta", "canary", or "dev" for pre-release Chrome builds.
+   */
+  channel?: "stable" | "beta" | "canary" | "dev";
+};
 export type BrowserConfig = {
   enabled?: boolean;
   /** If false, disable browser act:evaluate (arbitrary JS). Default: true */
@@ -66,4 +82,6 @@ export type BrowserConfig = {
    * Example: ["--window-size=1920,1080", "--disable-infobars"]
    */
   extraArgs?: string[];
+  /** Chrome DevTools MCP server integration for agent sessions. */
+  mcp?: BrowserMcpConfig;
 };

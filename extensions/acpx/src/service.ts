@@ -5,9 +5,48 @@ import type {
   PluginLogger,
 } from "openclaw/plugin-sdk/acpx";
 import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "openclaw/plugin-sdk/acpx";
-import { resolveAcpxPluginConfig, type ResolvedAcpxPluginConfig } from "./config.js";
+import {
+  resolveAcpxPluginConfig,
+  type McpServerConfig,
+  type ResolvedAcpxPluginConfig,
+} from "./config.js";
 import { ensureAcpx } from "./ensure.js";
 import { ACPX_BACKEND_ID, AcpxRuntime } from "./runtime.js";
+
+const CHROME_DEVTOOLS_MCP_SERVER_NAME = "chrome-devtools";
+const CHROME_DEVTOOLS_MCP_PACKAGE = "chrome-devtools-mcp@latest";
+
+/**
+ * Build the chrome-devtools-mcp server config from core browser.mcp settings.
+ * Returns undefined when the preset is not enabled or is already overridden by
+ * an explicit mcpServers entry with the same name.
+ */
+export function buildChromeDevToolsMcpPreset(params: {
+  browserMcp?: {
+    enabled?: boolean;
+    mode?: "full" | "slim";
+    channel?: "stable" | "beta" | "canary" | "dev";
+  };
+  existingMcpServers: Record<string, McpServerConfig>;
+}): McpServerConfig | undefined {
+  if (!params.browserMcp?.enabled) {
+    return undefined;
+  }
+  // Don't override an explicit user-defined entry.
+  if (params.existingMcpServers[CHROME_DEVTOOLS_MCP_SERVER_NAME]) {
+    return undefined;
+  }
+  const args: string[] = ["-y", CHROME_DEVTOOLS_MCP_PACKAGE, "--autoConnect"];
+  const mode = params.browserMcp.mode ?? "full";
+  if (mode === "slim") {
+    args.push("--slim");
+  }
+  const channel = params.browserMcp.channel;
+  if (channel && channel !== "stable") {
+    args.push(`--channel=${channel}`);
+  }
+  return { command: "npx", args };
+}
 
 type AcpxRuntimeLike = AcpRuntime & {
   probeAvailability(): Promise<void>;
@@ -45,6 +84,17 @@ export function createAcpxRuntimeService(
         rawConfig: params.pluginConfig,
         workspaceDir: ctx.workspaceDir,
       });
+
+      // Inject chrome-devtools-mcp preset when browser.mcp is enabled in core config.
+      const chromePreset = buildChromeDevToolsMcpPreset({
+        browserMcp: ctx.config.browser?.mcp,
+        existingMcpServers: pluginConfig.mcpServers,
+      });
+      if (chromePreset) {
+        pluginConfig.mcpServers[CHROME_DEVTOOLS_MCP_SERVER_NAME] = chromePreset;
+        ctx.logger.info("chrome-devtools-mcp preset injected from browser.mcp config");
+      }
+
       const runtimeFactory = params.runtimeFactory ?? createDefaultRuntime;
       runtime = runtimeFactory({
         pluginConfig,

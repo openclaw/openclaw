@@ -372,6 +372,21 @@ export const OpenClawSchema = z
           )
           .optional(),
         extraArgs: z.array(z.string()).optional(),
+        mcp: z
+          .object({
+            enabled: z.boolean().optional(),
+            mode: z.union([z.literal("full"), z.literal("slim")]).optional(),
+            channel: z
+              .union([
+                z.literal("stable"),
+                z.literal("beta"),
+                z.literal("canary"),
+                z.literal("dev"),
+              ])
+              .optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
