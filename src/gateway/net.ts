@@ -212,12 +212,18 @@ export function isLocalGatewayAddress(ip: string | undefined): boolean {
     return false;
   }
   const tailnetIPv4 = pickPrimaryTailnetIPv4();
-  if (tailnetIPv4 && normalized === tailnetIPv4.toLowerCase()) {
-    return true;
+  if (tailnetIPv4) {
+    const normalizedTailnetIPv4 = normalizeIp(tailnetIPv4);
+    if (normalizedTailnetIPv4 && normalized === normalizedTailnetIPv4) {
+      return true;
+    }
   }
   const tailnetIPv6 = pickPrimaryTailnetIPv6();
-  if (tailnetIPv6 && ip.trim().toLowerCase() === tailnetIPv6.toLowerCase()) {
-    return true;
+  if (tailnetIPv6) {
+    const normalizedTailnetIPv6 = normalizeIp(tailnetIPv6);
+    if (normalizedTailnetIPv6 && normalized === normalizedTailnetIPv6) {
+      return true;
+    }
   }
   return false;
 }

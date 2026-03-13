@@ -2,6 +2,7 @@ import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import {
+  isLocalGatewayAddress,
   isLocalishHost,
   isPrivateOrLoopbackAddress,
   isPrivateOrLoopbackHost,
@@ -536,5 +537,48 @@ describe("isSecureWebSocketUrl", () => {
     for (const input of disallowedWhenOptedIn) {
       expect(isSecureWebSocketUrl(input, { allowPrivateWs: true }), input).toBe(false);
     }
+  });
+});
+
+describe("isLocalGatewayAddress", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("matches tailnet IPv6 regardless of canonical form", async () => {
+    // Simulate a tailnet IPv6 address returned by the OS in short form
+    const tailnetModule = await import("../infra/tailnet.js");
+    vi.spyOn(tailnetModule, "pickPrimaryTailnetIPv4").mockReturnValue(undefined);
+    vi.spyOn(tailnetModule, "pickPrimaryTailnetIPv6").mockReturnValue("fd7a:115c:a1e0::1");
+
+    // Non-canonical (expanded) form of the same address must match
+    expect(isLocalGatewayAddress("fd7a:115c:a1e0:0:0:0:0:1")).toBe(true);
+    // Canonical short form must also match
+    expect(isLocalGatewayAddress("fd7a:115c:a1e0::1")).toBe(true);
+    // Uppercase must match
+    expect(isLocalGatewayAddress("FD7A:115C:A1E0::1")).toBe(true);
+    // Unrelated address must not match
+    expect(isLocalGatewayAddress("fd7a:115c:a1e0::2")).toBe(false);
+  });
+
+  it("matches tailnet IPv4 via normalized comparison", async () => {
+    const tailnetModule = await import("../infra/tailnet.js");
+    vi.spyOn(tailnetModule, "pickPrimaryTailnetIPv4").mockReturnValue("100.100.100.100");
+    vi.spyOn(tailnetModule, "pickPrimaryTailnetIPv6").mockReturnValue(undefined);
+
+    expect(isLocalGatewayAddress("100.100.100.100")).toBe(true);
+    // IPv4-mapped IPv6 form of the same address must match
+    expect(isLocalGatewayAddress("::ffff:100.100.100.100")).toBe(true);
+    expect(isLocalGatewayAddress("100.100.100.101")).toBe(false);
+  });
+
+  it("accepts loopback addresses", () => {
+    expect(isLocalGatewayAddress("127.0.0.1")).toBe(true);
+    expect(isLocalGatewayAddress("::1")).toBe(true);
+  });
+
+  it("rejects undefined and empty", () => {
+    expect(isLocalGatewayAddress(undefined)).toBe(false);
+    expect(isLocalGatewayAddress("")).toBe(false);
   });
 });
