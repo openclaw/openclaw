@@ -4,7 +4,11 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
 } from "../agents/huggingface-models.js";
 import {
-  buildAvianProvider,
+  AVIAN_BASE_URL,
+  AVIAN_MODEL_CATALOG,
+  buildAvianModelDefinition,
+} from "../agents/avian-models.js";
+import {
   buildKilocodeProvider,
   buildKimiCodingProvider,
   buildQianfanProvider,
@@ -555,13 +559,13 @@ export function applyAvianProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
     alias: models[AVIAN_DEFAULT_MODEL_REF]?.alias ?? "Avian",
   };
 
-  const avianModels = buildAvianProvider().models ?? [];
+  const avianModels = AVIAN_MODEL_CATALOG.map(buildAvianModelDefinition);
 
   return applyProviderConfigWithModelCatalog(cfg, {
     agentModels: models,
     providerId: "avian",
     api: "openai-completions",
-    baseUrl: "https://api.avian.io/v1",
+    baseUrl: AVIAN_BASE_URL,
     catalogModels: avianModels,
   });
 }
