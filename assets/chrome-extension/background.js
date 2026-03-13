@@ -912,6 +912,10 @@ async function handleForwardCdpCommand(msg) {
     throw new Error('Extension is globally disabled. Commands from relay refused.')
   }
 
+  if (relayIsLocked && lockedTabId && tabId !== lockedTabId) {
+    throw new Error('Extension relay is locked to another tab. Command refused.')
+  }
+
   if (!tabId) throw new Error(`No attached tab for method ${method}`)
 
   /** @type {chrome.debugger.DebuggerSession} */

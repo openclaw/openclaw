@@ -43,7 +43,7 @@ export function resolveCliSpawnInvocation(params: {
     env: params.env,
     execPath: process.execPath,
     packageName: params.packageName,
-    allowShellFallback: false,
+    allowShellFallback: true,
   });
   return materializeWindowsSpawnProgram(program, params.args);
 }
