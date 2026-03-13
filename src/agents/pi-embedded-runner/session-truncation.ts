@@ -1,22 +1,29 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { CompactionEntry, SessionEntry } from "@mariozechner/pi-coding-agent";
+import type { SessionEntry } from "@mariozechner/pi-coding-agent";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { log } from "./logger.js";
 
 /**
- * Truncate a session JSONL file after compaction by removing entries
- * that are no longer reachable from the current branch.
+ * Truncate a session JSONL file after compaction by removing only the
+ * message entries that the compaction actually summarized.
  *
  * After compaction, the session file still contains all historical entries
  * even though `buildSessionContext()` logically skips entries before
  * `firstKeptEntryId`. Over many compaction cycles this causes unbounded
  * file growth (issue #39953).
  *
- * This function rewrites the file to keep only:
+ * This function rewrites the file keeping:
  * 1. The session header
- * 2. The latest compaction entry (re-parented as root)
- * 3. All entries after the compaction in the current branch
+ * 2. All non-message session state (custom, model_change, thinking_level_change,
+ *    session_info, label, branch_summary, custom_message, compaction entries)
+ * 3. All entries from sibling branches not covered by the compaction
+ * 4. The compaction entry and all entries after it in the current branch
+ *
+ * Only `message` entries in the current branch that precede the latest
+ * compaction are removed — they are the entries the compaction summarized.
+ * Entries whose parent was removed are re-parented to the nearest kept
+ * ancestor (or become roots).
  */
 export async function truncateSessionAfterCompaction(params: {
   sessionFile: string;
@@ -62,19 +69,62 @@ export async function truncateSessionAfterCompaction(params: {
     return { truncated: false, entriesRemoved: 0, reason: "compaction already at root" };
   }
 
-  const entriesRemoved = latestCompactionIdx;
-  const totalEntriesBefore = sm.getEntries().length;
-
-  // Build the truncated entry list:
-  // compaction entry (re-parented as root) + all entries after it
-  const truncatedEntries: SessionEntry[] = [];
-
-  const compactionEntry = branch[latestCompactionIdx] as CompactionEntry;
-  truncatedEntries.push({ ...compactionEntry, parentId: null });
-
-  for (let i = latestCompactionIdx + 1; i < branch.length; i++) {
-    truncatedEntries.push(branch[i]);
+  // Collect IDs of entries in the current branch that precede the compaction.
+  // These are the candidates for removal (only message-type ones will be removed).
+  const summarizedBranchIds = new Set<string>();
+  for (let i = 0; i < latestCompactionIdx; i++) {
+    summarizedBranchIds.add(branch[i].id);
   }
+
+  // Operate on the full transcript so sibling branches and tree metadata
+  // are not silently dropped.
+  const allEntries = sm.getEntries();
+
+  // Only remove message-type entries that the compaction actually summarized.
+  // Non-message entries (custom, model_change, thinking_level_change,
+  // session_info, label, branch_summary, custom_message) are preserved even
+  // if they sit in the summarized portion of the branch.
+  const removedIds = new Set<string>();
+  for (const entry of allEntries) {
+    if (summarizedBranchIds.has(entry.id) && entry.type === "message") {
+      removedIds.add(entry.id);
+    }
+  }
+
+  if (removedIds.size === 0) {
+    return { truncated: false, entriesRemoved: 0, reason: "no entries to remove" };
+  }
+
+  // Build an id→entry map for walking parent chains during re-parenting.
+  const entryById = new Map<string, SessionEntry>();
+  for (const entry of allEntries) {
+    entryById.set(entry.id, entry);
+  }
+
+  // Keep every entry that was not removed, re-parenting where necessary so
+  // the tree stays connected.
+  const keptEntries: SessionEntry[] = [];
+  for (const entry of allEntries) {
+    if (removedIds.has(entry.id)) {
+      continue;
+    }
+
+    // Walk up the parent chain to find the nearest kept ancestor.
+    let newParentId = entry.parentId;
+    while (newParentId !== null && removedIds.has(newParentId)) {
+      const parent = entryById.get(newParentId);
+      newParentId = parent?.parentId ?? null;
+    }
+
+    if (newParentId !== entry.parentId) {
+      keptEntries.push({ ...entry, parentId: newParentId });
+    } else {
+      keptEntries.push(entry);
+    }
+  }
+
+  const entriesRemoved = removedIds.size;
+  const totalEntriesBefore = allEntries.length;
 
   // Get file size before truncation
   let bytesBefore = 0;
@@ -101,7 +151,7 @@ export async function truncateSessionAfterCompaction(params: {
   // Write truncated file atomically (temp + rename)
   const lines: string[] = [
     JSON.stringify(header),
-    ...truncatedEntries.map((e) => JSON.stringify(e)),
+    ...keptEntries.map((e) => JSON.stringify(e)),
   ];
   const content = lines.join("\n") + "\n";
 
@@ -125,7 +175,7 @@ export async function truncateSessionAfterCompaction(params: {
 
   log.info(
     `[session-truncation] Truncated session file: ` +
-      `entriesBefore=${totalEntriesBefore} entriesAfter=${truncatedEntries.length} ` +
+      `entriesBefore=${totalEntriesBefore} entriesAfter=${keptEntries.length} ` +
       `removed=${entriesRemoved} bytesBefore=${bytesBefore} bytesAfter=${bytesAfter} ` +
       `reduction=${bytesBefore > 0 ? ((1 - bytesAfter / bytesBefore) * 100).toFixed(1) : "?"}%`,
   );
