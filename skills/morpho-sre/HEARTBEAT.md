@@ -85,6 +85,11 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
 - If only monitoring/internal tooling is degraded, say exactly: `No confirmed customer impact. Internal observability degraded.`
 - Keep unrelated warnings under `*Also watching:*`.
 - Never lead with routing hints, fingerprint changes, raw section names, signal counts, or `primary/supporting` namespace jargon.
+- Do not send progress-only thread replies like `On it`, `Found it`, or `Let me verify`; wait for net-new evidence, mitigation, validation, or a PR URL.
+- Before claiming repo/tool access is unavailable, run one live probe (`gh repo view <owner/repo>` or the target helper in dry-run mode) and quote the exact error.
+- For rewards/provider incidents, do not name a stale-row/write-path cause or open a PR without one live DB row/provenance fact and one exact consuming code-path fact.
+- Until dedicated collectors exist, satisfy those rewards/provider gates only from explicit live probe outputs; if those outputs are absent, keep the gate closed and say so.
+- If a human questions the proposed fix or PR, re-open RCA with fresh evidence instead of repeating the prior theory.
 - If a user ask is vague:
   - do not answer with refusal-only language.
   - infer most likely intent from current thread incident context and latest triage output.
@@ -94,7 +99,6 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
 Suggested thread reply template:
 
 ```text
-On it. Investigated <namespace>/<workload>.
 *Incident:* <one-line summary>
 *Customer impact:* <confirmed / none confirmed / unknown>
 *Affected services:* <service/component list>

@@ -12,6 +12,7 @@
 ## Fingerprints
 
 - rewards APR off on USDT and USDC vaults
+- Base `superOETHb/USDC` showed phantom OP `supplyApr` while Merkl exposed borrow-only OP campaigns for the same market
 - campaign TVL looked suspicious in linked opportunity pages
 - stale market materialized view was present but did not fully explain the reward anomaly
 
@@ -32,4 +33,5 @@
 
 - treat prior APY incidents as priors only
 - do not name DB pressure as the root cause without checking the provider
+- do not name stale-row cleanup as root cause until the live DB row/provenance fact matches the theory
 - do not open blacklist/config PRs until the live failing path is proven to consume them

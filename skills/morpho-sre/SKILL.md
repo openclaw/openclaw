@@ -37,6 +37,10 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - relevant incident dossier / postmortem index
 - Retry on repeated asks: if same/near-identical question appears again in the same thread/session, re-run relevant live checks/tools (state may have changed); do not reuse a prior failure-only answer.
 - If an incident thread drifts into unrelated design/history questions, redirect that discussion to a DM or new thread instead of mixing it into RCA.
+- Incident threads:
+  - Do not send progress-only thread replies like `On it`, `Found it`, or `Let me verify`; wait for net-new evidence, mitigation, validation, or a PR URL.
+- Before claiming repo/tool access is unavailable, run one live probe (`gh repo view <owner/repo>` or the target helper in dry-run mode) and quote the exact error.
+- If a human questions the proposed fix or PR in-thread, re-open RCA with fresh live evidence; do not repeat the old theory or go silent.
 - Exact artifact replay:
   - if user provides an exact query, event ID, trace ID, address, or says the prior answer is wrong, replay that exact artifact before reusing any prior theory
   - isolate the minimal failing field set before expanding the query or naming a cause
@@ -215,6 +219,10 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   1. verify one upstream provider/API response
   2. verify one recent artifact or workflow output if such a collector exists
   3. verify the exact consuming code path before naming a root cause or proposing a PR
+- Additional stale-row / write-path gate:
+  - before naming a stale-row/write-path cause or opening a PR, include one live DB row/provenance fact for the affected reward entity
+  - the reply must also name the exact consuming repo/path that would change the active code path
+  - until dedicated collectors exist, these rewards/provider evidence gates are satisfied only from explicit live probe outputs; if those outputs are absent, keep the gate closed and say so
 - Required answer shape:
   - `primary trigger`
   - `local amplifier`
@@ -222,6 +230,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - one disproved or partial prior theory if the investigation changed direction
 - Auto-PR gate:
   - do not open a PR unless the reply names the repo/path that changes the active code path
+  - do not open a PR for a stale-row/write-path theory unless the reply includes one live DB row/provenance fact for that entity
   - blacklist/config-only PRs are not valid if the live failing path does not consume that blacklist/config
 
 ## Single-Vault API / GraphQL Data Incidents
@@ -279,6 +288,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - `*Next:*` owner/action
 - Put unrelated warnings under `*Also watching:*`.
 - Do not open with routing hints, fingerprint changes, raw step names, signal counts, confidence percentages, or `primary/supporting` namespace jargon.
+- Do not send progress-only thread replies like `On it`, `Found it`, or `Let me verify`; wait for net-new evidence, mitigation, validation, or a PR URL.
 - If fix is scoped/reversible and confidence >= `AUTO_PR_MIN_CONFIDENCE`, create PR via `autofix-pr.sh` and post PR URL in-thread.
 - If a thread question is vague/underspecified:
   - Do not refuse with “insufficient context” only.

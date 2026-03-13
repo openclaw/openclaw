@@ -64,7 +64,7 @@ _evidence_gap_lookup_value() {
 evidence_gaps_assess() {
   local category="${1:-unknown}"
   local source_file="${2:-/dev/stdin}"
-  local manifest_file critical_keys optional_keys
+  local manifest_file critical_keys optional_keys rewards_provider_keys rewards_provider_optional_keys rewards_provider_mode
   local total_keys=0 present_keys=0 missing_critical_count=0 missing_optional_count=0
   local confidence_penalty=0 key value
   local missing_critical_json missing_optional_json completeness_percent
@@ -78,6 +78,19 @@ evidence_gaps_assess() {
 
   critical_keys="$(_evidence_gap_section_keys "$manifest_file" critical)"
   optional_keys="$(_evidence_gap_section_keys "$manifest_file" optional)"
+  rewards_provider_mode="$(_evidence_gap_lookup_value "$source_file" "rewards_provider_mode")"
+  if [[ "$category" == "data_issue" ]] && _evidence_gap_value_present "${rewards_provider_mode:-}"; then
+    rewards_provider_keys="$(_evidence_gap_section_keys "$manifest_file" rewards_provider_critical)"
+    critical_keys="$(
+      printf '%s\n%s\n' "$critical_keys" "$rewards_provider_keys" \
+        | awk 'NF > 0 && !seen[$0]++ { print }'
+    )"
+    rewards_provider_optional_keys="$(_evidence_gap_section_keys "$manifest_file" rewards_provider_optional)"
+    optional_keys="$(
+      printf '%s\n%s\n' "$optional_keys" "$rewards_provider_optional_keys" \
+        | awk 'NF > 0 && !seen[$0]++ { print }'
+    )"
+  fi
 
   while IFS= read -r key; do
     [[ -n "$key" ]] || continue

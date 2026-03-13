@@ -69,3 +69,31 @@ printf '%s\n' "$OUTPUT" | jq -e '.category == "data_issue"' >/dev/null
 printf '%s\n' "$OUTPUT" | jq -e '.missing_critical == ["db_data_check","pg_internal_check"]' >/dev/null
 printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == ["pg_activity","pg_statements"]' >/dev/null
 printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 46' >/dev/null
+
+cat >"$TMP" <<'EOF'
+critical_alerts=1
+log_signals=1
+db_schema_check=1
+db_data_check=1
+pg_internal_check=1
+incident_memory=1
+changes_in_window=1
+config_lineage=1
+replica_lag=1
+pg_activity=1
+pg_statements=1
+pg_conflicts=1
+db_topology=1
+rewards_provider_mode=1
+provider_api_check=1
+artifact_check=0
+code_path_check=1
+disproved_theory_recorded=0
+EOF
+
+OUTPUT="$(evidence_gaps_assess data_issue "$TMP")"
+
+printf '%s\n' "$OUTPUT" | jq -e '.category == "data_issue"' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_critical == ["artifact_check"]' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == ["disproved_theory_recorded"]' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 23' >/dev/null

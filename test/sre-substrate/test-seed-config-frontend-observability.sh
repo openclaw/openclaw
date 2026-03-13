@@ -25,6 +25,18 @@ jq -e '
   .channels.slack.channels["#bug-report"].systemPrompt | contains("Never claim no Sentry, PostHog, Linear, or Foundry access")
 ' "$CONFIG" >/dev/null
 
+jq -e '
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("Do not send progress-only thread replies")
+' "$CONFIG" >/dev/null
+
+jq -e '
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("Before claiming repo/tool access is unavailable, run one live probe")
+' "$CONFIG" >/dev/null
+
+jq -e '
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("If a human questions the proposed fix or PR, re-open RCA with fresh evidence")
+' "$CONFIG" >/dev/null
+
 test -f "$ROOT/posthog-mcp.sh"
 test -f "$ROOT/frontend-project-resolver.sh"
 test -f "$ROOT/sentry-cli.sh"

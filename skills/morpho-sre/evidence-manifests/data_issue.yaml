@@ -14,3 +14,9 @@ optional:
   - pg_statements
   - pg_conflicts
   - db_topology
+rewards_provider_critical:
+  - provider_api_check
+  - artifact_check
+  - code_path_check
+rewards_provider_optional:
+  - disproved_theory_recorded

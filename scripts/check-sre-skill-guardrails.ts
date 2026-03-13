@@ -86,6 +86,31 @@ const REQUIRED_RULES: Array<{ id: string; re: RegExp; message: string }> = [
     message: "missing anti-anchoring / cross-resolver reuse guidance",
   },
   {
+    id: "no-progress-only-thread-replies",
+    re: /do not send progress-only (thread )?replies/i,
+    message: "missing no-progress-only incident thread guidance",
+  },
+  {
+    id: "repo-access-live-probe",
+    re: /Before claiming repo\/tool access is unavailable, run one live probe/i,
+    message: "missing live probe requirement before repo/tool access disclaimers",
+  },
+  {
+    id: "fix-challenge-reopens-rca",
+    re: /If a human questions the proposed fix or PR in-thread, re-open RCA/i,
+    message: "missing re-open RCA guidance when humans challenge the fix",
+  },
+  {
+    id: "rewards-db-provenance-gate",
+    re: /before naming a stale-row\/write-path cause or opening a PR, include one live DB row\/provenance fact/i,
+    message: "missing rewards/provider DB provenance gate before stale-row PRs",
+  },
+  {
+    id: "rewards-code-path-gate",
+    re: /exact consuming (repo\/path|code-path)( fact)?/i,
+    message: "missing rewards/provider exact consuming code-path gate before stale-row PRs",
+  },
+  {
     id: "single-vault-workflow",
     re: /## Single-Vault API \/ GraphQL Data Incidents/,
     message: "missing single-vault api/graphql workflow",

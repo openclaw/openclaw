@@ -13,13 +13,16 @@ Use for wrong rewards APR, suspicious vault APY, campaign TVL anomalies, or prom
 ## Minimum checks
 
 - one affected business-data query
+- one live DB row/provenance fact for the affected reward entity
 - one PostgreSQL internal fact
 - one upstream provider fact
-- one exact consuming code-path fact
+- one recent artifact or workflow/cache fact when such an artifact exists
+- one exact consuming repo/path fact
 
 ## Interpretation
 
 - bad upstream campaign TVL or APR can be the primary trigger even when DB pressure exists
 - stale materialized views or timeouts are often amplifiers, not necessarily the trigger
+- stale-row cleanup is only a hypothesis until the DB row/provenance fact and the consuming repo/path both match that theory
 - a blacklist/config PR is invalid if the active failing code path does not consume that blacklist/config
 - if the model changes direction, record which earlier theory became disproved or merely contributory

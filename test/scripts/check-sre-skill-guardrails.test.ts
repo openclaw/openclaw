@@ -11,11 +11,18 @@ const VALID_SKILL = `
 - if user provides an exact query, event ID, trace ID, address, or says the prior answer is wrong, replay that exact artifact first
 - use Sentry event IDs only after a live lookup, or explicitly say creds are unavailable
 - do not reuse a prior incident unless operation name, schema object, failing fields, chain, and address pattern match
+- do not send progress-only replies such as \`On it\`, \`Found it\`, or \`Let me verify\`
+- Before claiming repo/tool access is unavailable, run one live probe (\`gh repo view <owner/repo>\` or the target helper in dry-run mode) and quote the exact error.
+- If a human questions the proposed fix or PR in-thread, re-open RCA with fresh live evidence; do not repeat the old theory or go silent.
 - RBAC-aware fallback:
   - if \`pods/exec forbidden\` appears, stop retrying \`kubectl exec\`
 - Before broad repo/code reads, load at least one retrieval surface relevant to the incident:
   - \`knowledge-index.md\`
   - \`runbook-map.md\`
+
+## Rewards / Provider Incidents
+- before naming a stale-row/write-path cause or opening a PR, include one live DB row/provenance fact for the affected reward entity
+- the reply must also name one exact consuming repo/path fact for the active code path
 
 ## Single-Vault API / GraphQL Data Incidents
 - compare against one healthy control vault on the same chain

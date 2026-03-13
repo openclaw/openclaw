@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-HYPOTHESIS_RECOLLECT_CONFIDENCE_THRESHOLD="${HYPOTHESIS_RECOLLECT_CONFIDENCE_THRESHOLD:-70}"
 HYPOTHESIS_RECOLLECT_MAX_RETRIES="${HYPOTHESIS_RECOLLECT_MAX_RETRIES:-1}"
 HYPOTHESIS_RECOLLECT_BUDGET_MS="${HYPOTHESIS_RECOLLECT_BUDGET_MS:-15000}"
 
@@ -10,6 +9,7 @@ hypothesis_recollect_should_run() {
   local attempts="${3:-0}"
   local elapsed_ms="${4:-0}"
   local missing_critical_count=0
+  local collectors=""
   [[ -n "$gap_json" ]] || gap_json='{}'
 
   [[ "$attempts" =~ ^[0-9]+$ ]] || attempts=0
@@ -21,9 +21,6 @@ hypothesis_recollect_should_run() {
   if (( elapsed_ms >= HYPOTHESIS_RECOLLECT_BUDGET_MS )); then
     return 1
   fi
-  if ! awk -v c="$confidence" -v t="$HYPOTHESIS_RECOLLECT_CONFIDENCE_THRESHOLD" 'BEGIN { exit !(c < t) }'; then
-    return 1
-  fi
   if ! missing_critical_count="$(printf '%s\n' "$gap_json" | jq -r '(.missing_critical // []) | length' 2>/dev/null)"; then
     missing_critical_count=0
   fi
@@ -33,7 +30,11 @@ hypothesis_recollect_should_run() {
       missing_critical_count=0
       ;;
   esac
-  (( missing_critical_count > 0 ))
+  if (( missing_critical_count == 0 )); then
+    return 1
+  fi
+  collectors="$(hypothesis_recollect_collectors "$gap_json" 2>/dev/null || true)"
+  [[ -n "$collectors" ]]
 }
 
 hypothesis_recollect_collectors() {

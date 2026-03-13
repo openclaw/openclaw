@@ -454,6 +454,47 @@ normalize_json_number_or() {
   printf '%s\n' "$fallback"
 }
 
+apply_rca_confidence_cap() {
+  local target_confidence="${1:-0}"
+  local note="${2:-}"
+  local updated_json fallback_json
+
+  updated_json="$(
+    printf '%s\n' "$rca_result_json" | jq -c --argjson confidence "$target_confidence" --arg note "$note" '
+      .merged_confidence = $confidence
+      | .degradation_note = (if (.degradation_note // "") == "" then $note else (.degradation_note + "; " + $note) end)
+      | if (.hypotheses // [] | length) > 0 then .hypotheses[0].confidence = $confidence else . end
+    ' 2>/dev/null || true
+  )"
+  if [[ -z "$updated_json" ]]; then
+    log "RCA confidence cap jq mutation failed; attempting fallback patch"
+    fallback_json="$(
+      printf '%s\n' "$rca_result_json" | jq -c --argjson confidence "$target_confidence" --arg note "$note" '
+        .merged_confidence = $confidence
+        | .degradation_note = (if (.degradation_note // "") == "" then $note else (.degradation_note + "; " + $note) end)
+      ' 2>/dev/null || true
+    )"
+    if [[ -n "$fallback_json" ]]; then
+      updated_json="$fallback_json"
+    else
+      log "RCA confidence cap fallback patch failed; leaving RCA JSON unchanged"
+    fi
+  fi
+
+  if [[ -n "$updated_json" ]]; then
+    rca_result_json="$updated_json"
+  else
+    log "RCA confidence JSON mutation failed; forcing scalar confidence cap to ${target_confidence}"
+  fi
+
+  rca_confidence="$target_confidence"
+  rca_degradation_note="$(
+    sanitize_signal_line "$(
+      printf '%s\n' "$rca_result_json" | jq -r '.degradation_note // empty' 2>/dev/null || printf '%s' "$note"
+    )"
+  )"
+}
+
 resolve_helper_script() {
   local script_name="$1"
   if [[ -x "${SCRIPT_DIR%/}/${script_name}" ]]; then
@@ -1861,6 +1902,16 @@ collect_phase2_drift_and_lineage() {
   fi
 }
 
+rewards_provider_should_collect() {
+  local combined="${1:-}"
+  case "$combined" in
+    *merkl*|*v4/opportunities/campaigns*|*yearly_supply_tokens*|*campaigns.morpho.org*|*campaign\ tvl*|*reward\ apr*|*rewards\ apr*|*supply\ apr*|*borrow\ apr*|*supplyapr*|*borrowapr*|*reward\ program*|*rewards\ program*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 db_evidence_should_collect() {
   [[ "${DB_EVIDENCE_ENABLED:-1}" == "1" ]] || return 1
   local combined
@@ -1875,6 +1926,9 @@ db_evidence_should_collect() {
     } | tr '[:upper:]' '[:lower:]'
   )"
   [[ -n "$combined" ]] || return 1
+  if rewards_provider_should_collect "$combined"; then
+    return 0
+  fi
   case "$combined" in
     *postgres*|*replica*|*replication*|*replay\ lag*|*database*|*db-*|*indexer*|*graphql*|*stale*|*wrong\ value*|*apy*|*vault*|*query*|*table*)
       return 0
@@ -1885,6 +1939,10 @@ db_evidence_should_collect() {
 
 db_evidence_target_guess() {
   local combined="${1:-}"
+  if rewards_provider_should_collect "$combined"; then
+    printf 'blue_api\n'
+    return 0
+  fi
   case "$combined" in
     *indexer*|*replica*|*replication*|*replay\ lag*|*apy*|*graphql*|*vault*)
       printf 'indexer\n'
@@ -1996,6 +2054,93 @@ collect_phase2_db_evidence() {
   fi
 }
 
+collect_phase2_rewards_provider_context() {
+  rewards_provider_mode=0
+  provider_api_check=0
+  artifact_check=0
+  code_path_check=0
+  disproved_theory_recorded=0
+  rewards_provider_context_note=""
+  provider_api_evidence_output=""
+  artifact_evidence_output=""
+  code_path_evidence_output=""
+  disproved_theory_evidence_output=""
+
+  local raw_combined combined
+  local provider_api_evidence_output_local artifact_evidence_output_local
+  local code_path_evidence_output_local disproved_theory_evidence_output_local
+  raw_combined="$(
+    {
+      printf '%s\n' "${BETTERSTACK_CONTEXT:-}"
+      printf '%s\n' "${alert_rows:-}"
+      printf '%s\n' "${event_rows:-}"
+      printf '%s\n' "${log_signal_rows:-}"
+      printf '%s\n' "${repo_map_rows:-}"
+      printf '%s\n' "${revision_rows:-}"
+      printf '%s\n' "${ci_rows:-}"
+      printf '%s\n' "${changes_in_window_summary:-}"
+    }
+  )"
+  combined="$(printf '%s' "$raw_combined" | tr '[:upper:]' '[:lower:]')"
+
+  rewards_provider_should_collect "$combined" || return 0
+  rewards_provider_mode=1
+
+  provider_api_evidence_output_local="$(printf '%s' "${provider_api_evidence_input:-}" | awk 'NF > 0 { print }')"
+  artifact_evidence_output_local="$(printf '%s' "${artifact_evidence_input:-}" | awk 'NF > 0 { print }')"
+  code_path_evidence_output_local="$(printf '%s' "${code_path_evidence_input:-}" | awk 'NF > 0 { print }')"
+  disproved_theory_evidence_output_local="$(printf '%s' "${disproved_theory_evidence_input:-}" | awk 'NF > 0 { print }')"
+
+  if [[ -z "$provider_api_evidence_output_local" ]]; then
+    provider_api_evidence_output_local="$(
+      printf '%s\n' "$raw_combined" \
+        | grep -Eom1 '(GET /v4/opportunities/campaigns[^[:space:]]*|https?://[^[:space:]]*api\.merkl[^[:space:]]*|campaigns\.morpho\.org[^[:space:]]*)' \
+        || true
+    )"
+  fi
+
+  if [[ -z "$artifact_evidence_output_local" ]]; then
+    if [[ -n "${changes_in_window_summary:-}" ]] && printf '%s\n' "${changes_in_window_summary:-}" | grep -Eiq '(artifact|snapshot|dump|cache|workflow)'; then
+      artifact_evidence_output_local="$(sanitize_signal_line "$changes_in_window_summary")"
+    elif [[ -n "${ci_rows:-}" ]]; then
+      artifact_evidence_output_local="$(sanitize_signal_line "$(printf '%s\n' "$ci_rows" | awk 'NF > 0 { print; exit }')")"
+    fi
+  fi
+
+  if [[ -z "$code_path_evidence_output_local" ]]; then
+    code_path_evidence_output_local="$(
+      printf '%s\n' "$raw_combined" \
+        | grep -Eom1 '([A-Za-z0-9._-]+/)+[A-Za-z0-9._-]+\.(ts|tsx|js|jsx|sql|ya?ml|json|sh)(:[0-9]+)?' \
+        || true
+    )"
+  fi
+
+  if [[ -n "$provider_api_evidence_output_local" ]]; then
+    provider_api_check=1
+  fi
+
+  if [[ -n "$artifact_evidence_output_local" ]]; then
+    artifact_check=1
+  fi
+
+  if [[ -n "$code_path_evidence_output_local" ]]; then
+    code_path_check=1
+  fi
+
+  if [[ -n "$disproved_theory_evidence_output_local" ]]; then
+    disproved_theory_recorded=1
+  fi
+
+  provider_api_evidence_output="$provider_api_evidence_output_local"
+  artifact_evidence_output="$artifact_evidence_output_local"
+  code_path_evidence_output="$code_path_evidence_output_local"
+  disproved_theory_evidence_output="$disproved_theory_evidence_output_local"
+
+  if [[ "$provider_api_check" -eq 0 || "$artifact_check" -eq 0 || "$code_path_check" -eq 0 ]]; then
+    rewards_provider_context_note="explicit or raw provider/artifact/code-path evidence outputs are still incomplete; rewards/provider gate remains closed until those live facts are recorded"
+  fi
+}
+
 build_phase3_gap_input_file() {
   local target_file="$1"
   cat >"$target_file" <<EOF
@@ -2021,6 +2166,11 @@ pg_activity=${pg_activity:-0}
 pg_statements=${pg_statements:-0}
 pg_conflicts=${pg_conflicts:-0}
 db_topology=${db_topology:-0}
+rewards_provider_mode=${rewards_provider_mode:-0}
+provider_api_check=${provider_api_check:-0}
+artifact_check=${artifact_check:-0}
+code_path_check=${code_path_check:-0}
+disproved_theory_recorded=${disproved_theory_recorded:-0}
 EOF
 }
 
@@ -2822,6 +2972,7 @@ incident_fingerprint_source="$(
 incident_fingerprint="$(printf '%s\n' "$incident_fingerprint_source" | cksum | awk '{print $1}')"
 collect_change_window_context
 collect_phase2_drift_and_lineage
+collect_phase2_rewards_provider_context
 
 should_alert="no"
 gate_reason="healthy"
@@ -3350,9 +3501,6 @@ if [[ "$incident" -eq 1 && "$HAS_LIB_RCA_LLM" -eq 1 ]] && declare -F run_step_11
       fi
       rca_safety_record_outcome "$(date +%s 2>/dev/null || echo 0)" "$rca_convergence_outcome" >/dev/null 2>&1 || true
     fi
-    if [[ "$rca_skip" -eq 0 ]]; then
-      rca_cache_write_json "${incident_id:-}" "$incident_fingerprint" "$now_epoch" "$rca_result_json" >/dev/null 2>&1 || true
-    fi
   else
     STEP_STATUS_11="error"
     rca_result_status="fallback"
@@ -3368,8 +3516,16 @@ if [[ "$incident" -eq 1 && "$HAS_LIB_RCA_LLM" -eq 1 ]] && declare -F run_step_11
   if [[ -z "$recollect_category" || "$recollect_category" == "null" || "$recollect_category" == "unknown" ]]; then
     recollect_category="${step11_dedup_category:-unknown}"
   fi
+  collect_phase2_rewards_provider_context
   if [[ "$recollect_category" != "unknown" ]]; then
     run_phase3_recollection_loop "$recollect_category" "$evidence_bundle"
+  fi
+fi
+
+final_missing_critical_count="$(printf '%s\n' "${evidence_gap_json:-{}}" | jq -r '(.missing_critical // []) | length' 2>/dev/null || printf '0')"
+if [[ "$final_missing_critical_count" =~ ^[0-9]+$ ]] && [[ "$final_missing_critical_count" -gt 0 ]]; then
+  if awk -v c="$rca_confidence" 'BEGIN { exit !(c > 60) }'; then
+    apply_rca_confidence_cap "60" "Missing critical evidence after recollection; confidence capped at 60"
   fi
 fi
 
@@ -3406,15 +3562,17 @@ else
 fi
 
 if awk -v p="$evidence_completeness_pct" 'BEGIN { exit (p < 60 ? 0 : 1) }' && awk -v c="$rca_confidence" 'BEGIN { exit (c > 50 ? 0 : 1) }'; then
-  rca_confidence="50"
-  rca_result_json="$(
-    printf '%s\n' "$rca_result_json" | jq -c --argjson confidence 50 --arg note "Evidence completeness below 60%; confidence capped at 50" '
-      .merged_confidence = $confidence
-      | .degradation_note = (if (.degradation_note // "") == "" then $note else (.degradation_note + "; " + $note) end)
-      | if (.hypotheses // [] | length) > 0 then .hypotheses[0].confidence = $confidence else . end
-    ' 2>/dev/null || printf '%s\n' "$rca_result_json"
-  )"
-  rca_degradation_note="$(sanitize_signal_line "$(printf '%s\n' "$rca_result_json" | jq -r '.degradation_note // empty')")"
+  apply_rca_confidence_cap "50" "Evidence completeness below 60%; confidence capped at 50"
+fi
+
+if [[ "$incident" -eq 1 && "$rca_skip" -eq 0 && -n "${incident_id:-}" && -n "${rca_result_json:-}" ]] && printf '%s\n' "$rca_result_json" | jq -e . >/dev/null 2>&1; then
+  cache_write_epoch="${now_epoch:-$(date +%s 2>/dev/null || echo 0)}"
+  if ! rca_cache_write_json "${incident_id:-}" "$incident_fingerprint" "$cache_write_epoch" "$rca_result_json" >/dev/null 2>&1; then
+    rca_cache_write_error="incident_id=${incident_id:-unknown}"
+    log "RCA cache write failed for ${incident_id:-unknown}"
+  else
+    rca_cache_write_error=""
+  fi
 fi
 
 step_timeout_count=0
@@ -3593,6 +3751,11 @@ printf 'pg_activity_signal\t%s\n' "$pg_activity"
 printf 'pg_statements_signal\t%s\n' "$pg_statements"
 printf 'pg_conflicts_signal\t%s\n' "$pg_conflicts"
 printf 'db_topology_signal\t%s\n' "$db_topology"
+printf 'rewards_provider_mode\t%s\n' "${rewards_provider_mode:-0}"
+printf 'provider_api_check\t%s\n' "${provider_api_check:-0}"
+printf 'artifact_check\t%s\n' "${artifact_check:-0}"
+printf 'code_path_check\t%s\n' "${code_path_check:-0}"
+printf 'disproved_theory_recorded\t%s\n' "${disproved_theory_recorded:-0}"
 printf 'linear_memory_matches\t%s\n' "$linear_memory_rows_count"
 printf 'resolved_image_revisions\t%s\n' "$revision_resolved_count"
 printf 'suspect_prs\t%s\n' "$suspect_pr_count"
@@ -3692,6 +3855,28 @@ else
   echo "none"
 fi
 
+section "rewards_provider_context"
+printf 'mode\t%s\n' "${rewards_provider_mode:-0}"
+printf 'provider_api_check\t%s\n' "${provider_api_check:-0}"
+printf 'artifact_check\t%s\n' "${artifact_check:-0}"
+printf 'code_path_check\t%s\n' "${code_path_check:-0}"
+printf 'disproved_theory_recorded\t%s\n' "${disproved_theory_recorded:-0}"
+if [[ -n "${rewards_provider_context_note:-}" ]]; then
+  printf 'note\t%s\n' "$rewards_provider_context_note"
+fi
+if [[ -n "${provider_api_evidence_output:-}" ]]; then
+  printf 'provider_api_evidence_output\t%s\n' "$provider_api_evidence_output"
+fi
+if [[ -n "${artifact_evidence_output:-}" ]]; then
+  printf 'artifact_evidence_output\t%s\n' "$artifact_evidence_output"
+fi
+if [[ -n "${code_path_evidence_output:-}" ]]; then
+  printf 'code_path_evidence_output\t%s\n' "$code_path_evidence_output"
+fi
+if [[ -n "${disproved_theory_evidence_output:-}" ]]; then
+  printf 'disproved_theory_evidence_output\t%s\n' "$disproved_theory_evidence_output"
+fi
+
 section "rca_result"
 printf 'status\t%s\n' "$rca_result_status"
 printf 'source\t%s\n' "$rca_result_source"
@@ -3703,6 +3888,7 @@ printf 'review_rounds\t%s\n' "$rca_review_rounds"
 printf 'summary\t%s\n' "$rca_summary"
 printf 'root_cause\t%s\n' "$rca_root_cause"
 printf 'degradation_note\t%s\n' "${rca_degradation_note:-none}"
+printf 'cache_write_error\t%s\n' "${rca_cache_write_error:-none}"
 printf 'evidence_gap_status\t%s\n' "${evidence_gap_status:-disabled}"
 if [[ -n "${evidence_gap_json:-}" ]]; then
   printf 'evidence_gap_json\t%s\n' "$evidence_gap_json"
