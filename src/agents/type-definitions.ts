@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -73,7 +74,7 @@ export async function loadTypeDefinitions(params: {
   let totalSize = 0;
 
   const scanDir = async (dirPath: string, relativeBase: string): Promise<void> => {
-    let entries: fs.Dirent[];
+    let entries: Dirent[];
     try {
       entries = await fs.readdir(dirPath, { withFileTypes: true });
     } catch {
