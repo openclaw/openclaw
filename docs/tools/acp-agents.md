@@ -160,7 +160,7 @@ When a specific peer binding and a catch-all binding both match, the specific pe
 
 Use `acp.defaultChannels` to make all conversations on a channel use ACP automatically. No `bindings[]` entries needed. Each conversation gets its own isolated ACP session.
 
-This lets you reuse your existing Claude Code or Codex subscription as the core agent engine, replacing the built-in PI agent with a single config change.
+This lets you reuse your existing Claude Code or Codex subscription as the agent engine with a single config change.
 
 **CLI (one command):**
 
