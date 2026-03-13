@@ -25,11 +25,38 @@ export const OPENAI_CODEX_TEMPLATE_MODEL = {
   maxTokens: 128000,
 };
 
+export const OPENAI_CODEX_53_TEMPLATE_MODEL = {
+  ...OPENAI_CODEX_TEMPLATE_MODEL,
+  id: "gpt-5.3-codex",
+  name: "GPT-5.3 Codex",
+};
+
+export const OPENAI_TEMPLATE_MODEL = {
+  id: "gpt-5.2",
+  name: "GPT-5.2",
+  provider: "openai",
+  api: "openai-responses",
+  baseUrl: "https://api.openai.com/v1",
+  reasoning: true,
+  input: ["text", "image"] as const,
+  cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+  contextWindow: 400000,
+  maxTokens: 128000,
+};
+
 export function mockOpenAICodexTemplateModel(): void {
   mockDiscoveredModel({
     provider: "openai-codex",
     modelId: "gpt-5.2-codex",
     templateModel: OPENAI_CODEX_TEMPLATE_MODEL,
+  });
+}
+
+export function mockOpenAICodex53TemplateModel(): void {
+  mockDiscoveredModel({
+    provider: "openai-codex",
+    modelId: "gpt-5.3-codex",
+    templateModel: OPENAI_CODEX_53_TEMPLATE_MODEL,
   });
 }
 
@@ -55,6 +82,28 @@ export function buildOpenAICodexForwardCompatExpectation(
       : OPENAI_CODEX_TEMPLATE_MODEL.cost,
     contextWindow: isGpt54 ? 1_050_000 : isSpark ? 128_000 : 272000,
     maxTokens: 128000,
+  };
+}
+
+export function mockOpenAITemplateModel(): void {
+  mockDiscoveredModel({
+    provider: "openai",
+    modelId: "gpt-5.2",
+    templateModel: OPENAI_TEMPLATE_MODEL,
+  });
+}
+
+export function buildOpenAIForwardCompatExpectation(
+  id: string,
+): Partial<typeof OPENAI_TEMPLATE_MODEL> & { provider: string; id: string } {
+  return {
+    provider: "openai",
+    id,
+    api: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: true,
+    contextWindow: 1_050_000,
+    maxTokens: 128_000,
   };
 }
 

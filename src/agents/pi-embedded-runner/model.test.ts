@@ -8,9 +8,11 @@ vi.mock("../pi-model-discovery.js", () => ({
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildInlineProviderModels, resolveModel } from "./model.js";
 import {
+  buildOpenAIForwardCompatExpectation,
   buildOpenAICodexForwardCompatExpectation,
   makeModel,
   mockDiscoveredModel,
+  mockOpenAITemplateModel,
   mockOpenAICodexTemplateModel,
   resetMockDiscoverModels,
 } from "./model.test-harness.js";
@@ -354,6 +356,69 @@ describe("resolveModel", () => {
 
     expect(result.model?.contextWindow).toBe(262144);
     expect(result.model?.maxTokens).toBe(32768);
+  });
+
+  it("builds an openai forward-compat fallback for gpt-5.4", () => {
+    mockOpenAITemplateModel();
+
+    expectResolvedForwardCompatFallback({
+      provider: "openai",
+      id: "gpt-5.4",
+      expectedModel: buildOpenAIForwardCompatExpectation("gpt-5.4"),
+    });
+  });
+
+  it("builds an openai-codex forward-compat fallback for gpt-5.4", () => {
+    mockOpenAICodexTemplateModel();
+
+    expectResolvedForwardCompatFallback({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      expectedModel: buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+    });
+  });
+
+  it("builds an openai forward-compat fallback for gpt-5.4-pro", () => {
+    mockOpenAITemplateModel();
+
+    expectResolvedForwardCompatFallback({
+      provider: "openai",
+      id: "gpt-5.4-pro",
+      expectedModel: buildOpenAIForwardCompatExpectation("gpt-5.4-pro"),
+    });
+  });
+
+  it("preserves configured openai baseUrl for gpt-5.4 forward-compat fallbacks", () => {
+    mockOpenAITemplateModel();
+
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://proxy.example.com/v1",
+            api: "openai-responses",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("openai", "gpt-5.4", "/tmp/agent", cfg);
+    expect(result.error).toBeUndefined();
+    expect(result.model?.baseUrl).toBe("https://proxy.example.com/v1");
+  });
+
+  it("uses GPT-5.4 Pro pricing even when cloning an older openai template", () => {
+    mockOpenAITemplateModel();
+
+    const result = resolveModel("openai", "gpt-5.4-pro", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model?.cost).toEqual({
+      input: 30,
+      output: 180,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
   });
 
   it("propagates reasoning from matching configured fallback model", () => {
