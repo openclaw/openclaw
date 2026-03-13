@@ -783,7 +783,7 @@ export async function handleOpenResponsesHttpRequest(
           });
           closed = true;
           unsubscribe();
-          writeSseEvent(res, { type: "response.incompleted", response: incompleteResponse });
+          writeSseEvent(res, { type: "response.incomplete", response: incompleteResponse });
           writeDone(res);
           res.end();
           return;
