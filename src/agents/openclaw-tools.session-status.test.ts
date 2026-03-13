@@ -115,6 +115,50 @@ function resetSessionStore(store: Record<string, unknown>) {
   mockConfig = createMockConfig();
 }
 
+function installSandboxedSessionStatusConfig() {
+  mockConfig = {
+    session: { mainKey: "main", scope: "per-sender" },
+    tools: {
+      sessions: { visibility: "all" },
+      agentToAgent: { enabled: true, allow: ["*"] },
+    },
+    agents: {
+      defaults: {
+        model: { primary: "anthropic/claude-opus-4-5" },
+        models: {},
+        sandbox: { sessionToolsVisibility: "spawned" },
+      },
+    },
+  };
+}
+
+function mockSpawnedSessionList(
+  resolveSessions: (spawnedBy: string | undefined) => Array<Record<string, unknown>>,
+) {
+  callGatewayMock.mockImplementation(async (opts: unknown) => {
+    const request = opts as { method?: string; params?: Record<string, unknown> };
+    if (request.method === "sessions.list") {
+      return { sessions: resolveSessions(request.params?.spawnedBy as string | undefined) };
+    }
+    return {};
+  });
+}
+
+function expectSpawnedSessionLookupCalls(spawnedBy: string) {
+  const expectedCall = {
+    method: "sessions.list",
+    params: {
+      includeGlobal: false,
+      includeUnknown: false,
+      limit: 500,
+      spawnedBy,
+    },
+  };
+  expect(callGatewayMock).toHaveBeenCalledTimes(2);
+  expect(callGatewayMock).toHaveBeenNthCalledWith(1, expectedCall);
+  expect(callGatewayMock).toHaveBeenNthCalledWith(2, expectedCall);
+}
+
 function getSessionStatusTool(agentSessionKey = "main", options?: { sandboxed?: boolean }) {
   const tool = createOpenClawTools({
     agentSessionKey,
@@ -242,27 +286,8 @@ describe("session_status tool", () => {
         updatedAt: 10,
       },
     });
-    mockConfig = {
-      session: { mainKey: "main", scope: "per-sender" },
-      tools: {
-        sessions: { visibility: "all" },
-        agentToAgent: { enabled: true, allow: ["*"] },
-      },
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-5" },
-          models: {},
-          sandbox: { sessionToolsVisibility: "spawned" },
-        },
-      },
-    };
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: Record<string, unknown> };
-      if (request.method === "sessions.list") {
-        return { sessions: [] };
-      }
-      return {};
-    });
+    installSandboxedSessionStatusConfig();
+    mockSpawnedSessionList(() => []);
 
     const tool = getSessionStatusTool("agent:main:subagent:child", {
       sandboxed: true,
@@ -284,25 +309,7 @@ describe("session_status tool", () => {
 
     expect(loadSessionStoreMock).not.toHaveBeenCalled();
     expect(updateSessionStoreMock).not.toHaveBeenCalled();
-    expect(callGatewayMock).toHaveBeenCalledTimes(2);
-    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
-      method: "sessions.list",
-      params: {
-        includeGlobal: false,
-        includeUnknown: false,
-        limit: 500,
-        spawnedBy: "agent:main:subagent:child",
-      },
-    });
-    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
-      method: "sessions.list",
-      params: {
-        includeGlobal: false,
-        includeUnknown: false,
-        limit: 500,
-        spawnedBy: "agent:main:subagent:child",
-      },
-    });
+    expectSpawnedSessionLookupCalls("agent:main:subagent:child");
   });
 
   it("keeps legacy main requester keys for sandboxed session tree checks", async () => {
@@ -316,30 +323,10 @@ describe("session_status tool", () => {
         updatedAt: 20,
       },
     });
-    mockConfig = {
-      session: { mainKey: "main", scope: "per-sender" },
-      tools: {
-        sessions: { visibility: "all" },
-        agentToAgent: { enabled: true, allow: ["*"] },
-      },
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-5" },
-          models: {},
-          sandbox: { sessionToolsVisibility: "spawned" },
-        },
-      },
-    };
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: Record<string, unknown> };
-      if (request.method === "sessions.list") {
-        return {
-          sessions:
-            request.params?.spawnedBy === "main" ? [{ key: "agent:main:subagent:child" }] : [],
-        };
-      }
-      return {};
-    });
+    installSandboxedSessionStatusConfig();
+    mockSpawnedSessionList((spawnedBy) =>
+      spawnedBy === "main" ? [{ key: "agent:main:subagent:child" }] : [],
+    );
 
     const tool = getSessionStatusTool("main", {
       sandboxed: true,
@@ -357,25 +344,7 @@ describe("session_status tool", () => {
     expect(childDetails.ok).toBe(true);
     expect(childDetails.sessionKey).toBe("agent:main:subagent:child");
 
-    expect(callGatewayMock).toHaveBeenCalledTimes(2);
-    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
-      method: "sessions.list",
-      params: {
-        includeGlobal: false,
-        includeUnknown: false,
-        limit: 500,
-        spawnedBy: "main",
-      },
-    });
-    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
-      method: "sessions.list",
-      params: {
-        includeGlobal: false,
-        includeUnknown: false,
-        limit: 500,
-        spawnedBy: "main",
-      },
-    });
+    expectSpawnedSessionLookupCalls("main");
   });
 
   it("scopes bare session keys to the requester agent", async () => {
