@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
+import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 
 describe("config schema", () => {
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchema>[0]>;
@@ -198,6 +199,51 @@ describe("config schema", () => {
     const tags = deriveTagsForPath("tools.web.fetch.timeoutSeconds");
     expect(tags).toContain("tools");
     expect(tags).toContain("performance");
+  });
+
+  it("accepts web fetch readability and firecrawl config in the runtime zod schema", () => {
+    const parsed = ToolsSchema.parse({
+      web: {
+        fetch: {
+          readability: true,
+          firecrawl: {
+            enabled: true,
+            apiKey: "firecrawl-test-key",
+            baseUrl: "https://api.firecrawl.dev",
+            onlyMainContent: true,
+            maxAgeMs: 60_000,
+            timeoutSeconds: 15,
+          },
+        },
+      },
+    });
+
+    expect(parsed?.web?.fetch?.readability).toBe(true);
+    expect(parsed?.web?.fetch).toMatchObject({
+      firecrawl: {
+        enabled: true,
+        apiKey: "firecrawl-test-key",
+        baseUrl: "https://api.firecrawl.dev",
+        onlyMainContent: true,
+        maxAgeMs: 60_000,
+        timeoutSeconds: 15,
+      },
+    });
+  });
+
+  it("rejects unknown keys inside web fetch firecrawl config", () => {
+    expect(() =>
+      ToolsSchema.parse({
+        web: {
+          fetch: {
+            firecrawl: {
+              enabled: true,
+              nope: true,
+            },
+          },
+        },
+      }),
+    ).toThrow();
   });
 
   it("keeps tags in the allowed taxonomy", () => {
