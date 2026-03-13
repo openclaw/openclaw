@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { resolveUserPath } from "../utils.js";
 import { resolvePluginInstallDir } from "./install.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
@@ -66,6 +67,13 @@ export function removePluginFromConfig(
   cfg: OpenClawConfig,
   pluginId: string,
 ): { config: OpenClawConfig; actions: Omit<UninstallActions, "directory"> } {
+  const pathsEqual = (left: string | undefined, right: string | undefined): boolean => {
+    if (!left || !right) {
+      return false;
+    }
+    return resolveUserPath(left) === resolveUserPath(right);
+  };
+
   const actions: Omit<UninstallActions, "directory"> = {
     entry: false,
     install: false,
@@ -108,8 +116,8 @@ export function removePluginFromConfig(
   if (installRecord?.source === "path" && installRecord.sourcePath) {
     const sourcePath = installRecord.sourcePath;
     const loadPaths = load?.paths;
-    if (Array.isArray(loadPaths) && loadPaths.includes(sourcePath)) {
-      const nextLoadPaths = loadPaths.filter((p) => p !== sourcePath);
+    if (Array.isArray(loadPaths) && loadPaths.some((entry) => pathsEqual(entry, sourcePath))) {
+      const nextLoadPaths = loadPaths.filter((entry) => !pathsEqual(entry, sourcePath));
       load = nextLoadPaths.length > 0 ? { ...load, paths: nextLoadPaths } : undefined;
       actions.loadPath = true;
     }

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -35,6 +36,8 @@ const mocks = vi.hoisted(() => {
     ),
     resolveStateDir: vi.fn(() => "/tmp/state"),
     buildPluginStatusReport: vi.fn(() => ({ plugins: [], diagnostics: [], workspaceDir: "/tmp" })),
+    installPluginFromNpmSpec: vi.fn(),
+    installPluginFromPath: vi.fn(),
     theme: {
       muted: (s: string) => s,
       heading: (s: string) => s,
@@ -89,8 +92,8 @@ vi.mock("../plugins/enable.js", () => ({
 }));
 
 vi.mock("../plugins/install.js", () => ({
-  installPluginFromNpmSpec: vi.fn(),
-  installPluginFromPath: vi.fn(),
+  installPluginFromNpmSpec: mocks.installPluginFromNpmSpec,
+  installPluginFromPath: mocks.installPluginFromPath,
 }));
 
 vi.mock("../plugins/installs.js", () => ({
@@ -192,5 +195,43 @@ describe("plugins-cli config writes", () => {
     expect(mocks.runtime.log).toHaveBeenCalledWith(
       'Plugin "demo" could not be enabled (blocked by denylist).',
     );
+  });
+
+  it("uses readConfigFileSnapshotForWrite + write options for install --link", async () => {
+    const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(true);
+    try {
+      mocks.installPluginFromPath.mockResolvedValueOnce({
+        ok: true,
+        pluginId: "demo",
+        version: "1.2.3",
+      });
+
+      const program = new Command();
+      registerPluginsCli(program);
+
+      await program.parseAsync(["plugins", "install", "--link", "/some/path"], {
+        from: "user",
+      });
+
+      expect(mocks.readConfigFileSnapshotForWrite).toHaveBeenCalledTimes(1);
+      expect(mocks.loadConfig).not.toHaveBeenCalled();
+      expect(mocks.installPluginFromPath).toHaveBeenCalledWith({
+        path: "/some/path",
+        dryRun: true,
+      });
+      expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channels: { telegram: { dmPolicy: "open" } },
+          plugins: expect.objectContaining({
+            load: {
+              paths: ["/some/path"],
+            },
+          }),
+        }),
+        mocks.writeOptions,
+      );
+    } finally {
+      existsSpy.mockRestore();
+    }
   });
 });

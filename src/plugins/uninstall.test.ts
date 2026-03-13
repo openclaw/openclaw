@@ -193,6 +193,39 @@ describe("removePluginFromConfig", () => {
     expect(actions.loadPath).toBe(true);
   });
 
+  it("removes linked path from load.paths when sourcePath uses a different spelling", () => {
+    const homeDir = path.join(os.tmpdir(), "openclaw-uninstall-home");
+    const config: OpenClawConfig = {
+      plugins: {
+        installs: {
+          "my-plugin": {
+            source: "path",
+            sourcePath: "~/plugins/my-plugin",
+            installPath: "~/plugins/my-plugin",
+          },
+        },
+        load: {
+          paths: [path.join(homeDir, "plugins", "my-plugin"), "/other/path"],
+        },
+      },
+    };
+
+    const previousHome = process.env.HOME;
+    process.env.HOME = homeDir;
+    try {
+      const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
+
+      expect(result.plugins?.load?.paths).toEqual(["/other/path"]);
+      expect(actions.loadPath).toBe(true);
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+    }
+  });
+
   it("clears memory slot when uninstalling active memory plugin", () => {
     const config: OpenClawConfig = {
       plugins: {

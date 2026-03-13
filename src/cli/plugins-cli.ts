@@ -162,6 +162,11 @@ async function loadPluginsConfigForWriteOrExit(): Promise<{
     writeOptions,
   };
 }
+
+type PluginsConfigWriteOptions = Awaited<
+  ReturnType<typeof readConfigFileSnapshotForWrite>
+>["writeOptions"];
+
 function logSlotWarnings(warnings: string[]) {
   if (warnings.length === 0) {
     return;
@@ -173,6 +178,7 @@ function logSlotWarnings(warnings: string[]) {
 
 async function installBundledPluginSource(params: {
   config: OpenClawConfig;
+  writeOptions: PluginsConfigWriteOptions;
   rawSpec: string;
   bundledSource: BundledPluginSource;
   warning: string;
@@ -207,7 +213,7 @@ async function installBundledPluginSource(params: {
   });
   const slotResult = applySlotSelectionForPlugin(next, params.bundledSource.pluginId);
   next = slotResult.config;
-  await writeConfigFile(next);
+  await writeConfigFile(next, params.writeOptions);
   logSlotWarnings(slotResult.warnings);
   defaultRuntime.log(theme.warn(params.warning));
   defaultRuntime.log(`Installed plugin: ${params.bundledSource.pluginId}`);
@@ -226,7 +232,7 @@ async function runPluginInstallCommand(params: {
   }
   const normalized = fileSpec && fileSpec.ok ? fileSpec.path : raw;
   const resolved = resolveUserPath(normalized);
-  const cfg = loadConfig();
+  const { config: cfg, writeOptions } = await loadPluginsConfigForWriteOrExit();
 
   if (fs.existsSync(resolved)) {
     if (opts.link) {
@@ -260,7 +266,7 @@ async function runPluginInstallCommand(params: {
       });
       const slotResult = applySlotSelectionForPlugin(next, probe.pluginId);
       next = slotResult.config;
-      await writeConfigFile(next);
+      await writeConfigFile(next, writeOptions);
       logSlotWarnings(slotResult.warnings);
       defaultRuntime.log(`Linked plugin path: ${shortenHomePath(resolved)}`);
       defaultRuntime.log(`Restart the gateway to load plugins.`);
@@ -290,7 +296,7 @@ async function runPluginInstallCommand(params: {
     });
     const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
     next = slotResult.config;
-    await writeConfigFile(next);
+    await writeConfigFile(next, writeOptions);
     logSlotWarnings(slotResult.warnings);
     defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
     defaultRuntime.log(`Restart the gateway to load plugins.`);
@@ -325,6 +331,7 @@ async function runPluginInstallCommand(params: {
   if (bundledPreNpmPlan) {
     await installBundledPluginSource({
       config: cfg,
+      writeOptions,
       rawSpec: raw,
       bundledSource: bundledPreNpmPlan.bundledSource,
       warning: bundledPreNpmPlan.warning,
@@ -349,6 +356,7 @@ async function runPluginInstallCommand(params: {
 
     await installBundledPluginSource({
       config: cfg,
+      writeOptions,
       rawSpec: raw,
       bundledSource: bundledFallbackPlan.bundledSource,
       warning: bundledFallbackPlan.warning,
@@ -374,7 +382,7 @@ async function runPluginInstallCommand(params: {
   });
   const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
   next = slotResult.config;
-  await writeConfigFile(next);
+  await writeConfigFile(next, writeOptions);
   logSlotWarnings(slotResult.warnings);
   defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
   defaultRuntime.log(`Restart the gateway to load plugins.`);
