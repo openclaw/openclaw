@@ -107,4 +107,44 @@ describe("fetchCodexUsage", () => {
       { label: "Week", usedPercent: 20, resetAt: weeklyLikeSecondaryReset * 1000 },
     ]);
   });
+
+  it("labels short secondary windows in hours", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        rate_limit: {
+          secondary_window: {
+            limit_window_seconds: 21_600,
+            used_percent: 11,
+          },
+        },
+      }),
+    );
+
+    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
+    expect(result.windows).toEqual([{ label: "6h", usedPercent: 11, resetAt: undefined }]);
+  });
+
+  it("builds a balance-only plan when credits exist without a plan type", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        credits: { balance: "7.5" },
+      }),
+    );
+
+    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
+    expect(result.plan).toBe("$7.50");
+    expect(result.windows).toEqual([]);
+  });
+
+  it("falls back invalid credit strings to a zero balance", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        plan_type: "Plus",
+        credits: { balance: "not-a-number" },
+      }),
+    );
+
+    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
+    expect(result.plan).toBe("Plus ($0.00)");
+  });
 });
