@@ -13,8 +13,8 @@ import { resolveUserPath } from "../utils.js";
 import { registerPluginCommand } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
-import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { registerPluginInteractiveHandler } from "./interactive.js";
+import { normalizeRegisteredProvider } from "./provider-validation.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { defaultSlotIdForKey } from "./slots.js";
 import {
