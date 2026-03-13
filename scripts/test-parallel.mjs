@@ -104,11 +104,11 @@ const hostMemoryGiB = Math.floor(os.totalmem() / 1024 ** 3);
 const highMemLocalHost = !isCI && hostMemoryGiB >= 96;
 const lowMemLocalHost = !isCI && hostMemoryGiB < 64;
 const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "", 10);
-// vmForks is a big win for transform/import heavy suites, but Node 24+
-// regressed with Vitest's vm runtime in this repo, and low-memory local hosts
-// are more likely to hit per-worker V8 heap ceilings. Keep it opt-out via
-// OPENCLAW_TEST_VM_FORKS=0, and let users force-enable with =1.
-const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor < 24 : true;
+// vmForks is a big win for transform/import heavy suites. Node 24 is stable again
+// for the default unit-fast lane after moving the known flaky files to fork-only
+// isolation, but Node 25+ still falls back to process forks until re-validated.
+// Keep it opt-out via OPENCLAW_TEST_VM_FORKS=0, and let users force-enable with =1.
+const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor <= 24 : true;
 const useVmForks =
   process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
   (process.env.OPENCLAW_TEST_VM_FORKS !== "0" && !isWindows && supportsVmForks && !lowMemLocalHost);
