@@ -23,6 +23,18 @@ vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
 }));
 
+const hookMocks = vi.hoisted(() => ({
+  hasHooks: vi.fn(),
+  runBeforeAgentRun: vi.fn(),
+}));
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: vi.fn(() => ({
+    hasHooks: hookMocks.hasHooks,
+    runBeforeAgentRun: hookMocks.runBeforeAgentRun,
+  })),
+}));
+
 vi.mock("../../process/command-queue.js", () => ({
   clearCommandLane: vi.fn().mockReturnValue(0),
   getQueueSize: vi.fn().mockReturnValue(0),
@@ -159,6 +171,8 @@ function baseParams(
 describe("runPreparedReply media-only handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    hookMocks.hasHooks.mockReturnValue(false);
+    hookMocks.runBeforeAgentRun.mockReset();
   });
 
   it("allows media-only prompts and preserves thread context in queued followups", async () => {
@@ -279,6 +293,75 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
     expect(call?.followupRun.run.messageProvider).toBe("webchat");
+  });
+
+  it("passes the final prepared prompt to before_agent_run", async () => {
+    hookMocks.hasHooks.mockReturnValue(true);
+    hookMocks.runBeforeAgentRun.mockResolvedValue({ skip: false });
+
+    await runPreparedReply(
+      baseParams({
+        sessionCtx: {
+          Body: "Use the skill",
+          BodyStripped: "Use the skill",
+          Provider: "slack",
+          ChatType: "group",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          UntrustedContext: ["screen this too"],
+        },
+        beforeAgentRunContext: {
+          agentId: "default",
+          sessionKey: "session-key",
+          sessionId: "session-id",
+          workspaceDir: "/tmp/workspace",
+          trigger: "user",
+          channelId: "slack",
+          messageProvider: "slack",
+        },
+      }),
+    );
+
+    expect(hookMocks.runBeforeAgentRun).toHaveBeenCalledWith(
+      {
+        prompt: expect.stringContaining("Use the skill"),
+      },
+      expect.objectContaining({
+        agentId: "default",
+        trigger: "user",
+      }),
+    );
+    expect(hookMocks.runBeforeAgentRun.mock.calls[0]?.[0]?.prompt).toContain("screen this too");
+  });
+
+  it("skips the default run when before_agent_run vetoes the prepared prompt", async () => {
+    hookMocks.hasHooks.mockReturnValue(true);
+    hookMocks.runBeforeAgentRun.mockResolvedValue({ skip: true, skipReason: "screened-out" });
+
+    const result = await runPreparedReply(
+      baseParams({
+        sessionCtx: {
+          Body: "hello",
+          BodyStripped: "hello",
+          Provider: "slack",
+          ChatType: "group",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+        },
+        beforeAgentRunContext: {
+          agentId: "default",
+          sessionKey: "session-key",
+          sessionId: "session-id",
+          workspaceDir: "/tmp/workspace",
+          trigger: "user",
+          channelId: "slack",
+          messageProvider: "slack",
+        },
+      }),
+    );
+
+    expect(result).toBeUndefined();
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
   });
 
   it("prefers Provider over Surface when origin channel is missing", async () => {

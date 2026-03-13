@@ -11,7 +11,6 @@ import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookAgentContext } from "../../plugins/types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
@@ -376,31 +375,6 @@ export async function getReplyFromConfig(
     workspaceDir,
   });
 
-  const hookRunner = getGlobalHookRunner();
-  if (hookRunner?.hasHooks("before_agent_run")) {
-    const beforeAgentRunResult = await hookRunner.runBeforeAgentRun(
-      { prompt: cleanedBody },
-      {
-        agentId,
-        sessionKey,
-        sessionId,
-        workspaceDir,
-        messageProvider: resolveBeforeAgentRunMessageProvider(finalized, sessionEntry),
-        trigger: resolveBeforeAgentRunTrigger(opts),
-        channelId:
-          groupResolution?.channel ??
-          sessionEntry.channel ??
-          sessionEntry.origin?.provider ??
-          (typeof ctx.OriginatingChannel === "string" ? ctx.OriginatingChannel : undefined) ??
-          ctx.Provider,
-      },
-    );
-    if (beforeAgentRunResult?.skip) {
-      typing.cleanup();
-      return undefined;
-    }
-  }
-
   return runPreparedReply({
     ctx,
     sessionCtx,
@@ -445,5 +419,19 @@ export async function getReplyFromConfig(
     storePath,
     workspaceDir,
     abortedLastRun,
+    beforeAgentRunContext: {
+      agentId,
+      sessionKey,
+      sessionId,
+      workspaceDir,
+      messageProvider: resolveBeforeAgentRunMessageProvider(finalized, sessionEntry),
+      trigger: resolveBeforeAgentRunTrigger(opts),
+      channelId:
+        groupResolution?.channel ??
+        sessionEntry.channel ??
+        sessionEntry.origin?.provider ??
+        (typeof ctx.OriginatingChannel === "string" ? ctx.OriginatingChannel : undefined) ??
+        ctx.Provider,
+    },
   });
 }

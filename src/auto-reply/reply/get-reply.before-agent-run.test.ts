@@ -7,8 +7,6 @@ const mocks = vi.hoisted(() => ({
   initSessionState: vi.fn(),
   runPreparedReply: vi.fn(async (_args?: unknown) => ({ text: "ran" })),
   typingCleanup: vi.fn(),
-  hasHooks: vi.fn(),
-  runBeforeAgentRun: vi.fn(),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -38,12 +36,6 @@ vi.mock("../../link-understanding/apply.js", () => ({
 }));
 vi.mock("../../media-understanding/apply.js", () => ({
   applyMediaUnderstanding: vi.fn(async () => undefined),
-}));
-vi.mock("../../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: vi.fn(() => ({
-    hasHooks: mocks.hasHooks,
-    runBeforeAgentRun: mocks.runBeforeAgentRun,
-  })),
 }));
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: { log: vi.fn() },
@@ -175,8 +167,6 @@ describe("getReplyFromConfig before_agent_run hook", () => {
     mocks.initSessionState.mockReset();
     mocks.runPreparedReply.mockReset();
     mocks.typingCleanup.mockReset();
-    mocks.hasHooks.mockReset();
-    mocks.runBeforeAgentRun.mockReset();
 
     mocks.runPreparedReply.mockResolvedValue({ text: "ran" });
     mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult());
@@ -205,32 +195,27 @@ describe("getReplyFromConfig before_agent_run hook", () => {
     });
   });
 
-  it("skips the default agent run when a hook vetoes it", async () => {
-    mocks.hasHooks.mockReturnValue(true);
-    mocks.runBeforeAgentRun.mockResolvedValue({ skip: true, skipReason: "screened-out" });
-
+  it("passes before_agent_run context into the prepared reply stage", async () => {
     const result = await getReplyFromConfig(buildCtx(), undefined, {});
 
-    expect(result).toBeUndefined();
-    expect(mocks.runBeforeAgentRun).toHaveBeenCalledWith(
-      { prompt: "hello team" },
+    expect(result).toEqual({ text: "ran" });
+    expect(mocks.runPreparedReply).toHaveBeenCalledWith(
       expect.objectContaining({
+        beforeAgentRunContext: expect.objectContaining({
+          agentId: "main",
+          sessionKey: "agent:main:telegram:-100123",
+          sessionId: "session-1",
+          workspaceDir: "/tmp/workspace",
+          messageProvider: "telegram",
+          channelId: "telegram",
+          trigger: "user",
+        }),
         agentId: "main",
-        sessionKey: "agent:main:telegram:-100123",
-        sessionId: "session-1",
-        workspaceDir: "/tmp/workspace",
-        messageProvider: "telegram",
-        channelId: "telegram",
       }),
     );
-    expect(mocks.typingCleanup).toHaveBeenCalledTimes(1);
-    expect(mocks.runPreparedReply).not.toHaveBeenCalled();
   });
 
-  it("continues into the default agent run when no hook skips it", async () => {
-    mocks.hasHooks.mockReturnValue(true);
-    mocks.runBeforeAgentRun.mockResolvedValue({ skip: false });
-
+  it("continues into the default agent run", async () => {
     const result = await getReplyFromConfig(buildCtx(), undefined, {});
 
     expect(result).toEqual({ text: "ran" });
@@ -239,16 +224,14 @@ describe("getReplyFromConfig before_agent_run hook", () => {
   });
 
   it("passes heartbeat trigger context for heartbeat runs", async () => {
-    mocks.hasHooks.mockReturnValue(true);
-    mocks.runBeforeAgentRun.mockResolvedValue({ skip: false });
-
     await getReplyFromConfig(buildCtx(), { isHeartbeat: true }, {});
 
-    expect(mocks.runBeforeAgentRun).toHaveBeenCalledWith(
-      { prompt: "hello team" },
+    expect(mocks.runPreparedReply).toHaveBeenCalledWith(
       expect.objectContaining({
-        messageProvider: "telegram",
-        trigger: "heartbeat",
+        beforeAgentRunContext: expect.objectContaining({
+          messageProvider: "telegram",
+          trigger: "heartbeat",
+        }),
       }),
     );
   });

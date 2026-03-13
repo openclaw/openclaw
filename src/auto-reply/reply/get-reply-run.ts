@@ -17,6 +17,8 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { PluginHookAgentContext } from "../../plugins/types.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
@@ -177,6 +179,7 @@ type RunPreparedReplyParams = {
   storePath?: string;
   workspaceDir: string;
   abortedLastRun: boolean;
+  beforeAgentRunContext?: PluginHookAgentContext;
 };
 
 export async function runPreparedReply(
@@ -219,6 +222,7 @@ export async function runPreparedReply(
     storePath,
     workspaceDir,
     sessionStore,
+    beforeAgentRunContext,
   } = params;
   let {
     sessionEntry,
@@ -533,6 +537,18 @@ export async function runPreparedReply(
       ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
     },
   };
+
+  const hookRunner = getGlobalHookRunner();
+  if (beforeAgentRunContext && hookRunner?.hasHooks("before_agent_run")) {
+    const beforeAgentRunResult = await hookRunner.runBeforeAgentRun(
+      { prompt: prefixedCommandBody },
+      beforeAgentRunContext,
+    );
+    if (beforeAgentRunResult?.skip) {
+      typing.cleanup();
+      return undefined;
+    }
+  }
 
   return runReplyAgent({
     commandBody: prefixedCommandBody,
