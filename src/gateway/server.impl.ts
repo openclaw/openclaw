@@ -47,6 +47,7 @@ import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/di
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
@@ -478,7 +479,6 @@ export async function startGatewayServer(
           coreGatewayHandlers,
           baseMethods,
         });
-  let pluginRegistryCurrent = initialPluginRegistry;
   const channelLogs = Object.fromEntries(
     listChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
@@ -618,7 +618,7 @@ export async function startGatewayServer(
     gatewayTls,
     hooksConfig: () => hooksConfig,
     getHookClientIpConfig: () => hookClientIpConfig,
-    getPluginRegistry: () => pluginRegistryCurrent,
+    getPluginRegistry: () => getActivePluginRegistry() ?? initialPluginRegistry,
     deps,
     canvasRuntime,
     canvasHostEnabled,
