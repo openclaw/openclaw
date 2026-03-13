@@ -340,7 +340,7 @@ export function applyJobResult(
     deliveryStatus === "not-delivered" && result.error ? result.error : undefined;
   job.updatedAtMs = result.endedAt;
 
-  // Record delivered output for dedup context (only when enabled and delivered).
+  // Record delivered output for output history (only when enabled and delivered).
   if (
     result.delivered &&
     result.outputText?.trim() &&
@@ -349,7 +349,7 @@ export function applyJobResult(
   ) {
     const outputs = job.state.recentOutputs ?? [];
     outputs.push({
-      text: truncateOutputForHistory(result.outputText),
+      text: truncateOutputForHistory(result.outputText.trim()),
       timestamp: result.endedAt,
     });
     if (outputs.length > OUTPUT_HISTORY_MAX_ENTRIES) {
