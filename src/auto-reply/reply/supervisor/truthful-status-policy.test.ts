@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { decideTruthfulEarlyStatus } from "./truthful-status-policy.js";
+import {
+  decideTruthfulEarlyStatus,
+  recommendTruthfulEarlyStatusFromLatency,
+} from "./truthful-status-policy.js";
 
 describe("decideTruthfulEarlyStatus", () => {
   it("allows interrupt for active externally routable runs", () => {
@@ -81,5 +84,38 @@ describe("decideTruthfulEarlyStatus", () => {
         isStreaming: true,
       }).reason,
     ).toBe("heartbeat_runs_do_not_emit_user_status");
+  });
+
+  it("prioritizes early status work when visible feedback lags behind runtime start", () => {
+    expect(
+      recommendTruthfulEarlyStatusFromLatency({
+        dominantSegments: [{ segment: "runToFirstVisible", count: 4 }],
+      }),
+    ).toEqual({
+      level: "prioritize",
+      reason: "runtime_started_but_visible_feedback_arrives_late",
+    });
+  });
+
+  it("deprioritizes early status when the bottleneck is after first visible output", () => {
+    expect(
+      recommendTruthfulEarlyStatusFromLatency({
+        dominantSegments: [{ segment: "firstVisibleToFinal", count: 3 }],
+      }),
+    ).toEqual({
+      level: "deprioritize",
+      reason: "users_already_have_visible_feedback_so_extra_status_would_be_noise",
+    });
+  });
+
+  it("keeps pre-visible orchestration bottlenecks in observe mode", () => {
+    expect(
+      recommendTruthfulEarlyStatusFromLatency({
+        dominantSegments: [{ segment: "runToFirstEvent", count: 2 }],
+      }),
+    ).toEqual({
+      level: "observe",
+      reason: "latency_is_dominant_before_visible_feedback_is_semantically_decidable",
+    });
   });
 });

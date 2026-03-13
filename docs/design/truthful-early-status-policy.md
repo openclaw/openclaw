@@ -79,6 +79,26 @@ Interpretation:
 - If dominant bottlenecks cluster before runtime start, prefer runtime or queue fixes over more
   user-facing messages.
 
+This creates two distinct decisions:
+
+- semantic allowance
+  Is a truthful early status allowed at all for this kind of active-run transition?
+
+- optimization priority
+  Given recent latency patterns, should early truthful status be treated as a likely product win,
+  or should we fix a different stage first?
+
+Current recommendation mapping:
+
+- `runToFirstVisible` / `firstEventToFirstVisible`
+  Prioritize early truthful status work.
+
+- `dispatchToQueue` / `queueToRun` / `acpEnsureToRun` / `runToFirstEvent`
+  Observe and improve runtime or queue behavior first.
+
+- `firstVisibleToFinal`
+  Deprioritize additional early status. Users already got uncertainty reduction.
+
 ## Current Runtime Hook
 
 The first runtime consumer of this policy is active-run queue handling in `runReplyAgent(...)`.
