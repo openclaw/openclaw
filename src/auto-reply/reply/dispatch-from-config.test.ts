@@ -791,6 +791,45 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
+  it("marks routed fast-abort replies as first visible deliveries", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: true,
+      aborted: true,
+    });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:thread-1",
+      SessionKey: "agent:main:main",
+      Body: "/stop",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        diagnostics: { enabled: true },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver: vi.fn(async () => ({ text: "hi" }) as ReplyPayload),
+    });
+
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:thread-1",
+      }),
+    );
+    expect(diagnosticMocks.logMessageFirstVisible).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        sessionKey: "agent:main:main",
+        kind: "final",
+      }),
+    );
+  });
+
   it("routes ACP sessions through the runtime branch and streams block replies", async () => {
     setNoAbort();
     const runtime = createAcpRuntime([

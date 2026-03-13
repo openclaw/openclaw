@@ -388,6 +388,10 @@ export async function dispatchReplyFromConfig(params: {
     return true;
   };
 
+  const markRoutedVisibleDelivery = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
+    dispatcher.reportVisibleDelivery?.({ kind, payload });
+  };
+
   markProcessing();
 
   try {
@@ -413,6 +417,7 @@ export async function dispatchReplyFromConfig(params: {
         queuedFinal = result.ok;
         if (result.ok) {
           routedFinalCount += 1;
+          markRoutedVisibleDelivery("final", payload);
         }
         if (!result.ok) {
           logVerbose(
@@ -657,7 +662,7 @@ export async function dispatchReplyFromConfig(params: {
                 groupId,
               });
               if (result.ok) {
-                dispatcher.reportVisibleDelivery?.({ kind: "block", payload: ttsPayload });
+                markRoutedVisibleDelivery("block", ttsPayload);
               }
               return result.ok;
             } else {
@@ -782,7 +787,7 @@ export async function dispatchReplyFromConfig(params: {
         queuedFinal = result.ok || queuedFinal;
         if (result.ok) {
           routedFinalCount += 1;
-          dispatcher.reportVisibleDelivery?.({ kind: "final", payload: ttsReply });
+          markRoutedVisibleDelivery("final", ttsReply);
           if (turnLatencyId) {
             logTurnLatencyStage({
               turnLatencyId,
@@ -868,7 +873,7 @@ export async function dispatchReplyFromConfig(params: {
             queuedFinal = result.ok || queuedFinal;
             if (result.ok) {
               routedFinalCount += 1;
-              dispatcher.reportVisibleDelivery?.({ kind: "final", payload: ttsOnlyPayload });
+              markRoutedVisibleDelivery("final", ttsOnlyPayload);
             }
             if (!result.ok) {
               logVerbose(
