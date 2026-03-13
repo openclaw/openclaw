@@ -824,6 +824,54 @@ describe("runMessageAction sandboxed media validation", () => {
       await fs.rm(sandboxDir, { recursive: true, force: true });
     }
   });
+
+  it("accepts media as string[] for multiple attachments", async () => {
+    await withSandbox(async (sandboxDir) => {
+      const result = await runDrySend({
+        cfg: slackConfig,
+        actionParams: {
+          channel: "slack",
+          target: "#C12345678",
+          media: ["./a.png", "./b.png"],
+          message: "hello",
+        },
+        sandboxRoot: sandboxDir,
+      });
+
+      expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
+      // First media becomes mediaUrl for single-send compat
+      expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "a.png"));
+      // Full array available for multi-send
+      expect(result.sendResult?.mediaUrls).toEqual([
+        path.join(sandboxDir, "a.png"),
+        path.join(sandboxDir, "b.png"),
+      ]);
+    });
+  });
+
+  it("path fallback still works when media is not provided", async () => {
+    await withSandbox(async (sandboxDir) => {
+      const result = await runDrySend({
+        cfg: slackConfig,
+        actionParams: {
+          channel: "slack",
+          target: "#C12345678",
+          path: "./file.txt",
+          message: "",
+        },
+        sandboxRoot: sandboxDir,
+      });
+
+      expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
+      expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "file.txt"));
+    });
+  });
 });
 
 describe("runMessageAction media caption behavior", () => {
