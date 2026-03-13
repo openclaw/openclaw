@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -37,6 +38,26 @@ vi.mock("./system-events.js", () => ({
 
 const { deliverSessionMaintenanceWarning } = await import("./session-maintenance-warning.js");
 
+function createParams(
+  overrides: Partial<Parameters<typeof deliverSessionMaintenanceWarning>[0]> = {},
+): Parameters<typeof deliverSessionMaintenanceWarning>[0] {
+  const sessionKey = overrides.sessionKey ?? `agent:${randomUUID()}:main`;
+  return {
+    cfg: {},
+    sessionKey,
+    entry: {} as never,
+    warning: {
+      activeSessionKey: sessionKey,
+      pruneAfterMs: 1_000,
+      maxEntries: 100,
+      wouldPrune: true,
+      wouldCap: false,
+      ...(overrides.warning as object),
+    } as never,
+    ...overrides,
+  };
+}
+
 describe("deliverSessionMaintenanceWarning", () => {
   let prevVitest: string | undefined;
   let prevNodeEnv: string | undefined;
@@ -68,18 +89,9 @@ describe("deliverSessionMaintenanceWarning", () => {
   });
 
   it("forwards session context to outbound delivery", async () => {
-    await deliverSessionMaintenanceWarning({
-      cfg: {},
-      sessionKey: "agent:main:main",
-      entry: {} as never,
-      warning: {
-        activeSessionKey: "agent:main:main",
-        pruneAfterMs: 1_000,
-        maxEntries: 100,
-        wouldPrune: true,
-        wouldCap: false,
-      } as never,
-    });
+    const params = createParams({ sessionKey: "agent:main:main" });
+
+    await deliverSessionMaintenanceWarning(params);
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -89,5 +101,62 @@ describe("deliverSessionMaintenanceWarning", () => {
       }),
     );
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("suppresses duplicate warning contexts for the same session", async () => {
+    const params = createParams();
+
+    await deliverSessionMaintenanceWarning(params);
+    await deliverSessionMaintenanceWarning(params);
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to a system event when the last target is not deliverable", async () => {
+    mocks.resolveSessionDeliveryTarget.mockReturnValueOnce({
+      channel: "debug",
+      to: "+15550001",
+      accountId: "acct-1",
+      threadId: "thread-1",
+    });
+    mocks.isDeliverableMessageChannel.mockReturnValueOnce(false);
+
+    await deliverSessionMaintenanceWarning(
+      createParams({
+        warning: {
+          pruneAfterMs: 3_600_000,
+          maxEntries: 10,
+          wouldPrune: false,
+          wouldCap: true,
+        } as never,
+      }),
+    );
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining("most recent 10 sessions"),
+      expect.objectContaining({ sessionKey: expect.stringContaining("agent:") }),
+    );
+  });
+
+  it("skips warning delivery in test mode", async () => {
+    process.env.NODE_ENV = "test";
+
+    await deliverSessionMaintenanceWarning(createParams());
+
+    expect(mocks.resolveSessionDeliveryTarget).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("enqueues a system event when outbound delivery fails", async () => {
+    mocks.deliverOutboundPayloads.mockRejectedValueOnce(new Error("boom"));
+
+    await deliverSessionMaintenanceWarning(createParams());
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining("older than 1 second"),
+      expect.objectContaining({ sessionKey: expect.stringContaining("agent:") }),
+    );
   });
 });
