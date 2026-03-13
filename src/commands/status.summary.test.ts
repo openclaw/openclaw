@@ -68,6 +68,10 @@ vi.mock("../logging/diagnostic.js", () => ({
 }));
 
 vi.mock("../auto-reply/reply/supervisor/truthful-status-policy.js", () => ({
+  buildTruthfulEarlyStatusGuidance: vi.fn(() => ({
+    focus: "expand_active_run_status",
+    reason: "recent_candidates_are_primarily_waiting_on_latency_priority_rather_than_semantics",
+  })),
   recommendTruthfulEarlyStatusFromLatency: vi.fn(() => ({
     level: "prioritize",
     reason: "runtime_started_but_visible_feedback_arrives_late",
@@ -116,6 +120,10 @@ describe("getStatusSummary", () => {
       semanticGateCount: 1,
       latencyGateCount: 1,
       topReasons: [{ reason: "latency_priority_observe", count: 1 }],
+      guidance: {
+        focus: "expand_active_run_status",
+        reason: "recent_candidates_are_primarily_waiting_on_latency_priority_rather_than_semantics",
+      },
     });
   });
 });

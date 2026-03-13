@@ -20,6 +20,15 @@ export type TruthfulEarlyStatusRecommendation = {
   reason: string;
 };
 
+export type TruthfulEarlyStatusGuidance = {
+  focus:
+    | "expand_active_run_status"
+    | "tighten_semantic_contract"
+    | "optimize_other_bottlenecks"
+    | "observe_more_samples";
+  reason: string;
+};
+
 export type TruthfulEarlyStatusActivation = {
   shouldEmit: boolean;
   reason: string;
@@ -171,5 +180,61 @@ export function evaluateTruthfulEarlyStatusActivation(params: {
     reason: `latency_priority_${recommendation.level}`,
     decision,
     recommendation,
+  };
+}
+
+export function buildTruthfulEarlyStatusGuidance(params: {
+  recommendation: TruthfulEarlyStatusRecommendation;
+  summary?: {
+    sampleCount: number;
+    eligibleCount: number;
+    semanticGateCount: number;
+    latencyGateCount: number;
+  };
+}): TruthfulEarlyStatusGuidance {
+  const summary = params.summary;
+  if (!summary || summary.sampleCount < 3) {
+    return {
+      focus: "observe_more_samples",
+      reason: "not_enough_recent_policy_samples_to_change_behavior_confidently",
+    };
+  }
+
+  if (params.recommendation.level === "deprioritize") {
+    return {
+      focus: "optimize_other_bottlenecks",
+      reason:
+        "first_visible_feedback_already_arrives_early_enough_that_extra_status_would_be_noise",
+    };
+  }
+
+  if (params.recommendation.level === "observe") {
+    return {
+      focus: "optimize_other_bottlenecks",
+      reason: "dominant_latency_is_not_currently_in_the_visible_silence_window",
+    };
+  }
+
+  if (
+    summary.semanticGateCount > summary.latencyGateCount &&
+    summary.semanticGateCount >= summary.eligibleCount
+  ) {
+    return {
+      focus: "tighten_semantic_contract",
+      reason: "most_recent_candidates_are_still_blocked_by_truthful_semantics",
+    };
+  }
+
+  if (summary.latencyGateCount > 0) {
+    return {
+      focus: "expand_active_run_status",
+      reason: "recent_candidates_are_primarily_waiting_on_latency_priority_rather_than_semantics",
+    };
+  }
+
+  return {
+    focus: "observe_more_samples",
+    reason:
+      "current_policy_is_already_emitting_for_recent_candidates_without_clear_pressure_to_expand",
   };
 }

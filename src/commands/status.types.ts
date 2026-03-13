@@ -73,6 +73,14 @@ export type StatusSummary = {
           reason: string;
           count: number;
         }>;
+        guidance?: {
+          focus:
+            | "expand_active_run_status"
+            | "tighten_semantic_contract"
+            | "optimize_other_bottlenecks"
+            | "observe_more_samples";
+          reason: string;
+        };
       };
     };
   };

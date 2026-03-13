@@ -1,7 +1,10 @@
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
-import { recommendTruthfulEarlyStatusFromLatency } from "../auto-reply/reply/supervisor/truthful-status-policy.js";
+import {
+  buildTruthfulEarlyStatusGuidance,
+  recommendTruthfulEarlyStatusFromLatency,
+} from "../auto-reply/reply/supervisor/truthful-status-policy.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -116,6 +119,10 @@ export async function getStatusSummary(
   const earlyStatusSummary = getRecentDiagnosticEarlyStatusSummary();
   const earlyStatusPriority = recommendTruthfulEarlyStatusFromLatency({
     dominantSegments: latencySummary?.dominant,
+  });
+  const earlyStatusGuidance = buildTruthfulEarlyStatusGuidance({
+    recommendation: earlyStatusPriority,
+    summary: earlyStatusSummary,
   });
 
   const resolved = resolveConfiguredModelRef({
@@ -242,7 +249,14 @@ export async function getStatusSummary(
           ...(latencySummary?.dominant ? { dominant: latencySummary.dominant } : {}),
           earlyStatusPriority,
         },
-        ...(earlyStatusSummary ? { earlyStatus: earlyStatusSummary } : {}),
+        ...(earlyStatusSummary
+          ? {
+              earlyStatus: {
+                ...earlyStatusSummary,
+                guidance: earlyStatusGuidance,
+              },
+            }
+          : {}),
       },
     },
     channelSummary,
