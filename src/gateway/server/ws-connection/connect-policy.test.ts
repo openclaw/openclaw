@@ -328,6 +328,7 @@ describe("ws connect policy", () => {
         isLocalClient: true,
         hasBrowserOriginHeader: false,
         sharedAuthOk: true,
+        authOk: true,
         authMethod: "token",
       }),
     ).toBe(true);
@@ -342,6 +343,7 @@ describe("ws connect policy", () => {
         isLocalClient: false,
         hasBrowserOriginHeader: false,
         sharedAuthOk: true,
+        authOk: true,
         authMethod: "token",
       }),
     ).toBe(true);
@@ -355,6 +357,7 @@ describe("ws connect policy", () => {
         isLocalClient: true,
         hasBrowserOriginHeader: true,
         sharedAuthOk: true,
+        authOk: true,
         authMethod: "token",
       }),
     ).toBe(false);
@@ -368,6 +371,7 @@ describe("ws connect policy", () => {
         isLocalClient: true,
         hasBrowserOriginHeader: false,
         sharedAuthOk: false,
+        authOk: false,
         authMethod: "token",
       }),
     ).toBe(false);
@@ -381,6 +385,7 @@ describe("ws connect policy", () => {
         isLocalClient: true,
         hasBrowserOriginHeader: false,
         sharedAuthOk: true,
+        authOk: true,
         authMethod: "trusted-proxy",
       }),
     ).toBe(false);
@@ -452,6 +457,7 @@ describe("ws connect policy", () => {
         isLocalClient: true,
         hasBrowserOriginHeader: false,
         sharedAuthOk: true,
+        authOk: true,
         authMethod: "token",
       }),
     ).toBe(false);
@@ -467,6 +473,7 @@ describe("ws connect policy", () => {
         isLocalClient: true,
         hasBrowserOriginHeader: false,
         sharedAuthOk: false,
+        authOk: false,
         authMethod: "none",
       }),
     ).toBe(true);
@@ -481,6 +488,7 @@ describe("ws connect policy", () => {
         isLocalClient: false,
         hasBrowserOriginHeader: false,
         sharedAuthOk: false,
+        authOk: false,
         authMethod: "none",
       }),
     ).toBe(false);
@@ -572,6 +580,7 @@ describe("ws connect policy", () => {
         isLocalClient: false,
         hasBrowserOriginHeader: false,
         sharedAuthOk: true,
+        authOk: true,
         authMethod: "token",
       }),
     ).toBe(true);
@@ -586,6 +595,7 @@ describe("ws connect policy", () => {
         isLocalClient: false,
         hasBrowserOriginHeader: true,
         sharedAuthOk: true,
+        authOk: true,
         authMethod: "token",
       }),
     ).toBe(false);
@@ -628,6 +638,7 @@ describe("ws connect policy", () => {
         isLocalClient: true,
         hasBrowserOriginHeader: true,
         sharedAuthOk: false,
+        authOk: false,
         authMethod: "none",
       }),
     ).toBe(false);
