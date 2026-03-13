@@ -357,6 +357,43 @@ describe("shouldRunMemoryFlush", () => {
       }),
     ).toBe(false);
   });
+
+  it("adds outputTokens to the estimate when no override is provided", () => {
+    // threshold = 100_000 - 5_000 - 2_000 = 93_000
+    // totalTokens (85_000) alone is below threshold, but + outputTokens (10_000) = 95_000 crosses it
+    expect(
+      shouldRunMemoryFlush({
+        entry: { totalTokens: 85_000, outputTokens: 10_000, compactionCount: 1 },
+        contextWindowTokens: 100_000,
+        reserveTokensFloor: 5_000,
+        softThresholdTokens: 2_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not add outputTokens when tokenCount override is provided", () => {
+    // override is below threshold; outputTokens should be ignored
+    expect(
+      shouldRunMemoryFlush({
+        entry: { totalTokens: 82_000, outputTokens: 10_000, compactionCount: 1 },
+        tokenCount: 80_000,
+        contextWindowTokens: 100_000,
+        reserveTokensFloor: 5_000,
+        softThresholdTokens: 2_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores non-finite outputTokens", () => {
+    expect(
+      shouldRunMemoryFlush({
+        entry: { totalTokens: 82_000, outputTokens: Number.NaN, compactionCount: 1 },
+        contextWindowTokens: 100_000,
+        reserveTokensFloor: 5_000,
+        softThresholdTokens: 2_000,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("hasAlreadyFlushedForCurrentCompaction", () => {

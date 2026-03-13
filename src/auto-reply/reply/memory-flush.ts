@@ -170,7 +170,11 @@ export function resolveMemoryFlushContextWindowTokens(params: {
 export function shouldRunMemoryFlush(params: {
   entry?: Pick<
     SessionEntry,
-    "totalTokens" | "totalTokensFresh" | "compactionCount" | "memoryFlushCompactionCount"
+    | "totalTokens"
+    | "totalTokensFresh"
+    | "outputTokens"
+    | "compactionCount"
+    | "memoryFlushCompactionCount"
   >;
   /**
    * Optional token count override for flush gating. When provided, this value is
@@ -192,10 +196,22 @@ export function shouldRunMemoryFlush(params: {
       ? Math.floor(override)
       : undefined;
 
-  const totalTokens = overrideTokens ?? resolveFreshSessionTotalTokens(params.entry);
-  if (!totalTokens || totalTokens <= 0) {
+  const baseTokens = overrideTokens ?? resolveFreshSessionTotalTokens(params.entry);
+  if (!baseTokens || baseTokens <= 0) {
     return false;
   }
+  // Add output tokens from the last response to get a more accurate estimate of
+  // the actual context size. Without this, shouldRunMemoryFlush underestimates
+  // by ~10k tokens (a full response), causing the flush to fire after compaction
+  // rather than before it.
+  const outputTokens =
+    overrideTokens == null &&
+    typeof params.entry?.outputTokens === "number" &&
+    Number.isFinite(params.entry.outputTokens) &&
+    params.entry.outputTokens > 0
+      ? params.entry.outputTokens
+      : 0;
+  const totalTokens = baseTokens + outputTokens;
   const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
   const reserveTokens = Math.max(0, Math.floor(params.reserveTokensFloor));
   const softThreshold = Math.max(0, Math.floor(params.softThresholdTokens));
