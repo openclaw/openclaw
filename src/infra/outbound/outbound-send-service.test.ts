@@ -6,6 +6,17 @@ const mocks = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   sendPoll: vi.fn(),
   getAgentScopedMediaLocalRoots: vi.fn(() => ["/tmp/agent-roots"]),
+  triggerInternalHook: vi.fn().mockResolvedValue(undefined),
+  createInternalHookEvent: vi.fn((type, action, sessionKey, context) => ({
+    type,
+    action,
+    sessionKey,
+    context,
+    timestamp: new Date(),
+    messages: [],
+  })),
+  runMessageSent: vi.fn().mockResolvedValue(undefined),
+  hasHooks: vi.fn(),
 }));
 
 vi.mock("../../channels/plugins/message-actions.js", () => ({
@@ -22,6 +33,18 @@ vi.mock("../../media/local-roots.js", () => ({
   getAgentScopedMediaLocalRoots: mocks.getAgentScopedMediaLocalRoots,
 }));
 
+vi.mock("../../hooks/internal-hooks.js", () => ({
+  triggerInternalHook: mocks.triggerInternalHook,
+  createInternalHookEvent: mocks.createInternalHookEvent,
+}));
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => ({
+    hasHooks: mocks.hasHooks,
+    runMessageSent: mocks.runMessageSent,
+  }),
+}));
+
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
 
 describe("executeSendAction", () => {
@@ -31,6 +54,11 @@ describe("executeSendAction", () => {
     mocks.sendPoll.mockClear();
     mocks.getDefaultMediaLocalRoots.mockClear();
     mocks.getAgentScopedMediaLocalRoots.mockClear();
+    mocks.triggerInternalHook.mockClear();
+    mocks.createInternalHookEvent.mockClear();
+    mocks.runMessageSent.mockClear();
+    mocks.hasHooks.mockReset();
+    mocks.hasHooks.mockReturnValue(false);
   });
 
   it("forwards ctx.agentId to sendMessage on core outbound path", async () => {
@@ -121,6 +149,44 @@ describe("executeSendAction", () => {
         mediaLocalRoots: ["/tmp/agent-roots"],
       }),
     );
+  });
+
+  it("emits message_sent and internal message:sent when plugin handles send", async () => {
+    mocks.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    mocks.dispatchChannelMessageAction.mockResolvedValue({
+      ok: true,
+      value: { messageId: "msg-plugin" },
+      continuePrompt: "",
+      output: "",
+      sessionId: "s1",
+      model: "gpt-5.2",
+      usage: {},
+    });
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "telegram",
+        params: {},
+        dryRun: false,
+        accountId: "default",
+        mirror: { sessionKey: "agent:main:main", text: "hello" },
+      },
+      to: "751878683",
+      message: "hello",
+    });
+
+    expect(mocks.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "751878683", content: "hello", success: true }),
+      expect.objectContaining({ channelId: "telegram", accountId: "default" }),
+    );
+    expect(mocks.createInternalHookEvent).toHaveBeenCalledWith(
+      "message",
+      "sent",
+      "agent:main:main",
+      expect.objectContaining({ to: "751878683", channelId: "telegram", success: true }),
+    );
+    expect(mocks.triggerInternalHook).toHaveBeenCalled();
   });
 
   it("forwards poll args to sendPoll on core outbound path", async () => {
