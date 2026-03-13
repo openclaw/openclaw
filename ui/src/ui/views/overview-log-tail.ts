@@ -20,8 +20,8 @@ export function renderOverviewLogTail(props: OverviewLogTailProps) {
 
   const displayLines = props.lines
     .slice(-50)
-    .map((line) => stripAnsi(line).trim())
-    .filter(Boolean)
+    .map((line) => stripAnsi(line))
+    .filter((line) => line.trim() !== "")
     .join("\n");
 
   return html`
