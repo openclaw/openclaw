@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   resolveHeartbeatDeliveryTarget,
   resolveOutboundTarget,
@@ -63,6 +66,27 @@ describe("resolveOutboundTarget defaultTo config fallback", () => {
       mode: "implicit",
     });
     expect(res.ok).toBe(false);
+  });
+
+  it("falls back to the active registry when the cached channel map is stale", () => {
+    const registry = createTestRegistry([]);
+    setActivePluginRegistry(registry, "stale-registry-test");
+
+    // Warm the cached channel map before mutating the registry in place.
+    expect(resolveOutboundTarget({ channel: "telegram", to: "123", mode: "explicit" }).ok).toBe(
+      false,
+    );
+
+    registry.channels.push({
+      pluginId: "telegram",
+      plugin: createOutboundTestPlugin({ id: "telegram", outbound: telegramOutbound }),
+      source: "test",
+    });
+
+    expect(resolveOutboundTarget({ channel: "telegram", to: "123", mode: "explicit" })).toEqual({
+      ok: true,
+      to: "123",
+    });
   });
 });
 
