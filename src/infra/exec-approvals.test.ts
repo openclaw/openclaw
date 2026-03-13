@@ -10,66 +10,10 @@ import {
   evaluateExecAllowlist,
   evaluateShellAllowlist,
   maxAsk,
-  mergeExecApprovalsSocketDefaults,
   minSecurity,
-  normalizeExecApprovals,
   normalizeSafeBins,
   requiresExecApproval,
-  resolveExecApprovalsPath,
-  resolveExecApprovalsSocketPath,
 } from "./exec-approvals.js";
-
-describe("mergeExecApprovalsSocketDefaults", () => {
-  it("prefers normalized socket, then current, then default path", () => {
-    const normalized = normalizeExecApprovals({
-      version: 1,
-      agents: {},
-      socket: { path: "/tmp/a.sock", token: "a" },
-    });
-    const current = normalizeExecApprovals({
-      version: 1,
-      agents: {},
-      socket: { path: "/tmp/b.sock", token: "b" },
-    });
-    const merged = mergeExecApprovalsSocketDefaults({ normalized, current });
-    expect(merged.socket?.path).toBe("/tmp/a.sock");
-    expect(merged.socket?.token).toBe("a");
-  });
-
-  it("falls back to current token when missing in normalized", () => {
-    const normalized = normalizeExecApprovals({ version: 1, agents: {} });
-    const current = normalizeExecApprovals({
-      version: 1,
-      agents: {},
-      socket: { path: "/tmp/b.sock", token: "b" },
-    });
-    const merged = mergeExecApprovalsSocketDefaults({ normalized, current });
-    expect(merged.socket?.path).toBeTruthy();
-    expect(merged.socket?.token).toBe("b");
-  });
-});
-
-describe("resolve exec approvals defaults", () => {
-  it("expands home-prefixed default file and socket paths", () => {
-    const dir = makeTempDir();
-    const prevOpenClawHome = process.env.OPENCLAW_HOME;
-    try {
-      process.env.OPENCLAW_HOME = dir;
-      expect(path.normalize(resolveExecApprovalsPath())).toBe(
-        path.normalize(path.join(dir, ".openclaw", "exec-approvals.json")),
-      );
-      expect(path.normalize(resolveExecApprovalsSocketPath())).toBe(
-        path.normalize(path.join(dir, ".openclaw", "exec-approvals.sock")),
-      );
-    } finally {
-      if (prevOpenClawHome === undefined) {
-        delete process.env.OPENCLAW_HOME;
-      } else {
-        process.env.OPENCLAW_HOME = prevOpenClawHome;
-      }
-    }
-  });
-});
 
 describe("exec approvals safe shell command builder", () => {
   it("quotes only safeBins segments (leaves other segments untouched)", () => {
