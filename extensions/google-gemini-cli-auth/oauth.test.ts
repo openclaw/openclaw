@@ -144,6 +144,13 @@ describe("extractGeminiCliCredentials", () => {
     }
   }
 
+  function expectFakeCliCredentials(result: unknown) {
+    expect(result).toEqual({
+      clientId: FAKE_CLIENT_ID,
+      clientSecret: FAKE_CLIENT_SECRET,
+    });
+  }
+
   beforeEach(async () => {
     vi.clearAllMocks();
     originalPath = process.env.PATH;
@@ -169,10 +176,7 @@ describe("extractGeminiCliCredentials", () => {
     clearCredentialsCache();
     const result = extractGeminiCliCredentials();
 
-    expect(result).toEqual({
-      clientId: FAKE_CLIENT_ID,
-      clientSecret: FAKE_CLIENT_SECRET,
-    });
+    expectFakeCliCredentials(result);
   });
 
   it("extracts credentials when PATH entry is an npm global shim", async () => {
@@ -182,10 +186,7 @@ describe("extractGeminiCliCredentials", () => {
     clearCredentialsCache();
     const result = extractGeminiCliCredentials();
 
-    expect(result).toEqual({
-      clientId: FAKE_CLIENT_ID,
-      clientSecret: FAKE_CLIENT_SECRET,
-    });
+    expectFakeCliCredentials(result);
   });
 
   it("returns null when oauth2.js cannot be found", async () => {
@@ -304,6 +305,21 @@ describe("loginGeminiCliOAuth", () => {
     return { result, authUrl };
   }
 
+  async function runRemoteLoginExpectingProjectId(
+    loginGeminiCliOAuth: (options: {
+      isRemote: boolean;
+      openUrl: () => Promise<void>;
+      log: (msg: string) => void;
+      note: () => Promise<void>;
+      prompt: () => Promise<string>;
+      progress: { update: () => void; stop: () => void };
+    }) => Promise<{ projectId: string }>,
+    projectId: string,
+  ) {
+    const { result } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+    expect(result.projectId).toBe(projectId);
+  }
+
   let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
   beforeEach(() => {
     envSnapshot = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
@@ -357,9 +373,7 @@ describe("loginGeminiCliOAuth", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const { loginGeminiCliOAuth } = await import("./oauth.js");
-    const { result } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
-
-    expect(result.projectId).toBe("daily-project");
+    await runRemoteLoginExpectingProjectId(loginGeminiCliOAuth, "daily-project");
     const loadRequests = requests.filter((request) =>
       request.url.includes("v1internal:loadCodeAssist"),
     );
@@ -414,9 +428,7 @@ describe("loginGeminiCliOAuth", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const { loginGeminiCliOAuth } = await import("./oauth.js");
-    const { result } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
-
-    expect(result.projectId).toBe("env-project");
+    await runRemoteLoginExpectingProjectId(loginGeminiCliOAuth, "env-project");
     expect(requests.filter((url) => url.includes("v1internal:loadCodeAssist"))).toHaveLength(3);
     expect(requests.some((url) => url.includes("v1internal:onboardUser"))).toBe(false);
   });
