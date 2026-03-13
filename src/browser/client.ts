@@ -3,6 +3,7 @@ import { fetchBrowserJson } from "./client-fetch.js";
 export type BrowserStatus = {
   enabled: boolean;
   profile?: string;
+  driver?: "openclaw" | "extension" | "existing-session";
   running: boolean;
   cdpReady?: boolean;
   cdpHttp?: boolean;
@@ -26,6 +27,7 @@ export type ProfileStatus = {
   cdpPort: number;
   cdpUrl: string;
   color: string;
+  driver: "openclaw" | "extension" | "existing-session";
   running: boolean;
   tabCount: number;
   isDefault: boolean;
@@ -165,7 +167,7 @@ export async function browserCreateProfile(
     name: string;
     color?: string;
     cdpUrl?: string;
-    driver?: "openclaw" | "extension";
+    driver?: "openclaw" | "extension" | "existing-session";
   },
 ): Promise<BrowserCreateProfileResult> {
   return await fetchBrowserJson<BrowserCreateProfileResult>(

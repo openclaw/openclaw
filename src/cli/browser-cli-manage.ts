@@ -407,7 +407,8 @@ export function registerBrowserManageCommands(
               const def = p.isDefault ? " [default]" : "";
               const loc = p.isRemote ? `cdpUrl: ${p.cdpUrl}` : `port: ${p.cdpPort}`;
               const remote = p.isRemote ? " [remote]" : "";
-              return `${p.name}: ${status}${tabs}${def}${remote}\n  ${loc}, color: ${p.color}`;
+              const driver = p.driver !== "openclaw" ? ` [${p.driver}]` : "";
+              return `${p.name}: ${status}${tabs}${def}${remote}${driver}\n  ${loc}, color: ${p.color}`;
             })
             .join("\n"),
         );
@@ -420,7 +421,10 @@ export function registerBrowserManageCommands(
     .requiredOption("--name <name>", "Profile name (lowercase, numbers, hyphens)")
     .option("--color <hex>", "Profile color (hex format, e.g. #0066CC)")
     .option("--cdp-url <url>", "CDP URL for remote Chrome (http/https)")
-    .option("--driver <driver>", "Profile driver (openclaw|extension). Default: openclaw")
+    .option(
+      "--driver <driver>",
+      "Profile driver (openclaw|extension|existing-session). Default: openclaw",
+    )
     .action(
       async (opts: { name: string; color?: string; cdpUrl?: string; driver?: string }, cmd) => {
         const parent = parentOpts(cmd);
@@ -434,7 +438,12 @@ export function registerBrowserManageCommands(
                 name: opts.name,
                 color: opts.color,
                 cdpUrl: opts.cdpUrl,
-                driver: opts.driver === "extension" ? "extension" : undefined,
+                driver:
+                  opts.driver === "extension"
+                    ? "extension"
+                    : opts.driver === "existing-session"
+                      ? "existing-session"
+                      : undefined,
               },
             },
             { timeoutMs: 10_000 },
@@ -446,7 +455,11 @@ export function registerBrowserManageCommands(
           defaultRuntime.log(
             info(
               `🦞 Created profile "${result.profile}"\n${loc}\n  color: ${result.color}${
-                opts.driver === "extension" ? "\n  driver: extension" : ""
+                opts.driver === "extension"
+                  ? "\n  driver: extension"
+                  : opts.driver === "existing-session"
+                    ? "\n  driver: existing-session"
+                    : ""
               }`,
             ),
           );
