@@ -16,6 +16,7 @@ const TELEGRAM_POLL_RESTART_POLICY = {
 const POLL_STALL_THRESHOLD_MS = 90_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
+const MAX_CONSECUTIVE_POLL_RESTARTS = 5;
 
 const waitForGracefulStop = async (stop: () => Promise<void>) => {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -182,11 +183,15 @@ export class TelegramPollingSession {
     await this.#confirmPersistedOffset(bot);
 
     let lastGetUpdatesAt = Date.now();
-    bot.api.config.use((prev, method, payload, signal) => {
+    let consecutiveStallRestarts = 0;
+    bot.api.config.use(async (prev, method, payload, signal) => {
+      const result = await prev(method, payload, signal);
       if (method === "getUpdates") {
         lastGetUpdatesAt = Date.now();
+        this.#restartAttempts = 0;
+        consecutiveStallRestarts = 0;
       }
-      return prev(method, payload, signal);
+      return result;
     });
 
     const runner = run(bot, this.opts.runnerOptions);
@@ -227,9 +232,16 @@ export class TelegramPollingSession {
       }
       const elapsed = Date.now() - lastGetUpdatesAt;
       if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning()) {
+        consecutiveStallRestarts += 1;
         stalledRestart = true;
+        if (consecutiveStallRestarts >= MAX_CONSECUTIVE_POLL_RESTARTS) {
+          this.opts.log(
+            `[telegram] Polling recovery exhausted after ${consecutiveStallRestarts} consecutive stall restarts without successful getUpdates; escalating to process exit.`,
+          );
+          process.exit(1);
+        }
         this.opts.log(
-          `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart.`,
+          `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart (attempt ${consecutiveStallRestarts}/${MAX_CONSECUTIVE_POLL_RESTARTS}).`,
         );
         void stopRunner();
         void stopBot();
