@@ -43,6 +43,7 @@ import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./i
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveQueueSettings } from "./queue.js";
+import { resolveTelegramSupersedeQueueOverride } from "./telegram-supersede.js";
 import { routeReply } from "./route-reply.js";
 import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents, ensureSkillSnapshot } from "./session-updates.js";
@@ -436,19 +437,33 @@ export async function runPreparedReply(
   const queuedBody = mediaNote
     ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
     : queueBodyBase;
+  const telegramSupersedeOverride = resolveTelegramSupersedeQueueOverride({
+    cfg,
+    channel: sessionCtx.Provider,
+    accountId: sessionCtx.AccountId,
+  });
   const resolvedQueue = resolveQueueSettings({
     cfg,
     channel: sessionCtx.Provider,
     sessionEntry,
-    inlineMode: perMessageQueueMode,
-    inlineOptions: perMessageQueueOptions,
+    inlineMode: telegramSupersedeOverride.inlineMode ?? perMessageQueueMode,
+    inlineOptions:
+      telegramSupersedeOverride.inlineOptions || perMessageQueueOptions
+        ? {
+            ...(perMessageQueueOptions ?? {}),
+            ...(telegramSupersedeOverride.inlineOptions ?? {}),
+          }
+        : undefined,
   });
   const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal);
   const laneSize = getQueueSize(sessionLaneKey);
-  if (resolvedQueue.mode === "interrupt" && laneSize > 0) {
-    const cleared = clearCommandLane(sessionLaneKey);
+  const hadActiveRunBeforeInterrupt = isEmbeddedPiRunActive(sessionIdFinal);
+  if (resolvedQueue.mode === "interrupt" && (laneSize > 0 || hadActiveRunBeforeInterrupt)) {
+    const cleared = laneSize > 0 ? clearCommandLane(sessionLaneKey) : 0;
     const aborted = abortEmbeddedPiRun(sessionIdFinal);
-    logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
+    logVerbose(
+      `Interrupting ${sessionLaneKey} (cleared ${cleared}, active=${hadActiveRunBeforeInterrupt}, aborted=${aborted})`,
+    );
   }
   const queueKey = sessionKey ?? sessionIdFinal;
   const isActive = isEmbeddedPiRunActive(sessionIdFinal);

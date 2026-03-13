@@ -6,6 +6,7 @@ import {
   resolveInboundDebounceMs,
 } from "../auto-reply/inbound-debounce.js";
 import { buildCommandsPaginationKeyboard } from "../auto-reply/reply/commands-info.js";
+import { resolveTelegramSupersedeDebounceMs } from "../auto-reply/reply/telegram-supersede.js";
 import {
   buildModelsProviderData,
   formatModelsAvailableHeader,
@@ -166,6 +167,10 @@ export const registerTelegramHandlers = ({
   let textFragmentProcessing: Promise<void> = Promise.resolve();
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
+  const supersedeBurstDebounceMs = resolveTelegramSupersedeDebounceMs({
+    cfg,
+    accountId,
+  });
   const FORWARD_BURST_DEBOUNCE_MS = 80;
   type TelegramDebounceLane = "default" | "forward";
   type TelegramDebounceEntry = {
@@ -219,8 +224,12 @@ export const registerTelegramHandlers = ({
   };
   const inboundDebouncer = createInboundDebouncer<TelegramDebounceEntry>({
     debounceMs,
-    resolveDebounceMs: (entry) =>
-      entry.debounceLane === "forward" ? FORWARD_BURST_DEBOUNCE_MS : debounceMs,
+    resolveDebounceMs: (entry) => {
+      if (entry.debounceLane === "forward") {
+        return Math.max(FORWARD_BURST_DEBOUNCE_MS, supersedeBurstDebounceMs);
+      }
+      return Math.max(debounceMs, supersedeBurstDebounceMs);
+    },
     buildKey: (entry) => entry.debounceKey,
     shouldDebounce: (entry) => {
       const text = entry.msg.text ?? entry.msg.caption ?? "";

@@ -186,6 +186,14 @@ export const TelegramAccountSchemaBase = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     streaming: z.union([z.boolean(), z.enum(["off", "partial", "block", "progress"])]).optional(),
     blockStreaming: z.boolean().optional(),
+    supersede: z
+      .object({
+        enabled: z.boolean().optional(),
+        graceMs: z.number().int().nonnegative().optional(),
+        policy: z.enum(["latest-wins", "burst-coalesce"]).optional(),
+      })
+      .strict()
+      .optional(),
     draftChunk: BlockStreamingChunkSchema.optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     // Legacy key kept for automatic migration to `streaming`.

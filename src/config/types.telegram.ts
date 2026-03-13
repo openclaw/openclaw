@@ -39,6 +39,7 @@ export type TelegramNetworkConfig = {
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
 export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
 export type TelegramExecApprovalTarget = "dm" | "channel" | "both";
+export type TelegramSupersedePolicy = "latest-wins" | "burst-coalesce";
 
 export type TelegramExecApprovalConfig = {
   /** Enable Telegram exec approvals for this account. Default: false. */
@@ -51,6 +52,15 @@ export type TelegramExecApprovalConfig = {
   sessionFilter?: string[];
   /** Where to send approval prompts. Default: "dm". */
   target?: TelegramExecApprovalTarget;
+};
+
+export type TelegramSupersedeConfig = {
+  /** Enable Telegram run preemption when a newer inbound message arrives for the same session. */
+  enabled?: boolean;
+  /** Optional debounce/grace window (ms) for burst-coalesce handling. */
+  graceMs?: number;
+  /** Supersede strategy. latest-wins aborts immediately; burst-coalesce debounces bursts first. */
+  policy?: TelegramSupersedePolicy;
 };
 
 export type TelegramCapabilitiesConfig =
@@ -135,6 +145,8 @@ export type TelegramAccountConfig = {
   streaming?: TelegramStreamingMode | boolean;
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
+  /** Telegram run supersede controls (preempt stale in-flight turns on new inbound). */
+  supersede?: TelegramSupersedeConfig;
   /** @deprecated Legacy chunking config from `streamMode: "block"`; ignored after migration. */
   draftChunk?: BlockStreamingChunkConfig;
   /** Merge streamed block replies before sending. */
