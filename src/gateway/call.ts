@@ -163,9 +163,9 @@ export function buildGatewayConnectionDetails(
     options.configPath ?? resolveConfigPath(process.env, resolveStateDir(process.env));
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
-  const tlsEnabled = config.gateway?.tls?.enabled === true;
   const localPort = resolveGatewayPort(config);
   const bindMode = config.gateway?.bind ?? "loopback";
+  const tlsEnabled = config.gateway?.tls?.enabled === true || bindMode === "netbird";
   const scheme = tlsEnabled ? "wss" : "ws";
   // Self-connections should always target loopback; bind mode only controls listener exposure.
   const localUrl = `${scheme}://127.0.0.1:${localPort}`;
@@ -721,14 +721,17 @@ async function resolveGatewayTlsFingerprint(params: {
   url: string;
 }): Promise<string | undefined> {
   const { opts, context, url } = params;
+  const bindMode = context.config.gateway?.bind ?? "loopback";
   const useLocalTls =
-    context.config.gateway?.tls?.enabled === true &&
+    (context.config.gateway?.tls?.enabled === true || bindMode === "netbird") &&
     !context.urlOverrideSource &&
     !context.remoteUrl &&
     url.startsWith("wss://");
-  const tlsRuntime = useLocalTls
-    ? await loadGatewayTlsRuntime(context.config.gateway?.tls)
-    : undefined;
+  const effectiveTlsCfg =
+    useLocalTls && bindMode === "netbird" && context.config.gateway?.tls?.enabled !== true
+      ? { ...context.config.gateway?.tls, enabled: true as const, autoGenerate: true }
+      : context.config.gateway?.tls;
+  const tlsRuntime = useLocalTls ? await loadGatewayTlsRuntime(effectiveTlsCfg) : undefined;
   const overrideTlsFingerprint = trimToUndefined(opts.tlsFingerprint);
   const remoteTlsFingerprint =
     // Env overrides may still inherit configured remote TLS pinning for private cert deployments.

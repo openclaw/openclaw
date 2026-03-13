@@ -19,6 +19,7 @@ import { resolveGatewayService } from "../../daemon/service.js";
 import { trimToUndefined } from "../../gateway/credentials.js";
 import { resolveGatewayBindHost } from "../../gateway/net.js";
 import { resolveGatewayProbeAuthWithSecretInputs } from "../../gateway/probe-auth.js";
+import { pickPrimaryNetbirdIPv4 } from "../../infra/netbird.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import {
   formatPortDiagnostics,
@@ -193,9 +194,11 @@ async function resolveGatewayStatusSummary(params: {
   const customBindHost = params.daemonCfg.gateway?.customBindHost;
   const bindHost = await resolveGatewayBindHost(bindMode, customBindHost);
   const tailnetIPv4 = pickPrimaryTailnetIPv4();
-  const probeHost = pickProbeHostForBind(bindMode, tailnetIPv4, customBindHost);
+  const netbirdIPv4 = pickPrimaryNetbirdIPv4();
+  const probeHost = pickProbeHostForBind(bindMode, tailnetIPv4, customBindHost, netbirdIPv4);
   const probeUrlOverride = trimToUndefined(params.rpcUrlOverride) ?? null;
-  const scheme = params.daemonCfg.gateway?.tls?.enabled === true ? "wss" : "ws";
+  const tlsEnabled = params.daemonCfg.gateway?.tls?.enabled === true || bindMode === "netbird";
+  const scheme = tlsEnabled ? "wss" : "ws";
   const probeUrl = probeUrlOverride ?? `${scheme}://${probeHost}:${daemonPort}`;
   const probeNote =
     !probeUrlOverride && bindMode === "lan"

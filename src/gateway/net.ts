@@ -1,6 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
 import os from "node:os";
+import { listNetbirdAddresses, pickPrimaryNetbirdIPv4 } from "../infra/netbird.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import {
   isCanonicalDottedDecimalIPv4,
@@ -225,6 +226,13 @@ export function isLocalGatewayAddress(ip: string | undefined): boolean {
   if (tailnetIPv6 && ip.trim().toLowerCase() === tailnetIPv6.toLowerCase()) {
     return true;
   }
+  const { ipv4: netbirdV4List, ipv6: netbirdV6List } = listNetbirdAddresses();
+  if (netbirdV4List[0] && normalized === netbirdV4List[0].toLowerCase()) {
+    return true;
+  }
+  if (netbirdV6List[0] && ip.trim().toLowerCase() === netbirdV6List[0].toLowerCase()) {
+    return true;
+  }
   return false;
 }
 
@@ -235,6 +243,7 @@ export function isLocalGatewayAddress(ip: string | undefined): boolean {
  * - loopback: 127.0.0.1 (rarely fails, but handled gracefully)
  * - lan: always 0.0.0.0 (no fallback)
  * - tailnet: Tailnet IPv4 if available, else loopback
+ * - netbird: Netbird wt* interface IPv4 if available, else loopback (auto-TLS)
  * - auto: Loopback if available, else 0.0.0.0
  * - custom: User-specified IP, fallback to 0.0.0.0 if unavailable
  *
@@ -258,6 +267,17 @@ export async function resolveGatewayBindHost(
     const tailnetIP = pickPrimaryTailnetIPv4();
     if (tailnetIP && (await canBindToHost(tailnetIP))) {
       return tailnetIP;
+    }
+    if (await canBindToHost("127.0.0.1")) {
+      return "127.0.0.1";
+    }
+    return "0.0.0.0";
+  }
+
+  if (mode === "netbird") {
+    const netbirdIP = pickPrimaryNetbirdIPv4();
+    if (netbirdIP && (await canBindToHost(netbirdIP))) {
+      return netbirdIP;
     }
     if (await canBindToHost("127.0.0.1")) {
       return "127.0.0.1";

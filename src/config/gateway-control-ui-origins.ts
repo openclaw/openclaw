@@ -1,10 +1,10 @@
 import type { OpenClawConfig } from "./config.js";
 import { DEFAULT_GATEWAY_PORT } from "./paths.js";
 
-export type GatewayNonLoopbackBindMode = "lan" | "tailnet" | "custom";
+export type GatewayNonLoopbackBindMode = "lan" | "tailnet" | "netbird" | "custom";
 
 export function isGatewayNonLoopbackBindMode(bind: unknown): bind is GatewayNonLoopbackBindMode {
-  return bind === "lan" || bind === "tailnet" || bind === "custom";
+  return bind === "lan" || bind === "tailnet" || bind === "netbird" || bind === "custom";
 }
 
 export function hasConfiguredControlUiAllowedOrigins(params: {
@@ -32,9 +32,10 @@ export function buildDefaultControlUiAllowedOrigins(params: {
   bind: unknown;
   customBindHost?: string;
 }): string[] {
+  const scheme = params.bind === "netbird" ? "https" : "http";
   const origins = new Set<string>([
-    `http://localhost:${params.port}`,
-    `http://127.0.0.1:${params.port}`,
+    `${scheme}://localhost:${params.port}`,
+    `${scheme}://127.0.0.1:${params.port}`,
   ]);
   const customBindHost = params.customBindHost?.trim();
   if (params.bind === "custom" && customBindHost) {

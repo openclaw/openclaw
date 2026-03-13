@@ -1,6 +1,6 @@
 import type { SecretInput } from "./types.secrets.js";
 
-export type GatewayBindMode = "auto" | "lan" | "loopback" | "custom" | "tailnet";
+export type GatewayBindMode = "auto" | "lan" | "loopback" | "custom" | "tailnet" | "netbird";
 
 export type GatewayTlsConfig = {
   /** Enable TLS for the gateway server. */
@@ -397,6 +397,7 @@ export type GatewayConfig = {
    * - lan: 0.0.0.0 (all interfaces, no fallback)
    * - loopback: 127.0.0.1 (local-only)
    * - tailnet: Tailnet IPv4 if available (100.64.0.0/10), else loopback
+   * - netbird: Netbird wt* interface IPv4 if available, else loopback (auto-enables TLS)
    * - custom: User-specified IP, fallback to 0.0.0.0 if unavailable (requires customBindHost)
    * Default: loopback (127.0.0.1).
    */

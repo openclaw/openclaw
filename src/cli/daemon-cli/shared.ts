@@ -67,12 +67,16 @@ export function pickProbeHostForBind(
   bindMode: string,
   tailnetIPv4: string | undefined,
   customBindHost?: string,
+  netbirdIPv4?: string,
 ) {
   if (bindMode === "custom" && customBindHost?.trim()) {
     return customBindHost.trim();
   }
   if (bindMode === "tailnet") {
     return tailnetIPv4 ?? "127.0.0.1";
+  }
+  if (bindMode === "netbird") {
+    return netbirdIPv4 ?? "127.0.0.1";
   }
   if (bindMode === "lan") {
     // Same as call.ts: self-connections should always target loopback.
