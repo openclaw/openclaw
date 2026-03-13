@@ -23,7 +23,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2026.3.8</string>
+	<string>$(OPENCLAW_MARKETING_VERSION)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -36,7 +36,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>20260308</string>
+	<string>$(OPENCLAW_BUILD_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSAppTransportSecurity</key>
@@ -66,6 +66,14 @@
 	<string>OpenClaw uses on-device speech recognition for voice wake.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>OpenClawPushAPNsEnvironment</key>
+	<string>$(OPENCLAW_PUSH_APNS_ENVIRONMENT)</string>
+	<key>OpenClawPushDistribution</key>
+	<string>$(OPENCLAW_PUSH_DISTRIBUTION)</string>
+	<key>OpenClawPushRelayBaseURL</key>
+	<string>$(OPENCLAW_PUSH_RELAY_BASE_URL)</string>
+	<key>OpenClawPushTransport</key>
+	<string>$(OPENCLAW_PUSH_TRANSPORT)</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

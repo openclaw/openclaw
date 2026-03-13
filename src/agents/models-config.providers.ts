@@ -1,12 +1,10 @@
 import type { OpenClawConfig } from "../config/config.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_COPILOT_API_BASE_URL,
   resolveCopilotApiToken,
 } from "../providers/github-copilot-token.js";
-import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
+import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
@@ -15,12 +13,12 @@ import {
   resolveCloudflareAiGatewayBaseUrl,
 } from "./cloudflare-ai-gateway.js";
 import {
-  discoverHuggingfaceModels,
-  HUGGINGFACE_BASE_URL,
-  HUGGINGFACE_MODEL_CATALOG,
-  buildHuggingfaceModelDefinition,
-} from "./huggingface-models.js";
-import { discoverKilocodeModels } from "./kilocode-models.js";
+  buildHuggingfaceProvider,
+  buildKilocodeProviderWithDiscovery,
+  buildVeniceProvider,
+  buildVercelAiGatewayProvider,
+  resolveOllamaApiBase,
+} from "./models-config.providers.discovery.js";
 import {
   buildBytePlusCodingProvider,
   buildBytePlusProvider,
@@ -30,6 +28,7 @@ import {
   buildKilocodeProvider,
   buildMinimaxPortalProvider,
   buildMinimaxProvider,
+  buildModelStudioProvider,
   buildMoonshotProvider,
   buildNvidiaProvider,
   buildOpenAICodexProvider,
@@ -47,15 +46,22 @@ export {
   buildKimiCodingProvider,
   buildKilocodeProvider,
   buildNvidiaProvider,
+  buildModelStudioProvider,
   buildQianfanProvider,
   buildXiaomiProvider,
+  MODELSTUDIO_BASE_URL,
+  MODELSTUDIO_DEFAULT_MODEL_ID,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,
   XIAOMI_DEFAULT_MODEL_ID,
 } from "./models-config.providers.static.js";
 import {
+  groupPluginDiscoveryProvidersByOrder,
+  normalizePluginDiscoveryResult,
+  resolvePluginDiscoveryProviders,
+} from "../plugins/provider-discovery.js";
+import {
   MINIMAX_OAUTH_MARKER,
-  OLLAMA_LOCAL_AUTH_MARKER,
   QWEN_OAUTH_MARKER,
   isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
@@ -63,221 +69,15 @@ import {
   resolveEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
-import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
-import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
-import { discoverVercelAiGatewayModels, VERCEL_AI_GATEWAY_BASE_URL } from "./vercel-ai-gateway.js";
+export { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
-
-const OLLAMA_BASE_URL = OLLAMA_NATIVE_BASE_URL;
-const OLLAMA_API_BASE_URL = OLLAMA_BASE_URL;
-const OLLAMA_SHOW_CONCURRENCY = 8;
-const OLLAMA_SHOW_MAX_MODELS = 200;
-const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
-const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
-const OLLAMA_DEFAULT_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
+type SecretDefaults = {
+  env?: string;
+  file?: string;
+  exec?: string;
 };
-
-const VLLM_BASE_URL = "http://127.0.0.1:8000/v1";
-const VLLM_DEFAULT_CONTEXT_WINDOW = 128000;
-const VLLM_DEFAULT_MAX_TOKENS = 8192;
-const VLLM_DEFAULT_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
-
-const log = createSubsystemLogger("agents/model-providers");
-
-interface OllamaModel {
-  name: string;
-  modified_at: string;
-  size: number;
-  digest: string;
-  details?: {
-    family?: string;
-    parameter_size?: string;
-  };
-}
-
-interface OllamaTagsResponse {
-  models: OllamaModel[];
-}
-
-type VllmModelsResponse = {
-  data?: Array<{
-    id?: string;
-  }>;
-};
-
-/**
- * Derive the Ollama native API base URL from a configured base URL.
- *
- * Users typically configure `baseUrl` with a `/v1` suffix (e.g.
- * `http://192.168.20.14:11434/v1`) for the OpenAI-compatible endpoint.
- * The native Ollama API lives at the root (e.g. `/api/tags`), so we
- * strip the `/v1` suffix when present.
- */
-export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
-  if (!configuredBaseUrl) {
-    return OLLAMA_API_BASE_URL;
-  }
-  // Strip trailing slash, then strip /v1 suffix if present
-  const trimmed = configuredBaseUrl.replace(/\/+$/, "");
-  return trimmed.replace(/\/v1$/i, "");
-}
-
-async function queryOllamaContextWindow(
-  apiBase: string,
-  modelName: string,
-): Promise<number | undefined> {
-  try {
-    const response = await fetch(`${apiBase}/api/show`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: modelName }),
-      signal: AbortSignal.timeout(3000),
-    });
-    if (!response.ok) {
-      return undefined;
-    }
-    const data = (await response.json()) as { model_info?: Record<string, unknown> };
-    if (!data.model_info) {
-      return undefined;
-    }
-    for (const [key, value] of Object.entries(data.model_info)) {
-      if (key.endsWith(".context_length") && typeof value === "number" && Number.isFinite(value)) {
-        const contextWindow = Math.floor(value);
-        if (contextWindow > 0) {
-          return contextWindow;
-        }
-      }
-    }
-    return undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-async function discoverOllamaModels(
-  baseUrl?: string,
-  opts?: { quiet?: boolean },
-): Promise<ModelDefinitionConfig[]> {
-  // Skip Ollama discovery in test environments
-  if (process.env.VITEST || process.env.NODE_ENV === "test") {
-    return [];
-  }
-  try {
-    const apiBase = resolveOllamaApiBase(baseUrl);
-    const response = await fetch(`${apiBase}/api/tags`, {
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!response.ok) {
-      if (!opts?.quiet) {
-        log.warn(`Failed to discover Ollama models: ${response.status}`);
-      }
-      return [];
-    }
-    const data = (await response.json()) as OllamaTagsResponse;
-    if (!data.models || data.models.length === 0) {
-      log.debug("No Ollama models found on local instance");
-      return [];
-    }
-    const modelsToInspect = data.models.slice(0, OLLAMA_SHOW_MAX_MODELS);
-    if (modelsToInspect.length < data.models.length && !opts?.quiet) {
-      log.warn(
-        `Capping Ollama /api/show inspection to ${OLLAMA_SHOW_MAX_MODELS} models (received ${data.models.length})`,
-      );
-    }
-    const discovered: ModelDefinitionConfig[] = [];
-    for (let index = 0; index < modelsToInspect.length; index += OLLAMA_SHOW_CONCURRENCY) {
-      const batch = modelsToInspect.slice(index, index + OLLAMA_SHOW_CONCURRENCY);
-      const batchDiscovered = await Promise.all(
-        batch.map(async (model) => {
-          const modelId = model.name;
-          const contextWindow = await queryOllamaContextWindow(apiBase, modelId);
-          const isReasoning =
-            modelId.toLowerCase().includes("r1") || modelId.toLowerCase().includes("reasoning");
-          return {
-            id: modelId,
-            name: modelId,
-            reasoning: isReasoning,
-            input: ["text"],
-            cost: OLLAMA_DEFAULT_COST,
-            contextWindow: contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
-            maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
-          } satisfies ModelDefinitionConfig;
-        }),
-      );
-      discovered.push(...batchDiscovered);
-    }
-    return discovered;
-  } catch (error) {
-    if (!opts?.quiet) {
-      log.warn(`Failed to discover Ollama models: ${String(error)}`);
-    }
-    return [];
-  }
-}
-
-async function discoverVllmModels(
-  baseUrl: string,
-  apiKey?: string,
-): Promise<ModelDefinitionConfig[]> {
-  // Skip vLLM discovery in test environments
-  if (process.env.VITEST || process.env.NODE_ENV === "test") {
-    return [];
-  }
-
-  const trimmedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
-  const url = `${trimmedBaseUrl}/models`;
-
-  try {
-    const trimmedApiKey = apiKey?.trim();
-    const response = await fetch(url, {
-      headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!response.ok) {
-      log.warn(`Failed to discover vLLM models: ${response.status}`);
-      return [];
-    }
-    const data = (await response.json()) as VllmModelsResponse;
-    const models = data.data ?? [];
-    if (models.length === 0) {
-      log.warn("No vLLM models found on local instance");
-      return [];
-    }
-
-    return models
-      .map((m) => ({ id: typeof m.id === "string" ? m.id.trim() : "" }))
-      .filter((m) => Boolean(m.id))
-      .map((m) => {
-        const modelId = m.id;
-        const lower = modelId.toLowerCase();
-        const isReasoning =
-          lower.includes("r1") || lower.includes("reasoning") || lower.includes("think");
-        return {
-          id: modelId,
-          name: modelId,
-          reasoning: isReasoning,
-          input: ["text"],
-          cost: VLLM_DEFAULT_COST,
-          contextWindow: VLLM_DEFAULT_CONTEXT_WINDOW,
-          maxTokens: VLLM_DEFAULT_MAX_TOKENS,
-        } satisfies ModelDefinitionConfig;
-      });
-  } catch (error) {
-    log.warn(`Failed to discover vLLM models: ${String(error)}`);
-    return [];
-  }
-}
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
@@ -305,13 +105,7 @@ function resolveAwsSdkApiKeyVarName(env: NodeJS.ProcessEnv = process.env): strin
 
 function normalizeHeaderValues(params: {
   headers: ProviderConfig["headers"] | undefined;
-  secretDefaults:
-    | {
-        env?: string;
-        file?: string;
-        exec?: string;
-      }
-    | undefined;
+  secretDefaults: SecretDefaults | undefined;
 }): { headers: ProviderConfig["headers"] | undefined; mutated: boolean } {
   const { headers } = params;
   if (!headers) {
@@ -484,15 +278,155 @@ function normalizeAntigravityProvider(provider: ProviderConfig): ProviderConfig 
   return normalizeProviderModels(provider, normalizeAntigravityModelId);
 }
 
+function normalizeSourceProviderLookup(
+  providers: ModelsConfig["providers"] | undefined,
+): Record<string, ProviderConfig> {
+  if (!providers) {
+    return {};
+  }
+  const out: Record<string, ProviderConfig> = {};
+  for (const [key, provider] of Object.entries(providers)) {
+    const normalizedKey = key.trim();
+    if (!normalizedKey || !isRecord(provider)) {
+      continue;
+    }
+    out[normalizedKey] = provider;
+  }
+  return out;
+}
+
+function resolveSourceManagedApiKeyMarker(params: {
+  sourceProvider: ProviderConfig | undefined;
+  sourceSecretDefaults: SecretDefaults | undefined;
+}): string | undefined {
+  const sourceApiKeyRef = resolveSecretInputRef({
+    value: params.sourceProvider?.apiKey,
+    defaults: params.sourceSecretDefaults,
+  }).ref;
+  if (!sourceApiKeyRef || !sourceApiKeyRef.id.trim()) {
+    return undefined;
+  }
+  return sourceApiKeyRef.source === "env"
+    ? sourceApiKeyRef.id.trim()
+    : resolveNonEnvSecretRefApiKeyMarker(sourceApiKeyRef.source);
+}
+
+function resolveSourceManagedHeaderMarkers(params: {
+  sourceProvider: ProviderConfig | undefined;
+  sourceSecretDefaults: SecretDefaults | undefined;
+}): Record<string, string> {
+  const sourceHeaders = isRecord(params.sourceProvider?.headers)
+    ? (params.sourceProvider.headers as Record<string, unknown>)
+    : undefined;
+  if (!sourceHeaders) {
+    return {};
+  }
+  const markers: Record<string, string> = {};
+  for (const [headerName, headerValue] of Object.entries(sourceHeaders)) {
+    const sourceHeaderRef = resolveSecretInputRef({
+      value: headerValue,
+      defaults: params.sourceSecretDefaults,
+    }).ref;
+    if (!sourceHeaderRef || !sourceHeaderRef.id.trim()) {
+      continue;
+    }
+    markers[headerName] =
+      sourceHeaderRef.source === "env"
+        ? resolveEnvSecretRefHeaderValueMarker(sourceHeaderRef.id)
+        : resolveNonEnvSecretRefHeaderValueMarker(sourceHeaderRef.source);
+  }
+  return markers;
+}
+
+export function enforceSourceManagedProviderSecrets(params: {
+  providers: ModelsConfig["providers"];
+  sourceProviders: ModelsConfig["providers"] | undefined;
+  sourceSecretDefaults?: SecretDefaults;
+  secretRefManagedProviders?: Set<string>;
+}): ModelsConfig["providers"] {
+  const { providers } = params;
+  if (!providers) {
+    return providers;
+  }
+  const sourceProvidersByKey = normalizeSourceProviderLookup(params.sourceProviders);
+  if (Object.keys(sourceProvidersByKey).length === 0) {
+    return providers;
+  }
+
+  let nextProviders: Record<string, ProviderConfig> | null = null;
+  for (const [providerKey, provider] of Object.entries(providers)) {
+    if (!isRecord(provider)) {
+      continue;
+    }
+    const sourceProvider = sourceProvidersByKey[providerKey.trim()];
+    if (!sourceProvider) {
+      continue;
+    }
+    let nextProvider = provider;
+    let providerMutated = false;
+
+    const sourceApiKeyMarker = resolveSourceManagedApiKeyMarker({
+      sourceProvider,
+      sourceSecretDefaults: params.sourceSecretDefaults,
+    });
+    if (sourceApiKeyMarker) {
+      params.secretRefManagedProviders?.add(providerKey.trim());
+      if (nextProvider.apiKey !== sourceApiKeyMarker) {
+        providerMutated = true;
+        nextProvider = {
+          ...nextProvider,
+          apiKey: sourceApiKeyMarker,
+        };
+      }
+    }
+
+    const sourceHeaderMarkers = resolveSourceManagedHeaderMarkers({
+      sourceProvider,
+      sourceSecretDefaults: params.sourceSecretDefaults,
+    });
+    if (Object.keys(sourceHeaderMarkers).length > 0) {
+      const currentHeaders = isRecord(nextProvider.headers)
+        ? (nextProvider.headers as Record<string, unknown>)
+        : undefined;
+      const nextHeaders = {
+        ...(currentHeaders as Record<string, NonNullable<ProviderConfig["headers"]>[string]>),
+      };
+      let headersMutated = !currentHeaders;
+      for (const [headerName, marker] of Object.entries(sourceHeaderMarkers)) {
+        if (nextHeaders[headerName] === marker) {
+          continue;
+        }
+        headersMutated = true;
+        nextHeaders[headerName] = marker;
+      }
+      if (headersMutated) {
+        providerMutated = true;
+        nextProvider = {
+          ...nextProvider,
+          headers: nextHeaders,
+        };
+      }
+    }
+
+    if (!providerMutated) {
+      continue;
+    }
+    if (!nextProviders) {
+      nextProviders = { ...providers };
+    }
+    nextProviders[providerKey] = nextProvider;
+  }
+
+  return nextProviders ?? providers;
+}
+
 export function normalizeProviders(params: {
   providers: ModelsConfig["providers"];
   agentDir: string;
   env?: NodeJS.ProcessEnv;
-  secretDefaults?: {
-    env?: string;
-    file?: string;
-    exec?: string;
-  };
+  secretDefaults?: SecretDefaults;
+  sourceProviders?: ModelsConfig["providers"];
+  sourceSecretDefaults?: SecretDefaults;
   secretRefManagedProviders?: Set<string>;
 }): ModelsConfig["providers"] {
   const { providers } = params;
@@ -555,6 +489,9 @@ export function normalizeProviders(params: {
           apiKey: normalizedConfiguredApiKey,
         };
       }
+      if (isNonSecretApiKeyMarker(normalizedConfiguredApiKey)) {
+        params.secretRefManagedProviders?.add(normalizedKey);
+      }
       if (
         profileApiKey &&
         profileApiKey.source !== "plaintext" &&
@@ -578,6 +515,7 @@ export function normalizeProviders(params: {
       if (envVarName && env[envVarName] === currentApiKey) {
         mutated = true;
         normalizedProvider = { ...normalizedProvider, apiKey: envVarName };
+        params.secretRefManagedProviders?.add(normalizedKey);
       }
     }
 
@@ -638,85 +576,20 @@ export function normalizeProviders(params: {
     next[normalizedKey] = normalizedProvider;
   }
 
-  return mutated ? next : providers;
-}
-
-async function buildVeniceProvider(): Promise<ProviderConfig> {
-  const models = await discoverVeniceModels();
-  return {
-    baseUrl: VENICE_BASE_URL,
-    api: "openai-completions",
-    models,
-  };
-}
-
-async function buildOllamaProvider(
-  configuredBaseUrl?: string,
-  opts?: { quiet?: boolean },
-): Promise<ProviderConfig> {
-  const models = await discoverOllamaModels(configuredBaseUrl, opts);
-  return {
-    baseUrl: resolveOllamaApiBase(configuredBaseUrl),
-    api: "ollama",
-    models,
-  };
-}
-
-async function buildHuggingfaceProvider(discoveryApiKey?: string): Promise<ProviderConfig> {
-  const resolvedSecret = toDiscoveryApiKey(discoveryApiKey) ?? "";
-  const models =
-    resolvedSecret !== ""
-      ? await discoverHuggingfaceModels(resolvedSecret)
-      : HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
-  return {
-    baseUrl: HUGGINGFACE_BASE_URL,
-    api: "openai-completions",
-    models,
-  };
-}
-
-async function buildVercelAiGatewayProvider(): Promise<ProviderConfig> {
-  return {
-    baseUrl: VERCEL_AI_GATEWAY_BASE_URL,
-    api: "anthropic-messages",
-    models: await discoverVercelAiGatewayModels(),
-  };
-}
-
-async function buildVllmProvider(params?: {
-  baseUrl?: string;
-  apiKey?: string;
-}): Promise<ProviderConfig> {
-  const baseUrl = (params?.baseUrl?.trim() || VLLM_BASE_URL).replace(/\/+$/, "");
-  const models = await discoverVllmModels(baseUrl, params?.apiKey);
-  return {
-    baseUrl,
-    api: "openai-completions",
-    models,
-  };
-}
-
-/**
- * Build the Kilocode provider with dynamic model discovery from the gateway
- * API. Falls back to the static catalog on failure.
- *
- * Used by {@link resolveImplicitProviders} (async context). The sync
- * {@link buildKilocodeProvider} is kept for the onboarding config path
- * which cannot await.
- */
-async function buildKilocodeProviderWithDiscovery(): Promise<ProviderConfig> {
-  const models = await discoverKilocodeModels();
-  return {
-    baseUrl: KILOCODE_BASE_URL,
-    api: "openai-completions",
-    models,
-  };
+  const normalizedProviders = mutated ? next : providers;
+  return enforceSourceManagedProviderSecrets({
+    providers: normalizedProviders,
+    sourceProviders: params.sourceProviders,
+    sourceSecretDefaults: params.sourceSecretDefaults,
+    secretRefManagedProviders: params.secretRefManagedProviders,
+  });
 }
 
 type ImplicitProviderParams = {
   agentDir: string;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
 };
 
@@ -740,6 +613,7 @@ function withApiKey(
   build: (params: {
     apiKey: string;
     discoveryApiKey?: string;
+    explicitProvider?: ProviderConfig;
   }) => ProviderConfig | Promise<ProviderConfig>,
 ): ImplicitProviderLoader {
   return async (ctx) => {
@@ -748,7 +622,11 @@ function withApiKey(
       return undefined;
     }
     return {
-      [providerKey]: await build({ apiKey, discoveryApiKey }),
+      [providerKey]: await build({
+        apiKey,
+        discoveryApiKey,
+        explicitProvider: ctx.explicitProviders?.[providerKey],
+      }),
     };
   };
 }
@@ -781,8 +659,38 @@ function mergeImplicitProviderSet(
 
 const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
   withApiKey("minimax", async ({ apiKey }) => ({ ...buildMinimaxProvider(), apiKey })),
-  withApiKey("moonshot", async ({ apiKey }) => ({ ...buildMoonshotProvider(), apiKey })),
-  withApiKey("kimi-coding", async ({ apiKey }) => ({ ...buildKimiCodingProvider(), apiKey })),
+  withApiKey("moonshot", async ({ apiKey, explicitProvider }) => {
+    const explicitBaseUrl = explicitProvider?.baseUrl;
+    return {
+      ...buildMoonshotProvider(),
+      ...(typeof explicitBaseUrl === "string" && explicitBaseUrl.trim()
+        ? { baseUrl: explicitBaseUrl.trim() }
+        : {}),
+      apiKey,
+    };
+  }),
+  withApiKey("kimi-coding", async ({ apiKey, explicitProvider }) => {
+    const builtInProvider = buildKimiCodingProvider();
+    const explicitBaseUrl = explicitProvider?.baseUrl;
+    const explicitHeaders = isRecord(explicitProvider?.headers)
+      ? (explicitProvider.headers as ProviderConfig["headers"])
+      : undefined;
+    return {
+      ...builtInProvider,
+      ...(typeof explicitBaseUrl === "string" && explicitBaseUrl.trim()
+        ? { baseUrl: explicitBaseUrl.trim() }
+        : {}),
+      ...(explicitHeaders
+        ? {
+            headers: {
+              ...builtInProvider.headers,
+              ...explicitHeaders,
+            },
+          }
+        : {}),
+      apiKey,
+    };
+  }),
   withApiKey("synthetic", async ({ apiKey }) => ({ ...buildSyntheticProvider(), apiKey })),
   withApiKey("venice", async ({ apiKey }) => ({ ...(await buildVeniceProvider()), apiKey })),
   withApiKey("xiaomi", async ({ apiKey }) => ({ ...buildXiaomiProvider(), apiKey })),
@@ -796,6 +704,7 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
     apiKey,
   })),
   withApiKey("qianfan", async ({ apiKey }) => ({ ...buildQianfanProvider(), apiKey })),
+  withApiKey("modelstudio", async ({ apiKey }) => ({ ...buildModelStudioProvider(), apiKey })),
   withApiKey("openrouter", async ({ apiKey }) => ({ ...buildOpenrouterProvider(), apiKey })),
   withApiKey("nvidia", async ({ apiKey }) => ({ ...buildNvidiaProvider(), apiKey })),
   withApiKey("kilocode", async ({ apiKey }) => ({
@@ -890,56 +799,35 @@ async function resolveCloudflareAiGatewayImplicitProvider(
   return undefined;
 }
 
-async function resolveOllamaImplicitProvider(
+async function resolvePluginImplicitProviders(
   ctx: ImplicitProviderContext,
+  order: import("../plugins/types.js").ProviderDiscoveryOrder,
 ): Promise<Record<string, ProviderConfig> | undefined> {
-  const ollamaKey = ctx.resolveProviderApiKey("ollama").apiKey;
-  const explicitOllama = ctx.explicitProviders?.ollama;
-  const hasExplicitModels =
-    Array.isArray(explicitOllama?.models) && explicitOllama.models.length > 0;
-  if (hasExplicitModels && explicitOllama) {
-    return {
-      ollama: {
-        ...explicitOllama,
-        baseUrl: resolveOllamaApiBase(explicitOllama.baseUrl),
-        api: explicitOllama.api ?? "ollama",
-        apiKey: ollamaKey ?? explicitOllama.apiKey ?? OLLAMA_LOCAL_AUTH_MARKER,
-      },
-    };
-  }
-
-  const ollamaBaseUrl = explicitOllama?.baseUrl;
-  const hasExplicitOllamaConfig = Boolean(explicitOllama);
-  const ollamaProvider = await buildOllamaProvider(ollamaBaseUrl, {
-    quiet: !ollamaKey && !hasExplicitOllamaConfig,
+  const providers = resolvePluginDiscoveryProviders({
+    config: ctx.config,
+    workspaceDir: ctx.workspaceDir,
+    env: ctx.env,
   });
-  if (ollamaProvider.models.length === 0 && !ollamaKey && !explicitOllama?.apiKey) {
-    return undefined;
+  const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
+  const discovered: Record<string, ProviderConfig> = {};
+  for (const provider of byOrder[order]) {
+    const result = await provider.discovery?.run({
+      config: ctx.config ?? {},
+      agentDir: ctx.agentDir,
+      workspaceDir: ctx.workspaceDir,
+      env: ctx.env,
+      resolveProviderApiKey: (providerId) =>
+        ctx.resolveProviderApiKey(providerId?.trim() || provider.id),
+    });
+    mergeImplicitProviderSet(
+      discovered,
+      normalizePluginDiscoveryResult({
+        provider,
+        result,
+      }),
+    );
   }
-  return {
-    ollama: {
-      ...ollamaProvider,
-      apiKey: ollamaKey ?? explicitOllama?.apiKey ?? OLLAMA_LOCAL_AUTH_MARKER,
-    },
-  };
-}
-
-async function resolveVllmImplicitProvider(
-  ctx: ImplicitProviderContext,
-): Promise<Record<string, ProviderConfig> | undefined> {
-  if (ctx.explicitProviders?.vllm) {
-    return undefined;
-  }
-  const { apiKey: vllmKey, discoveryApiKey } = ctx.resolveProviderApiKey("vllm");
-  if (!vllmKey) {
-    return undefined;
-  }
-  return {
-    vllm: {
-      ...(await buildVllmProvider({ apiKey: discoveryApiKey })),
-      apiKey: vllmKey,
-    },
-  };
+  return Object.keys(discovered).length > 0 ? discovered : undefined;
 }
 
 export async function resolveImplicitProviders(
@@ -976,15 +864,17 @@ export async function resolveImplicitProviders(
   for (const loader of SIMPLE_IMPLICIT_PROVIDER_LOADERS) {
     mergeImplicitProviderSet(providers, await loader(context));
   }
+  mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "simple"));
   for (const loader of PROFILE_IMPLICIT_PROVIDER_LOADERS) {
     mergeImplicitProviderSet(providers, await loader(context));
   }
+  mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "profile"));
   for (const loader of PAIRED_IMPLICIT_PROVIDER_LOADERS) {
     mergeImplicitProviderSet(providers, await loader(context));
   }
+  mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "paired"));
   mergeImplicitProviderSet(providers, await resolveCloudflareAiGatewayImplicitProvider(context));
-  mergeImplicitProviderSet(providers, await resolveOllamaImplicitProvider(context));
-  mergeImplicitProviderSet(providers, await resolveVllmImplicitProvider(context));
+  mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "late"));
 
   if (!providers["github-copilot"]) {
     const implicitCopilot = await resolveImplicitCopilotProvider({

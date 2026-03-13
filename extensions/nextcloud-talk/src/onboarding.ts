@@ -1,15 +1,14 @@
 import {
-  buildSingleChannelSecretPromptState,
   formatDocsLink,
   hasConfiguredSecretInput,
   mapAllowFromEntries,
   mergeAllowFromEntries,
-  promptSingleChannelSecretInput,
+  patchScopedAccountConfig,
+  runSingleChannelSecretStep,
   resolveAccountIdForConfigure,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   setTopLevelChannelDmPolicyWithAllowFrom,
-  type SecretInput,
   type ChannelOnboardingAdapter,
   type ChannelOnboardingDmPolicy,
   type OpenClawConfig,
@@ -39,38 +38,12 @@ function setNextcloudTalkAccountConfig(
   accountId: string,
   updates: Record<string, unknown>,
 ): CoreConfig {
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        "nextcloud-talk": {
-          ...cfg.channels?.["nextcloud-talk"],
-          enabled: true,
-          ...updates,
-        },
-      },
-    };
-  }
-
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      "nextcloud-talk": {
-        ...cfg.channels?.["nextcloud-talk"],
-        enabled: true,
-        accounts: {
-          ...cfg.channels?.["nextcloud-talk"]?.accounts,
-          [accountId]: {
-            ...cfg.channels?.["nextcloud-talk"]?.accounts?.[accountId],
-            enabled: cfg.channels?.["nextcloud-talk"]?.accounts?.[accountId]?.enabled ?? true,
-            ...updates,
-          },
-        },
-      },
-    },
-  };
+  return patchScopedAccountConfig({
+    cfg,
+    channelKey: channel,
+    accountId,
+    patch: updates,
+  }) as CoreConfig;
 }
 
 async function noteNextcloudTalkSecretHelp(prompter: WizardPrompter): Promise<void> {
@@ -215,12 +188,6 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
       hasConfiguredSecretInput(resolvedAccount.config.botSecret) ||
       resolvedAccount.config.botSecretFile,
     );
-    const secretPromptState = buildSingleChannelSecretPromptState({
-      accountConfigured,
-      hasConfigToken: hasConfigSecret,
-      allowEnv,
-      envValue: process.env.NEXTCLOUD_TALK_BOT_SECRET,
-    });
 
     let baseUrl = resolvedAccount.baseUrl;
     if (!baseUrl) {
@@ -241,32 +208,35 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
       ).trim();
     }
 
-    let secret: SecretInput | null = null;
-    if (!accountConfigured) {
-      await noteNextcloudTalkSecretHelp(prompter);
-    }
-
-    const secretResult = await promptSingleChannelSecretInput({
+    const secretStep = await runSingleChannelSecretStep({
       cfg: next,
       prompter,
       providerHint: "nextcloud-talk",
       credentialLabel: "bot secret",
-      accountConfigured: secretPromptState.accountConfigured,
-      canUseEnv: secretPromptState.canUseEnv,
-      hasConfigToken: secretPromptState.hasConfigToken,
+      accountConfigured,
+      hasConfigToken: hasConfigSecret,
+      allowEnv,
+      envValue: process.env.NEXTCLOUD_TALK_BOT_SECRET,
       envPrompt: "NEXTCLOUD_TALK_BOT_SECRET detected. Use env var?",
       keepPrompt: "Nextcloud Talk bot secret already configured. Keep it?",
       inputPrompt: "Enter Nextcloud Talk bot secret",
       preferredEnvVar: "NEXTCLOUD_TALK_BOT_SECRET",
+      onMissingConfigured: async () => await noteNextcloudTalkSecretHelp(prompter),
+      applyUseEnv: async (cfg) =>
+        setNextcloudTalkAccountConfig(cfg as CoreConfig, accountId, {
+          baseUrl,
+        }),
+      applySet: async (cfg, value) =>
+        setNextcloudTalkAccountConfig(cfg as CoreConfig, accountId, {
+          baseUrl,
+          botSecret: value,
+        }),
     });
-    if (secretResult.action === "set") {
-      secret = secretResult.value;
-    }
+    next = secretStep.cfg as CoreConfig;
 
-    if (secretResult.action === "use-env" || secret || baseUrl !== resolvedAccount.baseUrl) {
+    if (secretStep.action === "keep" && baseUrl !== resolvedAccount.baseUrl) {
       next = setNextcloudTalkAccountConfig(next, accountId, {
         baseUrl,
-        ...(secret ? { botSecret: secret } : {}),
       });
     }
 
@@ -287,26 +257,28 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
           validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
         }),
       ).trim();
-      const apiPasswordResult = await promptSingleChannelSecretInput({
+      const apiPasswordStep = await runSingleChannelSecretStep({
         cfg: next,
         prompter,
         providerHint: "nextcloud-talk-api",
         credentialLabel: "API password",
-        ...buildSingleChannelSecretPromptState({
-          accountConfigured: Boolean(existingApiUser && existingApiPasswordConfigured),
-          hasConfigToken: existingApiPasswordConfigured,
-          allowEnv: false,
-        }),
+        accountConfigured: Boolean(existingApiUser && existingApiPasswordConfigured),
+        hasConfigToken: existingApiPasswordConfigured,
+        allowEnv: false,
         envPrompt: "",
         keepPrompt: "Nextcloud Talk API password already configured. Keep it?",
         inputPrompt: "Enter Nextcloud Talk API password",
         preferredEnvVar: "NEXTCLOUD_TALK_API_PASSWORD",
+        applySet: async (cfg, value) =>
+          setNextcloudTalkAccountConfig(cfg as CoreConfig, accountId, {
+            apiUser,
+            apiPassword: value,
+          }),
       });
-      const apiPassword = apiPasswordResult.action === "set" ? apiPasswordResult.value : undefined;
-      next = setNextcloudTalkAccountConfig(next, accountId, {
-        apiUser,
-        ...(apiPassword ? { apiPassword } : {}),
-      });
+      next =
+        apiPasswordStep.action === "keep"
+          ? setNextcloudTalkAccountConfig(next, accountId, { apiUser })
+          : (apiPasswordStep.cfg as CoreConfig);
     }
 
     if (forceAllowFrom) {

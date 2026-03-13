@@ -27,10 +27,14 @@ export {
   mergeAllowFromEntries,
   promptAccountId,
   promptSingleChannelSecretInput,
+  runSingleChannelSecretStep,
   resolveAccountIdForConfigure,
   setTopLevelChannelDmPolicyWithAllowFrom,
 } from "../channels/plugins/onboarding/helpers.js";
-export { applyAccountNameToChannelSection } from "../channels/plugins/setup-helpers.js";
+export {
+  applyAccountNameToChannelSection,
+  patchScopedAccountConfig,
+} from "../channels/plugins/setup-helpers.js";
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export type { ChannelGroupContext, ChannelSetupInput } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -73,6 +77,7 @@ export {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "../infra/http-body.js";
+export { waitForAbortSignal } from "../infra/abort-signal.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";

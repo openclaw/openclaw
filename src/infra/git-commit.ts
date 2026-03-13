@@ -22,6 +22,12 @@ const formatCommit = (value?: string | null) => {
 
 const cachedGitCommitBySearchDir = new Map<string, string | null>();
 
+export type CommitMetadataReaders = {
+  readGitCommit?: (searchDir: string, packageRoot: string | null) => string | null | undefined;
+  readBuildInfoCommit?: () => string | null;
+  readPackageJsonCommit?: () => string | null;
+};
+
 function isMissingPathError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
@@ -59,6 +65,10 @@ const safeReadFilePrefix = (filePath: string, limit = 256) => {
 const cacheGitCommit = (searchDir: string, commit: string | null) => {
   cachedGitCommitBySearchDir.set(searchDir, commit);
   return commit;
+};
+
+const clearCachedGitCommits = () => {
+  cachedGitCommitBySearchDir.clear();
 };
 
 const resolveGitLookupDepth = (searchDir: string, packageRoot: string | null) => {
@@ -176,9 +186,12 @@ export const resolveCommitHash = (
     cwd?: string;
     env?: NodeJS.ProcessEnv;
     moduleUrl?: string;
+    readers?: CommitMetadataReaders;
   } = {},
 ) => {
   const env = options.env ?? process.env;
+  const readers = options.readers ?? {};
+  const readGitCommit = readers.readGitCommit ?? readCommitFromGit;
   const envCommit = env.GIT_COMMIT?.trim() || env.GIT_SHA?.trim();
   const normalized = formatCommit(envCommit);
   if (normalized) {
@@ -193,24 +206,28 @@ export const resolveCommitHash = (
     moduleUrl: options.moduleUrl,
   });
   try {
-    const gitCommit = readCommitFromGit(searchDir, packageRoot);
+    const gitCommit = readGitCommit(searchDir, packageRoot);
     if (gitCommit !== undefined) {
       return cacheGitCommit(searchDir, gitCommit);
     }
   } catch {
     // Fall through to baked metadata for packaged installs that are not in a live checkout.
   }
-  const buildInfoCommit = readCommitFromBuildInfo();
+  const buildInfoCommit = readers.readBuildInfoCommit?.() ?? readCommitFromBuildInfo();
   if (buildInfoCommit) {
     return cacheGitCommit(searchDir, buildInfoCommit);
   }
-  const pkgCommit = readCommitFromPackageJson();
+  const pkgCommit = readers.readPackageJsonCommit?.() ?? readCommitFromPackageJson();
   if (pkgCommit) {
     return cacheGitCommit(searchDir, pkgCommit);
   }
   try {
-    return cacheGitCommit(searchDir, readCommitFromGit(searchDir, packageRoot) ?? null);
+    return cacheGitCommit(searchDir, readGitCommit(searchDir, packageRoot) ?? null);
   } catch {
     return cacheGitCommit(searchDir, null);
   }
+};
+
+export const __testing = {
+  clearCachedGitCommits,
 };

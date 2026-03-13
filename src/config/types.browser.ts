@@ -84,4 +84,10 @@ export type BrowserConfig = {
   extraArgs?: string[];
   /** Chrome DevTools MCP server integration for agent sessions. */
   mcp?: BrowserMcpConfig;
+  /**
+   * Bind address for the Chrome extension relay server.
+   * Default: "127.0.0.1". Set to "0.0.0.0" for WSL2 or other environments where
+   * the relay must be reachable from a different network namespace.
+   */
+  relayBindHost?: string;
 };

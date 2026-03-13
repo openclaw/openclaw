@@ -332,7 +332,7 @@ Read WORKFLOW.md on startup.
       fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
       const result = await readPostCompactionContext(tmpDir);
       expect(result).not.toBeNull();
-      expect(result).toContain("Execute your Session Startup sequence now");
+      expect(result).toContain("Run your Session Startup sequence");
     });
 
     it("falls back to legacy sections when defaults are explicitly configured", async () => {
@@ -368,7 +368,7 @@ Read WORKFLOW.md on startup.
       expect(result).not.toBeNull();
       expect(result).toContain("Do startup things");
       expect(result).toContain("Be safe");
-      expect(result).toContain("Execute your Session Startup sequence now");
+      expect(result).toContain("Run your Session Startup sequence");
     });
 
     it("custom section names are matched case-insensitively", async () => {

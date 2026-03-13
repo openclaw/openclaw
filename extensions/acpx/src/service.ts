@@ -117,9 +117,8 @@ export function createAcpxRuntimeService(
       });
       const expectedVersionLabel = pluginConfig.expectedVersion ?? "any";
       const installLabel = pluginConfig.allowPluginLocalInstall ? "enabled" : "disabled";
-      const mcpServerCount = Object.keys(pluginConfig.mcpServers).length;
       ctx.logger.info(
-        `acpx runtime backend registered (command: ${pluginConfig.command}, expectedVersion: ${expectedVersionLabel}, pluginLocalInstall: ${installLabel}${mcpServerCount > 0 ? `, mcpServers: ${mcpServerCount}` : ""})`,
+        `acpx runtime backend registered (command: ${pluginConfig.command}, expectedVersion: ${expectedVersionLabel}, pluginLocalInstall: ${installLabel})`,
       );
 
       lifecycleRevision += 1;
@@ -131,6 +130,7 @@ export function createAcpxRuntimeService(
             logger: ctx.logger,
             expectedVersion: pluginConfig.expectedVersion,
             allowInstall: pluginConfig.allowPluginLocalInstall,
+            stripProviderAuthEnvVars: pluginConfig.stripProviderAuthEnvVars,
             spawnOptions: {
               strictWindowsCmdWrapper: pluginConfig.strictWindowsCmdWrapper,
             },

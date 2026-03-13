@@ -387,6 +387,7 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        relayBindHost: z.union([z.string().ipv4(), z.string().ipv6()]).optional(),
       })
       .strict()
       .optional(),
@@ -610,6 +611,7 @@ export const OpenClawSchema = z
         wideArea: z
           .object({
             enabled: z.boolean().optional(),
+            domain: z.string().optional(),
           })
           .strict()
           .optional(),
@@ -797,6 +799,23 @@ export const OpenClawSchema = z
             securityHeaders: z
               .object({
                 strictTransportSecurity: z.union([z.string(), z.literal(false)]).optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
+        push: z
+          .object({
+            apns: z
+              .object({
+                relay: z
+                  .object({
+                    baseUrl: z.string().optional(),
+                    timeoutMs: z.number().int().positive().optional(),
+                  })
+                  .strict()
+                  .optional(),
               })
               .strict()
               .optional(),
