@@ -187,6 +187,40 @@ describe("skills global env", () => {
     expect(process.env["SHARED_KEY"]).toBeUndefined();
   });
 
+  it("restores global value after last skill override releases (concurrent sessions)", () => {
+    // Session A: holds SHARED_KEY via global env only.
+    const configA = makeConfig({
+      skills: { env: { SHARED_KEY: "global-value" } },
+    });
+    const revertA = applySkillEnvOverrides({
+      skills: [makeSkillEntry("skill-a")],
+      config: configA,
+    });
+    expect(process.env["SHARED_KEY"]).toBe("global-value");
+
+    // Session B: overrides SHARED_KEY with a per-skill value.
+    const configB = makeConfig({
+      skills: {
+        env: { SHARED_KEY: "global-value" },
+        entries: { "skill-b": { env: { SHARED_KEY: "skill-b-value" } } },
+      },
+    });
+    const revertB = applySkillEnvOverrides({
+      skills: [makeSkillEntry("skill-b")],
+      config: configB,
+    });
+    expect(process.env["SHARED_KEY"]).toBe("skill-b-value");
+
+    // B reverts: A still holds a global reference, so the key must revert to
+    // "global-value" rather than staying as "skill-b-value".
+    revertB();
+    expect(process.env["SHARED_KEY"]).toBe("global-value");
+
+    // A reverts: no more owners, key must be cleaned up entirely.
+    revertA();
+    expect(process.env["SHARED_KEY"]).toBeUndefined();
+  });
+
   it("applySkillEnvOverridesFromSnapshot injects global env for a skill with no entries config", () => {
     const config = makeConfig({
       skills: {
