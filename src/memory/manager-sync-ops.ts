@@ -3,7 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import chokidar, { FSWatcher } from "chokidar";
+import chokidar from "chokidar";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
 import { type OpenClawConfig } from "../config/config.js";
@@ -35,6 +35,11 @@ import {
 } from "./internal.js";
 import { type MemoryFileEntry } from "./internal.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
+import {
+  buildCaseInsensitiveExtensionGlob,
+  getMemoryMultimodalExtensions,
+  isMemoryMultimodalEnabled,
+} from "./multimodal.js";
 import type { SessionFileEntry } from "./session-files.js";
 import {
   buildSessionEntry,
@@ -60,6 +65,11 @@ type MemorySyncProgressState = {
   total: number;
   label?: string;
   report: (update: MemorySyncProgressUpdate) => void;
+};
+
+type MemoryWatcher = {
+  on(event: "add" | "change" | "unlink", listener: () => void): unknown;
+  close(): Promise<void>;
 };
 
 const META_KEY = "memory_index_meta_v1";
@@ -121,7 +131,7 @@ export abstract class MemoryManagerSyncOps {
     loadError?: string;
   } = { enabled: false, available: false };
   protected vectorReady: Promise<boolean> | null = null;
-  protected watcher: FSWatcher | null = null;
+  protected watcher: MemoryWatcher | null = null;
   protected watchTimer: NodeJS.Timeout | null = null;
   protected sessionWatchTimer: NodeJS.Timeout | null = null;
   protected sessionUnsubscribe: (() => void) | null = null;
@@ -384,9 +394,27 @@ export abstract class MemoryManagerSyncOps {
         }
         if (stat.isDirectory()) {
           watchPaths.add(path.join(entry, "**", "*.md"));
+          if (isMemoryMultimodalEnabled(this.settings.multimodal)) {
+            for (const modality of this.settings.multimodal.modalities) {
+              for (const extension of getMemoryMultimodalExtensions(modality)) {
+                watchPaths.add(
+                  path.join(entry, "**", buildCaseInsensitiveExtensionGlob(extension)),
+                );
+              }
+            }
+          }
           continue;
         }
-        if (stat.isFile() && entry.toLowerCase().endsWith(".md")) {
+        if (
+          stat.isFile() &&
+          (entry.toLowerCase().endsWith(".md") ||
+            (isMemoryMultimodalEnabled(this.settings.multimodal) &&
+              this.settings.multimodal.modalities.some((modality) =>
+                getMemoryMultimodalExtensions(modality).some((extension) =>
+                  entry.toLowerCase().endsWith(extension),
+                ),
+              )))
+        ) {
           watchPaths.add(entry);
         }
       } catch {
@@ -650,9 +678,15 @@ export abstract class MemoryManagerSyncOps {
       return;
     }
 
-    const files = await listMemoryFiles(this.workspaceDir, this.settings.extraPaths);
+    const files = await listMemoryFiles(
+      this.workspaceDir,
+      this.settings.extraPaths,
+      this.settings.multimodal,
+    );
     const fileEntries = (
-      await Promise.all(files.map(async (file) => buildFileEntry(file, this.workspaceDir)))
+      await Promise.all(
+        files.map(async (file) => buildFileEntry(file, this.workspaceDir, this.settings.multimodal)),
+      )
     ).filter((entry): entry is MemoryFileEntry => entry !== null);
     log.debug("memory sync: indexing memory files", {
       files: fileEntries.length,
