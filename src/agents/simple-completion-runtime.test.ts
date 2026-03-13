@@ -192,4 +192,38 @@ describe("prepareSimpleCompletionModel", () => {
       "copilot-runtime-token",
     );
   });
+
+  it("returns exchanged copilot token in auth.apiKey for github-copilot provider", async () => {
+    hoisted.resolveModelMock.mockReturnValueOnce({
+      model: {
+        provider: "github-copilot",
+        id: "gpt-4.1",
+      },
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "ghu_original_github_token",
+      source: "profile:github-copilot:default",
+      mode: "token",
+    });
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "github-copilot",
+      modelId: "gpt-4.1",
+    });
+
+    expect(result).not.toHaveProperty("error");
+    if ("error" in result) {
+      return;
+    }
+
+    // The returned auth.apiKey should be the exchanged runtime token,
+    // not the original GitHub token
+    expect(result.auth.apiKey).toBe("copilot-runtime-token");
+    expect(result.auth.apiKey).not.toBe("ghu_original_github_token");
+  });
 });
