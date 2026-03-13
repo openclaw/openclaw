@@ -478,9 +478,11 @@ describe("gateway server chat", () => {
             attachments: [
               {
                 type: "image",
-                mimeType: "image/png",
-                fileName: "dot.png",
-                content: `data:image/png;base64,${pngB64}`,
+                source: {
+                  type: "base64",
+                  media_type: "image/png",
+                  data: pngB64,
+                },
               },
             ],
           },
