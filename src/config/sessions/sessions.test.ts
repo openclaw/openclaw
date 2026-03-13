@@ -2,7 +2,8 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as jsonFiles from "../../infra/json-files.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
@@ -18,7 +19,6 @@ import {
   validateSessionId,
 } from "./paths.js";
 import { resolveSessionResetPolicy } from "./reset.js";
-import { useSessionStoreTestDb } from "./test-helpers.sqlite.js";
 import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
 import type { SessionEntry } from "./types.js";
 
@@ -147,14 +147,21 @@ describe("resolveSessionResetPolicy", () => {
 });
 
 describe("session store lock (Promise chain mutex)", () => {
-  const testDb = useSessionStoreTestDb();
   let lockFixtureRoot = "";
   let lockCaseId = 0;
+  let lockTmpDirs: string[] = [];
 
-  function makeTmpStorePath(): string {
-    // Use a unique storePath per test case that follows agents/{id}/sessions pattern
-    const agentId = `lock-test-${lockCaseId++}`;
-    return path.join(lockFixtureRoot, "agents", agentId, "sessions", "sessions.json");
+  async function makeTmpStore(
+    initial: Record<string, unknown> = {},
+  ): Promise<{ dir: string; storePath: string }> {
+    const dir = path.join(lockFixtureRoot, `case-${lockCaseId++}`);
+    await fsPromises.mkdir(dir);
+    lockTmpDirs.push(dir);
+    const storePath = path.join(dir, "sessions.json");
+    if (Object.keys(initial).length > 0) {
+      await fsPromises.writeFile(storePath, JSON.stringify(initial, null, 2), "utf-8");
+    }
+    return { dir, storePath };
   }
 
   beforeAll(async () => {
@@ -169,13 +176,13 @@ describe("session store lock (Promise chain mutex)", () => {
 
   afterEach(async () => {
     clearSessionStoreCacheForTest();
+    lockTmpDirs = [];
   });
 
   it("serializes concurrent updateSessionStore calls without data loss", async () => {
     const key = "agent:main:test";
-    const storePath = makeTmpStorePath();
-    testDb.seed(storePath, {
-      [key]: { sessionId: "s1", updatedAt: 100, counter: 0 } as unknown as SessionEntry,
+    const { storePath } = await makeTmpStore({
+      [key]: { sessionId: "s1", updatedAt: 100, counter: 0 },
     });
 
     const N = 4;
@@ -194,10 +201,27 @@ describe("session store lock (Promise chain mutex)", () => {
     expect((store[key] as Record<string, unknown>).counter).toBe(N);
   });
 
+  it("skips session store disk writes when payload is unchanged", async () => {
+    const key = "agent:main:no-op-save";
+    const { storePath } = await makeTmpStore({
+      [key]: { sessionId: "s-noop", updatedAt: Date.now() },
+    });
+
+    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
+    await updateSessionStore(
+      storePath,
+      async () => {
+        // Intentionally no-op mutation.
+      },
+      { skipMaintenance: true },
+    );
+    expect(writeSpy).not.toHaveBeenCalled();
+    writeSpy.mockRestore();
+  });
+
   it("multiple consecutive errors do not permanently poison the queue", async () => {
     const key = "agent:main:multi-err";
-    const storePath = makeTmpStorePath();
-    testDb.seed(storePath, {
+    const { storePath } = await makeTmpStore({
       [key]: { sessionId: "s1", updatedAt: 100 },
     });
 
@@ -238,13 +262,12 @@ describe("session store lock (Promise chain mutex)", () => {
 
   it("normalizes orphan modelProvider fields at store write boundary", async () => {
     const key = "agent:main:orphan-provider";
-    const storePath = makeTmpStorePath();
-    testDb.seed(storePath, {
+    const { storePath } = await makeTmpStore({
       [key]: {
         sessionId: "sess-orphan",
         updatedAt: 100,
         modelProvider: "anthropic",
-      } as SessionEntry,
+      },
     });
 
     await updateSessionStore(storePath, async (store) => {
@@ -260,20 +283,25 @@ describe("session store lock (Promise chain mutex)", () => {
 
 describe("appendAssistantMessageToSessionTranscript", () => {
   const fixture = useTempSessionsFixture("transcript-test-");
-  const testDb = useSessionStoreTestDb();
+  const sessionId = "test-session-id";
+  const sessionKey = "test-session";
+
+  function writeTranscriptStore() {
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          chatType: "direct",
+          channel: "discord",
+        },
+      }),
+      "utf-8",
+    );
+  }
 
   it("creates transcript file and appends message for valid session", async () => {
-    const sessionId = "test-session-id";
-    const sessionKey = "test-session";
-    const store = {
-      [sessionKey]: {
-        sessionId,
-        updatedAt: Date.now(),
-        chatType: "direct",
-        channel: "discord",
-      } as SessionEntry,
-    };
-    testDb.seed(fixture.storePath(), store);
+    writeTranscriptStore();
 
     const result = await appendAssistantMessageToSessionTranscript({
       sessionKey,
@@ -305,16 +333,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   });
 
   it("does not append a duplicate delivery mirror for the same idempotency key", async () => {
-    const sessionId = "test-session-id";
-    const sessionKey = "test-session";
-    const store = {
-      [sessionKey]: {
-        sessionId,
-        chatType: "direct",
-        channel: "discord",
-      },
-    };
-    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+    writeTranscriptStore();
 
     await appendAssistantMessageToSessionTranscript({
       sessionKey,
@@ -339,16 +358,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   });
 
   it("ignores malformed transcript lines when checking mirror idempotency", async () => {
-    const sessionId = "test-session-id";
-    const sessionKey = "test-session";
-    const store = {
-      [sessionKey]: {
-        sessionId,
-        chatType: "direct",
-        channel: "discord",
-      },
-    };
-    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+    writeTranscriptStore();
 
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
     fs.writeFileSync(
@@ -389,7 +399,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
 describe("resolveAndPersistSessionFile", () => {
   const fixture = useTempSessionsFixture("session-file-test-");
-  const testDb = useSessionStoreTestDb();
 
   it("persists fallback topic transcript paths for sessions without sessionFile", async () => {
     const sessionId = "topic-session-id";
@@ -399,9 +408,8 @@ describe("resolveAndPersistSessionFile", () => {
         sessionId,
         updatedAt: Date.now(),
       },
-    } as Record<string, SessionEntry>;
-    testDb.seed(fixture.storePath(), store);
-
+    };
+    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
     const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
     const fallbackSessionFile = resolveSessionTranscriptPathInDir(
       sessionId,
@@ -427,9 +435,7 @@ describe("resolveAndPersistSessionFile", () => {
   it("creates and persists entry when session is not yet present", async () => {
     const sessionId = "new-session-id";
     const sessionKey = "agent:main:telegram:group:123";
-    // Seed empty store
-    testDb.seed(fixture.storePath(), {});
-
+    fs.writeFileSync(fixture.storePath(), JSON.stringify({}), "utf-8");
     const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
     const fallbackSessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
 
