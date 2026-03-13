@@ -2,18 +2,20 @@
  * Autoresearch benchmark: measures stable prefix of the OpenClaw system prompt.
  * Run with: bun scripts/autoresearch-benchmark.ts
  *
- * Models real production usage: a group-chat session (WhatsApp/Telegram/Discord)
- * where the agent has a group-chat context string. This is the most common
- * OpenClaw deployment. The group-chat context (extraSystemPrompt) changes
- * per conversation, so it must come AFTER workspace files to avoid breaking
- * the Anthropic KV-cache prefix.
+ * SCENARIO: MEMORY.md daily-notes user.
+ * Models a user who has a MEMORY.md (daily notes) that changes every day,
+ * but whose workspace guidelines (AGENTS.md), channel (WhatsApp), group chat
+ * context, and reasoning level remain constant within the same day.
  *
- * stable_chars = chars before the first "most-dynamic" section.
- * Priority (most → least dynamic):
- *   1. ## Group Chat Context  — changes per conversation
- *   2. MEMORY.md header        — changes daily when present
- *   3. AGENTS.md header        — changes when guidelines update
- *   4. First workspace file    — fallback
+ * Method: build TWO prompts with identical parameters except MEMORY.md content
+ * (day 1 vs day 2 notes). Find the first character that differs. Everything
+ * before that is the KV-cacheable stable prefix.
+ *
+ * stable_chars = first-diff position between prompt-with-MEMORY-v1 and
+ *                prompt-with-MEMORY-v2.
+ *
+ * This is more rigorous than pattern scanning: it directly measures what
+ * Anthropic's KV cache would actually reuse.
  */
 
 import os from "node:os";
@@ -67,15 +69,41 @@ const GROUP_CHAT_EXTRA_PROMPT =
 
 // Load real workspace bootstrap files
 const rawFiles = await loadWorkspaceBootstrapFiles(workspaceDir);
-const contextFiles = buildBootstrapContextFiles(rawFiles, {
-  maxChars: 20_000,
-  totalMaxChars: 150_000,
-});
+
+// ── MEMORY.md daily-notes scenario ─────────────────────────────────────────
+// Inject a mock MEMORY.md (represents daily notes that change every morning).
+// Two versions simulate day 1 → day 2 transition.
+const MEMORY_MD_PATH = path.join(workspaceDir, "MEMORY.md");
+const MOCK_MEMORY_V1 =
+  "# Memory — 2026-03-13\n" +
+  "- Working on KV cache optimization for OpenClaw bootstrap prompts\n" +
+  "- Tests all passing on main branch\n" +
+  "- Next: investigate total_chars reduction opportunities";
+const MOCK_MEMORY_V2 =
+  "# Memory — 2026-03-14\n" +
+  "- KV cache optimization complete: 91.8% stable prefix achieved\n" +
+  "- PR open for review\n" +
+  "- Next: monitor cache hit rate in production, update docs";
+
+function makeContextFiles(memoryContent: string) {
+  const filesWithMemory = [
+    ...rawFiles,
+    { name: "MEMORY.md" as const, path: MEMORY_MD_PATH, content: memoryContent, missing: false },
+  ];
+  return buildBootstrapContextFiles(filesWithMemory, {
+    maxChars: 20_000,
+    totalMaxChars: 150_000,
+  });
+}
+
+// Build context files for both day versions
+const contextFilesV1 = makeContextFiles(MOCK_MEMORY_V1);
+const contextFilesV2 = makeContextFiles(MOCK_MEMORY_V2);
 
 // Build the system prompt with representative parameters.
-// Includes ttsHint (voice assistant config) and messageToolHints (per-channel tool hints)
-// which are session/channel-specific and currently injected into the stable boilerplate.
-const prompt = buildAgentSystemPrompt({
+// Everything is IDENTICAL between the two prompts — only contextFiles differ
+// (MEMORY.md v1 vs v2, representing day 1 vs day 2 notes).
+const sharedParams = {
   workspaceDir,
   toolNames,
   skillsPrompt:
@@ -88,13 +116,12 @@ const prompt = buildAgentSystemPrompt({
     "- gemini: gemini-2.5-pro (Google)",
     "- gpt: gpt-4o (OpenAI)",
   ],
-  contextFiles,
   extraSystemPrompt: GROUP_CHAT_EXTRA_PROMPT,
   reactionGuidance: { level: "minimal", channel: "WhatsApp" },
   reasoningLevel: "on",
-  // TTS hint: changes when voice assistant config changes (on/off, voice model, instructions)
+  // TTS hint: stable within a day (voice config doesn't change mid-day)
   ttsHint: "Reply with natural spoken language. Keep responses concise for voice delivery.",
-  // Per-channel message tool hints: change per channel (WhatsApp vs Telegram vs iMessage)
+  // Per-channel message tool hints: stable for a given channel
   messageToolHints: [
     "- For WhatsApp group chats: use reactions to acknowledge messages without noise.",
   ],
@@ -109,11 +136,31 @@ const prompt = buildAgentSystemPrompt({
   },
   acpEnabled: true,
   promptMode: "full",
-});
+};
+
+// Build two prompts: identical except MEMORY.md content (day 1 vs day 2)
+const prompt = buildAgentSystemPrompt({ ...sharedParams, contextFiles: contextFilesV1 });
+const promptV2 = buildAgentSystemPrompt({ ...sharedParams, contextFiles: contextFilesV2 });
 
 const totalChars = prompt.length;
 
-// ── Dynamic boundary detection ──────────────────────────────────────────────
+// ── MEMORY.md scenario: find first diff between day-1 and day-2 prompts ────
+// This is the exact KV-cache stable prefix for "MEMORY.md changes daily".
+// Everything before firstDiff is IDENTICAL between the two prompts and will
+// be served from Anthropic's KV cache.
+let firstDiff = 0;
+while (
+  firstDiff < prompt.length &&
+  firstDiff < promptV2.length &&
+  prompt[firstDiff] === promptV2[firstDiff]
+) {
+  firstDiff++;
+}
+const memoryScenarioStableChars = firstDiff;
+
+// ── Pattern-based detection (used to identify WHAT the boundary is) ─────────
+// Same minimum-position approach as before, but now AGENTS.md is NOT included
+// because it doesn't change in the MEMORY.md daily scenario.
 // Stable prefix = everything before the EARLIEST "most-dynamic" section.
 //
 // We identify "primary dynamic" sections — content that changes between
@@ -206,8 +253,11 @@ for (const { label, pattern } of legacyPatterns) {
   }
 }
 
-console.log(`METRIC system_prompt_stable_chars=${stableChars}`);
+// PRIMARY METRIC: MEMORY.md daily scenario (first-diff between day-1 and day-2 prompts)
+// This directly measures what Anthropic KV cache would reuse between daily note updates.
+// SECONDARY (pattern-based): shows what the boundary is for pattern identification.
+console.log(`METRIC system_prompt_stable_chars=${memoryScenarioStableChars}`);
 console.log(`METRIC system_prompt_total_chars=${totalChars}`);
 console.log(
-  `stable_ratio=${((stableChars / totalChars) * 100).toFixed(1)}%  total=${totalChars} stable=${stableChars}  boundary=${hitLabel}`,
+  `stable_ratio=${((memoryScenarioStableChars / totalChars) * 100).toFixed(1)}%  total=${totalChars} stable=${memoryScenarioStableChars}  boundary=${hitLabel}(pattern) memory-diff=${memoryScenarioStableChars}`,
 );
