@@ -216,4 +216,45 @@ describe("fetchRemoteMedia telegram network policy", () => {
       }),
     );
   });
+
+  it("preserves both primary and fallback errors when Telegram media retry fails twice", async () => {
+    const lookupFn = vi.fn(async () => [
+      { address: "149.154.167.220", family: 4 },
+      { address: "2001:67c:4e8:f004::9", family: 6 },
+    ]) as unknown as LookupFn;
+    const primaryError = createTelegramFetchFailedError("EHOSTUNREACH");
+    const fallbackError = createTelegramFetchFailedError("ETIMEDOUT");
+    undiciFetch.mockRejectedValueOnce(primaryError).mockRejectedValueOnce(fallbackError);
+
+    const telegramTransport = resolveTelegramTransport(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await expect(
+      fetchRemoteMedia({
+        url: "https://api.telegram.org/file/bottok/photos/3.jpg",
+        fetchImpl: telegramTransport.sourceFetch,
+        dispatcherPolicy: telegramTransport.pinnedDispatcherPolicy,
+        fallbackDispatcherPolicy: telegramTransport.fallbackPinnedDispatcherPolicy,
+        shouldRetryFetchError: shouldRetryTelegramIpv4Fallback,
+        lookupFn,
+        maxBytes: 1024,
+        ssrfPolicy: {
+          allowedHostnames: ["api.telegram.org"],
+          allowRfc2544BenchmarkRange: true,
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: "MediaFetchError",
+      code: "fetch_failed",
+      cause: expect.objectContaining({
+        name: "Error",
+        cause: fallbackError,
+        primaryError,
+      }),
+    });
+  });
 });

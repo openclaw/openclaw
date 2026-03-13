@@ -125,7 +125,16 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
         typeof shouldRetryFetchError === "function" &&
         shouldRetryFetchError(err)
       ) {
-        result = await runGuardedFetch(fallbackDispatcherPolicy);
+        try {
+          result = await runGuardedFetch(fallbackDispatcherPolicy);
+        } catch (fallbackErr) {
+          const combined = new Error(
+            `Primary fetch failed and fallback fetch also failed for ${url}`,
+            { cause: fallbackErr },
+          );
+          (combined as Error & { primaryError?: unknown }).primaryError = err;
+          throw combined;
+        }
       } else {
         throw err;
       }
