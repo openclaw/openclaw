@@ -59,6 +59,20 @@ while reducing token usage.
 openclaw plugins install @martian-engineering/lossless-claw
 ```
 
+### n8n-as-code
+
+Build, update, and manage n8n workflows entirely through conversation. Ships a
+prebuilt knowledge base of 537 nodes, 10k+ properties, and 7,700 community
+templates so the AI never hallucinates a schema. Supports pull/push,
+validation against live n8n, and GitOps-ready TypeScript workflow files.
+
+- **npm:** `@n8n-as-code/openclaw-plugin`
+- **repo:** [github.com/EtienneLescot/n8n-as-code](https://github.com/EtienneLescot/n8n-as-code)
+
+```bash
+openclaw plugins install @n8n-as-code/openclaw-plugin
+```
+
 ### Opik
 
 Official plugin that exports agent traces to Opik. Monitor agent behavior,
