@@ -6,6 +6,8 @@ import { isDeepStrictEqual } from "node:util";
 import JSON5 from "json5";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { loadDotEnv } from "../infra/dotenv.js";
+import { withFileLock } from "../infra/file-lock.js";
+import type { FileLockOptions } from "../infra/file-lock.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
   loadShellEnvFallback,
@@ -84,6 +86,17 @@ const OPEN_DM_POLICY_ALLOW_FROM_RE =
   /^(?<policyPath>[a-z0-9_.-]+)\s*=\s*"open"\s+requires\s+(?<allowPath>[a-z0-9_.-]+)(?:\s+\(or\s+[a-z0-9_.-]+\))?\s+to include "\*"$/i;
 
 const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
+
+const CONFIG_WRITE_LOCK_OPTIONS: FileLockOptions = {
+  retries: {
+    retries: 15,
+    factor: 1.5,
+    minTimeout: 50,
+    maxTimeout: 5_000,
+    randomize: true,
+  },
+  stale: 30_000,
+};
 const loggedInvalidConfigs = new Set<string>();
 
 type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed";
@@ -1084,252 +1097,254 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   }
 
   async function writeConfigFile(cfg: OpenClawConfig, options: ConfigWriteOptions = {}) {
-    clearConfigCache();
-    let persistCandidate: unknown = cfg;
-    const { snapshot } = await readConfigFileSnapshotInternal();
-    let envRefMap: Map<string, string> | null = null;
-    let changedPaths: Set<string> | null = null;
-    if (snapshot.valid && snapshot.exists) {
-      const patch = createMergePatch(snapshot.config, cfg);
-      persistCandidate = applyMergePatch(snapshot.resolved, patch);
+    return withFileLock(configPath, CONFIG_WRITE_LOCK_OPTIONS, async () => {
+      clearConfigCache();
+      let persistCandidate: unknown = cfg;
+      const { snapshot } = await readConfigFileSnapshotInternal();
+      let envRefMap: Map<string, string> | null = null;
+      let changedPaths: Set<string> | null = null;
+      if (snapshot.valid && snapshot.exists) {
+        const patch = createMergePatch(snapshot.config, cfg);
+        persistCandidate = applyMergePatch(snapshot.resolved, patch);
+        try {
+          const resolvedIncludes = resolveConfigIncludes(snapshot.parsed, configPath, {
+            readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
+            readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) =>
+              readConfigIncludeFileWithGuards({
+                includePath,
+                resolvedPath,
+                rootRealDir,
+                ioFs: deps.fs,
+              }),
+            parseJson: (raw) => deps.json5.parse(raw),
+          });
+          const collected = new Map<string, string>();
+          collectEnvRefPaths(resolvedIncludes, "", collected);
+          if (collected.size > 0) {
+            envRefMap = collected;
+            changedPaths = new Set<string>();
+            collectChangedPaths(snapshot.config, cfg, "", changedPaths);
+          }
+        } catch {
+          envRefMap = null;
+        }
+      }
+
+      const validated = validateConfigObjectRawWithPlugins(persistCandidate);
+      if (!validated.ok) {
+        const issue = validated.issues[0];
+        const pathLabel = issue?.path ? issue.path : "<root>";
+        const issueMessage = issue?.message ?? "invalid";
+        throw new Error(formatConfigValidationFailure(pathLabel, issueMessage));
+      }
+      if (validated.warnings.length > 0) {
+        const details = validated.warnings
+          .map((warning) => `- ${warning.path}: ${warning.message}`)
+          .join("\n");
+        deps.logger.warn(`Config warnings:\n${details}`);
+      }
+
+      // Restore ${VAR} env var references that were resolved during config loading.
+      // Read the current file (pre-substitution) and restore any references whose
+      // resolved values match the incoming config — so we don't overwrite
+      // "${ANTHROPIC_API_KEY}" with "sk-ant-..." when the caller didn't change it.
+      //
+      // We use only the root file's parsed content (no $include resolution) to avoid
+      // pulling values from included files into the root config on write-back.
+      // Apply env restoration to validated.config (which has runtime defaults stripped
+      // per issue #6070) rather than the raw caller input.
+      let cfgToWrite = validated.config;
       try {
-        const resolvedIncludes = resolveConfigIncludes(snapshot.parsed, configPath, {
-          readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
-          readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) =>
-            readConfigIncludeFileWithGuards({
-              includePath,
-              resolvedPath,
-              rootRealDir,
-              ioFs: deps.fs,
-            }),
-          parseJson: (raw) => deps.json5.parse(raw),
-        });
-        const collected = new Map<string, string>();
-        collectEnvRefPaths(resolvedIncludes, "", collected);
-        if (collected.size > 0) {
-          envRefMap = collected;
-          changedPaths = new Set<string>();
-          collectChangedPaths(snapshot.config, cfg, "", changedPaths);
+        if (deps.fs.existsSync(configPath)) {
+          const currentRaw = await deps.fs.promises.readFile(configPath, "utf-8");
+          const parsedRes = parseConfigJson5(currentRaw, deps.json5);
+          if (parsedRes.ok) {
+            // Use env snapshot from when config was loaded (if available) to avoid
+            // TOCTOU issues where env changes between load and write. Falls back to
+            // live env if no snapshot exists (e.g., first write before any load).
+            const envForRestore = options.envSnapshotForRestore ?? deps.env;
+            cfgToWrite = restoreEnvVarRefs(
+              cfgToWrite,
+              parsedRes.parsed,
+              envForRestore,
+            ) as OpenClawConfig;
+          }
         }
       } catch {
-        envRefMap = null;
+        // If reading the current file fails, write cfg as-is (no env restoration)
       }
-    }
 
-    const validated = validateConfigObjectRawWithPlugins(persistCandidate);
-    if (!validated.ok) {
-      const issue = validated.issues[0];
-      const pathLabel = issue?.path ? issue.path : "<root>";
-      const issueMessage = issue?.message ?? "invalid";
-      throw new Error(formatConfigValidationFailure(pathLabel, issueMessage));
-    }
-    if (validated.warnings.length > 0) {
-      const details = validated.warnings
-        .map((warning) => `- ${warning.path}: ${warning.message}`)
-        .join("\n");
-      deps.logger.warn(`Config warnings:\n${details}`);
-    }
-
-    // Restore ${VAR} env var references that were resolved during config loading.
-    // Read the current file (pre-substitution) and restore any references whose
-    // resolved values match the incoming config — so we don't overwrite
-    // "${ANTHROPIC_API_KEY}" with "sk-ant-..." when the caller didn't change it.
-    //
-    // We use only the root file's parsed content (no $include resolution) to avoid
-    // pulling values from included files into the root config on write-back.
-    // Apply env restoration to validated.config (which has runtime defaults stripped
-    // per issue #6070) rather than the raw caller input.
-    let cfgToWrite = validated.config;
-    try {
-      if (deps.fs.existsSync(configPath)) {
-        const currentRaw = await deps.fs.promises.readFile(configPath, "utf-8");
-        const parsedRes = parseConfigJson5(currentRaw, deps.json5);
-        if (parsedRes.ok) {
-          // Use env snapshot from when config was loaded (if available) to avoid
-          // TOCTOU issues where env changes between load and write. Falls back to
-          // live env if no snapshot exists (e.g., first write before any load).
-          const envForRestore = options.envSnapshotForRestore ?? deps.env;
-          cfgToWrite = restoreEnvVarRefs(
-            cfgToWrite,
-            parsedRes.parsed,
-            envForRestore,
-          ) as OpenClawConfig;
+      const dir = path.dirname(configPath);
+      await deps.fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+      await tightenStateDirPermissionsIfNeeded({
+        configPath,
+        env: deps.env,
+        homedir: deps.homedir,
+        fsModule: deps.fs,
+      });
+      const outputConfigBase =
+        envRefMap && changedPaths
+          ? (restoreEnvRefsFromMap(cfgToWrite, "", envRefMap, changedPaths) as OpenClawConfig)
+          : cfgToWrite;
+      let outputConfig = outputConfigBase;
+      if (options.unsetPaths?.length) {
+        for (const unsetPath of options.unsetPaths) {
+          if (!Array.isArray(unsetPath) || unsetPath.length === 0) {
+            continue;
+          }
+          const unsetResult = unsetPathForWrite(outputConfig, unsetPath);
+          if (unsetResult.changed) {
+            outputConfig = unsetResult.next;
+          }
         }
       }
-    } catch {
-      // If reading the current file fails, write cfg as-is (no env restoration)
-    }
+      // Do NOT apply runtime defaults when writing — user config should only contain
+      // explicitly set values. Runtime defaults are applied when loading (issue #6070).
+      const stampedOutputConfig = stampConfigVersion(outputConfig);
+      const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
+      const nextHash = hashConfigRaw(json);
+      const previousHash = resolveConfigSnapshotHash(snapshot);
+      const changedPathCount = changedPaths?.size;
+      const previousBytes =
+        typeof snapshot.raw === "string" ? Buffer.byteLength(snapshot.raw, "utf-8") : null;
+      const nextBytes = Buffer.byteLength(json, "utf-8");
+      const hasMetaBefore = hasConfigMeta(snapshot.parsed);
+      const hasMetaAfter = hasConfigMeta(stampedOutputConfig);
+      const gatewayModeBefore = resolveGatewayMode(snapshot.resolved);
+      const gatewayModeAfter = resolveGatewayMode(stampedOutputConfig);
+      const suspiciousReasons = resolveConfigWriteSuspiciousReasons({
+        existsBefore: snapshot.exists,
+        previousBytes,
+        nextBytes,
+        hasMetaBefore,
+        gatewayModeBefore,
+        gatewayModeAfter,
+      });
+      const logConfigOverwrite = () => {
+        if (!snapshot.exists) {
+          return;
+        }
+        const isVitest = deps.env.VITEST === "true";
+        const shouldLogInVitest = deps.env.OPENCLAW_TEST_CONFIG_OVERWRITE_LOG === "1";
+        if (isVitest && !shouldLogInVitest) {
+          return;
+        }
+        const changeSummary =
+          typeof changedPathCount === "number" ? `, changedPaths=${changedPathCount}` : "";
+        deps.logger.warn(
+          `Config overwrite: ${configPath} (sha256 ${previousHash ?? "unknown"} -> ${nextHash}, backup=${configPath}.bak${changeSummary})`,
+        );
+      };
+      const logConfigWriteAnomalies = () => {
+        if (suspiciousReasons.length === 0) {
+          return;
+        }
+        // Tests often write minimal configs (missing meta, etc); keep output quiet unless requested.
+        const isVitest = deps.env.VITEST === "true";
+        const shouldLogInVitest = deps.env.OPENCLAW_TEST_CONFIG_WRITE_ANOMALY_LOG === "1";
+        if (isVitest && !shouldLogInVitest) {
+          return;
+        }
+        deps.logger.warn(`Config write anomaly: ${configPath} (${suspiciousReasons.join(", ")})`);
+      };
+      const auditRecordBase = {
+        ts: new Date().toISOString(),
+        source: "config-io" as const,
+        event: "config.write" as const,
+        configPath,
+        pid: process.pid,
+        ppid: process.ppid,
+        cwd: process.cwd(),
+        argv: process.argv.slice(0, 8),
+        execArgv: process.execArgv.slice(0, 8),
+        watchMode: deps.env.OPENCLAW_WATCH_MODE === "1",
+        watchSession:
+          typeof deps.env.OPENCLAW_WATCH_SESSION === "string" &&
+          deps.env.OPENCLAW_WATCH_SESSION.trim().length > 0
+            ? deps.env.OPENCLAW_WATCH_SESSION.trim()
+            : null,
+        watchCommand:
+          typeof deps.env.OPENCLAW_WATCH_COMMAND === "string" &&
+          deps.env.OPENCLAW_WATCH_COMMAND.trim().length > 0
+            ? deps.env.OPENCLAW_WATCH_COMMAND.trim()
+            : null,
+        existsBefore: snapshot.exists,
+        previousHash: previousHash ?? null,
+        nextHash,
+        previousBytes,
+        nextBytes,
+        changedPathCount: typeof changedPathCount === "number" ? changedPathCount : null,
+        hasMetaBefore,
+        hasMetaAfter,
+        gatewayModeBefore,
+        gatewayModeAfter,
+        suspicious: suspiciousReasons,
+      };
+      const appendWriteAudit = async (result: ConfigWriteAuditResult, err?: unknown) => {
+        const errorCode =
+          err && typeof err === "object" && "code" in err && typeof err.code === "string"
+            ? err.code
+            : undefined;
+        const errorMessage =
+          err && typeof err === "object" && "message" in err && typeof err.message === "string"
+            ? err.message
+            : undefined;
+        await appendConfigWriteAuditRecord(deps, {
+          ...auditRecordBase,
+          result,
+          nextHash: result === "failed" ? null : auditRecordBase.nextHash,
+          nextBytes: result === "failed" ? null : auditRecordBase.nextBytes,
+          errorCode,
+          errorMessage,
+        });
+      };
 
-    const dir = path.dirname(configPath);
-    await deps.fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-    await tightenStateDirPermissionsIfNeeded({
-      configPath,
-      env: deps.env,
-      homedir: deps.homedir,
-      fsModule: deps.fs,
-    });
-    const outputConfigBase =
-      envRefMap && changedPaths
-        ? (restoreEnvRefsFromMap(cfgToWrite, "", envRefMap, changedPaths) as OpenClawConfig)
-        : cfgToWrite;
-    let outputConfig = outputConfigBase;
-    if (options.unsetPaths?.length) {
-      for (const unsetPath of options.unsetPaths) {
-        if (!Array.isArray(unsetPath) || unsetPath.length === 0) {
-          continue;
-        }
-        const unsetResult = unsetPathForWrite(outputConfig, unsetPath);
-        if (unsetResult.changed) {
-          outputConfig = unsetResult.next;
-        }
-      }
-    }
-    // Do NOT apply runtime defaults when writing — user config should only contain
-    // explicitly set values. Runtime defaults are applied when loading (issue #6070).
-    const stampedOutputConfig = stampConfigVersion(outputConfig);
-    const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
-    const nextHash = hashConfigRaw(json);
-    const previousHash = resolveConfigSnapshotHash(snapshot);
-    const changedPathCount = changedPaths?.size;
-    const previousBytes =
-      typeof snapshot.raw === "string" ? Buffer.byteLength(snapshot.raw, "utf-8") : null;
-    const nextBytes = Buffer.byteLength(json, "utf-8");
-    const hasMetaBefore = hasConfigMeta(snapshot.parsed);
-    const hasMetaAfter = hasConfigMeta(stampedOutputConfig);
-    const gatewayModeBefore = resolveGatewayMode(snapshot.resolved);
-    const gatewayModeAfter = resolveGatewayMode(stampedOutputConfig);
-    const suspiciousReasons = resolveConfigWriteSuspiciousReasons({
-      existsBefore: snapshot.exists,
-      previousBytes,
-      nextBytes,
-      hasMetaBefore,
-      gatewayModeBefore,
-      gatewayModeAfter,
-    });
-    const logConfigOverwrite = () => {
-      if (!snapshot.exists) {
-        return;
-      }
-      const isVitest = deps.env.VITEST === "true";
-      const shouldLogInVitest = deps.env.OPENCLAW_TEST_CONFIG_OVERWRITE_LOG === "1";
-      if (isVitest && !shouldLogInVitest) {
-        return;
-      }
-      const changeSummary =
-        typeof changedPathCount === "number" ? `, changedPaths=${changedPathCount}` : "";
-      deps.logger.warn(
-        `Config overwrite: ${configPath} (sha256 ${previousHash ?? "unknown"} -> ${nextHash}, backup=${configPath}.bak${changeSummary})`,
+      const tmp = path.join(
+        dir,
+        `${path.basename(configPath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
       );
-    };
-    const logConfigWriteAnomalies = () => {
-      if (suspiciousReasons.length === 0) {
-        return;
-      }
-      // Tests often write minimal configs (missing meta, etc); keep output quiet unless requested.
-      const isVitest = deps.env.VITEST === "true";
-      const shouldLogInVitest = deps.env.OPENCLAW_TEST_CONFIG_WRITE_ANOMALY_LOG === "1";
-      if (isVitest && !shouldLogInVitest) {
-        return;
-      }
-      deps.logger.warn(`Config write anomaly: ${configPath} (${suspiciousReasons.join(", ")})`);
-    };
-    const auditRecordBase = {
-      ts: new Date().toISOString(),
-      source: "config-io" as const,
-      event: "config.write" as const,
-      configPath,
-      pid: process.pid,
-      ppid: process.ppid,
-      cwd: process.cwd(),
-      argv: process.argv.slice(0, 8),
-      execArgv: process.execArgv.slice(0, 8),
-      watchMode: deps.env.OPENCLAW_WATCH_MODE === "1",
-      watchSession:
-        typeof deps.env.OPENCLAW_WATCH_SESSION === "string" &&
-        deps.env.OPENCLAW_WATCH_SESSION.trim().length > 0
-          ? deps.env.OPENCLAW_WATCH_SESSION.trim()
-          : null,
-      watchCommand:
-        typeof deps.env.OPENCLAW_WATCH_COMMAND === "string" &&
-        deps.env.OPENCLAW_WATCH_COMMAND.trim().length > 0
-          ? deps.env.OPENCLAW_WATCH_COMMAND.trim()
-          : null,
-      existsBefore: snapshot.exists,
-      previousHash: previousHash ?? null,
-      nextHash,
-      previousBytes,
-      nextBytes,
-      changedPathCount: typeof changedPathCount === "number" ? changedPathCount : null,
-      hasMetaBefore,
-      hasMetaAfter,
-      gatewayModeBefore,
-      gatewayModeAfter,
-      suspicious: suspiciousReasons,
-    };
-    const appendWriteAudit = async (result: ConfigWriteAuditResult, err?: unknown) => {
-      const errorCode =
-        err && typeof err === "object" && "code" in err && typeof err.code === "string"
-          ? err.code
-          : undefined;
-      const errorMessage =
-        err && typeof err === "object" && "message" in err && typeof err.message === "string"
-          ? err.message
-          : undefined;
-      await appendConfigWriteAuditRecord(deps, {
-        ...auditRecordBase,
-        result,
-        nextHash: result === "failed" ? null : auditRecordBase.nextHash,
-        nextBytes: result === "failed" ? null : auditRecordBase.nextBytes,
-        errorCode,
-        errorMessage,
-      });
-    };
-
-    const tmp = path.join(
-      dir,
-      `${path.basename(configPath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
-    );
-
-    try {
-      await deps.fs.promises.writeFile(tmp, json, {
-        encoding: "utf-8",
-        mode: 0o600,
-      });
-
-      if (deps.fs.existsSync(configPath)) {
-        await maintainConfigBackups(configPath, deps.fs.promises);
-      }
 
       try {
-        await deps.fs.promises.rename(tmp, configPath);
-      } catch (err) {
-        const code = (err as { code?: string }).code;
-        // Windows doesn't reliably support atomic replace via rename when dest exists.
-        if (code === "EPERM" || code === "EEXIST") {
-          await deps.fs.promises.copyFile(tmp, configPath);
-          await deps.fs.promises.chmod(configPath, 0o600).catch(() => {
-            // best-effort
-          });
+        await deps.fs.promises.writeFile(tmp, json, {
+          encoding: "utf-8",
+          mode: 0o600,
+        });
+
+        if (deps.fs.existsSync(configPath)) {
+          await maintainConfigBackups(configPath, deps.fs.promises);
+        }
+
+        try {
+          await deps.fs.promises.rename(tmp, configPath);
+        } catch (err) {
+          const code = (err as { code?: string }).code;
+          // Windows doesn't reliably support atomic replace via rename when dest exists.
+          if (code === "EPERM" || code === "EEXIST") {
+            await deps.fs.promises.copyFile(tmp, configPath);
+            await deps.fs.promises.chmod(configPath, 0o600).catch(() => {
+              // best-effort
+            });
+            await deps.fs.promises.unlink(tmp).catch(() => {
+              // best-effort
+            });
+            logConfigOverwrite();
+            logConfigWriteAnomalies();
+            await appendWriteAudit("copy-fallback");
+            return;
+          }
           await deps.fs.promises.unlink(tmp).catch(() => {
             // best-effort
           });
-          logConfigOverwrite();
-          logConfigWriteAnomalies();
-          await appendWriteAudit("copy-fallback");
-          return;
+          throw err;
         }
-        await deps.fs.promises.unlink(tmp).catch(() => {
-          // best-effort
-        });
+        logConfigOverwrite();
+        logConfigWriteAnomalies();
+        await appendWriteAudit("rename");
+      } catch (err) {
+        await appendWriteAudit("failed", err);
         throw err;
       }
-      logConfigOverwrite();
-      logConfigWriteAnomalies();
-      await appendWriteAudit("rename");
-    } catch (err) {
-      await appendWriteAudit("failed", err);
-      throw err;
-    }
+    }); // end withFileLock
   }
 
   return {
