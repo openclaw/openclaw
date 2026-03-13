@@ -138,7 +138,7 @@ export async function sendMessageDiscord(
 ): Promise<DiscordSendResult> {
   // Suppress NO_REPLY and other silent tokens before hitting the Discord API (parity with Slack)
   const trimmed = text?.trim() ?? "";
-  if (isSilentReplyText(trimmed) && !opts.mediaUrl) {
+  if (isSilentReplyText(trimmed) && !opts.mediaUrl && !opts.components && !opts.embeds) {
     logVerbose("discord send: suppressed NO_REPLY token before API call");
     return { messageId: "suppressed", channelId: "" };
   }
