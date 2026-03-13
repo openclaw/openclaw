@@ -1,6 +1,8 @@
-import { describe, expect, test } from "vitest";
+import fs from "node:fs/promises";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
+import { DEDUPE_TTL_MS } from "./server-constants.js";
 import {
   cronIsolatedRun,
   installGatewayTestHooks,
@@ -13,6 +15,10 @@ installGatewayTestHooks({ scope: "suite" });
 
 const resolveMainKey = () => resolveMainSessionKeyFromConfig();
 const HOOK_TOKEN = "hook-secret";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function buildHookJsonHeaders(options?: {
   token?: string | null;
@@ -75,6 +81,10 @@ describe("gateway server hooks", () => {
       expect(resAgent.status).toBe(200);
       const agentEvents = await waitForSystemEvent();
       expect(agentEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
+      const firstCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        deliveryContract?: string;
+      };
+      expect(firstCall?.deliveryContract).toBe("shared");
       drainSystemEvents(resolveMainKey());
 
       mockIsolatedRunOkOnce();
@@ -275,6 +285,165 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("dedupes repeated /hooks/agent deliveries by idempotency key", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
+
+      const first = await postHook(
+        port,
+        "/hooks/agent",
+        { message: "Do it", name: "Email" },
+        { headers: { "Idempotency-Key": "hook-idem-1" } },
+      );
+      expect(first.status).toBe(200);
+      const firstBody = (await first.json()) as { runId?: string };
+      expect(firstBody.runId).toBeTruthy();
+      await waitForSystemEvent();
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      drainSystemEvents(resolveMainKey());
+
+      const second = await postHook(
+        port,
+        "/hooks/agent",
+        { message: "Do it", name: "Email" },
+        { headers: { "Idempotency-Key": "hook-idem-1" } },
+      );
+      expect(second.status).toBe(200);
+      const secondBody = (await second.json()) as { runId?: string };
+      expect(secondBody.runId).toBe(firstBody.runId);
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
+    });
+  });
+
+  test("dedupes hook retries even when trusted-proxy client IP changes", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    expect(configPath).toBeTruthy();
+    await fs.writeFile(
+      configPath!,
+      JSON.stringify({ gateway: { trustedProxies: ["127.0.0.1"] } }, null, 2),
+      "utf-8",
+    );
+
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
+
+      const first = await postHook(
+        port,
+        "/hooks/agent",
+        { message: "Do it", name: "Email" },
+        {
+          headers: {
+            "Idempotency-Key": "hook-idem-forwarded",
+            "X-Forwarded-For": "198.51.100.10",
+          },
+        },
+      );
+      expect(first.status).toBe(200);
+      const firstBody = (await first.json()) as { runId?: string };
+      await waitForSystemEvent();
+      drainSystemEvents(resolveMainKey());
+
+      const second = await postHook(
+        port,
+        "/hooks/agent",
+        { message: "Do it", name: "Email" },
+        {
+          headers: {
+            "Idempotency-Key": "hook-idem-forwarded",
+            "X-Forwarded-For": "203.0.113.25",
+          },
+        },
+      );
+      expect(second.status).toBe(200);
+      const secondBody = (await second.json()) as { runId?: string };
+      expect(secondBody.runId).toBe(firstBody.runId);
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  test("does not retain oversized idempotency keys for replay dedupe", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    const oversizedKey = "x".repeat(257);
+
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
+
+      const first = await postHook(
+        port,
+        "/hooks/agent",
+        { message: "Do it", name: "Email" },
+        { headers: { "Idempotency-Key": oversizedKey } },
+      );
+      expect(first.status).toBe(200);
+      await waitForSystemEvent();
+      drainSystemEvents(resolveMainKey());
+
+      const second = await postHook(
+        port,
+        "/hooks/agent",
+        { message: "Do it", name: "Email" },
+        { headers: { "Idempotency-Key": oversizedKey } },
+      );
+      expect(second.status).toBe(200);
+      await waitForSystemEvent();
+
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  test("expires hook idempotency entries from first delivery time", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValue(1_000_000);
+
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
+
+      const first = await postHook(
+        port,
+        "/hooks/agent",
+        { message: "Do it", name: "Email" },
+        { headers: { "Idempotency-Key": "fixed-window-idem" } },
+      );
+      expect(first.status).toBe(200);
+      const firstBody = (await first.json()) as { runId?: string };
+      await waitForSystemEvent();
+      drainSystemEvents(resolveMainKey());
+
+      nowSpy.mockReturnValue(1_000_000 + DEDUPE_TTL_MS - 1);
+      const second = await postHook(
+        port,
+        "/hooks/agent",
+        { message: "Do it", name: "Email" },
+        { headers: { "Idempotency-Key": "fixed-window-idem" } },
+      );
+      expect(second.status).toBe(200);
+      const secondBody = (await second.json()) as { runId?: string };
+      expect(secondBody.runId).toBe(firstBody.runId);
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+
+      nowSpy.mockReturnValue(1_000_000 + DEDUPE_TTL_MS + 1);
+      const third = await postHook(
+        port,
+        "/hooks/agent",
+        { message: "Do it", name: "Email" },
+        { headers: { "Idempotency-Key": "fixed-window-idem" } },
+      );
+      expect(third.status).toBe(200);
+      const thirdBody = (await third.json()) as { runId?: string };
+      expect(thirdBody.runId).toBeTruthy();
+      expect(thirdBody.runId).not.toBe(firstBody.runId);
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
+    });
+  });
+
   test("enforces hooks.allowedAgentIds for explicit agent routing", async () => {
     testState.hooksConfig = {
       enabled: true,
@@ -381,6 +550,26 @@ describe("gateway server hooks", () => {
         { token: "wrong" },
       );
       expect(failAfterSuccess.status).toBe(401);
+    });
+  });
+
+  test("rejects non-POST hook requests without consuming auth failure budget", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      let lastGet: Response | null = null;
+      for (let i = 0; i < 21; i++) {
+        lastGet = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+          method: "GET",
+          headers: { Authorization: "Bearer wrong" },
+        });
+      }
+      expect(lastGet?.status).toBe(405);
+      expect(lastGet?.headers.get("allow")).toBe("POST");
+
+      const allowed = await postHook(port, "/hooks/wake", { text: "still works" });
+      expect(allowed.status).toBe(200);
+      await waitForSystemEvent();
+      drainSystemEvents(resolveMainKey());
     });
   });
 });

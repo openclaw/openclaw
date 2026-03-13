@@ -45,6 +45,20 @@ async function resolveWithConfig(params: {
   });
 }
 
+async function withEnvVar<T>(key: string, value: string, run: () => Promise<T>): Promise<T> {
+  const previous = process.env[key];
+  process.env[key] = value;
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = previous;
+    }
+  }
+}
+
 describe("resolveApiKeyForProfile config compatibility", () => {
   it("accepts token credentials when config mode is oauth", async () => {
     const profileId = "anthropic:token";
@@ -263,9 +277,7 @@ describe("resolveApiKeyForProfile secret refs", () => {
 
   it("resolves token tokenRef from env", async () => {
     const profileId = "github-copilot:default";
-    const previous = process.env.GITHUB_TOKEN;
-    process.env.GITHUB_TOKEN = "gh-ref-token";
-    try {
+    await withEnvVar("GITHUB_TOKEN", "gh-ref-token", async () => {
       const result = await resolveApiKeyForProfile({
         cfg: cfgFor(profileId, "github-copilot", "token"),
         store: {
@@ -286,20 +298,12 @@ describe("resolveApiKeyForProfile secret refs", () => {
         provider: "github-copilot",
         email: undefined,
       });
-    } finally {
-      if (previous === undefined) {
-        delete process.env.GITHUB_TOKEN;
-      } else {
-        process.env.GITHUB_TOKEN = previous;
-      }
-    }
+    });
   });
 
   it("resolves token tokenRef without inline token when expires is absent", async () => {
     const profileId = "github-copilot:no-inline-token";
-    const previous = process.env.GITHUB_TOKEN;
-    process.env.GITHUB_TOKEN = "gh-ref-token";
-    try {
+    await withEnvVar("GITHUB_TOKEN", "gh-ref-token", async () => {
       const result = await resolveApiKeyForProfile({
         cfg: cfgFor(profileId, "github-copilot", "token"),
         store: {
@@ -319,13 +323,7 @@ describe("resolveApiKeyForProfile secret refs", () => {
         provider: "github-copilot",
         email: undefined,
       });
-    } finally {
-      if (previous === undefined) {
-        delete process.env.GITHUB_TOKEN;
-      } else {
-        process.env.GITHUB_TOKEN = previous;
-      }
-    }
+    });
   });
 
   it("resolves inline ${ENV} api_key values", async () => {

@@ -68,6 +68,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -80,7 +81,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -118,7 +118,6 @@ private enum class PermissionToggle {
 
 private enum class SpecialAccessToggle {
   NotificationListener,
-  AppUpdates,
 }
 
 private val onboardingBackgroundGradient =
@@ -274,10 +273,6 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     rememberSaveable {
       mutableStateOf(isNotificationListenerEnabled(context))
     }
-  var enableAppUpdates by
-    rememberSaveable {
-      mutableStateOf(canInstallUnknownApps(context))
-    }
   var enableMicrophone by rememberSaveable { mutableStateOf(false) }
   var enableCamera by rememberSaveable { mutableStateOf(false) }
   var enablePhotos by rememberSaveable { mutableStateOf(false) }
@@ -342,7 +337,6 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   fun setSpecialAccessToggleEnabled(toggle: SpecialAccessToggle, enabled: Boolean) {
     when (toggle) {
       SpecialAccessToggle.NotificationListener -> enableNotificationListener = enabled
-      SpecialAccessToggle.AppUpdates -> enableAppUpdates = enabled
     }
   }
 
@@ -352,7 +346,6 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
       enableLocation,
       enableNotifications,
       enableNotificationListener,
-      enableAppUpdates,
       enableMicrophone,
       enableCamera,
       enablePhotos,
@@ -368,7 +361,6 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
       if (enableLocation) enabled += "Location"
       if (enableNotifications) enabled += "Notifications"
       if (enableNotificationListener) enabled += "Notification listener"
-      if (enableAppUpdates) enabled += "App updates"
       if (enableMicrophone) enabled += "Microphone"
       if (enableCamera) enabled += "Camera"
       if (enablePhotos) enabled += "Photos"
@@ -383,10 +375,6 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     var openedSpecialSetup = false
     if (enableNotificationListener && !isNotificationListenerEnabled(context)) {
       openNotificationListenerSettings(context)
-      openedSpecialSetup = true
-    }
-    if (enableAppUpdates && !canInstallUnknownApps(context)) {
-      openUnknownAppSourcesSettings(context)
       openedSpecialSetup = true
     }
     if (openedSpecialSetup) {
@@ -431,7 +419,6 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
       val grantedNow =
         when (toggle) {
           SpecialAccessToggle.NotificationListener -> isNotificationListenerEnabled(context)
-          SpecialAccessToggle.AppUpdates -> canInstallUnknownApps(context)
         }
       if (grantedNow) {
         setSpecialAccessToggleEnabled(toggle, true)
@@ -441,7 +428,6 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
       pendingSpecialAccessToggle = toggle
       when (toggle) {
         SpecialAccessToggle.NotificationListener -> openNotificationListenerSettings(context)
-        SpecialAccessToggle.AppUpdates -> openUnknownAppSourcesSettings(context)
       }
     }
 
@@ -456,13 +442,6 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             setSpecialAccessToggleEnabled(
               SpecialAccessToggle.NotificationListener,
               isNotificationListenerEnabled(context),
-            )
-            pendingSpecialAccessToggle = null
-          }
-          SpecialAccessToggle.AppUpdates -> {
-            setSpecialAccessToggleEnabled(
-              SpecialAccessToggle.AppUpdates,
-              canInstallUnknownApps(context),
             )
             pendingSpecialAccessToggle = null
           }
@@ -606,7 +585,6 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
               enableLocation = enableLocation,
               enableNotifications = enableNotifications,
               enableNotificationListener = enableNotificationListener,
-              enableAppUpdates = enableAppUpdates,
               enableMicrophone = enableMicrophone,
               enableCamera = enableCamera,
               enablePhotos = enablePhotos,
@@ -648,9 +626,6 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
               },
               onNotificationListenerChange = { checked ->
                 requestSpecialAccessToggle(SpecialAccessToggle.NotificationListener, checked)
-              },
-              onAppUpdatesChange = { checked ->
-                requestSpecialAccessToggle(SpecialAccessToggle.AppUpdates, checked)
               },
               onMicrophoneChange = { checked ->
                 requestPermissionToggle(
@@ -798,8 +773,18 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     return@Button
                   }
                   gatewayUrl = parsedSetup.url
-                  parsedSetup.token?.let { viewModel.setGatewayToken(it) }
-                  gatewayPassword = parsedSetup.password.orEmpty()
+                  viewModel.setGatewayBootstrapToken(parsedSetup.bootstrapToken.orEmpty())
+                  val sharedToken = parsedSetup.token.orEmpty().trim()
+                  val password = parsedSetup.password.orEmpty().trim()
+                  if (sharedToken.isNotEmpty()) {
+                    viewModel.setGatewayToken(sharedToken)
+                  } else if (!parsedSetup.bootstrapToken.isNullOrBlank()) {
+                    viewModel.setGatewayToken("")
+                  }
+                  gatewayPassword = password
+                  if (password.isEmpty() && !parsedSetup.bootstrapToken.isNullOrBlank()) {
+                    viewModel.setGatewayPassword("")
+                  }
                 } else {
                   val manualUrl = composeGatewayManualUrl(manualHost, manualPort, manualTls)
                   val parsedGateway = manualUrl?.let(::parseGatewayEndpoint)
@@ -808,6 +793,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     return@Button
                   }
                   gatewayUrl = parsedGateway.displayUrl
+                  viewModel.setGatewayBootstrapToken("")
                 }
                 step = OnboardingStep.Permissions
               },
@@ -876,8 +862,13 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                   viewModel.setManualHost(parsed.host)
                   viewModel.setManualPort(parsed.port)
                   viewModel.setManualTls(parsed.tls)
+                  if (gatewayInputMode == GatewayInputMode.Manual) {
+                    viewModel.setGatewayBootstrapToken("")
+                  }
                   if (token.isNotEmpty()) {
                     viewModel.setGatewayToken(token)
+                  } else {
+                    viewModel.setGatewayToken("")
                   }
                   viewModel.setGatewayPassword(password)
                   viewModel.connectManual()
@@ -1337,7 +1328,6 @@ private fun PermissionsStep(
   enableLocation: Boolean,
   enableNotifications: Boolean,
   enableNotificationListener: Boolean,
-  enableAppUpdates: Boolean,
   enableMicrophone: Boolean,
   enableCamera: Boolean,
   enablePhotos: Boolean,
@@ -1353,7 +1343,6 @@ private fun PermissionsStep(
   onLocationChange: (Boolean) -> Unit,
   onNotificationsChange: (Boolean) -> Unit,
   onNotificationListenerChange: (Boolean) -> Unit,
-  onAppUpdatesChange: (Boolean) -> Unit,
   onMicrophoneChange: (Boolean) -> Unit,
   onCameraChange: (Boolean) -> Unit,
   onPhotosChange: (Boolean) -> Unit,
@@ -1387,7 +1376,6 @@ private fun PermissionsStep(
       isPermissionGranted(context, Manifest.permission.ACTIVITY_RECOGNITION)
     }
   val notificationListenerGranted = isNotificationListenerEnabled(context)
-  val appUpdatesGranted = canInstallUnknownApps(context)
 
   StepShell(title = "Permissions") {
     Text(
@@ -1405,7 +1393,7 @@ private fun PermissionsStep(
     InlineDivider()
     PermissionToggleRow(
       title = "Location",
-      subtitle = "location.get (while app is open unless set to Always later)",
+      subtitle = "location.get (while app is open)",
       checked = enableLocation,
       granted = locationGranted,
       onCheckedChange = onLocationChange,
@@ -1430,16 +1418,8 @@ private fun PermissionsStep(
     )
     InlineDivider()
     PermissionToggleRow(
-      title = "App updates",
-      subtitle = "app.update install confirmation (opens Android Settings)",
-      checked = enableAppUpdates,
-      granted = appUpdatesGranted,
-      onCheckedChange = onAppUpdatesChange,
-    )
-    InlineDivider()
-    PermissionToggleRow(
       title = "Microphone",
-      subtitle = "Voice tab transcription",
+      subtitle = "Foreground Voice tab transcription",
       checked = enableMicrophone,
       granted = isPermissionGranted(context, Manifest.permission.RECORD_AUDIO),
       onCheckedChange = onMicrophoneChange,
@@ -1592,10 +1572,12 @@ private fun CommandBlock(command: String) {
     modifier =
       Modifier
         .fillMaxWidth()
-        .background(onboardingCommandBg, RoundedCornerShape(12.dp))
+        .height(IntrinsicSize.Min)
+        .clip(RoundedCornerShape(12.dp))
+        .background(onboardingCommandBg)
         .border(width = 1.dp, color = onboardingCommandBorder, shape = RoundedCornerShape(12.dp)),
   ) {
-    Box(modifier = Modifier.width(3.dp).height(42.dp).background(onboardingCommandAccent))
+    Box(modifier = Modifier.width(3.dp).fillMaxHeight().background(onboardingCommandAccent))
     Text(
       command,
       modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -1635,25 +1617,8 @@ private fun isNotificationListenerEnabled(context: Context): Boolean {
   return DeviceNotificationListenerService.isAccessEnabled(context)
 }
 
-private fun canInstallUnknownApps(context: Context): Boolean {
-  return context.packageManager.canRequestPackageInstalls()
-}
-
 private fun openNotificationListenerSettings(context: Context) {
   val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-  runCatching {
-    context.startActivity(intent)
-  }.getOrElse {
-    openAppSettings(context)
-  }
-}
-
-private fun openUnknownAppSourcesSettings(context: Context) {
-  val intent =
-    Intent(
-      Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-      "package:${context.packageName}".toUri(),
-    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
   runCatching {
     context.startActivity(intent)
   }.getOrElse {
