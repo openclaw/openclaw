@@ -57,10 +57,48 @@ describe("CronService", () => {
     await cronB.status();
 
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    expect(requestHeartbeatNow).toHaveBeenCalledTimes(1);
+    // wakeMode=next-heartbeat no longer calls requestHeartbeatNow;
+    // the queued system event waits for the next scheduled heartbeat (#14440).
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
 
     cronA.stop();
     cronB.stop();
+    await store.cleanup();
+  });
+
+  it("wakeMode=now still calls requestHeartbeatNow without runHeartbeatOnce (#14440)", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    await cron.start();
+    await cron.add({
+      name: "immediate job",
+      enabled: true,
+      schedule: { kind: "at", at: new Date("2025-12-13T00:00:01.000Z").toISOString() },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "ping" },
+    });
+
+    vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
+    await vi.runOnlyPendingTimersAsync();
+    await cron.status();
+
+    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    expect(requestHeartbeatNow).toHaveBeenCalledTimes(1);
+
+    cron.stop();
+    await vi.advanceTimersByTimeAsync(1);
     await store.cleanup();
   });
 });
