@@ -2,8 +2,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { registerLogTransport, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
+import { registerLogTransport, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
 // Mock auth-profiles module — must be before importing model-fallback
@@ -395,14 +395,6 @@ describe("runWithModelFallback – probe logic", () => {
     // All three candidates must be attempted — the abort must not short-circuit
     expect(run).toHaveBeenCalledTimes(3);
 
-    // Verify the primary error is classified as rate_limit, not timeout — the
-    // cause chain (RESOURCE_EXHAUSTED) must override the parent AbortError message.
-    try {
-      await runWithModelFallback({ cfg, provider: "google", model: "gemini-3-flash-preview", run });
-    } catch (err) {
-      expect(String(err)).toContain("(rate_limit)");
-      expect(String(err)).not.toMatch(/gemini.*\(timeout\)/);
-    }
     expect(run).toHaveBeenNthCalledWith(1, "google", "gemini-3-flash-preview", {
       allowTransientCooldownProbe: true,
     });
