@@ -22,7 +22,12 @@ import {
   parseBindingSpecs,
 } from "./agents.bindings.js";
 import { createQuietRuntime, requireValidConfig } from "./agents.command-shared.js";
-import { applyAgentConfig, findAgentEntryIndex, listAgentEntries } from "./agents.config.js";
+import {
+  applyAgentConfig,
+  clearAgentModelConfig,
+  findAgentEntryIndex,
+  listAgentEntries,
+} from "./agents.config.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { applyAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
 import { setupChannels } from "./onboard-channels.js";
@@ -279,7 +284,9 @@ export async function agentsAddCommand(
         agentId,
       });
       nextConfig = authResult.config;
-      if (authResult.agentModelOverride) {
+      if (authResult.clearAgentModelOverride) {
+        nextConfig = clearAgentModelConfig(nextConfig, agentId);
+      } else if (authResult.agentModelOverride) {
         nextConfig = applyAgentConfig(nextConfig, {
           agentId,
           model: authResult.agentModelOverride,

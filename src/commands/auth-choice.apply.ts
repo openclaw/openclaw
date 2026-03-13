@@ -30,6 +30,7 @@ export type ApplyAuthChoiceParams = {
 export type ApplyAuthChoiceResult = {
   config: OpenClawConfig;
   agentModelOverride?: string;
+  clearAgentModelOverride?: boolean;
 };
 
 export async function applyAuthChoice(

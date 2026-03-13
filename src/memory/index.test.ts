@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
+import { HAS_NODE_SQLITE } from "./test-node-sqlite.js";
 import "./test-runtime-mocks.js";
 
 let embedBatchCalls = 0;
@@ -90,7 +91,7 @@ vi.mock("./embeddings.js", () => {
   };
 });
 
-describe("memory index", () => {
+describe.skipIf(!HAS_NODE_SQLITE)("memory index", () => {
   let fixtureRoot = "";
   let workspaceDir = "";
   let memoryDir = "";

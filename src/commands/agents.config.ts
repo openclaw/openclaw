@@ -164,6 +164,28 @@ export function applyAgentConfig(
   };
 }
 
+export function clearAgentModelConfig(cfg: OpenClawConfig, agentId: string): OpenClawConfig {
+  const id = normalizeAgentId(agentId);
+  const list = listAgentEntries(cfg);
+  const index = findAgentEntryIndex(list, id);
+  if (index < 0) {
+    return cfg;
+  }
+
+  const nextList = [...list];
+  const nextEntry = { ...nextList[index] };
+  delete nextEntry.model;
+  nextList[index] = nextEntry;
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      list: nextList,
+    },
+  };
+}
+
 export function pruneAgentConfig(
   cfg: OpenClawConfig,
   agentId: string,

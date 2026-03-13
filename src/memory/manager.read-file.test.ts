@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resetEmbeddingMocks } from "./embedding.test-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { getRequiredMemoryIndexManager } from "./test-manager-helpers.js";
+import { HAS_NODE_SQLITE } from "./test-node-sqlite.js";
 
 function createMemorySearchCfg(options: {
   workspaceDir: string;
@@ -29,7 +30,7 @@ function createMemorySearchCfg(options: {
   } as OpenClawConfig;
 }
 
-describe("MemoryIndexManager.readFile", () => {
+describe.skipIf(!HAS_NODE_SQLITE)("MemoryIndexManager.readFile", () => {
   let workspaceDir: string;
   let indexPath: string;
   let manager: MemoryIndexManager | null = null;

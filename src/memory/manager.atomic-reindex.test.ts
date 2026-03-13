@@ -6,10 +6,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import { getEmbedBatchMock, resetEmbeddingMocks } from "./embedding.test-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { getRequiredMemoryIndexManager } from "./test-manager-helpers.js";
+import { HAS_NODE_SQLITE } from "./test-node-sqlite.js";
 
 let shouldFail = false;
 
-describe("memory manager atomic reindex", () => {
+describe.skipIf(!HAS_NODE_SQLITE)("memory manager atomic reindex", () => {
   let fixtureRoot = "";
   let caseId = 0;
   let workspaceDir: string;

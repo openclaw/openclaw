@@ -21,10 +21,12 @@ const ensureAuthProfileStore = vi.hoisted(() =>
 );
 const listProfilesForProvider = vi.hoisted(() => vi.fn(() => []));
 const upsertAuthProfile = vi.hoisted(() => vi.fn());
+const resolveApiKeyForProfile = vi.hoisted(() => vi.fn());
 vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore,
   listProfilesForProvider,
   upsertAuthProfile,
+  resolveApiKeyForProfile,
 }));
 
 const resolveEnvApiKey = vi.hoisted(() => vi.fn(() => undefined));
@@ -138,7 +140,6 @@ describe("promptDefaultModel", () => {
     expect(result.config?.models?.providers?.vllm).toMatchObject({
       baseUrl: "http://127.0.0.1:8000/v1",
       api: "openai-completions",
-      apiKey: "VLLM_API_KEY", // pragma: allowlist secret
       models: [
         { id: "meta-llama/Meta-Llama-3-8B-Instruct", name: "meta-llama/Meta-Llama-3-8B-Instruct" },
       ],

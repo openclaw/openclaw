@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { MemoryIndexManager } from "./index.js";
 import { buildFileEntry } from "./internal.js";
 import { createMemoryManagerOrThrow } from "./test-manager.js";
+import { HAS_NODE_SQLITE } from "./test-node-sqlite.js";
 
 vi.mock("./embeddings.js", () => {
   return {
@@ -21,7 +22,7 @@ vi.mock("./embeddings.js", () => {
   };
 });
 
-describe("memory vector dedupe", () => {
+describe.skipIf(!HAS_NODE_SQLITE)("memory vector dedupe", () => {
   let workspaceDir: string;
   let indexPath: string;
   let manager: MemoryIndexManager | null = null;
