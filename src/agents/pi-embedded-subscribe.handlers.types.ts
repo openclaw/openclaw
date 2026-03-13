@@ -80,6 +80,8 @@ export type EmbeddedPiSubscribeState = {
   pendingToolMediaUrls: string[];
   pendingToolAudioAsVoice: boolean;
   deterministicApprovalPromptSent: boolean;
+  suppressPreToolText: boolean;
+  pendingBlockReplies: BlockReplyPayload[];
   lastAssistant?: AgentMessage;
 };
 
