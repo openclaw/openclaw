@@ -74,8 +74,118 @@ export async function listTeamsByName(token: string, query: string): Promise<Gra
   return res.value ?? [];
 }
 
+// Cache: conversation-style team ID → Azure AD group ID
+const teamIdToGroupIdCache = new Map<string, string>();
+
+/**
+ * Resolve the Azure AD group ID from a Teams conversation-style team ID (19:xxx@thread.tacv2).
+ * Graph API endpoints need the group GUID, not the conversation ID.
+ */
+export async function resolveTeamGroupId(
+  token: string,
+  conversationTeamId: string,
+): Promise<string | null> {
+  const cached = teamIdToGroupIdCache.get(conversationTeamId);
+  if (cached) return cached;
+
+  // List all teams (paginated) and match by internalId
+  const filter = `resourceProvisioningOptions/Any(x:x eq 'Team')`;
+  let nextPath: string | null =
+    `/groups?$filter=${encodeURIComponent(filter)}&$select=id,displayName`;
+  while (nextPath) {
+    const page: GraphResponse<GraphGroup> & { "@odata.nextLink"?: string } = await fetchGraphJson<
+      GraphResponse<GraphGroup> & { "@odata.nextLink"?: string }
+    >({ token, path: nextPath });
+    for (const group of page.value ?? []) {
+      if (!group.id) continue;
+      try {
+        const teamPath = `/teams/${encodeURIComponent(group.id)}?$select=id,internalId`;
+        const teamInfo = await fetchGraphJson<{ id?: string; internalId?: string }>({
+          token,
+          path: teamPath,
+        });
+        if (teamInfo.internalId) {
+          teamIdToGroupIdCache.set(teamInfo.internalId, group.id);
+          if (teamInfo.internalId === conversationTeamId) {
+            return group.id;
+          }
+        }
+      } catch {
+        // Skip teams we can't access
+      }
+    }
+    nextPath = page["@odata.nextLink"]
+      ? page["@odata.nextLink"].replace(/^https:\/\/graph\.microsoft\.com\/v1\.0/, "")
+      : null;
+  }
+  return null;
+}
+
 export async function listChannelsForTeam(token: string, teamId: string): Promise<GraphChannel[]> {
   const path = `/teams/${encodeURIComponent(teamId)}/channels?$select=id,displayName`;
   const res = await fetchGraphJson<GraphResponse<GraphChannel>>({ token, path });
   return res.value ?? [];
+}
+
+export type GraphThreadMessage = {
+  id?: string;
+  from?: { user?: { displayName?: string; id?: string } };
+  body?: { content?: string; contentType?: string };
+  createdDateTime?: string;
+};
+
+/**
+ * Fetch the parent message of a channel thread.
+ */
+export async function fetchChannelMessage(params: {
+  token: string;
+  teamId: string;
+  channelId: string;
+  messageId: string;
+}): Promise<GraphThreadMessage | null> {
+  const path = `/teams/${encodeURIComponent(params.teamId)}/channels/${encodeURIComponent(params.channelId)}/messages/${encodeURIComponent(params.messageId)}`;
+  try {
+    return await fetchGraphJson<GraphThreadMessage>({ token: params.token, path });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch replies in a channel thread (up to `top` messages, default 50).
+ */
+export async function fetchThreadReplies(params: {
+  token: string;
+  teamId: string;
+  channelId: string;
+  messageId: string;
+  top?: number;
+}): Promise<GraphThreadMessage[]> {
+  const limit = params.top ?? 50;
+  const path = `/teams/${encodeURIComponent(params.teamId)}/channels/${encodeURIComponent(params.channelId)}/messages/${encodeURIComponent(params.messageId)}/replies?$top=${limit}&$orderby=${encodeURIComponent("createdDateTime asc")}`;
+  try {
+    const res = await fetchGraphJson<GraphResponse<GraphThreadMessage>>({
+      token: params.token,
+      path,
+    });
+    return res.value ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Strip HTML tags from Teams message body content.
+ */
+export function stripHtmlTags(html: string): string {
+  return html
+    .replace(/<at[^>]*>.*?<\/at>/gi, "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/\s+/g, " ")
+    .trim();
 }

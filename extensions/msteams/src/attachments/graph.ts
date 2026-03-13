@@ -192,15 +192,42 @@ async function downloadGraphHostedContent(params: {
   }
 
   const out: MSTeamsInboundMedia[] = [];
+  const fetchFnLocal = params.fetchFn ?? fetch;
   for (const item of hosted.items) {
     const contentBytes = typeof item.contentBytes === "string" ? item.contentBytes : "";
-    if (!contentBytes) {
-      continue;
-    }
     let buffer: Buffer;
-    try {
-      buffer = Buffer.from(contentBytes, "base64");
-    } catch {
+    if (contentBytes) {
+      try {
+        buffer = Buffer.from(contentBytes, "base64");
+      } catch {
+        continue;
+      }
+    } else if (item.id) {
+      // contentBytes is null for group chats — fetch via /$value endpoint
+      try {
+        const valueUrl = `${params.messageUrl}/hostedContents/${encodeURIComponent(item.id)}/$value`;
+        const { response: valRes, release } = await fetchWithSsrFGuard({
+          url: valueUrl,
+          fetchImpl: fetchFnLocal,
+          init: {
+            headers: { Authorization: `Bearer ${params.accessToken}` },
+          },
+          policy: params.ssrfPolicy,
+          auditContext: "msteams.graph.hostedContent.value",
+        });
+        try {
+          if (!valRes.ok) {
+            continue;
+          }
+          const ab = await valRes.arrayBuffer();
+          buffer = Buffer.from(ab);
+        } finally {
+          await release();
+        }
+      } catch {
+        continue;
+      }
+    } else {
       continue;
     }
     if (buffer.byteLength > params.maxBytes) {
