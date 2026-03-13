@@ -35,6 +35,11 @@ export function isAwsSdkAuthMarker(value: string): boolean {
   return AWS_SDK_ENV_MARKERS.has(value.trim());
 }
 
+export function isKnownEnvApiKeyMarker(value: string): boolean {
+  const trimmed = value.trim();
+  return KNOWN_ENV_API_KEY_MARKERS.has(trimmed) && !isAwsSdkAuthMarker(trimmed);
+}
+
 export function resolveNonEnvSecretRefApiKeyMarker(_source: SecretRefSource): string {
   return NON_ENV_SECRETREF_MARKER;
 }

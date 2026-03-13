@@ -9,10 +9,13 @@ import {
   applySetupAccountConfigPatch,
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
+  createAccountStatusSink,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
@@ -24,6 +27,7 @@ import {
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
+  resolveMattermostReplyToMode,
   type ResolvedMattermostAccount,
 } from "./mattermost/accounts.js";
 import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
@@ -269,6 +273,16 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   streaming: {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
   },
+  threading: {
+    resolveReplyToMode: ({ cfg, accountId, chatType }) => {
+      const account = resolveMattermostAccount({ cfg, accountId: accountId ?? "default" });
+      const kind =
+        chatType === "direct" || chatType === "group" || chatType === "channel"
+          ? chatType
+          : "channel";
+      return resolveMattermostReplyToMode(account, kind);
+    },
+  },
   reload: { configPrefixes: ["channels.mattermost"] },
   configSchema: buildChannelConfigSchema(MattermostConfigSchema),
   config: {
@@ -500,8 +514,11 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   gateway: {
     startAccount: async (ctx) => {
       const account = ctx.account;
-      ctx.setStatus({
-        accountId: account.accountId,
+      const statusSink = createAccountStatusSink({
+        accountId: ctx.accountId,
+        setStatus: ctx.setStatus,
+      });
+      statusSink({
         baseUrl: account.baseUrl,
         botTokenSource: account.botTokenSource,
       });
@@ -513,7 +530,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
         config: ctx.cfg,
         runtime: ctx.runtime,
         abortSignal: ctx.abortSignal,
-        statusSink: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),
+        statusSink,
       });
     },
   },
