@@ -425,6 +425,7 @@ export async function installLaunchAgent({
           `LaunchAgent install requires a logged-in macOS GUI session for this user (${domain}).`,
           "This usually means you are running from SSH/headless context or as the wrong user (including sudo).",
           "Fix: sign in to the macOS desktop as the target user and rerun `openclaw gateway install --force`.",
+          "For headless/VM setups: enable auto-login in System Settings → Users & Groups → Automatically log in as: [your user]",
           "Headless deployments should use a dedicated logged-in user session or a custom LaunchDaemon (not shipped): https://docs.openclaw.ai/gateway",
         ].join("\n"),
       );
