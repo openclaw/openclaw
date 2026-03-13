@@ -9,7 +9,7 @@ import { OpenClawApp } from "./app.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
-import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
+import { iconForTab, pathForTab, titleForTab, type CustomTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
@@ -83,6 +83,30 @@ export function renderTab(state: AppViewState, tab: Tab) {
       <span class="nav-item__icon" aria-hidden="true">${icons[iconForTab(tab)]}</span>
       ${!collapsed ? html`<span class="nav-item__text">${titleForTab(tab)}</span>` : nothing}
     </a>
+  `;
+}
+
+/**
+ * Render a single user-defined custom tab nav item.
+ * Clicking sets `state.customTabActive` on click.
+ */
+export function renderCustomTabItem(state: AppViewState, tab: CustomTab) {
+  const isActive = state.customTabActive === tab.id;
+  const collapsed = state.settings.navCollapsed;
+  const iconKey = (tab.icon ?? "globe") as keyof typeof icons;
+  const icon = icons[iconKey] ?? icons["globe"];
+  return html`
+    <button
+      class="nav-item ${isActive ? "nav-item--active" : ""}"
+      @click=${() => {
+        state.customTabActive = tab.id;
+      }}
+      title=${tab.label}
+      type="button"
+    >
+      <span class="nav-item__icon" aria-hidden="true">${icon}</span>
+      ${!collapsed ? html`<span class="nav-item__text">${tab.label}</span>` : nothing}
+    </button>
   `;
 }
 

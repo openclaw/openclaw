@@ -22,6 +22,7 @@ export const pt_BR: TranslationMap = {
     settings: "Configurações",
     expand: "Expandir barra lateral",
     collapse: "Recolher barra lateral",
+    custom: "Custom",
     resize: "Redimensionar barra lateral",
   },
   tabs: {

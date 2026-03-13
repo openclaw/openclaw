@@ -99,6 +99,50 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
     state.configFormOriginal = cloneConfigObject(snapshot.config ?? {});
     state.configRawOriginal = rawFromSnapshot;
   }
+
+  // Extract user-defined custom tabs from `ui.customTabs`.
+  state.customTabs = parseCustomTabs(snapshot.config);
+}
+
+/**
+ * Parse and validate `ui.customTabs` from the raw config object.
+ * Unknown or malformed entries are silently dropped.
+ */
+function parseCustomTabs(config: unknown): import("../navigation.ts").CustomTab[] {
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return [];
+  }
+  const ui = (config as Record<string, unknown>).ui;
+  if (!ui || typeof ui !== "object" || Array.isArray(ui)) {
+    return [];
+  }
+  const raw = (ui as Record<string, unknown>).customTabs;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const result: import("../navigation.ts").CustomTab[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+    const { id, label, icon, url } = entry as Record<string, unknown>;
+    if (typeof id !== "string" || !id.trim()) {
+      continue;
+    }
+    if (typeof label !== "string" || !label.trim()) {
+      continue;
+    }
+    if (typeof url !== "string" || !url.trim()) {
+      continue;
+    }
+    result.push({
+      id: id.trim(),
+      label: label.trim(),
+      icon: typeof icon === "string" ? (icon as import("../navigation.ts").CustomTab["icon"]) : undefined,
+      url: url.trim(),
+    });
+  }
+  return result;
 }
 
 function asJsonSchema(value: unknown): JsonSchema | null {

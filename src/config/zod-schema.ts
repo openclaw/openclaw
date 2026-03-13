@@ -386,6 +386,18 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        customTabs: z
+          .array(
+            z
+              .object({
+                id: z.string().min(1),
+                label: z.string().min(1),
+                icon: z.string().optional(),
+                url: z.string().min(1),
+              })
+              .strict(),
+          )
+          .optional(),
       })
       .strict()
       .optional(),

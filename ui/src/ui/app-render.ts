@@ -9,6 +9,7 @@ import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
   renderChatControls,
   renderChatSessionSelect,
+  renderCustomTabItem,
   renderTab,
   renderTopbarThemeModeToggle,
 } from "./app-render.helpers.ts";
@@ -77,7 +78,7 @@ import {
 import "./components/dashboard-header.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
-import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import { buildTabGroups, normalizeBasePath, subtitleForTab, titleForTab } from "./navigation.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
   resolveAgentConfig,
@@ -473,9 +474,12 @@ export function renderApp(state: AppViewState) {
  
           
           <nav class="sidebar-nav">
-          ${TAB_GROUPS.map((group) => {
+          ${buildTabGroups(state.customTabs).map((group) => {
+            const isCustomGroup = group.label === "custom";
             const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
-            const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
+            const hasActiveTab = isCustomGroup
+              ? (group.tabs as import("./navigation.ts").CustomTab[]).some((t) => t.id === state.customTabActive)
+              : (group.tabs as import("./navigation.ts").Tab[]).some((tab) => tab === state.tab);
             const showItems = hasActiveTab || !isGroupCollapsed;
 
             return html`
@@ -502,7 +506,10 @@ export function renderApp(state: AppViewState) {
                     : nothing
                 }
                 <div class="nav-group__items">
-                  ${group.tabs.map((tab) => renderTab(state, tab))}
+                  ${isCustomGroup
+                    ? (group.tabs as import("./navigation.ts").CustomTab[]).map((tab) => renderCustomTabItem(state, tab))
+                    : (group.tabs as import("./navigation.ts").Tab[]).map((tab) => renderTab(state, tab))
+                  }
                 </div>
               </div>
             `;
@@ -1898,6 +1905,26 @@ export function renderApp(state: AppViewState) {
                   onScroll: (event) => state.handleLogsScroll(event),
                 }),
               )
+            : nothing
+        }
+
+        ${
+          state.customTabActive !== null
+            ? html`<div class="custom-tab-view" style="display:${state.customTabActive !== null ? 'flex' : 'none'}; flex:1; flex-direction:column; height:100%; overflow:hidden;">
+                ${state.customTabs
+                  .filter((tab) => tab.id === state.customTabActive)
+                  .map(
+                    (tab) => html`
+                      <iframe
+                        src=${tab.url}
+                        title=${tab.label}
+                        style="flex:1; border:none; width:100%; height:100%;"
+                        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+                        allow="clipboard-read; clipboard-write"
+                      ></iframe>
+                    `,
+                  )}
+              </div>`
             : nothing
         }
       </main>

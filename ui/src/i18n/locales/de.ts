@@ -21,6 +21,7 @@ export const de: TranslationMap = {
     settings: "Einstellungen",
     expand: "Seitenleiste ausklappen",
     collapse: "Seitenleiste einklappen",
+    custom: "Custom",
   },
   tabs: {
     agents: "Agenten",

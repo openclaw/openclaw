@@ -22,6 +22,7 @@ export const zh_TW: TranslationMap = {
     settings: "設置",
     expand: "展開側邊欄",
     collapse: "折疊側邊欄",
+    custom: "Custom",
     resize: "調整側邊欄大小",
   },
   tabs: {

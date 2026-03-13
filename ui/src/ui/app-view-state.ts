@@ -32,6 +32,7 @@ import type {
   StatusSummary,
   ToolsCatalogResult,
 } from "./types.ts";
+import type { CustomTab } from "./navigation.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 import type { SessionLogEntry } from "./views/usage.ts";
@@ -42,6 +43,10 @@ export type AppViewState = {
   loginShowGatewayToken: boolean;
   loginShowGatewayPassword: boolean;
   tab: Tab;
+  /** The currently active custom tab id, or null when a built-in tab is shown. */
+  customTabActive: string | null;
+  /** User-defined custom tabs from `ui.customTabs` config. */
+  customTabs: CustomTab[];
   onboarding: boolean;
   basePath: string;
   connected: boolean;

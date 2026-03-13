@@ -21,6 +21,7 @@ export const en: TranslationMap = {
     control: "Control",
     agent: "Agent",
     settings: "Settings",
+    custom: "Custom",
     expand: "Expand sidebar",
     collapse: "Collapse sidebar",
     resize: "Resize sidebar",

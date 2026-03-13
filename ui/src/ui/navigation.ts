@@ -195,3 +195,47 @@ export function titleForTab(tab: Tab) {
 export function subtitleForTab(tab: Tab) {
   return t(`subtitles.${tab}`);
 }
+
+// ─── Custom tab type ──────────────────────────────────────────────────────────
+
+/** A user-defined iframe tab configured via `ui.customTabs` in openclaw.json. */
+export type CustomTab = {
+  /** Unique slug — must not conflict with any built-in Tab name. */
+  id: string;
+  /** Display label shown in the nav and page header. */
+  label: string;
+  /** Optional icon key. Defaults to "globe" when omitted. */
+  icon?: IconName;
+  /** URL loaded in the sandboxed iframe. */
+  url: string;
+};
+
+// ─── Tab groups ───────────────────────────────────────────────────────────────
+
+/**
+ * A nav group containing built-in tabs.  The `tabs` array holds `Tab` values.
+ */
+type BuiltinGroup = { readonly label: string; readonly tabs: readonly Tab[] };
+
+/**
+ * A nav group containing user-defined custom tabs.
+ * Only created when `ui.customTabs` is non-empty.
+ */
+export type CustomGroup = { readonly label: "custom"; readonly tabs: readonly CustomTab[] };
+
+/** Union of all possible nav group shapes. */
+export type TabGroup = BuiltinGroup | CustomGroup;
+
+export const TAB_GROUPS_BASE = TAB_GROUPS as unknown as readonly BuiltinGroup[];
+
+/**
+ * Build the ordered list of nav groups.
+ * If `customTabs` is non-empty a "custom" group is appended after the built-in
+ * groups; otherwise the result is identical to `TAB_GROUPS_BASE`.
+ */
+export function buildTabGroups(customTabs: readonly CustomTab[] = []): readonly TabGroup[] {
+  if (customTabs.length === 0) {
+    return TAB_GROUPS_BASE;
+  }
+  return [...TAB_GROUPS_BASE, { label: "custom" as const, tabs: customTabs }];
+}

@@ -21,6 +21,7 @@ export const es: TranslationMap = {
     settings: "Ajustes",
     expand: "Expandir barra lateral",
     collapse: "Contraer barra lateral",
+    custom: "Custom",
   },
   tabs: {
     agents: "Agentes",
