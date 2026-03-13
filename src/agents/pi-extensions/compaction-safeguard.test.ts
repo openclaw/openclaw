@@ -1587,7 +1587,7 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(compaction.firstKeptEntryId).toBe("entry-2");
   });
 
-  it("cancels on repeated no-real-messages compaction for same session (boundary already written)", async () => {
+  it("writes boundary again on repeated empty preparation (no cancel loop after new assistant message)", async () => {
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sessionManager, { model });
@@ -1610,15 +1610,21 @@ describe("compaction-safeguard double-compaction guard", () => {
       event: mockEvent,
       apiKey: "sk-test", // pragma: allowlist secret
     });
-    expectCompactionResult(result1);
+    const compaction1 = expectCompactionResult(result1);
+    expect(compaction1.summary).toContain("## Decisions");
 
-    // Second call with same sessionManager — cancels (boundary already exists)
+    // Simulate: after the boundary, a new assistant message arrives, SDK
+    // triggers compaction again with another empty preparation. The safeguard
+    // must write another boundary (not cancel) to avoid re-entering the
+    // cancel loop described in the maintainer review.
     const { result: result2 } = await runCompactionScenario({
       sessionManager,
       event: mockEvent,
       apiKey: "sk-test", // pragma: allowlist secret
     });
-    expect(result2).toEqual({ cancel: true });
+    const compaction2 = expectCompactionResult(result2);
+    expect(compaction2.summary).toContain("## Decisions");
+    expect(compaction2.firstKeptEntryId).toBe("entry-3");
   });
 
   it("does not write boundary when turnPrefixMessages has real content (split-turn)", async () => {
