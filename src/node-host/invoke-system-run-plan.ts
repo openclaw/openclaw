@@ -164,6 +164,26 @@ const NPM_EXEC_FLAG_OPTIONS = new Set([
   "-y",
 ]);
 
+const PNPM_OPTIONS_WITH_VALUE = new Set([
+  "--config",
+  "--dir",
+  "--filter",
+  "--reporter",
+  "--stream",
+  "--test-pattern",
+  "--workspace-concurrency",
+  "-C",
+]);
+
+const PNPM_FLAG_OPTIONS = new Set([
+  "--aggregate-output",
+  "--color",
+  "--recursive",
+  "--silent",
+  "--workspace-root",
+  "-r",
+]);
+
 type FileOperandCollection = {
   hits: number[];
   sawOptionValueFile: boolean;
@@ -299,6 +319,8 @@ function normalizePackageManagerExecToken(token: string): string {
   if (!normalized) {
     return normalized;
   }
+  // Approval binding only promises best-effort recovery of the effective runtime
+  // command for common package-manager shims; it is not full package-manager semantics.
   return normalized.replace(/\.(?:c|m)?js$/i, "");
 }
 
@@ -315,17 +337,30 @@ function unwrapPnpmExecInvocation(argv: string[]): string[] | null {
       continue;
     }
     if (!token.startsWith("-")) {
-      if (token !== "exec" || idx + 1 >= argv.length) {
-        return null;
+      if (token === "exec") {
+        if (idx + 1 >= argv.length) {
+          return null;
+        }
+        const tail = argv.slice(idx + 1);
+        return tail[0] === "--" ? (tail.length > 1 ? tail.slice(1) : null) : tail;
       }
-      const tail = argv.slice(idx + 1);
-      return tail[0] === "--" ? (tail.length > 1 ? tail.slice(1) : null) : tail;
+      if (token === "node") {
+        const tail = argv.slice(idx + 1);
+        const normalizedTail = tail[0] === "--" ? tail.slice(1) : tail;
+        return ["node", ...normalizedTail];
+      }
+      return null;
     }
-    if ((token === "-C" || token === "--dir" || token === "--filter") && !token.includes("=")) {
-      idx += 2;
+    const [flag] = token.toLowerCase().split("=", 2);
+    if (PNPM_OPTIONS_WITH_VALUE.has(flag)) {
+      idx += token.includes("=") ? 1 : 2;
       continue;
     }
-    idx += 1;
+    if (PNPM_FLAG_OPTIONS.has(flag)) {
+      idx += 1;
+      continue;
+    }
+    return null;
   }
   return null;
 }
