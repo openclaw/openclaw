@@ -65,6 +65,30 @@ function isMcporterCommand(cmd: unknown): boolean {
   return /(^|[\\/])mcporter(?:\.cmd)?$/i.test(cmd);
 }
 
+async function seedWindowsCmdShimFixture(params: {
+  rootDir: string;
+  packageName: "mcporter" | "qmd";
+}) {
+  const nodeModulesDir = path.join(params.rootDir, "node_modules");
+  const shimDir = path.join(nodeModulesDir, ".bin");
+  const packageDir = path.join(nodeModulesDir, params.packageName);
+  const scriptPath = path.join(packageDir, "dist", "cli.js");
+  await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+  await fs.mkdir(shimDir, { recursive: true });
+  await fs.writeFile(path.join(shimDir, `${params.packageName}.cmd`), "@echo off\r\n", "utf8");
+  await fs.writeFile(
+    path.join(packageDir, "package.json"),
+    JSON.stringify({
+      name: params.packageName,
+      version: "0.0.0",
+      bin: { [params.packageName]: "dist/cli.js" },
+    }),
+    "utf8",
+  );
+  await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");
+  return { shimDir };
+}
+
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => {
     const logger = {
@@ -104,6 +128,8 @@ describe("QmdMemoryManager", () => {
   let stateDir: string;
   let cfg: OpenClawConfig;
   const agentId = "main";
+  const originalPath = process.env.PATH;
+  const originalPathExt = process.env.PATHEXT;
 
   async function createManager(params?: { mode?: "full" | "status"; cfg?: OpenClawConfig }) {
     const cfgToUse = params?.cfg ?? cfg;
@@ -142,6 +168,14 @@ describe("QmdMemoryManager", () => {
     // Only workspace must exist for configured collection paths; state paths are
     // created lazily by manager code when needed.
     await fs.mkdir(workspaceDir);
+    if (process.platform === "win32") {
+      // Isolate Windows shim resolution from the runner's ambient PATH so qmd
+      // unit tests stay deterministic under the fail-closed wrapper policy.
+      const { shimDir } = await seedWindowsCmdShimFixture({ rootDir: tmpRoot, packageName: "qmd" });
+      await seedWindowsCmdShimFixture({ rootDir: tmpRoot, packageName: "mcporter" });
+      process.env.PATH = shimDir;
+      process.env.PATHEXT = ".CMD;.EXE;.BAT;.COM";
+    }
     process.env.OPENCLAW_STATE_DIR = stateDir;
     // Keep the default Windows path unresolved for most tests so spawn mocks can
     // match the logical package command. Tests that verify wrapper resolution
@@ -181,6 +215,8 @@ describe("QmdMemoryManager", () => {
     }
     delete (globalThis as Record<string, unknown>).__openclawMcporterDaemonStart;
     delete (globalThis as Record<string, unknown>).__openclawMcporterColdStartWarned;
+    process.env.PATH = originalPath;
+    process.env.PATHEXT = originalPathExt;
   });
 
   it("debounces back-to-back sync calls", async () => {
@@ -1101,19 +1137,7 @@ describe("QmdMemoryManager", () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const previousPath = process.env.PATH;
     try {
-      const nodeModulesDir = path.join(tmpRoot, "node_modules");
-      const shimDir = path.join(nodeModulesDir, ".bin");
-      const packageDir = path.join(nodeModulesDir, "qmd");
-      const scriptPath = path.join(packageDir, "dist", "cli.js");
-      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-      await fs.mkdir(shimDir, { recursive: true });
-      await fs.writeFile(path.join(shimDir, "qmd.cmd"), "@echo off\r\n", "utf8");
-      await fs.writeFile(
-        path.join(packageDir, "package.json"),
-        JSON.stringify({ name: "qmd", version: "0.0.0", bin: { qmd: "dist/cli.js" } }),
-        "utf8",
-      );
-      await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");
+      const { shimDir } = await seedWindowsCmdShimFixture({ rootDir: tmpRoot, packageName: "qmd" });
       process.env.PATH = `${shimDir};${previousPath ?? ""}`;
 
       const { manager } = await createManager({ mode: "status" });
@@ -1612,19 +1636,10 @@ describe("QmdMemoryManager", () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const previousPath = process.env.PATH;
     try {
-      const nodeModulesDir = path.join(tmpRoot, "node_modules");
-      const shimDir = path.join(nodeModulesDir, ".bin");
-      const packageDir = path.join(nodeModulesDir, "mcporter");
-      const scriptPath = path.join(packageDir, "dist", "cli.js");
-      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-      await fs.mkdir(shimDir, { recursive: true });
-      await fs.writeFile(path.join(shimDir, "mcporter.cmd"), "@echo off\r\n", "utf8");
-      await fs.writeFile(
-        path.join(packageDir, "package.json"),
-        JSON.stringify({ name: "mcporter", version: "0.0.0", bin: { mcporter: "dist/cli.js" } }),
-        "utf8",
-      );
-      await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");
+      const { shimDir } = await seedWindowsCmdShimFixture({
+        rootDir: tmpRoot,
+        packageName: "mcporter",
+      });
       process.env.PATH = `${shimDir};${previousPath ?? ""}`;
 
       cfg = {
