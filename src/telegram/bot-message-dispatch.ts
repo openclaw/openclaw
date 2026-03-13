@@ -192,21 +192,22 @@ export const dispatchTelegramMessage = async ({
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number" ? msg.message_id : undefined;
   const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;
-  // Keep DM preview lanes on real message transport. Native draft previews still
-  // require a draft->message materialize hop, and that overlap keeps reintroducing
-  // a visible duplicate flash at finalize time.
-  const useMessagePreviewTransportForDm = threadSpec?.scope === "dm" && canStreamAnswerDraft;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
+    // Prefer draft transport for DM answer previews when available; keep reasoning
+    // on message transport in DMs to avoid draft-only reasoning previews reappearing
+    // as transient duplicate/deleted-message artifacts in the main answer flow.
+    const useMessagePreviewTransportForDmReasoning =
+      laneName === "reasoning" && threadSpec?.scope === "dm" && canStreamAnswerDraft;
     const stream = enabled
       ? createTelegramDraftStream({
           api: bot.api,
           chatId,
           maxChars: draftMaxChars,
           thread: threadSpec,
-          previewTransport: useMessagePreviewTransportForDm ? "message" : "auto",
+          previewTransport: useMessagePreviewTransportForDmReasoning ? "message" : "auto",
           replyToMessageId: draftReplyToMessageId,
           minInitialChars: draftMinInitialChars,
           renderText: renderDraftPreview,

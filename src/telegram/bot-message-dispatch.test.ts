@@ -1414,7 +1414,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     },
   );
 
-  it("uses message preview transport for all DM lanes when streaming is active", async () => {
+  it("uses auto preview transport for DM answer lane and message transport for reasoning lane", async () => {
     setupDraftStreams({ answerMessageId: 999, reasoningMessageId: 111 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -1433,7 +1433,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(createTelegramDraftStream.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
-        previewTransport: "message",
+        previewTransport: "auto",
       }),
     );
     expect(createTelegramDraftStream.mock.calls[1]?.[0]).toEqual(
@@ -1464,7 +1464,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(createTelegramDraftStream.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         thread: { id: 777, scope: "dm" },
-        previewTransport: "message",
+        previewTransport: "auto",
       }),
     );
     expect(answerDraftStream.materialize).not.toHaveBeenCalled();
