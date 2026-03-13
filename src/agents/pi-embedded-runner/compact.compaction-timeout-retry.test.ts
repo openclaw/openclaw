@@ -2,14 +2,31 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Hoist mocks for compaction-safety-timeout and tool-result-truncation so they can be
 // configured per-test before the module under test is imported.
-const { compactWithSafetyTimeoutMock, truncateOversizedToolResultsMock } = vi.hoisted(() => ({
-  compactWithSafetyTimeoutMock: vi.fn(),
-  truncateOversizedToolResultsMock: vi.fn(),
-}));
+// CompactionSafetyTimeoutError must also be hoisted so the vi.mock factory (which Vitest
+// moves to the top of the file) can reference it without a TDZ error.
+const {
+  compactWithSafetyTimeoutMock,
+  truncateOversizedToolResultsMock,
+  CompactionSafetyTimeoutError,
+} = vi.hoisted(() => {
+  class CompactionSafetyTimeoutError extends Error {
+    readonly isCompactionTimeout = true;
+    constructor(timeoutMs = 300_000) {
+      super(`Compaction timed out after ${timeoutMs}ms`);
+      this.name = "CompactionSafetyTimeoutError";
+    }
+  }
+  return {
+    compactWithSafetyTimeoutMock: vi.fn(),
+    truncateOversizedToolResultsMock: vi.fn(),
+    CompactionSafetyTimeoutError,
+  };
+});
 
 vi.mock("./compaction-safety-timeout.js", () => ({
   EMBEDDED_COMPACTION_TIMEOUT_MS: 300_000,
   EMBEDDED_COMPACTION_RETRY_TIMEOUT_MS: 120_000,
+  CompactionSafetyTimeoutError,
   compactWithSafetyTimeout: compactWithSafetyTimeoutMock,
 }));
 
@@ -226,7 +243,7 @@ const COMPACT_SUCCESS = {
 };
 
 function makeTimeoutError(): Error {
-  return new Error("Compaction timed out");
+  return new CompactionSafetyTimeoutError();
 }
 
 describe("compactEmbeddedPiSessionDirect — compaction timeout retry", () => {

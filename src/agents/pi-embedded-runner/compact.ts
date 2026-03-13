@@ -72,6 +72,7 @@ import {
 } from "../skills.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import {
+  CompactionSafetyTimeoutError,
   compactWithSafetyTimeout,
   EMBEDDED_COMPACTION_RETRY_TIMEOUT_MS,
   EMBEDDED_COMPACTION_TIMEOUT_MS,
@@ -960,10 +961,7 @@ export async function compactEmbeddedPiSessionDirect(
           });
           emitCompactionEndOnce();
         } catch (firstErr) {
-          const isTimeout =
-            firstErr instanceof Error &&
-            (firstErr.message.toLowerCase().includes("timed out") ||
-              firstErr.message.toLowerCase().includes("timeout"));
+          const isTimeout = firstErr instanceof CompactionSafetyTimeoutError;
           if (!isTimeout) {
             backgroundCompact = undefined;
             throw firstErr;
