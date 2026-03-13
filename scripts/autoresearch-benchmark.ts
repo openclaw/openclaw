@@ -2,21 +2,20 @@
  * Autoresearch benchmark: measures stable prefix of the OpenClaw system prompt.
  * Run with: bun scripts/autoresearch-benchmark.ts
  *
- * SCENARIO: Deployment config change (ownerNumbers, docsPath, sandboxInfo).
- * Models a user who updates their deployment configuration — e.g., adding an
- * authorized sender (new device/phone), updating the docs path, or toggling
- * sandbox mode. These are set at deployment time and change rarely.
+ * SCENARIO: Tool installation (new channel plugin).
+ * Models a user who installs a new channel plugin (e.g., matrix, msteams, zalo)
+ * which adds new tool names to the available tools list. Workspace files,
+ * session config, skills, model aliases, and project notes all stay the same.
  *
- * Method: build TWO prompts with identical parameters except ownerNumbers,
- * docsPath, and sandboxInfo (all three deployment configs change together).
- * Find the first character that differs. Everything before that is the
- * KV-cacheable stable prefix.
+ * Method: build TWO prompts with identical parameters except toolNames
+ * (v1 = base tools, v2 = base tools + new plugin tool). Find the first
+ * character that differs. Everything before that is the KV-cacheable stable prefix.
  *
- * stable_chars = first-diff position between prompt-with-config-v1 and
- *                prompt-with-config-v2.
+ * stable_chars = first-diff position between prompt-with-tools-v1 and
+ *                prompt-with-tools-v2.
  *
  * This is rigorous: it directly measures what Anthropic's KV cache would
- * actually reuse between deployment config updates.
+ * actually reuse between plugin installations.
  */
 
 import os from "node:os";
@@ -75,27 +74,21 @@ const contextFiles = buildBootstrapContextFiles(rawFiles, {
   totalMaxChars: 150_000,
 });
 
-// ── Deployment config scenario ────────────────────────────────────────────────
-// Two versions of deployment config: v1 is initial setup, v2 is after an update.
-// Simulates: user adds a second authorized sender, updates docs path, enables sandbox.
-const DEPLOY_CONFIG_V1 = {
-  ownerNumbers: ["+1-555-0101"],
-  docsPath: "/Users/clawdine/.openclaw/workspace/projects/openclaw/docs",
-  sandboxInfo: undefined as { enabled: boolean } | undefined,
-};
-const DEPLOY_CONFIG_V2 = {
-  ownerNumbers: ["+1-555-0101", "+1-555-0202"],
-  docsPath: "/Users/clawdine/.openclaw/workspace/projects/openclaw-v2/docs",
-  sandboxInfo: { enabled: true },
-};
+// ── Tool installation scenario ─────────────────────────────────────────────────
+// Two versions of toolNames: v1 = base set, v2 = base + new plugin tool.
+// Simulates: user installs a new channel plugin (e.g., matrix, msteams, zalo).
+const TOOL_NAMES_V1 = [...toolNames]; // base tool set (no plugin)
+const TOOL_NAMES_V2 = [...toolNames, "matrix_join", "matrix_react", "matrix_leave"]; // + matrix plugin
 
 // Build the system prompt with representative parameters.
-// Everything is IDENTICAL between the two prompts — only deployment config differs
-// (ownerNumbers, docsPath, sandboxInfo — things that change at deployment setup time).
+// Everything is IDENTICAL between the two prompts — only toolNames differs
+// (v1 = base tools, v2 = base + matrix plugin tools).
 const sharedParams = {
   workspaceDir,
-  toolNames,
+  toolNames, // will be overridden per prompt
   contextFiles,
+  docsPath: "/Users/clawdine/.openclaw/workspace/projects/openclaw/docs",
+  ownerNumbers: ["+1-555-0101"],
   skillsPrompt:
     "<available_skills>\n  <skill>\n    <name>example-skill</name>\n    <description>An example skill for benchmarking</description>\n    <location>/path/to/skill.md</location>\n  </skill>\n</available_skills>",
   userTimezone: "America/Los_Angeles",
@@ -131,14 +124,14 @@ const sharedParams = {
   promptMode: "full",
 };
 
-// Build two prompts: identical except deployment config (ownerNumbers, docsPath, sandboxInfo)
-const prompt = buildAgentSystemPrompt({ ...sharedParams, ...DEPLOY_CONFIG_V1 });
-const promptV2 = buildAgentSystemPrompt({ ...sharedParams, ...DEPLOY_CONFIG_V2 });
+// Build two prompts: identical except toolNames (v1 = base, v2 = base + matrix plugin)
+const prompt = buildAgentSystemPrompt({ ...sharedParams, toolNames: TOOL_NAMES_V1 });
+const promptV2 = buildAgentSystemPrompt({ ...sharedParams, toolNames: TOOL_NAMES_V2 });
 
 const totalChars = prompt.length;
 
-// ── Deployment config scenario: find first diff between config-v1 and config-v2 ─
-// This is the exact KV-cache stable prefix for "deployment config changes".
+// ── Tool installation scenario: find first diff between tools-v1 and tools-v2 ─
+// This is the exact KV-cache stable prefix for "new plugin tool installed".
 // Everything before firstDiff is IDENTICAL between the two prompts and will
 // be served from Anthropic's KV cache.
 let firstDiff = 0;
@@ -149,7 +142,7 @@ while (
 ) {
   firstDiff++;
 }
-const deployConfigScenarioStableChars = firstDiff;
+const toolNamesScenarioStableChars = firstDiff;
 
 // ── Pattern-based detection (used to identify WHAT the boundary is) ─────────
 // Stable prefix = everything before the EARLIEST "most-dynamic" section.
@@ -247,11 +240,11 @@ for (const { label, pattern } of legacyPatterns) {
 // PRIMARY METRIC: MEMORY.md daily scenario (first-diff between day-1 and day-2 prompts)
 // This directly measures what Anthropic KV cache would reuse between daily note updates.
 // SECONDARY (pattern-based): shows what the boundary is for pattern identification.
-// PRIMARY METRIC: deployment config scenario (first-diff between config-v1 and config-v2)
-// This directly measures what Anthropic KV cache would reuse between config updates.
+// PRIMARY METRIC: tool installation scenario (first-diff between tools-v1 and tools-v2)
+// This directly measures what Anthropic KV cache would reuse between plugin installations.
 // SECONDARY (pattern-based): shows what the boundary is for pattern identification.
-console.log(`METRIC system_prompt_stable_chars=${deployConfigScenarioStableChars}`);
+console.log(`METRIC system_prompt_stable_chars=${toolNamesScenarioStableChars}`);
 console.log(`METRIC system_prompt_total_chars=${totalChars}`);
 console.log(
-  `stable_ratio=${((deployConfigScenarioStableChars / totalChars) * 100).toFixed(1)}%  total=${totalChars} stable=${deployConfigScenarioStableChars}  boundary=${hitLabel}(pattern) deploy-config-diff=${deployConfigScenarioStableChars}`,
+  `stable_ratio=${((toolNamesScenarioStableChars / totalChars) * 100).toFixed(1)}%  total=${totalChars} stable=${toolNamesScenarioStableChars}  boundary=${hitLabel}(pattern) tool-install-diff=${toolNamesScenarioStableChars}`,
 );
