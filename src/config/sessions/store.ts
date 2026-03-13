@@ -266,7 +266,13 @@ export function loadSessionStore(
     });
   }
 
-  return structuredClone(store);
+  // Use JSON.parse instead of structuredClone to avoid native (C++) memory accumulation.
+  // structuredClone allocates serialization buffers outside the V8 heap that GC cannot
+  // reclaim fast enough for large/frequent session stores. Session stores contain only
+  // JSON-serializable data (no Dates, Maps, or circular refs), so this is safe.
+  // Note: serializedFromDisk may be stale if applySessionStoreMigrations mutated store,
+  // so always stringify the final post-migration store.
+  return JSON.parse(JSON.stringify(store));
 }
 
 export function readSessionUpdatedAt(params: {
