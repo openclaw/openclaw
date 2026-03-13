@@ -1,5 +1,5 @@
 {
-  "name": "@openclaw/vllm-provider",
+  "name": "@openclaw/vllm",
   "version": "2026.3.11",
   "private": true,
   "description": "OpenClaw vLLM provider plugin",
