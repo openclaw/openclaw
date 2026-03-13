@@ -126,4 +126,78 @@ describe("embeddings-ollama", () => {
       }),
     );
   });
+
+  it("applies instruct prefix for qwen3-embedding model queries", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ embedding: [1, 0] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "qwen3-embedding:0.6b",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    await provider.embedQuery("怀孕");
+
+    const callBody = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(callBody.prompt).toContain("Instruct:");
+    expect(callBody.prompt).toContain("怀孕");
+  });
+
+  it("does NOT apply instruct prefix for embedBatch (document embedding)", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ embedding: [1, 0] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "qwen3-embedding:0.6b",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    await provider.embedBatch(["一些文档内容"]);
+
+    const callBody = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(callBody.prompt).toBe("一些文档内容");
+    expect(callBody.prompt).not.toContain("Instruct:");
+  });
+
+  it("does not apply instruct prefix for unknown models", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ embedding: [1, 0] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "some-custom-model",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    await provider.embedQuery("hello");
+
+    const callBody = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(callBody.prompt).toBe("hello");
+  });
 });
