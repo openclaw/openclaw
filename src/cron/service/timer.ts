@@ -655,12 +655,23 @@ export async function onTimer(state: CronServiceState) {
           beforeEntries,
         );
         if (beforeResult.aborted) {
+          const abortEndedAt = state.deps.nowMs();
+          const abortDurationMs = abortEndedAt - startedAt;
+          // afterRun hooks still fire on abort — they must always run.
+          const afterRunEntries = loadHookEntries("afterRun", state.deps.cronConfig, job);
+          if (afterRunEntries.length > 0) {
+            await runCronHooks(
+              "afterRun",
+              makeHookCtx("afterRun", { status: "skipped", durationMs: abortDurationMs }),
+              afterRunEntries,
+            );
+          }
           return {
             jobId: id,
             status: "skipped",
             error: `hook aborted: ${beforeResult.reason ?? "unknown"}`,
             startedAt,
-            endedAt: state.deps.nowMs(),
+            endedAt: abortEndedAt,
           };
         }
       }

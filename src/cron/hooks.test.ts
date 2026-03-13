@@ -185,6 +185,15 @@ describe("loadHookEntries", () => {
   });
 });
 
+/**
+ * Creates a data-URI module that exports the given function body as default.
+ * This avoids filesystem mocking while giving us real dynamic-import hooks.
+ */
+function inlineHook(body: string): string {
+  const code = `export default ${body}`;
+  return `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`;
+}
+
 describe("runCronHooks", () => {
   it("returns not-aborted for empty entries", async () => {
     const result = await runCronHooks("beforeRun", makeCtx("beforeRun"), []);
@@ -202,5 +211,37 @@ describe("runCronHooks", () => {
     const result = await runCronHooks("afterRun", ctx, entries);
     expect(result).toEqual({ aborted: false });
     expect(noopLog.warn).toHaveBeenCalled();
+  });
+
+  it("aborts when beforeRun hook returns { abort: true, reason }", async () => {
+    const script = inlineHook(
+      `async function(ctx) { return { abort: true, reason: "test abort" }; }`,
+    );
+    const entries = [{ script, priority: 10 }];
+    const result = await runCronHooks("beforeRun", makeCtx("beforeRun"), entries);
+    expect(result.aborted).toBe(true);
+    expect(result.reason).toBe("test abort");
+  });
+
+  it("uses default reason when abort result omits reason", async () => {
+    const script = inlineHook(`async function(ctx) { return { abort: true }; }`);
+    const entries = [{ script, priority: 10 }];
+    const result = await runCronHooks("beforeRun", makeCtx("beforeRun"), entries);
+    expect(result.aborted).toBe(true);
+    expect(result.reason).toBe("aborted by hook");
+  });
+
+  it("does not abort when hook returns { abort: false }", async () => {
+    const script = inlineHook(`async function(ctx) { return { abort: false }; }`);
+    const entries = [{ script, priority: 10 }];
+    const result = await runCronHooks("beforeRun", makeCtx("beforeRun"), entries);
+    expect(result.aborted).toBe(false);
+  });
+
+  it("ignores abort result from non-beforeRun hooks", async () => {
+    const script = inlineHook(`async function(ctx) { return { abort: true, reason: "ignored" }; }`);
+    const entries = [{ script, priority: 10 }];
+    const result = await runCronHooks("afterRun", makeCtx("afterRun"), entries);
+    expect(result.aborted).toBe(false);
   });
 });

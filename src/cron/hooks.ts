@@ -10,7 +10,6 @@ export type CronHookContext = {
   hookPoint: CronLifecycleHookPoint;
   workflow: string;
   job: Pick<CronJob, "id" | "name" | "agentId" | "schedule">;
-  result?: unknown;
   error?: string;
   status?: string;
   durationMs?: number;
