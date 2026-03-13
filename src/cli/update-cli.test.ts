@@ -221,6 +221,9 @@ describe("update-cli", () => {
       stdout: "",
       stderr: "install failed",
       code: 1,
+      signal: null,
+      killed: false,
+      termination: "exit",
     });
     if (params.daemonInstall === "fail") {
       vi.mocked(runDaemonInstall).mockRejectedValueOnce(new Error("refresh failed"));
