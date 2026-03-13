@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
-import { clearCommandLane, setCommandLaneConcurrency } from "../process/command-queue.js";
+import {
+  clearCommandLane,
+  enqueueCommandInLane,
+  setCommandLaneConcurrency,
+} from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import * as schedule from "./schedule.js";
 import {
@@ -1492,10 +1496,12 @@ describe("Cron issue regressions", () => {
     expect(jobs.find((job) => job.id === second.id)?.state.lastStatus).toBe("ok");
   });
 
-  it("queues manual cron.run requests behind the cron execution lane", async () => {
+  it("queues manual cron.run requests on the detached manual lane", async () => {
     vi.useRealTimers();
     clearCommandLane(CommandLane.Cron);
+    clearCommandLane(CommandLane.CronManual);
     setCommandLaneConcurrency(CommandLane.Cron, 1);
+    setCommandLaneConcurrency(CommandLane.CronManual, 1);
 
     const store = makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:02.000Z");
@@ -1566,12 +1572,15 @@ describe("Cron issue regressions", () => {
     });
 
     clearCommandLane(CommandLane.Cron);
+    clearCommandLane(CommandLane.CronManual);
   });
 
   it("logs unexpected queued manual run background failures once", async () => {
     vi.useRealTimers();
     clearCommandLane(CommandLane.Cron);
+    clearCommandLane(CommandLane.CronManual);
     setCommandLaneConcurrency(CommandLane.Cron, 1);
+    setCommandLaneConcurrency(CommandLane.CronManual, 1);
 
     const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
     const job = createDueIsolatedJob({ id: "queued-failure", nowMs: dueAt, nextRunAtMs: dueAt });
@@ -1594,6 +1603,65 @@ describe("Cron issue regressions", () => {
     );
 
     clearCommandLane(CommandLane.Cron);
+    clearCommandLane(CommandLane.CronManual);
+  });
+
+  it("lets detached cron.run force-runs reuse the cron execution lane without self-deadlocking (#41558)", async () => {
+    vi.useRealTimers();
+    clearCommandLane(CommandLane.Cron);
+    clearCommandLane(CommandLane.CronManual);
+    setCommandLaneConcurrency(CommandLane.Cron, 1);
+    setCommandLaneConcurrency(CommandLane.CronManual, 1);
+
+    const store = makeStorePath();
+    const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+    const job = createIsolatedRegressionJob({
+      id: "force-run-cron-lane-41558",
+      name: "force run cron lane",
+      scheduledAt,
+      schedule: { kind: "cron", expr: "0 13 * * *", tz: "UTC" },
+      payload: { kind: "agentTurn", message: "ping", timeoutSeconds: 0.5 },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [job]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi.fn(
+      async ({ abortSignal }: { abortSignal?: AbortSignal }) =>
+        await enqueueCommandInLane(CommandLane.Cron, async () => {
+          if (abortSignal?.aborted) {
+            throw new Error("nested cron run started after outer timeout");
+          }
+          now += 5;
+          return { status: "ok" as const, summary: "nested cron lane ok" };
+        }),
+    );
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const ack = await enqueueRun(state, job.id, "force");
+    expect(ack).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+
+    await vi.waitFor(() => {
+      const updated = state.store?.jobs.find((entry) => entry.id === job.id);
+      if (updated?.state.lastStatus === "error") {
+        throw new Error(String(updated.state.lastError));
+      }
+      expect(updated?.state.lastStatus).toBe("ok");
+      expect(updated?.state.lastError).toBeUndefined();
+    });
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+
+    clearCommandLane(CommandLane.Cron);
+    clearCommandLane(CommandLane.CronManual);
   });
 
   // Regression: isolated cron runs must not abort at 1/3 of configured timeoutSeconds.

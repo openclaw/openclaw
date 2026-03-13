@@ -556,7 +556,11 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
 
   const runId = `manual:${id}:${state.deps.nowMs()}:${nextManualRunId++}`;
   void enqueueCommandInLane(
-    CommandLane.Cron,
+    // Keep detached `cron.run` requests off the main cron execution lane.
+    // Isolated cron jobs enqueue their embedded agent work onto `CommandLane.Cron`,
+    // so reusing that lane here can deadlock a force-run against its own nested
+    // model execution until the outer cron timeout fires.
+    CommandLane.CronManual,
     async () => {
       const result = await run(state, id, mode);
       if (result.ok && "ran" in result && !result.ran) {

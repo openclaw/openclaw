@@ -192,6 +192,40 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
   );
 }
 
+function stripHtmlErrorText(input: string): string {
+  return input
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function summarizeBrowserServiceHttpError(status: number, bodyText: string): string {
+  const trimmed = bodyText.trim();
+  if (!trimmed) {
+    return `HTTP ${status}`;
+  }
+  if (!/^<!doctype html[\s>]|^<html[\s>]/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  const titleMatch = trimmed.match(/<title>([^<]+)<\/title>/i);
+  const headingMatch = trimmed.match(/<h1[^>]*>([^<]+)<\/h1>/i);
+  const serverMatch = [...trimmed.matchAll(/<center>([^<]+)<\/center>/gi)]
+    .map((match) => match[1]?.trim())
+    .filter(Boolean)
+    .at(-1);
+  const summary =
+    titleMatch?.[1]?.trim() ?? headingMatch?.[1]?.trim() ?? stripHtmlErrorText(trimmed);
+  if (!summary) {
+    return `HTTP ${status}`;
+  }
+  return serverMatch
+    ? `${summary} (${serverMatch} HTML error page)`
+    : `${summary} (HTML error page)`;
+}
+
 async function fetchHttpJson<T>(
   url: string,
   init: RequestInit & { timeoutMs?: number },
@@ -221,7 +255,7 @@ async function fetchHttpJson<T>(
         );
       }
       const text = await res.text().catch(() => "");
-      throw new BrowserServiceError(text || `HTTP ${res.status}`);
+      throw new BrowserServiceError(summarizeBrowserServiceHttpError(res.status, text));
     }
     return (await res.json()) as T;
   } finally {

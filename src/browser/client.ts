@@ -1,4 +1,6 @@
 import { fetchBrowserJson } from "./client-fetch.js";
+import type { BrowserStatusDiagnostic } from "./status-diagnostics.js";
+export type { BrowserStatusDiagnostic } from "./status-diagnostics.js";
 
 export type BrowserStatus = {
   enabled: boolean;
@@ -20,6 +22,7 @@ export type BrowserStatus = {
   noSandbox?: boolean;
   executablePath?: string | null;
   attachOnly: boolean;
+  diagnostics?: BrowserStatusDiagnostic[];
 };
 
 export type ProfileStatus = {

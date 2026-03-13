@@ -67,6 +67,30 @@ describe("browser client", () => {
     ).rejects.toThrow(/conflict/i);
   });
 
+  it("summarizes HTML upstream errors instead of dumping raw markup", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        text: async () =>
+          "<html><head><title>400 Bad Request</title></head><body><center><h1>400 Bad Request</h1></center><hr><center>nginx</center></body></html>",
+      } as unknown as Response),
+    );
+
+    const thrown = await browserStatus("http://browser.example/status").catch(
+      (err: unknown) => err,
+    );
+
+    expect(thrown).toBeInstanceOf(Error);
+    if (!(thrown instanceof Error)) {
+      throw new Error(`Expected Error, got ${String(thrown)}`);
+    }
+    expect(thrown.message).toContain("400 Bad Request");
+    expect(thrown.message).toContain("nginx HTML error page");
+    expect(thrown.message).not.toContain("<html>");
+  });
+
   it("adds labels + efficient mode query params to snapshots", async () => {
     const calls: string[] = [];
     stubSnapshotFetch(calls);

@@ -4,13 +4,22 @@ import type {
   BrowserDeleteProfileResult,
   BrowserResetProfileResult,
   BrowserStatus,
+  BrowserStatusDiagnostic,
   BrowserTab,
   ProfileStatus,
 } from "../browser/client.js";
+import {
+  combineBrowserStatusDiagnostics,
+  deriveGatewayControlUiDiagnostics,
+} from "../browser/status-diagnostics.js";
 import { danger, info } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
-import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  callGatewayConfigSnapshot,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 
 function resolveProfileQuery(profile?: string) {
@@ -99,6 +108,39 @@ function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {
   );
 }
 
+function formatBrowserStatusDiagnostics(
+  diagnostics: readonly BrowserStatusDiagnostic[] | undefined,
+): string[] {
+  if (!diagnostics || diagnostics.length === 0) {
+    return [];
+  }
+  const lines = ["diagnostics:"];
+  for (const diagnostic of diagnostics) {
+    lines.push(`- [${diagnostic.layer}/${diagnostic.level}] ${diagnostic.summary}`);
+    if (diagnostic.hint) {
+      lines.push(`  hint: ${diagnostic.hint}`);
+    }
+  }
+  return lines;
+}
+
+async function resolveBrowserStatusDiagnostics(
+  parent: BrowserParentOpts,
+  status: BrowserStatus,
+): Promise<BrowserStatusDiagnostic[] | undefined> {
+  try {
+    const snapshot = await callGatewayConfigSnapshot(parent);
+    const controlUiDiagnostics = deriveGatewayControlUiDiagnostics(
+      (snapshot.resolved && typeof snapshot.resolved === "object"
+        ? snapshot.resolved
+        : snapshot.config) ?? {},
+    );
+    return combineBrowserStatusDiagnostics(controlUiDiagnostics, status.diagnostics);
+  } catch {
+    return status.diagnostics;
+  }
+}
+
 export function registerBrowserManageCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -110,11 +152,17 @@ export function registerBrowserManageCommands(
       const parent = parentOpts(cmd);
       await runBrowserCommand(async () => {
         const status = await fetchBrowserStatus(parent, parent?.browserProfile);
-        if (printJsonResult(parent, status)) {
+        const diagnostics = await resolveBrowserStatusDiagnostics(parent, status);
+        const statusWithDiagnostics = {
+          ...status,
+          diagnostics,
+        } satisfies BrowserStatus;
+        if (printJsonResult(parent, statusWithDiagnostics)) {
           return;
         }
         const detectedPath = status.detectedExecutablePath ?? status.executablePath;
         const detectedDisplay = detectedPath ? shortenHomePath(detectedPath) : "auto";
+        const formattedDiagnostics = formatBrowserStatusDiagnostics(diagnostics);
         defaultRuntime.log(
           [
             `profile: ${status.profile ?? "openclaw"}`,
@@ -127,6 +175,7 @@ export function registerBrowserManageCommands(
             `detectedPath: ${detectedDisplay}`,
             `profileColor: ${status.color}`,
             ...(status.detectError ? [`detectError: ${status.detectError}`] : []),
+            ...formattedDiagnostics,
           ].join("\n"),
         );
       });

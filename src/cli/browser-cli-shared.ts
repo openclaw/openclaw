@@ -61,6 +61,64 @@ export async function callBrowserRequest<T>(
   return payload as T;
 }
 
+export async function callGatewayConfigSnapshot(opts: BrowserParentOpts): Promise<{
+  config?: {
+    gateway?: {
+      bind?: unknown;
+      port?: unknown;
+      auth?: { mode?: unknown; token?: unknown; password?: unknown };
+      controlUi?: {
+        enabled?: unknown;
+        allowedOrigins?: unknown;
+        dangerouslyAllowHostHeaderOriginFallback?: unknown;
+      };
+    };
+  };
+  resolved?: {
+    gateway?: {
+      bind?: unknown;
+      port?: unknown;
+      auth?: { mode?: unknown; token?: unknown; password?: unknown };
+      controlUi?: {
+        enabled?: unknown;
+        allowedOrigins?: unknown;
+        dangerouslyAllowHostHeaderOriginFallback?: unknown;
+      };
+    };
+  };
+}> {
+  const payload = await callGatewayFromCli("config.get", opts, {});
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Unexpected config.get response");
+  }
+  return payload as {
+    config?: {
+      gateway?: {
+        bind?: unknown;
+        port?: unknown;
+        auth?: { mode?: unknown; token?: unknown; password?: unknown };
+        controlUi?: {
+          enabled?: unknown;
+          allowedOrigins?: unknown;
+          dangerouslyAllowHostHeaderOriginFallback?: unknown;
+        };
+      };
+    };
+    resolved?: {
+      gateway?: {
+        bind?: unknown;
+        port?: unknown;
+        auth?: { mode?: unknown; token?: unknown; password?: unknown };
+        controlUi?: {
+          enabled?: unknown;
+          allowedOrigins?: unknown;
+          dangerouslyAllowHostHeaderOriginFallback?: unknown;
+        };
+      };
+    };
+  };
+}
+
 export async function callBrowserResize(
   opts: BrowserParentOpts,
   params: { profile?: string; width: number; height: number; targetId?: string },
