@@ -16,7 +16,7 @@ export type RuntimeEnv = import("../../runtime.js").RuntimeEnv;
 
 export type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;
 
-export type DiscordMessagePreflightContext = {
+type DiscordMessagePreflightSharedFields = {
   cfg: LoadedConfig;
   discordConfig: NonNullable<
     import("../../config/config.js").OpenClawConfig["channels"]
@@ -33,7 +33,9 @@ export type DiscordMessagePreflightContext = {
   replyToMode: ReplyToMode;
   ackReactionScope: "all" | "direct" | "group-all" | "group-mentions" | "off" | "none";
   groupPolicy: "open" | "disabled" | "allowlist";
+};
 
+export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields & {
   data: DiscordMessageEvent;
   client: Client;
   message: DiscordMessageEvent["message"];
@@ -89,19 +91,7 @@ export type DiscordMessagePreflightContext = {
   discordRestFetch?: typeof fetch;
 };
 
-export type DiscordMessagePreflightParams = {
-  cfg: LoadedConfig;
-  discordConfig: DiscordMessagePreflightContext["discordConfig"];
-  accountId: string;
-  token: string;
-  runtime: RuntimeEnv;
-  botUserId?: string;
-  abortSignal?: AbortSignal;
-  guildHistories: Map<string, HistoryEntry[]>;
-  historyLimit: number;
-  mediaMaxBytes: number;
-  textLimit: number;
-  replyToMode: ReplyToMode;
+export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields & {
   dmEnabled: boolean;
   groupDmEnabled: boolean;
   groupDmChannels?: string[];
