@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import { isRestartEnabled } from "../../config/commands.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { parseCmdScriptCommandLine } from "../../daemon/cmd-argv.js";
+import { launchAgentPlistExists, repairLaunchAgentBootstrap } from "../../daemon/launchd.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { probeGateway } from "../../gateway/probe.js";
 import { isGatewayArgv, parseProcCmdline } from "../../infra/gateway-process-argv.js";
@@ -30,6 +31,21 @@ import type { DaemonLifecycleOptions } from "./types.js";
 
 const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
 const POST_RESTART_HEALTH_DELAY_MS = DEFAULT_RESTART_HEALTH_DELAY_MS;
+
+async function repairLaunchAgentIfInstalled(args?: { kickstart?: boolean }): Promise<boolean> {
+  if (process.platform !== "darwin") {
+    return false;
+  }
+  const plistExists = await launchAgentPlistExists(process.env).catch(() => false);
+  if (!plistExists) {
+    return false;
+  }
+  const repair = await repairLaunchAgentBootstrap({
+    env: process.env,
+    kickstart: args?.kickstart,
+  }).catch(() => ({ ok: false as const }));
+  return repair.ok;
+}
 
 async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
   const command = await service.readCommand(process.env).catch(() => null);
@@ -191,10 +207,16 @@ export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
 }
 
 export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
+  const service = resolveGatewayService();
+
   return await runServiceStart({
     serviceNoun: "Gateway",
-    service: resolveGatewayService(),
+    service,
     renderStartHints: renderGatewayServiceStartHints,
+    onNotLoaded:
+      process.platform === "darwin"
+        ? async () => await repairLaunchAgentIfInstalled({ kickstart: false })
+        : undefined,
     opts,
   });
 }
@@ -234,6 +256,9 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     opts,
     checkTokenDrift: true,
     onNotLoaded: async () => {
+      if (await repairLaunchAgentIfInstalled()) {
+        return { result: "restarted" as const, loaded: true };
+      }
       const handled = await restartGatewayWithoutServiceManager(restartPort);
       if (handled) {
         restartedWithoutServiceManager = true;

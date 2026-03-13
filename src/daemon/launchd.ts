@@ -224,6 +224,7 @@ export async function readLaunchAgentRuntime(
 
 export async function repairLaunchAgentBootstrap(args: {
   env?: Record<string, string | undefined>;
+  kickstart?: boolean;
 }): Promise<{ ok: boolean; detail?: string }> {
   const env = args.env ?? (process.env as Record<string, string | undefined>);
   const domain = resolveGuiDomain();
@@ -235,6 +236,9 @@ export async function repairLaunchAgentBootstrap(args: {
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   if (boot.code !== 0) {
     return { ok: false, detail: (boot.stderr || boot.stdout).trim() || undefined };
+  }
+  if (args.kickstart === false) {
+    return { ok: true };
   }
   const kick = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
   if (kick.code !== 0) {

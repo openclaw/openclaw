@@ -240,6 +240,23 @@ describe("launchd bootstrap repair", () => {
     expect(enableIndex).toBeLessThan(bootstrapIndex);
     expect(bootstrapIndex).toBeLessThan(kickstartIndex);
   });
+
+  it("can skip kickstart when only re-registering the agent", async () => {
+    const env: Record<string, string | undefined> = {
+      HOME: "/Users/test",
+      OPENCLAW_PROFILE: "default",
+    };
+    const repair = await repairLaunchAgentBootstrap({ env, kickstart: false });
+    expect(repair.ok).toBe(true);
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const label = "ai.openclaw.gateway";
+    const plistPath = resolveLaunchAgentPlistPath(env);
+
+    expect(state.launchctlCalls).toContainEqual(["enable", `${domain}/${label}`]);
+    expect(state.launchctlCalls).toContainEqual(["bootstrap", domain, plistPath]);
+    expect(state.launchctlCalls.some((c) => c[0] === "kickstart")).toBe(false);
+  });
 });
 
 describe("launchd install", () => {

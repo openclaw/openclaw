@@ -91,6 +91,30 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
     expect(service.restart).not.toHaveBeenCalled();
   });
 
+  it("aborts restart before not-loaded recovery when config is invalid", async () => {
+    const onNotLoaded = vi.fn();
+    service.isLoaded.mockResolvedValue(false);
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: true,
+      valid: false,
+      config: {},
+      issues: [{ path: "agents.defaults.pdfModel", message: "Unrecognized key" }],
+    });
+
+    await expect(
+      runServiceRestart({
+        serviceNoun: "Gateway",
+        service,
+        renderStartHints: () => [],
+        opts: { json: true },
+        onNotLoaded,
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(onNotLoaded).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
   it("proceeds with restart when config is valid", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
@@ -186,6 +210,30 @@ describe("runServiceStart config pre-flight (#35862)", () => {
     expect(service.restart).not.toHaveBeenCalled();
   });
 
+  it("aborts start before not-loaded recovery when config is invalid", async () => {
+    const onNotLoaded = vi.fn();
+    service.isLoaded.mockResolvedValue(false);
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: true,
+      valid: false,
+      config: {},
+      issues: [{ path: "agents.defaults.pdfModel", message: "Unrecognized key" }],
+    });
+
+    await expect(
+      runServiceStart({
+        serviceNoun: "Gateway",
+        service,
+        renderStartHints: () => [],
+        opts: { json: true },
+        onNotLoaded,
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(onNotLoaded).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
   it("proceeds with start when config is valid", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
@@ -201,6 +249,23 @@ describe("runServiceStart config pre-flight (#35862)", () => {
       opts: { json: true },
     });
 
+    expect(service.restart).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers not-loaded start after validating config", async () => {
+    const onNotLoaded = vi.fn().mockResolvedValue(true);
+    service.isLoaded.mockResolvedValue(false);
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      onNotLoaded,
+    });
+
+    expect(service.isLoaded).toHaveBeenCalledWith({ env: process.env });
+    expect(onNotLoaded).toHaveBeenCalledTimes(1);
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
 });
