@@ -1,6 +1,10 @@
 import type { ResolvedBrowserProfile } from "./config.js";
 
-export type BrowserProfileMode = "local-managed" | "local-extension-relay" | "remote-cdp";
+export type BrowserProfileMode =
+  | "local-managed"
+  | "local-extension-relay"
+  | "local-existing-session"
+  | "remote-cdp";
 
 export type BrowserProfileCapabilities = {
   mode: BrowserProfileMode;
@@ -27,6 +31,20 @@ export function getBrowserProfileCapabilities(
       supportsPerTabWs: false,
       supportsJsonTabEndpoints: true,
       supportsReset: true,
+      supportsManagedTabLimit: false,
+    };
+  }
+
+  if (profile.driver === "existing-session") {
+    return {
+      mode: "local-existing-session",
+      isRemote: false,
+      requiresRelay: false,
+      requiresAttachedTab: false,
+      usesPersistentPlaywright: false,
+      supportsPerTabWs: false,
+      supportsJsonTabEndpoints: false,
+      supportsReset: false,
       supportsManagedTabLimit: false,
     };
   }
@@ -74,6 +92,9 @@ export function resolveDefaultSnapshotFormat(params: {
   const capabilities = getBrowserProfileCapabilities(params.profile);
   if (capabilities.mode === "local-extension-relay") {
     return "aria";
+  }
+  if (capabilities.mode === "local-existing-session") {
+    return "ai";
   }
 
   return params.hasPlaywright ? "ai" : "aria";
