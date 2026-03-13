@@ -151,8 +151,11 @@ function buildStaticCatalog(): ModelDefinitionConfig[] {
 /**
  * Discover models from the Kilo Gateway API with fallback to static catalog.
  * The /api/gateway/models endpoint is public and doesn't require authentication.
+ * When an org ID is configured the request is routed to the org-scoped endpoint
+ * (/api/organizations/{orgId}/models), which requires a Bearer token; the
+ * apiKey parameter is included as Authorization: Bearer when provided.
  */
-export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]> {
+export async function discoverKilocodeModels(apiKey?: string): Promise<ModelDefinitionConfig[]> {
   // Skip API discovery in test environment
   if (process.env.NODE_ENV === "test" || process.env.VITEST) {
     return buildStaticCatalog();
@@ -161,9 +164,16 @@ export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]>
   const orgId = resolveKilocodeOrgId();
   const modelsUrl = buildKilocodeModelsUrl(orgId);
 
+  const headers: Record<string, string> = { Accept: "application/json" };
+  // Org-scoped endpoints require authentication; include the Bearer token when
+  // an org ID is present and an API key has been resolved.
+  if (orgId && apiKey) {
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  }
+
   try {
     const response = await fetch(modelsUrl, {
-      headers: { Accept: "application/json" },
+      headers,
       signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
     });
 
