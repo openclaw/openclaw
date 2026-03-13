@@ -1,0 +1,11 @@
+# PlatformIO build artifacts
+.pio/build/
+.pio/libdeps/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

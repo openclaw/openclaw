@@ -82,7 +82,7 @@ import {
 import { resolveDiscordPresenceUpdate } from "./presence.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
 import { runDiscordGatewayLifecycle } from "./provider.lifecycle.js";
-import { resolveDiscordRestFetch } from "./rest-fetch.js";
+import { applyDiscordGlobalProxy, resolveDiscordRestFetch } from "./rest-fetch.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
 import {
   createNoopThreadBindingManager,
@@ -316,7 +316,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const discordRootThreadBindings = cfg.channels?.discord?.threadBindings;
   const discordAccountThreadBindings =
     cfg.channels?.discord?.accounts?.[account.accountId]?.threadBindings;
-  const discordRestFetch = resolveDiscordRestFetch(rawDiscordCfg.proxy, runtime);
+  // Apply global proxy for undici so @buape/carbon's REST client also uses the proxy
+  applyDiscordGlobalProxy(rawDiscordCfg.proxy, runtime, rawDiscordCfg.proxyBypass);
+  const discordRestFetch = resolveDiscordRestFetch(rawDiscordCfg.proxy, runtime, rawDiscordCfg.proxyBypass);
   const dmConfig = rawDiscordCfg.dm;
   let guildEntries = rawDiscordCfg.guilds;
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);

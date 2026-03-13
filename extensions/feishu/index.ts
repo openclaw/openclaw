@@ -5,6 +5,7 @@ import { feishuPlugin } from "./src/channel.js";
 import { registerFeishuChatTools } from "./src/chat.js";
 import { registerFeishuDocTools } from "./src/docx.js";
 import { registerFeishuDriveTools } from "./src/drive.js";
+import { registerFeishuMediaTools } from "./src/media-tool.js";
 import { registerFeishuPermTools } from "./src/perm.js";
 import { setFeishuRuntime } from "./src/runtime.js";
 import { registerFeishuWikiTools } from "./src/wiki.js";
@@ -59,6 +60,7 @@ const plugin = {
     registerFeishuDriveTools(api);
     registerFeishuPermTools(api);
     registerFeishuBitableTools(api);
+    registerFeishuMediaTools(api);
   },
 };
 

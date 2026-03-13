@@ -111,11 +111,16 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
   ],
   linux: [...SYSTEM_COMMANDS],
   windows: [...SYSTEM_COMMANDS],
+  esp32: [
+    ...DEVICE_COMMANDS,
+    ...CAMERA_COMMANDS,
+    ...NOTIFICATION_COMMANDS,
+  ],
   // Fail-safe: unknown metadata should not receive host exec defaults.
   unknown: [...UNKNOWN_PLATFORM_COMMANDS],
 };
 
-type PlatformId = "ios" | "android" | "macos" | "windows" | "linux" | "unknown";
+type PlatformId = "ios" | "android" | "macos" | "windows" | "linux" | "esp32" | "unknown";
 
 const PLATFORM_PREFIX_RULES: ReadonlyArray<{
   id: Exclude<PlatformId, "unknown">;
@@ -126,6 +131,7 @@ const PLATFORM_PREFIX_RULES: ReadonlyArray<{
   { id: "macos", prefixes: ["mac", "darwin"] },
   { id: "windows", prefixes: ["win"] },
   { id: "linux", prefixes: ["linux"] },
+  { id: "esp32", prefixes: ["esp32"] },
 ] as const;
 
 const DEVICE_FAMILY_TOKEN_RULES: ReadonlyArray<{

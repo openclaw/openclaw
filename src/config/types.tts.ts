@@ -1,6 +1,6 @@
 import type { SecretInput } from "./types.secrets.js";
 
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "zai";
 
 export type TtsMode = "final" | "all";
 
@@ -79,6 +79,13 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** ZhipuGLM (智谱) TTS configuration. */
+  zai?: {
+    apiKey?: SecretInput;
+    baseUrl?: string;
+    model?: string;
+    voice?: string; // female or male
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;

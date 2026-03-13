@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   rmSync,
   renameSync,
+  statSync,
   unlinkSync,
 } from "node:fs";
 import path from "node:path";
@@ -39,6 +40,7 @@ import {
   OPENAI_TTS_VOICES,
   resolveOpenAITtsInstructions,
   openaiTTS,
+  zaiTTS,
   parseTtsDirectives,
   scheduleCleanup,
   summarizeText,
@@ -72,6 +74,7 @@ const TELEGRAM_OUTPUT = {
   // ElevenLabs output formats use codec_sample_rate_bitrate naming.
   // Opus @ 48kHz/64kbps is a good voice-note tradeoff for Telegram.
   elevenlabs: "opus_48000_64",
+  zai: "wav", // Zai returns PCM, we save as wav
   extension: ".opus",
   voiceCompatible: true,
 };
@@ -79,6 +82,7 @@ const TELEGRAM_OUTPUT = {
 const DEFAULT_OUTPUT = {
   openai: "mp3" as const,
   elevenlabs: "mp3_44100_128",
+  zai: "wav", // Zai returns PCM
   extension: ".mp3",
   voiceCompatible: false,
 };
@@ -134,6 +138,12 @@ export type ResolvedTtsConfig = {
     proxy?: string;
     timeoutMs?: number;
   };
+  zai: {
+    apiKey?: string;
+    baseUrl: string;
+    model: string;
+    voice: string;
+  };
   prefsPath?: string;
   maxTextLength: number;
   timeoutMs: number;
@@ -174,6 +184,10 @@ export type TtsDirectiveOverrides = {
     applyTextNormalization?: "auto" | "on" | "off";
     languageCode?: string;
     voiceSettings?: Partial<ResolvedTtsConfig["elevenlabs"]["voiceSettings"]>;
+  };
+  zai?: {
+    voice?: string;
+    model?: string;
   };
 };
 
@@ -322,6 +336,15 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       saveSubtitles: raw.edge?.saveSubtitles ?? false,
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
+    },
+    zai: {
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.zai?.apiKey,
+        path: "messages.tts.zai.apiKey",
+      }),
+      baseUrl: raw.zai?.baseUrl?.trim() || "https://open.bigmodel.cn/api/coding/paas/v4",
+      model: raw.zai?.model?.trim() || "glm-tts",
+      voice: raw.zai?.voice?.trim() || "female",
     },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
@@ -531,7 +554,7 @@ export function resolveTtsApiKey(
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge", "zai"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -613,6 +636,17 @@ export async function textToSpeech(params: {
             },
             timeoutMs: config.timeoutMs,
           });
+          // Wait a brief moment to ensure file system has flushed the write
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          // Verify the file was created and is not empty
+          const stats = existsSync(audioPath) ? statSync(audioPath) : null;
+          if (!stats || stats.size === 0) {
+            throw new Error(
+              stats
+                ? `Edge TTS produced empty file: ${audioPath}`
+                : `Edge TTS failed to create file: ${audioPath}`,
+            );
+          }
           return { audioPath, outputFormat };
         };
 
@@ -688,7 +722,7 @@ export async function textToSpeech(params: {
           voiceSettings,
           timeoutMs: config.timeoutMs,
         });
-      } else {
+      } else if (provider === "openai") {
         const openaiModelOverride = params.overrides?.openai?.model;
         const openaiVoiceOverride = params.overrides?.openai?.voice;
         audioBuffer = await openaiTTS({
@@ -702,6 +736,20 @@ export async function textToSpeech(params: {
           responseFormat: output.openai,
           timeoutMs: config.timeoutMs,
         });
+      } else if (provider === "zai") {
+        const zaiVoiceOverride = params.overrides?.zai?.voice;
+        audioBuffer = await zaiTTS({
+          text: params.text,
+          apiKey,
+          baseUrl: config.zai?.baseUrl,
+          model: config.zai?.model,
+          voice: zaiVoiceOverride ?? config.zai?.voice,
+          timeoutMs: config.timeoutMs,
+        });
+      } else {
+        // Unknown provider - should not happen if TTS_PROVIDERS is complete
+        errors.push(`${provider}: unknown TTS provider`);
+        continue;
       }
 
       const latencyMs = Date.now() - providerStart;
@@ -718,7 +766,7 @@ export async function textToSpeech(params: {
         audioPath,
         latencyMs,
         provider,
-        outputFormat: provider === "openai" ? output.openai : output.elevenlabs,
+        outputFormat: provider === "openai" ? output.openai : provider === "elevenlabs" ? output.elevenlabs : output.zai,
         voiceCompatible: output.voiceCompatible,
       };
     } catch (err) {

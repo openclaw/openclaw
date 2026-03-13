@@ -716,3 +716,42 @@ export async function edgeTTS(params: {
   });
   await tts.ttsPromise(text, outputPath);
 }
+
+/**
+ * ZhipuGLM (智谱) TTS - 调用 glm-tts API
+ * API: https://open.bigmodel.cn/api/coding/paas/v4/audio/speech
+ */
+export async function zaiTTS(params: {
+  text: string;
+  apiKey: string;
+  model?: string;
+  voice?: string; // female or male
+  baseUrl?: string;
+  timeoutMs?: number;
+}): Promise<Buffer> {
+  const { text, apiKey, model = "glm-tts", voice = "female", baseUrl = "https://open.bigmodel.cn/api/coding/paas/v4", timeoutMs = 30000 } = params;
+
+  const url = `${baseUrl}/audio/speech`;
+  
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      input: text,
+      voice,
+    }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Zai TTS failed: ${response.status} ${errorText}`);
+  }
+
+  // 返回 PCM 音频 buffer
+  return Buffer.from(await response.arrayBuffer());
+}
