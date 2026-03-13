@@ -118,10 +118,10 @@ export function toInboundMessage(payload: KudosityWebhookPayload): InboundMessag
     typeof data.recipient !== "string" ||
     typeof data.message !== "string" ||
     typeof data.id !== "string" ||
-    !data.sender ||
-    !data.recipient ||
-    !data.message ||
-    !data.id
+    !data.sender.trim() ||
+    !data.recipient.trim() ||
+    !data.message.trim() ||
+    !data.id.trim()
   ) {
     return null;
   }

@@ -167,6 +167,51 @@ describe("toInboundMessage", () => {
     expect(message!.timestamp).toBe("2026-03-02T07:00:00Z");
   });
 
+  it("should return null for whitespace-only sender", () => {
+    const payload = parseWebhookPayload({
+      event_type: "SMS_INBOUND",
+      timestamp: "2026-03-02T06:12:52Z",
+      data: {
+        id: "msg-123",
+        sender: "   ",
+        recipient: "+61400000000",
+        message: "Hello",
+        created_at: "2026-03-02T06:12:52Z",
+      },
+    })!;
+    expect(toInboundMessage(payload)).toBeNull();
+  });
+
+  it("should return null for whitespace-only message", () => {
+    const payload = parseWebhookPayload({
+      event_type: "SMS_INBOUND",
+      timestamp: "2026-03-02T06:12:52Z",
+      data: {
+        id: "msg-123",
+        sender: "+61478038915",
+        recipient: "+61400000000",
+        message: "   ",
+        created_at: "2026-03-02T06:12:52Z",
+      },
+    })!;
+    expect(toInboundMessage(payload)).toBeNull();
+  });
+
+  it("should return null for whitespace-only id", () => {
+    const payload = parseWebhookPayload({
+      event_type: "SMS_INBOUND",
+      timestamp: "2026-03-02T06:12:52Z",
+      data: {
+        id: "   ",
+        sender: "+61478038915",
+        recipient: "+61400000000",
+        message: "Hello",
+        created_at: "2026-03-02T06:12:52Z",
+      },
+    })!;
+    expect(toInboundMessage(payload)).toBeNull();
+  });
+
   it("should return null if data.id is missing", () => {
     const payload = parseWebhookPayload({
       event_type: "SMS_INBOUND",
