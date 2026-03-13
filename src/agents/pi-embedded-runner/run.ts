@@ -576,19 +576,13 @@ export async function runEmbeddedPiAgent(
           message,
           profileIds: profileCandidates,
         });
-        if (fallbackConfigured) {
-          throw new FailoverError(message, {
+        throw new FailoverError(message, {
             reason,
             provider,
             model: modelId,
             status: resolveFailoverStatus(reason),
             cause: params.error,
           });
-        }
-        if (params.error instanceof Error) {
-          throw params.error;
-        }
-        throw new Error(message);
       };
 
       const resolveApiKeyForCandidate = async (candidate?: string) => {
@@ -1322,10 +1316,11 @@ export async function runEmbeddedPiAgent(
               thinkLevel = fallbackThinking;
               continue;
             }
-            // Throw FailoverError for prompt-side failover reasons when fallbacks
-            // are configured so outer model fallback can continue on overload,
-            // rate-limit, auth, or billing failures.
-            if (fallbackConfigured && promptFailoverFailure) {
+            // Always throw FailoverError for prompt-side failover reasons so
+            // the outer runWithModelFallback loop can try the next candidate.
+            // Previously gated on fallbackConfigured, which could be stale when
+            // FollowupRun snapshots an older config before hot-reload.
+            if (promptFailoverFailure) {
               const status = resolveFailoverStatus(promptFailoverReason ?? "unknown");
               logPromptFailoverDecision("fallback_model", { status });
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
@@ -1337,7 +1332,7 @@ export async function runEmbeddedPiAgent(
                 status,
               });
             }
-            if (promptFailoverFailure || promptFailoverReason) {
+            if (promptFailoverReason) {
               logPromptFailoverDecision("surface_error");
             }
             throw promptError;
@@ -1441,9 +1436,12 @@ export async function runEmbeddedPiAgent(
               continue;
             }
 
-            if (fallbackConfigured) {
+            // Always throw FailoverError so the outer runWithModelFallback
+            // loop can try the next candidate. Previously gated on
+            // fallbackConfigured, which could be stale from a FollowupRun
+            // config snapshot taken before hot-reload applied fallbacks.
+            {
               await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
-              // Prefer formatted error message (user-friendly) over raw errorMessage
               const message =
                 (lastAssistant
                   ? formatAssistantErrorText(lastAssistant, {
@@ -1478,7 +1476,6 @@ export async function runEmbeddedPiAgent(
                 status,
               });
             }
-            logAssistantFailoverDecision("surface_error");
           }
 
           const usage = toNormalizedUsage(usageAccumulator);
