@@ -21,7 +21,12 @@ import {
 
 function normalizeBindingChannel(value: string | undefined): ConfiguredAcpBindingChannel | null {
   const normalized = (value ?? "").trim().toLowerCase();
-  if (normalized === "discord" || normalized === "telegram") {
+  if (
+    normalized === "discord" ||
+    normalized === "telegram" ||
+    normalized === "feishu" ||
+    normalized === "qqbot"
+  ) {
     return normalized;
   }
   return null;
@@ -142,6 +147,10 @@ export function resolveConfiguredAcpBindingSpecBySessionKey(params: {
     if (accountMatchPriority === 0) {
       continue;
     }
+    // Reverse lookup requires a concrete conversationId to rebuild the session
+    // key hash. Catch-all bindings (no peer.id) cannot be matched here because
+    // the hash is one-way; those sessions rely on stored session meta instead
+    // (see resetAcpSessionInPlace).
     const targetConversationId = resolveBindingConversationId(binding);
     if (!targetConversationId) {
       continue;
@@ -150,6 +159,24 @@ export function resolveConfiguredAcpBindingSpecBySessionKey(params: {
       const spec = toConfiguredBindingSpec({
         cfg: params.cfg,
         channel: "discord",
+        accountId: parsedSessionKey.accountId,
+        conversationId: targetConversationId,
+        binding,
+      });
+      if (buildConfiguredAcpSessionKey(spec) === sessionKey) {
+        if (accountMatchPriority === 2) {
+          return spec;
+        }
+        if (!wildcardMatch) {
+          wildcardMatch = spec;
+        }
+      }
+      continue;
+    }
+    if (channel === "feishu" || channel === "qqbot") {
+      const spec = toConfiguredBindingSpec({
+        cfg: params.cfg,
+        channel,
         accountId: parsedSessionKey.accountId,
         conversationId: targetConversationId,
         binding,
@@ -269,7 +296,7 @@ export function resolveConfiguredAcpBindingRecord(params: {
         return inheritedMatch;
       }
     }
-    return null;
+    // No explicit binding matched; fall through to defaultChannels check.
   }
 
   if (channel === "telegram") {
@@ -334,7 +361,112 @@ export function resolveConfiguredAcpBindingRecord(params: {
         record: toConfiguredAcpBindingRecord(spec),
       };
     }
-    return null;
+    // No explicit binding matched; fall through to defaultChannels check.
+  }
+
+  // Feishu and QQ use direct conversationId matching.
+  // When a binding omits peer.id it acts as a catch-all for the channel/account.
+  // Peer-specific bindings always take priority over catch-all bindings,
+  // regardless of declaration order.
+  if (channel === "feishu" || channel === "qqbot") {
+    let peerExactMatch: AgentAcpBinding | null = null;
+    let peerWildcardMatch: AgentAcpBinding | null = null;
+    let catchAllExactMatch: AgentAcpBinding | null = null;
+    let catchAllWildcardMatch: AgentAcpBinding | null = null;
+    for (const binding of listAcpBindings(params.cfg)) {
+      if (normalizeBindingChannel(binding.match.channel) !== channel) {
+        continue;
+      }
+      const accountMatchPriority = resolveAccountMatchPriority(binding.match.accountId, accountId);
+      if (accountMatchPriority === 0) {
+        continue;
+      }
+      const bindingConversationId = resolveBindingConversationId(binding);
+      if (bindingConversationId) {
+        // Peer-specific binding — must match conversationId exactly.
+        if (bindingConversationId !== conversationId) {
+          continue;
+        }
+        if (accountMatchPriority === 2 && !peerExactMatch) {
+          peerExactMatch = binding;
+        } else if (!peerWildcardMatch) {
+          peerWildcardMatch = binding;
+        }
+      } else {
+        // Catch-all binding (no peer.id).
+        if (accountMatchPriority === 2 && !catchAllExactMatch) {
+          catchAllExactMatch = binding;
+        } else if (!catchAllWildcardMatch) {
+          catchAllWildcardMatch = binding;
+        }
+      }
+    }
+    // Priority: peer exact > peer wildcard > catch-all exact > catch-all wildcard.
+    const bestMatch =
+      peerExactMatch ?? peerWildcardMatch ?? catchAllExactMatch ?? catchAllWildcardMatch;
+    if (bestMatch) {
+      const spec = toConfiguredBindingSpec({
+        cfg: params.cfg,
+        channel,
+        accountId,
+        conversationId,
+        binding: bestMatch,
+      });
+      return {
+        spec,
+        record: toConfiguredAcpBindingRecord(spec),
+      };
+    }
+    // No explicit binding matched; fall through to defaultChannels check.
+  }
+
+  // Implicit ACP binding via acp.defaultChannels — when no explicit binding
+  // matched but the channel is listed in defaultChannels, synthesize a
+  // catch-all binding spec on the fly. This lets users enable ACP for entire
+  // channels with a single config line instead of writing bindings[] entries.
+  const defaultChannels = (params.cfg.acp?.defaultChannels ?? []).map((c) =>
+    c.trim().toLowerCase(),
+  );
+  if (defaultChannels.includes(channel)) {
+    const bindingChannel = normalizeBindingChannel(channel);
+    if (bindingChannel) {
+      // Telegram requires topic normalization so the session key hash stays
+      // consistent with explicit binding paths.
+      let effectiveConversationId = conversationId;
+      let effectiveParentConversationId = parentConversationId;
+      if (bindingChannel === "telegram") {
+        const parsed = parseTelegramTopicConversation({
+          conversationId,
+          parentConversationId,
+        });
+        if (!parsed || !parsed.chatId.startsWith("-")) {
+          return null;
+        }
+        effectiveConversationId = parsed.canonicalConversationId;
+        effectiveParentConversationId = parsed.chatId;
+      }
+
+      const agentId = pickFirstExistingAgentId(params.cfg, "main");
+      const runtimeDefaults = resolveAgentRuntimeAcpDefaults({
+        cfg: params.cfg,
+        ownerAgentId: agentId,
+      });
+      const spec: ConfiguredAcpBindingSpec = {
+        channel: bindingChannel,
+        accountId,
+        conversationId: effectiveConversationId,
+        parentConversationId: effectiveParentConversationId,
+        agentId,
+        acpAgentId: normalizeText(runtimeDefaults.acpAgentId),
+        mode: normalizeMode(runtimeDefaults.mode),
+        cwd: runtimeDefaults.cwd,
+        backend: runtimeDefaults.backend,
+      };
+      return {
+        spec,
+        record: toConfiguredAcpBindingRecord(spec),
+      };
+    }
   }
 
   return null;

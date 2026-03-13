@@ -62,6 +62,22 @@ Use ACP when you want an external harness runtime. Use sub-agents when you want 
 
 See also [Sub-agents](/tools/subagents).
 
+### ACP versus embedded Pi agent
+
+ACP sessions use an external agent CLI (Claude Code, Codex, etc.) as the core agent engine. When ACP is active for a session, the agent CLI fully handles thinking, tool execution, and context management. OpenClaw serves as the orchestration layer — routing messages, managing session lifecycle, and delivering responses back to channels.
+
+| Feature            | Embedded Pi                                               | ACP session                                               |
+| ------------------ | --------------------------------------------------------- | --------------------------------------------------------- |
+| Tool execution     | OpenClaw tools (browser, canvas, nodes, cron)             | Agent CLI native tools (file edit, terminal, search, web) |
+| Context/compaction | OpenClaw session store + memory flush                     | Agent CLI native context management                       |
+| Skills             | OpenClaw skills platform                                  | Agent CLI native capabilities (AGENTS.md, MCP, etc.)      |
+| Media              | Images, audio, video, documents                           | Images (audio/video/documents forwarded as text context)  |
+| Group messages     | Activation gating, lurking, group context injection       | All messages forwarded to agent CLI                       |
+| Model              | Per-message directives, channel overrides, failover chain | Controlled by agent CLI subscription                      |
+| Streaming          | OpenClaw block streaming                                  | ACP projector with configurable delivery modes            |
+
+For coding and development workflows, agent CLIs like Claude Code and Codex provide a more capable tool set (file editing, terminal execution, code search, git operations) than the embedded Pi runtime.
+
 ## Thread-bound sessions (channel-agnostic)
 
 When thread bindings are enabled for a channel adapter, ACP sessions can be bound to threads:
@@ -99,12 +115,72 @@ For non-ephemeral workflows, configure persistent ACP bindings in top-level `bin
 - `bindings[].match` identifies the target conversation:
   - Discord channel or thread: `match.channel="discord"` + `match.peer.id="<channelOrThreadId>"`
   - Telegram forum topic: `match.channel="telegram"` + `match.peer.id="<chatId>:topic:<topicId>"`
+  - Feishu conversation: `match.channel="feishu"` + optional `match.peer.id="<openId>"`
+  - QQ bot conversation: `match.channel="qqbot"` + optional `match.peer.id="<senderId>"`
 - `bindings[].agentId` is the owning OpenClaw agent id.
 - Optional ACP overrides live under `bindings[].acp`:
   - `mode` (`persistent` or `oneshot`)
   - `label`
   - `cwd`
   - `backend`
+
+### Channel-wide catch-all bindings
+
+Feishu and QQ bot support catch-all ACP bindings where `match.peer` is omitted. When peer is omitted, the binding matches all conversations on that channel/account. Each conversation still gets its own isolated ACP session.
+
+This is useful when you want every message on a channel to route through an ACP harness agent (for example Claude Code or Codex) instead of the embedded PI agent.
+
+```json5
+{
+  bindings: [
+    // All Feishu conversations -> ACP with Claude Code
+    {
+      type: "acp",
+      agentId: "main",
+      match: { channel: "feishu", accountId: "*" },
+    },
+    // All QQ bot conversations -> ACP with Claude Code
+    {
+      type: "acp",
+      agentId: "main",
+      match: { channel: "qqbot", accountId: "*" },
+    },
+  ],
+  acp: {
+    defaultAgent: "claude", // or "codex", "opencode", "gemini"
+  },
+}
+```
+
+When a specific peer binding and a catch-all binding both match, the specific peer binding takes priority.
+
+### Quick start: route all channel messages through ACP
+
+Use `acp.defaultChannels` to make all conversations on a channel use ACP automatically. No `bindings[]` entries needed. Each conversation gets its own isolated ACP session. This lets you reuse your existing Claude Code or Codex subscription as the agent engine.
+
+**CLI (two commands):**
+
+```sh
+openclaw config set acp.defaultAgent claude
+openclaw config set acp.defaultChannels '["feishu","qqbot"]'
+```
+
+Replace `claude` with `codex`, `opencode`, or `gemini` to use a different agent CLI. The `acpx` backend plugin auto-enables when `defaultChannels` is set.
+
+**Config file (`openclaw.json`):**
+
+```json5
+{
+  acp: {
+    defaultAgent: "claude", // or "codex", "opencode", "gemini"
+    defaultChannels: ["feishu", "qqbot"],
+  },
+}
+```
+
+Supported values: `"discord"`, `"telegram"`, `"feishu"`, `"qqbot"`.
+
+Explicit `bindings[]` entries always take priority over `defaultChannels` when both match the same conversation, so you can still use fine-grained bindings for specific conversations while using `defaultChannels` as the catch-all.
 
 ### Runtime defaults per agent
 
@@ -169,6 +245,18 @@ Example:
         peer: { kind: "group", id: "-1001234567890:topic:42" },
       },
       acp: { cwd: "/workspace/repo-b" },
+    },
+    // Feishu catch-all: all conversations on this account use ACP
+    {
+      type: "acp",
+      agentId: "claude",
+      match: { channel: "feishu", accountId: "*" },
+    },
+    // QQ catch-all
+    {
+      type: "acp",
+      agentId: "claude",
+      match: { channel: "qqbot", accountId: "*" },
     },
     {
       type: "route",

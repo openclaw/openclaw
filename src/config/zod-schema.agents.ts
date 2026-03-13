@@ -62,7 +62,22 @@ const AcpBindingSchema = z
   .strict()
   .superRefine((value, ctx) => {
     const peerId = value.match.peer?.id?.trim() ?? "";
-    if (!peerId) {
+    const channel = value.match.channel.trim().toLowerCase();
+    if (
+      channel !== "discord" &&
+      channel !== "telegram" &&
+      channel !== "feishu" &&
+      channel !== "qqbot"
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["match", "channel"],
+        message:
+          'ACP bindings currently support only "discord", "telegram", "feishu", and "qqbot" channels.',
+      });
+      return;
+    }
+    if ((channel === "discord" || channel === "telegram") && !peerId) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["match", "peer"],
@@ -70,12 +85,14 @@ const AcpBindingSchema = z
       });
       return;
     }
-    const channel = value.match.channel.trim().toLowerCase();
-    if (channel !== "discord" && channel !== "telegram") {
+    // Feishu/QQ allow omitting peer entirely (catch-all), but if peer is
+    // provided its id must be non-empty to avoid accidental catch-all.
+    if ((channel === "feishu" || channel === "qqbot") && value.match.peer && !peerId) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ["match", "channel"],
-        message: 'ACP bindings currently support only "discord" and "telegram" channels.',
+        path: ["match", "peer", "id"],
+        message:
+          "Feishu/QQ ACP bindings require a non-empty peer.id when match.peer is specified. Omit peer entirely for catch-all.",
       });
       return;
     }
