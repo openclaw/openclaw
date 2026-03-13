@@ -33,7 +33,9 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
     const nextContent: AssistantContentBlock[] = [];
     let changed = false;
     for (const block of msg.content) {
-      if (block && typeof block === "object" && (block as { type?: unknown }).type === "thinking") {
+      const blockType =
+        block && typeof block === "object" ? (block as { type?: unknown }).type : undefined;
+      if (blockType === "thinking" || blockType === "redacted_thinking") {
         touched = true;
         changed = true;
         continue;

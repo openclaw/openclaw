@@ -3,6 +3,7 @@ import { normalizeTargetForProvider } from "../infra/outbound/target-normalizati
 import { splitMediaFromOutput } from "../media/parse.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
+import { isImmutableThinkingBlock } from "./pi-embedded-helpers/thinking-guard.js";
 import { type MessagingToolSend } from "./pi-embedded-messaging.js";
 import { normalizeToolName } from "./tool-policy.js";
 
@@ -94,6 +95,9 @@ export function sanitizeToolResult(result: unknown): unknown {
   }
   const sanitized = content.map((item) => {
     if (!item || typeof item !== "object") {
+      return item;
+    }
+    if (isImmutableThinkingBlock(item)) {
       return item;
     }
     const entry = item as Record<string, unknown>;
