@@ -9,6 +9,7 @@ import {
   resetDiagnosticSessionStateForTest,
 } from "./diagnostic-session-state.js";
 import {
+  __testing,
   logMessageFirstVisibleTimeout,
   logMessageFirstVisible,
   logTurnLatencyStage,
@@ -317,5 +318,20 @@ describe("stuck session diagnostics threshold", () => {
     expect(resolveFirstVisibleWarnMs({ diagnostics: { firstVisibleWarnMs: -1 } })).toBe(4_000);
     expect(resolveFirstVisibleWarnMs({ diagnostics: { firstVisibleWarnMs: 0 } })).toBe(4_000);
     expect(resolveFirstVisibleWarnMs()).toBe(4_000);
+  });
+
+  it("formats heartbeat latency summaries as readable segment text", () => {
+    expect(
+      __testing.formatLatencyHeartbeatSummary({
+        sampleCount: 2,
+        segments: {
+          dispatchToQueue: { avgMs: 100, p95Ms: 120, maxMs: 140 },
+          runToFirstVisible: { avgMs: 900, p95Ms: 1100, maxMs: 1300 },
+          endToEnd: { avgMs: 2200, p95Ms: 2600, maxMs: 3000 },
+        },
+      }),
+    ).toBe(
+      " latency=2 queue=100/120/140ms | run->visible=900/1100/1300ms | endToEnd=2200/2600/3000ms",
+    );
   });
 });

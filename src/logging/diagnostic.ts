@@ -153,6 +153,56 @@ function buildLatencySummary():
   };
 }
 
+function formatLatencyHeartbeatSummary(
+  latency:
+    | {
+        sampleCount: number;
+        segments: Partial<
+          Record<
+            LatencySegmentName,
+            {
+              avgMs: number;
+              p95Ms: number;
+              maxMs: number;
+            }
+          >
+        >;
+      }
+    | undefined,
+): string {
+  if (!latency) {
+    return "";
+  }
+  const parts: string[] = [];
+  const append = (
+    label: string,
+    segment:
+      | {
+          avgMs: number;
+          p95Ms: number;
+          maxMs: number;
+        }
+      | undefined,
+  ) => {
+    if (!segment) {
+      return;
+    }
+    parts.push(`${label}=${segment.avgMs}/${segment.p95Ms}/${segment.maxMs}ms`);
+  };
+  append("queue", latency.segments.dispatchToQueue);
+  append("queue->run", latency.segments.queueToRun);
+  append("ensure->run", latency.segments.acpEnsureToRun);
+  append("run->event", latency.segments.runToFirstEvent);
+  append("event->visible", latency.segments.firstEventToFirstVisible);
+  append("run->visible", latency.segments.runToFirstVisible);
+  append("visible->final", latency.segments.firstVisibleToFinal);
+  append("endToEnd", latency.segments.endToEnd);
+  if (parts.length === 0) {
+    return "";
+  }
+  return ` latency=${latency.sampleCount} ${parts.join(" | ")}`;
+}
+
 function recordTurnLatencyStageSample(params: {
   turnLatencyId: string;
   stage: TurnLatencyStageInfo["stage"];
@@ -670,11 +720,7 @@ export function startDiagnosticHeartbeat(config?: OpenClawConfig) {
         firstVisible
           ? ` firstVisible=${firstVisible.sampleCount} avg=${firstVisible.avgMs}ms p95=${firstVisible.p95Ms}ms max=${firstVisible.maxMs}ms`
           : ""
-      }${
-        latency?.segments.endToEnd
-          ? ` latency.endToEnd=${latency.sampleCount} avg=${latency.segments.endToEnd.avgMs}ms p95=${latency.segments.endToEnd.p95Ms}ms max=${latency.segments.endToEnd.maxMs}ms`
-          : ""
-      }`,
+      }${formatLatencyHeartbeatSummary(latency)}`,
     );
     emitDiagnosticEvent({
       type: "diagnostic.heartbeat",
@@ -743,3 +789,4 @@ export function resetDiagnosticStateForTest(): void {
 }
 
 export { diag as diagnosticLogger };
+export const __testing = { formatLatencyHeartbeatSummary };
