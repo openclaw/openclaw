@@ -801,6 +801,31 @@ function collectFeishuAssignments(params: {
             : baseConnectionMode;
           return accountMode === "webhook";
         });
+  const topLevelEncryptKeyActive = !surface.channelEnabled
+    ? false
+    : !surface.hasExplicitAccounts
+      ? baseConnectionMode === "webhook"
+      : surface.accounts.some(({ account, enabled }) => {
+          if (!enabled || hasOwnProperty(account, "encryptKey")) {
+            return false;
+          }
+          const accountMode = hasOwnProperty(account, "connectionMode")
+            ? normalizeSecretStringValue(account.connectionMode)
+            : baseConnectionMode;
+          return accountMode === "webhook";
+        });
+  collectSecretInputAssignment({
+    value: feishu.encryptKey,
+    path: "channels.feishu.encryptKey",
+    expected: "string",
+    defaults: params.defaults,
+    context: params.context,
+    active: topLevelEncryptKeyActive,
+    inactiveReason: "no enabled Feishu webhook-mode surface inherits this top-level encryptKey.",
+    apply: (value) => {
+      feishu.encryptKey = value;
+    },
+  });
   collectSecretInputAssignment({
     value: feishu.verificationToken,
     path: "channels.feishu.verificationToken",
@@ -818,6 +843,23 @@ function collectFeishuAssignments(params: {
     return;
   }
   for (const { accountId, account, enabled } of surface.accounts) {
+    if (hasOwnProperty(account, "encryptKey")) {
+      const accountMode = hasOwnProperty(account, "connectionMode")
+        ? normalizeSecretStringValue(account.connectionMode)
+        : baseConnectionMode;
+      collectSecretInputAssignment({
+        value: account.encryptKey,
+        path: `channels.feishu.accounts.${accountId}.encryptKey`,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
+        active: enabled && accountMode === "webhook",
+        inactiveReason: "Feishu account is disabled or not running in webhook mode.",
+        apply: (value) => {
+          account.encryptKey = value;
+        },
+      });
+    }
     if (!hasOwnProperty(account, "verificationToken")) {
       continue;
     }

@@ -23,6 +23,7 @@ async function runExplicitTelegramAnnounceTurn(params: {
   home: string;
   storePath: string;
   deps: CliDeps;
+  deliveryContract?: "cron-owned" | "shared";
 }): Promise<Awaited<ReturnType<typeof runCronIsolatedAgentTurn>>> {
   return runTelegramAnnounceTurn({
     ...params,
@@ -196,7 +197,7 @@ describe("runCronIsolatedAgentTurn", () => {
     setupIsolatedAgentTurnMocks();
   });
 
-  it("delivers explicit targets with direct and final-payload text", async () => {
+  it("delivers explicit targets with direct text", async () => {
     await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
       await assertExplicitTelegramTargetDelivery({
         home,
@@ -205,7 +206,11 @@ describe("runCronIsolatedAgentTurn", () => {
         payloads: [{ text: "hello from cron" }],
         expectedText: "hello from cron",
       });
-      vi.clearAllMocks();
+    });
+  });
+
+  it("delivers explicit targets with final-payload text", async () => {
+    await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
       await assertExplicitTelegramTargetDelivery({
         home,
         storePath,
@@ -301,6 +306,7 @@ describe("runCronIsolatedAgentTurn", () => {
         home,
         storePath,
         deps,
+        deliveryContract: "shared",
       });
 
       expectDeliveredOk(res);
