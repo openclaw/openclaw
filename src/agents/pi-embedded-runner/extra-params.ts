@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { resolveBedrockBearerToken } from "../../agents/model-auth.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -12,6 +13,7 @@ import {
   createBedrockNoCacheWrapper,
   createAnthropicFastModeWrapper,
   createAnthropicToolPayloadCompatibilityWrapper,
+  createBedrockBearerTokenWrapper,
   isAnthropicBedrockModel,
   resolveAnthropicFastMode,
   resolveAnthropicBetas,
@@ -289,10 +291,17 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createBedrockNoCacheWrapper(agent.streamFn);
   }
 
+  if (provider === "amazon-bedrock") {
+    const bearerToken = resolveBedrockBearerToken();
+    if (bearerToken) {
+      log.debug(`applying Bedrock bearer token auth header for ${provider}/${modelId}`);
+      agent.streamFn = createBedrockBearerTokenWrapper(agent.streamFn, bearerToken);
+    }
+  }
+
   // Guard Google payloads against invalid negative thinking budgets emitted by
   // upstream model-ID heuristics for Gemini 3.1 variants.
   agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
-
   const anthropicFastMode = resolveAnthropicFastMode(effectiveExtraParams);
   if (anthropicFastMode !== undefined) {
     log.debug(`applying Anthropic fast mode=${anthropicFastMode} for ${provider}/${modelId}`);

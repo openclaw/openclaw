@@ -224,6 +224,17 @@ function resolveEnvSourceLabel(params: {
   return `${prefix}${params.label}`;
 }
 
+/**
+ * Returns the trimmed bearer token value from AWS_BEARER_TOKEN_BEDROCK, or undefined.
+ * Exported for use by the stream-wrapper layer that injects the Authorization header.
+ */
+export function resolveBedrockBearerToken(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const value = env[AWS_BEARER_ENV]?.trim();
+  return value || undefined;
+}
+
 export function resolveAwsSdkEnvVarName(env: NodeJS.ProcessEnv = process.env): string | undefined {
   if (env[AWS_BEARER_ENV]?.trim()) {
     return AWS_BEARER_ENV;
@@ -237,11 +248,20 @@ export function resolveAwsSdkEnvVarName(env: NodeJS.ProcessEnv = process.env): s
   return undefined;
 }
 
-function resolveAwsSdkAuthInfo(): { mode: "aws-sdk"; source: string } {
+function resolveAwsSdkAuthInfo(env: NodeJS.ProcessEnv = process.env): {
+  mode: "aws-sdk" | "api-key";
+  source: string;
+  apiKey?: string;
+} {
   const applied = new Set(getShellEnvAppliedKeys());
-  if (process.env[AWS_BEARER_ENV]?.trim()) {
+  const bearerToken = resolveBedrockBearerToken(env);
+  if (bearerToken) {
+    // Bearer token auth: return the actual token so the downstream pipeline
+    // stores it as a runtime API key and the stream wrapper injects it as
+    // an Authorization: Bearer header (bypassing AWS SDK signing).
     return {
-      mode: "aws-sdk",
+      mode: "api-key",
+      apiKey: bearerToken,
       source: resolveEnvSourceLabel({
         applied,
         envVars: [AWS_BEARER_ENV],
@@ -249,7 +269,7 @@ function resolveAwsSdkAuthInfo(): { mode: "aws-sdk"; source: string } {
       }),
     };
   }
-  if (process.env[AWS_ACCESS_KEY_ENV]?.trim() && process.env[AWS_SECRET_KEY_ENV]?.trim()) {
+  if (env[AWS_ACCESS_KEY_ENV]?.trim() && env[AWS_SECRET_KEY_ENV]?.trim()) {
     return {
       mode: "aws-sdk",
       source: resolveEnvSourceLabel({
@@ -259,7 +279,7 @@ function resolveAwsSdkAuthInfo(): { mode: "aws-sdk"; source: string } {
       }),
     };
   }
-  if (process.env[AWS_PROFILE_ENV]?.trim()) {
+  if (env[AWS_PROFILE_ENV]?.trim()) {
     return {
       mode: "aws-sdk",
       source: resolveEnvSourceLabel({
@@ -363,7 +383,12 @@ export async function resolveApiKeyForProvider(params: {
 
   const normalized = normalizeProviderId(provider);
   if (authOverride === undefined && normalized === "amazon-bedrock") {
-    return resolveAwsSdkAuthInfo();
+    const awsAuth = resolveAwsSdkAuthInfo();
+    return {
+      apiKey: awsAuth.apiKey,
+      source: awsAuth.source,
+      mode: awsAuth.mode,
+    };
   }
 
   const { buildProviderMissingAuthMessageWithPlugin } = await loadProviderRuntime();
@@ -439,7 +464,8 @@ export function resolveModelAuthMode(
   }
 
   if (authOverride === undefined && normalizeProviderId(resolved) === "amazon-bedrock") {
-    return "aws-sdk";
+    // Bearer token takes precedence: report as api-key so UI/status shows the right mode.
+    return resolveBedrockBearerToken() ? "api-key" : "aws-sdk";
   }
 
   const envKey = resolveEnvApiKey(resolved);
