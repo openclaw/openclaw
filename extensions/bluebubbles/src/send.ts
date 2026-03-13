@@ -427,7 +427,7 @@ export async function sendMessageBlueBubbles(
       password,
       accountId: account.accountId,
       timeoutMs: 5000,
-    }).catch(() => null);
+    });
     if (serverInfo) {
       privateApiStatus = getCachedBlueBubblesPrivateApiStatus(account.accountId);
     }
