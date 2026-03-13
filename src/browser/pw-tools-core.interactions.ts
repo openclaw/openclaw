@@ -8,6 +8,7 @@ import {
   refLocator,
   restoreRoleRefsForTarget,
 } from "./pw-session.js";
+import { assertSafeEvaluateCode } from "./pw-evaluate-validation.js";
 import { normalizeTimeoutMs, requireRef, toAIFriendlyError } from "./pw-tools-core.shared.js";
 
 type TargetOpts = {
@@ -246,6 +247,7 @@ export async function evaluateViaPlaywright(opts: {
   if (!fnText) {
     throw new Error("function is required");
   }
+  assertSafeEvaluateCode(fnText);
   const page = await getRestoredPageForTarget(opts);
   // Clamp evaluate timeout to prevent permanently blocking Playwright's command queue.
   // Without this, a long-running async evaluate blocks all subsequent page operations
