@@ -138,6 +138,9 @@ const primaryPatterns: Array<{ label: string; pattern: RegExp }> = [
   // Reasoning line: `Reasoning: on/stream` breaks cache when reasoning is enabled.
   // The "off" default is stable; "on" and "stream" are per-session settings.
   { label: "reasoning-level", pattern: /\bReasoning: (on|stream)\b/m },
+  // Inline buttons note in messaging boilerplate contains the channel name
+  // (e.g. "not enabled for whatsapp") — breaks cache across different channels.
+  { label: "inline-buttons-channel", pattern: /not enabled for \w+/ },
   // channel= and capabilities= change per conversation in multi-channel deployments
   { label: "channel-runtime", pattern: /\bchannel=\w/m },
   { label: "capabilities-runtime", pattern: /\bcapabilities=\w/m },
