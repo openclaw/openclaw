@@ -7,6 +7,7 @@ import {
   collectBundledExtensionManifestErrors,
   collectBundledExtensionRootDependencyGapErrors,
   collectSkillShellScriptExecutableErrors,
+  collectForbiddenPackPaths,
 } from "../scripts/release-check.ts";
 
 function makeItem(shortVersion: string, sparkleVersion: string): string {
@@ -186,5 +187,17 @@ describe.skipIf(process.platform === "win32")("collectSkillShellScriptExecutable
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("collectForbiddenPackPaths", () => {
+  it("flags nested node_modules leaking into npm pack output", () => {
+    expect(
+      collectForbiddenPackPaths([
+        "dist/index.js",
+        "extensions/tlon/node_modules/.bin/tlon",
+        "node_modules/.bin/openclaw",
+      ]),
+    ).toEqual(["extensions/tlon/node_modules/.bin/tlon", "node_modules/.bin/openclaw"]);
   });
 });

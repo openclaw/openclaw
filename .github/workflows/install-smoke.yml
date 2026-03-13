@@ -41,7 +41,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Docker Builder
-        uses: useblacksmith/setup-docker-builder@v1
+        uses: docker/setup-buildx-action@v3
 
       - name: Build root Dockerfile smoke image
         uses: useblacksmith/build-push-action@v2
