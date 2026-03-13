@@ -28,6 +28,7 @@ export function resolveTelegramConversationRoute(params: {
   route: ReturnType<typeof resolveAgentRoute>;
   configuredBinding: ReturnType<typeof resolveConfiguredAcpRoute>["configuredBinding"];
   configuredBindingSessionKey: string;
+  skipDmThreadSuffix: boolean;
 } {
   const peerId = params.isGroup
     ? buildTelegramGroupPeerId(params.chatId, params.resolvedThreadId)
@@ -97,6 +98,7 @@ export function resolveTelegramConversationRoute(params: {
   });
   let configuredBinding = configuredRoute.configuredBinding;
   let configuredBindingSessionKey = configuredRoute.boundSessionKey ?? "";
+  let skipDmThreadSuffix = Boolean(configuredRoute.boundSessionKey);
   route = configuredRoute.route;
 
   const threadBindingConversationId =
@@ -125,6 +127,7 @@ export function resolveTelegramConversationRoute(params: {
       };
       configuredBinding = null;
       configuredBindingSessionKey = "";
+      skipDmThreadSuffix = true;
       getSessionBindingService().touch(threadBinding.bindingId);
       logVerbose(
         `telegram: routed via bound conversation ${threadBindingConversationId} -> ${boundSessionKey}`,
@@ -136,5 +139,6 @@ export function resolveTelegramConversationRoute(params: {
     route,
     configuredBinding,
     configuredBindingSessionKey,
+    skipDmThreadSuffix,
   };
 }
