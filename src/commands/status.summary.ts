@@ -1,6 +1,7 @@
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import { recommendTruthfulEarlyStatusFromLatency } from "../auto-reply/reply/supervisor/truthful-status-policy.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -18,6 +19,7 @@ import {
 import { buildChannelSummary } from "../infra/channel-summary.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-runner.js";
 import { peekSystemEvents } from "../infra/system-events.js";
+import { getRecentDiagnosticLatencySummary } from "../logging/diagnostic.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { resolveLinkChannelContext } from "./status.link-channel.js";
@@ -107,6 +109,10 @@ export async function getStatusSummary(
   });
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
+  const latencySummary = getRecentDiagnosticLatencySummary();
+  const earlyStatusPriority = recommendTruthfulEarlyStatusFromLatency({
+    dominantSegments: latencySummary?.dominant,
+  });
 
   const resolved = resolveConfiguredModelRef({
     cfg,
@@ -227,6 +233,12 @@ export async function getStatusSummary(
     heartbeat: {
       defaultAgentId: agentList.defaultId,
       agents: heartbeatAgents,
+      diagnostics: {
+        latency: {
+          ...(latencySummary?.dominant ? { dominant: latencySummary.dominant } : {}),
+          earlyStatusPriority,
+        },
+      },
     },
     channelSummary,
     queuedSystemEvents,

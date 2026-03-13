@@ -808,6 +808,10 @@ export function stopDiagnosticHeartbeat() {
   }
 }
 
+export function getRecentDiagnosticLatencySummary() {
+  return buildLatencySummary();
+}
+
 export function getDiagnosticSessionStateCountForTest(): number {
   return getDiagnosticSessionStateCountForTestImpl();
 }

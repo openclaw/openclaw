@@ -52,6 +52,21 @@ vi.mock("../infra/heartbeat-runner.js", () => ({
   })),
 }));
 
+vi.mock("../logging/diagnostic.js", () => ({
+  getRecentDiagnosticLatencySummary: vi.fn(() => ({
+    sampleCount: 2,
+    dominant: [{ segment: "runToFirstVisible", count: 2 }],
+    segments: {},
+  })),
+}));
+
+vi.mock("../auto-reply/reply/supervisor/truthful-status-policy.js", () => ({
+  recommendTruthfulEarlyStatusFromLatency: vi.fn(() => ({
+    level: "prioritize",
+    reason: "runtime_started_but_visible_feedback_arrives_late",
+  })),
+}));
+
 vi.mock("../infra/system-events.js", () => ({
   peekSystemEvents: vi.fn(() => []),
 }));
@@ -81,5 +96,12 @@ describe("getStatusSummary", () => {
     expect(summary.runtimeVersion).toBe("2026.3.8");
     expect(summary.heartbeat.defaultAgentId).toBe("main");
     expect(summary.channelSummary).toEqual(["ok"]);
+    expect(summary.heartbeat.diagnostics?.latency?.dominant).toEqual([
+      { segment: "runToFirstVisible", count: 2 },
+    ]);
+    expect(summary.heartbeat.diagnostics?.latency?.earlyStatusPriority).toEqual({
+      level: "prioritize",
+      reason: "runtime_started_but_visible_feedback_arrives_late",
+    });
   });
 });

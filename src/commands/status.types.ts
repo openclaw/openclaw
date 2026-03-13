@@ -45,6 +45,26 @@ export type StatusSummary = {
   heartbeat: {
     defaultAgentId: string;
     agents: HeartbeatStatus[];
+    diagnostics?: {
+      latency?: {
+        dominant?: Array<{
+          segment:
+            | "dispatchToQueue"
+            | "queueToRun"
+            | "acpEnsureToRun"
+            | "runToFirstEvent"
+            | "firstEventToFirstVisible"
+            | "runToFirstVisible"
+            | "firstVisibleToFinal"
+            | "endToEnd";
+          count: number;
+        }>;
+        earlyStatusPriority?: {
+          level: "prioritize" | "observe" | "deprioritize";
+          reason: string;
+        };
+      };
+    };
   };
   channelSummary: string[];
   queuedSystemEvents: string[];
