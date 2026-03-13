@@ -22,6 +22,34 @@ function decodeBase64Url(input: string): Buffer {
   return Buffer.from(padded, "base64");
 }
 
+function createSignedTelnyxCtx(params: {
+  privateKey: crypto.KeyObject;
+  rawBody: string;
+}): WebhookContext {
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signedPayload = `${timestamp}|${params.rawBody}`;
+  const signature = crypto
+    .sign(null, Buffer.from(signedPayload), params.privateKey)
+    .toString("base64");
+
+  return createCtx({
+    rawBody: params.rawBody,
+    headers: {
+      "telnyx-signature-ed25519": signature,
+      "telnyx-timestamp": timestamp,
+    },
+  });
+}
+
+function expectReplayVerification(
+  results: Array<{ ok: boolean; isReplay?: boolean; verifiedRequestKey?: string }>,
+) {
+  expect(results.map((result) => result.ok)).toEqual([true, true]);
+  expect(results.map((result) => Boolean(result.isReplay))).toEqual([false, true]);
+  expect(results[0]?.verifiedRequestKey).toEqual(expect.any(String));
+  expect(results[1]?.verifiedRequestKey).toBe(results[0]?.verifiedRequestKey);
+}
+
 function expectWebhookVerificationSucceeds(params: {
   publicKey: string;
   privateKey: crypto.KeyObject;
@@ -35,20 +63,8 @@ function expectWebhookVerificationSucceeds(params: {
     event_type: "call.initiated",
     payload: { call_control_id: "x" },
   });
-  const timestamp = String(Math.floor(Date.now() / 1000));
-  const signedPayload = `${timestamp}|${rawBody}`;
-  const signature = crypto
-    .sign(null, Buffer.from(signedPayload), params.privateKey)
-    .toString("base64");
-
   const result = provider.verifyWebhook(
-    createCtx({
-      rawBody,
-      headers: {
-        "telnyx-signature-ed25519": signature,
-        "telnyx-timestamp": timestamp,
-      },
-    }),
+    createSignedTelnyxCtx({ privateKey: params.privateKey, rawBody }),
   );
   expect(result.ok).toBe(true);
 }
@@ -117,26 +133,12 @@ describe("TelnyxProvider.verifyWebhook", () => {
       payload: { call_control_id: "call-replay-test" },
       nonce: crypto.randomUUID(),
     });
-    const timestamp = String(Math.floor(Date.now() / 1000));
-    const signedPayload = `${timestamp}|${rawBody}`;
-    const signature = crypto.sign(null, Buffer.from(signedPayload), privateKey).toString("base64");
-    const ctx = createCtx({
-      rawBody,
-      headers: {
-        "telnyx-signature-ed25519": signature,
-        "telnyx-timestamp": timestamp,
-      },
-    });
+    const ctx = createSignedTelnyxCtx({ privateKey, rawBody });
 
     const first = provider.verifyWebhook(ctx);
     const second = provider.verifyWebhook(ctx);
 
-    expect(first.ok).toBe(true);
-    expect(first.isReplay).toBeFalsy();
-    expect(first.verifiedRequestKey).toBeTruthy();
-    expect(second.ok).toBe(true);
-    expect(second.isReplay).toBe(true);
-    expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
+    expectReplayVerification([first, second]);
   });
 });
 
