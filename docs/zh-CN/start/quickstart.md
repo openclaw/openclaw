@@ -64,8 +64,8 @@ OpenClaw 需要 Node 22 或更新版本。
 git clone https://github.com/openclaw/openclaw.git
 cd openclaw
 pnpm install
-pnpm ui:build # 首次运行时会自动安装 UI 依赖
 pnpm build
+pnpm ui:build # 首次运行时会自动安装 UI 依赖
 openclaw onboard --install-daemon
 ```
 
