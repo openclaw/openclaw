@@ -324,6 +324,11 @@ async function verifyAssetChecksums(params: {
 
   for (const asset of params.manifest.assets) {
     if (!asset.sha256) {
+      if (params.manifest.schemaVersion >= 2) {
+        throw new Error(
+          `Schema v2 asset is missing required checksum: ${asset.kind} (${asset.sourcePath})`,
+        );
+      }
       continue;
     }
 
