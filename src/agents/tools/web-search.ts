@@ -672,6 +672,18 @@ function minimaxUnavailablePayload(
   };
 }
 
+function hasBraveSchemaFilterArgs(params: Record<string, unknown>): boolean {
+  return (
+    (typeof params.country === "string" && params.country.trim() !== "") ||
+    (typeof params.language === "string" && params.language.trim() !== "") ||
+    (typeof params.freshness === "string" && params.freshness.trim() !== "") ||
+    (typeof params.date_after === "string" && params.date_after.trim() !== "") ||
+    (typeof params.date_before === "string" && params.date_before.trim() !== "") ||
+    (typeof params.search_lang === "string" && params.search_lang.trim() !== "") ||
+    (typeof params.ui_lang === "string" && params.ui_lang.trim() !== "")
+  );
+}
+
 function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDERS)[number] {
   const raw =
     search && "provider" in search && typeof search.provider === "string"
@@ -2358,6 +2370,10 @@ export function createWebSearchTool(options?: {
       perplexityTransport: provider === "perplexity" ? perplexitySchemaTransportHint : undefined,
     }),
     execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const braveFilterArgsRequested =
+        provider === "brave" ? hasBraveSchemaFilterArgs(params) : false;
+
       // Resolve Perplexity auth/transport lazily at execution time so unrelated providers
       // do not touch Perplexity-only credential surfaces during tool construction.
       let perplexityRuntime =
@@ -2459,6 +2475,9 @@ export function createWebSearchTool(options?: {
 
       if (!effectiveApiKey) {
         if (provider === "brave") {
+          if (braveFilterArgsRequested) {
+            return jsonResult(missingSearchKeyPayload(provider));
+          }
           let minimaxVerifyReason: string | undefined;
           minimaxRuntime =
             minimaxRuntime ??
@@ -2530,7 +2549,6 @@ export function createWebSearchTool(options?: {
 
       const supportsStructuredPerplexityFilters =
         effectiveProvider === "perplexity" && perplexityRuntime?.transport === "search_api";
-      const params = args as Record<string, unknown>;
       const query = readStringParam(params, "query", { required: true });
       const count =
         readNumberParam(params, "count", { integer: true }) ?? search?.maxResults ?? undefined;

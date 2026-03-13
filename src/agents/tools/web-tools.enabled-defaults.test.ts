@@ -929,6 +929,32 @@ describe("web_search minimax provider", () => {
     expect((result?.details as { provider?: string } | undefined)?.provider).toBe("minimax");
   });
 
+  it("does not fallback away from Brave when Brave-specific filter args are provided", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    vi.stubEnv("MINIMAX_API_KEY", "");
+    vi.stubEnv("MINIMAX_OAUTH_TOKEN", "minimax-oauth-token");
+    const mockFetch = installMockFetch({
+      base_resp: { status_code: 0, status_msg: "ok" },
+      organic: [{ title: "MiniMax", link: "https://example.com", snippet: "snippet" }],
+    });
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    const result = await tool?.execute?.("call-1", { query: "filter call", search_lang: "en" });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({ error: "missing_brave_api_key" });
+  });
+
   it("falls back to another provider when MiniMax verify fails during Brave fallback", async () => {
     vi.stubEnv("BRAVE_API_KEY", "");
     vi.stubEnv("MINIMAX_API_KEY", "");
