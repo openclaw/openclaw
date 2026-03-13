@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { ElevatedAllowFromSchema } from "./zod-schema.agent-runtime.js";
+import { DmScopeSchema, ElevatedAllowFromSchema } from "./zod-schema.agent-runtime.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import {
   GroupChatSchema,
@@ -26,14 +26,7 @@ export const SessionSendPolicySchema = createAllowDenyChannelRulesSchema();
 export const SessionSchema = z
   .object({
     scope: z.union([z.literal("per-sender"), z.literal("global")]).optional(),
-    dmScope: z
-      .union([
-        z.literal("main"),
-        z.literal("per-peer"),
-        z.literal("per-channel-peer"),
-        z.literal("per-account-channel-peer"),
-      ])
-      .optional(),
+    dmScope: DmScopeSchema.optional(),
     identityLinks: z.record(z.string(), z.array(z.string())).optional(),
     resetTriggers: z.array(z.string()).optional(),
     idleMinutes: z.number().int().positive().optional(),
