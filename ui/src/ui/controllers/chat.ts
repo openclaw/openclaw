@@ -98,7 +98,8 @@ export async function loadChatHistory(state: ChatState) {
           hasTimedOut &&
           state.sessionKey === targetSession &&
           currentFreshness === _chatHistoryFreshnessToken &&
-          state.chatMessages.length === _originalMessageCount
+          state.chatMessages.length === _originalMessageCount &&
+          state.chatStream === null
         ) {
           // Only clear the timeout error, not unrelated errors
           if (state.lastError && state.lastError.includes("timed out")) {
