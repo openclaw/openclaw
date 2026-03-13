@@ -348,7 +348,7 @@ describe("launchd install", () => {
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
     const label = "ai.openclaw.gateway";
     const serviceId = `${domain}/${label}`;
-    expect(result).toBeUndefined();
+    expect(result).toEqual({ outcome: "scheduled" });
     expect(prepareRestartScript).toHaveBeenCalledWith(env);
     expect(runRestartScript).toHaveBeenCalledWith("/tmp/openclaw-restart-test.sh");
     expect(state.launchctlCalls).toEqual([]);
