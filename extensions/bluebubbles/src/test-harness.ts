@@ -46,7 +46,14 @@ export function createBlueBubblesAccountsMockModule() {
 }
 
 type BlueBubblesProbeMockModule = {
-  fetchBlueBubblesServerInfo: Mock<() => Promise<Record<string, unknown> | null>>;
+  fetchBlueBubblesServerInfo: Mock<
+    (params: {
+      baseUrl?: string | null;
+      password?: string | null;
+      accountId?: string;
+      timeoutMs?: number;
+    }) => Promise<Record<string, unknown> | null>
+  >;
   getCachedBlueBubblesPrivateApiStatus: Mock<() => boolean | null>;
   isBlueBubblesPrivateApiStatusEnabled: Mock<(status: boolean | null) => boolean>;
 };
