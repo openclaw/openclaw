@@ -33,8 +33,6 @@ export type ModelAliasIndex = {
   byKey: Map<string, string[]>;
 };
 
-const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
-
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
 }
