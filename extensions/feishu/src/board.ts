@@ -169,19 +169,10 @@ async function downloadImage(client: Lark.Client, params: FeishuBoardParams) {
     throw new Error(res.msg);
   }
 
-  // The downloadAsImage endpoint returns binary image data in res.data.
-  // Convert to base64 if we got a Buffer, otherwise return as-is.
-  let imageData: string | undefined;
-  if (Buffer.isBuffer(res.data)) {
-    imageData = res.data.toString("base64");
-  } else if (res.data?.image) {
-    imageData = res.data.image;
-  }
-
   return {
     whiteboard_id: params.whiteboard_id,
-    image_base64: imageData,
-    downloaded: !!imageData,
+    image_data: res.data,
+    downloaded: true,
   };
 }
 
