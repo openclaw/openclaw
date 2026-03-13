@@ -42,12 +42,8 @@ import ai.openclaw.app.ui.mobileCallout
 import ai.openclaw.app.ui.mobileCaption1
 import ai.openclaw.app.ui.mobileCaption2
 import ai.openclaw.app.ui.mobileDanger
-import ai.openclaw.app.ui.mobileSuccess
-import ai.openclaw.app.ui.mobileSuccessSoft
 import ai.openclaw.app.ui.mobileText
 import ai.openclaw.app.ui.mobileTextSecondary
-import ai.openclaw.app.ui.mobileWarning
-import ai.openclaw.app.ui.mobileWarningSoft
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -106,7 +102,6 @@ fun ChatSheetContent(viewModel: MainViewModel) {
       sessionKey = sessionKey,
       sessions = sessions,
       mainSessionKey = mainSessionKey,
-      healthOk = healthOk,
       onSelectSession = { key -> viewModel.switchChatSession(key) },
     )
 
@@ -160,77 +155,34 @@ private fun ChatThreadSelector(
   sessionKey: String,
   sessions: List<ChatSessionEntry>,
   mainSessionKey: String,
-  healthOk: Boolean,
   onSelectSession: (String) -> Unit,
 ) {
   val sessionOptions = resolveSessionChoices(sessionKey, sessions, mainSessionKey = mainSessionKey)
-  val currentSessionLabel =
-    friendlySessionName(sessionOptions.firstOrNull { it.key == sessionKey }?.displayName ?: sessionKey)
 
-  Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.SpaceBetween,
-      verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-    ) {
-      Text(
-        text = "SESSION",
-        style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp),
-        color = mobileTextSecondary,
-      )
-      Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+  Row(
+    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    for (entry in sessionOptions) {
+      val active = entry.key == sessionKey
+      Surface(
+        onClick = { onSelectSession(entry.key) },
+        shape = RoundedCornerShape(14.dp),
+        color = if (active) mobileAccent else Color.White,
+        border = BorderStroke(1.dp, if (active) Color(0xFF154CAD) else mobileBorderStrong),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+      ) {
         Text(
-          text = currentSessionLabel,
-          style = mobileCallout.copy(fontWeight = FontWeight.SemiBold),
-          color = mobileText,
+          text = friendlySessionName(entry.displayName ?: entry.key),
+          style = mobileCaption1.copy(fontWeight = if (active) FontWeight.Bold else FontWeight.SemiBold),
+          color = if (active) Color.White else mobileText,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
+          modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
         )
-        ChatConnectionPill(healthOk = healthOk)
       }
     }
-
-    Row(
-      modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      for (entry in sessionOptions) {
-        val active = entry.key == sessionKey
-        Surface(
-          onClick = { onSelectSession(entry.key) },
-          shape = RoundedCornerShape(14.dp),
-          color = if (active) mobileAccent else Color.White,
-          border = BorderStroke(1.dp, if (active) Color(0xFF154CAD) else mobileBorderStrong),
-          tonalElevation = 0.dp,
-          shadowElevation = 0.dp,
-        ) {
-          Text(
-            text = friendlySessionName(entry.displayName ?: entry.key),
-            style = mobileCaption1.copy(fontWeight = if (active) FontWeight.Bold else FontWeight.SemiBold),
-            color = if (active) Color.White else mobileText,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-          )
-        }
-      }
-    }
-  }
-}
-
-@Composable
-private fun ChatConnectionPill(healthOk: Boolean) {
-  Surface(
-    shape = RoundedCornerShape(999.dp),
-    color = if (healthOk) mobileSuccessSoft else mobileWarningSoft,
-    border = BorderStroke(1.dp, if (healthOk) mobileSuccess.copy(alpha = 0.35f) else mobileWarning.copy(alpha = 0.35f)),
-  ) {
-    Text(
-      text = if (healthOk) "Connected" else "Offline",
-      style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
-      color = if (healthOk) mobileSuccess else mobileWarning,
-      modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-    )
   }
 }
 
