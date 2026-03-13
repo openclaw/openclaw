@@ -49,7 +49,7 @@ function isGenericBrowserFetchFailure(message: string): boolean {
   return /^(?:typeerror:\s*)?(?:fetch failed|failed to fetch)$/i.test(message.trim());
 }
 
-function formatAuthCloseErrorMessage(code: string | null, fallback: string): string {
+function formatConnectCloseErrorMessage(code: string | null, fallback: string): string {
   const resolvedCode = code ?? "";
   if (resolvedCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH) {
     return "unauthorized: gateway token mismatch (open dashboard URL with current token)";
@@ -59,6 +59,18 @@ function formatAuthCloseErrorMessage(code: string | null, fallback: string): str
   }
   if (resolvedCode === ConnectErrorDetailCodes.AUTH_UNAUTHORIZED) {
     return "unauthorized: authentication failed";
+  }
+  if (resolvedCode === ConnectErrorDetailCodes.PAIRING_REQUIRED) {
+    return "pairing required: approve this browser or device pairing, then retry";
+  }
+  if (
+    resolvedCode === ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED ||
+    resolvedCode === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED
+  ) {
+    return "device identity required: use HTTPS or localhost, or explicitly disable device auth for Control UI";
+  }
+  if (resolvedCode === ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED) {
+    return "origin not allowed: open the Control UI from an allowed origin or update gateway.controlUi.allowedOrigins";
   }
   return fallback;
 }
@@ -240,7 +252,7 @@ export function connectGateway(host: GatewayHost) {
         if (error?.message) {
           host.lastError =
             host.lastErrorCode && isGenericBrowserFetchFailure(error.message)
-              ? formatAuthCloseErrorMessage(host.lastErrorCode, error.message)
+              ? formatConnectCloseErrorMessage(host.lastErrorCode, error.message)
               : error.message;
           return;
         }

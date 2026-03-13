@@ -34,13 +34,13 @@ export function resolveControlUiAuthPolicy(params: {
 
 export function shouldSkipControlUiPairing(
   policy: ControlUiAuthPolicy,
-  sharedAuthOk: boolean,
+  role: GatewayRole,
   trustedProxyAuthOk = false,
 ): boolean {
   if (trustedProxyAuthOk) {
     return true;
   }
-  return policy.allowBypass && sharedAuthOk;
+  return role === "operator" && policy.allowBypass;
 }
 
 export function isTrustedProxyControlUiOperatorAuth(params: {
@@ -80,6 +80,9 @@ export function evaluateMissingDeviceIdentity(params: {
     return { kind: "allow" };
   }
   if (params.isControlUi && params.trustedProxyAuthOk) {
+    return { kind: "allow" };
+  }
+  if (params.isControlUi && params.role === "operator" && params.controlUiAuthPolicy.allowBypass) {
     return { kind: "allow" };
   }
   if (params.isControlUi && !params.controlUiAuthPolicy.allowBypass) {
