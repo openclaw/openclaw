@@ -575,7 +575,10 @@ export async function runCronIsolatedAgentTurn(params: {
               : getCliSessionId(cronSession.sessionEntry, providerOverride);
             const result = await runCliAgent({
               sessionId: cronSession.sessionEntry.sessionId,
-              sessionKey: agentSessionKey,
+              // Use the per-run session key for execution so each isolated cron
+              // run gets its own session lane instead of queueing behind stale
+              // work on the stable job-scoped key.
+              sessionKey: runSessionKey,
               agentId,
               sessionFile,
               workspaceDir,
@@ -597,7 +600,10 @@ export async function runCronIsolatedAgentTurn(params: {
           }
           const result = await runEmbeddedPiAgent({
             sessionId: cronSession.sessionEntry.sessionId,
-            sessionKey: agentSessionKey,
+            // Use the per-run session key for execution so each isolated cron
+            // run gets its own session lane instead of queueing behind stale
+            // work on the stable job-scoped key.
+            sessionKey: runSessionKey,
             agentId,
             trigger: "cron",
             // Cron jobs are trusted local automation, so isolated runs should
