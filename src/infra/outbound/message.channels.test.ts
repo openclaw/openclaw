@@ -97,13 +97,10 @@ describe("sendMessage channel normalization", () => {
     expect(seen.to).toBe("+15551234567");
   });
 
-  it("normalizes Teams alias", async () => {
-    const sendMSTeams = vi.fn(async () => ({
-      messageId: "m1",
-      conversationId: "c1",
-    }));
-    setRegistry(
-      createTestRegistry([
+  it.each([
+    {
+      name: "normalizes Teams aliases",
+      registry: createTestRegistry([
         {
           pluginId: "msteams",
           source: "test",
@@ -113,40 +110,57 @@ describe("sendMessage channel normalization", () => {
           }),
         },
       ]),
-    );
-    const result = await sendMessage({
-      cfg: {},
-      to: "conversation:19:abc@thread.tacv2",
-      content: "hi",
-      channel: "teams",
-      deps: { sendMSTeams },
-    });
-
-    expect(sendMSTeams).toHaveBeenCalledWith("conversation:19:abc@thread.tacv2", "hi");
-    expect(result.channel).toBe("msteams");
-  });
-
-  it("normalizes iMessage alias", async () => {
-    const sendIMessage = vi.fn(async () => ({ messageId: "i1" }));
-    setRegistry(
-      createTestRegistry([
+      params: {
+        to: "conversation:19:abc@thread.tacv2",
+        channel: "teams",
+        deps: {
+          sendMSTeams: vi.fn(async () => ({
+            messageId: "m1",
+            conversationId: "c1",
+          })),
+        },
+      },
+      assertDeps: (deps: { sendMSTeams?: ReturnType<typeof vi.fn> }) => {
+        expect(deps.sendMSTeams).toHaveBeenCalledWith("conversation:19:abc@thread.tacv2", "hi");
+      },
+      expectedChannel: "msteams",
+    },
+    {
+      name: "normalizes iMessage aliases",
+      registry: createTestRegistry([
         {
           pluginId: "imessage",
           source: "test",
           plugin: createIMessageTestPlugin(),
         },
       ]),
-    );
+      params: {
+        to: "someone@example.com",
+        channel: "imsg",
+        deps: {
+          sendIMessage: vi.fn(async () => ({ messageId: "i1" })),
+        },
+      },
+      assertDeps: (deps: { sendIMessage?: ReturnType<typeof vi.fn> }) => {
+        expect(deps.sendIMessage).toHaveBeenCalledWith(
+          "someone@example.com",
+          "hi",
+          expect.any(Object),
+        );
+      },
+      expectedChannel: "imessage",
+    },
+  ])("$name", async ({ registry, params, assertDeps, expectedChannel }) => {
+    setRegistry(registry);
+
     const result = await sendMessage({
       cfg: {},
-      to: "someone@example.com",
       content: "hi",
-      channel: "imsg",
-      deps: { sendIMessage },
+      ...params,
     });
 
-    expect(sendIMessage).toHaveBeenCalledWith("someone@example.com", "hi", expect.any(Object));
-    expect(result.channel).toBe("imessage");
+    assertDeps(params.deps);
+    expect(result.channel).toBe(expectedChannel);
   });
 });
 
@@ -162,34 +176,31 @@ describe("sendMessage replyToId threading", () => {
     return capturedCtx;
   };
 
-  it("passes replyToId through to the outbound adapter", async () => {
+  it.each([
+    {
+      name: "passes replyToId through to the outbound adapter",
+      params: { content: "thread reply", replyToId: "post123" },
+      field: "replyToId",
+      expected: "post123",
+    },
+    {
+      name: "passes threadId through to the outbound adapter",
+      params: { content: "topic reply", threadId: "topic456" },
+      field: "threadId",
+      expected: "topic456",
+    },
+  ])("$name", async ({ params, field, expected }) => {
     const capturedCtx = setupMattermostCapture();
 
     await sendMessage({
       cfg: {},
       to: "channel:town-square",
-      content: "thread reply",
       channel: "mattermost",
-      replyToId: "post123",
+      ...params,
     });
 
     expect(capturedCtx).toHaveLength(1);
-    expect(capturedCtx[0]?.replyToId).toBe("post123");
-  });
-
-  it("passes threadId through to the outbound adapter", async () => {
-    const capturedCtx = setupMattermostCapture();
-
-    await sendMessage({
-      cfg: {},
-      to: "channel:town-square",
-      content: "topic reply",
-      channel: "mattermost",
-      threadId: "topic456",
-    });
-
-    expect(capturedCtx).toHaveLength(1);
-    expect(capturedCtx[0]?.threadId).toBe("topic456");
+    expect(capturedCtx[0]?.[field]).toBe(expected);
   });
 });
 
