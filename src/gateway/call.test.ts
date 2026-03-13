@@ -4,6 +4,7 @@ import { captureEnv } from "../test-utils/env.js";
 import {
   loadConfigMock as loadConfig,
   pickPrimaryLanIPv4Mock as pickPrimaryLanIPv4,
+  pickPrimaryNetbirdIPv4Mock as pickPrimaryNetbirdIPv4,
   pickPrimaryTailnetIPv4Mock as pickPrimaryTailnetIPv4,
   resolveGatewayPortMock as resolveGatewayPort,
 } from "./gateway-connection.test-mocks.js";
@@ -181,12 +182,22 @@ describe("callGateway url resolution", () => {
       gateway: { mode: "local", bind: "netbird", tls: { enabled: true } },
       tailnetIp: undefined,
       lanIp: undefined,
+      netbirdIp: undefined,
       expectedUrl: "wss://127.0.0.1:18800",
     },
-  ])("uses loopback for $label", async ({ gateway, tailnetIp, lanIp, expectedUrl }) => {
+    {
+      label: "netbird with IP still uses loopback with TLS",
+      gateway: { mode: "local", bind: "netbird" },
+      tailnetIp: undefined,
+      lanIp: undefined,
+      netbirdIp: "100.119.0.5",
+      expectedUrl: "wss://127.0.0.1:18800",
+    },
+  ])("uses loopback for $label", async ({ gateway, tailnetIp, lanIp, netbirdIp, expectedUrl }) => {
     loadConfig.mockReturnValue({ gateway });
     resolveGatewayPort.mockReturnValue(18800);
     pickPrimaryTailnetIPv4.mockReturnValue(tailnetIp);
+    pickPrimaryNetbirdIPv4.mockReturnValue(netbirdIp);
     pickPrimaryLanIPv4.mockReturnValue(lanIp);
 
     await callGateway({ method: "health" });
