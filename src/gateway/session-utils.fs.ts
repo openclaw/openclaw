@@ -577,7 +577,10 @@ function truncatePreviewText(text: string, maxChars: number): string {
  */
 function stripSecurityNoticeForPreview(text: string): string {
   const hadMarkers = /<<<\s*(?:END_)?EXTERNAL_UNTRUSTED_CONTENT/.test(text);
-  let result = text.replace(/<<<\s*(?:END_)?EXTERNAL_UNTRUSTED_CONTENT(?:\s+id="[^"]*")?\s*>>>/g, "");
+  let result = text.replace(
+    /<<<\s*(?:END_)?EXTERNAL_UNTRUSTED_CONTENT(?:\s+id="[^"]*")?\s*>>>/g,
+    "",
+  );
   // Only strip security notice and wrapper metadata when external content markers were present
   if (hadMarkers) {
     result = result
