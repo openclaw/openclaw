@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { inspectPortUsage } from "../infra/ports.js";
-import { killProcessTree } from "../process/kill-tree.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { killProcessTree } from "../process/kill-tree.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
@@ -541,10 +541,9 @@ async function readScheduledTaskPort(taskName: string): Promise<number> {
   // Use PowerShell to get the task command (avoids locale-specific field names)
   // Call powershell.exe directly, not through execSchtasks (which is for schtasks.exe only)
   const psScript = `Get-ScheduledTask -TaskName "${taskName}" | Select-Object -ExpandProperty Actions | Select-Object -ExpandProperty Command`;
-  const res = await runCommandWithTimeout(
-    ["powershell", "-NoProfile", "-Command", psScript],
-    { timeoutMs: 10000 },
-  );
+  const res = await runCommandWithTimeout(["powershell", "-NoProfile", "-Command", psScript], {
+    timeoutMs: 10000,
+  });
   if (res.code !== 0 || !res.stdout) {
     return 18789;
   }
@@ -578,7 +577,7 @@ export async function restartScheduledTask({
     }
   }
   const taskName = resolveTaskName(effectiveEnv);
-  
+
   // Read port from installed task config, not from environment
   // This ensures we wait for the correct port when custom port is configured
   const port = await readScheduledTaskPort(taskName);
@@ -593,9 +592,7 @@ export async function restartScheduledTask({
   } catch (err) {
     // Log warning but continue - the restart may still succeed if the
     // port is released shortly after or if the error is a false positive
-    stdout.write(
-      `${formatLine("Warning", String((err as Error).message))}\n`,
-    );
+    stdout.write(`${formatLine("Warning", String((err as Error).message))}\n`);
   }
 
   // 3. Start new instance

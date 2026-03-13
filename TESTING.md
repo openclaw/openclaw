@@ -5,12 +5,15 @@
 本 PR 修复了 Windows Gateway 重启时的两个相关问题：
 
 ### 问题 1: 端口占用 (EADDRINUSE)
+
 在 `src/daemon/schtasks.ts` 中添加了 `waitForPortFree()` 函数，在重启 Gateway 时等待 TCP 端口释放，防止 EADDRINUSE 错误。
 
 同时添加了 `readScheduledTaskPort()` 函数，从已安装的 task 脚本中读取实际端口（支持自定义端口配置）。
 
 ### 问题 2: 健康检查误报超时
+
 在 `src/cli/daemon-cli/restart-health.ts` 中优化了健康检查逻辑：
+
 - 添加 3 秒初始延迟，让新进程有时间启动
 - 容忍 stale 进程短暂存在（最多 5 秒）
 - 当 runtime 未启动时立即返回，允许清理逻辑运行
@@ -52,6 +55,7 @@ openclaw gateway restart
 ### 方法 2: 验证修复效果
 
 **预期结果（修复前）**:
+
 ```
 Restarted Scheduled Task: OpenClaw Gateway
 Timed out after 60s waiting for gateway port 18789 to become healthy.
@@ -60,6 +64,7 @@ Port 18789 is already in use.
 ```
 
 **预期结果（修复后）**:
+
 ```
 Restarted Scheduled Task: OpenClaw Gateway
 ✅ Gateway restarted successfully.
@@ -68,17 +73,20 @@ Restarted Scheduled Task: OpenClaw Gateway
 ## 测试用例
 
 ### 用例 1: 正常重启
+
 1. 启动 Gateway: `openclaw gateway start`
 2. 确认运行：`openclaw gateway status`
 3. 执行重启：`openclaw gateway restart`
 4. 预期：重启成功，无错误信息
 
 ### 用例 2: 快速连续重启
+
 1. 启动 Gateway
 2. 连续执行 3 次 `openclaw gateway restart`
 3. 预期：每次都能成功重启，无超时错误
 
 ### 用例 3: 自定义端口（如果配置了）
+
 1. 配置自定义端口（如 19999）
 2. 安装 Gateway: `openclaw gateway install`
 3. 执行重启：`openclaw gateway restart`
@@ -99,9 +107,11 @@ Restarted Scheduled Task: OpenClaw Gateway
 ## 技术说明
 
 ### Windows TIME_WAIT 状态
+
 在 Windows 上，杀掉进程后，TCP 端口可能保持在 TIME_WAIT 状态 30-120 秒。这是正常的 TCP 协议行为，但会导致新进程无法绑定同一端口。
 
 ### 修复策略
+
 1. **等待端口释放**: 轮询端口状态，最多等待 30 秒
 2. **容忍重叠期**: 允许新旧进程短暂共存（最多 5 秒）
 3. **快速失败**: 如果新进程未启动，立即返回允许清理
