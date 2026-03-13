@@ -91,8 +91,16 @@ export function resolveSlackChannelConfig(params: {
   channels?: SlackChannelConfigEntries;
   channelKeys?: string[];
   defaultRequireMention?: boolean;
+  allowNameMatching?: boolean;
 }): SlackChannelConfigResolved | null {
-  const { channelId, channelName, channels, channelKeys, defaultRequireMention } = params;
+  const {
+    channelId,
+    channelName,
+    channels,
+    channelKeys,
+    defaultRequireMention,
+    allowNameMatching,
+  } = params;
   const entries = channels ?? {};
   const keys = channelKeys ?? Object.keys(entries);
   const normalizedName = channelName ? normalizeSlackSlug(channelName) : "";
@@ -107,9 +115,9 @@ export function resolveSlackChannelConfig(params: {
     channelId,
     channelIdLower !== channelId ? channelIdLower : undefined,
     channelIdUpper !== channelId ? channelIdUpper : undefined,
-    channelName ? `#${directName}` : undefined,
-    directName,
-    normalizedName,
+    allowNameMatching ? (channelName ? `#${directName}` : undefined) : undefined,
+    allowNameMatching ? directName : undefined,
+    allowNameMatching ? normalizedName : undefined,
   );
   const match = resolveChannelEntryMatchWithFallback({
     entries,

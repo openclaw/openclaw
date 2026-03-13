@@ -404,6 +404,7 @@ export async function registerSlackMonitorSlashCommands(params: {
           channels: ctx.channelsConfig,
           channelKeys: ctx.channelsConfigKeys,
           defaultRequireMention: ctx.defaultRequireMention,
+          allowNameMatching: ctx.allowNameMatching,
         });
         if (ctx.useAccessGroups) {
           const channelAllowlistConfigured = (ctx.channelsConfigKeys?.length ?? 0) > 0;
