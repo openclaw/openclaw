@@ -528,6 +528,32 @@ describe("backupVerifyCommand", () => {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }
   });
+  it("produces stable checksums for non-ASCII filenames regardless of locale collation", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-locale-"));
+    try {
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      // These filenames sort differently under locale-sensitive collation (e.g.
+      // Swedish puts ä after z) vs deterministic byte-order (ä = U+00E4 > z).
+      // A locale-dependent sort in create vs verify would produce a Merkle hash
+      // mismatch even though the file bytes are identical.
+      await fs.writeFile(path.join(stateDir, "ä.txt"), "umlaut\n", "utf8");
+      await fs.writeFile(path.join(stateDir, "z.txt"), "zed\n", "utf8");
+      await fs.writeFile(path.join(stateDir, "ñ.txt"), "enye\n", "utf8");
+      await fs.writeFile(path.join(stateDir, "o.txt"), "oscar\n", "utf8");
+
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const nowMs = Date.UTC(2026, 2, 9, 7, 0, 0);
+      const created = await backupCreateCommand(runtime, { output: archiveDir, nowMs });
+      const verified = await backupVerifyCommand(runtime, { archive: created.archivePath });
+
+      expect(verified.ok).toBe(true);
+      expect(verified.schemaVersion).toBe(2);
+      expect(verified.checksumsVerified).toBe(true);
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
 });
 
 async function findFilesRecursive(dir: string, name: string): Promise<string[]> {
