@@ -113,6 +113,31 @@ describe("signal createSignalEventHandler inbound contract", () => {
     expect(context.OriginatingTo).toBe("+15550002222");
   });
 
+  it("processes dataMessage even when syncMessage envelope key is present", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        // oxlint-disable-next-line typescript/no-explicit-any
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        syncMessage: { sentMessage: { destination: "+15550003333" } },
+        dataMessage: {
+          message: "group hello",
+          attachments: [],
+          groupInfo: { groupId: "g-sync", groupName: "Sync Group" },
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.ChatType).toBe("group");
+    expect(capture.ctx?.GroupSubject).toBe("Sync Group");
+  });
+
   it("sends typing + read receipt for allowed DMs", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
