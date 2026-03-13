@@ -1,5 +1,9 @@
 import HOST_ENV_SECURITY_POLICY_JSON from "./host-env-security-policy.json" with { type: "json" };
-import { markOpenClawExecEnv } from "./openclaw-exec-env.js";
+import {
+  markOpenClawChildCommandEnv,
+  markOpenClawCliEnv,
+  NO_DNA_ENV_VAR,
+} from "./openclaw-exec-env.js";
 
 const PORTABLE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const WINDOWS_COMPAT_OVERRIDE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_()]*$/;
@@ -128,6 +132,7 @@ function sortUnique(values: Iterable<string>): string[] {
 function sanitizeHostEnvOverridesWithDiagnostics(params?: {
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
+  includeNoDna?: boolean;
 }): {
   acceptedOverrides?: Record<string, string>;
   rejectedOverrideBlockedKeys: string[];
@@ -158,6 +163,10 @@ function sanitizeHostEnvOverridesWithDiagnostics(params?: {
       continue;
     }
     const upper = normalized.toUpperCase();
+    if (params?.includeNoDna === false && upper === NO_DNA_ENV_VAR) {
+      rejectedBlocked.push(upper);
+      continue;
+    }
     // PATH is part of the security boundary (command resolution + safe-bin checks). Never allow
     // request-scoped PATH overrides from agents/gateways.
     if (blockPathOverrides && upper === "PATH") {
@@ -182,18 +191,25 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
   baseEnv?: Record<string, string | undefined>;
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
+  includeNoDna?: boolean;
 }): HostExecEnvSanitizationResult {
   const baseEnv = params?.baseEnv ?? process.env;
+  const markExecEnv =
+    params?.includeNoDna === false ? markOpenClawCliEnv : markOpenClawChildCommandEnv;
 
   const merged: Record<string, string> = {};
   for (const [key, value] of listNormalizedEnvEntries(baseEnv)) {
     if (isDangerousHostEnvVarName(key)) {
       continue;
     }
+    if (params?.includeNoDna === false && key.toUpperCase() === NO_DNA_ENV_VAR) {
+      continue;
+    }
     merged[key] = value;
   }
 
   const overrideResult = sanitizeHostEnvOverridesWithDiagnostics({
+    includeNoDna: params?.includeNoDna,
     overrides: params?.overrides ?? undefined,
     blockPathOverrides: params?.blockPathOverrides ?? true,
   });
@@ -204,7 +220,7 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
   }
 
   return {
-    env: markOpenClawExecEnv(merged),
+    env: markExecEnv(merged),
     rejectedOverrideBlockedKeys: overrideResult.rejectedOverrideBlockedKeys,
     rejectedOverrideInvalidKeys: overrideResult.rejectedOverrideInvalidKeys,
   };
@@ -213,6 +229,7 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
 export function inspectHostExecEnvOverrides(params?: {
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
+  includeNoDna?: boolean;
 }): HostExecEnvOverrideDiagnostics {
   const result = sanitizeHostEnvOverridesWithDiagnostics(params);
   return {
@@ -225,6 +242,7 @@ export function sanitizeHostExecEnv(params?: {
   baseEnv?: Record<string, string | undefined>;
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
+  includeNoDna?: boolean;
 }): Record<string, string> {
   return sanitizeHostExecEnvWithDiagnostics(params).env;
 }

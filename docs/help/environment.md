@@ -60,6 +60,8 @@ Env var equivalents:
 
 OpenClaw also injects context markers into spawned child processes:
 
+- `NO_DNA=1`: set for child commands spawned by OpenClaw command runners.
+- `OPENCLAW_CLI=1`: set for child commands spawned by OpenClaw command runners.
 - `OPENCLAW_SHELL=exec`: set for commands run through the `exec` tool.
 - `OPENCLAW_SHELL=acp`: set for ACP runtime backend process spawns (for example `acpx`).
 - `OPENCLAW_SHELL=acp-client`: set for `openclaw acp client` when it spawns the ACP bridge process.
@@ -67,6 +69,9 @@ OpenClaw also injects context markers into spawned child processes:
 
 These are runtime markers (not required user config). They can be used in shell/profile logic
 to apply context-specific rules.
+
+OpenClaw adds these markers to spawned child processes only. It does not set `NO_DNA` on startup
+unless the parent environment already exported it.
 
 ## UI env vars
 

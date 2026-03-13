@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { NO_DNA_ENV_VALUE, OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   buildAcpClientStripKeys,
@@ -54,6 +55,8 @@ describe("resolveAcpClientSpawnEnv", () => {
     });
 
     expect(env.OPENCLAW_SHELL).toBe("acp-client");
+    expect(env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
+    expect(env.NO_DNA).toBe(NO_DNA_ENV_VALUE);
     expect(env.PATH).toBe("/usr/bin");
     expect(env.USER).toBe("openclaw");
   });

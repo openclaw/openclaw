@@ -276,6 +276,7 @@ Security note:
   - local mode: env (`OPENCLAW_GATEWAY_*`) -> `gateway.auth.*` -> `gateway.remote.*` fallback only when `gateway.auth.*` is unset (configured-but-unresolved local SecretRefs fail closed)
   - remote mode: `gateway.remote.*` with env/config fallback per remote precedence rules
   - `--url` is override-safe and does not reuse implicit config/env credentials; pass explicit `--token`/`--password` (or file variants)
+- ACP child processes spawned by OpenClaw receive `NO_DNA=1` and `OPENCLAW_CLI=1`.
 - ACP runtime backend child processes receive `OPENCLAW_SHELL=acp`, which can be used for context-specific shell/profile rules.
 - `openclaw acp client` sets `OPENCLAW_SHELL=acp-client` on the spawned bridge process.
 

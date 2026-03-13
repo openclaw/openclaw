@@ -122,6 +122,7 @@ describe("buildSandboxCreateArgs", () => {
         `OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE}`,
       ]),
     );
+    expect(args).not.toContain("NO_DNA=1");
 
     const ulimitValues: string[] = [];
     for (let i = 0; i < args.length; i += 1) {
@@ -162,6 +163,7 @@ describe("buildSandboxCreateArgs", () => {
         `OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE}`,
       ]),
     );
+    expect(args).not.toContain("NO_DNA=1");
   });
 
   it("emits -v flags for safe custom binds", () => {

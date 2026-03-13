@@ -163,7 +163,7 @@ export function execDockerRaw(
 }
 
 import { formatCliCommand } from "../../cli/command-format.js";
-import { markOpenClawExecEnv } from "../../infra/openclaw-exec-env.js";
+import { markOpenClawCliEnv } from "../../infra/openclaw-exec-env.js";
 import { defaultRuntime } from "../../runtime.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
@@ -375,7 +375,7 @@ export function buildSandboxCreateArgs(params: {
   if (envSanitization.warnings.length > 0) {
     log.warn(`Suspicious environment variables: ${envSanitization.warnings.join(", ")}`);
   }
-  for (const [key, value] of Object.entries(markOpenClawExecEnv(envSanitization.allowed))) {
+  for (const [key, value] of Object.entries(markOpenClawCliEnv(envSanitization.allowed))) {
     args.push("--env", `${key}=${value}`);
   }
   for (const cap of params.cfg.capDrop) {

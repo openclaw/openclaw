@@ -33,6 +33,7 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.OPENCLAW_TEST_ENV).toBe("ok");
     expect(resolved.OPENCLAW_TO_REMOVE).toBeUndefined();
     expect(resolved.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
+    expect(resolved.NO_DNA).toBeUndefined();
   });
 
   it("suppresses npm fund prompts for npm argv", async () => {

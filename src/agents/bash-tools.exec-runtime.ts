@@ -4,6 +4,7 @@ import { Type } from "@sinclair/typebox";
 import { type ExecHost } from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
+import { markOpenClawChildCommandEnv } from "../infra/openclaw-exec-env.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
@@ -310,10 +311,10 @@ export async function runExecProcess(opts: {
   const sessionId = createSessionSlug();
   const execCommand = opts.execCommand ?? opts.command;
   const supervisor = getProcessSupervisor();
-  const shellRuntimeEnv: Record<string, string> = {
+  const shellRuntimeEnv: Record<string, string> = markOpenClawChildCommandEnv({
     ...opts.env,
     OPENCLAW_SHELL: "exec",
-  };
+  });
 
   const session: ProcessSession = {
     id: sessionId,
