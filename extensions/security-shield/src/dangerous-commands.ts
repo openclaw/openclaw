@@ -141,7 +141,7 @@ const RULES: Rule[] = [
     id: "reverse-shell",
     severity: "critical",
     message: "Reverse shell pattern detected",
-    pattern: /\b(bash\s+-i\s+>&|\/dev\/tcp\/|nc\s+-[a-z]*e)\b/,
+    pattern: /\bbash\s+-i\s+>&|\/dev\/tcp\/|\bnc\s+-[a-z]*e\b/,
   },
   {
     id: "base64-decode-pipe",
