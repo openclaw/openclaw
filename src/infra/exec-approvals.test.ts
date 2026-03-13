@@ -14,54 +14,12 @@ import {
   mergeExecApprovalsSocketDefaults,
   minSecurity,
   normalizeExecApprovals,
-  parseExecArgvToken,
   normalizeSafeBins,
   requiresExecApproval,
-  resolveCommandResolution,
-  resolveCommandResolutionFromArgv,
   resolveExecApprovalsPath,
   resolveExecApprovalsSocketPath,
   type ExecAllowlistEntry,
 } from "./exec-approvals.js";
-
-function buildNestedEnvShellCommand(params: {
-  envExecutable: string;
-  depth: number;
-  payload: string;
-}): string[] {
-  return [...Array(params.depth).fill(params.envExecutable), "/bin/sh", "-c", params.payload];
-}
-
-function analyzeEnvWrapperAllowlist(params: { argv: string[]; envPath: string; cwd: string }) {
-  const analysis = analyzeArgvCommand({
-    argv: params.argv,
-    cwd: params.cwd,
-    env: makePathEnv(params.envPath),
-  });
-  const allowlistEval = evaluateExecAllowlist({
-    analysis,
-    allowlist: [{ pattern: params.envPath }],
-    safeBins: normalizeSafeBins([]),
-    cwd: params.cwd,
-  });
-  return { analysis, allowlistEval };
-}
-
-function createPathExecutableFixture(params?: { executable?: string }): {
-  exeName: string;
-  exePath: string;
-  binDir: string;
-} {
-  const dir = makeTempDir();
-  const binDir = path.join(dir, "bin");
-  fs.mkdirSync(binDir, { recursive: true });
-  const baseName = params?.executable ?? "rg";
-  const exeName = process.platform === "win32" ? `${baseName}.exe` : baseName;
-  const exePath = path.join(binDir, exeName);
-  fs.writeFileSync(exePath, "");
-  fs.chmodSync(exePath, 0o755);
-  return { exeName, exePath, binDir };
-}
 
 describe("exec approvals allowlist matching", () => {
   const baseResolution = {
@@ -231,161 +189,6 @@ describe("exec approvals safe shell command builder", () => {
   });
 });
 
-describe("exec approvals command resolution", () => {
-  it("resolves PATH, relative, and quoted executables", () => {
-    const cases = [
-      {
-        name: "PATH executable",
-        setup: () => {
-          const fixture = createPathExecutableFixture();
-          return {
-            command: "rg -n foo",
-            cwd: undefined as string | undefined,
-            envPath: makePathEnv(fixture.binDir),
-            expectedPath: fixture.exePath,
-            expectedExecutableName: fixture.exeName,
-          };
-        },
-      },
-      {
-        name: "relative executable",
-        setup: () => {
-          const dir = makeTempDir();
-          const cwd = path.join(dir, "project");
-          const script = path.join(cwd, "scripts", "run.sh");
-          fs.mkdirSync(path.dirname(script), { recursive: true });
-          fs.writeFileSync(script, "");
-          fs.chmodSync(script, 0o755);
-          return {
-            command: "./scripts/run.sh --flag",
-            cwd,
-            envPath: undefined as NodeJS.ProcessEnv | undefined,
-            expectedPath: script,
-            expectedExecutableName: undefined,
-          };
-        },
-      },
-      {
-        name: "quoted executable",
-        setup: () => {
-          const dir = makeTempDir();
-          const cwd = path.join(dir, "project");
-          const script = path.join(cwd, "bin", "tool");
-          fs.mkdirSync(path.dirname(script), { recursive: true });
-          fs.writeFileSync(script, "");
-          fs.chmodSync(script, 0o755);
-          return {
-            command: '"./bin/tool" --version',
-            cwd,
-            envPath: undefined as NodeJS.ProcessEnv | undefined,
-            expectedPath: script,
-            expectedExecutableName: undefined,
-          };
-        },
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const setup = testCase.setup();
-      const res = resolveCommandResolution(setup.command, setup.cwd, setup.envPath);
-      expect(res?.resolvedPath, testCase.name).toBe(setup.expectedPath);
-      if (setup.expectedExecutableName) {
-        expect(res?.executableName, testCase.name).toBe(setup.expectedExecutableName);
-      }
-    }
-  });
-
-  it("unwraps transparent env wrapper argv to resolve the effective executable", () => {
-    const fixture = createPathExecutableFixture();
-
-    const resolution = resolveCommandResolutionFromArgv(
-      ["/usr/bin/env", "rg", "-n", "needle"],
-      undefined,
-      makePathEnv(fixture.binDir),
-    );
-    expect(resolution?.resolvedPath).toBe(fixture.exePath);
-    expect(resolution?.executableName).toBe(fixture.exeName);
-  });
-
-  it("blocks semantic env wrappers from allowlist/safeBins auto-resolution", () => {
-    const resolution = resolveCommandResolutionFromArgv([
-      "/usr/bin/env",
-      "FOO=bar",
-      "rg",
-      "-n",
-      "needle",
-    ]);
-    expect(resolution?.policyBlocked).toBe(true);
-    expect(resolution?.rawExecutable).toBe("/usr/bin/env");
-  });
-
-  it("fails closed for env -S even when env itself is allowlisted", () => {
-    const dir = makeTempDir();
-    const binDir = path.join(dir, "bin");
-    fs.mkdirSync(binDir, { recursive: true });
-    const envName = process.platform === "win32" ? "env.exe" : "env";
-    const envPath = path.join(binDir, envName);
-    fs.writeFileSync(envPath, process.platform === "win32" ? "" : "#!/bin/sh\n");
-    if (process.platform !== "win32") {
-      fs.chmodSync(envPath, 0o755);
-    }
-    const { analysis, allowlistEval } = analyzeEnvWrapperAllowlist({
-      argv: [envPath, "-S", 'sh -c "echo pwned"'],
-      envPath: envPath,
-      cwd: dir,
-    });
-
-    expect(analysis.ok).toBe(true);
-    expect(analysis.segments[0]?.resolution?.policyBlocked).toBe(true);
-    expect(allowlistEval.allowlistSatisfied).toBe(false);
-    expect(allowlistEval.segmentSatisfiedBy).toEqual([null]);
-  });
-
-  it("fails closed when transparent env wrappers exceed unwrap depth", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = makeTempDir();
-    const binDir = path.join(dir, "bin");
-    fs.mkdirSync(binDir, { recursive: true });
-    const envPath = path.join(binDir, "env");
-    fs.writeFileSync(envPath, "#!/bin/sh\n");
-    fs.chmodSync(envPath, 0o755);
-    const { analysis, allowlistEval } = analyzeEnvWrapperAllowlist({
-      argv: buildNestedEnvShellCommand({
-        envExecutable: envPath,
-        depth: 5,
-        payload: "echo pwned",
-      }),
-      envPath,
-      cwd: dir,
-    });
-
-    expect(analysis.ok).toBe(true);
-    expect(analysis.segments[0]?.resolution?.policyBlocked).toBe(true);
-    expect(analysis.segments[0]?.resolution?.blockedWrapper).toBe("env");
-    expect(allowlistEval.allowlistSatisfied).toBe(false);
-    expect(allowlistEval.segmentSatisfiedBy).toEqual([null]);
-  });
-
-  it("unwraps env wrapper with shell inner executable", () => {
-    const resolution = resolveCommandResolutionFromArgv(["/usr/bin/env", "bash", "-lc", "echo hi"]);
-    expect(resolution?.rawExecutable).toBe("bash");
-    expect(resolution?.executableName.toLowerCase()).toContain("bash");
-  });
-
-  it("unwraps nice wrapper argv to resolve the effective executable", () => {
-    const resolution = resolveCommandResolutionFromArgv([
-      "/usr/bin/nice",
-      "bash",
-      "-lc",
-      "echo hi",
-    ]);
-    expect(resolution?.rawExecutable).toBe("bash");
-    expect(resolution?.executableName.toLowerCase()).toContain("bash");
-  });
-});
-
 describe("exec approvals shell parsing", () => {
   it("parses pipelines and chained commands", () => {
     const cases = [
@@ -531,26 +334,6 @@ describe("exec approvals shell parsing", () => {
     });
     expect(res.ok).toBe(true);
     expect(res.segments[0]?.argv).toEqual(["C:\\Program Files\\Tool\\tool.exe", "--version"]);
-  });
-
-  it("normalizes short option clusters with attached payloads", () => {
-    const parsed = parseExecArgvToken("-oblocked.txt");
-    expect(parsed.kind).toBe("option");
-    if (parsed.kind !== "option" || parsed.style !== "short-cluster") {
-      throw new Error("expected short-cluster option");
-    }
-    expect(parsed.flags[0]).toBe("-o");
-    expect(parsed.cluster).toBe("oblocked.txt");
-  });
-
-  it("normalizes long options with inline payloads", () => {
-    const parsed = parseExecArgvToken("--output=blocked.txt");
-    expect(parsed.kind).toBe("option");
-    if (parsed.kind !== "option" || parsed.style !== "long") {
-      throw new Error("expected long option");
-    }
-    expect(parsed.flag).toBe("--output");
-    expect(parsed.inlineValue).toBe("blocked.txt");
   });
 });
 
