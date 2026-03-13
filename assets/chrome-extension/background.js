@@ -282,7 +282,7 @@ async function syncAllOverlays() {
 async function rehydrateState() {
   try {
     const stored = await chrome.storage.session.get([
-      'persistedTabs', 'reattachingTabs', 'tabAncestry',
+      'persistedTabs', 'reattachingTabs', 'childSessionToTab', 'tabAncestry',
       'nextSession', 'lockedTabId', 'relayIsLocked',
       'extensionIsDisabled', 'activationEpoch'
     ])
@@ -817,10 +817,6 @@ async function attachTab(tabId, opts = {}) {
   const reattachInfo = reattachingTabs.get(tabId)
   const sessionId = opts.sessionId || reattachInfo?.sessionId || `cb-tab-${nextSession++}`
   const attachOrder = opts.attachOrder || reattachInfo?.attachOrder || (nextSession - 1)
-  
-  if (reattachInfo) {
-    reattachingTabs.delete(tabId)
-  }
 
   await chrome.debugger.attach(debuggee, '1.3')
   await chrome.debugger.sendCommand(debuggee, 'Page.enable').catch(() => {})
@@ -837,6 +833,12 @@ async function attachTab(tabId, opts = {}) {
     targetId: targetId || `cb-target-${tabId}`,
     attachOrder,
   })
+
+  // Keep the reattach marker until attach succeeds so retry loops survive
+  // transient attach failures during navigation.
+  if (reattachInfo) {
+    reattachingTabs.delete(tabId)
+  }
   
   if (targetId) targetToTab.set(targetId, tabId)
   tabBySession.set(sessionId, tabId)
@@ -887,10 +889,30 @@ async function attachTab(tabId, opts = {}) {
   return { sessionId, targetId }
 }
 
-async function detachTab(tabId, reason) {
-  const tab = tabs.get(tabId)
+async function detachTab(tabId, reason, displayError) {
+  // 1. Atomic Snapshot: ensures idempotency by returning if identity is already gone.
+  const meta = tabs.get(tabId) || reattachingTabs.get(tabId)
+  if (!meta) return
 
-  // Send detach events for child sessions first.
+  const wasAttached = tabs.has(tabId)
+  const sessionId = meta.sessionId
+  const targetId = meta.targetId
+
+  // 2. Recursive Ancestry GC: Purge all direct and indirect descendants before clearing registries.
+  const purgeAncestry = (id) => {
+    for (const [cid, pid] of tabAncestry.entries()) {
+      if (pid === id) {
+        tabAncestry.delete(cid)
+        purgeAncestry(cid)
+      }
+      if (cid === id) {
+        tabAncestry.delete(cid)
+      }
+    }
+  }
+  purgeAncestry(tabId)
+
+  // 3. Child Session Termination: Send detach events for all related iframes.
   for (const [childSessionId, parentTabId] of childSessionToTab.entries()) {
     if (parentTabId === tabId) {
       try {
@@ -901,60 +923,59 @@ async function detachTab(tabId, reason) {
             params: { sessionId: childSessionId, reason: 'parent_detached' },
           },
         })
-      } catch {
-        // Relay may be down.
-      }
+      } catch {}
       childSessionToTab.delete(childSessionId)
     }
   }
 
-  // Send detach event for main session.
-  if (tab?.sessionId && tab?.targetId) {
+  // 4. Main Session Termination: Broadcast authoritative death event to relay.
+  if (sessionId) {
     try {
       sendToRelay({
         method: 'forwardCDPEvent',
         params: {
           method: 'Target.detachedFromTarget',
-          params: { sessionId: tab.sessionId, targetId: tab.targetId, reason },
+          params: { sessionId, targetId: targetId || undefined, reason },
         },
       })
-    } catch {
-      // Relay may be down.
+    } catch {}
+    tabBySession.delete(sessionId)
+  }
+
+  // 5. Registry Erasure
+  if (targetId) targetToTab.delete(targetId)
+  tabs.delete(tabId)
+  reattachingTabs.delete(tabId)
+
+  // 6. Command Buffer Flushing: specific rejection reasons for the agent.
+  const buffer = commandBuffers.get(tabId)
+  if (buffer) {
+    commandBuffers.delete(tabId)
+    for (const cmd of buffer) {
+      if (cmd.reject) cmd.reject(new Error(displayError || 'Target detached'))
     }
   }
 
-  if (tab?.sessionId) {
-    tabBySession.delete(tab.sessionId)
-  }
-  if (tab?.targetId) {
-    targetToTab.delete(tab.targetId)
-  }
-  tabs.delete(tabId)
-  
-  // Clear any child sessions belonging to this tab
-  for (const [sid, tid] of childSessionToTab.entries()) {
-    if (tid === tabId) childSessionToTab.delete(sid)
-  }
-
+  // 7. Lock Recovery
   if (lockedTabId === tabId) {
     lockedTabId = null
     relayIsLocked = false
-    // Clear the relay state as well so status reflects reality
     void setLockOnRelay(false).catch(() => {})
   }
 
-  try {
-    await chrome.debugger.detach({ tabId })
-  } catch {
-    // May already be detached.
+  // 8. CDP Cleanup: only detach if we were actually attached (avoids log noise for navigating tabs).
+  if (wasAttached) {
+    try {
+      await chrome.debugger.detach({ tabId })
+    } catch {}
   }
 
-  // Sync overlays globally to remove label from the detached tab
-  await syncAllOverlays()
-
-  updateAllBadges() // Sync ALL badges (forcing the detached tab to correctly inherit the globally applied state)
-  await persistState()
+  // 9. Industrial State Sync
+  await syncAllOverlays().catch(() => {})
+  updateAllBadges()
+  void persistState()
 }
+
 
 async function connectOrToggleForActiveTab() {
   await whenReady(async () => {
@@ -1327,69 +1348,13 @@ async function runReattachLoop(tabId) {
   }
 
   // Final failure
-  const info = reattachingTabs.get(tabId)
-  if (info) {
-    if (info.sessionId) tabBySession.delete(info.sessionId)
-    reattachingTabs.delete(tabId)
-    
-    // Reject any buffered commands
-    const buffer = commandBuffers.get(tabId) || []
-    commandBuffers.delete(tabId)
-    for (const cmd of buffer) {
-      if (cmd.reject) cmd.reject(new Error('Target navigation failed to recover attachment'))
-    }
-    void detachTab(tabId, 'reattach_failed')
-  }
+  void detachTab(tabId, 'reattach_failed', 'Target navigation failed to recover attachment')
 }
 
 // Tab lifecycle listeners — clean up stale entries.
-chrome.tabs.onRemoved.addListener((tabId) => void whenReady(async () => {
+chrome.tabs.onRemoved.addListener((tabId) => void whenReady(() => {
   activationEpoch++
-  const reattachInfo = reattachingTabs.get(tabId)
-  if (reattachInfo?.sessionId) tabBySession.delete(reattachInfo.sessionId)
-  if (reattachInfo?.targetId) targetToTab.delete(reattachInfo.targetId)
-  reattachingTabs.delete(tabId)
-  
-  // 1. Recursive Ancestry GC: Purge all direct and indirect descendants to prevent memory leaks
-  const purgeAncestry = (id) => {
-    for (const [cid, pid] of tabAncestry.entries()) {
-      if (pid === id) {
-        tabAncestry.delete(cid)
-        purgeAncestry(cid)
-      }
-      if (cid === id) {
-        tabAncestry.delete(cid)
-      }
-    }
-  }
-  purgeAncestry(tabId)
-  
-  // Flush any buffers with immediate rejection
-  const buffer = commandBuffers.get(tabId)
-  if (buffer) {
-    commandBuffers.delete(tabId)
-    for (const cmd of buffer) {
-      if (cmd.reject) cmd.reject(new Error('Target tab was closed'))
-    }
-  }
-  
-  if (!tabs.has(tabId)) return
-  const tab = tabs.get(tabId)
-  if (tab?.sessionId) tabBySession.delete(tab.sessionId)
-  if (tab?.targetId) targetToTab.delete(tab.targetId)
-  tabs.delete(tabId)
-  
-  for (const [sid, tid] of childSessionToTab.entries()) {
-    if (tid === tabId) childSessionToTab.delete(sid)
-  }
-  
-  if (lockedTabId === tabId) {
-    lockedTabId = null
-    relayIsLocked = false
-    void setLockOnRelay(false).catch(() => {})
-  }
-
-  void persistState()
+  void detachTab(tabId, 'tab_closed', 'Target tab was closed')
 }))
 
 chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => void whenReady(async () => {
