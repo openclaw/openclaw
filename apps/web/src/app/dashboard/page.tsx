@@ -29,6 +29,8 @@ export default async function DashboardPage({
   const params = await searchParams;
   const justUpgraded = params.upgraded === "true";
   const isPaid = subscription?.status === "active" && subscription?.plan !== "free";
+  if (!isPaid) redirect("/pricing");
+
   const plan = subscription?.plan ?? "free";
   const periodEnd = subscription?.stripeCurrentPeriodEnd;
 
@@ -67,7 +69,7 @@ export default async function DashboardPage({
           {/* Subscription card */}
           <div style={{
             background: "#111",
-            border: `1px solid ${isPaid ? "rgba(224,90,43,0.4)" : "#222"}`,
+            border: "1px solid rgba(224,90,43,0.4)",
             borderRadius: 16,
             padding: "1.75rem",
             marginBottom: "1.5rem",
@@ -78,15 +80,15 @@ export default async function DashboardPage({
                 <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
                   <h2 style={{ fontSize: "1.4rem", fontWeight: 700, textTransform: "capitalize" }}>{plan}</h2>
                   <span style={{
-                    background: isPaid ? "rgba(224,90,43,0.15)" : "#1a1a1a",
-                    color: isPaid ? "#e05a2b" : "#666",
-                    border: `1px solid ${isPaid ? "rgba(224,90,43,0.3)" : "#2a2a2a"}`,
+                    background: "rgba(224,90,43,0.15)",
+                    color: "#e05a2b",
+                    border: "1px solid rgba(224,90,43,0.3)",
                     borderRadius: 999,
                     padding: "0.2rem 0.6rem",
                     fontSize: "0.75rem",
                     fontWeight: 600,
                   }}>
-                    {subscription?.status ?? "inactive"}
+                    {subscription?.status ?? "active"}
                   </span>
                 </div>
                 {periodEnd && (
@@ -96,13 +98,7 @@ export default async function DashboardPage({
                 )}
               </div>
               <div style={{ display: "flex", gap: "0.6rem" }}>
-                {isPaid ? (
-                  <BillingButton label="Manage billing" />
-                ) : (
-                  <Link href="/pricing" className="btn btn-primary">
-                    Upgrade plan
-                  </Link>
-                )}
+                <BillingButton label="Manage billing" />
               </div>
             </div>
           </div>
@@ -118,59 +114,37 @@ export default async function DashboardPage({
             </Link>
           </div>
 
-          {/* Paywall gate */}
-          {!isPaid ? (
-            <div style={{
-              background: "#111",
-              border: "1px solid #1f1f1f",
-              borderRadius: 16,
-              padding: "2.5rem",
-              textAlign: "center",
-            }}>
-              <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>🔒</div>
-              <h3 style={{ fontSize: "1.2rem", fontWeight: 700, marginBottom: "0.5rem" }}>
-                Upgrade to unlock full access
-              </h3>
-              <p style={{ color: "#777", marginBottom: "1.5rem", maxWidth: 400, margin: "0 auto 1.5rem" }}>
-                Connect unlimited channels, access voice features, and get priority support.
-              </p>
-              <Link href="/pricing" className="btn btn-primary">
-                View plans
-              </Link>
-            </div>
-          ) : (
-            {/* Stats */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "1rem", marginBottom: "1.5rem" }}>
-              {[
-                { label: "Gateway", value: gwHealth.online ? "Online" : "Offline", color: gwHealth.online ? "#22c55e" : "#ef4444" },
-                { label: "Messages today", value: String(messagesToday) },
-              ].map((stat) => (
-                <div key={stat.label} style={{ background: "#111", border: "1px solid #1f1f1f", borderRadius: 12, padding: "1.25rem" }}>
-                  <p style={{ color: "#666", fontSize: "0.8rem", marginBottom: "0.4rem" }}>{stat.label}</p>
-                  <p style={{ fontWeight: 700, fontSize: "1.2rem", color: stat.color ?? "inherit" }}>{stat.value}</p>
-                </div>
-              ))}
-            </div>
+          {/* Stats */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "1rem", marginBottom: "1.5rem" }}>
+            {[
+              { label: "Gateway", value: gwHealth.online ? "Online" : "Offline", color: gwHealth.online ? "#22c55e" : "#ef4444" },
+              { label: "Messages today", value: String(messagesToday) },
+            ].map((stat) => (
+              <div key={stat.label} style={{ background: "#111", border: "1px solid #1f1f1f", borderRadius: 12, padding: "1.25rem" }}>
+                <p style={{ color: "#666", fontSize: "0.8rem", marginBottom: "0.4rem" }}>{stat.label}</p>
+                <p style={{ fontWeight: 700, fontSize: "1.2rem", color: stat.color ?? "inherit" }}>{stat.value}</p>
+              </div>
+            ))}
+          </div>
 
-            {/* Gateway quick-access cards */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
-              {[
-                { href: "/dashboard/gateway", icon: "⚡", label: "Gateway", desc: "Status & overview" },
-                { href: "/dashboard/channels", icon: "🔌", label: "Channels", desc: "Telegram, Discord, Slack…" },
-                { href: "/dashboard/chat", icon: "💬", label: "Chat", desc: "Talk to your agent" },
-                { href: "/dashboard/agents", icon: "🤖", label: "Agents", desc: "Manage agents" },
-                { href: "/dashboard/sessions", icon: "🗂️", label: "Sessions", desc: "View history" },
-              ].map((card) => (
-                <Link key={card.href} href={card.href} style={{ textDecoration: "none" }}>
-                  <div style={{ background: "#111", border: "1px solid #1f1f1f", borderRadius: 12, padding: "1rem" }}>
-                    <div style={{ fontSize: "1.4rem", marginBottom: "0.35rem" }}>{card.icon}</div>
-                    <p style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.1rem" }}>{card.label}</p>
-                    <p style={{ color: "#555", fontSize: "0.78rem" }}>{card.desc}</p>
-                  </div>
-                </Link>
-              ))}
-            </div>
-          )}
+          {/* Quick-access cards */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
+            {[
+              { href: "/dashboard/gateway", icon: "⚡", label: "Gateway", desc: "Status & overview" },
+              { href: "/dashboard/channels", icon: "🔌", label: "Channels", desc: "Telegram, Discord, Slack…" },
+              { href: "/dashboard/chat", icon: "💬", label: "Chat", desc: "Talk to your agent" },
+              { href: "/dashboard/agents", icon: "🤖", label: "Agents", desc: "Manage agents" },
+              { href: "/dashboard/sessions", icon: "🗂️", label: "Sessions", desc: "View history" },
+            ].map((card) => (
+              <Link key={card.href} href={card.href} style={{ textDecoration: "none" }}>
+                <div style={{ background: "#111", border: "1px solid #1f1f1f", borderRadius: 12, padding: "1rem" }}>
+                  <div style={{ fontSize: "1.4rem", marginBottom: "0.35rem" }}>{card.icon}</div>
+                  <p style={{ fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.1rem" }}>{card.label}</p>
+                  <p style={{ color: "#555", fontSize: "0.78rem" }}>{card.desc}</p>
+                </div>
+              </Link>
+            ))}
+          </div>
         </div>
       </main>
     </>
