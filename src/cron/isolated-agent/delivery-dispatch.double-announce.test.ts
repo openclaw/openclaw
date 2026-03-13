@@ -51,6 +51,7 @@ import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { shouldEnqueueCronMainSummary } from "../heartbeat-policy.js";
 import {
   dispatchCronDelivery,
+  getCompletedDirectCronDeliveriesCountForTests,
   resetCompletedDirectCronDeliveriesForTests,
 } from "./delivery-dispatch.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
@@ -87,7 +88,11 @@ function makeWithRunSession() {
   });
 }
 
-function makeBaseParams(overrides: { synthesizedText?: string; deliveryRequested?: boolean }) {
+function makeBaseParams(overrides: {
+  synthesizedText?: string;
+  deliveryRequested?: boolean;
+  runSessionId?: string;
+}) {
   const resolvedDelivery = makeResolvedDelivery();
   return {
     cfg: {} as never,
@@ -101,7 +106,7 @@ function makeBaseParams(overrides: { synthesizedText?: string; deliveryRequested
     } as never,
     agentId: "main",
     agentSessionKey: "agent:main",
-    runSessionId: "run-123",
+    runSessionId: overrides.runSessionId ?? "run-123",
     runStartedAt: Date.now(),
     runEndedAt: Date.now(),
     timeoutMs: 30_000,
@@ -295,6 +300,23 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(second.delivered).toBe(true);
     expect(second.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+  });
+
+  it("prunes the completed-delivery cache back to the entry cap", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+
+    for (let i = 0; i < 2003; i += 1) {
+      const params = makeBaseParams({
+        synthesizedText: `Replay-safe cron update ${i}.`,
+        runSessionId: `run-${i}`,
+      });
+      const state = await dispatchCronDelivery(params);
+      expect(state.delivered).toBe(true);
+    }
+
+    expect(getCompletedDirectCronDeliveriesCountForTests()).toBe(2000);
   });
 
   it("does not retry permanent direct announce failures", async () => {

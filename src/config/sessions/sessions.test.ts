@@ -358,6 +358,54 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(messageLine.message.idempotencyKey).toBe("mirror:test-source-message");
     expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
   });
+
+  it("ignores malformed transcript lines when checking mirror idempotency", async () => {
+    const sessionId = "test-session-id";
+    const sessionKey = "test-session";
+    const store = {
+      [sessionKey]: {
+        sessionId,
+        chatType: "direct",
+        channel: "discord",
+      },
+    };
+    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 1,
+          id: sessionId,
+          timestamp: new Date().toISOString(),
+          cwd: process.cwd(),
+        }),
+        "{not-json",
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            idempotencyKey: "mirror:test-source-message",
+            content: [{ type: "text", text: "Hello from delivery mirror!" }],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    const result = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from delivery mirror!",
+      idempotencyKey: "mirror:test-source-message",
+      storePath: fixture.storePath(),
+    });
+
+    expect(result.ok).toBe(true);
+    const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
+    expect(lines.length).toBe(3);
+  });
 });
 
 describe("resolveAndPersistSessionFile", () => {

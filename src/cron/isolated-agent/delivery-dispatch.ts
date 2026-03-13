@@ -164,7 +164,8 @@ function pruneCompletedDirectCronDeliveries(now: number) {
   const entries = [...COMPLETED_DIRECT_CRON_DELIVERIES.entries()].toSorted(
     (a, b) => a[1].ts - b[1].ts,
   );
-  for (let i = 0; i < COMPLETED_DIRECT_CRON_DELIVERIES.size - maxEntries; i += 1) {
+  const toDelete = COMPLETED_DIRECT_CRON_DELIVERIES.size - maxEntries;
+  for (let i = 0; i < toDelete; i += 1) {
     const oldest = entries[i];
     if (!oldest) {
       break;
@@ -212,6 +213,10 @@ function buildDirectCronDeliveryIdempotencyKey(params: {
 
 export function resetCompletedDirectCronDeliveriesForTests() {
   COMPLETED_DIRECT_CRON_DELIVERIES.clear();
+}
+
+export function getCompletedDirectCronDeliveriesCountForTests(): number {
+  return COMPLETED_DIRECT_CRON_DELIVERIES.size;
 }
 
 function summarizeDirectCronDeliveryError(error: unknown): string {
@@ -329,7 +334,8 @@ export async function dispatchCronDelivery(
       deliveryAttempted = true;
       const cachedResults = getCompletedDirectCronDelivery(deliveryIdempotencyKey);
       if (cachedResults) {
-        delivered = cachedResults.length > 0;
+        // Cached entries are only recorded after a successful non-empty delivery.
+        delivered = true;
         return null;
       }
       const deliverySession = buildOutboundSessionContext({
