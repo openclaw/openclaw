@@ -1,9 +1,12 @@
+import "./run.overflow-compaction.mocks.shared.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { runEmbeddedPiAgent } from "./run.js";
 import { mockedEnsureRuntimePluginsLoaded } from "./run.overflow-compaction.mocks.shared.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 
 const mockedRunEmbeddedAttempt = vi.mocked(runEmbeddedAttempt);
+const mockedEnqueueCommandInLane = vi.mocked(enqueueCommandInLane);
 
 describe("runEmbeddedPiAgent usage reporting", () => {
   beforeEach(() => {
@@ -147,5 +150,30 @@ describe("runEmbeddedPiAgent usage reporting", () => {
     // Check if total matches the last turn's total (200)
     // If the bug exists, it will likely be 350
     expect(usage?.total).toBe(200);
+  });
+
+  it("enqueues embedded runs in session -> provider -> global lane order", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
+      aborted: false,
+      promptError: null,
+      timedOut: false,
+      sessionIdUsed: "test-session",
+      assistantTexts: ["Response 1"],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    await runEmbeddedPiAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-lane-order",
+      provider: "OpenAI",
+    });
+
+    const laneCalls = mockedEnqueueCommandInLane.mock.calls.map(([lane]) => lane);
+    expect(laneCalls).toEqual(["session-lane", "provider:openai", "global-lane"]);
   });
 });
