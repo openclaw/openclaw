@@ -40,6 +40,22 @@ import { estimateBase64Size, resolveVideoMaxBase64Bytes } from "./video.js";
 
 export type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 
+/**
+ * Reject strings containing shell metacharacters that could be interpreted
+ * by shell wrappers or argument injection patterns (CWE-78).
+ */
+export function containsShellMetacharacters(value: string): boolean {
+  const dangerousPatterns = [
+    /\$\(/, // Command substitution $(...)
+    /`/, // Backtick command substitution
+    /\${/, // Variable expansion ${...}
+    /\$[a-zA-Z_]/, // Bare variable expansion $VAR
+    /&&/, // Shell command chaining
+    /[;|><]/, // Shell operators
+  ];
+  return dangerousPatterns.some((pattern) => pattern.test(value));
+}
+
 function sanitizeProviderHeaders(
   headers: Record<string, unknown> | undefined,
 ): Record<string, string> | undefined {
@@ -621,6 +637,15 @@ export async function runCliEntry(params: {
   );
   const mediaPath = pathResult.path;
   const outputBase = path.join(outputDir, path.parse(mediaPath).name);
+
+  // Reject context fields containing shell metacharacters before template
+  // substitution to prevent OS command injection (CWE-78).
+  const fieldsToValidate: Record<string, string> = { Prompt: prompt };
+  for (const [name, value] of Object.entries(fieldsToValidate)) {
+    if (containsShellMetacharacters(value)) {
+      throw new Error(`CLI entry rejected: ${name} contains shell metacharacters`);
+    }
+  }
 
   const templCtx: MsgContext = {
     ...ctx,
