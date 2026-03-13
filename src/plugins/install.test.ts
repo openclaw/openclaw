@@ -565,6 +565,42 @@ describe("installPluginFromArchive", () => {
     expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(true);
   });
 
+  it("normalizes critical finding paths outside the plugin directory", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    const scanSpy = vi.spyOn(skillScanner, "scanDirectoryWithSummary").mockResolvedValueOnce({
+      critical: 1,
+      warn: 0,
+      findings: [
+        {
+          ruleId: "no-eval",
+          severity: "critical",
+          message: "dynamic eval",
+          file: path.join(path.parse(pluginDir).root, "tmp", "outside", "evil.js"),
+          line: 7,
+        },
+      ],
+    });
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "path-warning-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["index.js"] },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
+
+    const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+    expect(result.ok).toBe(true);
+    expect(
+      warnings.some((w) => w.includes("dangerous code patterns: dynamic eval (evil.js:7)")),
+    ).toBe(true);
+    expect(warnings.some((w) => w.includes("/tmp/outside/evil.js"))).toBe(false);
+    scanSpy.mockRestore();
+  });
+
   it("scans extension entry files in hidden directories", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
     fs.mkdirSync(path.join(pluginDir, ".hidden"), { recursive: true });

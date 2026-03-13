@@ -45,6 +45,19 @@ type PackageManifest = PluginPackageManifest & {
   dependencies?: Record<string, string>;
 };
 
+function basenameAcrossSeparators(filePath: string): string {
+  return path.win32.basename(path.posix.basename(filePath));
+}
+
+function formatPluginScanFindingPath(filePath: string, packageDir: string): string {
+  const relPath = path.relative(packageDir, filePath);
+  const displayPath =
+    relPath && relPath !== "." && !relPath.startsWith("..")
+      ? relPath
+      : basenameAcrossSeparators(filePath);
+  return displayPath.replaceAll("\\", "/");
+}
+
 const MISSING_EXTENSIONS_ERROR =
   'package.json missing openclaw.extensions; update the plugin package to include openclaw.extensions (for example ["./dist/index.js"]). See https://docs.openclaw.ai/help/troubleshooting#plugin-install-fails-with-missing-openclaw-extensions';
 
@@ -289,7 +302,10 @@ async function installPluginFromPackageDir(
     if (scanSummary.critical > 0) {
       const criticalDetails = scanSummary.findings
         .filter((f) => f.severity === "critical")
-        .map((f) => `${f.message} (${f.file}:${f.line})`)
+        .map(
+          (f) =>
+            `${f.message} (${formatPluginScanFindingPath(f.file, params.packageDir)}:${f.line})`,
+        )
         .join("; ");
       logger.warn?.(
         `WARNING: Plugin "${pluginId}" contains dangerous code patterns: ${criticalDetails}`,
