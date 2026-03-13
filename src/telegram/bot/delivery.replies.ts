@@ -36,6 +36,7 @@ import {
 import { resolveTelegramReplyId, type TelegramThreadSpec } from "./helpers.js";
 
 const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
+const VOICE_NETWORK_RE = /Network request for ['"]?sendVoice['"]? failed/i;
 const CAPTION_TOO_LONG_RE = /caption is too long/i;
 
 type DeliveryProgress = {
@@ -192,6 +193,10 @@ function isVoiceMessagesForbidden(err: unknown): boolean {
     return VOICE_FORBIDDEN_RE.test(err.description);
   }
   return VOICE_FORBIDDEN_RE.test(formatErrorMessage(err));
+}
+
+function isSendVoiceNetworkError(err: unknown): boolean {
+  return VOICE_NETWORK_RE.test(formatErrorMessage(err));
 }
 
 function isCaptionTooLong(err: unknown): boolean {
@@ -361,14 +366,18 @@ async function deliverMediaReply(params: {
           }
           markDelivered(params.progress);
         } catch (voiceErr) {
-          if (isVoiceMessagesForbidden(voiceErr)) {
+          if (isVoiceMessagesForbidden(voiceErr) || isSendVoiceNetworkError(voiceErr)) {
             const fallbackText = params.reply.text;
             if (!fallbackText || !fallbackText.trim()) {
               throw voiceErr;
             }
-            logVerbose(
-              "telegram sendVoice forbidden (recipient has voice messages blocked in privacy settings); falling back to text",
-            );
+            if (isVoiceMessagesForbidden(voiceErr)) {
+              logVerbose(
+                "telegram sendVoice forbidden (recipient has voice messages blocked in privacy settings); falling back to text",
+              );
+            } else {
+              logVerbose("telegram sendVoice network failure; falling back to text");
+            }
             const voiceFallbackReplyTo = resolveReplyToForSend({
               replyToId: params.replyToId,
               replyToMode: params.replyToMode,

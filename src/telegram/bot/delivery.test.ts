@@ -694,9 +694,37 @@ describe("deliverReplies", () => {
     expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_markup");
   });
 
-  it("rethrows non-VOICE_MESSAGES_FORBIDDEN errors from sendVoice", async () => {
+  it("falls back to text when sendVoice fails with a network upload error", async () => {
     const runtime = createRuntime();
-    const sendVoice = vi.fn().mockRejectedValue(new Error("Network error"));
+    const sendVoice = vi
+      .fn()
+      .mockRejectedValue(new Error("Network request for 'sendVoice' failed!"));
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 7,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendVoice, sendMessage });
+
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [{ mediaUrl: "https://example.com/note.ogg", text: "Hello", audioAsVoice: true }],
+      runtime,
+      bot,
+    });
+
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("Hello"),
+      expect.any(Object),
+    );
+  });
+
+  it("rethrows non-network/non-forbidden errors from sendVoice", async () => {
+    const runtime = createRuntime();
+    const sendVoice = vi.fn().mockRejectedValue(new Error("socket hang up"));
     const sendMessage = vi.fn();
     const bot = createBot({ sendVoice, sendMessage });
 
@@ -708,10 +736,9 @@ describe("deliverReplies", () => {
         runtime,
         bot,
       }),
-    ).rejects.toThrow("Network error");
+    ).rejects.toThrow("socket hang up");
 
     expect(sendVoice).toHaveBeenCalledTimes(1);
-    // Text fallback should NOT be attempted for other errors
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
