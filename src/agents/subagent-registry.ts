@@ -1023,6 +1023,10 @@ async function finalizeSubagentCleanup(
     const completionReason = resolveCleanupCompletionReason(entry);
     await emitCompletionEndedHookIfNeeded(entry, completionReason);
     logAnnounceGiveUp(entry, deferredDecision.reason);
+    // Best-effort last-resort notification — same as the restart path in
+    // resumeSubagentRun, but called here for the common case where retries are
+    // exhausted during the same process lifetime without a restart.
+    void notifyAnnounceGiveUp(entry);
     completeCleanupBookkeeping({
       runId,
       entry,
