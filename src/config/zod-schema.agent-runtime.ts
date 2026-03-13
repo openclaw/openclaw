@@ -327,6 +327,13 @@ export const ToolsWebFetchSchema = z
     cacheTtlMinutes: z.number().nonnegative().optional(),
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
+    ssrfPolicy: z
+      .object({
+        allowPrivateNetwork: z.boolean().optional(),
+        allowCidrs: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
@@ -606,6 +613,26 @@ export const MemorySearchSchema = z
         z.literal("mistral"),
         z.literal("ollama"),
         z.literal("none"),
+        z
+          .object({
+            provider: z.union([
+              z.literal("openai"),
+              z.literal("gemini"),
+              z.literal("local"),
+              z.literal("voyage"),
+              z.literal("mistral"),
+              z.literal("ollama"),
+            ]),
+            model: z.string().optional(),
+            remote: z
+              .object({
+                baseUrl: z.string().optional(),
+                apiKey: SecretInputSchema.optional().register(sensitive),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict(),
       ])
       .optional(),
     model: z.string().optional(),

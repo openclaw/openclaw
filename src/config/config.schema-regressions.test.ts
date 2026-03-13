@@ -37,6 +37,41 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts memorySearch fallback as object with provider only", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            fallback: { provider: "ollama" },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts memorySearch fallback as object with remote override", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            fallback: {
+              provider: "openai",
+              model: "text-embedding-3-large",
+              remote: {
+                baseUrl: "https://fallback.example.com/v1",
+                apiKey: "fb-key",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it('accepts memorySearch provider "mistral"', () => {
     const res = validateConfigObject({
       agents: {

@@ -701,6 +701,10 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.firecrawl.maxAgeMs":
     "Firecrawl maxAge (ms) for cached results when supported by the API.",
   "tools.web.fetch.firecrawl.timeoutSeconds": "Timeout in seconds for Firecrawl requests.",
+  "tools.web.fetch.ssrfPolicy.allowPrivateNetwork":
+    "Allow web_fetch to access private/internal network addresses (default false). Use with caution.",
+  "tools.web.fetch.ssrfPolicy.allowCidrs":
+    "List of CIDR ranges (e.g. 198.18.0.0/15, 10.0.0.0/8) to allow through SSRF protection. Use for fake-IP proxy environments or trusted internal networks.",
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":
@@ -824,7 +828,17 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.local.modelPath":
     "Specifies the local embedding model source for local memory search, such as a GGUF file path or `hf:` URI. Use this only when provider is `local`, and verify model compatibility before large index rebuilds.",
   "agents.defaults.memorySearch.fallback":
-    'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "ollama", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
+    'Backup provider used when primary embeddings fail. Accepts a provider name string ("openai", "gemini", "voyage", "mistral", "ollama", "local", "none") or an object { provider, model?, remote? } to use a separate endpoint/model for fallback. Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
+  "agents.defaults.memorySearch.fallback.provider":
+    'Selects the fallback embedding provider id: "openai", "gemini", "voyage", "mistral", "ollama", or "local". Use this when fallback is an object to specify which provider handles fallback embeddings.',
+  "agents.defaults.memorySearch.fallback.model":
+    "Sets an optional model override for the fallback embedding provider. When omitted, uses the provider default model. Use this to select a different model than the primary provider.",
+  "agents.defaults.memorySearch.fallback.remote":
+    "Controls optional remote config overrides for the fallback provider (baseUrl, apiKey). When omitted, uses the shared memorySearch.remote config. Use this to point fallback to a separate endpoint.",
+  "agents.defaults.memorySearch.fallback.remote.baseUrl":
+    "Sets the base URL for the fallback embedding provider API endpoint. Use this when the fallback provider runs on a different host than the primary.",
+  "agents.defaults.memorySearch.fallback.remote.apiKey":
+    "Sets the API key for the fallback embedding provider. Use this to authenticate with a separate fallback endpoint that requires its own credentials.",
   "agents.defaults.memorySearch.store.path":
     "Sets where the SQLite memory index is stored on disk for each agent. Keep the default `~/.openclaw/memory/{agentId}.sqlite` unless you need custom storage placement or backup policy alignment.",
   "agents.defaults.memorySearch.store.vector.enabled":

@@ -709,3 +709,90 @@ describe("FTS-only fallback when no provider available", () => {
     expect(result.providerUnavailableReason).toContain("Fallback to gemini failed");
   });
 });
+
+describe("object fallback config", () => {
+  it("falls back with object { provider } using shared remote config", async () => {
+    mockMissingLocalEmbeddingDependency();
+
+    const fetchMock = createFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    mockResolvedProviderKey("provider-key");
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "text-embedding-3-small",
+      fallback: { provider: "openai" },
+    });
+
+    const provider = requireProvider(result);
+    expect(provider.id).toBe("openai");
+    expect(result.fallbackFrom).toBe("local");
+    expect(result.fallbackReason).toContain("node-llama-cpp");
+  });
+
+  it("falls back with object { provider, remote } using override baseUrl", async () => {
+    mockMissingLocalEmbeddingDependency();
+
+    const fetchMock = createFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
+    mockResolvedProviderKey("provider-key");
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "text-embedding-3-small",
+      remote: { baseUrl: "https://primary.example.com/v1" },
+      fallback: {
+        provider: "openai",
+        remote: { baseUrl: "https://fallback.example.com/v1" },
+      },
+    });
+
+    const provider = requireProvider(result);
+    expect(provider.id).toBe("openai");
+    expect(result.fallbackFrom).toBe("local");
+
+    // Verify the fallback used its own baseUrl
+    await provider.embedQuery("test");
+    const { url } = readFirstFetchRequest(fetchMock);
+    expect(String(url)).toContain("fallback.example.com");
+  });
+
+  it("falls back with object { provider, model } using override model", async () => {
+    mockMissingLocalEmbeddingDependency();
+
+    const fetchMock = createFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    mockResolvedProviderKey("provider-key");
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "text-embedding-3-small",
+      fallback: { provider: "openai", model: "text-embedding-3-large" },
+    });
+
+    const provider = requireProvider(result);
+    expect(provider.id).toBe("openai");
+    expect(provider.model).toBe("text-embedding-3-large");
+  });
+
+  it("returns null when object fallback also fails with missing API key", async () => {
+    vi.mocked(authModule.resolveApiKeyForProvider).mockRejectedValue(
+      new Error("No API key found for provider"),
+    );
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "openai",
+      model: "text-embedding-3-small",
+      fallback: { provider: "gemini" },
+    });
+
+    expect(result.provider).toBeNull();
+    expect(result.fallbackFrom).toBe("openai");
+    expect(result.providerUnavailableReason).toContain("Fallback to gemini failed");
+  });
+});

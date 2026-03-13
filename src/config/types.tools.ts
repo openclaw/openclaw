@@ -353,7 +353,22 @@ export type MemorySearchConfig = {
     };
   };
   /** Fallback behavior when embeddings fail. */
-  fallback?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
+  fallback?:
+    | "openai"
+    | "gemini"
+    | "local"
+    | "voyage"
+    | "mistral"
+    | "ollama"
+    | "none"
+    | {
+        provider: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama";
+        model?: string;
+        remote?: {
+          baseUrl?: string;
+          apiKey?: SecretInput;
+        };
+      };
   /** Embedding model id (remote) or alias (local). */
   model?: string;
   /**
@@ -537,6 +552,12 @@ export type ToolsConfig = {
         maxAgeMs?: number;
         /** Timeout in seconds for Firecrawl requests. */
         timeoutSeconds?: number;
+      };
+      ssrfPolicy?: {
+        /** Allow web_fetch to access private/internal network addresses (default: false). */
+        allowPrivateNetwork?: boolean;
+        /** CIDR ranges to allow through SSRF protection (e.g. '198.18.0.0/15', '10.0.0.0/8'). */
+        allowCidrs?: string[];
       };
     };
   };

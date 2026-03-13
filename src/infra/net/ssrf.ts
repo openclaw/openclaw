@@ -1,12 +1,12 @@
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
+import ipaddr from "ipaddr.js";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, type Dispatcher } from "undici";
 import {
   extractEmbeddedIpv4FromIpv6,
   isBlockedSpecialUseIpv4Address,
   isBlockedSpecialUseIpv6Address,
   isCanonicalDottedDecimalIPv4,
-  type Ipv4SpecialUseBlockOptions,
   isIpv4Address,
   isLegacyIpv4Literal,
   parseCanonicalIpAddress,
@@ -32,7 +32,7 @@ export type LookupFn = typeof dnsLookup;
 export type SsrFPolicy = {
   allowPrivateNetwork?: boolean;
   dangerouslyAllowPrivateNetwork?: boolean;
-  allowRfc2544BenchmarkRange?: boolean;
+  allowCidrs?: string[];
   allowedHostnames?: string[];
   hostnameAllowlist?: string[];
 };
@@ -42,6 +42,23 @@ const BLOCKED_HOSTNAMES = new Set([
   "localhost.localdomain",
   "metadata.google.internal",
 ]);
+
+type ParsedCidr = [ipaddr.IPv4 | ipaddr.IPv6, number];
+
+function parseCidrStrings(cidrs?: string[]): ParsedCidr[] {
+  if (!cidrs || cidrs.length === 0) {
+    return [];
+  }
+  const parsed: ParsedCidr[] = [];
+  for (const raw of cidrs) {
+    try {
+      parsed.push(ipaddr.parseCIDR(raw));
+    } catch {
+      console.warn(`[ssrf] invalid CIDR in allowCidrs, skipping: ${raw}`);
+    }
+  }
+  return parsed;
+}
 
 function normalizeHostnameSet(values?: string[]): Set<string> {
   if (!values || values.length === 0) {
@@ -65,12 +82,6 @@ function normalizeHostnameAllowlist(values?: string[]): string[] {
 
 export function isPrivateNetworkAllowedByPolicy(policy?: SsrFPolicy): boolean {
   return policy?.dangerouslyAllowPrivateNetwork === true || policy?.allowPrivateNetwork === true;
-}
-
-function resolveIpv4SpecialUseBlockOptions(policy?: SsrFPolicy): Ipv4SpecialUseBlockOptions {
-  return {
-    allowRfc2544BenchmarkRange: policy?.allowRfc2544BenchmarkRange === true,
-  };
 }
 
 function isHostnameAllowedByPattern(hostname: string, pattern: string): boolean {
@@ -105,7 +116,10 @@ function looksLikeUnsupportedIpv4Literal(address: string): boolean {
 }
 
 // Returns true for private/internal and special-use non-global addresses.
-export function isPrivateIpAddress(address: string, policy?: SsrFPolicy): boolean {
+export function isPrivateIpAddress(
+  address: string,
+  policy?: { allowCidrs?: ParsedCidr[] },
+): boolean {
   let normalized = address.trim().toLowerCase();
   if (normalized.startsWith("[") && normalized.endsWith("]")) {
     normalized = normalized.slice(1, -1);
@@ -113,19 +127,18 @@ export function isPrivateIpAddress(address: string, policy?: SsrFPolicy): boolea
   if (!normalized) {
     return false;
   }
-  const blockOptions = resolveIpv4SpecialUseBlockOptions(policy);
-
+  const cidrOpts = policy?.allowCidrs?.length ? { allowCidrs: policy.allowCidrs } : undefined;
   const strictIp = parseCanonicalIpAddress(normalized);
   if (strictIp) {
     if (isIpv4Address(strictIp)) {
-      return isBlockedSpecialUseIpv4Address(strictIp, blockOptions);
+      return isBlockedSpecialUseIpv4Address(strictIp, cidrOpts);
     }
     if (isBlockedSpecialUseIpv6Address(strictIp)) {
       return true;
     }
     const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(strictIp);
     if (embeddedIpv4) {
-      return isBlockedSpecialUseIpv4Address(embeddedIpv4, blockOptions);
+      return isBlockedSpecialUseIpv4Address(embeddedIpv4, cidrOpts);
     }
     return false;
   }
@@ -163,7 +176,10 @@ function isBlockedHostnameNormalized(normalized: string): boolean {
   );
 }
 
-export function isBlockedHostnameOrIp(hostname: string, policy?: SsrFPolicy): boolean {
+export function isBlockedHostnameOrIp(
+  hostname: string,
+  policy?: { allowCidrs?: ParsedCidr[] },
+): boolean {
   const normalized = normalizeHostname(hostname);
   if (!normalized) {
     return false;
@@ -174,7 +190,10 @@ export function isBlockedHostnameOrIp(hostname: string, policy?: SsrFPolicy): bo
 const BLOCKED_HOST_OR_IP_MESSAGE = "Blocked hostname or private/internal/special-use IP address";
 const BLOCKED_RESOLVED_IP_MESSAGE = "Blocked: resolves to private/internal/special-use IP address";
 
-function assertAllowedHostOrIpOrThrow(hostnameOrIp: string, policy?: SsrFPolicy): void {
+function assertAllowedHostOrIpOrThrow(
+  hostnameOrIp: string,
+  policy?: { allowCidrs?: ParsedCidr[] },
+): void {
   if (isBlockedHostnameOrIp(hostnameOrIp, policy)) {
     throw new SsrFBlockedError(BLOCKED_HOST_OR_IP_MESSAGE);
   }
@@ -182,7 +201,7 @@ function assertAllowedHostOrIpOrThrow(hostnameOrIp: string, policy?: SsrFPolicy)
 
 function assertAllowedResolvedAddressesOrThrow(
   results: readonly LookupAddress[],
-  policy?: SsrFPolicy,
+  policy?: { allowCidrs?: ParsedCidr[] },
 ): void {
   for (const entry of results) {
     // Reuse the exact same host/IP classifier as the pre-DNS check to avoid drift.
@@ -299,10 +318,12 @@ export async function resolvePinnedHostnameWithPolicy(
   }
 
   const allowPrivateNetwork = isPrivateNetworkAllowedByPolicy(params.policy);
+  const parsedCidrs = parseCidrStrings(params.policy?.allowCidrs);
   const allowedHostnames = normalizeHostnameSet(params.policy?.allowedHostnames);
   const hostnameAllowlist = normalizeHostnameAllowlist(params.policy?.hostnameAllowlist);
   const isExplicitAllowed = allowedHostnames.has(normalized);
   const skipPrivateNetworkChecks = allowPrivateNetwork || isExplicitAllowed;
+  const cidrPolicy = parsedCidrs.length > 0 ? { allowCidrs: parsedCidrs } : undefined;
 
   if (!matchesHostnameAllowlist(normalized, hostnameAllowlist)) {
     throw new SsrFBlockedError(`Blocked hostname (not in allowlist): ${hostname}`);
@@ -310,7 +331,7 @@ export async function resolvePinnedHostnameWithPolicy(
 
   if (!skipPrivateNetworkChecks) {
     // Phase 1: fail fast for literal hosts/IPs before any DNS lookup side-effects.
-    assertAllowedHostOrIpOrThrow(normalized, params.policy);
+    assertAllowedHostOrIpOrThrow(normalized, cidrPolicy);
   }
 
   const lookupFn = params.lookupFn ?? dnsLookup;
@@ -321,7 +342,7 @@ export async function resolvePinnedHostnameWithPolicy(
 
   if (!skipPrivateNetworkChecks) {
     // Phase 2: re-check DNS answers so public hostnames cannot pivot to private targets.
-    assertAllowedResolvedAddressesOrThrow(results, params.policy);
+    assertAllowedResolvedAddressesOrThrow(results, cidrPolicy);
   }
 
   // Prefer addresses returned as IPv4 by DNS family metadata before other
