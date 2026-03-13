@@ -9,6 +9,8 @@ export type AgentConfig = {
   id: string;
   default?: boolean;
   name?: string;
+  /** Custom preamble for this agent's system prompt (replaces the default "You are a personal assistant running inside OpenClaw."). */
+  preamble?: string;
   workspace?: string;
   agentDir?: string;
   model?: AgentModelConfig;

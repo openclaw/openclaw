@@ -150,6 +150,8 @@ export type AgentDefaultsConfig = {
    * Include elapsed time in message envelopes ("on" | "off", default: "on").
    */
   envelopeElapsed?: "on" | "off";
+  /** Custom preamble for the agent system prompt (replaces the default "You are a personal assistant running inside OpenClaw."). */
+  preamble?: string;
   /** Optional context window cap (used for runtime estimates + status %). */
   contextTokens?: number;
   /** Optional CLI backends for text-only fallback (claude-cli, etc.). */

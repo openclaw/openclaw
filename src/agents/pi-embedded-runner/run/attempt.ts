@@ -527,6 +527,11 @@ export async function runEmbeddedAttempt(
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
 
+    // Resolve preamble: per-agent config takes priority over defaults.
+    const agentPreamble =
+      params.config?.agents?.list?.find((a) => a.id === params.agentId)?.preamble ??
+      params.config?.agents?.defaults?.preamble;
+
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
@@ -555,6 +560,7 @@ export async function runEmbeddedAttempt(
       userTimeFormat,
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
+      preamble: agentPreamble,
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",

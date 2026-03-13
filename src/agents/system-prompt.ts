@@ -230,6 +230,8 @@ export function buildAgentSystemPrompt(params: {
     channel: string;
   };
   memoryCitationsMode?: MemoryCitationsMode;
+  /** Custom preamble (replaces default "You are a personal assistant running inside OpenClaw."). */
+  preamble?: string;
 }) {
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
@@ -402,13 +404,16 @@ export function buildAgentSystemPrompt(params: {
   });
   const workspaceNotes = (params.workspaceNotes ?? []).map((note) => note.trim()).filter(Boolean);
 
+  const preamble =
+    params.preamble?.trim() || "You are a personal assistant running inside OpenClaw.";
+
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
-    return "You are a personal assistant running inside OpenClaw.";
+    return preamble;
   }
 
   const lines = [
-    "You are a personal assistant running inside OpenClaw.",
+    preamble,
     "",
     "## Tooling",
     "Tool availability (filtered by policy):",

@@ -483,6 +483,11 @@ export async function compactEmbeddedPiSessionDirect(
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
+    // Resolve preamble: per-agent config takes priority over defaults.
+    const agentPreamble =
+      params.config?.agents?.list?.find((a) => a.id === sessionAgentId)?.preamble ??
+      params.config?.agents?.defaults?.preamble;
+
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
@@ -510,6 +515,7 @@ export async function compactEmbeddedPiSessionDirect(
       userTimeFormat,
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
+      preamble: agentPreamble,
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
 
