@@ -215,6 +215,59 @@ describe("maybeRepairLegacyCronStore", () => {
     );
   });
 
+  it("does not warn for already-normalized payload kinds", async () => {
+    const storePath = await makeTempStorePath();
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "normalized-job",
+              name: "Normalized job",
+              enabled: true,
+              createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+              updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
+              schedule: { kind: "cron", expr: "0 7 * * *", tz: "UTC" },
+              sessionTarget: "isolated",
+              wakeMode: "now",
+              payload: {
+                kind: "agentTurn",
+                message: "already normalized",
+              },
+              delivery: { mode: "none" },
+              state: {},
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    const prompter = makePrompter(true);
+
+    await maybeRepairLegacyCronStore({
+      cfg: {
+        cron: {
+          store: storePath,
+        },
+      },
+      options: { nonInteractive: true },
+      prompter,
+    });
+
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(noteSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("needs payload kind normalization"),
+      "Cron",
+    );
+  });
+
   it("migrates notify fallback none delivery jobs to cron.webhook", async () => {
     const storePath = await makeTempStorePath();
     await fs.mkdir(path.dirname(storePath), { recursive: true });
