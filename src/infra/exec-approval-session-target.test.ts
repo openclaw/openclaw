@@ -95,8 +95,6 @@ describe("exec approval session target", () => {
       "agent:main:main": {
         sessionId: "main",
         updatedAt: 1,
-        channel: "slack",
-        to: "U1",
         lastChannel: "slack",
         lastTo: "U1",
       },

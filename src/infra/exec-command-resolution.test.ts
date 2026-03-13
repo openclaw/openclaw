@@ -24,6 +24,7 @@ function analyzeEnvWrapperAllowlist(params: { argv: string[]; envPath: string; c
     ok: true as const,
     segments: [
       {
+        raw: params.argv.join(" "),
         argv: params.argv,
         resolution: resolveCommandResolutionFromArgv(
           params.argv,

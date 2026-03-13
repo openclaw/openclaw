@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ReplyPayload } from "../auto-reply/types.js";
 import {
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
@@ -22,8 +23,8 @@ describe("exec approval reply helpers", () => {
       { channelData: { execApproval: [] } },
       { channelData: { execApproval: { approvalId: "req-1", approvalSlug: "  " } } },
       { channelData: { execApproval: { approvalId: "  ", approvalSlug: "slug-1" } } },
-    ]) {
-      expect(getExecApprovalReplyMetadata(payload)).toBeNull();
+    ] as unknown[]) {
+      expect(getExecApprovalReplyMetadata(payload as ReplyPayload)).toBeNull();
     }
   });
 

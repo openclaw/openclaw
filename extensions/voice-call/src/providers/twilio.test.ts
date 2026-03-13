@@ -36,7 +36,8 @@ describe("TwilioProvider", () => {
 
     const result = provider.parseWebhookEvent(ctx);
 
-    expectStreamingTwiml(result.providerResponseBody);
+    expect(result.providerResponseBody).toBeDefined();
+    expectStreamingTwiml(result.providerResponseBody ?? "");
   });
 
   it("returns empty TwiML for status callbacks", () => {
@@ -59,7 +60,8 @@ describe("TwilioProvider", () => {
 
     const result = provider.parseWebhookEvent(ctx);
 
-    expectStreamingTwiml(result.providerResponseBody);
+    expect(result.providerResponseBody).toBeDefined();
+    expectStreamingTwiml(result.providerResponseBody ?? "");
   });
 
   it("returns queue TwiML for second inbound call when first call is active", () => {

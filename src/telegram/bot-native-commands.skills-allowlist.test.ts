@@ -6,7 +6,6 @@ import { writeSkill } from "../agents/skills.e2e-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { TelegramAccountConfig } from "../config/types.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
-import { createNativeCommandTestParams } from "./bot-native-commands.test-helpers.js";
 
 const pluginCommandMocks = vi.hoisted(() => ({
   getPluginCommandSpecs: vi.fn(() => []),
@@ -77,18 +76,40 @@ describe("registerTelegramNativeCommands skill allowlist integration", () => {
     };
 
     registerTelegramNativeCommands({
-      ...createNativeCommandTestParams({
-        bot: {
-          api: {
-            setMyCommands,
-            sendMessage: vi.fn().mockResolvedValue(undefined),
-          },
-          command: vi.fn(),
-        } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-        cfg,
-        accountId: "bot-a",
-        telegramCfg: {} as TelegramAccountConfig,
+      bot: {
+        api: {
+          setMyCommands,
+          sendMessage: vi.fn().mockResolvedValue(undefined),
+        },
+        command: vi.fn(),
+      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      cfg,
+      runtime: { log: vi.fn() } as unknown as Parameters<
+        typeof registerTelegramNativeCommands
+      >[0]["runtime"],
+      accountId: "bot-a",
+      telegramCfg: {} as TelegramAccountConfig,
+      allowFrom: [],
+      groupAllowFrom: [],
+      replyToMode: "off",
+      textLimit: 4000,
+      useAccessGroups: false,
+      nativeEnabled: true,
+      nativeSkillsEnabled: true,
+      nativeDisabledExplicit: false,
+      resolveGroupPolicy: () =>
+        ({
+          allowlistEnabled: false,
+          allowed: true,
+        }) as ReturnType<
+          Parameters<typeof registerTelegramNativeCommands>[0]["resolveGroupPolicy"]
+        >,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: undefined,
+        topicConfig: undefined,
       }),
+      shouldSkipUpdate: () => false,
+      opts: { token: "token" },
     });
 
     await vi.waitFor(() => {

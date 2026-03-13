@@ -5,10 +5,15 @@ import type { TelegramAccountConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 
+type RegisterTelegramNativeCommandsParams = Parameters<typeof registerTelegramNativeCommands>[0];
+type GetPluginCommandSpecsFn = typeof import("../plugins/commands.js").getPluginCommandSpecs;
+type MatchPluginCommandFn = typeof import("../plugins/commands.js").matchPluginCommand;
+type ExecutePluginCommandFn = typeof import("../plugins/commands.js").executePluginCommand;
+
 const pluginCommandMocks = vi.hoisted(() => ({
-  getPluginCommandSpecs: vi.fn(() => []),
-  matchPluginCommand: vi.fn(() => null),
-  executePluginCommand: vi.fn(async () => ({ text: "ok" })),
+  getPluginCommandSpecs: vi.fn<GetPluginCommandSpecsFn>(() => []),
+  matchPluginCommand: vi.fn<MatchPluginCommandFn>(() => null),
+  executePluginCommand: vi.fn<ExecutePluginCommandFn>(async () => ({ text: "ok" })),
 }));
 export const getPluginCommandSpecs = pluginCommandMocks.getPluginCommandSpecs;
 export const matchPluginCommand = pluginCommandMocks.matchPluginCommand;
@@ -28,6 +33,48 @@ vi.mock("./bot/delivery.js", () => ({ deliverReplies: deliveryMocks.deliverRepli
 vi.mock("../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: vi.fn(async () => []),
 }));
+
+export function createNativeCommandTestParams(
+  params: Partial<RegisterTelegramNativeCommandsParams> = {},
+): RegisterTelegramNativeCommandsParams {
+  const log = vi.fn();
+  return {
+    bot:
+      params.bot ??
+      ({
+        api: {
+          setMyCommands: vi.fn().mockResolvedValue(undefined),
+          sendMessage: vi.fn().mockResolvedValue(undefined),
+        },
+        command: vi.fn(),
+      } as unknown as RegisterTelegramNativeCommandsParams["bot"]),
+    cfg: params.cfg ?? ({} as OpenClawConfig),
+    runtime:
+      params.runtime ?? ({ log } as unknown as RegisterTelegramNativeCommandsParams["runtime"]),
+    accountId: params.accountId ?? "default",
+    telegramCfg: params.telegramCfg ?? ({} as RegisterTelegramNativeCommandsParams["telegramCfg"]),
+    allowFrom: params.allowFrom ?? [],
+    groupAllowFrom: params.groupAllowFrom ?? [],
+    replyToMode: params.replyToMode ?? "off",
+    textLimit: params.textLimit ?? 4000,
+    useAccessGroups: params.useAccessGroups ?? false,
+    nativeEnabled: params.nativeEnabled ?? true,
+    nativeSkillsEnabled: params.nativeSkillsEnabled ?? false,
+    nativeDisabledExplicit: params.nativeDisabledExplicit ?? false,
+    resolveGroupPolicy:
+      params.resolveGroupPolicy ??
+      (() =>
+        ({
+          allowlistEnabled: false,
+          allowed: true,
+        }) as ReturnType<RegisterTelegramNativeCommandsParams["resolveGroupPolicy"]>),
+    resolveTelegramGroupConfig:
+      params.resolveTelegramGroupConfig ??
+      (() => ({ groupConfig: undefined, topicConfig: undefined })),
+    shouldSkipUpdate: params.shouldSkipUpdate ?? (() => false),
+    opts: params.opts ?? { token: "token" },
+  };
+}
 
 export function createNativeCommandsHarness(params?: {
   cfg?: OpenClawConfig;

@@ -88,7 +88,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
   });
 
   it("force-kills remaining busy port listeners when the first stop pass does not free the port", async () => {
-    await withWindowsEnv(async ({ env }) => {
+    await withWindowsEnv("openclaw-win-stop-", async ({ env }) => {
       await writeGatewayScript(env);
       schtasksResponses.push(
         { code: 0, stdout: "", stderr: "" },

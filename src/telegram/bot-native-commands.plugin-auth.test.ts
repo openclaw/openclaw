@@ -9,13 +9,34 @@ import {
   matchPluginCommand,
 } from "./bot-native-commands.test-helpers.js";
 
+type GetPluginCommandSpecsMock = {
+  mockReturnValue: (
+    value: ReturnType<typeof import("../plugins/commands.js").getPluginCommandSpecs>,
+  ) => unknown;
+};
+type MatchPluginCommandMock = {
+  mockReturnValue: (
+    value: ReturnType<typeof import("../plugins/commands.js").matchPluginCommand>,
+  ) => unknown;
+};
+type ExecutePluginCommandMock = {
+  mockResolvedValue: (
+    value: Awaited<ReturnType<typeof import("../plugins/commands.js").executePluginCommand>>,
+  ) => unknown;
+};
+
+const getPluginCommandSpecsMock = getPluginCommandSpecs as unknown as GetPluginCommandSpecsMock;
+const matchPluginCommandMock = matchPluginCommand as unknown as MatchPluginCommandMock;
+const executePluginCommandMock = executePluginCommand as unknown as ExecutePluginCommandMock;
+
 describe("registerTelegramNativeCommands (plugin auth)", () => {
   it("does not register plugin commands in menu when native=false but keeps handlers available", () => {
     const specs = Array.from({ length: 101 }, (_, i) => ({
       name: `cmd_${i}`,
       description: `Command ${i}`,
+      acceptsArgs: false,
     }));
-    getPluginCommandSpecs.mockReturnValue(specs);
+    getPluginCommandSpecsMock.mockReturnValue(specs);
 
     const { handlers, setMyCommands, log } = createNativeCommandsHarness({
       cfg: {} as OpenClawConfig,
@@ -32,13 +53,16 @@ describe("registerTelegramNativeCommands (plugin auth)", () => {
     const command = {
       name: "plugin",
       description: "Plugin command",
+      pluginId: "test-plugin",
       requireAuth: false,
       handler: vi.fn(),
     } as const;
 
-    getPluginCommandSpecs.mockReturnValue([{ name: "plugin", description: "Plugin command" }]);
-    matchPluginCommand.mockReturnValue({ command, args: undefined });
-    executePluginCommand.mockResolvedValue({ text: "ok" });
+    getPluginCommandSpecsMock.mockReturnValue([
+      { name: "plugin", description: "Plugin command", acceptsArgs: false },
+    ]);
+    matchPluginCommandMock.mockReturnValue({ command, args: undefined });
+    executePluginCommandMock.mockResolvedValue({ text: "ok" });
 
     const { handlers, bot } = createNativeCommandsHarness({
       cfg: {} as OpenClawConfig,
