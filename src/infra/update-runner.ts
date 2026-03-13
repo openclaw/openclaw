@@ -20,6 +20,7 @@ import {
   type UpdateChannel,
 } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
+import { spawnDetachedUpdate } from "./update-detached-win32.js";
 import {
   cleanupGlobalRenameDirs,
   createGlobalInstallEnv,
@@ -88,6 +89,13 @@ export type UpdateRunResult = {
       }>;
     };
   };
+  /**
+   * When set, the verified npm package swap has been delegated to a detached
+   * helper process. The Gateway should shut down so the helper can replace
+   * locked files, then the helper will restart the Gateway via Scheduled Task.
+   * The detached result is written to this path.
+   */
+  detachedResultPath?: string;
 };
 
 type CommandRunner = (
@@ -1425,6 +1433,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       tag,
       env: globalInstallEnv,
     });
+
+    const shouldDetachVerifiedNpmSwap =
+      process.platform === "win32" &&
+      opts.runCommand === undefined &&
+      installTarget.manager === "npm";
     const packageUpdate = await runGlobalPackageUpdateSteps({
       installTarget,
       installSpec: spec,
@@ -1434,6 +1447,34 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       timeoutMs,
       ...(globalInstallEnv === undefined ? {} : { env: globalInstallEnv }),
       installCwd: pkgRoot,
+      ...(shouldDetachVerifiedNpmSwap
+        ? {
+            deferStagedNpmSwap: async ({ stage, installTarget, packageName, afterVersion }) => {
+              const started = Date.now();
+              const detached = spawnDetachedUpdate({
+                stage,
+                installTarget,
+                packageName,
+                afterVersion,
+                env: globalInstallEnv,
+              });
+              return {
+                name: "global install swap (detached win32)",
+                command: `swap ${stage.packageRoot} -> ${installTarget.packageRoot ?? "<unknown>"}`,
+                cwd: installTarget.globalRoot ?? pkgRoot,
+                durationMs: Date.now() - started,
+                exitCode: detached.ok ? 0 : 1,
+                stdoutTail: detached.ok
+                  ? `Delegated verified staged package swap. Result will be written to ${detached.resultPath}`
+                  : null,
+                stderrTail: detached.ok
+                  ? null
+                  : (detached.detail ?? "failed to spawn detached update helper"),
+                ...(detached.ok ? { detachedResultPath: detached.resultPath } : {}),
+              };
+            },
+          }
+        : {}),
       runStep: (stepParams) =>
         runStep({
           runCommand,
@@ -1455,6 +1496,9 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       after: { version: packageUpdate.afterVersion },
       steps: packageUpdate.steps,
       durationMs: Date.now() - startedAt,
+      ...(packageUpdate.detachedResultPath
+        ? { detachedResultPath: packageUpdate.detachedResultPath }
+        : {}),
     };
   }
 
