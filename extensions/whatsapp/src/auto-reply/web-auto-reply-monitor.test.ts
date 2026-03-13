@@ -270,6 +270,62 @@ describe("applyGroupGating", () => {
 
     expect(result.shouldProcess).toBe(false);
   });
+
+  it("respects account-scoped whatsapp group allowlist bypass without explicit groups", () => {
+    const cfg = makeConfig({
+      channels: {
+        whatsapp: {
+          groupPolicy: "open",
+          accounts: {
+            work: {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["+111"],
+            },
+          },
+        },
+      },
+    });
+
+    const { result } = runGroupGating({
+      cfg,
+      msg: createGroupMessage({
+        accountId: "work",
+        senderE164: "+111",
+      }),
+    });
+
+    expect(result.shouldProcess).toBe(true);
+  });
+
+  it("respects account-scoped whatsapp requireMention defaults", () => {
+    const cfg = makeConfig({
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+          groups: {
+            "*": { requireMention: false },
+          },
+          accounts: {
+            work: {
+              groups: {
+                "*": { requireMention: true },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const { result } = runGroupGating({
+      cfg,
+      msg: createGroupMessage({
+        accountId: "work",
+        body: "no mention",
+      }),
+    });
+
+    expect(result.shouldProcess).toBe(false);
+  });
 });
 
 describe("buildInboundLine", () => {

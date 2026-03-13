@@ -252,7 +252,7 @@ describe("web monitor inbox", () => {
     });
   });
 
-  it("handles append messages by marking them read but skipping auto-reply", async () => {
+  it("handles append messages by marking them read and forwarding them inbound", async () => {
     const { onMessage, listener, sock } = await openInboxMonitor();
 
     const upsert = {
@@ -284,8 +284,13 @@ describe("web monitor inbox", () => {
       },
     ]);
 
-    // Verify it WAS NOT passed to onMessage
-    expect(onMessage).not.toHaveBeenCalled();
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: "old message",
+        from: "+999",
+        senderE164: "+999",
+      }),
+    );
 
     await listener.close();
   });

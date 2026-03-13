@@ -34,6 +34,7 @@ export function maybeSendAckReaction(params: {
           agentId: params.agentId,
           sessionKey: params.sessionKey,
           conversationId: conversationIdForCheck,
+          accountId: params.msg.accountId,
         })
       : null;
   const shouldSendReaction = () =>
