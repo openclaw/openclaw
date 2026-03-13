@@ -75,3 +75,25 @@ export function expandHomePrefix(
   }
   return input.replace(/^~(?=$|[\\/])/, home);
 }
+
+export function resolveHomeRelativePath(
+  input: string,
+  opts?: {
+    env?: NodeJS.ProcessEnv;
+    homedir?: () => string;
+  },
+): string {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("~")) {
+    const expanded = expandHomePrefix(trimmed, {
+      home: resolveRequiredHomeDir(opts?.env ?? process.env, opts?.homedir ?? os.homedir),
+      env: opts?.env,
+      homedir: opts?.homedir,
+    });
+    return path.resolve(expanded);
+  }
+  return path.resolve(trimmed);
+}
