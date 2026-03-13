@@ -75,6 +75,7 @@ Use `sessions_spawn`:
 - Default model: inherits the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.list[].subagents.model`); an explicit `sessions_spawn.model` still wins.
 - Default thinking: inherits the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`); an explicit `sessions_spawn.thinking` still wins.
 - Default run timeout: if `sessions_spawn.runTimeoutSeconds` is omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout).
+- Minimum run timeout floor: if `agents.defaults.subagents.minRunTimeoutSeconds` is set, positive timeouts are clamped up to that floor; `0` remains `0` (no timeout).
 
 Tool params:
 
@@ -156,6 +157,7 @@ By default, sub-agents cannot spawn their own sub-agents (`maxSpawnDepth: 1`). Y
         maxChildrenPerAgent: 5, // max active children per agent session (default: 5)
         maxConcurrent: 8, // global concurrency lane cap (default: 8)
         runTimeoutSeconds: 900, // default timeout for sessions_spawn when omitted (0 = no timeout)
+        minRunTimeoutSeconds: 120, // floor for positive run timeouts (0 keeps no-timeout behavior)
       },
     },
   },
