@@ -197,6 +197,14 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "status",
     }),
     defineChatCommand({
+      key: "fast",
+      description: "Show or change fast mode for this session.",
+      textAlias: "/fast",
+      acceptsArgs: true,
+      scope: "text",
+      category: "status",
+    }),
+    defineChatCommand({
       key: "cortex",
       description: "Inspect or override Cortex prompt mode for this conversation.",
       textAlias: "/cortex",

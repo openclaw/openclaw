@@ -199,6 +199,13 @@ describe("commands registry", () => {
     ]);
   });
 
+  it("registers /fast as a text command", () => {
+    const fast = listChatCommands().find((command) => command.key === "fast");
+    expect(fast).toBeTruthy();
+    expect(fast?.scope).toBe("text");
+    expect(fast?.textAliases).toContain("/fast");
+  });
+
   it("invalidates cached command lists after plugin registry updates", () => {
     const before = listChatCommands();
     expect(before.find((command) => command.key === "dock:msteams")).toBeFalsy();
