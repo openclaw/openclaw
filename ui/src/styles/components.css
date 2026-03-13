@@ -2226,7 +2226,8 @@
 }
 
 /* New messages indicator */
-.chat-new-messages {
+.chat-new-messages,
+.agent-chat__scroll-pill {
   align-self: center;
   margin: 8px auto 0;
   border-radius: 999px;

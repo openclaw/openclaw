@@ -101,7 +101,8 @@
 }
 
 /* New messages indicator - floating pill above compose */
-.chat-new-messages {
+.chat-new-messages,
+.agent-chat__scroll-pill {
   align-self: center;
   display: inline-flex;
   align-items: center;
@@ -122,12 +123,14 @@
     border-color 150ms ease-out;
 }
 
-.chat-new-messages:hover {
+.chat-new-messages:hover,
+.agent-chat__scroll-pill:hover {
   background: var(--panel);
   border-color: var(--accent);
 }
 
-.chat-new-messages svg {
+.chat-new-messages svg,
+.agent-chat__scroll-pill svg {
   width: 16px;
   height: 16px;
   stroke: currentColor;
