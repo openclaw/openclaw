@@ -1,3 +1,8 @@
+import {
+  type GatewayMessageChannel,
+  isDeliverableMessageChannel,
+  resolveGatewayMessageChannel,
+} from "../utils/message-channel.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 type ExecApprovalFollowupParams = {
@@ -8,6 +13,14 @@ type ExecApprovalFollowupParams = {
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
   resultText: string;
+};
+
+type ExecApprovalFollowupRoute = {
+  channel?: GatewayMessageChannel;
+  deliver: boolean;
+  to?: string;
+  accountId?: string;
+  threadId?: string;
 };
 
 export function buildExecApprovalFollowupPrompt(resultText: string): string {
@@ -24,6 +37,38 @@ export function buildExecApprovalFollowupPrompt(resultText: string): string {
   ].join("\n");
 }
 
+function resolveExecApprovalFollowupRoute(
+  params: Pick<
+    ExecApprovalFollowupParams,
+    "turnSourceChannel" | "turnSourceTo" | "turnSourceAccountId" | "turnSourceThreadId"
+  >,
+): ExecApprovalFollowupRoute {
+  const channel = resolveGatewayMessageChannel(params.turnSourceChannel);
+  const to = params.turnSourceTo?.trim() || undefined;
+  const threadId =
+    params.turnSourceThreadId != null && params.turnSourceThreadId !== ""
+      ? String(params.turnSourceThreadId)
+      : undefined;
+
+  // Approval follow-ups already have a live agent session to write back to.
+  // Only re-enter outbound delivery when we still have a deliverable chat
+  // channel and a concrete recipient target from the originating turn.
+  if (!channel || !isDeliverableMessageChannel(channel) || !to) {
+    return {
+      channel,
+      deliver: false,
+    };
+  }
+
+  return {
+    channel,
+    deliver: true,
+    to,
+    accountId: params.turnSourceAccountId?.trim() || undefined,
+    threadId,
+  };
+}
+
 export async function sendExecApprovalFollowup(
   params: ExecApprovalFollowupParams,
 ): Promise<boolean> {
@@ -33,12 +78,7 @@ export async function sendExecApprovalFollowup(
     return false;
   }
 
-  const channel = params.turnSourceChannel?.trim();
-  const to = params.turnSourceTo?.trim();
-  const threadId =
-    params.turnSourceThreadId != null && params.turnSourceThreadId !== ""
-      ? String(params.turnSourceThreadId)
-      : undefined;
+  const route = resolveExecApprovalFollowupRoute(params);
 
   await callGatewayTool(
     "agent",
@@ -46,12 +86,12 @@ export async function sendExecApprovalFollowup(
     {
       sessionKey,
       message: buildExecApprovalFollowupPrompt(resultText),
-      deliver: true,
+      deliver: route.deliver,
       bestEffortDeliver: true,
-      channel: channel && to ? channel : undefined,
-      to: channel && to ? to : undefined,
-      accountId: channel && to ? params.turnSourceAccountId?.trim() || undefined : undefined,
-      threadId: channel && to ? threadId : undefined,
+      channel: route.channel,
+      to: route.to,
+      accountId: route.accountId,
+      threadId: route.threadId,
       idempotencyKey: `exec-approval-followup:${params.approvalId}`,
     },
     { expectFinal: true },
