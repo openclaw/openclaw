@@ -76,6 +76,23 @@ export type {
 
 const DISCORD_BOUND_THREAD_SYSTEM_PREFIXES = ["⚙️", "🤖", "🧰"];
 
+// Cache for bot mention regexes to avoid recompilation on every message
+// Key: botId, Value: compiled regex for <@botId> or <@!botId>
+const botMentionRegexCache = new Map<string, RegExp>();
+
+/**
+ * Get or create a cached regex for detecting bot mentions in message text.
+ * Matches both standard (<@id>) and nickname (<@!id>) mention formats.
+ */
+function getBotMentionRegex(botId: string): RegExp {
+  let regex = botMentionRegexCache.get(botId);
+  if (!regex) {
+    regex = new RegExp(`<@!?${botId}>`);
+    botMentionRegexCache.set(botId, regex);
+  }
+  return regex;
+}
+
 function isPreflightAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
 }
@@ -402,19 +419,27 @@ export async function preflightDiscordMessage(
   ) {
     logVerbose(`discord: drop bound-thread bot system message ${message.id}`);
     return null;
-    }
+      }
   const mentionRegexes = buildMentionRegexes(params.cfg, effectiveRoute.agentId);
   
   // Check explicit mention via Discord's mentionedUsers array, with fallback
   // to text-based detection for threads where mentionedUsers may be unpopulated.
   // Fixes #44183: Discord thread mentions not working
-  const explicitlyMentionedViaArray = Boolean(
+    const explicitlyMentionedViaArray = Boolean(
     botId && message.mentionedUsers?.some((user: User) => user.id === botId),
   );
   const explicitlyMentionedViaText = Boolean(
-    botId && baseText && new RegExp(`<@!?${botId}>`).test(baseText),
+    botId && baseText && getBotMentionRegex(botId).test(baseText),
   );
   const explicitlyMentioned = explicitlyMentionedViaArray || explicitlyMentionedViaText;
+  
+  // Log when fallback detection is used (helps diagnose Discord API issues)
+  if (explicitlyMentionedViaText && !explicitlyMentionedViaArray) {
+    logVerbose(
+      `discord: mention detected via text fallback (thread workaround) ` +
+      `channel=${messageChannelId} botId=${botId}`,
+    );
+  }
   
   const hasAnyMention = Boolean(
     !isDirectMessage &&
