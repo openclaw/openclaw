@@ -303,6 +303,8 @@ export function renderApp(state: AppViewState) {
   const chatDisabledReason = state.connected ? null : t("chat.disconnected");
   const isChat = state.tab === "chat";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
+  const navDrawerOpen = Boolean(state.navDrawerOpen && !chatFocus && !state.onboarding);
+  const navCollapsed = Boolean(state.settings.navCollapsed && !navDrawerOpen);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
@@ -396,10 +398,30 @@ export function renderApp(state: AppViewState) {
       },
     })}
     <div
-      class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${state.settings.navCollapsed ? "shell--nav-collapsed" : ""} ${state.onboarding ? "shell--onboarding" : ""}"
+      class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${navCollapsed ? "shell--nav-collapsed" : ""} ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${state.onboarding ? "shell--onboarding" : ""}"
     >
+      <button
+        type="button"
+        class="shell-nav-backdrop"
+        aria-label="${t("nav.collapse")}"
+        @click=${() => {
+          state.navDrawerOpen = false;
+        }}
+      ></button>
       <header class="topbar">
         <div class="topnav-shell">
+          <button
+            type="button"
+            class="topbar-nav-toggle"
+            @click=${() => {
+              state.navDrawerOpen = !navDrawerOpen;
+            }}
+            title="${navDrawerOpen ? t("nav.collapse") : t("nav.expand")}"
+            aria-label="${navDrawerOpen ? t("nav.collapse") : t("nav.expand")}"
+            aria-expanded=${navDrawerOpen}
+          >
+            <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.menu}</span>
+          </button>
           <div class="topnav-shell__content">
             <dashboard-header .tab=${state.tab}></dashboard-header>
           </div>
@@ -422,15 +444,15 @@ export function renderApp(state: AppViewState) {
         </div>
       </header>
       <div class="shell-nav">
-        <aside class="sidebar ${state.settings.navCollapsed ? "sidebar--collapsed" : ""}">
+        <aside class="sidebar ${navCollapsed ? "sidebar--collapsed" : ""}">
           <div class="sidebar-shell">
             <div class="sidebar-shell__header">
               <div class="sidebar-brand">
-                <img class="sidebar-brand__logo" src="${agentLogoUrl(basePath)}" alt="OpenClaw" />
                 ${
-                  state.settings.navCollapsed
+                  navCollapsed
                     ? nothing
                     : html`
+                        <img class="sidebar-brand__logo" src="${agentLogoUrl(basePath)}" alt="OpenClaw" />
                         <span class="sidebar-brand__copy">
                           <span class="sidebar-brand__eyebrow">${t("nav.control")}</span>
                           <span class="sidebar-brand__title">OpenClaw</span>
@@ -446,8 +468,8 @@ export function renderApp(state: AppViewState) {
                     ...state.settings,
                     navCollapsed: !state.settings.navCollapsed,
                   })}
-                title="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
-                aria-label="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
+                title="${navCollapsed ? t("nav.expand") : t("nav.collapse")}"
+                aria-label="${navCollapsed ? t("nav.expand") : t("nav.collapse")}"
               >
                 <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.menu}</span>
               </button>
@@ -457,13 +479,12 @@ export function renderApp(state: AppViewState) {
                 ${TAB_GROUPS.map((group) => {
                   const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
                   const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
-                  const showItems =
-                    state.settings.navCollapsed || hasActiveTab || !isGroupCollapsed;
+                  const showItems = navCollapsed || hasActiveTab || !isGroupCollapsed;
 
                   return html`
                     <section class="nav-section ${!showItems ? "nav-section--collapsed" : ""}">
                       ${
-                        !state.settings.navCollapsed
+                        !navCollapsed
                           ? html`
                               <button
                                 class="nav-section__label"
@@ -504,7 +525,7 @@ export function renderApp(state: AppViewState) {
                 >
                   <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
                   ${
-                    !state.settings.navCollapsed
+                    !navCollapsed
                       ? html`
                           <span class="nav-item__text">${t("common.docs")}</span>
                           <span class="nav-item__external-icon">${icons.externalLink}</span>
@@ -518,7 +539,7 @@ export function renderApp(state: AppViewState) {
                     ? html`
                         <div class="sidebar-version" title=${`v${version}`}>
                           ${
-                            !state.settings.navCollapsed
+                            !navCollapsed
                               ? html`
                                   <span class="sidebar-version__label">${t("common.version")}</span>
                                   <span class="sidebar-version__text">v${version}</span>
