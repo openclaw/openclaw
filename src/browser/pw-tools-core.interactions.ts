@@ -540,7 +540,9 @@ export async function waitForViaPlaywright(opts: {
     ensurePageState(page);
     const timeout = normalizeTimeoutMs(opts.timeoutMs, 20_000);
     if (typeof opts.timeMs === "number" && Number.isFinite(opts.timeMs)) {
-      await page.waitForTimeout(resolveBoundedDelayMs(opts.timeMs, "wait timeMs", MAX_WAIT_TIME_MS));
+      await page.waitForTimeout(
+        resolveBoundedDelayMs(opts.timeMs, "wait timeMs", MAX_WAIT_TIME_MS),
+      );
     }
     if (opts.text) {
       await page.getByText(opts.text).first().waitFor({
