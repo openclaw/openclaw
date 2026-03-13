@@ -42,6 +42,13 @@ const log = createSubsystemLogger("memory");
 const INDEX_CACHE = new Map<string, MemoryIndexManager>();
 const INDEX_CACHE_PENDING = new Map<string, Promise<MemoryIndexManager>>();
 
+export async function closeAllMemoryIndexManagers(): Promise<void> {
+  const managers = Array.from(INDEX_CACHE.values());
+  INDEX_CACHE.clear();
+  INDEX_CACHE_PENDING.clear();
+  await Promise.allSettled(managers.map(async (manager) => await manager.close()));
+}
+
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
   private readonly cacheKey: string;
   protected readonly cfg: OpenClawConfig;
