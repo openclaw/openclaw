@@ -399,6 +399,36 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("parses reply tags before MEDIA directives on the same line", async () => {
+    const runtime = createRuntime(false);
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 25, chat: { id: "123" } });
+    const sendMessage = vi.fn();
+    const bot = createBot({ sendPhoto, sendMessage });
+
+    mockMediaLoad("./photo.jpg", "image/jpeg", "photo-bytes");
+
+    await deliverReplies({
+      replies: [{ text: "[[reply_to:42]] MEDIA:./photo.jpg" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "all",
+      textLimit: 4000,
+      mediaLocalRoots: ["."],
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendPhoto).toHaveBeenCalledTimes(1);
+    expect(sendPhoto).toHaveBeenCalledWith(
+      "123",
+      expect.anything(),
+      expect.objectContaining({
+        reply_to_message_id: 42,
+      }),
+    );
+  });
+
   it("invokes onVoiceRecording before sending a voice note", async () => {
     const events: string[] = [];
     const runtime = createRuntime(false);
