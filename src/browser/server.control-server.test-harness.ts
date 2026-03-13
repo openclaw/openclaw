@@ -77,6 +77,7 @@ export function getCdpMocks(): { createTargetViaCdp: MockFn; snapshotAria: MockF
 const pwMocks = vi.hoisted(() => ({
   armDialogViaPlaywright: vi.fn(async () => {}),
   armFileUploadViaPlaywright: vi.fn(async () => {}),
+  batchViaPlaywright: vi.fn(async () => ({ results: [] })),
   clickViaPlaywright: vi.fn(async () => {}),
   closePageViaPlaywright: vi.fn(async () => {}),
   closePlaywrightBrowserConnection: vi.fn(async () => {}),
@@ -210,7 +211,9 @@ vi.mock("./cdp.js", () => ({
 vi.mock("./pw-ai.js", () => pwMocks);
 
 vi.mock("../media/store.js", () => ({
+  MEDIA_MAX_BYTES: 5 * 1024 * 1024,
   ensureMediaDir: vi.fn(async () => {}),
+  getMediaDir: vi.fn(() => "/tmp"),
   saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
 }));
 
