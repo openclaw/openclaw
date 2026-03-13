@@ -26,6 +26,7 @@ export class LegacyContextEngine implements ContextEngine {
 
   async ingest(_params: {
     sessionId: string;
+    sessionKey?: string;
     message: AgentMessage;
     isHeartbeat?: boolean;
   }): Promise<IngestResult> {
@@ -35,6 +36,7 @@ export class LegacyContextEngine implements ContextEngine {
 
   async assemble(params: {
     sessionId: string;
+    sessionKey?: string;
     messages: AgentMessage[];
     tokenBudget?: number;
   }): Promise<AssembleResult> {
@@ -49,6 +51,7 @@ export class LegacyContextEngine implements ContextEngine {
 
   async afterTurn(_params: {
     sessionId: string;
+    sessionKey?: string;
     sessionFile: string;
     messages: AgentMessage[];
     prePromptMessageCount: number;
@@ -62,6 +65,7 @@ export class LegacyContextEngine implements ContextEngine {
 
   async compact(params: {
     sessionId: string;
+    sessionKey?: string;
     sessionFile: string;
     tokenBudget?: number;
     force?: boolean;
@@ -78,6 +82,13 @@ export class LegacyContextEngine implements ContextEngine {
     // set by the caller in run.ts. We spread them and override the fields
     // that come from the ContextEngine compact() signature directly.
     const runtimeContext = params.runtimeContext ?? {};
+    const currentTokenCount =
+      params.currentTokenCount ??
+      (typeof runtimeContext.currentTokenCount === "number" &&
+      Number.isFinite(runtimeContext.currentTokenCount) &&
+      runtimeContext.currentTokenCount > 0
+        ? Math.floor(runtimeContext.currentTokenCount)
+        : undefined);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- bridge runtimeContext matches CompactEmbeddedPiSessionParams
     const result = await compactEmbeddedPiSessionDirect({
@@ -85,6 +96,7 @@ export class LegacyContextEngine implements ContextEngine {
       sessionId: params.sessionId,
       sessionFile: params.sessionFile,
       tokenBudget: params.tokenBudget,
+      ...(currentTokenCount !== undefined ? { currentTokenCount } : {}),
       force: params.force,
       customInstructions: params.customInstructions,
       workspaceDir: (runtimeContext.workspaceDir as string) ?? process.cwd(),
