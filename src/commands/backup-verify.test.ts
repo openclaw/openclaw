@@ -457,6 +457,64 @@ describe("backupVerifyCommand", () => {
     }
   });
 
+  it("accepts directory assets that are backed only by nested payload entries", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-nested-state-"));
+    const archivePath = path.join(tempDir, "ok.tar.gz");
+    const manifestPath = path.join(tempDir, "manifest.json");
+    const nestedPayloadPath = path.join(tempDir, "state.txt");
+    try {
+      const rootName = "2026-03-09T00-00-00.000Z-openclaw-backup";
+      const stateArchivePath = `${rootName}/payload/posix/tmp/.openclaw`;
+      const manifest = {
+        schemaVersion: 1,
+        createdAt: "2026-03-09T00:00:00.000Z",
+        archiveRoot: rootName,
+        runtimeVersion: "test",
+        platform: process.platform,
+        nodeVersion: process.version,
+        assets: [
+          {
+            kind: "state",
+            sourcePath: "/tmp/.openclaw",
+            archivePath: stateArchivePath,
+          },
+        ],
+      };
+      await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+      await fs.writeFile(nestedPayloadPath, "nested\n", "utf8");
+      await tar.c(
+        {
+          file: archivePath,
+          gzip: true,
+          portable: true,
+          preservePaths: true,
+          onWriteEntry: (entry) => {
+            if (entry.path === manifestPath) {
+              entry.path = `${rootName}/manifest.json`;
+              return;
+            }
+            if (entry.path === nestedPayloadPath) {
+              entry.path = `${stateArchivePath}/state.txt`;
+            }
+          },
+        },
+        [manifestPath, nestedPayloadPath],
+      );
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      const verified = await backupVerifyCommand(runtime, { archive: archivePath });
+      expect(verified.ok).toBe(true);
+      expect(verified.assetCount).toBe(1);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails when the archive contains blocked tar special entries", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-link-entry-"));
     const archivePath = path.join(tempDir, "broken.tar.gz");

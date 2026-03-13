@@ -334,11 +334,24 @@ function requiresExactArchiveEntry(asset: BackupManifestAsset): boolean {
   return asset.kind === "config";
 }
 
+function collectNestedArchiveParents(entries: Iterable<string>): Set<string> {
+  const nestedParents = new Set<string>();
+  for (const entry of entries) {
+    let parent = path.posix.dirname(entry);
+    while (parent !== "." && parent !== entry) {
+      nestedParents.add(parent);
+      parent = path.posix.dirname(parent);
+    }
+  }
+  return nestedParents;
+}
+
 function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<string>): void {
   const archiveRoot = normalizeArchiveRoot(manifest.archiveRoot);
   const manifestEntryPath = path.posix.join(archiveRoot, "manifest.json");
   const normalizedEntries = [...entries];
   const normalizedEntrySet = new Set(normalizedEntries);
+  const nestedArchiveParents = collectNestedArchiveParents(normalizedEntries);
 
   if (!normalizedEntrySet.has(manifestEntryPath)) {
     throw new Error(`Archive is missing manifest entry: ${manifestEntryPath}`);
@@ -357,9 +370,7 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
       throw new Error(`Manifest asset path is outside payload root: ${asset.archivePath}`);
     }
     const exact = normalizedEntrySet.has(assetArchivePath);
-    const nested = normalizedEntries.some(
-      (entry) => entry !== assetArchivePath && isArchivePathWithin(entry, assetArchivePath),
-    );
+    const nested = nestedArchiveParents.has(assetArchivePath);
     if (!exact && (!nested || requiresExactArchiveEntry(asset))) {
       throw new Error(`Archive is missing payload for manifest asset: ${assetArchivePath}`);
     }
