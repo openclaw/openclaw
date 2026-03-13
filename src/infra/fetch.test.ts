@@ -60,6 +60,42 @@ describe("wrapFetchWithAbortSignal", () => {
     expect((seenInit as (RequestInit & { duplex?: string }) | undefined)?.duplex).toBe("half");
   });
 
+  it("adds duplex when the input Request already carries the body", async () => {
+    let seenInit: RequestInit | undefined;
+    const fetchImpl = withFetchPreconnect(
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seenInit = init;
+        return {} as Response;
+      }),
+    );
+
+    const wrapped = wrapFetchWithAbortSignal(fetchImpl);
+
+    await wrapped(new Request("https://example.com", { method: "POST", body: "hi" }));
+
+    expect((seenInit as (RequestInit & { duplex?: string }) | undefined)?.duplex).toBe("half");
+  });
+
+  it("preserves an existing duplex init field", async () => {
+    let seenInit: RequestInit | undefined;
+    const fetchImpl = withFetchPreconnect(
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seenInit = init;
+        return {} as Response;
+      }),
+    );
+
+    const wrapped = wrapFetchWithAbortSignal(fetchImpl);
+
+    await wrapped("https://example.com", {
+      method: "POST",
+      body: "hi",
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+
+    expect(seenInit).toMatchObject({ duplex: "half" });
+  });
+
   it("converts foreign abort signals to native controllers", async () => {
     let seenSignal: AbortSignal | undefined;
     const fetchImpl = withFetchPreconnect(
@@ -167,6 +203,26 @@ describe("wrapFetchWithAbortSignal", () => {
     expect(removeEventListener).not.toHaveBeenCalled();
   });
 
+  it("passes through foreign signal-like objects without addEventListener", async () => {
+    let seenSignal: AbortSignal | undefined;
+    const fetchImpl = withFetchPreconnect(
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seenSignal = init?.signal as AbortSignal | undefined;
+        return {} as Response;
+      }),
+    );
+    const wrapped = wrapFetchWithAbortSignal(fetchImpl);
+
+    const fakeSignal = {
+      aborted: false,
+      removeEventListener: vi.fn(),
+    } as unknown as AbortSignal;
+
+    await wrapped("https://example.com", { signal: fakeSignal });
+
+    expect(seenSignal).toBe(fakeSignal);
+  });
+
   it("returns the same function when called with an already wrapped fetch", () => {
     const fetchImpl = withFetchPreconnect(vi.fn(async () => ({ ok: true }) as Response));
     const wrapped = wrapFetchWithAbortSignal(fetchImpl);
@@ -192,5 +248,17 @@ describe("wrapFetchWithAbortSignal", () => {
 
     expect(preconnectSpy).toHaveBeenCalledOnce();
     expect(seenThis).toBe(fetchImpl);
+  });
+});
+
+describe("resolveFetch", () => {
+  it("returns undefined when neither an explicit nor global fetch exists", () => {
+    const previousFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", undefined);
+    try {
+      expect(resolveFetch(undefined)).toBeUndefined();
+    } finally {
+      vi.stubGlobal("fetch", previousFetch);
+    }
   });
 });
