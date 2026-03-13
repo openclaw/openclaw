@@ -42,6 +42,16 @@ describe("extractTextCached", () => {
     expect(extractText(message)).toBe("Final user answer");
     expect(extractTextCached(message)).toBe("Final user answer");
   });
+
+  it("skips malformed content blocks when extracting text", () => {
+    const message = {
+      role: "assistant",
+      content: [null, undefined, ["nested"], { type: "text", text: "Hello there" }],
+    };
+
+    expect(extractText(message)).toBe("Hello there");
+    expect(extractTextCached(message)).toBe("Hello there");
+  });
 });
 
 describe("extractThinkingCached", () => {
@@ -59,6 +69,16 @@ describe("extractThinkingCached", () => {
       content: [{ type: "thinking", thinking: "Plan A" }],
     };
     expect(extractThinkingCached(message)).toBe("Plan A");
+    expect(extractThinkingCached(message)).toBe("Plan A");
+  });
+
+  it("skips malformed content blocks when extracting thinking", () => {
+    const message = {
+      role: "assistant",
+      content: [null, ["nested"], { type: "thinking", thinking: "Plan A" }, undefined],
+    };
+
+    expect(extractThinking(message)).toBe("Plan A");
     expect(extractThinkingCached(message)).toBe("Plan A");
   });
 });
