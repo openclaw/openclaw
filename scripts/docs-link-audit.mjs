@@ -119,6 +119,27 @@ const markdownLinkRegex = /!?\[[^\]]*\]\(([^)]+)\)/g;
 const broken = [];
 let checked = 0;
 
+/**
+ * Parse fenced code block markers.
+ * Supports backticks and tildes, and tracks fence length so we don't
+ * accidentally toggle on shorter fence runs inside longer-fenced blocks.
+ *
+ * @param {string} trimmedLine
+ * @returns {{ch: "`" | "~"; len: number} | null}
+ */
+function parseFence(trimmedLine) {
+  const match = trimmedLine.match(/^([`~]{3,})/);
+  if (!match) {
+    return null;
+  }
+  const fence = match[1];
+  const ch = fence[0];
+  if (ch !== "`" && ch !== "~") {
+    return null;
+  }
+  return { ch, len: fence.length };
+}
+
 for (const abs of markdownFiles) {
   const rel = normalizeSlashes(path.relative(DOCS_DIR, abs));
   const baseDir = normalizeSlashes(path.dirname(rel));
@@ -126,17 +147,24 @@ for (const abs of markdownFiles) {
   const lines = rawText.split("\n");
 
   // Track if we're inside a code fence
-  let inCodeFence = false;
+  /** @type {{ch: "`" | "~"; len: number} | null} */
+  let codeFence = null;
 
   for (let lineNum = 0; lineNum < lines.length; lineNum++) {
     let line = lines[lineNum];
 
     // Toggle code fence state
-    if (line.trim().startsWith("```")) {
-      inCodeFence = !inCodeFence;
+    const trimmed = line.trim();
+    const fence = parseFence(trimmed);
+    if (fence) {
+      if (!codeFence) {
+        codeFence = fence;
+      } else if (codeFence.ch === fence.ch && fence.len >= codeFence.len) {
+        codeFence = null;
+      }
       continue;
     }
-    if (inCodeFence) {
+    if (codeFence) {
       continue;
     }
 
