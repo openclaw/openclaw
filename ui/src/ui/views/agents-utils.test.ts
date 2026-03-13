@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentLogoUrl,
   resolveConfiguredCronModelSuggestions,
+  resolveAgentAvatarUrl,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
 } from "./agents-utils.ts";
@@ -179,5 +181,33 @@ describe("renderOverview", () => {
     expect(renderedValues).toContain("Sync coding");
     expect(renderedValues).toContain("technical · stored");
     expect(renderedValues).toContain("high-signal memory candidate");
+describe("agentLogoUrl", () => {
+  it("keeps base-mounted control UI logo paths absolute to the mount", () => {
+    expect(agentLogoUrl("/ui")).toBe("/ui/favicon.svg");
+    expect(agentLogoUrl("/apps/openclaw/")).toBe("/apps/openclaw/favicon.svg");
+  });
+
+  it("uses a route-relative fallback before basePath bootstrap finishes", () => {
+    expect(agentLogoUrl("")).toBe("favicon.svg");
+  });
+});
+
+describe("resolveAgentAvatarUrl", () => {
+  it("prefers a runtime avatar URL over non-URL identity avatars", () => {
+    expect(
+      resolveAgentAvatarUrl(
+        { identity: { avatar: "A", avatarUrl: "/avatar/main" } },
+        {
+          agentId: "main",
+          avatar: "A",
+          name: "Main",
+        },
+      ),
+    ).toBe("/avatar/main");
+  });
+
+  it("returns null for initials or emoji avatar values without a URL", () => {
+    expect(resolveAgentAvatarUrl({ identity: { avatar: "A" } })).toBeNull();
+    expect(resolveAgentAvatarUrl({ identity: { avatar: "🦞" } })).toBeNull();
   });
 });
