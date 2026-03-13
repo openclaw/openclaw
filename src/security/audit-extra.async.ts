@@ -78,6 +78,10 @@ function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
   return null;
 }
 
+function basenameAcrossSeparators(filePath: string): string {
+  return path.win32.basename(path.posix.basename(filePath));
+}
+
 async function readPluginManifestExtensions(pluginPath: string): Promise<string[]> {
   const manifestPath = path.join(pluginPath, "package.json");
   const raw = await fs.readFile(manifestPath, "utf-8").catch(() => "");
@@ -102,7 +106,7 @@ function formatCodeSafetyDetails(findings: SkillScanFinding[], rootDir: string):
       const filePath =
         relPath && relPath !== "." && !relPath.startsWith("..")
           ? relPath
-          : path.basename(finding.file);
+          : basenameAcrossSeparators(finding.file);
       const normalizedPath = filePath.replaceAll("\\", "/");
       return `  - [${finding.ruleId}] ${finding.message} (${normalizedPath}:${finding.line})`;
     })
