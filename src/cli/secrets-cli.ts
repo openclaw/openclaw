@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { confirm } from "@clack/prompts";
 import type { Command } from "commander";
 import { danger } from "../globals.js";
+import { getConsoleSubsystemFilter, setConsoleSubsystemFilter } from "../logging/console.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSecretsApply } from "../secrets/apply.js";
 import { resolveSecretsAuditExitCode, runSecretsAudit } from "../secrets/audit.js";
@@ -132,11 +133,20 @@ export function registerSecretsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts: SecretsConfigureOptions) => {
       try {
-        const configured = await runSecretsConfigureInteractive({
-          providersOnly: Boolean(opts.providersOnly),
-          skipProviderSetup: Boolean(opts.skipProviderSetup),
-          agentId: typeof opts.agent === "string" ? opts.agent : undefined,
-        });
+        const previousSubsystemFilter = getConsoleSubsystemFilter();
+        // Keep interactive prompts readable by suppressing noisy plugin subsystem logs.
+        setConsoleSubsystemFilter(["secrets", "cli"]);
+        const configured = await (async () => {
+          try {
+            return await runSecretsConfigureInteractive({
+              providersOnly: Boolean(opts.providersOnly),
+              skipProviderSetup: Boolean(opts.skipProviderSetup),
+              agentId: typeof opts.agent === "string" ? opts.agent : undefined,
+            });
+          } finally {
+            setConsoleSubsystemFilter(previousSubsystemFilter);
+          }
+        })();
         if (opts.planOut) {
           fs.writeFileSync(opts.planOut, `${JSON.stringify(configured.plan, null, 2)}\n`, "utf8");
         }

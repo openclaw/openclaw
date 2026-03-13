@@ -8,6 +8,8 @@ const resolveSecretsAuditExitCode = vi.fn();
 const runSecretsConfigureInteractive = vi.fn();
 const runSecretsApply = vi.fn();
 const confirm = vi.fn();
+const setConsoleSubsystemFilter = vi.fn();
+const getConsoleSubsystemFilter = vi.fn();
 
 const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
   createCliRuntimeCapture();
@@ -40,6 +42,11 @@ vi.mock("@clack/prompts", () => ({
   confirm: (options: unknown) => confirm(options),
 }));
 
+vi.mock("../logging/console.js", () => ({
+  setConsoleSubsystemFilter: (filters?: string[] | null) => setConsoleSubsystemFilter(filters),
+  getConsoleSubsystemFilter: () => getConsoleSubsystemFilter(),
+}));
+
 const { registerSecretsCli } = await import("./secrets-cli.js");
 
 describe("secrets CLI", () => {
@@ -58,6 +65,9 @@ describe("secrets CLI", () => {
     runSecretsConfigureInteractive.mockReset();
     runSecretsApply.mockReset();
     confirm.mockReset();
+    setConsoleSubsystemFilter.mockReset();
+    getConsoleSubsystemFilter.mockReset();
+    getConsoleSubsystemFilter.mockReturnValue(null);
   });
 
   it("calls secrets.reload and prints human output", async () => {
@@ -140,6 +150,8 @@ describe("secrets CLI", () => {
 
     await createProgram().parseAsync(["secrets", "configure"], { from: "user" });
     expect(runSecretsConfigureInteractive).toHaveBeenCalled();
+    expect(setConsoleSubsystemFilter).toHaveBeenNthCalledWith(1, ["secrets", "cli"]);
+    expect(setConsoleSubsystemFilter).toHaveBeenNthCalledWith(2, null);
     expect(runSecretsApply).toHaveBeenCalledWith(
       expect.objectContaining({
         write: true,
