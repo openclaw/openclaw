@@ -749,12 +749,10 @@ export function buildAgentSystemPrompt(params: {
     lines.push("## Voice (TTS)", ttsHint, "");
   }
 
-  if (extraSystemPrompt) {
-    // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
-    const contextHeader =
-      promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
-    lines.push(contextHeader, extraSystemPrompt, "");
-  }
+  // ## Reactions and ## Reasoning Format are per-channel/per-session config — they do NOT
+  // change per-conversation (different group chat, same channel+reasoning). Placing them
+  // BEFORE extraSystemPrompt keeps them in the stable KV-cache prefix when only the group
+  // chat context changes, improving per-conversation cache hit rate.
   if (params.reactionGuidance) {
     const { level, channel } = params.reactionGuidance;
     const guidanceText =
@@ -780,6 +778,13 @@ export function buildAgentSystemPrompt(params: {
   }
   if (reasoningHint) {
     lines.push("## Reasoning Format", reasoningHint, "");
+  }
+
+  if (extraSystemPrompt) {
+    // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
+    const contextHeader =
+      promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
+    lines.push(contextHeader, extraSystemPrompt, "");
   }
 
   // ── Post-conversation dynamic tail ────────────────────────────────────────────
