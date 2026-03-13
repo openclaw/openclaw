@@ -1349,9 +1349,10 @@ const findooTraderPlugin = {
       writeFileSync(recoveryFilePath, JSON.stringify(snapshot, null, 2));
     });
 
-    api.on("before_prompt_build", async () => {
+    api.on("before_prompt_build", async (_event, ctx) => {
+      const isHeartbeat = ctx?.trigger === "heartbeat" || ctx?.trigger === "cron";
       const context = buildFinancialContext({
-        heartbeatChecklist,
+        heartbeatChecklist: isHeartbeat ? heartbeatChecklist : undefined,
         paperEngine,
         strategyRegistry,
         riskController,
@@ -1362,7 +1363,7 @@ const findooTraderPlugin = {
         recoveryFilePath,
       });
       if (!context) return;
-      return { prependContext: context };
+      return { prependSystemContext: context };
     });
   },
 };

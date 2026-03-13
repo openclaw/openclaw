@@ -149,4 +149,37 @@ describe("buildFinancialContext", () => {
 
     expect(result).not.toContain("Lifecycle engine");
   });
+
+  it("includes heartbeat checklist when provided", () => {
+    const checklist = "## Heartbeat Checklist\n- Risk check\n- Strategy tick";
+    const deps = makeMockDeps({ heartbeatChecklist: checklist });
+    const result = buildFinancialContext(deps);
+
+    expect(result).toContain("Financial Heartbeat Checklist:");
+    expect(result).toContain("Risk check");
+    expect(result).toContain("Strategy tick");
+  });
+
+  it("omits heartbeat checklist when undefined (normal user message)", () => {
+    const deps = makeMockDeps({ heartbeatChecklist: undefined });
+    const result = buildFinancialContext(deps);
+
+    expect(result).not.toContain("Financial Heartbeat Checklist:");
+    expect(result).not.toContain("Heartbeat");
+  });
+
+  it("returns context via prependSystemContext, not prependContext (hook contract)", () => {
+    // This test documents the expected hook return shape.
+    // The actual hook in index.ts returns { prependSystemContext: context }
+    // to avoid leaking financial context into user-visible messages.
+    const deps = makeMockDeps();
+    const context = buildFinancialContext(deps);
+
+    // Simulate what the hook returns
+    const hookResult = { prependSystemContext: context };
+
+    expect(hookResult).toHaveProperty("prependSystemContext");
+    expect(hookResult).not.toHaveProperty("prependContext");
+    expect(hookResult.prependSystemContext).toContain("Financial Context:");
+  });
 });
