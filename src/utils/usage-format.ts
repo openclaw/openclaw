@@ -48,6 +48,45 @@ export function formatUsd(value?: number): string | undefined {
   return `$${value.toFixed(4)}`;
 }
 
+const BUILTIN_MODEL_COSTS: Record<string, ModelCostConfig> = {
+  "anthropic/claude-opus-4-6": {
+    input: 15,
+    output: 75,
+    cacheRead: 1.5,
+    cacheWrite: 18.75,
+  },
+  "anthropic/claude-sonnet-4-6": {
+    input: 3,
+    output: 15,
+    cacheRead: 0.3,
+    cacheWrite: 3.75,
+  },
+  "anthropic/claude-haiku-4-5": {
+    input: 0.8,
+    output: 4,
+    cacheRead: 0.08,
+    cacheWrite: 1,
+  },
+  "openai-codex/gpt-5.4": {
+    input: 2,
+    output: 8,
+    cacheRead: 0,
+    cacheWrite: 0,
+  },
+  "openai-codex/gpt-5.3-codex": {
+    input: 1,
+    output: 4,
+    cacheRead: 0,
+    cacheWrite: 0,
+  },
+  "openai-codex/gpt-5.3-codex-spark": {
+    input: 0.5,
+    output: 2,
+    cacheRead: 0,
+    cacheWrite: 0,
+  },
+};
+
 export function resolveModelCostConfig(params: {
   provider?: string;
   model?: string;
@@ -60,7 +99,10 @@ export function resolveModelCostConfig(params: {
   }
   const providers = params.config?.models?.providers ?? {};
   const entry = providers[provider]?.models?.find((item) => item.id === model);
-  return entry?.cost;
+  if (entry?.cost) {
+    return entry.cost;
+  }
+  return BUILTIN_MODEL_COSTS[`${provider.toLowerCase()}/${model.toLowerCase()}`];
 }
 
 const toNumber = (value: number | undefined): number =>

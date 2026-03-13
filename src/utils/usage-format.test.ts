@@ -59,4 +59,60 @@ describe("usage-format", () => {
 
     expect(total).toBeCloseTo(0.003);
   });
+
+  it("falls back to built in pricing for common models", () => {
+    expect(
+      resolveModelCostConfig({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      }),
+    ).toEqual({
+      input: 3,
+      output: 15,
+      cacheRead: 0.3,
+      cacheWrite: 3.75,
+    });
+
+    expect(
+      resolveModelCostConfig({
+        provider: "openai-codex",
+        model: "gpt-5.4",
+      }),
+    ).toEqual({
+      input: 2,
+      output: 8,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+  });
+
+  it("prefers configured pricing over built in defaults", () => {
+    const config = {
+      models: {
+        providers: {
+          anthropic: {
+            models: [
+              {
+                id: "claude-sonnet-4-6",
+                cost: { input: 9, output: 19, cacheRead: 0.9, cacheWrite: 1.9 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveModelCostConfig({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        config,
+      }),
+    ).toEqual({
+      input: 9,
+      output: 19,
+      cacheRead: 0.9,
+      cacheWrite: 1.9,
+    });
+  });
 });
