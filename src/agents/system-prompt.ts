@@ -821,7 +821,7 @@ export function buildAgentSystemPrompt(params: {
     lines.push(...skillsSection);
   }
 
-  // 5. Project Notes (workspaceNotes): weekly changes (sprint/project updates).
+  // 3. Project Notes (workspaceNotes): weekly changes (sprint/project updates).
   if (workspaceNotes.length > 0) {
     lines.push("## Project Notes", "");
     for (const note of workspaceNotes) {
