@@ -19,6 +19,7 @@ const zalouserAccountSchema = z.object({
   enabled: z.boolean().optional(),
   markdown: MarkdownConfigSchema,
   profile: z.string().optional(),
+  dangerouslyAllowNameMatching: z.boolean().optional(),
   dmPolicy: DmPolicySchema.optional(),
   allowFrom: AllowFromListSchema,
   historyLimit: z.number().int().min(0).optional(),
