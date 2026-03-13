@@ -520,8 +520,8 @@ export type ToolsConfig = {
     x_search?: {
       /** Enable X search tool (default: true when XAI_API_KEY is present). */
       enabled?: boolean;
-      /** API key for xAI (defaults to XAI_API_KEY env var). */
-      apiKey?: string;
+      /** API key for xAI (defaults to XAI_API_KEY env var). Supports SecretRef. */
+      apiKey?: SecretInput;
       /** Model to use (defaults to "grok-4-1-fast"). */
       model?: string;
       /** Include inline citations in response text as markdown links (default: false). */
