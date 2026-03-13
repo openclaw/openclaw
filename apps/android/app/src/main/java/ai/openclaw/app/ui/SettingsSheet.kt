@@ -818,7 +818,7 @@ private fun openNotificationListenerSettings(context: Context) {
 private fun hasNotificationsPermission(context: Context): Boolean {
   if (Build.VERSION.SDK_INT < 33) return true
   return ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-    PackageManager.PERMISSION_GRANTED
+          PackageManager.PERMISSION_GRANTED
 }
 
 private fun isNotificationListenerEnabled(context: Context): Boolean {
@@ -828,5 +828,5 @@ private fun isNotificationListenerEnabled(context: Context): Boolean {
 private fun hasMotionCapabilities(context: Context): Boolean {
   val sensorManager = context.getSystemService(SensorManager::class.java) ?: return false
   return sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null ||
-    sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
+          sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
 }
