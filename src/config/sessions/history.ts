@@ -1,5 +1,5 @@
 // src/config/sessions/history.ts
-import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import { SessionManager, type SessionEntry } from "@mariozechner/pi-coding-agent";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "./paths.js";
 import { loadSessionStore, resolveSessionStoreEntry } from "./store.js";
@@ -36,6 +36,7 @@ export async function readSessionRecentMessages(params: {
   limit?: number;
 }): Promise<SessionHistoryMessage[]> {
   const { storePath, sessionKey, agentId, limit = 10 } = params;
+  const effectiveLimit = limit > 0 ? limit : 10;
   try {
     const store = loadSessionStore(storePath);
     const { existing: entry } = resolveSessionStoreEntry({ store, sessionKey });
@@ -46,7 +47,9 @@ export async function readSessionRecentMessages(params: {
     const opts = resolveSessionFilePathOptions({ agentId, storePath });
     const sessionFile = resolveSessionFilePath(entry.sessionId, entry, opts);
 
-    if (!fs.existsSync(sessionFile)) {
+    try {
+      await fsPromises.stat(sessionFile);
+    } catch {
       return [];
     }
 
@@ -71,7 +74,7 @@ export async function readSessionRecentMessages(params: {
       });
     }
 
-    return messages.slice(-limit);
+    return messages.slice(-effectiveLimit);
   } catch {
     return [];
   }

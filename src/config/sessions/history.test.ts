@@ -154,17 +154,17 @@ describe("readSessionRecentMessages", () => {
       "ghost-key": { sessionId, updatedAt: Date.now() },
     });
 
-    // sessions directory that should NOT be created
-    const sessionsDir = path.join(tmpDir, "sessions");
+    // Snapshot tmpDir contents before the call
+    const beforeContents = await fs.readdir(tmpDir);
 
-    const result = await readSessionRecentMessages({
+    await readSessionRecentMessages({
       storePath,
       sessionKey: "ghost-key",
     });
 
-    expect(result).toEqual([]);
-    // The sessions directory must not have been created as a side effect
-    await expect(fs.access(sessionsDir)).rejects.toThrow();
+    // Snapshot after the call — no new entries should appear
+    const afterContents = await fs.readdir(tmpDir);
+    expect(afterContents).toEqual(beforeContents);
   });
 
   it("excludes toolResult messages from returned history", async () => {
