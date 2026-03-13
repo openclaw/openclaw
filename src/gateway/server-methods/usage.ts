@@ -90,13 +90,12 @@ function resolveSessionUsageFileOrRespond(
     try {
       realSessionsDir = fs.realpathSync(sessionsDir);
     } catch {
-      // Sessions directory doesn't exist for this agent — no archived file possible
-      // Fall through to normal resolution
-      realSessionsDir = "";
+      // Sessions directory doesn't exist — use path.resolve as fallback base
+      // to still enforce containment against traversal attacks
+      realSessionsDir = path.resolve(sessionsDir);
     }
     const realSessionFile = path.resolve(sessionFile);
     if (
-      realSessionsDir &&
       !realSessionFile.startsWith(realSessionsDir + path.sep) &&
       realSessionFile !== realSessionsDir
     ) {
