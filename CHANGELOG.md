@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 - Agents/memory bootstrap: load only one root memory file, preferring `MEMORY.md` and using `memory.md` as a fallback, so case-insensitive Docker mounts no longer inject duplicate memory context. (#26054) Thanks @Lanfei.
 - Agents/OpenAI-compatible compat overrides: respect explicit user `models[].compat` opt-ins for non-native `openai-completions` endpoints so usage-in-streaming capability overrides no longer get forced off when the endpoint actually supports them. (#44432) Thanks @cheapestinference.
 - Agents/Azure OpenAI startup prompts: rephrase the built-in `/new`, `/reset`, and post-compaction startup instruction so Azure OpenAI deployments no longer hit HTTP 400 false positives from the content filter. (#43403) Thanks @xingsy97.
+- Gateway/loopback CLI handshakes: keep the longer pre-auth timeout for direct localhost WebSocket connects while retaining the hardened shorter timeout for non-local clients, so loaded machines do not fail healthy local CLI commands with `handshake-timeout`. (#44714)
 
 ## 2026.3.12
 
