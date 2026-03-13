@@ -412,6 +412,7 @@ export async function resolveAgentCortexConflictNotice(params: {
       .filter((entry) => entry.id && entry.summary)
       .toSorted((left, right) => right.severity - left.severity)[0];
     if (!topConflict) {
+      cortexConflictNoticeCooldowns.set(targetKey, now + cooldownMs);
       return null;
     }
     cortexConflictNoticeCooldowns.set(targetKey, now + cooldownMs);
@@ -424,6 +425,7 @@ export async function resolveAgentCortexConflictNotice(params: {
       ].join("\n"),
     };
   } catch {
+    cortexConflictNoticeCooldowns.set(targetKey, now + cooldownMs);
     return null;
   }
 }
