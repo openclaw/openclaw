@@ -1,5 +1,6 @@
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
+import * as net from "node:net";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, type Dispatcher } from "undici";
 import {
   extractEmbeddedIpv4FromIpv6,
@@ -345,17 +346,38 @@ export async function resolvePinnedHostname(
   return await resolvePinnedHostnameWithPolicy(hostname, { lookupFn });
 }
 
+function resolveProcessAutoSelectFamily(): boolean | undefined {
+  // Respect process-level autoSelectFamily setting from:
+  // - Node.js default (true on Node 22+)
+  // - --no-network-family-autoselection CLI flag
+  // - net.setDefaultAutoSelectFamily(false) API call
+  if (typeof net.getDefaultAutoSelectFamily !== "function") {
+    return undefined;
+  }
+  try {
+    return net.getDefaultAutoSelectFamily();
+  } catch {
+    return undefined;
+  }
+}
+
 function withPinnedLookup(
   lookup: PinnedHostname["lookup"],
   connect?: Record<string, unknown>,
 ): Record<string, unknown> {
-  // Default to Happy Eyeballs (RFC 8305) for IPv6/IPv4 dual-stack compatibility.
-  // When IPv6 connection fails within the attempt timeout, IPv4 is tried in parallel.
-  // This fixes media download failures in networks with broken IPv6 connectivity.
-  const defaultConnect: Record<string, unknown> = {
-    autoSelectFamily: true,
-    autoSelectFamilyAttemptTimeout: 300,
-  };
+  // Respect process-level autoSelectFamily setting instead of hardcoding true.
+  // This ensures deployments that intentionally disabled family autoselection
+  // (via --no-network-family-autoselection or net.setDefaultAutoSelectFamily(false))
+  // are not forced back into IPv6/dual-stack probing.
+  const processAutoSelectFamily = resolveProcessAutoSelectFamily();
+
+  // Only set attempt timeout when autoSelectFamily is enabled at process level.
+  // This provides Happy Eyeballs (RFC 8305) benefits without overriding policy.
+  const defaultConnect: Record<string, unknown> =
+    processAutoSelectFamily === true
+      ? { autoSelectFamilyAttemptTimeout: 300 }
+      : {};
+
   const mergedConnect = connect ? { ...defaultConnect, ...connect } : defaultConnect;
   return { ...mergedConnect, lookup };
 }
