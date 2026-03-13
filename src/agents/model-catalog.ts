@@ -1,6 +1,7 @@
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { shouldSuppressBuiltInModel } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
 const log = createSubsystemLogger("model-catalog");
@@ -240,6 +241,9 @@ export async function loadModelCatalog(params?: {
         }
         const provider = String(entry?.provider ?? "").trim();
         if (!provider) {
+          continue;
+        }
+        if (shouldSuppressBuiltInModel({ provider, id })) {
           continue;
         }
         const name = String(entry?.name ?? id).trim() || id;

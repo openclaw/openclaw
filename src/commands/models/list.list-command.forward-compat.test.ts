@@ -347,5 +347,55 @@ describe("modelsListCommand forward-compat", () => {
         }),
       ]);
     });
+
+    it("suppresses direct openai gpt-5.3-codex-spark rows in --all output", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      mocks.loadModelRegistry.mockResolvedValueOnce({
+        models: [
+          {
+            provider: "openai",
+            id: "gpt-5.3-codex-spark",
+            name: "GPT-5.3 Codex Spark",
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            input: ["text", "image"],
+            contextWindow: 128000,
+            maxTokens: 32000,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+          {
+            provider: "azure-openai-responses",
+            id: "gpt-5.3-codex-spark",
+            name: "GPT-5.3 Codex Spark",
+            api: "azure-openai-responses",
+            baseUrl: "https://example.openai.azure.com/openai/v1",
+            input: ["text", "image"],
+            contextWindow: 128000,
+            maxTokens: 32000,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+          { ...OPENAI_CODEX_53_MODEL },
+        ],
+        availableKeys: new Set([
+          "openai/gpt-5.3-codex-spark",
+          "azure-openai-responses/gpt-5.3-codex-spark",
+          "openai-codex/gpt-5.3-codex",
+        ]),
+        registry: {
+          getAll: () => [{ ...OPENAI_CODEX_53_MODEL }],
+        },
+      });
+      mocks.loadModelCatalog.mockResolvedValueOnce([]);
+      const runtime = createRuntime();
+
+      await modelsListCommand({ all: true, json: true }, runtime as never);
+
+      expect(mocks.printModelTable).toHaveBeenCalled();
+      expect(lastPrintedRows<{ key: string }>()).toEqual([
+        expect.objectContaining({
+          key: "openai-codex/gpt-5.3-codex",
+        }),
+      ]);
+    });
   });
 });
