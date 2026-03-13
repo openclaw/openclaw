@@ -12,7 +12,9 @@ describe("shared/subagents-format", () => {
   it("formats compact durations across minute, hour, and day buckets", () => {
     expect(formatDurationCompact()).toBe("n/a");
     expect(formatDurationCompact(30_000)).toBe("1m");
+    expect(formatDurationCompact(60 * 60_000)).toBe("1h");
     expect(formatDurationCompact(61 * 60_000)).toBe("1h1m");
+    expect(formatDurationCompact(24 * 60 * 60_000)).toBe("1d");
     expect(formatDurationCompact(25 * 60 * 60_000)).toBe("1d1h");
   });
 
@@ -20,7 +22,9 @@ describe("shared/subagents-format", () => {
     expect(formatTokenShort()).toBeUndefined();
     expect(formatTokenShort(999.9)).toBe("999");
     expect(formatTokenShort(1_500)).toBe("1.5k");
+    expect(formatTokenShort(10_000)).toBe("10k");
     expect(formatTokenShort(15_400)).toBe("15k");
+    expect(formatTokenShort(1_000_000)).toBe("1m");
     expect(formatTokenShort(1_250_000)).toBe("1.3m");
   });
 
@@ -40,6 +44,11 @@ describe("shared/subagents-format", () => {
       output: 5,
       total: 15,
     });
+    expect(resolveIoTokens({ outputTokens: 5 })).toEqual({
+      input: 0,
+      output: 5,
+      total: 5,
+    });
     expect(resolveIoTokens({ inputTokens: Number.NaN, outputTokens: 0 })).toBeUndefined();
   });
 
@@ -53,6 +62,13 @@ describe("shared/subagents-format", () => {
     ).toBe("tokens 1.5k (in 1.2k / out 300), prompt/cache 2.1k");
 
     expect(formatTokenUsageDisplay({ totalTokens: 500 })).toBe("tokens 500 prompt/cache");
+    expect(
+      formatTokenUsageDisplay({
+        inputTokens: 1_200,
+        outputTokens: 300,
+        totalTokens: 1_500,
+      }),
+    ).toBe("tokens 1.5k (in 1.2k / out 300)");
     expect(formatTokenUsageDisplay({ inputTokens: 0, outputTokens: 0, totalTokens: 0 })).toBe("");
   });
 });
