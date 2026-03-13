@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 
 // On Windows, `.cmd` launchers can fail with `spawn EINVAL` when invoked without a shell
 // (especially under GitHub Actions + Git Bash). Use `shell: true` and let the shell resolve pnpm.
@@ -243,12 +244,7 @@ const OPTION_TAKES_VALUE = new Set([
   "--configLoader",
   "--experimental",
 ]);
-const SINGLE_RUN_ONLY_FLAGS = new Set([
-  "--coverage",
-  "--reporter",
-  "--outputFile",
-  "--mergeReports",
-]);
+const SINGLE_RUN_ONLY_FLAGS = new Set(["--coverage", "--outputFile", "--mergeReports"]);
 
 if (shardIndexOverride !== null && shardCount <= 1) {
   console.error(
@@ -309,106 +305,183 @@ const passthroughRequiresSingleRun = passthroughOptionArgs.some((arg) => {
 });
 const channelPrefixes = ["src/telegram/", "src/discord/", "src/web/", "src/browser/", "src/line/"];
 const baseConfigPrefixes = ["src/agents/", "src/auto-reply/", "src/commands/", "test/", "ui/"];
-const inferTargetKind = (fileFilter) => {
+const normalizeRepoPath = (value) => value.split(path.sep).join("/");
+const walkTestFiles = (rootDir) => {
+  if (!fs.existsSync(rootDir)) {
+    return [];
+  }
+  const entries = fs.readdirSync(rootDir, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const fullPath = path.join(rootDir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...walkTestFiles(fullPath));
+      continue;
+    }
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (
+      fullPath.endsWith(".test.ts") ||
+      fullPath.endsWith(".live.test.ts") ||
+      fullPath.endsWith(".e2e.test.ts")
+    ) {
+      files.push(normalizeRepoPath(fullPath));
+    }
+  }
+  return files;
+};
+const allKnownTestFiles = [
+  ...new Set([
+    ...walkTestFiles("src"),
+    ...walkTestFiles("extensions"),
+    ...walkTestFiles("test"),
+    ...walkTestFiles(path.join("ui", "src", "ui")),
+  ]),
+];
+const inferTarget = (fileFilter) => {
+  const isolated = unitIsolatedFiles.includes(fileFilter);
   if (fileFilter.endsWith(".live.test.ts")) {
-    return "live";
+    return { owner: "live", isolated };
   }
   if (fileFilter.endsWith(".e2e.test.ts")) {
-    return "e2e";
+    return { owner: "e2e", isolated };
   }
   if (fileFilter.startsWith("extensions/")) {
-    return "extensions";
+    return { owner: "extensions", isolated };
   }
   if (fileFilter.startsWith("src/gateway/")) {
-    return "gateway";
+    return { owner: "gateway", isolated };
   }
   if (channelPrefixes.some((prefix) => fileFilter.startsWith(prefix))) {
-    return "channels";
+    return { owner: "channels", isolated };
   }
   if (baseConfigPrefixes.some((prefix) => fileFilter.startsWith(prefix))) {
-    return "base";
+    return { owner: "base", isolated };
   }
   if (fileFilter.startsWith("src/")) {
-    return unitIsolatedFiles.includes(fileFilter) ? "unit-isolated" : "unit";
+    return { owner: "unit", isolated };
   }
-  return "base";
+  return { owner: "base", isolated };
 };
-const createTargetedEntry = (kind, filters) => {
-  if (kind === "unit") {
+const resolveFilterMatches = (fileFilter) => {
+  const normalizedFilter = normalizeRepoPath(fileFilter);
+  if (fs.existsSync(fileFilter)) {
+    const stats = fs.statSync(fileFilter);
+    if (stats.isFile()) {
+      return [normalizedFilter];
+    }
+    if (stats.isDirectory()) {
+      const prefix = normalizedFilter.endsWith("/") ? normalizedFilter : `${normalizedFilter}/`;
+      return allKnownTestFiles.filter((file) => file.startsWith(prefix));
+    }
+  }
+  if (/[*?[\]{}]/.test(normalizedFilter)) {
+    return allKnownTestFiles.filter((file) => path.matchesGlob(file, normalizedFilter));
+  }
+  return allKnownTestFiles.filter((file) => file.includes(normalizedFilter));
+};
+const createTargetedEntry = (owner, isolated, filters) => {
+  const name = isolated ? `${owner}-isolated` : owner;
+  const forceForks = isolated;
+  if (owner === "unit") {
     return {
-      name: "unit",
+      name,
       args: [
         "vitest",
         "run",
         "--config",
         "vitest.unit.config.ts",
-        `--pool=${useVmForks ? "vmForks" : "forks"}`,
+        `--pool=${forceForks ? "forks" : useVmForks ? "vmForks" : "forks"}`,
         ...(disableIsolation ? ["--isolate=false"] : []),
         ...filters,
       ],
     };
   }
-  if (kind === "unit-isolated") {
+  if (owner === "extensions") {
     return {
-      name: "unit-isolated",
-      args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", ...filters],
-    };
-  }
-  if (kind === "extensions") {
-    return {
-      name: "extensions",
+      name,
       args: [
         "vitest",
         "run",
         "--config",
         "vitest.extensions.config.ts",
-        ...(useVmForks ? ["--pool=vmForks"] : []),
+        ...(forceForks ? ["--pool=forks"] : useVmForks ? ["--pool=vmForks"] : []),
         ...filters,
       ],
     };
   }
-  if (kind === "gateway") {
+  if (owner === "gateway") {
     return {
-      name: "gateway",
+      name,
       args: ["vitest", "run", "--config", "vitest.gateway.config.ts", "--pool=forks", ...filters],
     };
   }
-  if (kind === "channels") {
+  if (owner === "channels") {
     return {
-      name: "channels",
-      args: ["vitest", "run", "--config", "vitest.channels.config.ts", ...filters],
+      name,
+      args: [
+        "vitest",
+        "run",
+        "--config",
+        "vitest.channels.config.ts",
+        ...(forceForks ? ["--pool=forks"] : []),
+        ...filters,
+      ],
     };
   }
-  if (kind === "live") {
+  if (owner === "live") {
     return {
-      name: "live",
+      name,
       args: ["vitest", "run", "--config", "vitest.live.config.ts", ...filters],
     };
   }
-  if (kind === "e2e") {
+  if (owner === "e2e") {
     return {
-      name: "e2e",
+      name,
       args: ["vitest", "run", "--config", "vitest.e2e.config.ts", ...filters],
     };
   }
   return {
-    name: "base",
-    args: ["vitest", "run", "--config", "vitest.config.ts", ...filters],
+    name,
+    args: [
+      "vitest",
+      "run",
+      "--config",
+      "vitest.config.ts",
+      ...(forceForks ? ["--pool=forks"] : []),
+      ...filters,
+    ],
   };
 };
-const targetedEntries =
-  passthroughFileFilters.length > 0
-    ? Array.from(
-        passthroughFileFilters.reduce((groups, fileFilter) => {
-          const kind = inferTargetKind(fileFilter);
-          const files = groups.get(kind) ?? [];
-          files.push(fileFilter);
-          groups.set(kind, files);
-          return groups;
-        }, new Map()),
-        ([kind, filters]) => createTargetedEntry(kind, filters),
-      )
-    : [];
+const targetedEntries = (() => {
+  if (passthroughFileFilters.length === 0) {
+    return [];
+  }
+  const groups = passthroughFileFilters.reduce((acc, fileFilter) => {
+    const matchedFiles = resolveFilterMatches(fileFilter);
+    if (matchedFiles.length === 0) {
+      const target = inferTarget(normalizeRepoPath(fileFilter));
+      const key = `${target.owner}:${target.isolated ? "isolated" : "default"}`;
+      const files = acc.get(key) ?? [];
+      files.push(normalizeRepoPath(fileFilter));
+      acc.set(key, files);
+      return acc;
+    }
+    for (const matchedFile of matchedFiles) {
+      const target = inferTarget(matchedFile);
+      const key = `${target.owner}:${target.isolated ? "isolated" : "default"}`;
+      const files = acc.get(key) ?? [];
+      files.push(matchedFile);
+      acc.set(key, files);
+    }
+    return acc;
+  }, new Map());
+  return Array.from(groups, ([key, filters]) => {
+    const [owner, mode] = key.split(":");
+    return createTargetedEntry(owner, mode === "isolated", [...new Set(filters)]);
+  });
+})();
 const topLevelParallelEnabled = testProfile !== "low" && testProfile !== "serial";
 const overrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
 const resolvedOverride =
@@ -491,7 +564,7 @@ const maxWorkersForRun = (name) => {
   if (isCI && isMacOS) {
     return 1;
   }
-  if (name === "unit-isolated") {
+  if (name === "unit-isolated" || name.endsWith("-isolated")) {
     return defaultWorkerBudget.unitIsolated;
   }
   if (name === "extensions") {
