@@ -157,7 +157,10 @@ export async function ackDelivery(id: string, stateDir?: string): Promise<void> 
   await unlinkBestEffort(deliveredPath);
 }
 
-/** Update a queue entry after a failed delivery attempt. */
+/** Update a queue entry after a failed delivery attempt.
+ * If the error matches a known permanent failure pattern (e.g. HTTP 4xx),
+ * the entry is moved to failed/ immediately instead of being retried.
+ */
 export async function failDelivery(id: string, error: string, stateDir?: string): Promise<void> {
   const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
   const raw = await fs.promises.readFile(filePath, "utf-8");
@@ -171,6 +174,13 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
     mode: 0o600,
   });
   await fs.promises.rename(tmp, filePath);
+
+  // Permanent errors (e.g. HTTP 4xx) will never succeed on retry — move to
+  // failed/ immediately after persisting diagnostic fields so operators can
+  // inspect lastError/lastAttemptAt in the failed entry.
+  if (isPermanentDeliveryError(error)) {
+    await moveToFailed(id, stateDir);
+  }
 }
 
 /** Load all pending delivery entries from the queue directory. */
@@ -426,6 +436,12 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
   /ambiguous discord recipient/i,
+  // HTTP 4xx client errors — the request itself is invalid and will never succeed on retry.
+  // Excludes 429 (rate-limiting) which is transient.
+  /\b(?:400|403|404|405|410|413|415|422)\b/i,
+  /message is too long/i,
+  /request entity too large/i,
+  /bad request:/i,
 ];
 
 export function isPermanentDeliveryError(error: string): boolean {
