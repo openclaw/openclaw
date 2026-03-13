@@ -128,12 +128,18 @@ async function downloadAndSaveTelegramFile(params: {
   const url = `https://api.telegram.org/file/bot${params.token}/${params.filePath}`;
   const fetched = await fetchRemoteMedia({
     url,
-    fetchImpl: params.transport.sourceFetch,
-    dispatcherPolicy: params.transport.pinnedDispatcherPolicy,
+    // Use the transport's fully configured fetch so we preserve
+    // Telegram's proxy/dispatcher decisions (explicit proxy, env proxy,
+    // IPv4 fallback, etc.) instead of bypassing them.
+    fetchImpl: params.transport.fetch,
     filePathHint: params.filePath,
     maxBytes: params.maxBytes,
     readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
     ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
+    // Telegram already applies resolver-scoped dispatchers and proxy routing
+    // via resolveTelegramFetch. Disable DNS pinning at the SSRF layer so we
+    // don't override Telegram's dispatcher decisions or bypass HTTP proxies.
+    pinDns: false,
   });
   const originalName = params.telegramFileName ?? fetched.fileName ?? params.filePath;
   return saveMediaBuffer(

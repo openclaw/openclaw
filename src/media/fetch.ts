@@ -36,6 +36,12 @@ type FetchMediaOptions = {
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
   dispatcherPolicy?: PinnedDispatcherPolicy;
+  /**
+   * Whether to enable DNS pinning at the SSRF guard layer.
+   * Defaults to true; set to false when the caller already applies
+   * its own dispatcher/proxy and only needs hostname-level SSRF checks.
+   */
+  pinDns?: boolean;
 };
 
 function stripQuotes(value: string): string {
@@ -94,6 +100,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     ssrfPolicy,
     lookupFn,
     dispatcherPolicy,
+    pinDns,
   } = options;
 
   let res: Response;
@@ -109,6 +116,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
         policy: ssrfPolicy,
         lookupFn,
         dispatcherPolicy,
+        ...(pinDns === false ? { pinDns: false } : {}),
       }),
     );
     res = result.response;
