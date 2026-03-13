@@ -721,40 +721,21 @@ export function buildAgentSystemPrompt(params: {
     lines.push("## Reasoning Format", reasoningHint, "");
   }
 
-  // Model aliases and skills: deployment-level config that changes when users update model
-  // preferences or install new skills. Injected here (after per-conversation dynamic context,
-  // before workspaceNotes) so that installing a skill or changing model aliases does not
-  // invalidate the stable prefix of workspace files + boilerplate.
-  if (!isMinimal && params.modelAliasLines && params.modelAliasLines.length > 0) {
-    lines.push(
-      "## Model Aliases",
-      "Prefer aliases when specifying model overrides; full provider/model is also accepted.",
-      params.modelAliasLines.join("\n"),
-      "",
-    );
-  }
-  // Skills are included in ALL prompt modes (cron/subagent sessions need them).
-  if (skillsSection.length > 0) {
-    lines.push(...skillsSection);
-  }
+  // ── Dynamic tail ordering (most-stable-first → least-stable-last) ─────────────
+  // Sections are ordered by change frequency (least frequent = FIRST) so that
+  // when a section changes, the maximum amount of prior content is KV-cached.
+  //
+  //   1. Deployment config (docs/owners/sandbox) — YEARLY changes
+  //   2. Tool Manifest — plugin installs, RARELY (for most users: never)
+  //   3. Model Aliases — QUARTERLY changes (user updates model preferences)
+  //   4. Skills (mandatory) — MONTHLY changes (user installs new skills)
+  //   5. Project Notes (workspaceNotes) — WEEKLY changes (sprint updates)
+  //   6. MEMORY.md — DAILY changes (daily notes update)
+  //
+  // This ordering maximises the total expected KV-cache stable prefix across all
+  // real-world change events, weighted by their frequency.
 
-  // workspaceNotes: injected before deployment config and MEMORY.md. Both workspaceNotes and
-  // deployment config are in the stable prefix for MEMORY.md-daily-change sessions.
-  // For workspaceNotes-change sessions, everything before (skills, modelAliases, etc.) is cached.
-  // For deployment-config-change sessions, workspaceNotes is in the stable prefix too.
-  if (workspaceNotes.length > 0) {
-    lines.push("## Project Notes", "");
-    for (const note of workspaceNotes) {
-      lines.push(note);
-    }
-    lines.push("");
-  }
-
-  // Deployment-level config: docs, authorized senders, sandbox settings.
-  // Injected BEFORE Tool Manifest. Deployment config changes are RARER than tool installs
-  // (yearly vs monthly). By placing deployment config before the tool manifest, when
-  // deployment config changes, the stable prefix is smaller — but this is the rare event.
-  // When tool names change (monthly), deployment config is in the stable prefix. ✓
+  // 1. Deployment-level config: docs, authorized senders, sandbox settings.
   if (!isMinimal) {
     lines.push(...docsSection);
   }
@@ -810,17 +791,38 @@ export function buildAgentSystemPrompt(params: {
     lines.push("");
   }
 
-  // Tool Manifest: injected AFTER deployment config (docs, owners, sandbox) and BEFORE MEMORY.md.
-  // Tool installs happen monthly — more often than yearly deployConfig changes but less often
-  // than daily MEMORY.md updates. Placing tool manifest here means:
-  //   • When tools change (monthly): deployConfig is in stable prefix ✓
-  //   • When deployConfig changes (yearly): tool manifest is NOT in stable prefix (smaller loss)
-  //   • When MEMORY.md changes (daily): everything above is in stable prefix ✓
+  // 2. Tool Manifest: after deployment config, before model aliases.
+  // Plugin installs are rare (many users never install plugins).
   if (toolLines.length > 0) {
     lines.push("## Tool Manifest", toolLines.join("\n"), "");
   }
 
-  // Memory files (MEMORY.md / memory.md) are injected LAST — after all per-conversation
+  // 3. Model aliases: quarterly changes (model preference updates).
+  if (!isMinimal && params.modelAliasLines && params.modelAliasLines.length > 0) {
+    lines.push(
+      "## Model Aliases",
+      "Prefer aliases when specifying model overrides; full provider/model is also accepted.",
+      params.modelAliasLines.join("\n"),
+      "",
+    );
+  }
+
+  // 4. Skills: monthly changes (skill installations from Clawhub).
+  // Included in ALL prompt modes (cron/subagent sessions need skills too).
+  if (skillsSection.length > 0) {
+    lines.push(...skillsSection);
+  }
+
+  // 5. Project Notes (workspaceNotes): weekly changes (sprint/project updates).
+  if (workspaceNotes.length > 0) {
+    lines.push("## Project Notes", "");
+    for (const note of workspaceNotes) {
+      lines.push(note);
+    }
+    lines.push("");
+  }
+
+  // 6. Memory files (MEMORY.md / memory.md) are injected LAST — after all per-conversation
   // dynamic context and workspaceNotes. This maximises the stable prefix for the most
   // common change pattern: daily notes update while session config stays constant.
   // When only MEMORY.md changes between sessions, everything above this point is KV-cached.
