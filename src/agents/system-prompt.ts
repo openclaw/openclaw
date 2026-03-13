@@ -617,13 +617,21 @@ export function buildAgentSystemPrompt(params: {
       // Basenames of standard workspace files are fixed by the loader; listing them here
       // extends the stable Anthropic KV-cache prefix by the length of the manifest, while
       // still giving the agent a quick reference of which files are loaded.
-      const fileNames = validContextFiles.map((f) => {
+      // Only list standard files here — memory files (MEMORY.md, daily notes) are injected
+      // at the end of the prompt for KV-cache stability and are not adjacent to Project Context.
+      const fileNames = standardContextFiles.map((f) => {
         const p = f.path.trim().replace(/\\/g, "/");
         return p.split("/").pop() ?? p;
       });
+      const memoryFileNames = memoryContextFiles.map((f) => {
+        const p = f.path.trim().replace(/\\/g, "/");
+        return p.split("/").pop() ?? p;
+      });
+      const memoryNote =
+        memoryFileNames.length > 0 ? ` (${memoryFileNames.join(", ")} injected at end)` : "";
       lines.push(
         "The following project context files have been loaded:",
-        `Files: ${fileNames.join(", ")}`,
+        `Files: ${fileNames.join(", ")}${memoryNote}`,
       );
       if (hasSoulFile) {
         lines.push(
