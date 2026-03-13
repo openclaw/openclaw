@@ -1,5 +1,5 @@
-import type { PluginRuntimeChannel } from "./types-channel.js";
-import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
+import type { LogLevel } from "../../logging/levels.js";
+import type { RuntimeLogger } from "./types-core.js";
 
 export type { RuntimeLogger };
 type ResolveApiKeyForProvider =
@@ -15,13 +15,18 @@ type ResolveEffectiveMessagesConfig =
 type ResolveHumanDelayConfig = typeof import("../../agents/identity.js").resolveHumanDelayConfig;
 type ResolveAgentRoute = typeof import("../../routing/resolve-route.js").resolveAgentRoute;
 type BuildPairingReply = typeof import("../../pairing/pairing-messages.js").buildPairingReply;
-type ReadChannelAllowFromStore =
-  typeof import("../../pairing/pairing-store.js").readChannelAllowFromStore;
+type ReadChannelAllowFromStore = (params: {
+  channel: import("../../channels/plugins/types.js").ChannelId;
+  accountId?: string;
+  env?: NodeJS.ProcessEnv;
+}) => Promise<string[]>;
 type UpsertChannelPairingRequest =
   typeof import("../../pairing/pairing-store.js").upsertChannelPairingRequest;
 type FetchRemoteMedia = typeof import("../../media/fetch.js").fetchRemoteMedia;
 type SaveMediaBuffer = typeof import("../../media/store.js").saveMediaBuffer;
 type TextToSpeechTelephony = typeof import("../../tts/tts.js").textToSpeechTelephony;
+type TranscribeAudioFile =
+  typeof import("../../media-understanding/transcribe-audio.js").transcribeAudioFile;
 type BuildMentionRegexes = typeof import("../../auto-reply/reply/mentions.js").buildMentionRegexes;
 type MatchesMentionPatterns =
   typeof import("../../auto-reply/reply/mentions.js").matchesMentionPatterns;
@@ -58,6 +63,7 @@ type ShouldComputeCommandAuthorized =
   typeof import("../../auto-reply/command-detection.js").shouldComputeCommandAuthorized;
 type ShouldHandleTextCommands =
   typeof import("../../auto-reply/commands-registry.js").shouldHandleTextCommands;
+type WithReplyDispatcher = typeof import("../../auto-reply/dispatch.js").withReplyDispatcher;
 type DispatchReplyFromConfig =
   typeof import("../../auto-reply/reply/dispatch-from-config.js").dispatchReplyFromConfig;
 type FinalizeInboundContext =
@@ -78,6 +84,7 @@ type WriteConfigFile = typeof import("../../config/config.js").writeConfigFile;
 type RecordChannelActivity = typeof import("../../infra/channel-activity.js").recordChannelActivity;
 type GetChannelActivity = typeof import("../../infra/channel-activity.js").getChannelActivity;
 type EnqueueSystemEvent = typeof import("../../infra/system-events.js").enqueueSystemEvent;
+type RequestHeartbeatNow = typeof import("../../infra/heartbeat-wake.js").requestHeartbeatNow;
 type RunCommandWithTimeout = typeof import("../../process/exec.js").runCommandWithTimeout;
 type FormatNativeDependencyHint = typeof import("./native-deps.js").formatNativeDependencyHint;
 type LoadWebMedia = typeof import("../../web/media.js").loadWebMedia;
@@ -153,6 +160,27 @@ type HandleWhatsAppAction =
   typeof import("../../agents/tools/whatsapp-actions.js").handleWhatsAppAction;
 type CreateWhatsAppLoginTool =
   typeof import("../../channels/plugins/agent-tools/whatsapp-login.js").createWhatsAppLoginTool;
+type OnAgentEvent = typeof import("../../infra/agent-events.js").onAgentEvent;
+type OnSessionTranscriptUpdate =
+  typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
+type ListLineAccountIds = typeof import("../../line/accounts.js").listLineAccountIds;
+type ResolveDefaultLineAccountId =
+  typeof import("../../line/accounts.js").resolveDefaultLineAccountId;
+type ResolveLineAccount = typeof import("../../line/accounts.js").resolveLineAccount;
+type NormalizeLineAccountId = typeof import("../../line/accounts.js").normalizeAccountId;
+type ProbeLineBot = typeof import("../../line/probe.js").probeLineBot;
+type SendMessageLine = typeof import("../../line/send.js").sendMessageLine;
+type PushMessageLine = typeof import("../../line/send.js").pushMessageLine;
+type PushMessagesLine = typeof import("../../line/send.js").pushMessagesLine;
+type PushFlexMessage = typeof import("../../line/send.js").pushFlexMessage;
+type PushTemplateMessage = typeof import("../../line/send.js").pushTemplateMessage;
+type PushLocationMessage = typeof import("../../line/send.js").pushLocationMessage;
+type PushTextMessageWithQuickReplies =
+  typeof import("../../line/send.js").pushTextMessageWithQuickReplies;
+type CreateQuickReplyItems = typeof import("../../line/send.js").createQuickReplyItems;
+type BuildTemplateMessageFromPayload =
+  typeof import("../../line/template-messages.js").buildTemplateMessageFromPayload;
+type MonitorLineProvider = typeof import("../../line/monitor.js").monitorLineProvider;
 
 // ── Subagent runtime types ──────────────────────────────────────────
 
@@ -164,7 +192,6 @@ export type SubagentRunParams = {
   deliver?: boolean;
   idempotencyKey?: string;
 };
-
 
 export type SubagentRunResult = {
   runId: string;
@@ -202,10 +229,16 @@ export type SubagentDeleteSessionParams = {
 
 export type PluginRuntime = {
   version: string;
+  events: {
+    onAgentEvent: OnAgentEvent;
+    onSessionTranscriptUpdate: OnSessionTranscriptUpdate;
+  };
   subagent: {
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
     waitForRun: (params: SubagentWaitParams) => Promise<SubagentWaitResult>;
-    getSessionMessages: (params: SubagentGetSessionMessagesParams) => Promise<SubagentGetSessionMessagesResult>;
+    getSessionMessages: (
+      params: SubagentGetSessionMessagesParams,
+    ) => Promise<SubagentGetSessionMessagesResult>;
     getSession: (params: SubagentGetSessionParams) => Promise<SubagentGetSessionResult>;
     deleteSession: (params: SubagentDeleteSessionParams) => Promise<void>;
   };
@@ -215,6 +248,7 @@ export type PluginRuntime = {
   };
   system: {
     enqueueSystemEvent: EnqueueSystemEvent;
+    requestHeartbeatNow: RequestHeartbeatNow;
     runCommandWithTimeout: RunCommandWithTimeout;
     formatNativeDependencyHint: FormatNativeDependencyHint;
   };
@@ -228,6 +262,9 @@ export type PluginRuntime = {
   };
   tts: {
     textToSpeechTelephony: TextToSpeechTelephony;
+  };
+  stt: {
+    transcribeAudioFile: TranscribeAudioFile;
   };
   tools: {
     createMemoryGetTool: CreateMemoryGetTool;
@@ -253,6 +290,7 @@ export type PluginRuntime = {
       resolveEffectiveMessagesConfig: ResolveEffectiveMessagesConfig;
       resolveHumanDelayConfig: ResolveHumanDelayConfig;
       dispatchReplyFromConfig: DispatchReplyFromConfig;
+      withReplyDispatcher: WithReplyDispatcher;
       finalizeInboundContext: FinalizeInboundContext;
       formatAgentEnvelope: FormatAgentEnvelope;
       /** @deprecated Prefer `BodyForAgent` + structured user-context blocks (do not build plaintext envelopes for prompts). */

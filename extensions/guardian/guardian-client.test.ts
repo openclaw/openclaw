@@ -274,7 +274,32 @@ describe("guardian-client", () => {
 
       const result = await callGuardian(makeParams());
       expect(result.action).toBe("allow");
-      expect(result.reason).toContain("empty response");
+      expect(result.reason).toContain("not recognized");
+    });
+
+    it("extracts verdict from thinking blocks when no text blocks present", async () => {
+      // Some reasoning models (e.g. kimi-coding) return thinking blocks only
+      vi.mocked(completeSimple).mockResolvedValue({
+        ...mockResponse(""),
+        content: [{ type: "thinking", thinking: "ALLOW: user asked to run this command" }],
+      } as AssistantMessage);
+
+      const result = await callGuardian(makeParams());
+      expect(result.action).toBe("allow");
+      expect(result.reason).toContain("user asked to run this command");
+    });
+
+    it("prefers text blocks over thinking blocks", async () => {
+      vi.mocked(completeSimple).mockResolvedValue({
+        ...mockResponse(""),
+        content: [
+          { type: "thinking", thinking: "BLOCK: from thinking" },
+          { type: "text", text: "ALLOW: user requested this" },
+        ],
+      } as AssistantMessage);
+
+      const result = await callGuardian(makeParams());
+      expect(result.action).toBe("allow"); // text block wins
     });
 
     it("returns fallback on unrecognized response format", async () => {
@@ -305,7 +330,7 @@ describe("guardian-client", () => {
 
       const result = await callGuardian(makeParams());
       expect(result.action).toBe("allow");
-      expect(result.reason).toContain("empty response");
+      expect(result.reason).toContain("not recognized");
     });
   });
 
@@ -330,7 +355,8 @@ describe("guardian-client", () => {
       expect(infoMessages.some((m: string) => m.includes("Calling guardian LLM"))).toBe(true);
       expect(infoMessages.some((m: string) => m.includes("provider=test-provider"))).toBe(true);
       expect(infoMessages.some((m: string) => m.includes("model=test-model"))).toBe(true);
-      expect(infoMessages.some((m: string) => m.includes("Raw response content"))).toBe(true);
+      // extractResponseText logs are internal; just check the main flow logged
+
       expect(infoMessages.some((m: string) => m.includes("Guardian responded in"))).toBe(true);
       expect(infoMessages.some((m: string) => m.includes("ALLOW"))).toBe(true);
     });
@@ -388,7 +414,7 @@ describe("guardian-client", () => {
       await callGuardian(makeParams({ logger }));
 
       const warnMessages = logger.warn.mock.calls.map((c: string[]) => c[0]);
-      expect(warnMessages.some((m: string) => m.includes("empty response"))).toBe(true);
+      expect(warnMessages.some((m: string) => m.includes("Empty response"))).toBe(true);
     });
 
     it("does not log when logger is not provided", async () => {

@@ -28,10 +28,16 @@ export type GuardianConfig = {
   log_decisions: boolean;
   /** enforce = block disallowed calls; audit = log only */
   mode: "enforce" | "audit";
-  /** Number of recent user messages to include in guardian prompt */
+  /** Number of conversation turns fed to the summarizer (history window) */
   max_user_messages: number;
   /** Max characters of tool arguments to include (truncated) */
   max_arg_length: number;
+  /** Number of recent raw turns to keep in the guardian prompt (alongside the summary) */
+  max_recent_turns: number;
+  /** Tool names whose results are included in the guardian's conversation context */
+  context_tools: string[];
+  /** Max characters per tool result snippet */
+  max_tool_result_length: number;
 };
 
 /**
@@ -67,11 +73,35 @@ export type ConversationTurn = {
 };
 
 /**
- * Internal representation of cached conversation turns for a session.
+ * Internal representation of cached conversation state for a session.
+ * Stores a live reference to the message array for lazy extraction,
+ * plus a rolling summary of older conversation context.
  */
 export type CachedMessages = {
-  /** Recent conversation turns (user message + optional assistant reply). */
-  turns: ConversationTurn[];
+  /** Rolling summary of user intent in this session (generated async). */
+  summary?: string;
+  /** Whether a summary update is currently in progress. */
+  summaryUpdateInProgress: boolean;
+  /** Live reference to the session's message array (not a snapshot). */
+  liveMessages: unknown[];
+  /** Current user prompt (not in historyMessages yet). */
+  currentPrompt?: string;
+  /** Number of recent raw turns to keep. */
+  maxRecentTurns: number;
+  /** Tool names whose results are included in context. */
+  contextTools: Set<string>;
+  /** Total turns processed (for deciding when to start summarizing). */
+  totalTurnsProcessed: number;
+  /** Turn count at the time the last summary was generated. */
+  lastSummarizedTurnCount: number;
+  /** Whether the current invocation was triggered by a system event (heartbeat, cron, etc.). */
+  isSystemTrigger: boolean;
+  /** Standing instructions extracted from the main agent's system prompt (once per session). */
+  standingInstructions?: string;
+  /** Whether standing instructions extraction has been attempted. */
+  standingInstructionsResolved: boolean;
+  /** Available skills extracted from the agent's system prompt (once per session). */
+  availableSkills?: string;
   updatedAt: number;
 };
 
@@ -83,17 +113,29 @@ export const GUARDIAN_DEFAULTS = {
     "exec",
     "write_file",
     "Write",
+    "edit",
     "gateway",
     "gateway_config",
     "cron",
     "cron_add",
   ],
-  timeout_ms: 20000,
+  timeout_ms: 45000,
   fallback_on_error: "allow" as const,
   log_decisions: true,
   mode: "enforce" as const,
   max_user_messages: 10,
   max_arg_length: 500,
+  max_recent_turns: 3,
+  context_tools: [
+    "memory_search",
+    "memory_get",
+    "memory_recall",
+    "read",
+    "exec",
+    "web_fetch",
+    "web_search",
+  ],
+  max_tool_result_length: 300,
 };
 
 /**
@@ -122,6 +164,17 @@ export function resolveConfig(raw: Record<string, unknown> | undefined): Guardia
       typeof raw.max_arg_length === "number"
         ? raw.max_arg_length
         : GUARDIAN_DEFAULTS.max_arg_length,
+    max_recent_turns:
+      typeof raw.max_recent_turns === "number"
+        ? raw.max_recent_turns
+        : GUARDIAN_DEFAULTS.max_recent_turns,
+    context_tools: Array.isArray(raw.context_tools)
+      ? (raw.context_tools as string[])
+      : GUARDIAN_DEFAULTS.context_tools,
+    max_tool_result_length:
+      typeof raw.max_tool_result_length === "number"
+        ? raw.max_tool_result_length
+        : GUARDIAN_DEFAULTS.max_tool_result_length,
   };
 }
 

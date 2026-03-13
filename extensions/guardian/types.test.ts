@@ -14,6 +14,9 @@ describe("types — resolveConfig", () => {
     expect(config.timeout_ms).toBe(GUARDIAN_DEFAULTS.timeout_ms);
     expect(config.fallback_on_error).toBe(GUARDIAN_DEFAULTS.fallback_on_error);
     expect(config.mode).toBe(GUARDIAN_DEFAULTS.mode);
+    expect(config.max_recent_turns).toBe(GUARDIAN_DEFAULTS.max_recent_turns);
+    expect(config.context_tools).toEqual(GUARDIAN_DEFAULTS.context_tools);
+    expect(config.max_tool_result_length).toBe(GUARDIAN_DEFAULTS.max_tool_result_length);
   });
 
   it("returns defaults when raw is empty", () => {
@@ -42,6 +45,9 @@ describe("types — resolveConfig", () => {
       mode: "audit",
       max_user_messages: 5,
       max_arg_length: 200,
+      max_recent_turns: 2,
+      context_tools: ["memory_search"],
+      max_tool_result_length: 150,
     });
 
     expect(config.model).toBe("openai/gpt-4o-mini");
@@ -52,6 +58,9 @@ describe("types — resolveConfig", () => {
     expect(config.mode).toBe("audit");
     expect(config.max_user_messages).toBe(5);
     expect(config.max_arg_length).toBe(200);
+    expect(config.max_recent_turns).toBe(2);
+    expect(config.context_tools).toEqual(["memory_search"]);
+    expect(config.max_tool_result_length).toBe(150);
   });
 
   it("uses defaults for invalid types", () => {
@@ -59,11 +68,17 @@ describe("types — resolveConfig", () => {
       timeout_ms: "not a number",
       log_decisions: "not a boolean",
       max_user_messages: null,
+      max_recent_turns: "bad",
+      context_tools: "not an array",
+      max_tool_result_length: false,
     });
 
     expect(config.timeout_ms).toBe(GUARDIAN_DEFAULTS.timeout_ms);
     expect(config.log_decisions).toBe(GUARDIAN_DEFAULTS.log_decisions);
     expect(config.max_user_messages).toBe(GUARDIAN_DEFAULTS.max_user_messages);
+    expect(config.max_recent_turns).toBe(GUARDIAN_DEFAULTS.max_recent_turns);
+    expect(config.context_tools).toEqual(GUARDIAN_DEFAULTS.context_tools);
+    expect(config.max_tool_result_length).toBe(GUARDIAN_DEFAULTS.max_tool_result_length);
   });
 
   it("normalizes fallback_on_error to allow for non-block values", () => {

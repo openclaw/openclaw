@@ -50,6 +50,22 @@ function resolveProviderConfig(
   );
 }
 
+function normalizeHeaders(
+  headers: Record<string, unknown> | undefined,
+): Record<string, string> | undefined {
+  if (!headers) {
+    return undefined;
+  }
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    const normalized = normalizeSecretInput(value);
+    if (normalized) {
+      out[key] = normalized;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 export function getCustomProviderApiKey(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -426,7 +442,7 @@ export async function resolveProviderInfo(params: {
     return {
       baseUrl: explicit.baseUrl,
       api: explicit.api ?? "openai-completions",
-      headers: explicit.headers,
+      headers: normalizeHeaders(explicit.headers),
     };
   }
 
@@ -449,7 +465,7 @@ export async function resolveProviderInfo(params: {
         return {
           baseUrl: direct.baseUrl,
           api: direct.api ?? "openai-completions",
-          headers: direct.headers,
+          headers: normalizeHeaders(direct.headers),
         };
       }
 
@@ -459,7 +475,7 @@ export async function resolveProviderInfo(params: {
           return {
             baseUrl: value.baseUrl,
             api: value.api ?? "openai-completions",
-            headers: value.headers,
+            headers: normalizeHeaders(value.headers),
           };
         }
       }

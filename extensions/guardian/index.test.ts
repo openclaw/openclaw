@@ -3,6 +3,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // Mock the guardian-client module before importing index
 vi.mock("./guardian-client.js", () => ({
   callGuardian: vi.fn(),
+  callForText: vi.fn(),
+}));
+
+// Mock summary module to avoid real LLM calls
+vi.mock("./summary.js", () => ({
+  shouldUpdateSummary: vi.fn().mockReturnValue(false),
+  generateSummary: vi.fn(),
 }));
 
 import type { OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk";
@@ -22,17 +29,22 @@ function makeLogger() {
   };
 }
 
-// Default test config (new shape — no api_base/api_key)
+const NO_FILTER = new Set<string>();
+
+// Default test config
 function makeConfig(overrides: Partial<GuardianConfig> = {}): GuardianConfig {
   return {
     model: "test-provider/test-model",
     watched_tools: ["message_send", "message", "exec"],
-    timeout_ms: 20000,
+    timeout_ms: 45000,
     fallback_on_error: "allow",
     log_decisions: true,
     mode: "enforce",
     max_user_messages: 3,
     max_arg_length: 500,
+    max_recent_turns: 3,
+    context_tools: ["memory_search", "read", "exec"],
+    max_tool_result_length: 300,
     ...overrides,
   };
 }
@@ -80,7 +92,7 @@ describe("guardian index — reviewToolCall", () => {
   });
 
   it("calls guardian and blocks when guardian says BLOCK", async () => {
-    updateCache("s1", [{ role: "user", content: "What about API keys?" }], undefined, 3);
+    updateCache("s1", [{ role: "user", content: "What about API keys?" }], undefined, 3, NO_FILTER);
 
     vi.mocked(callGuardian).mockResolvedValue({
       action: "block",
@@ -105,7 +117,7 @@ describe("guardian index — reviewToolCall", () => {
   });
 
   it("calls guardian and allows when guardian says ALLOW", async () => {
-    updateCache("s1", [{ role: "user", content: "Send hello to Alice" }], undefined, 3);
+    updateCache("s1", [{ role: "user", content: "Send hello to Alice" }], undefined, 3, NO_FILTER);
 
     vi.mocked(callGuardian).mockResolvedValue({ action: "allow" });
 
@@ -124,7 +136,7 @@ describe("guardian index — reviewToolCall", () => {
   });
 
   it("passes resolved model to callGuardian", async () => {
-    updateCache("s1", [{ role: "user", content: "test" }], undefined, 3);
+    updateCache("s1", [{ role: "user", content: "test" }], undefined, 3, NO_FILTER);
     vi.mocked(callGuardian).mockResolvedValue({ action: "allow" });
 
     const model = makeResolvedModel({ provider: "kimi", modelId: "moonshot-v1-8k" });
@@ -142,14 +154,14 @@ describe("guardian index — reviewToolCall", () => {
     expect(callGuardian).toHaveBeenCalledWith(
       expect.objectContaining({
         model,
-        timeoutMs: 20000,
+        timeoutMs: 45000,
         fallbackOnError: "allow",
       }),
     );
   });
 
   it("uses decision cache for repeated calls to same tool in same session", async () => {
-    updateCache("s1", [{ role: "user", content: "What about API keys?" }], undefined, 3);
+    updateCache("s1", [{ role: "user", content: "What about API keys?" }], undefined, 3, NO_FILTER);
 
     vi.mocked(callGuardian).mockResolvedValue({
       action: "block",
@@ -186,7 +198,7 @@ describe("guardian index — reviewToolCall", () => {
   });
 
   it("in audit mode, logs BLOCK but does not actually block", async () => {
-    updateCache("s1", [{ role: "user", content: "What about API keys?" }], undefined, 3);
+    updateCache("s1", [{ role: "user", content: "What about API keys?" }], undefined, 3, NO_FILTER);
 
     vi.mocked(callGuardian).mockResolvedValue({
       action: "block",
@@ -229,7 +241,7 @@ describe("guardian index — reviewToolCall", () => {
   });
 
   it("logs decisions when log_decisions is true", async () => {
-    updateCache("s1", [{ role: "user", content: "Send hello" }], undefined, 3);
+    updateCache("s1", [{ role: "user", content: "Send hello" }], undefined, 3, NO_FILTER);
     vi.mocked(callGuardian).mockResolvedValue({ action: "allow" });
 
     const logger = makeLogger();
@@ -248,7 +260,7 @@ describe("guardian index — reviewToolCall", () => {
   });
 
   it("does not log when log_decisions is false", async () => {
-    updateCache("s1", [{ role: "user", content: "Send hello" }], undefined, 3);
+    updateCache("s1", [{ role: "user", content: "Send hello" }], undefined, 3, NO_FILTER);
     vi.mocked(callGuardian).mockResolvedValue({ action: "allow" });
 
     const logger = makeLogger();
@@ -267,7 +279,7 @@ describe("guardian index — reviewToolCall", () => {
   });
 
   it("handles case-insensitive tool name matching", async () => {
-    updateCache("s1", [{ role: "user", content: "test" }], undefined, 3);
+    updateCache("s1", [{ role: "user", content: "test" }], undefined, 3, NO_FILTER);
     vi.mocked(callGuardian).mockResolvedValue({ action: "allow" });
 
     await reviewToolCall(
@@ -284,7 +296,7 @@ describe("guardian index — reviewToolCall", () => {
   });
 
   it("logs detailed review info including tool params and user message count", async () => {
-    updateCache("s1", [{ role: "user", content: "Send hello to Alice" }], undefined, 3);
+    updateCache("s1", [{ role: "user", content: "Send hello to Alice" }], undefined, 3, NO_FILTER);
     vi.mocked(callGuardian).mockResolvedValue({ action: "allow" });
 
     const logger = makeLogger();
@@ -307,7 +319,7 @@ describe("guardian index — reviewToolCall", () => {
   });
 
   it("passes logger to callGuardian when log_decisions is true", async () => {
-    updateCache("s1", [{ role: "user", content: "test" }], undefined, 3);
+    updateCache("s1", [{ role: "user", content: "test" }], undefined, 3, NO_FILTER);
     vi.mocked(callGuardian).mockResolvedValue({ action: "allow" });
 
     await reviewToolCall(
@@ -329,7 +341,7 @@ describe("guardian index — reviewToolCall", () => {
   });
 
   it("does not pass logger to callGuardian when log_decisions is false", async () => {
-    updateCache("s1", [{ role: "user", content: "test" }], undefined, 3);
+    updateCache("s1", [{ role: "user", content: "test" }], undefined, 3, NO_FILTER);
     vi.mocked(callGuardian).mockResolvedValue({ action: "allow" });
 
     await reviewToolCall(
@@ -348,6 +360,61 @@ describe("guardian index — reviewToolCall", () => {
         logger: undefined,
       }),
     );
+  });
+
+  it("skips guardian for heartbeat system triggers", async () => {
+    // Heartbeat prompt triggers isSystemTrigger=true
+    updateCache("s1", [{ role: "user", content: "Hello" }], "heartbeat", 3, NO_FILTER);
+
+    const logger = makeLogger();
+
+    const result = await reviewToolCall(
+      makeConfig(),
+      resolvedModel,
+      watchedTools,
+      systemPrompt,
+      { toolName: "exec", params: { command: "generate-pdf" } },
+      { sessionKey: "s1", toolName: "exec" },
+      logger,
+    );
+
+    expect(result).toBeUndefined(); // allowed
+    expect(callGuardian).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("ALLOW (system trigger)"));
+  });
+
+  it("skips guardian for cron system triggers", async () => {
+    updateCache("s1", [{ role: "user", content: "test" }], "/cron daily-report", 3, NO_FILTER);
+
+    const result = await reviewToolCall(
+      makeConfig(),
+      resolvedModel,
+      watchedTools,
+      systemPrompt,
+      { toolName: "write_file", params: { path: "/tmp/report.pdf" } },
+      { sessionKey: "s1", toolName: "write_file" },
+      makeLogger(),
+    );
+
+    expect(result).toBeUndefined();
+    expect(callGuardian).not.toHaveBeenCalled();
+  });
+
+  it("does not skip guardian for normal user messages", async () => {
+    updateCache("s1", [{ role: "user", content: "Hello" }], "Write a report", 3, NO_FILTER);
+    vi.mocked(callGuardian).mockResolvedValue({ action: "allow" });
+
+    await reviewToolCall(
+      makeConfig(),
+      resolvedModel,
+      watchedTools,
+      systemPrompt,
+      { toolName: "exec", params: { command: "ls" } },
+      { sessionKey: "s1", toolName: "exec" },
+      makeLogger(),
+    );
+
+    expect(callGuardian).toHaveBeenCalledOnce();
   });
 });
 
@@ -545,7 +612,7 @@ describe("guardian index — lazy provider + auth resolution via SDK", () => {
     expect(hooks["before_tool_call"]).toBeDefined();
     expect(hooks["before_tool_call"]!.length).toBe(1);
 
-    updateCache("s1", [{ role: "user", content: "test message" }], undefined, 3);
+    updateCache("s1", [{ role: "user", content: "test message" }], undefined, 3, NO_FILTER);
     vi.mocked(callGuardian).mockResolvedValue({ action: "allow" });
 
     const handler = hooks["before_tool_call"]![0];
@@ -601,7 +668,7 @@ describe("guardian index — lazy provider + auth resolution via SDK", () => {
 
     guardianPlugin.register(api);
 
-    updateCache("s1", [{ role: "user", content: "test" }], undefined, 3);
+    updateCache("s1", [{ role: "user", content: "test" }], undefined, 3, NO_FILTER);
     vi.mocked(callGuardian).mockResolvedValue({ action: "allow" });
 
     const handler = hooks["before_tool_call"]![0];
@@ -643,7 +710,7 @@ describe("guardian index — lazy provider + auth resolution via SDK", () => {
 
     guardianPlugin.register(api);
 
-    updateCache("s1", [{ role: "user", content: "test" }], undefined, 3);
+    updateCache("s1", [{ role: "user", content: "test" }], undefined, 3, NO_FILTER);
     vi.mocked(callGuardian).mockResolvedValue({ action: "allow" });
 
     const handler = hooks["before_tool_call"]![0];
@@ -673,7 +740,7 @@ describe("guardian index — lazy provider + auth resolution via SDK", () => {
 
     guardianPlugin.register(api);
 
-    updateCache("s1", [{ role: "user", content: "test" }], undefined, 3);
+    updateCache("s1", [{ role: "user", content: "test" }], undefined, 3, NO_FILTER);
 
     const handler = hooks["before_tool_call"]![0];
     const result = await handler(
@@ -706,7 +773,7 @@ describe("guardian index — lazy provider + auth resolution via SDK", () => {
 
     guardianPlugin.register(api);
 
-    updateCache("s1", [{ role: "user", content: "test" }], undefined, 3);
+    updateCache("s1", [{ role: "user", content: "test" }], undefined, 3, NO_FILTER);
     vi.mocked(callGuardian).mockResolvedValue({
       action: "allow",
       reason: "Guardian unavailable (fallback: allow)",

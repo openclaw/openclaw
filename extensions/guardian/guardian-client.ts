@@ -1,5 +1,5 @@
 import { completeSimple } from "@mariozechner/pi-ai";
-import type { Api, Model, TextContent } from "@mariozechner/pi-ai";
+import type { Api, Model, TextContent, ThinkingContent } from "@mariozechner/pi-ai";
 import type { GuardianDecision, ResolvedGuardianModel } from "./types.js";
 
 /**
@@ -114,28 +114,27 @@ export async function callGuardian(params: GuardianCallParams): Promise<Guardian
       },
     );
 
-    // Extract text content from AssistantMessage
-    const content = res.content
-      .filter((block): block is TextContent => block.type === "text")
-      .map((block) => block.text.trim())
-      .filter(Boolean)
-      .join(" ")
-      .trim();
-
-    if (logger) {
-      logger.info(`[guardian]   Raw response content: "${content || "(empty)"}"`);
-    }
-
-    if (!content) {
+    // Race condition guard: the abort signal may have fired just as
+    // completeSimple() returned, producing empty/truncated content instead
+    // of throwing. Detect this and treat as a proper timeout.
+    if (controller.signal.aborted) {
+      const elapsed = Date.now() - startTime;
       const decision = {
         ...fallback,
-        reason: `Guardian returned empty response: ${fallback.reason || "fallback"}`,
+        reason: `Guardian timed out after ${timeoutMs}ms: ${fallback.reason || "fallback"}`,
       };
       if (logger) {
-        logger.warn(`[guardian] ◀ Guardian returned empty response — fallback=${fallback.action}`);
+        logger.warn(
+          `[guardian] ◀ Guardian TIMED OUT after ${elapsed}ms (abort race) — fallback=${fallback.action}`,
+        );
       }
       return decision;
     }
+
+    // Extract text content from AssistantMessage.
+    // Some reasoning models (e.g. kimi-coding) return thinking blocks
+    // instead of text blocks — fall back to those if no text found.
+    const content = extractResponseText(res.content, logger);
 
     const result = parseGuardianResponse(content, fallback);
 
@@ -152,7 +151,7 @@ export async function callGuardian(params: GuardianCallParams): Promise<Guardian
     const elapsed = Date.now() - startTime;
     const errMsg = err instanceof Error ? err.message : String(err);
 
-    if (errMsg.includes("abort")) {
+    if (errMsg.includes("abort") || controller.signal.aborted) {
       const decision = {
         ...fallback,
         reason: `Guardian timed out after ${timeoutMs}ms: ${fallback.reason || "fallback"}`,
@@ -183,6 +182,55 @@ export async function callGuardian(params: GuardianCallParams): Promise<Guardian
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Extract text from an assistant response's content blocks.
+ *
+ * Primary: `text` blocks (standard response format).
+ * Fallback: `thinking` blocks — some reasoning models (e.g. kimi-coding)
+ * return their answer in thinking blocks instead of text blocks.
+ *
+ * Logs block types when the response is empty or falls back to thinking,
+ * to aid debugging provider-specific behavior.
+ */
+function extractResponseText(
+  contentBlocks: (TextContent | ThinkingContent | { type: string })[],
+  logger?: GuardianLogger,
+): string {
+  // Try text blocks first (preferred)
+  const textContent = contentBlocks
+    .filter((block): block is TextContent => block.type === "text")
+    .map((block) => block.text.trim())
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  if (textContent) {
+    return textContent;
+  }
+
+  // Fallback: extract from thinking blocks (reasoning models)
+  const thinkingContent = contentBlocks
+    .filter((block): block is ThinkingContent => block.type === "thinking")
+    .map((block) => block.thinking.trim())
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  if (thinkingContent) {
+    if (logger) {
+      logger.info(`[guardian] No text blocks in response — extracted from thinking blocks instead`);
+    }
+    return thinkingContent;
+  }
+
+  // Neither text nor thinking blocks had content
+  if (logger) {
+    const types = contentBlocks.map((b) => b.type).join(", ");
+    logger.warn(`[guardian] Empty response — block types received: [${types || "none"}]`);
+  }
+  return "";
+}
 
 /**
  * Parse the guardian LLM's response text into a decision.
@@ -229,4 +277,84 @@ function makeFallbackDecision(fallbackPolicy: "allow" | "block"): GuardianDecisi
     return { action: "block", reason: "Guardian unavailable (fallback: block)" };
   }
   return { action: "allow", reason: "Guardian unavailable (fallback: allow)" };
+}
+
+// ---------------------------------------------------------------------------
+// Raw text completion — used for summary generation
+// ---------------------------------------------------------------------------
+
+/**
+ * Parameters for a raw text completion call.
+ */
+export type TextCallParams = {
+  model: ResolvedGuardianModel;
+  systemPrompt: string;
+  userPrompt: string;
+  timeoutMs: number;
+  logger?: GuardianLogger;
+};
+
+/**
+ * Call the guardian's LLM and return raw text output.
+ *
+ * Unlike `callGuardian()`, this does NOT parse ALLOW/BLOCK — it returns
+ * the raw text response. Used for summary generation.
+ *
+ * Returns undefined on error/timeout.
+ */
+export async function callForText(params: TextCallParams): Promise<string | undefined> {
+  const { model, systemPrompt, userPrompt, timeoutMs, logger } = params;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const modelSpec = toModelSpec(model);
+
+    const res = await completeSimple(
+      modelSpec,
+      {
+        systemPrompt,
+        messages: [
+          {
+            role: "user" as const,
+            content: userPrompt,
+            timestamp: Date.now(),
+          },
+        ],
+      },
+      {
+        apiKey: model.apiKey,
+        maxTokens: 200,
+        temperature: 0,
+        signal: controller.signal,
+      },
+    );
+
+    // Abort race guard (same as callGuardian)
+    if (controller.signal.aborted) {
+      if (logger) {
+        logger.warn(`[guardian] Summary call timed out after ${timeoutMs}ms (abort race)`);
+      }
+      return undefined;
+    }
+
+    const content = extractResponseText(res.content, logger);
+
+    if (logger) {
+      logger.info(
+        `[guardian] Summary response: "${content.slice(0, 200)}${content.length > 200 ? "..." : ""}"`,
+      );
+    }
+
+    return content || undefined;
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (logger) {
+      logger.warn(`[guardian] Summary call failed: ${errMsg}`);
+    }
+    return undefined;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }

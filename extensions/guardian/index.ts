@@ -1,8 +1,32 @@
 import type { OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { callGuardian } from "./guardian-client.js";
-import { getRecentTurns, updateCache } from "./message-cache.js";
+import {
+  getAllTurns,
+  getAvailableSkills,
+  getLastSummarizedTurnCount,
+  getRecentTurns,
+  getStandingInstructions,
+  getSummary,
+  getTotalTurns,
+  isStandingInstructionsResolved,
+  isSystemTrigger as isSystemTriggerForSession,
+  isSummaryInProgress,
+  markSummaryComplete,
+  markSummaryInProgress,
+  setLastSummarizedTurnCount,
+  updateAvailableSkills,
+  updateCache,
+  updateStandingInstructions,
+  updateSummary,
+} from "./message-cache.js";
 import { buildGuardianSystemPrompt, buildGuardianUserPrompt } from "./prompt.js";
+import {
+  extractAvailableSkills,
+  extractStandingInstructions,
+  generateSummary,
+  shouldUpdateSummary,
+} from "./summary.js";
 import type { ConversationTurn, GuardianConfig, ResolvedGuardianModel } from "./types.js";
 import { parseModelRef, resolveConfig, resolveGuardianModelRef } from "./types.js";
 
@@ -148,13 +172,149 @@ const guardianPlugin = {
       return true;
     }
 
+    // Build the context tools set for O(1) lookup
+    const contextToolsSet = new Set(config.context_tools.map((t) => t.toLowerCase()));
+
     // -----------------------------------------------------------------
-    // 2. Register llm_input hook — cache user messages
+    // 2. Register llm_input hook — cache messages + trigger async summary
     // -----------------------------------------------------------------
     api.on("llm_input", (event, ctx) => {
       const sessionKey = ctx.sessionKey;
       if (!sessionKey) return;
-      updateCache(sessionKey, event.historyMessages, event.prompt, config.max_user_messages);
+
+      // Store live reference (lazy extraction happens at before_tool_call time)
+      const totalTurns = updateCache(
+        sessionKey,
+        event.historyMessages,
+        event.prompt,
+        config.max_recent_turns,
+        contextToolsSet,
+      );
+
+      // Trigger async summary update if needed (fire-and-forget).
+      // Skip for system triggers (heartbeat, cron) — they don't contain
+      // meaningful user requests and would pollute the summary.
+      if (
+        !isSystemTriggerForSession(sessionKey) &&
+        shouldUpdateSummary(
+          totalTurns,
+          config.max_recent_turns,
+          isSummaryInProgress(sessionKey),
+          getLastSummarizedTurnCount(sessionKey),
+        )
+      ) {
+        // Get all turns for summary input (older turns beyond the recent window)
+        const allTurns = getAllTurns(sessionKey);
+        const turnsForSummary = allTurns.slice(0, -config.max_recent_turns);
+
+        if (turnsForSummary.length > 0) {
+          markSummaryInProgress(sessionKey);
+
+          const existingSummary = getSummary(sessionKey);
+
+          // Ensure provider + API key are resolved before calling LLM.
+          // ensureProviderResolved() is idempotent and cached after first call.
+          ensureProviderResolved()
+            .then((resolved) => {
+              if (!resolved) {
+                api.logger.warn("[guardian] Summary skipped: provider not resolved");
+                return undefined;
+              }
+              return generateSummary({
+                model: resolvedModel,
+                existingSummary,
+                turns: turnsForSummary,
+                timeoutMs: config.timeout_ms,
+                logger: config.log_decisions ? api.logger : undefined,
+              });
+            })
+            .then((newSummary) => {
+              // Discard summaries that are just heartbeat noise
+              if (newSummary && /^heartbeat_ok$/i.test(newSummary.trim())) {
+                if (config.log_decisions) {
+                  api.logger.info(
+                    `[guardian] Summary discarded (heartbeat noise) for session=${sessionKey}`,
+                  );
+                }
+                return;
+              }
+              // Only update when we got a genuinely new/changed summary
+              if (newSummary && newSummary !== existingSummary) {
+                updateSummary(sessionKey, newSummary);
+                setLastSummarizedTurnCount(sessionKey, totalTurns);
+                if (config.log_decisions) {
+                  api.logger.info(
+                    `[guardian] Summary updated for session=${sessionKey}: "${newSummary.slice(0, 100)}..."`,
+                  );
+                }
+              }
+            })
+            .catch((err) => {
+              api.logger.warn(
+                `[guardian] Summary generation failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            })
+            .finally(() => {
+              // Always reset in-progress flag, even on failure or no-op.
+              // Without this, a failed/empty summary locks out future attempts.
+              markSummaryComplete(sessionKey);
+            });
+        }
+      }
+
+      // Extract standing instructions from the system prompt (once per session)
+      const agentSystemPrompt = (event as Record<string, unknown>).systemPrompt;
+      if (
+        typeof agentSystemPrompt === "string" &&
+        agentSystemPrompt.length > 0 &&
+        !isStandingInstructionsResolved(sessionKey)
+      ) {
+        // Mark as resolved immediately to prevent duplicate extraction
+        updateStandingInstructions(sessionKey, undefined);
+
+        ensureProviderResolved()
+          .then((resolved) => {
+            if (!resolved) return;
+            return extractStandingInstructions({
+              model: resolvedModel,
+              systemPrompt: agentSystemPrompt,
+              timeoutMs: config.timeout_ms,
+              logger: config.log_decisions ? api.logger : undefined,
+            });
+          })
+          .then((instructions) => {
+            if (instructions) {
+              updateStandingInstructions(sessionKey, instructions);
+              if (config.log_decisions) {
+                api.logger.info(
+                  `[guardian] Standing instructions extracted for session=${sessionKey}: "${instructions.slice(0, 150)}..."`,
+                );
+              }
+            }
+          })
+          .catch((err) => {
+            api.logger.warn(
+              `[guardian] Standing instructions extraction failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+      }
+
+      // Extract available skills from the system prompt (once per session, sync — no LLM call)
+      if (
+        typeof agentSystemPrompt === "string" &&
+        agentSystemPrompt.length > 0 &&
+        !getAvailableSkills(sessionKey)
+      ) {
+        const skills = extractAvailableSkills(agentSystemPrompt);
+        if (skills) {
+          updateAvailableSkills(sessionKey, skills);
+          if (config.log_decisions) {
+            api.logger.info(
+              `[guardian] Available skills extracted for session=${sessionKey}: "${skills.slice(0, 150)}..."`,
+            );
+          }
+        }
+      }
     });
 
     // -----------------------------------------------------------------
@@ -318,7 +478,15 @@ async function reviewToolCall(
 
   const sessionKey = ctx.sessionKey ?? "unknown";
 
-  // 2. Check decision cache (dedup within same LLM turn)
+  // 2. Skip system triggers (heartbeat, cron, etc.) — trusted events
+  if (isSystemTriggerForSession(sessionKey)) {
+    if (config.log_decisions) {
+      logger.info(`[guardian] ALLOW (system trigger) tool=${event.toolName} session=${sessionKey}`);
+    }
+    return undefined;
+  }
+
+  // 3. Check decision cache (dedup within same LLM turn)
   const cacheKey = `${sessionKey}:${toolNameLower}`;
   const cached = getCachedDecision(cacheKey);
   if (cached) {
@@ -341,10 +509,13 @@ async function reviewToolCall(
     return undefined;
   }
 
-  // 3. Retrieve cached conversation turns
+  // 4. Retrieve cached conversation context
   const turns = getRecentTurns(sessionKey);
+  const summary = getSummary(sessionKey);
+  const standingInstructions = getStandingInstructions(sessionKey);
+  const availableSkills = getAvailableSkills(sessionKey);
 
-  if (turns.length === 0 && sessionKey === "unknown") {
+  if (turns.length === 0 && !summary && sessionKey === "unknown") {
     if (config.log_decisions) {
       logger.info(
         `[guardian] ${config.fallback_on_error.toUpperCase()} (no session context) ` +
@@ -357,8 +528,11 @@ async function reviewToolCall(
     return undefined;
   }
 
-  // 4. Build the guardian prompt
+  // 5. Build the guardian prompt
   const userPrompt = buildGuardianUserPrompt(
+    standingInstructions,
+    availableSkills,
+    summary,
     turns,
     event.toolName,
     event.params,
@@ -368,11 +542,12 @@ async function reviewToolCall(
   if (config.log_decisions) {
     logger.info(
       `[guardian] Reviewing tool=${event.toolName} session=${sessionKey} ` +
-        `turns=${turns.length} params=${JSON.stringify(event.params).slice(0, 200)}`,
+        `turns=${turns.length}${summary ? ` summary="${summary.slice(0, 100)}..."` : ""} ` +
+        `params=${JSON.stringify(event.params).slice(0, 200)}`,
     );
   }
 
-  // 5. Call the guardian LLM (pass logger for detailed debug output)
+  // 6. Call the guardian LLM (pass logger for detailed debug output)
   const decision = await callGuardian({
     model,
     systemPrompt,
@@ -382,14 +557,28 @@ async function reviewToolCall(
     logger: config.log_decisions ? logger : undefined,
   });
 
-  // 6. Cache the decision
-  setCachedDecision(cacheKey, decision.action, decision.reason);
+  // 7. Cache BLOCK decisions only — ALLOW decisions must not be cached
+  // because different arguments to the same tool may have different risk
+  // levels (e.g. exec("ls") vs exec("rm -rf /")).
+  if (decision.action === "block") {
+    setCachedDecision(cacheKey, decision.action, decision.reason);
+  }
 
-  // 7. Log the decision
+  // 8. Log the decision
   if (config.log_decisions) {
     if (decision.action === "block") {
       // Log BLOCK prominently with full conversation context
-      logBlockDecision(logger, decision, event, sessionKey, turns, config.mode);
+      logBlockDecision(
+        logger,
+        decision,
+        event,
+        sessionKey,
+        turns,
+        summary,
+        standingInstructions,
+        availableSkills,
+        config.mode,
+      );
     } else {
       logger.info(
         `[guardian] ${decision.action.toUpperCase()} tool=${event.toolName} ` +
@@ -398,7 +587,7 @@ async function reviewToolCall(
     }
   }
 
-  // 8. Return the decision
+  // 9. Return the decision
   if (decision.action === "block") {
     if (config.mode === "enforce") {
       return { block: true, blockReason: `Guardian: ${decision.reason || "blocked"}` };
@@ -418,9 +607,21 @@ function logBlockDecision(
   event: BeforeToolCallEvent,
   sessionKey: string,
   turns: ConversationTurn[],
+  summary: string | undefined,
+  standingInstructions: string | undefined,
+  availableSkills: string | undefined,
   mode: "enforce" | "audit",
 ): void {
   const modeLabel = mode === "enforce" ? "BLOCKED" : "AUDIT-ONLY (would block)";
+
+  // Format standing instructions section
+  const instructionsBlock = standingInstructions ? `  ${standingInstructions}` : "  (none)";
+
+  // Format available skills section
+  const skillsBlock = availableSkills ? `  ${availableSkills}` : "  (none)";
+
+  // Format summary section
+  const summaryBlock = summary ? `  ${summary}` : "  (no summary yet)";
 
   // Format conversation turns
   const turnLines: string[] = [];
@@ -451,7 +652,16 @@ function logBlockDecision(
     `[guardian]   Session: ${sessionKey}`,
     `[guardian]   Reason:  ${decision.reason || "blocked"}`,
     `[guardian]`,
-    `[guardian]   ── Conversation context sent to guardian ──`,
+    `[guardian]   ── Standing instructions ──`,
+    ...instructionsBlock.split("\n").map((l) => `[guardian] ${l}`),
+    `[guardian]`,
+    `[guardian]   ── Available skills ──`,
+    ...skillsBlock.split("\n").map((l) => `[guardian] ${l}`),
+    `[guardian]`,
+    `[guardian]   ── Session summary ──`,
+    ...summaryBlock.split("\n").map((l) => `[guardian] ${l}`),
+    `[guardian]`,
+    `[guardian]   ── Recent conversation turns ──`,
     ...conversationBlock.split("\n").map((l) => `[guardian] ${l}`),
     `[guardian]`,
     `[guardian]   ── Tool arguments ──`,

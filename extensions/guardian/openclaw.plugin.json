@@ -16,6 +16,7 @@
           "exec",
           "write_file",
           "Write",
+          "edit",
           "gateway",
           "gateway_config",
           "cron",
@@ -47,12 +48,36 @@
       "max_user_messages": {
         "type": "number",
         "default": 10,
-        "description": "Number of recent conversation turns to include in guardian prompt"
+        "description": "Number of conversation turns fed to the summarizer (history window)"
       },
       "max_arg_length": {
         "type": "number",
         "default": 500,
         "description": "Max characters of tool arguments to include (truncated)"
+      },
+      "max_recent_turns": {
+        "type": "number",
+        "default": 3,
+        "description": "Number of recent raw conversation turns to keep in the guardian prompt alongside the rolling summary"
+      },
+      "context_tools": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": [
+          "memory_search",
+          "memory_get",
+          "memory_recall",
+          "read",
+          "exec",
+          "web_fetch",
+          "web_search"
+        ],
+        "description": "Tool names whose results are included in the guardian's conversation context. Only results from these tools are fed to the guardian — others are filtered out to save tokens."
+      },
+      "max_tool_result_length": {
+        "type": "number",
+        "default": 300,
+        "description": "Max characters per tool result snippet included in the guardian context"
       }
     },
     "additionalProperties": false
