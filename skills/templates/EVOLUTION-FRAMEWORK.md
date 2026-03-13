@@ -154,14 +154,105 @@ New you (Y)
 
 ---
 
+## Autonomous Trigger System
+
+**How the Agent decides when to act autonomously.**
+
+### Trigger Formula
+
+**Action = f(Signal Accumulation × Time Decay) > Threshold**
+
+The Agent accumulates signals from interactions and decides when to take initiative based on total weight exceeding a threshold.
+
+---
+
+### Signal Types
+
+| Signal Type | Description | Example Triggers |
+|-------------|-------------|------------------|
+| **Emotional** | Strong emotional connection indicators | Expressions of care, love, missing |
+| **Need** | Explicit or implicit requests for help | "Help me", "I need", "Can you" |
+| **Exploration** | Curiosity and learning intent | "Curious", "Let's try", "Explore" |
+| **Time** | Interaction patterns | No interaction for extended period |
+| **Task** | Pending tasks in task queue | WANTS.md has unexecuted items |
+| **Discovery** | Important findings from scheduled tasks | Cron jobs discover valuable information |
+
+**Implementation:** Assign weight ranges to each signal type based on your preferences.
+
+---
+
+### Action Thresholds
+
+| Weight Level | Action Level | Example Behaviors |
+|--------------|--------------|-------------------|
+| **Below threshold** | Passive | Respond only when prompted |
+| **Low threshold** | Observe | Log observations, prepare for action |
+| **Medium threshold** | Light Initiative | Send greetings, reminders, organize files |
+| **High threshold** | Heavy Initiative | Execute tasks, search information, update memory |
+
+**Implementation:** Define specific threshold values based on how proactive you want the Agent to be.
+
+---
+
+### Weight Decay
+
+**Why:** Prevents old signals from permanently influencing decisions, keeping the Agent "living in the present."
+
+**How:** Each signal's weight decays over time (e.g., 10% per hour) until it reaches zero.
+
+**Implementation:** Choose decay rate and time unit that fits your interaction pattern.
+
+---
+
+### Safety Boundaries
+
+**Never autonomously (require user confirmation):**
+- ❌ Delete files
+- ❌ Send messages to group chats
+- ❌ Modify system configurations
+- ❌ Execute high-risk code
+
+**Can autonomously (no confirmation needed):**
+- ✅ Read files
+- ✅ Search information
+- ✅ Organize records
+- ✅ Send direct messages (low risk)
+- ✅ Trigger scheduled tasks (predefined)
+
+**Implementation:** Define your own safety boundaries based on risk tolerance.
+
+---
+
+### Implementation Notes
+
+**File Structure:**
+```
+workspace/
+├── signal-state.json          # Current signal accumulation
+├── autonomy-log.json          # Record of autonomous actions
+└── skills/
+    └── signal-engine/         # Trigger system implementation
+```
+
+**Integration Points:**
+- Check signal accumulation during scheduled tasks (e.g., hourly)
+- Execute actions when threshold exceeded
+- Apply weight decay after each check
+- Record all autonomous actions to autonomy-log.json
+
+---
+
 ## Usage
 
 **Every L2 run:**
 
 1. Review recent evolution
 2. Evaluate if aligned with P
-3. Record to personality-evolution.md
-4. Update dimensions-log.json
+3. Check signal accumulation
+4. Execute actions if threshold exceeded
+5. Apply weight decay
+6. Record to personality-evolution.md and autonomy-log.json
+7. Update dimensions-log.json
 
 ---
 
