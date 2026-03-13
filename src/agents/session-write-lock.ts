@@ -22,6 +22,7 @@ type HeldLock = {
   acquiredAt: number;
   maxHoldMs: number;
   releasePromise?: Promise<void>;
+  onForceRelease?: () => void;
 };
 
 export type SessionLockInspection = {
@@ -202,6 +203,16 @@ async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {
     console.warn(
       `[session-write-lock] releasing lock held for ${heldForMs}ms (max=${held.maxHoldMs}ms): ${held.lockPath}`,
     );
+
+    // Notify the holder before releasing so it can abort writes.
+    const callback = held.onForceRelease;
+    if (callback) {
+      try {
+        callback();
+      } catch {
+        // Best effort — don't let callback failures block lock cleanup.
+      }
+    }
 
     const didRelease = await releaseHeldLock(sessionFile, held, { force: true });
     if (didRelease) {
@@ -441,12 +452,31 @@ export async function cleanStaleLockFiles(params: {
   return { locks, cleaned };
 }
 
+/**
+ * Check whether the current process still holds the session write lock for the given file.
+ * Useful for write guards that need to verify lock ownership before persisting data.
+ */
+export function isSessionLockHeld(sessionFile: string): boolean {
+  const resolved = path.resolve(sessionFile);
+  // Try realpath to match the normalization in acquireSessionWriteLock.
+  let dir = path.dirname(resolved);
+  try {
+    dir = fsSync.realpathSync(dir);
+  } catch {
+    // Fall back to resolved path if realpath fails.
+  }
+  const normalizedSessionFile = path.join(dir, path.basename(resolved));
+  return HELD_LOCKS.has(normalizedSessionFile);
+}
+
 export async function acquireSessionWriteLock(params: {
   sessionFile: string;
   timeoutMs?: number;
   staleMs?: number;
   maxHoldMs?: number;
   allowReentrant?: boolean;
+  /** Called when the watchdog force-releases this lock due to exceeding maxHoldMs. */
+  onForceRelease?: () => void;
 }): Promise<{
   release: () => Promise<void>;
 }> {
@@ -470,6 +500,9 @@ export async function acquireSessionWriteLock(params: {
   const held = HELD_LOCKS.get(normalizedSessionFile);
   if (allowReentrant && held) {
     held.count += 1;
+    if (params.onForceRelease) {
+      held.onForceRelease = params.onForceRelease;
+    }
     return {
       release: async () => {
         await releaseHeldLock(normalizedSessionFile, held);
@@ -497,6 +530,7 @@ export async function acquireSessionWriteLock(params: {
         lockPath,
         acquiredAt: Date.now(),
         maxHoldMs,
+        onForceRelease: params.onForceRelease,
       };
       HELD_LOCKS.set(normalizedSessionFile, createdHeld);
       return {
@@ -557,4 +591,5 @@ export const __testing = {
   handleTerminationSignal,
   releaseAllLocksSync,
   runLockWatchdogCheck,
+  HELD_LOCKS,
 };
