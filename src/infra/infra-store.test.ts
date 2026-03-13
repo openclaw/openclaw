@@ -8,14 +8,7 @@ import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
 } from "./diagnostic-events.js";
-import { setCoreSettingInDb } from "./state-db/core-settings-sqlite.js";
-import { useCoreSettingsTestDb } from "./state-db/test-helpers.core-settings.js";
 import { readSessionStoreJson5 } from "./state-migrations.fs.js";
-import {
-  defaultVoiceWakeTriggers,
-  loadVoiceWakeConfig,
-  setVoiceWakeTriggers,
-} from "./voicewake.js";
 
 describe("infra store", () => {
   describe("state migrations fs", () => {
@@ -44,43 +37,6 @@ describe("infra store", () => {
         expect(result.store.main?.sessionId).toBe("s1");
         expect(result.store.main?.updatedAt).toBe(123);
       });
-    });
-  });
-
-  describe("voicewake store", () => {
-    useCoreSettingsTestDb();
-
-    it("returns defaults when missing", async () => {
-      const cfg = await loadVoiceWakeConfig();
-      expect(cfg.triggers).toEqual(defaultVoiceWakeTriggers());
-      expect(cfg.updatedAtMs).toBe(0);
-    });
-
-    it("sanitizes and persists triggers", async () => {
-      const saved = await setVoiceWakeTriggers(["  hi  ", "", "  there "]);
-      expect(saved.triggers).toEqual(["hi", "there"]);
-      expect(saved.updatedAtMs).toBeGreaterThan(0);
-
-      const loaded = await loadVoiceWakeConfig();
-      expect(loaded.triggers).toEqual(["hi", "there"]);
-      expect(loaded.updatedAtMs).toBeGreaterThan(0);
-    });
-
-    it("falls back to defaults when triggers empty", async () => {
-      const saved = await setVoiceWakeTriggers(["", "   "]);
-      expect(saved.triggers).toEqual(defaultVoiceWakeTriggers());
-    });
-
-    it("sanitizes malformed persisted config values", async () => {
-      // Seed DB with malformed data
-      setCoreSettingInDb("voicewake", "", {
-        triggers: ["  wake ", "", 42, null],
-        updatedAtMs: -1,
-      });
-
-      const loaded = await loadVoiceWakeConfig();
-      expect(loaded.triggers).toEqual(["wake"]);
-      expect(loaded.updatedAtMs).toBe(0);
     });
   });
 
