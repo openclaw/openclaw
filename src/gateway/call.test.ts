@@ -169,6 +169,20 @@ describe("callGateway url resolution", () => {
       lanIp: undefined,
       expectedUrl: "ws://127.0.0.1:18800",
     },
+    {
+      label: "netbird auto-enables TLS",
+      gateway: { mode: "local", bind: "netbird" },
+      tailnetIp: undefined,
+      lanIp: undefined,
+      expectedUrl: "wss://127.0.0.1:18800",
+    },
+    {
+      label: "netbird with explicit TLS",
+      gateway: { mode: "local", bind: "netbird", tls: { enabled: true } },
+      tailnetIp: undefined,
+      lanIp: undefined,
+      expectedUrl: "wss://127.0.0.1:18800",
+    },
   ])("uses loopback for $label", async ({ gateway, tailnetIp, lanIp, expectedUrl }) => {
     loadConfig.mockReturnValue({ gateway });
     resolveGatewayPort.mockReturnValue(18800);

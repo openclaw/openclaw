@@ -417,7 +417,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "messages.queue.drop": ['"old"', '"new"', '"summarize"'],
   "channels.defaults.groupPolicy": ['"open"', '"disabled"', '"allowlist"'],
   "gateway.mode": ['"local"', '"remote"'],
-  "gateway.bind": ['"auto"', '"lan"', '"loopback"', '"custom"', '"tailnet"'],
+  "gateway.bind": ['"auto"', '"lan"', '"loopback"', '"custom"', '"tailnet"', '"netbird"'],
   "gateway.auth.mode": ['"none"', '"token"', '"password"', '"trusted-proxy"'],
   "gateway.tailscale.mode": ['"off"', '"serve"', '"funnel"'],
   "browser.profiles.*.driver": ['"openclaw"', '"clawd"', '"extension"'],
@@ -757,6 +757,7 @@ describe("config help copy quality", () => {
     const bind = FIELD_HELP["gateway.bind"];
     expect(bind.includes('"loopback"')).toBe(true);
     expect(bind.includes('"tailnet"')).toBe(true);
+    expect(bind.includes('"netbird"')).toBe(true);
 
     const reconnect = FIELD_HELP["web.reconnect.maxAttempts"];
     expect(/0 means no retries|no retries/i.test(reconnect)).toBe(true);

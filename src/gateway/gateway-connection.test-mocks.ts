@@ -5,6 +5,7 @@ type TestMock = ReturnType<typeof vi.fn>;
 export const loadConfigMock: TestMock = vi.fn();
 export const resolveGatewayPortMock: TestMock = vi.fn();
 export const pickPrimaryTailnetIPv4Mock: TestMock = vi.fn();
+export const pickPrimaryNetbirdIPv4Mock: TestMock = vi.fn();
 export const pickPrimaryLanIPv4Mock: TestMock = vi.fn();
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -18,6 +19,10 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4: pickPrimaryTailnetIPv4Mock,
+}));
+
+vi.mock("../infra/netbird.js", () => ({
+  pickPrimaryNetbirdIPv4: pickPrimaryNetbirdIPv4Mock,
 }));
 
 vi.mock("./net.js", async (importOriginal) => {
