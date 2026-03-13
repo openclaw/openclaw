@@ -1,7 +1,7 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import fs from "fs/promises";
-import path from "path";
 import os from "os";
+import path from "path";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { recordTokenUsage } from "./usage-log.js";
 
 describe("recordTokenUsage", () => {
@@ -69,7 +69,10 @@ describe("recordTokenUsage", () => {
       usage: undefined,
     });
 
-    const exists = await fs.access(usageFile).then(() => true).catch(() => false);
+    const exists = await fs
+      .access(usageFile)
+      .then(() => true)
+      .catch(() => false);
     expect(exists).toBe(false);
   });
 
@@ -80,7 +83,10 @@ describe("recordTokenUsage", () => {
       usage: { input: 0, output: 0 },
     });
 
-    const exists = await fs.access(usageFile).then(() => true).catch(() => false);
+    const exists = await fs
+      .access(usageFile)
+      .then(() => true)
+      .catch(() => false);
     expect(exists).toBe(false);
   });
 
