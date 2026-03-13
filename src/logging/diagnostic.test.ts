@@ -158,6 +158,14 @@ describe("stuck session diagnostics threshold", () => {
         semanticGateCount: number;
         latencyGateCount: number;
         topReasons?: Array<{ reason: string; count: number }>;
+        phase2Supplements?: {
+          sampleCount: number;
+          eligibleCount: number;
+          hitRatePct: number;
+          topSkipReasons?: Array<{ reason: string; count: number }>;
+          statusFirstVisibleAvgMs?: number;
+          statusFirstVisibleP95Ms?: number;
+        };
       };
       latency?: {
         sampleCount: number;
@@ -361,25 +369,37 @@ describe("stuck session diagnostics threshold", () => {
       logEarlyStatusPolicyDecision({
         channel: "slack",
         sessionKey: "agent:main:main",
-        queueMode: "interrupt",
+        queueMode: "collect",
         decisionShouldEmit: true,
         activationShouldEmit: true,
         decisionReason: "replacement_of_active_foreground_task_is_user_visible",
-        activationReason: "replacement_of_active_task_is_prioritized_even_without_latency_signal",
-        recommendationLevel: "observe",
-        recommendationReason: "no_dominant_latency_pattern_yet",
+        activationReason: "phase2_supplement_status_enabled_for_visible_silence_reduction",
+        recommendationLevel: "prioritize",
+        recommendationReason: "runtime_started_but_visible_feedback_arrives_late",
       });
       logEarlyStatusPolicyDecision({
         channel: "slack",
         sessionKey: "agent:main:main",
-        queueMode: "steer",
+        queueMode: "followup",
         decisionShouldEmit: true,
         activationShouldEmit: false,
-        decisionReason: "same_task_correction_should_acknowledge_direction_change",
+        decisionReason: "same_task_supplement_should_acknowledge_new_material",
         activationReason: "latency_priority_observe",
         recommendationLevel: "observe",
         recommendationReason:
           "latency_is_dominant_before_visible_feedback_is_semantically_decidable",
+      });
+      logMessageFirstVisible({
+        channel: "slack",
+        sessionKey: "agent:main:main",
+        kind: "status",
+        dispatchToFirstVisibleMs: 780,
+      });
+      logMessageFirstVisible({
+        channel: "slack",
+        sessionKey: "agent:main:main",
+        kind: "status",
+        dispatchToFirstVisibleMs: 940,
       });
       logEarlyStatusPolicyDecision({
         channel: "slack",
@@ -406,7 +426,7 @@ describe("stuck session diagnostics threshold", () => {
         latencyGateCount: 1,
         topReasons: [
           {
-            reason: "replacement_of_active_task_is_prioritized_even_without_latency_signal",
+            reason: "phase2_supplement_status_enabled_for_visible_silence_reduction",
             count: 1,
           },
           { reason: "latency_priority_observe", count: 1 },
@@ -415,6 +435,14 @@ describe("stuck session diagnostics threshold", () => {
             count: 1,
           },
         ],
+        phase2Supplements: {
+          sampleCount: 2,
+          eligibleCount: 1,
+          hitRatePct: 50,
+          topSkipReasons: [{ reason: "latency_priority_observe", count: 1 }],
+          statusFirstVisibleAvgMs: 860,
+          statusFirstVisibleP95Ms: 940,
+        },
       },
     });
   });
@@ -443,9 +471,16 @@ describe("stuck session diagnostics threshold", () => {
         semanticGateCount: 2,
         latencyGateCount: 1,
         topReasons: [{ reason: "latency_priority_observe", count: 2 }],
+        phase2Supplements: {
+          sampleCount: 2,
+          eligibleCount: 1,
+          hitRatePct: 50,
+          statusFirstVisibleAvgMs: 860,
+          statusFirstVisibleP95Ms: 940,
+        },
       }),
     ).toBe(
-      " earlyStatus=4 | eligible=1 | semanticGate=2 | latencyGate=1 | reasons=latency_priority_observex2",
+      " earlyStatus=4 | eligible=1 | semanticGate=2 | latencyGate=1 | reasons=latency_priority_observex2 | phase2=1/2(50%) | statusVisible=860/940ms",
     );
   });
 });

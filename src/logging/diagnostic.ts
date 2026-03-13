@@ -27,6 +27,12 @@ const FIRST_VISIBLE_TIMEOUT_MS = 4_000;
 const MIN_FIRST_VISIBLE_WARN_MS = 250;
 const MAX_FIRST_VISIBLE_WARN_MS = 10 * 60 * 1000;
 const firstVisibleSamples: number[] = [];
+const firstVisibleSamplesByKind: Record<"tool" | "block" | "status" | "final", number[]> = {
+  tool: [],
+  block: [],
+  status: [],
+  final: [],
+};
 let firstVisibleTimeoutCount = 0;
 type LatencySegmentName =
   | "dispatchToQueue"
@@ -51,7 +57,11 @@ const latencySamples: Record<LatencySegmentName, number[]> = {
 const latencyDominantCounts: Partial<Record<LatencySegmentName, number>> = {};
 const turnLatencySnapshots = new Map<string, TurnLatencySnapshot>();
 const EARLY_STATUS_SAMPLE_LIMIT = 50;
-const earlyStatusSamples: Array<"eligible" | "semantic_gate" | "latency_gate"> = [];
+const earlyStatusSamples: Array<{
+  category: "eligible" | "semantic_gate" | "latency_gate";
+  queueMode: string;
+  activationReason: string;
+}> = [];
 const earlyStatusReasonCounts: Record<string, number> = {};
 
 let lastActivityAt = 0;
@@ -71,10 +81,15 @@ function markActivity() {
   lastActivityAt = Date.now();
 }
 
-function recordFirstVisibleSample(durationMs: number) {
+function recordFirstVisibleSample(kind: "tool" | "block" | "status" | "final", durationMs: number) {
   firstVisibleSamples.push(durationMs);
   if (firstVisibleSamples.length > FIRST_VISIBLE_SAMPLE_LIMIT) {
     firstVisibleSamples.splice(0, firstVisibleSamples.length - FIRST_VISIBLE_SAMPLE_LIMIT);
+  }
+  const byKindBucket = firstVisibleSamplesByKind[kind];
+  byKindBucket.push(durationMs);
+  if (byKindBucket.length > FIRST_VISIBLE_SAMPLE_LIMIT) {
+    byKindBucket.splice(0, byKindBucket.length - FIRST_VISIBLE_SAMPLE_LIMIT);
   }
 }
 
@@ -229,6 +244,7 @@ function formatLatencyHeartbeatSummary(
 function recordEarlyStatusPolicySample(params: {
   decisionShouldEmit: boolean;
   activationShouldEmit: boolean;
+  queueMode: string;
   activationReason: string;
 }) {
   const category = params.activationShouldEmit
@@ -236,7 +252,11 @@ function recordEarlyStatusPolicySample(params: {
     : params.decisionShouldEmit
       ? "latency_gate"
       : "semantic_gate";
-  earlyStatusSamples.push(category);
+  earlyStatusSamples.push({
+    category,
+    queueMode: params.queueMode,
+    activationReason: params.activationReason,
+  });
   if (earlyStatusSamples.length > EARLY_STATUS_SAMPLE_LIMIT) {
     earlyStatusSamples.splice(0, earlyStatusSamples.length - EARLY_STATUS_SAMPLE_LIMIT);
   }
@@ -254,6 +274,17 @@ function buildEarlyStatusSummary():
         reason: string;
         count: number;
       }>;
+      phase2Supplements?: {
+        sampleCount: number;
+        eligibleCount: number;
+        hitRatePct: number;
+        topSkipReasons?: Array<{
+          reason: string;
+          count: number;
+        }>;
+        statusFirstVisibleAvgMs?: number;
+        statusFirstVisibleP95Ms?: number;
+      };
     }
   | undefined {
   if (earlyStatusSamples.length === 0) {
@@ -261,17 +292,64 @@ function buildEarlyStatusSummary():
   }
   const summary = {
     sampleCount: earlyStatusSamples.length,
-    eligibleCount: earlyStatusSamples.filter((value) => value === "eligible").length,
-    semanticGateCount: earlyStatusSamples.filter((value) => value === "semantic_gate").length,
-    latencyGateCount: earlyStatusSamples.filter((value) => value === "latency_gate").length,
+    eligibleCount: earlyStatusSamples.filter((value) => value.category === "eligible").length,
+    semanticGateCount: earlyStatusSamples.filter((value) => value.category === "semantic_gate")
+      .length,
+    latencyGateCount: earlyStatusSamples.filter((value) => value.category === "latency_gate")
+      .length,
   };
   const topReasons = Object.entries(earlyStatusReasonCounts)
     .toSorted((left, right) => right[1] - left[1])
     .slice(0, 3)
     .map(([reason, count]) => ({ reason, count }));
+  const supplementSamples = earlyStatusSamples.filter(
+    (value) => value.queueMode === "collect" || value.queueMode === "followup",
+  );
+  const supplementEligibleCount = supplementSamples.filter(
+    (value) => value.category === "eligible",
+  ).length;
+  const supplementSkipReasons = supplementSamples
+    .filter((value) => value.category !== "eligible")
+    .reduce<Record<string, number>>((acc, value) => {
+      acc[value.activationReason] = (acc[value.activationReason] ?? 0) + 1;
+      return acc;
+    }, {});
+  const topSkipReasons = Object.entries(supplementSkipReasons)
+    .toSorted((left, right) => right[1] - left[1])
+    .slice(0, 3)
+    .map(([reason, count]) => ({ reason, count }));
+  const statusVisibleOrdered = [...firstVisibleSamplesByKind.status].toSorted(
+    (left, right) => left - right,
+  );
+  const statusVisibleP95Index = Math.min(
+    statusVisibleOrdered.length - 1,
+    Math.max(0, Math.ceil(statusVisibleOrdered.length * 0.95) - 1),
+  );
+
   return {
     ...summary,
     ...(topReasons.length > 0 ? { topReasons } : {}),
+    ...(supplementSamples.length > 0
+      ? {
+          phase2Supplements: {
+            sampleCount: supplementSamples.length,
+            eligibleCount: supplementEligibleCount,
+            hitRatePct: Math.round((supplementEligibleCount / supplementSamples.length) * 100),
+            ...(topSkipReasons.length > 0 ? { topSkipReasons } : {}),
+            ...(statusVisibleOrdered.length > 0
+              ? {
+                  statusFirstVisibleAvgMs: Math.round(
+                    statusVisibleOrdered.reduce((sum, value) => sum + value, 0) /
+                      statusVisibleOrdered.length,
+                  ),
+                  statusFirstVisibleP95Ms:
+                    statusVisibleOrdered[statusVisibleP95Index] ??
+                    statusVisibleOrdered[statusVisibleOrdered.length - 1],
+                }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -286,6 +364,17 @@ function formatEarlyStatusHeartbeatSummary(
           reason: string;
           count: number;
         }>;
+        phase2Supplements?: {
+          sampleCount: number;
+          eligibleCount: number;
+          hitRatePct: number;
+          topSkipReasons?: Array<{
+            reason: string;
+            count: number;
+          }>;
+          statusFirstVisibleAvgMs?: number;
+          statusFirstVisibleP95Ms?: number;
+        };
       }
     | undefined,
 ): string {
@@ -304,6 +393,16 @@ function formatEarlyStatusHeartbeatSummary(
         .map((entry) => `${entry.reason}x${entry.count}`)
         .join(",")}`,
     );
+  }
+  if (earlyStatus.phase2Supplements) {
+    parts.push(
+      `phase2=${earlyStatus.phase2Supplements.eligibleCount}/${earlyStatus.phase2Supplements.sampleCount}(${earlyStatus.phase2Supplements.hitRatePct}%)`,
+    );
+    if (typeof earlyStatus.phase2Supplements.statusFirstVisibleAvgMs === "number") {
+      parts.push(
+        `statusVisible=${earlyStatus.phase2Supplements.statusFirstVisibleAvgMs}/${earlyStatus.phase2Supplements.statusFirstVisibleP95Ms}ms`,
+      );
+    }
   }
   return ` ${parts.join(" | ")}`;
 }
@@ -571,7 +670,7 @@ export function logMessageFirstVisible(params: {
     kind: params.kind,
     dispatchToFirstVisibleMs: params.dispatchToFirstVisibleMs,
   });
-  recordFirstVisibleSample(params.dispatchToFirstVisibleMs);
+  recordFirstVisibleSample(params.kind, params.dispatchToFirstVisibleMs);
   markActivity();
 }
 
@@ -697,6 +796,7 @@ export function logEarlyStatusPolicyDecision(params: {
   recordEarlyStatusPolicySample({
     decisionShouldEmit: params.decisionShouldEmit,
     activationShouldEmit: params.activationShouldEmit,
+    queueMode: params.queueMode,
     activationReason: params.activationReason,
   });
   markActivity();
@@ -956,6 +1056,11 @@ export function resetDiagnosticStateForTest(): void {
   webhookStats.errors = 0;
   webhookStats.lastReceived = 0;
   firstVisibleSamples.length = 0;
+  for (const kind of Object.keys(firstVisibleSamplesByKind) as Array<
+    keyof typeof firstVisibleSamplesByKind
+  >) {
+    firstVisibleSamplesByKind[kind].length = 0;
+  }
   firstVisibleTimeoutCount = 0;
   for (const segment of Object.keys(latencySamples) as LatencySegmentName[]) {
     latencySamples[segment].length = 0;

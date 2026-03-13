@@ -81,6 +81,17 @@ export type StatusSummary = {
             | "observe_more_samples";
           reason: string;
         };
+        phase2Supplements?: {
+          sampleCount: number;
+          eligibleCount: number;
+          hitRatePct: number;
+          topSkipReasons?: Array<{
+            reason: string;
+            count: number;
+          }>;
+          statusFirstVisibleAvgMs?: number;
+          statusFirstVisibleP95Ms?: number;
+        };
       };
     };
   };

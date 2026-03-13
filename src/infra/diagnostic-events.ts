@@ -255,6 +255,17 @@ export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
       reason: string;
       count: number;
     }>;
+    phase2Supplements?: {
+      sampleCount: number;
+      eligibleCount: number;
+      hitRatePct: number;
+      topSkipReasons?: Array<{
+        reason: string;
+        count: number;
+      }>;
+      statusFirstVisibleAvgMs?: number;
+      statusFirstVisibleP95Ms?: number;
+    };
   };
 };
 

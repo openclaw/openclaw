@@ -59,6 +59,14 @@ vi.mock("../logging/diagnostic.js", () => ({
     semanticGateCount: 1,
     latencyGateCount: 1,
     topReasons: [{ reason: "latency_priority_observe", count: 1 }],
+    phase2Supplements: {
+      sampleCount: 2,
+      eligibleCount: 1,
+      hitRatePct: 50,
+      topSkipReasons: [{ reason: "latency_priority_observe", count: 1 }],
+      statusFirstVisibleAvgMs: 800,
+      statusFirstVisibleP95Ms: 950,
+    },
   })),
   getRecentDiagnosticLatencySummary: vi.fn(() => ({
     sampleCount: 2,
@@ -123,6 +131,14 @@ describe("getStatusSummary", () => {
       guidance: {
         focus: "expand_active_run_status",
         reason: "recent_candidates_are_primarily_waiting_on_latency_priority_rather_than_semantics",
+      },
+      phase2Supplements: {
+        sampleCount: 2,
+        eligibleCount: 1,
+        hitRatePct: 50,
+        topSkipReasons: [{ reason: "latency_priority_observe", count: 1 }],
+        statusFirstVisibleAvgMs: 800,
+        statusFirstVisibleP95Ms: 950,
       },
     });
   });
