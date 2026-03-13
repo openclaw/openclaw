@@ -15,13 +15,13 @@ Native Linux companion apps are planned. Contributions are welcome if you want t
 
 ## Beginner quick path (VPS)
 
-1. Install Node 22+
+1. Install Node 22+ (use nvm to install)
 2. `npm i -g openclaw@latest`
 3. `openclaw onboard --install-daemon`
 4. From your laptop: `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
 5. Open `http://127.0.0.1:18789/` and paste your token
 
-Step-by-step VPS guide: [exe.dev](/install/exe-dev)
+If you plan to use a VPS, here is a step-by-step VPS guide: [exe.dev](/install/exe-dev)
 
 ## Install
 
