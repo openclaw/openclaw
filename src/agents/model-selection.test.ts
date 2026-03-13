@@ -122,6 +122,12 @@ describe("model-selection", () => {
         expected: { provider: "anthropic", model: "claude-sonnet-4-6" },
       },
       {
+        name: "keeps dated anthropic model ids unchanged",
+        variants: ["anthropic/claude-sonnet-4-20250514", "claude-sonnet-4-20250514"],
+        defaultProvider: "anthropic",
+        expected: { provider: "anthropic", model: "claude-sonnet-4-20250514" },
+      },
+      {
         name: "normalizes deprecated google flash preview ids",
         variants: ["google/gemini-3.1-flash-preview", "gemini-3.1-flash-preview"],
         defaultProvider: "google",
