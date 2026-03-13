@@ -105,44 +105,74 @@ const prompt = buildAgentSystemPrompt({
 const totalChars = prompt.length;
 
 // ── Dynamic boundary detection ──────────────────────────────────────────────
-// We find the EARLIEST "most-dynamic" section and use it as the stable boundary.
-// Everything before it remains in the Anthropic KV-cache prefix cross-session.
+// Stable prefix = everything before the EARLIEST "most-dynamic" section.
+//
+// We identify "primary dynamic" sections — content that changes between
+// conversations or sessions. Stable workspace files (SOUL.md, USER.md, etc.)
+// are NOT dynamic boundaries; only the most-frequently-changing sections are.
+//
+// Primary candidates (take minimum position of all that appear):
+//   • ## Group Chat Context   — changes per conversation (channel, members)
+//   • ## Subagent Context     — same, but for subagent sessions
+//   • MEMORY.md header        — changes daily when present
+//   • AGENTS.md header        — changes when workspace guidelines update
+//
+// Fallback (only if no primary candidate found):
+//   • First workspace file header (SOUL.md, etc.)
+//
+// Legacy guards applied on top: ISO timestamps, "Current Date" headers.
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// Ordered: most-dynamic first
-const boundaryPatterns: Array<{ label: string; pattern: RegExp }> = [
-  // Group Chat Context: changes per conversation (most dynamic)
+// Primary: any of these changing would invalidate the cache at that position
+const primaryPatterns: Array<{ label: string; pattern: RegExp }> = [
   { label: "group-chat-context", pattern: /^## Group Chat Context$/m },
-  // Subagent Context: same as Group Chat Context but for subagent mode
   { label: "subagent-context", pattern: /^## Subagent Context$/m },
-  // MEMORY.md: changes daily when present
   {
     label: "memory-md-header",
     pattern: new RegExp(`^## ${escapeRegExp(workspaceDir)}/(MEMORY|memory)\\.md$`, "m"),
   },
-  // AGENTS.md: changes when workspace protocol/guidelines update
   {
     label: "agents-md-header",
     pattern: new RegExp(`^## ${escapeRegExp(workspaceDir)}/AGENTS\\.md$`, "m"),
   },
-  // Fallback: first injected workspace file
-  {
-    label: "workspace-file-header",
-    pattern: new RegExp(`^## ${escapeRegExp(workspaceDir)}/`, "m"),
-  },
-  // Legacy guards
+];
+
+// Fallback: first workspace file header (only if no primary candidate)
+const firstFilePattern = new RegExp(`^## ${escapeRegExp(workspaceDir)}/`, "m");
+
+// Legacy guards (timestamps, date headers)
+const legacyPatterns: Array<{ label: string; pattern: RegExp }> = [
   { label: "iso-timestamp", pattern: /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/ },
   { label: "current-date-header", pattern: /## Current Date & Time/ },
   { label: "current-time", pattern: /Current time:/ },
 ];
 
+// Find the minimum position among primary candidates
 let stableChars = totalChars;
 let hitLabel = "none";
 
-for (const { label, pattern } of boundaryPatterns) {
+for (const { label, pattern } of primaryPatterns) {
+  const match = pattern.exec(prompt);
+  if (match && match.index < stableChars) {
+    stableChars = match.index;
+    hitLabel = label;
+  }
+}
+
+// Fall back to first workspace file if no primary candidate was found
+if (hitLabel === "none") {
+  const firstFileMatch = firstFilePattern.exec(prompt);
+  if (firstFileMatch) {
+    stableChars = firstFileMatch.index;
+    hitLabel = "workspace-file-header-fallback";
+  }
+}
+
+// Apply legacy guards (can only tighten the boundary, never widen it)
+for (const { label, pattern } of legacyPatterns) {
   const match = pattern.exec(prompt);
   if (match && match.index < stableChars) {
     stableChars = match.index;
