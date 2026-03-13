@@ -70,6 +70,18 @@ export class ResizableDivider extends LitElement {
     this.startWidth = this.initialWidth;
     this.classList.add("dragging");
 
+    // Add a global overlay to prevent iframe/other elements from capturing mouse events
+    const overlay = document.createElement("div");
+    overlay.id = "resize-overlay";
+    overlay.style.position = "fixed";
+    overlay.style.top = "0";
+    overlay.style.left = "0";
+    overlay.style.width = "100%";
+    overlay.style.height = "100%";
+    overlay.style.zIndex = "9999";
+    overlay.style.cursor = "col-resize";
+    document.body.appendChild(overlay);
+
     document.addEventListener("mousemove", this.handleMouseMove);
     document.addEventListener("mouseup", this.handleMouseUp);
 
@@ -126,6 +138,11 @@ export class ResizableDivider extends LitElement {
   private handleMouseUp = () => {
     this.isDragging = false;
     this.classList.remove("dragging");
+
+    const overlay = document.getElementById("resize-overlay");
+    if (overlay) {
+      document.body.removeChild(overlay);
+    }
 
     document.removeEventListener("mousemove", this.handleMouseMove);
     document.removeEventListener("mouseup", this.handleMouseUp);

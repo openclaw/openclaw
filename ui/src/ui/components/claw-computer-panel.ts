@@ -45,111 +45,44 @@ export class ClawComputerPanel extends LitElement {
       height: 100%;
       display: flex;
       flex-direction: column;
-      padding: 16px;
-    }
-    h2 {
-      text-align: center;
-      margin: 0 0 16px 0;
-      color: #ddd;
-    }
-    .controls {
-      background: #1a1a1a;
-      padding: 16px;
-      border-radius: 8px;
-      margin-bottom: 16px;
-      border: 1px solid #333;
-    }
-    label {
-      display: block;
-      margin-bottom: 6px;
-      font-weight: 500;
-    }
-    input {
-      width: 100%;
-      padding: 10px;
-      background: #222;
-      border: 1px solid #444;
-      color: #eee;
-      border-radius: 6px;
-      margin-bottom: 12px;
-    }
-    .btn-group {
-      display: flex;
-      gap: 8px;
-      margin: 12px 0;
-      flex-wrap: wrap;
-    }
-    button {
-      padding: 10px 16px;
-      background: #0066cc;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      font-weight: bold;
-    }
-    button:hover:not(:disabled) {
-      background: #007fff;
-    }
-    button:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-    .active {
-      background: #0088ff !important;
+      position: relative;
     }
     .screen-container {
       flex: 1;
-      min-height: 400px;
+      width: 100%;
+      height: 100%;
       background: #000;
-      border: 2px solid #444;
-      border-radius: 8px;
       overflow: hidden;
       position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     .screen {
       width: 100%;
       height: 100%;
     }
-    .status {
-      margin-top: 8px;
-      text-align: center;
-      font-weight: bold;
-      min-height: 24px;
+    .status-overlay {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0, 0, 0, 0.7);
+      padding: 16px 24px;
+      border-radius: 8px;
+      color: #fff;
+      font-weight: 500;
+      pointer-events: none;
+      z-index: 10;
     }
   `;
 
   render() {
     return html`
       <div class="container">
-        <h2>noVNC - 自動調整版（穩定無錯誤）</h2>
-        <p style="text-align:center; color:#888;">
-          ${this.vncUrl}（已轉發到你的 10.75.171.0:25900）
-        </p>
-        <div class="controls">
-          <label>VNC 密碼（如果有）:</label>
-          <input type="password" placeholder="留空 = 無密碼"
-                 .value=${this.password}
-                 @input=${(e: Event) => {
-                   this.password = (e.target as HTMLInputElement).value;
-                 }}
-                 @keydown=${this.handlePasswordKeydown} />
-          <div class="btn-group">
-            <button @click=${this.connect} ?disabled=${this.isConnected}>連接</button>
-            <button @click=${this.disconnect} ?disabled=${!this.isConnected}>斷開</button>
-            <button @click=${this.toggleFullscreen}>全螢幕</button>
-          </div>
-          <div style="margin-top:12px;">
-            <strong>視窗縮放模式：</strong>
-            <button class=${this.isFitted ? "active" : ""} @click=${() => this.setFitMode(true)}>適配視窗</button>
-            <button class=${!this.isFitted ? "active" : ""} @click=${() => this.setFitMode(false)}>1:1 原尺寸</button>
-          </div>
-          <div class="status" style="color: ${this.isConnected ? "#4caf50" : "#aaa"}">
-            ${this.status}
-          </div>
-        </div>
+        ${!this.isConnected ? html`<div class="status-overlay">${this.status}</div>` : null}
         <div class="screen-container">
-          <div ${ref(this.screenRef)} class="screen" style="display: ${this.isConnected ? "block" : "none"}"></div>
+          <div ${ref(this.screenRef)} class="screen"></div>
         </div>
       </div>
     `;
