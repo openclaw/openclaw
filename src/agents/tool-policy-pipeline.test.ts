@@ -70,6 +70,37 @@ describe("tool-policy-pipeline", () => {
     expect(warnings[0]).not.toContain("unless the plugin is enabled");
   });
 
+  test("treats core tools with metadata as core, not plugin-only", () => {
+    const tools = [
+      { name: "exec" },
+      { name: "apply_patch" },
+      { name: "plugin_tool" },
+    ] as unknown as DummyTool[];
+    const warnings: string[] = [];
+    const filtered = applyToolPolicyPipeline({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      tools: tools as any,
+      // apply_patch and plugin_tool both carry metadata, but apply_patch is a known core tool
+      // oxlint-disable-next-line typescript/no-explicit-any
+      toolMeta: (t: any) =>
+        t.name === "apply_patch" || t.name === "plugin_tool" ? { pluginId: "foo" } : undefined,
+      warn: (msg) => warnings.push(msg),
+      steps: [
+        {
+          policy: { allow: ["apply_patch", "plugin_tool"] },
+          label: "tools.profile (coding)",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    });
+    const names = filtered.map((t) => (t as unknown as DummyTool).name).toSorted();
+    // apply_patch should be recognized as core and included via the allowlist
+    expect(names).toContain("apply_patch");
+    // no warning about apply_patch being unknown — it's a known core tool
+    const applyPatchWarnings = warnings.filter((w) => w.includes("apply_patch"));
+    expect(applyPatchWarnings.length).toBe(0);
+  });
+
   test("applies allowlist filtering when core tools are explicitly listed", () => {
     const tools = [{ name: "exec" }, { name: "process" }] as unknown as DummyTool[];
     const filtered = applyToolPolicyPipeline({

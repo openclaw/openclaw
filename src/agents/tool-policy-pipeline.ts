@@ -71,7 +71,7 @@ export function applyToolPolicyPipeline(params: {
 }): AnyAgentTool[] {
   const coreToolNames = new Set(
     params.tools
-      .filter((tool) => !params.toolMeta(tool))
+      .filter((tool) => !params.toolMeta(tool) || isKnownCoreToolId(normalizeToolName(tool.name)))
       .map((tool) => normalizeToolName(tool.name))
       .filter(Boolean),
   );
