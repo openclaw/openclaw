@@ -200,7 +200,7 @@ function isAddrInUseError(err: unknown): boolean {
   );
 }
 
-function relayAuthTokenForUrl(url: string): string | null {
+async function relayAuthTokenForUrl(url: string): Promise<string | null> {
   try {
     const parsed = new URL(url);
     if (!isLoopbackHost(parsed.hostname)) {
@@ -212,15 +212,21 @@ function relayAuthTokenForUrl(url: string): string | null {
     }
     const runtimeToken = relayRuntimeByPort.get(port)?.relayAuthToken;
     if (runtimeToken) {
-      console.log(`[browser/extension-relay] relayAuthTokenForUrl(${url}) -> returning runtimeToken=${runtimeToken}`);
+      console.log(
+        `[browser/extension-relay] relayAuthTokenForUrl(${url}) -> returning runtimeToken=${runtimeToken}`,
+      );
       return runtimeToken;
     }
     try {
-      const derivedToken = resolveRelayAuthTokenForPort(port);
-      console.log(`[browser/extension-relay] relayAuthTokenForUrl(${url}) -> returning dynamically derivedToken=${derivedToken}`);
+      const derivedToken = await resolveRelayAuthTokenForPort(port);
+      console.log(
+        `[browser/extension-relay] relayAuthTokenForUrl(${url}) -> returning dynamically derivedToken=${derivedToken}`,
+      );
       return derivedToken;
     } catch {
-      console.log(`[browser/extension-relay] relayAuthTokenForUrl(${url}) -> dynamically driving failed`);
+      console.log(
+        `[browser/extension-relay] relayAuthTokenForUrl(${url}) -> dynamically driving failed`,
+      );
       return null;
     }
   } catch {
@@ -228,8 +234,10 @@ function relayAuthTokenForUrl(url: string): string | null {
   }
 }
 
-export function getChromeExtensionRelayAuthHeaders(url: string): Record<string, string> {
-  const token = relayAuthTokenForUrl(url);
+export async function getChromeExtensionRelayAuthHeaders(
+  url: string,
+): Promise<Record<string, string>> {
+  const token = await relayAuthTokenForUrl(url);
   if (!token) {
     return {};
   }
@@ -274,7 +282,9 @@ export async function ensureChromeExtensionRelayServer(opts: {
     DEFAULT_EXTENSION_COMMAND_RECONNECT_WAIT_MS,
   );
   let currentLockTab = !!opts.lockTab;
-  console.log(`[browser/extension-relay] Relay starting on ${info.host}:${info.port} (lockTab=${currentLockTab})`);
+  console.log(
+    `[browser/extension-relay] Relay starting on ${info.host}:${info.port} (lockTab=${currentLockTab})`,
+  );
 
   const initPromise = (async (): Promise<ChromeExtensionRelayServer> => {
     const relayAuthToken = await resolveRelayAuthTokenForPort(info.port);
@@ -627,7 +637,9 @@ export async function ensureChromeExtensionRelayServer(opts: {
               const data = JSON.parse(body);
               if (typeof data.lockTab === "boolean") {
                 currentLockTab = data.lockTab;
-                console.log(`[browser/extension-relay] Relay on ${info.port} lockTab updated to: ${currentLockTab}`);
+                console.log(
+                  `[browser/extension-relay] Relay on ${info.port} lockTab updated to: ${currentLockTab}`,
+                );
                 res.writeHead(200, { "Content-Type": "application/json" });
                 res.end(JSON.stringify({ ok: true, lockTab: currentLockTab }));
               } else {
@@ -1057,7 +1069,9 @@ export async function ensureChromeExtensionRelayServer(opts: {
           cdpWsUrl: `ws://${info.host}:${info.port}/cdp`,
           extensionConnected: () => false,
           isLocked: () => currentLockTab,
-          setLocked: (locked: boolean) => { currentLockTab = locked; },
+          setLocked: (locked: boolean) => {
+            currentLockTab = locked;
+          },
           stop: async () => {
             relayRuntimeByPort.delete(info.port);
           },
@@ -1067,7 +1081,9 @@ export async function ensureChromeExtensionRelayServer(opts: {
       }
       throw err;
     }
-    console.log(`[browser/extension-relay] Relay server listening on ${info.host}:${info.port} (lockTab=${!!opts.lockTab})`);
+    console.log(
+      `[browser/extension-relay] Relay server listening on ${info.host}:${info.port} (lockTab=${!!opts.lockTab})`,
+    );
 
     const addr = server.address() as AddressInfo | null;
     const port = addr?.port ?? info.port;

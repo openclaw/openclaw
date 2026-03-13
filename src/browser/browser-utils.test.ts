@@ -183,20 +183,20 @@ describe("cdp.helpers", () => {
     expect(url).toBe("http://127.0.0.1:9222/browser?token=abc");
   });
 
-  it("adds basic auth headers when credentials are present", () => {
-    const headers = getHeadersWithAuth("https://user:pass@example.com");
+  it("adds basic auth headers when credentials are present", async () => {
+    const headers = await getHeadersWithAuth("https://user:pass@example.com");
     expect(headers.Authorization).toBe(`Basic ${Buffer.from("user:pass").toString("base64")}`);
   });
 
-  it("keeps preexisting authorization headers", () => {
-    const headers = getHeadersWithAuth("https://user:pass@example.com", {
+  it("keeps preexisting authorization headers", async () => {
+    const headers = await getHeadersWithAuth("https://user:pass@example.com", {
       Authorization: "Bearer token",
     });
     expect(headers.Authorization).toBe("Bearer token");
   });
 
-  it("does not add relay header for unknown loopback ports", () => {
-    const headers = getHeadersWithAuth("http://127.0.0.1:19444/json/version");
+  it("does not add relay header for unknown loopback ports", async () => {
+    const headers = await getHeadersWithAuth("http://127.0.0.1:19444/json/version");
     expect(headers["x-openclaw-relay-token"]).toBeUndefined();
   });
 
@@ -207,7 +207,7 @@ describe("cdp.helpers", () => {
     process.env.OPENCLAW_GATEWAY_TOKEN = "test-gateway-token";
     try {
       await ensureChromeExtensionRelayServer({ cdpUrl });
-      const headers = getHeadersWithAuth(`${cdpUrl}/json/version`);
+      const headers = await getHeadersWithAuth(`${cdpUrl}/json/version`);
       expect(headers["x-openclaw-relay-token"]).toBeTruthy();
       expect(headers["x-openclaw-relay-token"]).not.toBe("test-gateway-token");
     } finally {
