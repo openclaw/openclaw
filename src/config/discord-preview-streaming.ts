@@ -107,6 +107,19 @@ export function resolveDiscordPreviewStreamMode(
   return "off";
 }
 
+export function resolveDiscordPreviewSplitOnAssistantBoundary(
+  params: {
+    previewSplitOnAssistantBoundary?: unknown;
+    streamMode?: unknown;
+    streaming?: unknown;
+  } = {},
+): boolean {
+  if (typeof params.previewSplitOnAssistantBoundary === "boolean") {
+    return params.previewSplitOnAssistantBoundary;
+  }
+  return resolveDiscordPreviewStreamMode(params) === "block";
+}
+
 export function resolveSlackStreamingMode(
   params: {
     streamMode?: unknown;

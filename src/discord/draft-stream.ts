@@ -40,8 +40,10 @@ export function createDiscordDraftStream(params: {
   const streamState = { stopped: false, final: false };
   let streamMessageId: string | undefined;
   let lastSentText = "";
+  let generation = 0;
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
+    const sendGeneration = generation;
     // Allow final flush even if stopped (e.g., after clear()).
     if (streamState.stopped && !streamState.final) {
       return false;
@@ -94,6 +96,12 @@ export function createDiscordDraftStream(params: {
         params.warn?.("discord stream preview stopped (missing message id from send)");
         return false;
       }
+      if (sendGeneration !== generation) {
+        params.log?.(
+          `discord stream preview send superseded before id bind (generation ${sendGeneration} -> ${generation})`,
+        );
+        return true;
+      }
       streamMessageId = sentMessageId;
       return true;
     } catch (err) {
@@ -127,9 +135,11 @@ export function createDiscordDraftStream(params: {
   });
 
   const forceNewMessage = () => {
+    generation += 1;
     streamMessageId = undefined;
     lastSentText = "";
     loop.resetPending();
+    loop.resetThrottleWindow();
   };
 
   params.log?.(`discord stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
