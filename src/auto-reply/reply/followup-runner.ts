@@ -145,7 +145,7 @@ export function createFollowupRunner(params: {
           isControlUiVisible: shouldSurfaceToControlUi,
         });
       }
-      let autoCompactionCompleted = false;
+      let autoCompactionCount = 0;
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
@@ -222,7 +222,7 @@ export function createFollowupRunner(params: {
                 }
                 const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
                 if (phase === "end") {
-                  autoCompactionCompleted = true;
+                  autoCompactionCount += 1;
                 }
               },
             });
@@ -230,9 +230,7 @@ export function createFollowupRunner(params: {
               result.meta?.systemPromptReport,
             );
             const resultCompactionCount = Math.max(0, result.meta?.agentMeta?.compactionCount ?? 0);
-            if (resultCompactionCount > 0) {
-              autoCompactionCompleted = true;
-            }
+            autoCompactionCount = Math.max(autoCompactionCount, resultCompactionCount);
             return result;
           },
         });
@@ -330,12 +328,13 @@ export function createFollowupRunner(params: {
         return;
       }
 
-      if (autoCompactionCompleted) {
+      if (autoCompactionCount > 0) {
         const count = await incrementRunCompactionCount({
           sessionEntry,
           sessionStore,
           sessionKey,
           storePath,
+          amount: autoCompactionCount,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
         });

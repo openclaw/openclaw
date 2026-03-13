@@ -474,7 +474,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         agentMeta: {
           usage: { input: 190_000, output: 8_000, total: 198_000 },
           lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
-          compactionCount: 1,
+          compactionCount: 2,
         },
       },
     });
@@ -515,7 +515,7 @@ describe("runReplyAgent auto-compaction token update", () => {
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(10_000);
-    expect(stored[sessionKey].compactionCount).toBe(1);
+    expect(stored[sessionKey].compactionCount).toBe(2);
   });
 
   it("updates totalTokens from lastCallUsage even without compaction", async () => {

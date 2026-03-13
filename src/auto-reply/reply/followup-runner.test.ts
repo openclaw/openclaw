@@ -145,7 +145,7 @@ describe("createFollowupRunner compaction", () => {
       payloads: [{ text: "final" }],
       meta: {
         agentMeta: {
-          compactionCount: 1,
+          compactionCount: 2,
           lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
         },
       },
@@ -173,7 +173,7 @@ describe("createFollowupRunner compaction", () => {
     expect(onBlockReply).toHaveBeenCalled();
     const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
-    expect(sessionStore.main.compactionCount).toBe(1);
+    expect(sessionStore.main.compactionCount).toBe(2);
   });
 });
 

@@ -67,7 +67,7 @@ export type AgentRunLoopResult =
       fallbackModel?: string;
       fallbackAttempts: RuntimeFallbackAttempt[];
       didLogHeartbeatStrip: boolean;
-      autoCompactionCompleted: boolean;
+      autoCompactionCount: number;
       /** Payload keys sent directly (not via pipeline) during tool flush. */
       directlySentBlockKeys?: Set<string>;
     }
@@ -103,7 +103,7 @@ export async function runAgentTurnWithFallback(params: {
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
-  let autoCompactionCompleted = false;
+  let autoCompactionCount = 0;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
   const directlySentBlockKeys = new Set<string>();
 
@@ -396,7 +396,7 @@ export async function runAgentTurnWithFallback(params: {
                     await params.opts?.onCompactionStart?.();
                   }
                   if (phase === "end") {
-                    autoCompactionCompleted = true;
+                    autoCompactionCount += 1;
                     await params.opts?.onCompactionEnd?.();
                   }
                 }
@@ -467,9 +467,7 @@ export async function runAgentTurnWithFallback(params: {
               result.meta?.systemPromptReport,
             );
             const resultCompactionCount = Math.max(0, result.meta?.agentMeta?.compactionCount ?? 0);
-            if (resultCompactionCount > 0) {
-              autoCompactionCompleted = true;
-            }
+            autoCompactionCount = Math.max(autoCompactionCount, resultCompactionCount);
             return result;
           })();
         },
@@ -658,7 +656,7 @@ export async function runAgentTurnWithFallback(params: {
     fallbackModel,
     fallbackAttempts,
     didLogHeartbeatStrip,
-    autoCompactionCompleted,
+    autoCompactionCount,
     directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
   };
 }
