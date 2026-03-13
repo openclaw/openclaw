@@ -36,6 +36,7 @@ export function createSessionsSendTool(opts?: {
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
   sandboxed?: boolean;
+  requesterAgentIdOverride?: string;
 }): AnyAgentTool {
   return {
     label: "Session Send",
@@ -47,10 +48,14 @@ export function createSessionsSendTool(opts?: {
       const params = args as Record<string, unknown>;
       const message = readStringParam(params, "message", { required: true });
       const cfg = loadConfig();
+      const requesterAgentId =
+        opts?.requesterAgentIdOverride ??
+        (opts?.agentSessionKey ? resolveAgentIdFromSessionKey(opts.agentSessionKey) : undefined);
       const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
+          agentId: opts?.requesterAgentIdOverride,
           sandboxed: opts?.sandboxed,
         });
 
@@ -58,6 +63,7 @@ export function createSessionsSendTool(opts?: {
       const sessionVisibility = resolveEffectiveSessionToolsVisibility({
         cfg,
         sandboxed: opts?.sandboxed === true,
+        agentId: requesterAgentId,
       });
 
       const sessionKeyParam = readStringParam(params, "sessionKey");
@@ -73,12 +79,12 @@ export function createSessionsSendTool(opts?: {
 
       let sessionKey = sessionKeyParam;
       if (!sessionKey && labelParam) {
-        const requesterAgentId = resolveAgentIdFromSessionKey(effectiveRequesterKey);
+        const labelRequesterAgentId = resolveAgentIdFromSessionKey(effectiveRequesterKey);
         const requestedAgentId = labelAgentIdParam
           ? normalizeAgentId(labelAgentIdParam)
           : undefined;
 
-        if (restrictToSpawned && requestedAgentId && requestedAgentId !== requesterAgentId) {
+        if (restrictToSpawned && requestedAgentId && requestedAgentId !== labelRequesterAgentId) {
           return jsonResult({
             runId: crypto.randomUUID(),
             status: "forbidden",
@@ -86,7 +92,11 @@ export function createSessionsSendTool(opts?: {
           });
         }
 
-        if (requesterAgentId && requestedAgentId && requestedAgentId !== requesterAgentId) {
+        if (
+          labelRequesterAgentId &&
+          requestedAgentId &&
+          requestedAgentId !== labelRequesterAgentId
+        ) {
           if (!a2aPolicy.enabled) {
             return jsonResult({
               runId: crypto.randomUUID(),
@@ -95,7 +105,7 @@ export function createSessionsSendTool(opts?: {
                 "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
             });
           }
-          if (!a2aPolicy.isAllowed(requesterAgentId, requestedAgentId)) {
+          if (!a2aPolicy.isAllowed(labelRequesterAgentId, requestedAgentId)) {
             return jsonResult({
               runId: crypto.randomUUID(),
               status: "forbidden",

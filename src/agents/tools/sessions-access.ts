@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  isSubagentSessionKey,
+  normalizeAgentId,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import {
   listSpawnedSessionKeys,
   resolveInternalSessionKey,
@@ -33,25 +37,39 @@ export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionTools
 export function resolveEffectiveSessionToolsVisibility(params: {
   cfg: OpenClawConfig;
   sandboxed: boolean;
+  agentId?: string;
 }): SessionToolsVisibility {
   const visibility = resolveSessionToolsVisibility(params.cfg);
   if (!params.sandboxed) {
     return visibility;
   }
-  const sandboxClamp = params.cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
+  const sandboxClamp = resolveSandboxSessionToolsVisibility(params.cfg, params.agentId);
   if (sandboxClamp === "spawned" && visibility !== "tree") {
     return "tree";
   }
   return visibility;
 }
 
-export function resolveSandboxSessionToolsVisibility(cfg: OpenClawConfig): "spawned" | "all" {
+export function resolveSandboxSessionToolsVisibility(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): "spawned" | "all" {
+  if (agentId) {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    const override = cfg.agents?.list?.find(
+      (entry) => normalizeAgentId(entry.id) === normalizedAgentId,
+    )?.sandbox?.sessionToolsVisibility;
+    if (override === "spawned" || override === "all") {
+      return override;
+    }
+  }
   return cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
 }
 
 export function resolveSandboxedSessionToolContext(params: {
   cfg: OpenClawConfig;
   agentSessionKey?: string;
+  agentId?: string;
   sandboxed?: boolean;
 }): {
   mainKey: string;
@@ -62,7 +80,12 @@ export function resolveSandboxedSessionToolContext(params: {
   restrictToSpawned: boolean;
 } {
   const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
-  const visibility = resolveSandboxSessionToolsVisibility(params.cfg);
+  const requesterAgentId =
+    params.agentId ??
+    (typeof params.agentSessionKey === "string" && params.agentSessionKey.trim()
+      ? resolveAgentIdFromSessionKey(params.agentSessionKey)
+      : undefined);
+  const visibility = resolveSandboxSessionToolsVisibility(params.cfg, requesterAgentId);
   const requesterInternalKey =
     typeof params.agentSessionKey === "string" && params.agentSessionKey.trim()
       ? resolveInternalSessionKey({
