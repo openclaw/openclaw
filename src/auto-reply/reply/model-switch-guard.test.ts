@@ -1,9 +1,28 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { lookupContextTokensMock } = vi.hoisted(() => ({
+  lookupContextTokensMock: vi.fn(),
+}));
+
+vi.mock("../../agents/context.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/context.js")>();
+  return {
+    ...actual,
+    lookupContextTokens: lookupContextTokensMock,
+  };
+});
+
 import type { OpenClawConfig } from "../../config/config.js";
 import { maybeBlockOversizedModelSwitch } from "./model-switch-guard.js";
 
 describe("maybeBlockOversizedModelSwitch", () => {
+  beforeEach(() => {
+    lookupContextTokensMock.mockReset();
+  });
+
   it("uses the smallest bare-model budget when providers share the same model id", () => {
+    lookupContextTokensMock.mockReturnValue(200_000);
+
     const cfg = {
       agents: {
         defaults: {
@@ -38,6 +57,7 @@ describe("maybeBlockOversizedModelSwitch", () => {
 
     expect(result).toContain("Can't switch to openrouter/shared-budget-model yet.");
     expect(result).toContain("108k/128k");
+    expect(lookupContextTokensMock).toHaveBeenCalledWith("shared-budget-model");
   });
 
   it("does not block when the target model budget is unknown", () => {

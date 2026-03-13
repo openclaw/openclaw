@@ -50,7 +50,10 @@ function resolveEffectiveContextWindowTokens(params: {
 }): number | undefined {
   const cachedWindow = normalizePositiveInt(lookupContextTokens(params.model));
   const configuredWindow = resolveConfiguredModelContextWindow(params);
-  const contextWindow = cachedWindow ?? configuredWindow;
+  const contextWindow =
+    cachedWindow !== undefined && configuredWindow !== undefined
+      ? Math.min(cachedWindow, configuredWindow)
+      : (cachedWindow ?? configuredWindow);
   const configuredCap = normalizePositiveInt(params.cfg.agents?.defaults?.contextTokens);
   if (contextWindow === undefined) {
     // Refuse a switch only when we have a real budget signal. Falling back to
