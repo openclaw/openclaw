@@ -4,6 +4,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createMSTeamsTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   INTER_SESSION_CHANNEL,
+  listReservedChannelIds,
   normalizeMessageChannel,
   resolveGatewayMessageChannel,
 } from "./message-channel.js";
@@ -49,5 +50,15 @@ describe("message-channel", () => {
     plugin.meta.aliases?.push(INTER_SESSION_CHANNEL);
 
     expect(normalizeMessageChannel(INTER_SESSION_CHANNEL)).toBe(INTER_SESSION_CHANNEL);
+  });
+
+  it("does not let callers mutate the reserved channel source of truth", () => {
+    const reserved = listReservedChannelIds();
+
+    reserved.length = 0;
+    reserved.push("discord");
+
+    expect(normalizeMessageChannel(INTER_SESSION_CHANNEL)).toBe(INTER_SESSION_CHANNEL);
+    expect(normalizeMessageChannel("webchat")).toBe("webchat");
   });
 });

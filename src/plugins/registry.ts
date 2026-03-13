@@ -10,7 +10,7 @@ import type {
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import { resolveUserPath } from "../utils.js";
-import { RESERVED_CHANNEL_IDS } from "../utils/message-channel.js";
+import { isReservedChannelId } from "../utils/message-channel.js";
 import { registerPluginCommand } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
@@ -431,7 +431,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    if (RESERVED_CHANNEL_IDS.has(id.toLowerCase())) {
+    if (isReservedChannelId(id)) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
@@ -444,8 +444,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     // "inter_session" or "webchat" would cause normalizeMessageChannel to
     // remap the sentinel into a real deliverable channel, bypassing the guards
     // in resolveLastChannelRaw / resolveLastToRaw.
-    const reservedAliases =
-      plugin.meta?.aliases?.filter((a) => RESERVED_CHANNEL_IDS.has(a.trim().toLowerCase())) ?? [];
+    const reservedAliases = plugin.meta?.aliases?.filter((a) => isReservedChannelId(a)) ?? [];
     if (reservedAliases.length > 0) {
       pushDiagnostic({
         level: "error",
@@ -456,9 +455,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       // Strip reserved aliases rather than blocking the whole registration so
       // the rest of the channel can still be used normally.
       if (plugin.meta?.aliases) {
-        plugin.meta.aliases = plugin.meta.aliases.filter(
-          (a) => !RESERVED_CHANNEL_IDS.has(a.trim().toLowerCase()),
-        );
+        plugin.meta.aliases = plugin.meta.aliases.filter((a) => !isReservedChannelId(a));
       }
     }
     const existing = registry.channels.find((entry) => entry.plugin.id === id);

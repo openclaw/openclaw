@@ -33,10 +33,19 @@ export type InterSessionChannel = typeof INTER_SESSION_CHANNEL;
  * Checked in both plugin install (validatePluginId) and runtime channel
  * registration (registerChannel) to cover all registration paths.
  */
-export const RESERVED_CHANNEL_IDS: Set<string> = new Set([
+const RESERVED_CHANNEL_IDS: ReadonlySet<string> = new Set([
   INTER_SESSION_CHANNEL,
   INTERNAL_MESSAGE_CHANNEL,
 ]);
+
+export function isReservedChannelId(raw?: string | null): boolean {
+  const normalized = raw?.trim().toLowerCase();
+  return Boolean(normalized) && RESERVED_CHANNEL_IDS.has(normalized);
+}
+
+export function listReservedChannelIds(): string[] {
+  return Array.from(RESERVED_CHANNEL_IDS);
+}
 
 export function isInterSessionChannel(raw?: string | null): boolean {
   // Guard against collision with real deliverable plugin channels: a plugin
@@ -88,7 +97,7 @@ export function normalizeMessageChannel(raw?: string | null): string | undefined
   if (!normalized) {
     return undefined;
   }
-  if (RESERVED_CHANNEL_IDS.has(normalized)) {
+  if (isReservedChannelId(normalized)) {
     return normalized;
   }
   const builtIn = normalizeChatChannelId(normalized);
