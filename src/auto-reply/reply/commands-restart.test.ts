@@ -5,8 +5,10 @@ import { buildCommandTestParams } from "./commands.test-harness.js";
 
 const scheduleGatewaySigusr1RestartMock = vi.hoisted(() => vi.fn());
 const triggerOpenClawRestartMock = vi.hoisted(() => vi.fn());
+const isLocalRestartScriptAvailableMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/restart.js", () => ({
+  isLocalRestartScriptAvailable: (...args: unknown[]) => isLocalRestartScriptAvailableMock(...args),
   scheduleGatewaySigusr1Restart: (...args: unknown[]) => scheduleGatewaySigusr1RestartMock(...args),
   triggerOpenClawRestart: (...args: unknown[]) => triggerOpenClawRestartMock(...args),
 }));
@@ -35,8 +37,10 @@ function buildParams(commandBody: string, overrides?: Record<string, unknown>) {
 }
 
 beforeEach(() => {
+  isLocalRestartScriptAvailableMock.mockReset();
   scheduleGatewaySigusr1RestartMock.mockReset();
   triggerOpenClawRestartMock.mockReset();
+  isLocalRestartScriptAvailableMock.mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -50,7 +54,7 @@ afterEach(() => {
 describe("handleRestartCommand", () => {
   it("prefers local restart script for Telegram on macOS when available", async () => {
     setPlatform("darwin");
-    process.env.OPENCLAW_LOCAL_RESTART_SCRIPT = "/tmp/openclaw-restart-local-gateway.sh";
+    isLocalRestartScriptAvailableMock.mockReturnValue(true);
 
     vi.spyOn(process, "listenerCount").mockImplementation((signal) =>
       signal === "SIGUSR1" ? 1 : 0,
@@ -78,7 +82,7 @@ describe("handleRestartCommand", () => {
 
   it("uses in-process SIGUSR1 scheduling for non-Telegram surfaces", async () => {
     setPlatform("darwin");
-    process.env.OPENCLAW_LOCAL_RESTART_SCRIPT = "/tmp/openclaw-restart-local-gateway.sh";
+    isLocalRestartScriptAvailableMock.mockReturnValue(true);
     vi.spyOn(process, "listenerCount").mockImplementation((signal) =>
       signal === "SIGUSR1" ? 1 : 0,
     );
@@ -92,7 +96,7 @@ describe("handleRestartCommand", () => {
 
   it("keeps SIGUSR1 path for Telegram when no local script is configured", async () => {
     setPlatform("darwin");
-    delete process.env.OPENCLAW_LOCAL_RESTART_SCRIPT;
+    isLocalRestartScriptAvailableMock.mockReturnValue(false);
     vi.spyOn(process, "listenerCount").mockImplementation((signal) =>
       signal === "SIGUSR1" ? 1 : 0,
     );

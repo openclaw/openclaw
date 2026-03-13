@@ -13,7 +13,11 @@ import {
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
-import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
+import {
+  isLocalRestartScriptAvailable,
+  scheduleGatewaySigusr1Restart,
+  triggerOpenClawRestart,
+} from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import {
   setTelegramThreadBindingIdleTimeoutBySessionKey,
@@ -564,10 +568,7 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
     };
   }
   const preferLocalScriptRestart =
-    process.platform === "darwin" &&
-    isTelegramSurface(params) &&
-    typeof process.env.OPENCLAW_LOCAL_RESTART_SCRIPT === "string" &&
-    process.env.OPENCLAW_LOCAL_RESTART_SCRIPT.trim().length > 0;
+    process.platform === "darwin" && isTelegramSurface(params) && isLocalRestartScriptAvailable();
   // Telegram /restart is often invoked from the same process tree as the
   // gateway itself on macOS dev setups. Prefer the detached local restart
   // script so we can acknowledge the command before launchctl tears us down.

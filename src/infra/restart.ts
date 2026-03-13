@@ -7,6 +7,7 @@ import {
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
 
@@ -290,19 +291,36 @@ function normalizeSystemdUnit(raw?: string, profile?: string): string {
   return unit.endsWith(".service") ? unit : `${unit}.service`;
 }
 
+function resolveScriptPathIfExists(scriptPath: string | undefined | null): string | null {
+  if (typeof scriptPath !== "string") {
+    return null;
+  }
+  const trimmed = scriptPath.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return fs.existsSync(trimmed) ? trimmed : null;
+}
+
 function resolveLocalRestartScriptPath(): string | null {
-  const raw = process.env.OPENCLAW_LOCAL_RESTART_SCRIPT;
-  if (typeof raw !== "string") {
+  const envScriptPath = resolveScriptPathIfExists(process.env.OPENCLAW_LOCAL_RESTART_SCRIPT);
+  if (envScriptPath) {
+    return envScriptPath;
+  }
+
+  const openclawRoot = resolveOpenClawPackageRootSync({
+    cwd: process.cwd(),
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+  });
+  if (!openclawRoot) {
     return null;
   }
-  const scriptPath = raw.trim();
-  if (!scriptPath) {
-    return null;
-  }
-  if (!fs.existsSync(scriptPath)) {
-    return null;
-  }
-  return scriptPath;
+  return resolveScriptPathIfExists(path.join(openclawRoot, "scripts", "restart-local-gateway.sh"));
+}
+
+export function isLocalRestartScriptAvailable(): boolean {
+  return resolveLocalRestartScriptPath() !== null;
 }
 
 function triggerDetachedLocalRestartScript(scriptPath: string): {

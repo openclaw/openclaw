@@ -8,6 +8,7 @@ const spawnSyncMock = vi.hoisted(() => vi.fn());
 const spawnMock = vi.hoisted(() => vi.fn());
 const cleanStaleGatewayProcessesSyncMock = vi.hoisted(() => vi.fn());
 const relaunchGatewayScheduledTaskMock = vi.hoisted(() => vi.fn());
+const resolveOpenClawPackageRootSyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", () => ({
   spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
@@ -22,6 +23,11 @@ vi.mock("./restart-stale-pids.js", () => ({
 
 vi.mock("./windows-task-restart.js", () => ({
   relaunchGatewayScheduledTask: (...args: unknown[]) => relaunchGatewayScheduledTaskMock(...args),
+}));
+
+vi.mock("./openclaw-root.js", () => ({
+  resolveOpenClawPackageRootSync: (...args: unknown[]) =>
+    resolveOpenClawPackageRootSyncMock(...args),
 }));
 
 import { triggerOpenClawRestart } from "./restart.js";
@@ -45,6 +51,8 @@ afterEach(() => {
   spawnMock.mockReset();
   cleanStaleGatewayProcessesSyncMock.mockReset();
   relaunchGatewayScheduledTaskMock.mockReset();
+  resolveOpenClawPackageRootSyncMock.mockReset();
+  resolveOpenClawPackageRootSyncMock.mockReturnValue(null);
   if (originalPlatformDescriptor) {
     Object.defineProperty(process, "platform", originalPlatformDescriptor);
   }
@@ -126,5 +134,46 @@ describe("triggerOpenClawRestart local script mode", () => {
         timeout: 2000,
       }),
     );
+  });
+
+  it("auto-detects the local restart script from the OpenClaw package root", async () => {
+    setPlatform("darwin");
+    delete process.env.VITEST;
+    delete process.env.NODE_ENV;
+    delete process.env.OPENCLAW_LOCAL_RESTART_SCRIPT;
+
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-root-"));
+    const scriptDir = path.join(rootDir, "scripts");
+    const scriptPath = path.join(scriptDir, "restart-local-gateway.sh");
+    await fs.mkdir(scriptDir, { recursive: true });
+    await fs.writeFile(scriptPath, "#!/usr/bin/env bash\nexit 0\n", "utf8");
+    resolveOpenClawPackageRootSyncMock.mockReturnValue(rootDir);
+
+    const unrefMock = vi.fn();
+    spawnMock.mockReturnValue({ pid: 4243, unref: unrefMock });
+
+    try {
+      const result = triggerOpenClawRestart({ preferLocalScript: true });
+      expect(result).toMatchObject({
+        ok: true,
+        method: "launchctl",
+      });
+      expect(result.detail).toContain("scheduled local restart script");
+      expect(result.tried).toContain(
+        `local-restart-script OPENCLAW_RESTART_DETACHED=1 /bin/bash ${scriptPath}`,
+      );
+      expect(spawnMock).toHaveBeenCalledWith(
+        "/bin/bash",
+        [scriptPath],
+        expect.objectContaining({
+          detached: true,
+          stdio: "ignore",
+        }),
+      );
+      expect(unrefMock).toHaveBeenCalledOnce();
+      expect(spawnSyncMock).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
   });
 });
