@@ -604,11 +604,15 @@ export function createOllamaStreamFn(
           output: estimateOllamaCompletionTokens(finalResponse),
         };
 
-        const assistantMessage = buildAssistantMessage(finalResponse, {
-          api: model.api,
-          provider: model.provider,
-          id: model.id,
-        }, usageFallback);
+        const assistantMessage = buildAssistantMessage(
+          finalResponse,
+          {
+            api: model.api,
+            provider: model.provider,
+            id: model.id,
+          },
+          usageFallback,
+        );
 
         const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
           assistantMessage.stopReason === "toolUse" ? "toolUse" : "stop";
