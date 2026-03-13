@@ -271,6 +271,8 @@ Approval-backed interpreter/runtime runs are intentionally conservative:
 - Exact argv/cwd/env context is always bound.
 - Direct shell script and direct runtime file forms are best-effort bound to one concrete local
   file snapshot.
+- Common package-manager wrapper forms that still resolve to one direct local file (for example
+  `pnpm exec`, `pnpm node`, `npm exec`, `npx`) are unwrapped before binding.
 - If OpenClaw cannot identify exactly one concrete local file for an interpreter/runtime command
   (for example package scripts, eval forms, runtime-specific loader chains, or ambiguous multi-file
   forms), approval-backed execution is denied instead of claiming semantic coverage it does not
