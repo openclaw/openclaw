@@ -214,8 +214,14 @@ struct ExecCommandResolution {
         while idx < chars.count {
             let ch = chars[idx]
             let next: Character? = idx + 1 < chars.count ? chars[idx + 1] : nil
+            let lookahead = self.nextShellSignificantCharacter(chars: chars, after: idx, inSingle: inSingle)
 
             if escaped {
+                if ch == "\n" {
+                    escaped = false
+                    idx += 1
+                    continue
+                }
                 current.append(ch)
                 escaped = false
                 idx += 1
@@ -223,6 +229,10 @@ struct ExecCommandResolution {
             }
 
             if ch == "\\", !inSingle {
+                if next == "\n" {
+                    idx += 2
+                    continue
+                }
                 current.append(ch)
                 escaped = true
                 idx += 1
@@ -243,7 +253,7 @@ struct ExecCommandResolution {
                 continue
             }
 
-            if !inSingle, self.shouldFailClosedForShell(ch: ch, next: next, inDouble: inDouble) {
+            if !inSingle, self.shouldFailClosedForShell(ch: ch, next: lookahead, inDouble: inDouble) {
                 // Fail closed on command/process substitution in allowlist mode,
                 // including command substitution inside double-quoted shell strings.
                 return nil
@@ -265,6 +275,25 @@ struct ExecCommandResolution {
         if escaped || inSingle || inDouble { return nil }
         guard appendCurrent() else { return nil }
         return segments
+    }
+
+    private static func nextShellSignificantCharacter(
+        chars: [Character],
+        after idx: Int,
+        inSingle: Bool) -> Character?
+    {
+        guard !inSingle else {
+            return idx + 1 < chars.count ? chars[idx + 1] : nil
+        }
+        var cursor = idx + 1
+        while cursor < chars.count {
+            if chars[cursor] == "\\", cursor + 1 < chars.count, chars[cursor + 1] == "\n" {
+                cursor += 2
+                continue
+            }
+            return chars[cursor]
+        }
+        return nil
     }
 
     private static func shouldFailClosedForShell(ch: Character, next: Character?, inDouble: Bool) -> Bool {
