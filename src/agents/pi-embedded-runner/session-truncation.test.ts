@@ -168,7 +168,9 @@ describe("truncateSessionAfterCompaction", () => {
     const latestCompIdx = branchAfter.findIndex(
       (e) => e.type === "compaction" && e === compactionEntries[compactionEntries.length - 1],
     );
-    const messagesBeforeLatest = branchAfter.slice(0, latestCompIdx).filter((e) => e.type === "message");
+    const messagesBeforeLatest = branchAfter
+      .slice(0, latestCompIdx)
+      .filter((e) => e.type === "message");
     expect(messagesBeforeLatest).toHaveLength(0);
   });
 
