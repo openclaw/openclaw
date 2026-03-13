@@ -1,6 +1,8 @@
 import path from "node:path";
+import { formatErrorMessage } from "../infra/errors.js";
 import { fetchWithSsrFGuard, withStrictGuardedFetchMode } from "../infra/net/fetch-guard.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { detectMime, extensionForMime } from "./mime.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";
 
@@ -84,6 +86,10 @@ async function readErrorBodySnippet(res: Response, maxChars = 200): Promise<stri
   }
 }
 
+function redactMediaUrl(url: string): string {
+  return redactSensitiveText(url);
+}
+
 export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<FetchMediaResult> {
   const {
     url,
@@ -99,6 +105,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     fallbackDispatcherPolicy,
     shouldRetryFetchError,
   } = options;
+  const sourceUrl = redactMediaUrl(url);
 
   let res: Response;
   let finalUrl = url;
@@ -129,7 +136,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
           result = await runGuardedFetch(fallbackDispatcherPolicy);
         } catch (fallbackErr) {
           const combined = new Error(
-            `Primary fetch failed and fallback fetch also failed for ${url}`,
+            `Primary fetch failed and fallback fetch also failed for ${sourceUrl}`,
             { cause: fallbackErr },
           );
           (combined as Error & { primaryError?: unknown }).primaryError = err;
@@ -143,15 +150,19 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     finalUrl = result.finalUrl;
     release = result.release;
   } catch (err) {
-    throw new MediaFetchError("fetch_failed", `Failed to fetch media from ${url}: ${String(err)}`, {
-      cause: err,
-    });
+    throw new MediaFetchError(
+      "fetch_failed",
+      `Failed to fetch media from ${sourceUrl}: ${formatErrorMessage(err)}`,
+      {
+        cause: err,
+      },
+    );
   }
 
   try {
     if (!res.ok) {
       const statusText = res.statusText ? ` ${res.statusText}` : "";
-      const redirected = finalUrl !== url ? ` (redirected to ${finalUrl})` : "";
+      const redirected = finalUrl !== url ? ` (redirected to ${redactMediaUrl(finalUrl)})` : "";
       let detail = `HTTP ${res.status}${statusText}`;
       if (!res.body) {
         detail = `HTTP ${res.status}${statusText}; empty response body`;
@@ -163,7 +174,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
       }
       throw new MediaFetchError(
         "http_error",
-        `Failed to fetch media from ${url}${redirected}: ${detail}`,
+        `Failed to fetch media from ${sourceUrl}${redirected}: ${redactSensitiveText(detail)}`,
       );
     }
 
@@ -173,7 +184,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
       if (Number.isFinite(length) && length > maxBytes) {
         throw new MediaFetchError(
           "max_bytes",
-          `Failed to fetch media from ${url}: content length ${length} exceeds maxBytes ${maxBytes}`,
+          `Failed to fetch media from ${sourceUrl}: content length ${length} exceeds maxBytes ${maxBytes}`,
         );
       }
     }
@@ -185,7 +196,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
             onOverflow: ({ maxBytes, res }) =>
               new MediaFetchError(
                 "max_bytes",
-                `Failed to fetch media from ${res.url || url}: payload exceeds maxBytes ${maxBytes}`,
+                `Failed to fetch media from ${redactMediaUrl(res.url || url)}: payload exceeds maxBytes ${maxBytes}`,
               ),
             chunkTimeoutMs: readIdleTimeoutMs,
           })
@@ -196,7 +207,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
       }
       throw new MediaFetchError(
         "fetch_failed",
-        `Failed to fetch media from ${res.url || url}: ${String(err)}`,
+        `Failed to fetch media from ${redactMediaUrl(res.url || url)}: ${formatErrorMessage(err)}`,
         { cause: err },
       );
     }
