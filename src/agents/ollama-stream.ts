@@ -245,6 +245,7 @@ function estimateOllamaPromptTokens(params: {
   let chars = 0;
   for (const message of params.messages) {
     chars += message.content.length;
+    chars += safeJsonLength(message.images);
     chars += safeJsonLength(message.tool_calls);
     chars += message.tool_name?.length ?? 0;
   }

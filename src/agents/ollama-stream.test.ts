@@ -605,6 +605,45 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
+  it("counts image payloads in prompt usage estimates when Ollama omits counters", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"vision answer"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true}',
+      ],
+      async () => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const stream = await Promise.resolve(
+          streamFn(
+            {
+              id: "llava",
+              api: "ollama",
+              provider: "custom-ollama",
+              contextWindow: 131072,
+            } as never,
+            {
+              messages: [
+                {
+                  role: "user",
+                  content: [{ type: "image", data: "a".repeat(400) }],
+                },
+              ],
+            } as never,
+            {} as never,
+          ),
+        );
+        const events = await collectStreamEvents(stream);
+
+        const doneEvent = events.at(-1);
+        if (!doneEvent || doneEvent.type !== "done") {
+          throw new Error("Expected done event");
+        }
+
+        expect(doneEvent.message.usage.input).toBeGreaterThan(50);
+      },
+    );
+  });
+
   it("prefers streamed content over earlier reasoning chunks", async () => {
     await withMockNdjsonFetch(
       [
