@@ -3,6 +3,7 @@ import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
+import { DEDUP_MAX_CHARS_PER_OUTPUT, DEDUP_MAX_OUTPUTS } from "../isolated-agent/dedup-context.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
   CronDeliveryStatus,
@@ -335,6 +336,24 @@ export function applyJobResult(
   job.state.lastDeliveryError =
     deliveryStatus === "not-delivered" && result.error ? result.error : undefined;
   job.updatedAtMs = result.endedAt;
+
+  // Record delivered output for dedup context (only when enabled and delivered).
+  if (
+    result.delivered &&
+    result.outputText?.trim() &&
+    job.payload.kind === "agentTurn" &&
+    job.payload.dedupContext
+  ) {
+    const outputs = job.state.recentOutputs ?? [];
+    outputs.push({
+      text: result.outputText.slice(0, DEDUP_MAX_CHARS_PER_OUTPUT),
+      timestamp: result.endedAt,
+    });
+    if (outputs.length > DEDUP_MAX_OUTPUTS) {
+      outputs.splice(0, outputs.length - DEDUP_MAX_OUTPUTS);
+    }
+    job.state.recentOutputs = outputs;
+  }
 
   // Track consecutive errors for backoff / auto-disable.
   if (result.status === "error") {
