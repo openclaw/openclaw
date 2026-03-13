@@ -846,14 +846,23 @@ export function isBillingAssistantError(msg: AssistantMessage | undefined): bool
   return isBillingErrorMessage(msg.errorMessage ?? "");
 }
 
-function isJsonApiInternalServerError(raw: string): boolean {
+function isRetryableJsonApiServerError(raw: string): boolean {
   if (!raw) {
     return false;
   }
-  const value = raw.toLowerCase();
-  // Anthropic often wraps transient 500s in JSON payloads like:
-  // {"type":"error","error":{"type":"api_error","message":"Internal server error"}}
-  return value.includes('"type":"api_error"') && value.includes("internal server error");
+  const info = parseApiErrorInfo(raw);
+  if (!info) {
+    return false;
+  }
+
+  // OpenAI/Codex can surface transient failures as raw payloads like:
+  // {"type":"error","error":{"type":"server_error","message":"An error occurred while processing your request."}}
+  if (info.type === "server_error") {
+    return true;
+  }
+
+  const message = info.message?.toLowerCase() ?? "";
+  return info.type === "api_error" && message.includes("internal server error");
 }
 
 export function parseImageDimensionError(raw: string): {
@@ -1006,7 +1015,7 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     // Treat remaining transient 5xx provider failures as retryable transport issues.
     return "timeout";
   }
-  if (isJsonApiInternalServerError(raw)) {
+  if (isRetryableJsonApiServerError(raw)) {
     return "timeout";
   }
   if (isCloudCodeAssistFormatError(raw)) {
