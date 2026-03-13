@@ -274,6 +274,7 @@ export async function sendDiscordVoiceMessage(
       body: JSON.stringify({
         files: [{ filename, file_size: fileSize, id: "0" }],
       }),
+      signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) {
       if (res.status === 429) {
@@ -309,13 +310,22 @@ export async function sendDiscordVoiceMessage(
 
   // Step 2: Upload the file to Discord's CDN
   // Note: Not wrapped in retry runner - upload URLs are single-use and CDN behavior differs
-  const uploadResponse = await fetch(upload_url, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "audio/ogg",
-    },
-    body: new Uint8Array(audioBuffer),
-  });
+  let uploadResponse: Response;
+  try {
+    uploadResponse = await fetch(upload_url, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "audio/ogg",
+      },
+      body: new Uint8Array(audioBuffer),
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch (err) {
+    throw new Error(
+      `Failed to upload voice message: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
 
   if (!uploadResponse.ok) {
     throw new Error(`Failed to upload voice message: ${uploadResponse.status}`);
