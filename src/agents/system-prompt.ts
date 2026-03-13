@@ -644,6 +644,67 @@ export function buildAgentSystemPrompt(params: {
     }
   }
 
+  // ── Deployment-level config: docs, authorized senders, sandbox ──────────────
+  // Injected BEFORE the per-session runtime line (channel=, model=...) so that
+  // deployment config stays in the STABLE PREFIX for per-conversation changes.
+  // These sections change YEARLY (docs path update, adding a device, sandbox toggle)
+  // vs every session for channel= and per-conversation for group-chat context.
+  // Being before channel= means they're KV-cached for all per-session changes too.
+  if (!isMinimal) {
+    lines.push(...docsSection);
+  }
+  if (ownerLine && !isMinimal) {
+    lines.push(...buildUserIdentitySection(ownerLine, isMinimal));
+  }
+  if (params.sandboxInfo?.enabled) {
+    lines.push("## Sandbox");
+    lines.push(
+      [
+        "You are running in a sandboxed runtime (tools execute in Docker).",
+        "Some tools may be unavailable due to sandbox policy.",
+        "Sub-agents stay sandboxed (no elevated/host access). Need outside-sandbox read/write? Don't spawn; ask first.",
+        acpHarnessSpawnAllowed
+          ? 'ACP harness spawns are blocked from sandboxed sessions (`sessions_spawn` with `runtime: "acp"`). Use `runtime: "subagent"` instead.'
+          : "",
+        params.sandboxInfo.containerWorkspaceDir
+          ? `Sandbox container workdir: ${sanitizeForPromptLiteral(params.sandboxInfo.containerWorkspaceDir)}`
+          : "",
+        params.sandboxInfo.workspaceDir
+          ? `Sandbox host mount source (file tools bridge only; not valid inside sandbox exec): ${sanitizeForPromptLiteral(params.sandboxInfo.workspaceDir)}`
+          : "",
+        params.sandboxInfo.workspaceAccess
+          ? `Agent workspace access: ${params.sandboxInfo.workspaceAccess}${
+              params.sandboxInfo.agentWorkspaceMount
+                ? ` (mounted at ${sanitizeForPromptLiteral(params.sandboxInfo.agentWorkspaceMount)})`
+                : ""
+            }`
+          : "",
+        params.sandboxInfo.browserBridgeUrl ? "Sandbox browser: enabled." : "",
+        params.sandboxInfo.browserNoVncUrl
+          ? `Sandbox browser observer (noVNC): ${sanitizeForPromptLiteral(params.sandboxInfo.browserNoVncUrl)}`
+          : "",
+        params.sandboxInfo.hostBrowserAllowed === true
+          ? "Host browser control: allowed."
+          : params.sandboxInfo.hostBrowserAllowed === false
+            ? "Host browser control: blocked."
+            : "",
+        params.sandboxInfo.elevated?.allowed ? "Elevated exec is available for this session." : "",
+        params.sandboxInfo.elevated?.allowed
+          ? "User can toggle with /elevated on|off|ask|full."
+          : "",
+        params.sandboxInfo.elevated?.allowed
+          ? "You may also send /elevated on|off|ask|full when needed."
+          : "",
+        params.sandboxInfo.elevated?.allowed
+          ? `Current elevated level: ${params.sandboxInfo.elevated.defaultLevel} (ask runs exec on host with approvals; full auto-approves).`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+    lines.push("");
+  }
+
   // Dynamic per-session fields on a final line so the stable prefix above can be KV-cached.
   const dynamicLine = buildRuntimeDynamicLine(
     runtimeInfo,
@@ -721,77 +782,17 @@ export function buildAgentSystemPrompt(params: {
     lines.push("## Reasoning Format", reasoningHint, "");
   }
 
-  // ── Dynamic tail ordering (most-stable-first → least-stable-last) ─────────────
-  // Sections are ordered by change frequency (least frequent = FIRST) so that
-  // when a section changes, the maximum amount of prior content is KV-cached.
-  //
-  //   1. Deployment config (docs/owners/sandbox) — YEARLY changes
-  //   2. Tool Manifest — plugin installs, RARELY (for most users: never)
-  //   3. Model Aliases — QUARTERLY changes (user updates model preferences)
-  //   4. Skills (mandatory) — MONTHLY changes (user installs new skills)
-  //   5. Project Notes (workspaceNotes) — WEEKLY changes (sprint updates)
-  //   6. MEMORY.md — DAILY changes (daily notes update)
-  //
-  // This ordering maximises the total expected KV-cache stable prefix across all
-  // real-world change events, weighted by their frequency.
+  // ── Post-conversation dynamic tail ────────────────────────────────────────────
+  // Sections ordered by change frequency (least frequent = FIRST). Deployment config
+  // was moved BEFORE the runtime dynamic line (above) to restore per-conversation stable prefix.
+  // Remaining ordering:
+  //   1. Tool Manifest — plugin installs, RARELY (for most users: never)
+  //   2. Model Aliases — QUARTERLY changes (user updates model preferences)
+  //   3. Skills (mandatory) — MONTHLY changes (user installs new skills)
+  //   4. Project Notes (workspaceNotes) — WEEKLY changes (sprint updates)
+  //   5. MEMORY.md — DAILY changes (daily notes update)
 
-  // 1. Deployment-level config: docs, authorized senders, sandbox settings.
-  if (!isMinimal) {
-    lines.push(...docsSection);
-  }
-  if (ownerLine && !isMinimal) {
-    lines.push(...buildUserIdentitySection(ownerLine, isMinimal));
-  }
-  if (params.sandboxInfo?.enabled) {
-    lines.push("## Sandbox");
-    lines.push(
-      [
-        "You are running in a sandboxed runtime (tools execute in Docker).",
-        "Some tools may be unavailable due to sandbox policy.",
-        "Sub-agents stay sandboxed (no elevated/host access). Need outside-sandbox read/write? Don't spawn; ask first.",
-        acpHarnessSpawnAllowed
-          ? 'ACP harness spawns are blocked from sandboxed sessions (`sessions_spawn` with `runtime: "acp"`). Use `runtime: "subagent"` instead.'
-          : "",
-        params.sandboxInfo.containerWorkspaceDir
-          ? `Sandbox container workdir: ${sanitizeForPromptLiteral(params.sandboxInfo.containerWorkspaceDir)}`
-          : "",
-        params.sandboxInfo.workspaceDir
-          ? `Sandbox host mount source (file tools bridge only; not valid inside sandbox exec): ${sanitizeForPromptLiteral(params.sandboxInfo.workspaceDir)}`
-          : "",
-        params.sandboxInfo.workspaceAccess
-          ? `Agent workspace access: ${params.sandboxInfo.workspaceAccess}${
-              params.sandboxInfo.agentWorkspaceMount
-                ? ` (mounted at ${sanitizeForPromptLiteral(params.sandboxInfo.agentWorkspaceMount)})`
-                : ""
-            }`
-          : "",
-        params.sandboxInfo.browserBridgeUrl ? "Sandbox browser: enabled." : "",
-        params.sandboxInfo.browserNoVncUrl
-          ? `Sandbox browser observer (noVNC): ${sanitizeForPromptLiteral(params.sandboxInfo.browserNoVncUrl)}`
-          : "",
-        params.sandboxInfo.hostBrowserAllowed === true
-          ? "Host browser control: allowed."
-          : params.sandboxInfo.hostBrowserAllowed === false
-            ? "Host browser control: blocked."
-            : "",
-        params.sandboxInfo.elevated?.allowed ? "Elevated exec is available for this session." : "",
-        params.sandboxInfo.elevated?.allowed
-          ? "User can toggle with /elevated on|off|ask|full."
-          : "",
-        params.sandboxInfo.elevated?.allowed
-          ? "You may also send /elevated on|off|ask|full when needed."
-          : "",
-        params.sandboxInfo.elevated?.allowed
-          ? `Current elevated level: ${params.sandboxInfo.elevated.defaultLevel} (ask runs exec on host with approvals; full auto-approves).`
-          : "",
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    );
-    lines.push("");
-  }
-
-  // 2. Tool Manifest: after deployment config, before model aliases.
+  // 1. Tool Manifest: after deployment config (before runtime line), before model aliases.
   // Plugin installs are rare (many users never install plugins).
   if (toolLines.length > 0) {
     lines.push("## Tool Manifest", toolLines.join("\n"), "");
