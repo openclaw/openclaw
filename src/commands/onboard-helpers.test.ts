@@ -187,4 +187,17 @@ describe("resolveResetTargets", () => {
     expect(targets.credentialsPath).toBe(path.resolve("/tmp/custom-openclaw/credentials"));
     expect(targets.sessionsDir).toBe(path.resolve("/tmp/custom-openclaw/agents/main/sessions"));
   });
+
+  it("respects legacy CLAWDBOT_CONFIG_PATH override at runtime", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: "/tmp/custom-openclaw",
+      CLAWDBOT_CONFIG_PATH: "/tmp/legacy/openclaw.json",
+    } as NodeJS.ProcessEnv;
+    const targets = resolveResetTargets(env);
+
+    expect(targets.stateDir).toBe(path.resolve("/tmp/custom-openclaw"));
+    expect(targets.configPath).toBe(path.resolve("/tmp/legacy/openclaw.json"));
+    expect(targets.credentialsPath).toBe(path.resolve("/tmp/custom-openclaw/credentials"));
+    expect(targets.sessionsDir).toBe(path.resolve("/tmp/custom-openclaw/agents/main/sessions"));
+  });
 });

@@ -5,7 +5,7 @@ import { inspect } from "node:util";
 import { cancel, isCancel } from "@clack/prompts";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveConfigPath, resolveStateDir } from "../config/config.js";
+import { resolveCanonicalConfigPath, resolveStateDir } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
@@ -335,7 +335,7 @@ export function resolveResetTargets(
   const stateDir = resolveStateDir(env);
   return {
     stateDir,
-    configPath: resolveConfigPath(env, stateDir),
+    configPath: resolveCanonicalConfigPath(env, stateDir),
     credentialsPath: path.join(stateDir, "credentials"),
     sessionsDir: resolveSessionTranscriptsDirForAgent(agentId, env),
   };

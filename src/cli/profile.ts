@@ -27,7 +27,7 @@ function takeValue(
   return { value: trimmed || null, consumedNext: Boolean(next) };
 }
 
-const ARBITRARY_ARG_COMMAND_PATHS = [["nodes", "run"], ["docs"]] as const;
+const ARBITRARY_ARG_COMMAND_PATHS = [["nodes", "run"], ["docs"], ["acp", "client"]] as const;
 const ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
 const ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level"]);
 

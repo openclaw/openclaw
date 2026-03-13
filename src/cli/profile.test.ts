@@ -145,6 +145,60 @@ describe("parseCliProfileArgs", () => {
     expect(res.argv).toEqual(["node", "openclaw", "docs", "aws", "--profile", "prod"]);
   });
 
+  it("does not intercept --profile in acp client server args", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "acp",
+      "client",
+      "--server-args",
+      "--profile",
+      "work",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBeNull();
+    expect(res.argv).toEqual([
+      "node",
+      "openclaw",
+      "acp",
+      "client",
+      "--server-args",
+      "--profile",
+      "work",
+    ]);
+  });
+
+  it("preserves acp client server args after root option values", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "--log-level",
+      "debug",
+      "acp",
+      "client",
+      "--server-args",
+      "--profile",
+      "work",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBeNull();
+    expect(res.argv).toEqual([
+      "node",
+      "openclaw",
+      "--log-level",
+      "debug",
+      "acp",
+      "client",
+      "--server-args",
+      "--profile",
+      "work",
+    ]);
+  });
+
   it("keeps passthrough --profile when global --profile is set before terminator", () => {
     const res = parseCliProfileArgs([
       "node",

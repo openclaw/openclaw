@@ -248,8 +248,12 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       : false;
     const stateTargetsProfileDefault = stateIsDefault || stateMatchesProfileDefault;
     const configTargetsProfileDefault = configIsDefault || configMatchesProfileDefault;
-    const hasStateOverride = Boolean(process.env.OPENCLAW_STATE_DIR?.trim());
-    const hasConfigOverride = Boolean(process.env.OPENCLAW_CONFIG_PATH?.trim());
+    const hasStateOverride = Boolean(
+      process.env.OPENCLAW_STATE_DIR?.trim() || process.env.CLAWDBOT_STATE_DIR?.trim(),
+    );
+    const hasConfigOverride = Boolean(
+      process.env.OPENCLAW_CONFIG_PATH?.trim() || process.env.CLAWDBOT_CONFIG_PATH?.trim(),
+    );
     const hasExplicitCustomTarget =
       hasStateOverride &&
       !stateTargetsProfileDefault &&

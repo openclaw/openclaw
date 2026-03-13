@@ -3,7 +3,6 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
@@ -373,11 +372,39 @@ describe("gateway run option collisions", () => {
     expect(ensureDevGatewayConfig).toHaveBeenCalledWith({ reset: true });
   });
 
+  it("allows --dev --reset for explicit non-default legacy state/config paths", async () => {
+    vi.stubEnv("HOME", "/Users/test");
+    vi.stubEnv("CLAWDBOT_STATE_DIR", "/tmp/custom-dev");
+    vi.stubEnv("CLAWDBOT_CONFIG_PATH", "/tmp/custom-dev/openclaw.json");
+    resolveStateDir.mockReturnValue("/tmp/custom-dev");
+    resolveConfigPath.mockReturnValue("/tmp/custom-dev/openclaw.json");
+
+    await runGatewayCli(["gateway", "run", "--dev", "--reset", "--allow-unconfigured"]);
+
+    expect(ensureDevGatewayConfig).toHaveBeenCalledWith({ reset: true });
+  });
+
   it("hard-stops --dev --reset when state/config match non-dev profile defaults", async () => {
     vi.stubEnv("HOME", "/Users/test");
     vi.stubEnv("OPENCLAW_PROFILE", "work");
     vi.stubEnv("OPENCLAW_STATE_DIR", "/Users/test/.openclaw-work");
     vi.stubEnv("OPENCLAW_CONFIG_PATH", "/Users/test/.openclaw-work/openclaw.json");
+    resolveStateDir.mockReturnValue("/Users/test/.openclaw-work");
+    resolveConfigPath.mockReturnValue("/Users/test/.openclaw-work/openclaw.json");
+
+    await expectGatewayExit(["gateway", "run", "--dev", "--reset"]);
+
+    expect(ensureDevGatewayConfig).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain(
+      "Refusing to run `gateway --dev --reset` because the reset target is not dev-isolated.",
+    );
+  });
+
+  it("hard-stops --dev --reset when legacy env resolves to non-dev profile defaults", async () => {
+    vi.stubEnv("HOME", "/Users/test");
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
+    vi.stubEnv("CLAWDBOT_STATE_DIR", "/Users/test/.openclaw-work");
+    vi.stubEnv("CLAWDBOT_CONFIG_PATH", "/Users/test/.openclaw-work/openclaw.json");
     resolveStateDir.mockReturnValue("/Users/test/.openclaw-work");
     resolveConfigPath.mockReturnValue("/Users/test/.openclaw-work/openclaw.json");
 
