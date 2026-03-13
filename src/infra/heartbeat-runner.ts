@@ -6,7 +6,6 @@ import {
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
-import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../agents/identity.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
@@ -17,15 +16,12 @@ import {
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
-import {
-  extractShortModelName,
-  resolveResponsePrefixTemplate,
-  type ResponsePrefixContext,
-} from "../auto-reply/reply/response-prefix-template.js";
+import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
+import { createReplyPrefixContext } from "../channels/reply-prefix.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
@@ -687,19 +683,16 @@ export async function runHeartbeatOnce(opts: {
         })
       : { showOk: false, showAlerts: true, useIndicator: true };
   const { sender } = resolveHeartbeatSenderContext({ cfg, entry, delivery });
-  const responsePrefixTemplate = resolveEffectiveMessagesConfig(cfg, agentId, {
+  const {
+    prefixContext,
+    responsePrefix: responsePrefixTemplate,
+    onModelSelected,
+  } = createReplyPrefixContext({
+    cfg,
+    agentId,
     channel: delivery.channel !== "none" ? delivery.channel : undefined,
     accountId: delivery.accountId,
-  }).responsePrefix;
-  const prefixContext: ResponsePrefixContext = {
-    identityName: resolveIdentityName(cfg, agentId),
-  };
-  const onModelSelected = (ctx: { provider: string; model: string; thinkLevel?: string }) => {
-    prefixContext.provider = ctx.provider;
-    prefixContext.model = extractShortModelName(ctx.model);
-    prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
-    prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
-  };
+  });
 
   const canRelayToUser = Boolean(
     delivery.channel !== "none" && delivery.to && visibility.showAlerts,
