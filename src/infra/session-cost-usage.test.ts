@@ -241,6 +241,8 @@ describe("session cost usage", () => {
       "sess-active.jsonl",
       "sess-reset.jsonl.reset.2026-03-13T10-05-00.000Z",
       "sess-deleted.jsonl.deleted.2026-03-13T10-10-00.000Z",
+      "sess-backup.jsonl.bak.2026-03-13T10-20-00.000Z",
+      "sessions.json.bak.1737420882",
     ];
 
     for (const [i, name] of files.entries()) {
@@ -286,6 +288,7 @@ describe("session cost usage", () => {
       ["sess-active.jsonl", "active hello"],
       ["sess-reset.jsonl.reset.2026-03-13T10-05-00.000Z", "reset hello"],
       ["sess-deleted.jsonl.deleted.2026-03-13T10-10-00.000Z", "deleted hello"],
+      ["foo.jsonl.bar.jsonl.reset.2026-03-13T10-15-00.000Z", "compound hello"],
     ] as const;
 
     for (const [name, text] of files) {
@@ -309,11 +312,13 @@ describe("session cost usage", () => {
         startMs: new Date("2026-03-13T00:00:00.000Z").getTime(),
       });
       const ids = sessions.map((session) => session.sessionId).sort();
-      expect(ids).toEqual(["sess-active", "sess-deleted", "sess-reset"]);
+      expect(ids).toEqual(["foo.jsonl.bar", "sess-active", "sess-deleted", "sess-reset"]);
       const reset = sessions.find((session) => session.sessionId === "sess-reset");
       const deleted = sessions.find((session) => session.sessionId === "sess-deleted");
+      const compound = sessions.find((session) => session.sessionId === "foo.jsonl.bar");
       expect(reset?.firstUserMessage).toContain("reset hello");
       expect(deleted?.firstUserMessage).toContain("deleted hello");
+      expect(compound?.firstUserMessage).toContain("compound hello");
     });
   });
 

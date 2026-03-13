@@ -9,6 +9,10 @@ import {
   resolveSessionFilePath,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
+import {
+  isPrimarySessionTranscriptFileName,
+  parseSessionArchiveTimestamp,
+} from "../config/sessions/artifacts.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
@@ -53,14 +57,30 @@ export type {
   SessionUsageTimeSeries,
 } from "./session-cost-usage.types.js";
 
-const SESSION_TRANSCRIPT_FILE_RE = /\.jsonl(?:\.(?:reset|deleted)\..+)?$/;
+const isArchivedUsageTranscriptFilename = (name: string): boolean =>
+  parseSessionArchiveTimestamp(name, "reset") !== null ||
+  parseSessionArchiveTimestamp(name, "deleted") !== null;
 
 const isSessionTranscriptFilename = (name: string): boolean =>
-  SESSION_TRANSCRIPT_FILE_RE.test(name);
+  isPrimarySessionTranscriptFileName(name) || isArchivedUsageTranscriptFilename(name);
 
 const deriveSessionIdFromFilename = (name: string): string => {
-  const match = name.match(/^(.*?\.jsonl)(?:\.(?:reset|deleted)\..+)?$/);
-  return match ? match[1].slice(0, -6) : name.replace(/\.jsonl$/, "");
+  for (const reason of ["reset", "deleted"] as const) {
+    const archivedAt = parseSessionArchiveTimestamp(name, reason);
+    if (archivedAt === null) {
+      continue;
+    }
+    const marker = `.${reason}.`;
+    const index = name.lastIndexOf(marker);
+    if (index >= 0) {
+      const base = name.slice(0, index);
+      if (base.endsWith(".jsonl")) {
+        return base.slice(0, -6);
+      }
+      return base;
+    }
+  }
+  return name.endsWith(".jsonl") ? name.slice(0, -6) : name;
 };
 
 const emptyTotals = (): CostUsageTotals => ({
