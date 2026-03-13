@@ -483,6 +483,48 @@ async function assertSafeConfigRestoreTarget(params: {
   }
 }
 
+async function assertSafeDirectoryRestoreTarget(params: {
+  targetPath: string;
+  label: "OPENCLAW_STATE_DIR" | "OPENCLAW_OAUTH_DIR";
+}): Promise<void> {
+  const resolved = await canonicalizePathForContainment(params.targetPath);
+  const homeDir = resolveHomeDir();
+  const canonicalHomeDir = homeDir ? await canonicalizePathForContainment(homeDir) : undefined;
+  if (isUnsafeRestoreTarget(resolved, canonicalHomeDir)) {
+    throw new Error(
+      `Refusing full-host restore: ${params.label} resolves to ${resolved}, which is too broad. ` +
+        "Set it to a dedicated directory before restoring.",
+    );
+  }
+
+  try {
+    const stat = await fs.lstat(params.targetPath);
+    if (!stat.isDirectory()) {
+      throw new Error(
+        `Refusing full-host restore: ${params.label} resolves to an existing non-directory (${resolved}). ` +
+          "Set it to a dedicated directory before restoring.",
+      );
+    }
+  } catch (error) {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+  }
+}
+
+async function assertRegularFileRestoreSource(params: {
+  sourcePath: string;
+  label: string;
+  mode: "config-only" | "full-host";
+}): Promise<void> {
+  const stat = await fs.lstat(params.sourcePath);
+  if (!stat.isFile()) {
+    throw new Error(
+      `Refusing ${params.mode} restore: ${params.label} is not a regular file (${params.sourcePath}).`,
+    );
+  }
+}
+
 async function assertSafeWorkspaceRestoreTarget(params: {
   targetPath: string;
   stateDir: string;
@@ -561,6 +603,11 @@ export async function buildRestoreOperations(params: {
     if (!configSourcePath) {
       throw new Error("Backup archive does not contain a config asset.");
     }
+    await assertRegularFileRestoreSource({
+      sourcePath: configSourcePath,
+      label: "config asset",
+      mode: "config-only",
+    });
     return [
       {
         kind: "config",
@@ -571,10 +618,6 @@ export async function buildRestoreOperations(params: {
   }
 
   if (params.mode === "full-host") {
-    // Validate that state/config/oauth targets are not dangerously broad paths
-    // (e.g. $HOME or /) that would clobber unrelated user data on restore.
-    const homeDir = resolveHomeDir();
-    const canonicalHomeDir = homeDir ? await canonicalizePathForContainment(homeDir) : undefined;
     await assertSafeConfigRestoreTarget({
       targetPath: configPath,
       mode: "full-host",
@@ -583,13 +626,10 @@ export async function buildRestoreOperations(params: {
       ["OPENCLAW_STATE_DIR", stateDir],
       ["OPENCLAW_OAUTH_DIR", oauthDir],
     ] as const) {
-      const resolved = await canonicalizePathForContainment(targetPath);
-      if (isUnsafeRestoreTarget(resolved, canonicalHomeDir)) {
-        throw new Error(
-          `Refusing full-host restore: ${label} resolves to ${resolved}, which is too broad. ` +
-            "Set it to a dedicated directory before restoring.",
-        );
-      }
+      await assertSafeDirectoryRestoreTarget({
+        targetPath,
+        label,
+      });
     }
 
     if (stateAsset) {
@@ -610,6 +650,11 @@ export async function buildRestoreOperations(params: {
           }))
         : undefined;
     if (configSourcePath) {
+      await assertRegularFileRestoreSource({
+        sourcePath: configSourcePath,
+        label: "config asset",
+        mode: "full-host",
+      });
       operations.push({
         kind: "config",
         sourcePath: configSourcePath,

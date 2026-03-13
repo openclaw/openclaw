@@ -742,6 +742,149 @@ describe("backup restore", () => {
     }
   });
 
+  it("rejects full-host restore when OPENCLAW_STATE_DIR points to an existing file", async () => {
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
+    const stateFile = path.join(tempHome.home, "state-file.txt");
+    try {
+      process.env.OPENCLAW_STATE_DIR = stateFile;
+      process.env.OPENCLAW_CONFIG_PATH = path.join(tempHome.home, "safe", "openclaw.json");
+      await fs.writeFile(stateFile, "not a directory\n", "utf8");
+
+      await expect(
+        buildRestoreOperations({
+          mode: "full-host",
+          extractedRoot: extractDir,
+          manifest: {
+            schemaVersion: 1,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            archiveRoot: "archive-root",
+            runtimeVersion: "2026.3.9",
+            platform: process.platform,
+            nodeVersion: process.version,
+            assets: [],
+          },
+        }),
+      ).rejects.toThrow(
+        /Refusing full-host restore: OPENCLAW_STATE_DIR resolves to an existing non-directory/,
+      );
+    } finally {
+      if (originalStateDir == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+      if (originalConfigPath == null) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+      }
+      await fs.rm(extractDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects full-host restore when OPENCLAW_OAUTH_DIR points to an existing file", async () => {
+    const originalOauthDir = process.env.OPENCLAW_OAUTH_DIR;
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
+    const oauthFile = path.join(tempHome.home, "oauth-file.txt");
+    try {
+      process.env.OPENCLAW_OAUTH_DIR = oauthFile;
+      await fs.writeFile(oauthFile, "not a directory\n", "utf8");
+
+      await expect(
+        buildRestoreOperations({
+          mode: "full-host",
+          extractedRoot: extractDir,
+          manifest: {
+            schemaVersion: 1,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            archiveRoot: "archive-root",
+            runtimeVersion: "2026.3.9",
+            platform: process.platform,
+            nodeVersion: process.version,
+            assets: [],
+          },
+        }),
+      ).rejects.toThrow(
+        /Refusing full-host restore: OPENCLAW_OAUTH_DIR resolves to an existing non-directory/,
+      );
+    } finally {
+      if (originalOauthDir == null) {
+        delete process.env.OPENCLAW_OAUTH_DIR;
+      } else {
+        process.env.OPENCLAW_OAUTH_DIR = originalOauthDir;
+      }
+      await fs.rm(extractDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects config-only restore when the config asset source is a directory", async () => {
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
+    const rootDir = path.join(extractDir, "archive-root");
+    const configDir = path.join(rootDir, "assets", "config");
+    try {
+      await fs.mkdir(configDir, { recursive: true });
+
+      await expect(
+        buildRestoreOperations({
+          mode: "config-only",
+          extractedRoot: rootDir,
+          manifest: {
+            schemaVersion: 1,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            archiveRoot: "archive-root",
+            runtimeVersion: "2026.3.9",
+            platform: process.platform,
+            nodeVersion: process.version,
+            assets: [
+              {
+                kind: "config",
+                sourcePath: path.join(tempHome.home, ".openclaw", "openclaw.json"),
+                archivePath: "archive-root/assets/config",
+              },
+            ],
+          },
+        }),
+      ).rejects.toThrow(/Refusing config-only restore: config asset is not a regular file/);
+    } finally {
+      await fs.rm(extractDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects full-host restore when the config asset source is a directory", async () => {
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
+    const rootDir = path.join(extractDir, "archive-root");
+    const configDir = path.join(rootDir, "assets", "config");
+    try {
+      await fs.mkdir(configDir, { recursive: true });
+
+      await expect(
+        buildRestoreOperations({
+          mode: "full-host",
+          extractedRoot: rootDir,
+          manifest: {
+            schemaVersion: 1,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            archiveRoot: "archive-root",
+            runtimeVersion: "2026.3.9",
+            platform: process.platform,
+            nodeVersion: process.version,
+            assets: [
+              {
+                kind: "config",
+                sourcePath: path.join(tempHome.home, ".openclaw", "openclaw.json"),
+                archivePath: "archive-root/assets/config",
+              },
+            ],
+          },
+        }),
+      ).rejects.toThrow(/Refusing full-host restore: config asset is not a regular file/);
+    } finally {
+      await fs.rm(extractDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails full-host restore when archived workspace assets cannot be mapped", async () => {
     const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
     const rootDir = path.join(extractDir, "archive-root");
