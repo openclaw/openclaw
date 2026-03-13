@@ -10,10 +10,19 @@ describe("shared/chat-message-content", () => {
     ).toBe("hello");
   });
 
+  it("preserves empty-string text in the first block", () => {
+    expect(
+      extractFirstTextBlock({
+        content: [{ text: "" }, { text: "later" }],
+      }),
+    ).toBe("");
+  });
+
   it("returns undefined for missing, empty, or non-text content", () => {
     expect(extractFirstTextBlock(null)).toBeUndefined();
     expect(extractFirstTextBlock({ content: [] })).toBeUndefined();
     expect(extractFirstTextBlock({ content: [{ type: "image" }] })).toBeUndefined();
     expect(extractFirstTextBlock({ content: ["hello"] })).toBeUndefined();
+    expect(extractFirstTextBlock({ content: [{ text: 1 }, { text: "later" }] })).toBeUndefined();
   });
 });
