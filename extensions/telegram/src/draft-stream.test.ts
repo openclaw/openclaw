@@ -364,7 +364,7 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).not.toHaveBeenCalled();
   });
 
-it("shares draft-id allocation across distinct module instances", async () => {
+  it("shares draft-id allocation across distinct module instances", async () => {
     const draftA = await importFreshModule<typeof import("./draft-stream.js")>(
       import.meta.url,
       "./draft-stream.js?scope=shared-a",
