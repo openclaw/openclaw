@@ -881,6 +881,47 @@ describe("handleToolExecutionEnd lastToolError clearing", () => {
     expect(ctx.state.lastToolError?.toolName).toBe("write");
   });
 
+  it("does not clear lastToolError when same tool succeeds with a different mutating action", async () => {
+    const { ctx } = createTestContext();
+
+    // 1. cron add fails (mutating)
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "cron",
+      toolCallId: "tool-c1",
+      args: { action: "add", job: { name: "reminder" } },
+    } as never);
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "cron",
+      toolCallId: "tool-c1",
+      isError: true,
+      result: "Error: cron add failed",
+    } as never);
+
+    expect(ctx.state.lastToolError).toBeDefined();
+    expect(ctx.state.lastToolError?.toolName).toBe("cron");
+
+    // 2. cron remove succeeds (different mutating action, same tool)
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "cron",
+      toolCallId: "tool-c2",
+      args: { action: "remove", jobId: "job-123" },
+    } as never);
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "cron",
+      toolCallId: "tool-c2",
+      isError: false,
+      result: { ok: true },
+    } as never);
+
+    // lastToolError should remain — different action on same tool must not clear
+    expect(ctx.state.lastToolError).toBeDefined();
+    expect(ctx.state.lastToolError?.toolName).toBe("cron");
+  });
+
   it("does not clear lastToolError when same tool type succeeds with a read-only action", async () => {
     const { ctx } = createTestContext();
 

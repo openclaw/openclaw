@@ -37,7 +37,12 @@ import {
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
-import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
+import { consumeAdjustedParamsForToolCall } from "./pi-tools.before-tool-call.js";
+import {
+  buildToolMutationState,
+  isSameToolActionType,
+  isSameToolMutationAction,
+} from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
@@ -820,15 +825,20 @@ export async function handleToolExecutionEnd(
         meta,
         actionFingerprint: callSummary?.actionFingerprint,
       });
-      // Also clear when the same tool type performs a *different* mutating action
-      // successfully, which indicates the agent retried the operation on a new
-      // target (issue #42912).  Require the success to also be mutating so that
+      // Also clear when the same tool+action type retries on a different target
+      // (issue #42912).  Require the success to also be mutating so that
       // read-only calls (e.g. `list`, `get`) don't accidentally clear an
-      // unresolved write failure.
+      // unresolved write failure.  Compare tool+action prefix (not full fingerprint)
+      // to avoid clearing unrelated actions on multi-action tools (e.g. gateway
+      // config.apply vs restart).
       const sameToolRetried =
         !sameAction &&
         callSummary?.mutatingAction === true &&
-        toolName.trim().toLowerCase() === ctx.state.lastToolError.toolName.trim().toLowerCase();
+        isSameToolActionType(ctx.state.lastToolError, {
+          toolName,
+          meta,
+          actionFingerprint: callSummary?.actionFingerprint,
+        });
       if (sameAction || sameToolRetried) {
         ctx.state.lastToolError = undefined;
       }

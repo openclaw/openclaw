@@ -4,6 +4,7 @@ import {
   buildToolMutationState,
   isLikelyMutatingToolName,
   isMutatingToolCall,
+  isSameToolActionType,
   isSameToolMutationAction,
 } from "./tool-mutation.js";
 
@@ -86,6 +87,40 @@ describe("tool mutation helpers", () => {
         { toolName: "write" },
       ),
     ).toBe(false);
+  });
+
+  it("matches same tool+action type ignoring target differences", () => {
+    // Same tool, no action, different target → same type
+    expect(
+      isSameToolActionType(
+        { toolName: "write", actionFingerprint: "tool=write|path=/tmp/a" },
+        { toolName: "write", actionFingerprint: "tool=write|path=/tmp/b" },
+      ),
+    ).toBe(true);
+    // Same tool, same action, different target → same type
+    expect(
+      isSameToolActionType(
+        { toolName: "cron", actionFingerprint: "tool=cron|action=add|jobid=1" },
+        { toolName: "cron", actionFingerprint: "tool=cron|action=add|jobid=2" },
+      ),
+    ).toBe(true);
+    // Same tool, different action → different type
+    expect(
+      isSameToolActionType(
+        { toolName: "cron", actionFingerprint: "tool=cron|action=add|jobid=1" },
+        { toolName: "cron", actionFingerprint: "tool=cron|action=remove|jobid=1" },
+      ),
+    ).toBe(false);
+    // Different tool → different type
+    expect(
+      isSameToolActionType(
+        { toolName: "write", actionFingerprint: "tool=write|path=/tmp/a" },
+        { toolName: "exec", actionFingerprint: "tool=exec|meta=echo hi" },
+      ),
+    ).toBe(false);
+    // Fallback to toolName when no fingerprints
+    expect(isSameToolActionType({ toolName: "write" }, { toolName: "write" })).toBe(true);
+    expect(isSameToolActionType({ toolName: "write" }, { toolName: "exec" })).toBe(false);
   });
 
   it("keeps legacy name-only mutating heuristics for payload fallback", () => {

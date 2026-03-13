@@ -214,6 +214,32 @@ export function buildToolMutationState(
   };
 }
 
+/**
+ * Extract `tool=X` and `action=Y` segments from a fingerprint, ignoring target keys.
+ * Returns a comparable prefix like `tool=write` or `tool=cron|action=add`.
+ */
+function extractToolActionPrefix(fingerprint: string): string {
+  return fingerprint
+    .split("|")
+    .filter((part) => part.startsWith("tool=") || part.startsWith("action="))
+    .join("|");
+}
+
+/**
+ * Check if two tool calls are the same tool+action type (ignoring target).
+ * Used to allow clearing errors when the same operation retries on a different target,
+ * while preventing unrelated actions on the same multi-action tool from clearing errors.
+ */
+export function isSameToolActionType(existing: ToolActionRef, next: ToolActionRef): boolean {
+  if (existing.actionFingerprint != null && next.actionFingerprint != null) {
+    return (
+      extractToolActionPrefix(existing.actionFingerprint) ===
+      extractToolActionPrefix(next.actionFingerprint)
+    );
+  }
+  return existing.toolName.trim().toLowerCase() === next.toolName.trim().toLowerCase();
+}
+
 export function isSameToolMutationAction(existing: ToolActionRef, next: ToolActionRef): boolean {
   if (existing.actionFingerprint != null || next.actionFingerprint != null) {
     // For mutating flows, fail closed: only clear when both fingerprints exist and match.
