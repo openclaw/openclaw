@@ -441,6 +441,7 @@ export async function discoverAllSessions(params?: {
 
     // Extract session ID from filename, preserving base session id for archived reset/deleted transcripts.
     const sessionId = deriveSessionIdFromFilename(entry.name);
+    const archived = isArchivedUsageTranscriptFilename(entry.name);
 
     // Try to read first user message for label extraction
     let firstUserMessage: string | undefined;
@@ -482,6 +483,7 @@ export async function discoverAllSessions(params?: {
       sessionFile: filePath,
       mtime: stats.mtimeMs,
       firstUserMessage,
+      ...(archived ? { archived } : {}),
     });
   }
 

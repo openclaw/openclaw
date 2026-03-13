@@ -316,9 +316,15 @@ describe("session cost usage", () => {
       const reset = sessions.find((session) => session.sessionId === "sess-reset");
       const deleted = sessions.find((session) => session.sessionId === "sess-deleted");
       const compound = sessions.find((session) => session.sessionId === "foo.jsonl.bar");
+      const active = sessions.find((session) => session.sessionId === "sess-active");
       expect(reset?.firstUserMessage).toContain("reset hello");
       expect(deleted?.firstUserMessage).toContain("deleted hello");
       expect(compound?.firstUserMessage).toContain("compound hello");
+      // Archived transcripts should be flagged so callers use sessionFile directly
+      expect(reset?.archived).toBe(true);
+      expect(deleted?.archived).toBe(true);
+      expect(compound?.archived).toBe(true);
+      expect(active?.archived).toBeUndefined();
     });
   });
 
