@@ -119,13 +119,16 @@ function errorBackoffMs(consecutiveErrors: number): number {
 }
 
 function resolveDeliveryStatus(params: { job: CronJob; delivered?: boolean }): CronDeliveryStatus {
+  const plan = resolveCronDeliveryPlan(params.job);
   if (params.delivered === true) {
     return "delivered";
   }
   if (params.delivered === false) {
-    return "not-delivered";
+    // When delivery was not requested (e.g. delivery.mode = "none"),
+    // report "not-requested" instead of "not-delivered".
+    return plan.requested ? "not-delivered" : "not-requested";
   }
-  return resolveCronDeliveryPlan(params.job).requested ? "unknown" : "not-requested";
+  return plan.requested ? "unknown" : "not-requested";
 }
 
 /**

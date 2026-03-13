@@ -106,7 +106,7 @@ describe("CronService persists delivered status", () => {
     cron.stop();
   });
 
-  it("persists lastDelivered=false when isolated job explicitly reports not delivered", async () => {
+  it("persists not-requested when delivered=false and delivery.mode is none", async () => {
     const store = await makeStorePath();
     const { cron, finished } = createIsolatedCronWithFinishedBarrier({
       storePath: store.storePath,
@@ -117,7 +117,35 @@ describe("CronService persists delivered status", () => {
     const { updated } = await runSingleJobAndReadState({
       cron,
       finished,
-      job: buildIsolatedAgentTurnJob("delivered-false"),
+      job: buildIsolatedAgentTurnJob("delivered-false-mode-none"),
+    });
+
+    expect(updated?.state.lastStatus).toBe("ok");
+    expect(updated?.state.lastRunStatus).toBe("ok");
+    expect(updated?.state.lastDelivered).toBe(false);
+    // delivery.mode = "none" means delivery was not requested,
+    // so the status should be "not-requested" even when delivered=false (#44533)
+    expect(updated?.state.lastDeliveryStatus).toBe("not-requested");
+    expect(updated?.state.lastDeliveryError).toBeUndefined();
+
+    cron.stop();
+  });
+
+  it("persists not-delivered when delivered=false and delivery was requested", async () => {
+    const store = await makeStorePath();
+    const { cron, finished } = createIsolatedCronWithFinishedBarrier({
+      storePath: store.storePath,
+      delivered: false,
+    });
+
+    await cron.start();
+    const { updated } = await runSingleJobAndReadState({
+      cron,
+      finished,
+      job: {
+        ...buildIsolatedAgentTurnJob("delivered-false-requested"),
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      },
     });
 
     expect(updated?.state.lastStatus).toBe("ok");
