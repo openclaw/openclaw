@@ -56,7 +56,7 @@ export function renderToolCardSidebar(card: ToolCard, _onOpenSidebar?: (content:
   // Issue #45040: Remove auto-open sidebar behavior to prevent blocking popup
   // Users can still manually open sidebar if needed
   const canClick = false;
-  const handleClick = undefined;
+  const handleClick: (() => void) | undefined = undefined;
 
   const isShort = hasText && (card.text?.length ?? 0) <= TOOL_INLINE_THRESHOLD;
   const showCollapsed = hasText && !isShort;
