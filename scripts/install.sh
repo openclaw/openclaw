@@ -1029,6 +1029,8 @@ Environment variables:
   OPENCLAW_DRY_RUN=1
   OPENCLAW_NO_ONBOARD=1
   OPENCLAW_VERBOSE=1
+  OPENCLAW_INSTALL_RESTORE_BACKUP=1  Auto-restore latest backup when state empty
+  OPENCLAW_INSTALL_SKIP_BACKUP=1     Skip backup detection/restore prompt
   OPENCLAW_NPM_LOGLEVEL=error|warn|notice  Default: error (hide npm deprecation noise)
   SHARP_IGNORE_GLOBAL_LIBVIPS=0|1    Default: 1 (avoid sharp building against global libvips)
 
@@ -2006,6 +2008,131 @@ install_openclaw() {
     ui_success "OpenClaw installed"
 }
 
+# Detect backup directories from uninstall (e.g. ~/.openclaw-backup-20260311-143022)
+# Returns newline-separated paths, newest first.
+detect_backup_dirs() {
+    local dir
+    for dir in "$HOME"/.openclaw-backup-*; do
+        [[ -e "$dir" ]] || continue
+        [[ -d "$dir" ]] || continue
+        echo "$dir"
+    done 2>/dev/null | sort -r
+}
+
+# Check if state dir is empty or missing (no config, no skills, no sessions)
+is_state_dir_empty() {
+    local state_dir="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
+    [[ ! -d "$state_dir" ]] && return 0
+    [[ -f "$state_dir/openclaw.json" || -f "$state_dir/clawdbot.json" ]] && return 1
+    [[ -d "$state_dir/skills" && -n "$(ls -A "$state_dir/skills" 2>/dev/null)" ]] && return 1
+    [[ -d "$state_dir/sessions" && -n "$(ls -A "$state_dir/sessions" 2>/dev/null)" ]] && return 1
+    return 0
+}
+
+# Check if a backup dir contains valid backup (tar.gz or manual skills/sessions)
+is_valid_backup_dir() {
+    local dir="$1"
+    [[ -d "$dir" ]] || return 1
+    if ls "$dir"/*.tar.gz 1>/dev/null 2>&1; then
+        return 0
+    fi
+    [[ -d "$dir/skills" || -d "$dir/sessions" || -f "$dir/openclaw.json" ]] && return 0
+    return 1
+}
+
+# Restore backup during install. Call only when: state empty, backups exist, openclaw available.
+maybe_restore_backup_during_install() {
+    local claw="${OPENCLAW_BIN:-}"
+    [[ -z "$claw" ]] && claw="$(resolve_openclaw_bin || true)"
+    [[ -z "$claw" || ! -x "$claw" ]] && return 0
+
+    is_state_dir_empty || return 0
+    local backups
+    backups="$(detect_backup_dirs)"
+    [[ -z "$backups" ]] && return 0
+
+    # Filter to valid backup dirs only
+    local valid_backups=()
+    local b
+    while IFS= read -r b; do
+        [[ -z "$b" ]] && continue
+        is_valid_backup_dir "$b" && valid_backups+=("$b")
+    done <<< "$backups"
+    [[ ${#valid_backups[@]} -eq 0 ]] && return 0
+
+    # Env overrides
+    [[ "${OPENCLAW_INSTALL_SKIP_BACKUP:-0}" == "1" ]] && return 0
+    if [[ "${OPENCLAW_INSTALL_RESTORE_BACKUP:-0}" == "1" ]]; then
+        local latest="${valid_backups[0]}"
+        ui_info "Restoring backup from ${latest}"
+        if run_quiet_step "Restoring backup" "$claw" backup restore "$latest" --verify; then
+            ui_success "Backup restored"
+        else
+            ui_warn "Backup restore failed; continuing with fresh state"
+        fi
+        return 0
+    fi
+
+    # Non-interactive: skip
+    if is_non_interactive_shell || [[ "${NO_PROMPT:-0}" == "1" ]]; then
+        ui_info "Backup(s) found but no TTY; skipping restore. Run: openclaw backup restore <path>"
+        return 0
+    fi
+
+    # Interactive prompt
+    local latest="${valid_backups[0]}"
+    ui_section "Backup detected"
+    ui_info "Found ${#valid_backups[@]} backup(s). Latest: ${latest}"
+    if [[ -n "$GUM" ]] && gum_is_tty; then
+        local choice
+        choice="$("$GUM" choose \
+            --header "Restore backup or continue with fresh install?" \
+            --cursor-prefix "❯ " \
+            "restore  · restore latest backup into ~/.openclaw" \
+            "skip     · continue without restoring (backup kept)" \
+            "delete   · delete all backups and continue" < /dev/tty 2>/dev/null || true)"
+        case "$choice" in
+            restore*)
+                if run_quiet_step "Restoring backup" "$claw" backup restore "$latest" --verify; then
+                    ui_success "Backup restored"
+                else
+                    ui_warn "Backup restore failed; continuing with fresh state"
+                fi
+                ;;
+            delete*)
+                for b in "${valid_backups[@]}"; do
+                    rm -rf "$b" 2>/dev/null && ui_info "Removed $b" || true
+                done
+                ui_info "Backups removed"
+                ;;
+            *)
+                ui_info "Skipping restore; backup(s) kept at ~/.openclaw-backup-*"
+                ;;
+        esac
+    else
+        echo -e "${WARN}→${NC} Restore latest backup? [y]es / [n]o (skip) / [d]elete backups:"
+        read -r answer < /dev/tty || true
+        case "${answer,,}" in
+            y|yes)
+                if run_quiet_step "Restoring backup" "$claw" backup restore "$latest" --verify; then
+                    ui_success "Backup restored"
+                else
+                    ui_warn "Backup restore failed; continuing with fresh state"
+                fi
+                ;;
+            d|delete)
+                for b in "${valid_backups[@]}"; do
+                    rm -rf "$b" 2>/dev/null && ui_info "Removed $b" || true
+                done
+                ui_info "Backups removed"
+                ;;
+            *)
+                ui_info "Skipping restore; backup(s) kept"
+                ;;
+        esac
+    fi
+}
+
 # Run doctor for migrations (safe, non-interactive)
 run_doctor() {
     ui_info "Running doctor to migrate settings"
@@ -2325,6 +2452,9 @@ main() {
     fi
 
     refresh_gateway_service_if_loaded
+
+    # Step 5b: Restore backup if state is empty and backups exist (reinstall after uninstall)
+    maybe_restore_backup_during_install
 
     # Step 6: Run doctor for migrations on upgrades and git installs
     local run_doctor_after=false

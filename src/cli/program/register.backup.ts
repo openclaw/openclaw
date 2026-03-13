@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { backupVerifyCommand } from "../../commands/backup-verify.js";
 import { backupCreateCommand } from "../../commands/backup.js";
+import { restoreBackup } from "../../infra/backup-restore.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
@@ -87,6 +88,44 @@ export function registerBackupCommand(program: Command) {
           archive: archive as string,
           json: Boolean(opts.json),
         });
+      });
+    });
+
+  backup
+    .command("restore <source>")
+    .description("Restore OpenClaw state from a backup archive or directory")
+    .option("--target-dir <path>", "Target state directory (default: ~/.openclaw)")
+    .option("--verify", "Verify archive before restore (tar.gz only)", false)
+    .option("--dry-run", "Print restore plan without writing", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          [
+            "openclaw backup restore ~/.openclaw-backup-20260311-143022",
+            "Restore from uninstall backup directory.",
+          ],
+          [
+            "openclaw backup restore ./backup.tar.gz --verify",
+            "Restore from archive with verification.",
+          ],
+          [
+            "openclaw backup restore ~/Backups/latest.tar.gz --dry-run",
+            "Preview restore without writing files.",
+          ],
+        ])}`,
+    )
+    .action(async (source, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const result = await restoreBackup(defaultRuntime, {
+          source: source as string,
+          targetDir: opts.targetDir as string | undefined,
+          verify: Boolean(opts.verify),
+          dryRun: Boolean(opts.dryRun),
+        });
+        defaultRuntime.log(
+          `Restored ${result.restored.length} path(s) to ${result.targetDir} (${result.sourceType})`,
+        );
       });
     });
 }
