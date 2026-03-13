@@ -1,6 +1,8 @@
 import { formatCliCommand } from "../cli/command-format.js";
+import { loadConfig } from "../config/config.js";
 import type { PollInput } from "../polls.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import { resolveDefaultWhatsAppAccountId } from "./accounts.js";
 
 export type ActiveWebSendOptions = {
   gifPlayback?: boolean;
@@ -33,7 +35,20 @@ let _currentListener: ActiveWebListener | null = null;
 const listeners = new Map<string, ActiveWebListener>();
 
 export function resolveWebAccountId(accountId?: string | null): string {
-  return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
+  const explicit = (accountId ?? "").trim();
+  if (explicit && explicit !== DEFAULT_ACCOUNT_ID) {
+    return explicit;
+  }
+  try {
+    const cfg = loadConfig();
+    const configuredDefault = resolveDefaultWhatsAppAccountId(cfg)?.trim();
+    if (configuredDefault) {
+      return configuredDefault;
+    }
+  } catch {
+    // Fall back to legacy default account id when config cannot be loaded.
+  }
+  return DEFAULT_ACCOUNT_ID;
 }
 
 export function requireActiveWebListener(accountId?: string | null): {
