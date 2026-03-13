@@ -121,10 +121,9 @@ function buildMessagingSection(params: {
   isMinimal: boolean;
   availableTools: Set<string>;
   messageChannelOptions: string;
-  inlineButtonsEnabled: boolean;
-  runtimeChannel?: string;
-  // Note: messageToolHints are NOT included here — they are per-channel/per-session
-  // and are injected in the dynamic tail (after workspace files) for KV-cache stability.
+  // Note: inlineButtonsEnabled, runtimeChannel, and messageToolHints are NOT included here —
+  // they are per-channel/per-conversation and are injected in the dynamic tail
+  // (after workspace files) for KV-cache stability.
 }) {
   if (params.isMinimal) {
     return [];
@@ -144,12 +143,7 @@ function buildMessagingSection(params: {
           "- For `action=send`, include `to` and `message`.",
           `- If multiple channels are configured, pass \`channel\` (${params.messageChannelOptions}).`,
           `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
-          params.inlineButtonsEnabled
-            ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data,style?}]]`; `style` can be `primary`, `success`, or `danger`."
-            : params.runtimeChannel
-              ? `- Inline buttons not enabled on this channel. To enable, ask to set capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
-              : "",
-          // messageToolHints injected in dynamic tail (see buildAgentSystemPrompt)
+          // Inline buttons status and messageToolHints injected in dynamic tail
         ]
           .filter(Boolean)
           .join("\n")
@@ -568,8 +562,6 @@ export function buildAgentSystemPrompt(params: {
       isMinimal,
       availableTools,
       messageChannelOptions,
-      inlineButtonsEnabled,
-      runtimeChannel,
     }),
     ...buildVoiceSection({ isMinimal }),
   ];
@@ -690,6 +682,18 @@ export function buildAgentSystemPrompt(params: {
   // workspace files and the runtime line ensures the large stable prefix (workspace
   // files + boilerplate, ~28k chars) remains cached even when these change.
 
+  // Per-channel message tool content: inline buttons and hints vary by channel capabilities
+  if (availableTools.has("message")) {
+    // Inline buttons status depends on inlineButtonsEnabled (a per-conversation capability)
+    const inlineButtonsLine = inlineButtonsEnabled
+      ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data,style?}]]`; `style` can be `primary`, `success`, or `danger`."
+      : runtimeChannel
+        ? '- Inline buttons not enabled on this channel. To enable, ask to set capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").'
+        : "";
+    if (inlineButtonsLine) {
+      lines.push(inlineButtonsLine);
+    }
+  }
   // Per-channel message tool hints (vary by channel: WhatsApp vs Telegram vs iMessage)
   if (params.messageToolHints?.length) {
     // Append as continuation of the message tool section in the dynamic tail
