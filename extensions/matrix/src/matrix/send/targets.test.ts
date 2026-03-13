@@ -4,10 +4,34 @@ import { EventType } from "./types.js";
 
 let resolveMatrixRoomId: typeof import("./targets.js").resolveMatrixRoomId;
 let normalizeThreadId: typeof import("./targets.js").normalizeThreadId;
+let clearDirectRoomCacheForTarget: typeof import("./targets.js").clearDirectRoomCacheForTarget;
+
+type TargetsTestHooks = {
+  getDirectRoomCacheOrderLength(): number;
+  getMaxDirectRoomCacheOrderSize(): number;
+};
+
+function getTargetsTestHooks(): TargetsTestHooks {
+  const hooks = (
+    globalThis as typeof globalThis & {
+      __openclawMatrixTargetsTestHooks__?: TargetsTestHooks;
+    }
+  ).__openclawMatrixTargetsTestHooks__;
+  if (!hooks) {
+    throw new Error("Matrix targets test hooks were not initialized");
+  }
+  return hooks;
+}
 
 beforeEach(async () => {
   vi.resetModules();
-  ({ resolveMatrixRoomId, normalizeThreadId } = await import("./targets.js"));
+  delete (
+    globalThis as typeof globalThis & {
+      __openclawMatrixTargetsTestHooks__?: TargetsTestHooks;
+    }
+  ).__openclawMatrixTargetsTestHooks__;
+  ({ resolveMatrixRoomId, normalizeThreadId, clearDirectRoomCacheForTarget } =
+    await import("./targets.js"));
 });
 
 function createMockClient(opts: {
@@ -233,6 +257,46 @@ describe("resolveMatrixRoomId", () => {
     const resolved = await resolveMatrixRoomId(client, userId);
 
     expect(resolved).toBe("!valid:example.org");
+  });
+
+  it("compacts evicted direct-room cache order entries after repeated invalidations", async () => {
+    const userId = "@churn:example.org";
+    const firstRoom = "!one:example.org";
+    const secondRoom = "!two:example.org";
+    const directContent: Record<string, string[] | undefined> = {
+      [userId]: [firstRoom],
+    };
+    const joinedRooms = [firstRoom];
+    const membersByRoom: Record<string, string[]> = {
+      [firstRoom]: ["@bot:example.org", userId],
+      [secondRoom]: ["@bot:example.org", userId],
+    };
+    const roomStateEvents: Record<string, Record<string, unknown>> = {
+      [`${firstRoom}|m.room.member|${userId}`]: { is_direct: true },
+      [`${firstRoom}|m.room.member|@bot:example.org`]: {},
+      [`${secondRoom}|m.room.member|${userId}`]: { is_direct: true },
+      [`${secondRoom}|m.room.member|@bot:example.org`]: {},
+    };
+    const client = createMockClient({
+      directContent,
+      joinedRooms,
+      membersByRoom,
+      roomStateEvents,
+    });
+
+    const hooks = getTargetsTestHooks();
+    const maxOrderSize = hooks.getMaxDirectRoomCacheOrderSize();
+    await resolveMatrixRoomId(client, userId);
+
+    for (let index = 0; index < maxOrderSize + 50; index += 1) {
+      clearDirectRoomCacheForTarget(client, userId);
+      const nextRoom = index % 2 === 0 ? secondRoom : firstRoom;
+      directContent[userId] = [nextRoom];
+      joinedRooms.splice(0, joinedRooms.length, nextRoom);
+      await resolveMatrixRoomId(client, userId);
+    }
+
+    expect(hooks.getDirectRoomCacheOrderLength()).toBeLessThanOrEqual(maxOrderSize);
   });
 });
 
