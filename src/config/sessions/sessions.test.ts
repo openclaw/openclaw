@@ -18,7 +18,7 @@ import {
   resolveSessionTranscriptPathInDir,
   validateSessionId,
 } from "./paths.js";
-import { resolveSessionResetPolicy } from "./reset.js";
+import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
 import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
 import type { SessionEntry } from "./types.js";
 
@@ -143,6 +143,60 @@ describe("resolveSessionResetPolicy", () => {
 
       expect(groupPolicy.mode).toBe("daily");
     });
+  });
+});
+
+describe("evaluateSessionFreshness — adaptive mode (AND logic)", () => {
+  const ONE_HOUR = 60 * 60 * 1000;
+  const atHour = 4;
+  // now = 10:00 AM, so daily boundary (4 AM today) has passed
+  const now = new Date("2024-01-15T10:00:00.000Z").getTime();
+  // updatedAt = 2 AM (before daily boundary and 8h idle)
+  const updatedAtBeforeBoundary = new Date("2024-01-15T02:00:00.000Z").getTime();
+  // updatedAt = 9:30 AM (after daily boundary, only 30 min idle)
+  const updatedAtAfterBoundary = new Date("2024-01-15T09:30:00.000Z").getTime();
+
+  const adaptivePolicy = { mode: "adaptive" as const, atHour, idleMinutes: 120 };
+
+  it("resets when both daily boundary passed AND session is idle", () => {
+    const result = evaluateSessionFreshness({
+      updatedAt: updatedAtBeforeBoundary,
+      now,
+      policy: adaptivePolicy,
+    });
+    expect(result.fresh).toBe(false);
+  });
+
+  it("stays fresh when daily boundary passed but session is NOT idle", () => {
+    const result = evaluateSessionFreshness({
+      updatedAt: updatedAtAfterBoundary,
+      now,
+      policy: adaptivePolicy,
+    });
+    expect(result.fresh).toBe(true);
+  });
+
+  it("stays fresh when session is idle but daily boundary has NOT passed", () => {
+    // now = 3:00 AM — before the 4 AM boundary
+    const nowBeforeBoundary = new Date("2024-01-15T03:00:00.000Z").getTime();
+    // updatedAt = midnight — 3h idle, well past idleMinutes:120
+    const updatedAtMidnight = new Date("2024-01-15T00:00:00.000Z").getTime();
+    const result = evaluateSessionFreshness({
+      updatedAt: updatedAtMidnight,
+      now: nowBeforeBoundary,
+      policy: adaptivePolicy,
+    });
+    expect(result.fresh).toBe(true);
+  });
+
+  it("exposes dailyResetAt and idleExpiresAt for callers", () => {
+    const result = evaluateSessionFreshness({
+      updatedAt: updatedAtBeforeBoundary,
+      now,
+      policy: adaptivePolicy,
+    });
+    expect(result.dailyResetAt).toBeDefined();
+    expect(result.idleExpiresAt).toBeDefined();
   });
 });
 
