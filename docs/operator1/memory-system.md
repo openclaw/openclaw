@@ -1,32 +1,36 @@
 ---
-summary: "Three-layer memory architecture for Operator1 agents — daily notes, long-term MEMORY.md, and QMD semantic search."
+summary: "Four-layer memory architecture for Operator1 agents — daily notes, long-term MEMORY.md, project-scoped memory, and QMD semantic search."
 title: "Memory System"
 ---
 
 # Memory System
 
-Each agent in the Operator1 system has a three-layer memory architecture that balances raw session capture, curated knowledge, and semantic search.
+Each agent in the Operator1 system has a four-layer memory architecture that balances raw session capture, curated knowledge, project isolation, and semantic search.
 
-## Three-layer model
+## Four-layer model
 
 ```mermaid
 flowchart TD
     Session["Agent Session"]
     Daily["Layer 1: Daily Notes"]
     LongTerm["Layer 2: Long-Term Memory"]
-    Semantic["Layer 3: Semantic Search"]
+    Project["Layer 3: Project Memory"]
+    Semantic["Layer 4: Semantic Search"]
 
     Session -->|"Raw capture"| Daily
     Daily -->|"Periodic distillation"| LongTerm
+    Session -->|"Project-scoped notes"| Project
     Daily -->|"Auto-indexed"| Semantic
     LongTerm -->|"Auto-indexed"| Semantic
+    Project -->|"Auto-indexed via extraPaths"| Semantic
 ```
 
-| Layer           | Files                  | Purpose                           | Update Frequency        |
-| --------------- | ---------------------- | --------------------------------- | ----------------------- |
-| **Daily Notes** | `memory/YYYY-MM-DD.md` | Raw session logs and observations | Every session           |
-| **Long-Term**   | `MEMORY.md`            | Curated wisdom and key decisions  | Periodic distillation   |
-| **Semantic**    | QMD index              | Vector-searchable knowledge base  | Auto-updated on changes |
+| Layer              | Files                                 | Purpose                                | Update Frequency        |
+| ------------------ | ------------------------------------- | -------------------------------------- | ----------------------- |
+| **Daily Notes**    | `memory/YYYY-MM-DD.md`                | Raw session logs and observations      | Every session           |
+| **Long-Term**      | `MEMORY.md`                           | Curated wisdom and key decisions       | Periodic distillation   |
+| **Project Memory** | `workspace/projects/{id}/memory/*.md` | Project-specific context and decisions | When working on project |
+| **Semantic**       | QMD index                             | Vector-searchable knowledge base       | Auto-updated on changes |
 
 ## Layer 1: Daily notes
 
@@ -166,11 +170,36 @@ Without this, the gateway cannot find the `qmd` binary and memory search will fa
 
 ### Memory RPCs
 
-| Method           | Description                                   |
-| ---------------- | --------------------------------------------- |
-| `memory.status`  | Check memory provider health and index stats  |
-| `memory.search`  | Search agent memory by natural language query |
-| `memory.reindex` | Trigger a full reindex of the agent's memory  |
+| Method           | Description                                                                        |
+| ---------------- | ---------------------------------------------------------------------------------- |
+| `memory.status`  | Check memory provider health and index stats                                       |
+| `memory.search`  | Search agent memory (includes project memory dirs via `extraPaths` auto-discovery) |
+| `memory.reindex` | Trigger a full reindex of the agent's memory (includes project memory)             |
+
+## Layer 3: Project memory
+
+Project memory provides isolated, project-scoped storage for decisions, context, and notes related to a specific project or workstream.
+
+**Location:** `~/.openclaw/workspace/projects/{projectId}/memory/`
+
+Project memory is always centralized under the Operator1 workspace — it never creates files inside external repositories. This keeps project repos clean while still providing persistent project context.
+
+### How it works
+
+1. When a session is bound to a project (via auto-bind or RPC), the agent receives the project's memory path
+2. The agent can read/write Markdown files in that directory
+3. QMD auto-discovers project memory directories via `extraPaths` and indexes them alongside workspace memory
+4. `memory.search` queries return results from both workspace and project memory
+
+### Project memory vs workspace memory
+
+| Aspect                    | Workspace memory              | Project memory                    |
+| ------------------------- | ----------------------------- | --------------------------------- |
+| Scope                     | Agent-wide knowledge          | Project-specific context          |
+| Location                  | `workspace-{agentId}/memory/` | `workspace/projects/{id}/memory/` |
+| Survives project archival | Yes                           | Archived with project             |
+| Indexed by                | Agent's QMD index             | All agents via `extraPaths`       |
+| Written by                | The owning agent              | Any agent bound to the project    |
 
 ## Per-agent isolation
 

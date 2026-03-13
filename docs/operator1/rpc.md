@@ -79,20 +79,20 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ## Sessions
 
-| Method                      | Scope | Description                     | Key Params                               |
-| --------------------------- | ----- | ------------------------------- | ---------------------------------------- |
-| `sessions.list`             | READ  | List sessions                   | `{ agentId?: string, limit?: number }`   |
-| `sessions.get`              | READ  | Get a session by key            | `{ sessionKey: string }`                 |
-| `sessions.preview`          | READ  | Preview session message history | `{ sessionKey: string, limit?: number }` |
-| `sessions.resolve`          | READ  | Resolve a session key alias     | `{ sessionKey: string }`                 |
-| `sessions.usage`            | READ  | Token/cost usage for a session  | `{ sessionKey: string }`                 |
-| `sessions.usage.timeseries` | READ  | Usage over time for a session   | `{ sessionKey: string }`                 |
-| `sessions.usage.logs`       | READ  | Per-turn usage log entries      | `{ sessionKey: string }`                 |
-| `sessions.patch`            | ADMIN | Patch session metadata          | `{ sessionKey: string, patch: object }`  |
-| `sessions.reset`            | ADMIN | Clear session message history   | `{ sessionKey: string }`                 |
-| `sessions.delete`           | ADMIN | Delete a session                | `{ sessionKey: string }`                 |
-| `sessions.compact`          | ADMIN | Compact session history         | `{ sessionKey: string }`                 |
-| `sessions.archive`          | ADMIN | Archive a session               | `{ sessionKey: string }`                 |
+| Method                      | Scope | Description                                     | Key Params                               |
+| --------------------------- | ----- | ----------------------------------------------- | ---------------------------------------- |
+| `sessions.list`             | READ  | List sessions                                   | `{ agentId?: string, limit?: number }`   |
+| `sessions.get`              | READ  | Get a session by key                            | `{ sessionKey: string }`                 |
+| `sessions.preview`          | READ  | Preview session message history                 | `{ sessionKey: string, limit?: number }` |
+| `sessions.resolve`          | READ  | Resolve a session key alias                     | `{ sessionKey: string }`                 |
+| `sessions.usage`            | READ  | Token/cost usage for a session                  | `{ sessionKey: string }`                 |
+| `sessions.usage.timeseries` | READ  | Usage over time for a session                   | `{ sessionKey: string }`                 |
+| `sessions.usage.logs`       | READ  | Per-turn usage log entries                      | `{ sessionKey: string }`                 |
+| `sessions.patch`            | ADMIN | Patch session metadata (including `project_id`) | `{ sessionKey: string, patch: object }`  |
+| `sessions.reset`            | ADMIN | Clear session message history                   | `{ sessionKey: string }`                 |
+| `sessions.delete`           | ADMIN | Delete a session                                | `{ sessionKey: string }`                 |
+| `sessions.compact`          | ADMIN | Compact session history                         | `{ sessionKey: string }`                 |
+| `sessions.archive`          | ADMIN | Archive a session                               | `{ sessionKey: string }`                 |
 
 ---
 

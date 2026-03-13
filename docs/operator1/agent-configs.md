@@ -214,6 +214,21 @@ First-run ritual for when an agent is initialized on a new machine or after a re
 - Memory initialization
 - First heartbeat
 
+## Project memory directories
+
+In addition to agent workspace memory, each project has its own isolated memory directory:
+
+```
+~/.openclaw/workspace/projects/{projectId}/memory/
+   +-- MEMORY.md           # Project-specific long-term memory
+   +-- 2026-03-10.md       # Project daily notes
+   +-- decisions.md        # Any project-specific files
+```
+
+Project memory is always centralized under `~/.openclaw/workspace/projects/` — it is never created inside external repository directories. This keeps external repos clean while providing persistent project context that any bound agent can access.
+
+When an agent session is bound to a project, this path is provided via system prompt injection. Memory search (`memory.search`) auto-discovers these directories and includes them in search results.
+
 ## Templates
 
 ### Generic templates

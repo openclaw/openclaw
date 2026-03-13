@@ -168,6 +168,10 @@ See [Agent Configs](/operator1/agent-configs) for detailed file reference.
 
 When bootstrapping a new agent, copy from the matrix-specific template if one exists, otherwise fall back to the generic template.
 
+## Agent scopes
+
+Agent marketplace scopes (which tools, channels, and capabilities each agent can access) are persisted in the `agent_scopes` SQLite table in `operator1.db`. This replaces the previous JSON-only approach, enabling dynamic scope updates via RPC without config file edits.
+
 ## Agent configuration
 
 Each agent is defined in `matrix-agents.json` with these fields:

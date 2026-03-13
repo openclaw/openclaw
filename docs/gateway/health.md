@@ -21,7 +21,7 @@ Short guide to verify channel connectivity without guessing.
 ## Deep diagnostics
 
 - Creds on disk: `ls -l ~/.openclaw/credentials/whatsapp/<accountId>/creds.json` (mtime should be recent).
-- Session store: `ls -l ~/.openclaw/agents/<agentId>/sessions/sessions.json` (path can be overridden in config). Count and recent recipients are surfaced via `status`.
+- Session store: `ls -l ~/.openclaw/agents/<agentId>/sessions/sessions.json` (path can be overridden in config). Count and recent recipients are surfaced via `status`. In operator1, session metadata is also stored in `~/.openclaw/operator1.db` and `openclaw doctor` reports SQLite database health as part of the health snapshot.
 - Relink flow: `openclaw channels logout && openclaw channels login --verbose` when status codes 409–515 or `loggedOut` appear in logs. (Note: the QR login flow auto-restarts once for status 515 after pairing.)
 
 ## When something fails

@@ -38,7 +38,12 @@ openclaw backup verify ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz
 - The state directory returned by OpenClaw's local state resolver, usually `~/.openclaw`
 - The active config file path
 - The OAuth / credentials directory
+- `~/.openclaw/operator1.db` — SQLite state database (sessions, projects, agent scopes, config overrides). Included automatically when present because it lives inside the state directory.
 - Workspace directories discovered from the current config, unless you pass `--no-include-workspace`
+
+<Note>
+Restoring a backup that does not include `operator1.db` means losing session history, project bindings, and agent scope assignments. These cannot be reconstructed from `openclaw.json` alone. Always use a full backup (not `--only-config`) when you intend to restore a complete working state.
+</Note>
 
 If you use `--only-config`, OpenClaw skips state, credentials, and workspace discovery and archives only the active config file path.
 

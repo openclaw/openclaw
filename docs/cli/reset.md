@@ -17,4 +17,4 @@ openclaw reset --dry-run
 openclaw reset --scope config+creds+sessions --yes --non-interactive
 ```
 
-Run `openclaw backup create` first if you want a restorable snapshot before removing local state.
+Run `openclaw backup create` first if you want a restorable snapshot before removing local state. Note: `openclaw reset` will delete `~/.openclaw/operator1.db`, which contains session history, project bindings, and agent scopes. Back it up with `openclaw backup create` before proceeding.

@@ -265,6 +265,17 @@ memory: {
   parsed, the search manager logs a warning and returns the builtin provider
   (existing Markdown embeddings) until QMD recovers.
 
+### Operator1: Project-scoped memory
+
+When a session is bound to a project, a fourth memory layer becomes available:
+
+- **Location**: `~/.openclaw/workspace/projects/{id}/memory/` — always under the OpenClaw state dir, never inside an external repository.
+- **Access**: any agent session bound to that project can read and write this directory via the standard `memory_search` and `memory_get` tools.
+- **Auto-discovery**: the project memory directory is registered as an `extraPaths` entry so `memory_search` indexes it automatically alongside the agent's personal memory.
+- **Scope**: project memory is shared across all sessions with the same `project_id`, making it the right place for project-level decisions, preferences, and running context that should survive session resets.
+
+This adds a fourth layer to the memory architecture: daily notes → `MEMORY.md` → semantic index → project-scoped memory.
+
 ### Additional memory paths
 
 If you want to index Markdown files outside the default workspace layout, add

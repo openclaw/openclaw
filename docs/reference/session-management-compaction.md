@@ -51,6 +51,17 @@ OpenClaw persists sessions in two layers:
    - Stores the actual conversation + tool calls + compaction summaries
    - Used to rebuild the model context for future turns
 
+### Operator1: SQLite metadata layer
+
+This deployment adds a third persistence layer on top of the two above:
+
+3. **SQLite session metadata (`operator1.db` → `session_entries` table)**
+   - Stores structured session metadata: `project_id`, creation time, origin channel, and audit fields.
+   - Enables project binding, cross-session queries, and audit logging without modifying `sessions.json`.
+   - `sessions.json` and JSONL transcripts are unchanged; this layer adds queryable metadata on top.
+
+Run `openclaw state` to inspect `operator1.db` and the `session_entries` table directly.
+
 ---
 
 ## On-disk locations

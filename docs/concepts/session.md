@@ -71,6 +71,19 @@ All session state is **owned by the gateway** (the “master” OpenClaw). UI cl
 - Session entries include `origin` metadata (label + routing hints) so UIs can explain where a session came from.
 - OpenClaw does **not** read legacy Pi/Tau session folders.
 
+### Operator1: SQLite session store
+
+In this deployment, session metadata is persisted in a `session_entries` table inside `operator1.db` (WAL mode), in addition to `sessions.json`. The SQLite layer adds structured metadata on top of the existing file store:
+
+- **`project_id` column**: each session entry can be bound to a project. Sessions bound to a project share workspace and memory with that project.
+- **Auto-bind**: inbound Telegram topic messages are automatically matched to the corresponding project and the session's `project_id` is set accordingly.
+- **Subagent inheritance**: child/subagent sessions spawned from a parent automatically inherit the parent session's `project_id`.
+- **`sessions.json`** continues to exist for transcript/message-history purposes; the SQLite `session_entries` table stores the structured metadata layer on top.
+
+Run `openclaw state` to inspect the SQLite database directly.
+
+---
+
 ## Maintenance
 
 OpenClaw applies session-store maintenance to keep `sessions.json` and transcript artifacts bounded over time.

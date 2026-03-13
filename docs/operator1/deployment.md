@@ -140,6 +140,14 @@ done
 pnpm openclaw gateway run --bind loopback --port 18789
 ```
 
+On first startup, the gateway automatically:
+
+- Creates `~/.openclaw/operator1.db` (SQLite database in WAL mode)
+- Runs schema migrations to the latest version (currently v10)
+- Migrates any legacy JSON/YAML state files into SQLite
+
+No manual database setup is needed.
+
 Verify:
 
 ```bash
@@ -151,6 +159,9 @@ pnpm openclaw channels status --probe
 
 # Check gateway logs
 tail -n 50 /tmp/openclaw-gateway.log
+
+# Verify database health
+pnpm openclaw doctor
 ```
 
 ## Deployment modes
@@ -178,14 +189,16 @@ See [Gateway Patterns](/operator1/gateway-patterns) for the full comparison.
 
 ## Environment requirements
 
-| Component          | Location                         | Size                |
-| ------------------ | -------------------------------- | ------------------- |
-| OpenClaw repo      | `~/dev/operator1/`               | ~500 MB             |
-| Agent workspaces   | `~/.openclaw/workspace-*/`       | ~50 MB total        |
-| Agent runtime dirs | `~/.openclaw/agents/*/`          | Grows with sessions |
-| QMD models         | `~/.cache/qmd/models/`           | ~2.2 GB             |
-| Config             | `~/.openclaw/openclaw.json`      | ~10 KB              |
-| Agent config       | `~/.openclaw/matrix-agents.json` | ~15 KB              |
+| Component          | Location                          | Size                |
+| ------------------ | --------------------------------- | ------------------- |
+| OpenClaw repo      | `~/dev/operator1/`                | ~500 MB             |
+| Agent workspaces   | `~/.openclaw/workspace-*/`        | ~50 MB total        |
+| Agent runtime dirs | `~/.openclaw/agents/*/`           | Grows with sessions |
+| State database     | `~/.openclaw/operator1.db`        | Grows with usage    |
+| Project memory     | `~/.openclaw/workspace/projects/` | Per-project         |
+| QMD models         | `~/.cache/qmd/models/`            | ~2.2 GB             |
+| Config             | `~/.openclaw/openclaw.json`       | ~10 KB              |
+| Agent config       | `~/.openclaw/matrix-agents.json`  | ~15 KB              |
 
 ## Troubleshooting
 
@@ -207,6 +220,13 @@ See [Gateway Patterns](/operator1/gateway-patterns) for the full comparison.
 - Check SOUL.md and AGENTS.md are present
 - Verify agent is in `matrix-agents.json`
 - Check gateway logs for spawn errors
+
+### Database issues
+
+- Run `pnpm openclaw doctor` to check SQLite health (schema version, WAL status, table integrity)
+- **Locked database**: usually caused by a stale gateway process — `pkill -f openclaw-gateway` and restart
+- **Schema mismatch**: the gateway auto-migrates on startup; if migration fails, check logs for the specific error
+- **Corrupt WAL**: delete `~/.openclaw/operator1.db-wal` and `~/.openclaw/operator1.db-shm`, then restart — SQLite will recover from the main DB file
 
 ### Channel connection issues
 

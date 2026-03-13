@@ -99,6 +99,8 @@ openclaw sessions cleanup --json
 }
 ```
 
+In operator1, session metadata is also persisted in `~/.openclaw/operator1.db` (`session_entries` table), enabling project binding and cross-session queries. The `sessions.json` file remains for backwards compatibility.
+
 Related:
 
 - Session config: [Configuration reference](/gateway/configuration-reference#session)

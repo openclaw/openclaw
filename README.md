@@ -314,6 +314,7 @@ Runbook: [iOS connect](https://docs.openclaw.ai/platforms/ios).
 - Workspace root: `~/.openclaw/workspace` (configurable via `agents.defaults.workspace`).
 - Injected prompt files: `AGENTS.md`, `SOUL.md`, `TOOLS.md`.
 - Skills: `~/.openclaw/workspace/skills/<skill>/SKILL.md`.
+- State database: `~/.openclaw/operator1.db` — SQLite state database (sessions, projects, agent scopes).
 
 ## Configuration
 

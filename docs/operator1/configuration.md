@@ -18,15 +18,47 @@ _The configuration system architecture showing how openclaw.json, $include direc
 ~/.openclaw/
    +-- openclaw.json              # Primary config (gateway, channels, models, etc.)
    +-- matrix-agents.json         # Agent hierarchy ($included from openclaw.json)
+   +-- operator1.db               # Unified state database (SQLite, WAL mode)
    +-- .env                       # Environment variables (PATH, etc.)
    +-- credentials/               # Web provider credentials
    +-- workspace/                 # Operator1 workspace
+   +--   projects/{id}/memory/    # Project-scoped memory (per project)
    +-- workspace-neo/             # Neo workspace
    +-- workspace-morpheus/        # Morpheus workspace
    +-- workspace-trinity/         # Trinity workspace
    +-- workspace-{agentId}/       # Worker workspaces
    +-- agents/{agentId}/agent/    # Agent runtime directories
 ```
+
+## State database: operator1.db
+
+The system persists runtime state in a single SQLite database at `~/.openclaw/operator1.db`. The database is created automatically on first gateway startup and uses WAL (Write-Ahead Logging) mode for concurrent read/write safety.
+
+### What lives in SQLite
+
+| Table / Group     | Purpose                                                             |
+| ----------------- | ------------------------------------------------------------------- |
+| `op1_config`      | Key-value config overrides (registries, project settings)           |
+| `op1_projects`    | Project definitions (internal workspace + external repo references) |
+| `agent_scopes`    | Agent marketplace scope assignments                                 |
+| `agent_locks`     | Agent lock state (previously YAML-based)                            |
+| `session_entries` | Session metadata including `project_id` binding                     |
+| `core_settings`   | Scoped settings (global, agent, project)                            |
+| `audit_log`       | Audit trail for security-sensitive operations                       |
+
+### Schema versioning
+
+The database schema is versioned (current: v10). Migrations run automatically at gateway startup — no manual intervention needed. Run `openclaw doctor` to verify schema health.
+
+### Hybrid config reads
+
+Some settings exist in both `openclaw.json` and SQLite. The resolution order is:
+
+1. SQLite `op1_config` / `core_settings` (if present)
+2. `openclaw.json` values
+3. Built-in defaults
+
+This allows the gateway to progressively adopt SQLite storage while keeping `openclaw.json` as the human-editable config surface.
 
 ## Primary config: openclaw.json
 
@@ -335,6 +367,31 @@ Each agent entry has these fields:
 
 A ready-to-use template is available at `Project-tasks/matrix/matrix-agents.template.json`. Copy it to `~/.openclaw/matrix-agents.json` and update paths to match your home directory.
 
+## Projects
+
+Projects are stored in the `op1_projects` SQLite table and link agent sessions to codebases or workstreams.
+
+### Project types
+
+| Type       | Description                                   | Memory location                                                                               |
+| ---------- | --------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `internal` | Workspace-managed projects (no external repo) | `~/.openclaw/workspace/projects/{id}/memory/`                                                 |
+| `external` | References to external repositories           | `~/.openclaw/workspace/projects/{id}/memory/` (centralized, never pollutes the external repo) |
+
+### Session binding
+
+Sessions can be bound to a project via:
+
+- **Auto-bind** — Telegram topic messages automatically bind to the matching project
+- **RPC** — `projects.bindSession` / `projects.unbindSession`
+- **Subagent inheritance** — child sessions inherit the parent's `project_id` automatically
+
+When a session is bound to a project, the agent receives project context (soul, agents, tools, memory path) injected into its system prompt.
+
+### Project memory
+
+Each project gets an isolated memory directory at `~/.openclaw/workspace/projects/{id}/memory/`. Memory search (`memory.search`) auto-discovers these directories via `extraPaths` and indexes them alongside the agent's workspace memory.
+
 ## Config hot reload
 
 The gateway supports hot-reloading configuration changes without restart for most settings. See the [gateway configuration docs](/gateway/configuration) for details on which settings hot-apply vs require a restart.
@@ -346,3 +403,4 @@ The gateway supports hot-reloading configuration changes without restart for mos
 - [Memory System](/operator1/memory-system) — memory backend setup
 - [Channels](/operator1/channels) — channel integration config
 - [Deployment](/operator1/deployment) — new machine setup
+- [RPC Reference](/operator1/rpc) — projects and session RPCs

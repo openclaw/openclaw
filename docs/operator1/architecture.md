@@ -86,6 +86,22 @@ Configuration is split across two files joined by `$include`:
 
 See [Configuration](/operator1/configuration) for the full reference.
 
+### State database
+
+All runtime state is persisted in a single SQLite database at `~/.openclaw/operator1.db`:
+
+```
+~/.openclaw/operator1.db           # Unified state (WAL mode, schema v10, 38 tables)
+    ├── op1_config                 # Key-value config overrides
+    ├── op1_projects               # Project definitions
+    ├── agent_scopes               # Marketplace agent scopes
+    ├── session_entries            # Session metadata + project binding
+    ├── core_settings              # Scoped settings
+    └── audit_log                  # Security audit trail
+```
+
+The database auto-creates on first gateway startup and self-migrates to the latest schema version. Run `openclaw doctor` to verify DB health.
+
 ## Three-tier model
 
 The hierarchy enforces structured delegation with clear boundaries:
@@ -125,6 +141,7 @@ flowchart LR
         Sessions["Session Manager"]
         Memory["Memory Manager"]
         Config["Config Manager"]
+        StateDB["State DB (SQLite)"]
     end
 
     subgraph Agents["Agent Layer"]
@@ -145,6 +162,8 @@ flowchart LR
     Workers --> ACP
     Memory --- Sessions
     Config --- Gateway
+    StateDB --- Sessions
+    StateDB --- Config
 ```
 
 ## Key design principles
@@ -156,3 +175,7 @@ flowchart LR
 **Workspace-scoped memory** — Each agent has its own memory files and QMD index. Daily notes capture raw session data, MEMORY.md holds curated long-term knowledge, and QMD provides semantic search. See [Memory System](/operator1/memory-system).
 
 **Config-driven hierarchy** — The entire agent tree is defined in JSON configuration, making it easy to add, remove, or reconfigure agents without code changes. See [Configuration](/operator1/configuration).
+
+**Unified SQLite state** — All runtime state lives in a single `operator1.db` database using WAL mode for safe concurrent access. This replaces the previous pattern of scattered JSON/YAML state files. Schema migrations run automatically at gateway startup, and `openclaw doctor` validates database health. See [Configuration](/operator1/configuration#state-database-operator1db).
+
+**Project-scoped memory** — Projects bind sessions to codebases or workstreams, with isolated memory at `~/.openclaw/workspace/projects/{id}/memory/`. Subagent sessions automatically inherit their parent's project binding. See [Memory System](/operator1/memory-system).

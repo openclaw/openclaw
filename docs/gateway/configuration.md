@@ -346,6 +346,24 @@ When validation fails:
   </Accordion>
 </AccordionGroup>
 
+### Operator1: SQLite config overlay
+
+Some config values are stored in `operator1.db` (the `op1_config` table) and overlay `openclaw.json` at runtime. This enables dynamic config changes via RPC without editing the config file directly.
+
+Resolution order at startup:
+
+1. **SQLite `op1_config`** — values written via RPC or `openclaw state`
+2. **`openclaw.json`** — values from the config file
+3. **Built-in defaults** — compiled-in fallbacks
+
+To inspect what is currently in the SQLite config overlay, run:
+
+```bash
+openclaw state
+```
+
+Values in the overlay take effect immediately when the gateway reads them; they do not require a file-watch reload cycle.
+
 ## Config hot reload
 
 The Gateway watches `~/.openclaw/openclaw.json` and applies changes automatically — no manual restart needed for most settings.

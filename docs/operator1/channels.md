@@ -76,6 +76,14 @@ Telegram is the primary interface for interacting with Operator1.
 | `streaming`      | `partial`, `full`, `off`                   | Message streaming mode                   |
 | `requireMention` | `true`/`false`                             | Whether bot must be @mentioned in groups |
 
+### Topic-to-project auto-binding
+
+Telegram groups with topics enabled support automatic project binding. When a message arrives in a topic, the gateway matches the topic name to a project in `op1_projects` and automatically binds the session to that project. This means:
+
+- Messages in a topic named "subzero" auto-bind to the project with slug `subzero`
+- The agent receives project context (soul, tools, memory path) in its system prompt
+- Subagent sessions spawned from that session inherit the project binding
+
 ### Group configuration
 
 Groups are configured by their Telegram group ID. Each group can override the global policy:

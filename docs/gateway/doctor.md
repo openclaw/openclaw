@@ -158,6 +158,27 @@ the legacy sessions + agent dir on startup so history/auth/models land in the
 per-agent path without a manual doctor run. WhatsApp auth is intentionally only
 migrated via `openclaw doctor`.
 
+### 3b) SQLite state database
+
+Doctor checks the health of `operator1.db`, the SQLite database that stores sessions, projects, agent scopes, and config overrides.
+
+Doctor reports:
+
+- **Schema version**: confirms the database is at the expected schema version. A mismatch usually means the database was opened by an older build; the gateway auto-migrates on startup.
+- **WAL mode**: verifies the database is running in WAL (write-ahead log) mode for safe concurrent access.
+- **Table integrity**: spot-checks key tables for row counts and basic consistency.
+- **Path and file size**: reports the resolved path (usually `~/.openclaw/operator1.db`) and current file size.
+
+Common fixes:
+
+| Symptom                   | Fix                                                                                                                                       |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Locked DB (stale process) | Kill the stale process holding a write lock, then restart the gateway.                                                                    |
+| Schema mismatch           | Restart the gateway — it auto-migrates `operator1.db` at startup.                                                                         |
+| Corrupt WAL               | Delete `~/.openclaw/operator1.db-wal` and `~/.openclaw/operator1.db-shm`; the gateway recovers from the main database file on next start. |
+
+Run `openclaw doctor` to see all checks. The SQLite check appears as a named health item labeled **SQLite state database** in the output.
+
 ### 4) State integrity checks (session persistence, routing, and safety)
 
 The state directory is the operational brainstem. If it vanishes, you lose

@@ -42,6 +42,7 @@ Notes:
   - Config: `~/.openclaw/openclaw.json`
   - Credentials: `~/.openclaw/credentials/`
   - Workspace: `~/.openclaw/workspace`
+  - State database: `~/.openclaw/operator1.db` — back this up before updating; it contains session history, project bindings, and agent scopes that cannot be reconstructed from config alone.
 
 ## Update (global install)
 

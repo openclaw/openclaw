@@ -97,11 +97,11 @@ _Gateway system architecture: WebSocket API, channels, nodes, and AI providers_
 
 ### Configuration
 
-|                                                        |                                                                  |
-| ------------------------------------------------------ | ---------------------------------------------------------------- |
-| **[Configuration](/docs/configuration/overview)**      | openclaw.json structure and Matrix agent config reference.       |
-| **[Agent Configs](/docs/configuration/agent-configs)** | Workspace files: SOUL.md, AGENTS.md, IDENTITY.md, and more.      |
-| **[Memory System](/docs/configuration/memory-system)** | Three-layer memory: daily notes, long-term, and semantic search. |
+|                                                        |                                                                                 |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| **[Configuration](/docs/configuration/overview)**      | openclaw.json structure and Matrix agent config reference.                      |
+| **[Agent Configs](/docs/configuration/agent-configs)** | Workspace files: SOUL.md, AGENTS.md, IDENTITY.md, and more.                     |
+| **[Memory System](/docs/configuration/memory-system)** | Four-layer memory: daily notes, long-term, project-scoped, and semantic search. |
 
 ### Operations
 
@@ -121,6 +121,7 @@ _Gateway system architecture: WebSocket API, channels, nodes, and AI providers_
 | Departments     | Engineering, Marketing, Finance                                |
 | Max spawn depth | 4 levels                                                       |
 | Gateway pattern | Collocated (single process, port 18789)                        |
-| Memory backend  | QMD (semantic) + daily notes + MEMORY.md                       |
+| State backend   | `~/.openclaw/operator1.db` (SQLite, WAL mode, schema v10)      |
+| Memory backend  | QMD (semantic) + daily notes + MEMORY.md + project memory      |
 | ACP backend     | Claude Code via acpx                                           |
 | Config          | `~/.openclaw/openclaw.json` + `$include` for agent definitions |

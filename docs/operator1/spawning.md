@@ -164,6 +164,41 @@ Tier 3 workers spawn Claude Code sessions via the ACP (Agent Communication Proto
 | `stream`                | Whether to stream tool events                |
 | `runtime`               | Which coding agent to use                    |
 
+## Project binding
+
+Sessions can be bound to a project, which provides project-specific context and memory to the agent.
+
+### Auto-binding
+
+Sessions are automatically bound to a project in these cases:
+
+- **Telegram topics** — messages in a Telegram topic are auto-bound to the matching project based on topic name
+- **Subagent inheritance** — when a parent session spawns a child, the child automatically inherits the parent's `project_id`
+
+### Manual binding
+
+Use the `projects.bindSession` RPC to manually associate a session with a project:
+
+```json
+{
+  "method": "projects.bindSession",
+  "params": { "id": "project-uuid", "sessionKey": "session-key" }
+}
+```
+
+### What binding provides
+
+When a session is bound to a project, the agent's system prompt is injected with:
+
+- Project soul/persona context (if defined)
+- Project-specific AGENTS.md rules
+- Project tool configurations
+- Project memory path (`~/.openclaw/workspace/projects/{id}/memory/`)
+
+### Storage
+
+Project binding is stored as a dedicated `project_id` column on the `session_entries` table in `operator1.db`. This allows efficient queries for all sessions associated with a project.
+
 ## Session lifecycle
 
 ```mermaid
@@ -201,14 +236,15 @@ stateDiagram-v2
 
 Each spawned session is fully isolated:
 
-| Aspect      | Scope                                    |
-| ----------- | ---------------------------------------- |
-| Workspace   | Agent's own workspace directory          |
-| Memory      | Agent's own QMD index and daily notes    |
-| Auth        | Agent's own auth profile (or defaults)   |
-| Tools       | Agent's own allow/deny lists             |
-| File system | ACP sessions scoped to project `cwd`     |
-| State       | No shared mutable state between sessions |
+| Aspect      | Scope                                         |
+| ----------- | --------------------------------------------- |
+| Workspace   | Agent's own workspace directory               |
+| Memory      | Agent's own QMD index and daily notes         |
+| Project     | Inherited `project_id` from parent (if bound) |
+| Auth        | Agent's own auth profile (or defaults)        |
+| Tools       | Agent's own allow/deny lists                  |
+| File system | ACP sessions scoped to project `cwd`          |
+| State       | No shared mutable state between sessions      |
 
 ## Related
 

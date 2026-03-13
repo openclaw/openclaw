@@ -131,6 +131,7 @@ These live under `~/.openclaw/` and should NOT be committed to the workspace rep
 - `~/.openclaw/credentials/` (OAuth tokens, API keys)
 - `~/.openclaw/agents/<agentId>/sessions/` (session transcripts + metadata)
 - `~/.openclaw/skills/` (managed skills)
+- `~/.openclaw/operator1.db` — SQLite state database (session metadata, projects, agent scopes); back this up separately from the workspace and include it in any backup archive
 
 If you need to migrate sessions or config, copy them separately and keep them
 out of version control.
