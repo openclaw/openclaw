@@ -895,13 +895,18 @@ export function listSessionsFromStore(params: {
       // Check if this is a main session - main sessions should have a stable display name
       // to avoid showing transient internal labels like "heartbeat" from the origin.
       // Use resolveAgentMainSessionKey to handle custom mainKey configurations.
+      // Also handle global scope main session.
       const parsedAgent = parseAgentSessionKey(key);
       const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
       const agentMainKey = resolveAgentMainSessionKey({ cfg, agentId: sessionAgentId });
-      const isMainSession = key === agentMainKey || key === `agent:${sessionAgentId}:main`;
+      const globalMainKey = resolveMainSessionKey(cfg);
+      const isMainSession = key === agentMainKey || key === globalMainKey;
 
+      // For main sessions: preserve user-set displayName, otherwise use stable default
+      // This prevents transient originLabel (like "heartbeat") from appearing while
+      // still respecting explicit user renaming.
       const displayName = isMainSession
-        ? "Main Session"
+        ? (entry?.displayName ?? "Main Session")
         : (entry?.displayName ??
           (channel
             ? buildGroupDisplayName({
