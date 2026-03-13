@@ -319,7 +319,7 @@ export function createAnthropicToolPayloadCompatibilityWrapper(
             );
           }
         }
-        return originalOnPayload?.(payload, model);
+        return originalOnPayload?.(payload);
       },
     });
   };
@@ -351,7 +351,7 @@ export function createAnthropicFastModeWrapper(
             payloadObj.service_tier = serviceTier;
           }
         }
-        return originalOnPayload?.(payload, model);
+        return originalOnPayload?.(payload);
       },
     });
   };

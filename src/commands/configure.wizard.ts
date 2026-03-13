@@ -4,6 +4,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, resolveGatewayPort, writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
+import type { AgentCortexConfig } from "../config/types.agent-defaults.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -47,6 +48,7 @@ import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { setupSkills } from "./onboard-skills.js";
 
 type ConfigureSectionChoice = WizardSection | "__continue";
+type CortexMode = NonNullable<AgentCortexConfig["mode"]>;
 
 async function resolveGatewaySecretInputForWizard(params: {
   cfg: OpenClawConfig;
@@ -305,7 +307,7 @@ async function promptCortexMemoryConfig(
   runtime: RuntimeEnv,
   workspaceDir: string,
 ): Promise<OpenClawConfig> {
-  const existing = nextConfig.agents?.defaults?.cortex;
+  const existing: AgentCortexConfig | undefined = nextConfig.agents?.defaults?.cortex;
   const defaultGraphPath = nodePath.join(workspaceDir, ".cortex", "context.json");
   const graphExists = await fsPromises
     .access(defaultGraphPath)
@@ -359,7 +361,7 @@ async function promptCortexMemoryConfig(
       initialValue: existing?.mode ?? "technical",
     }),
     runtime,
-  ) as NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["cortex"]["mode"];
+  ) as CortexMode;
 
   const maxCharsInput = guardCancel(
     await text({

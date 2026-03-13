@@ -14,7 +14,7 @@ import * as internalHooks from "../../hooks/internal-hooks.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import type { MsgContext } from "../templating.js";
+import type { MsgContext, TemplateContext } from "../templating.js";
 import { resetBashChatCommandForTests } from "./bash-command.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { buildCommandsPaginationKeyboard } from "./commands-info.js";
@@ -199,7 +199,11 @@ afterAll(async () => {
   await fs.rm(testWorkspaceDir, { recursive: true, force: true });
 });
 
-function buildParams(commandBody: string, cfg: OpenClawConfig, ctxOverrides?: Partial<MsgContext>) {
+function buildParams(
+  commandBody: string,
+  cfg: OpenClawConfig,
+  ctxOverrides?: Partial<TemplateContext>,
+) {
   return buildCommandTestParams(commandBody, cfg, ctxOverrides, { workspaceDir: testWorkspaceDir });
 }
 

@@ -349,6 +349,12 @@ export type MemorySearchConfig = {
   model?: string;
   /** Optional embedding output dimensionality override (for providers that support it). */
   outputDimensionality?: number;
+  /** Optional multimodal indexing for image/audio files in extra paths. */
+  multimodal?: {
+    enabled?: boolean;
+    modalities?: Array<"image" | "audio" | "all">;
+    maxFileBytes?: number;
+  };
   /** Local embedding settings (node-llama-cpp). */
   local?: {
     /** GGUF model path or hf: URI. */

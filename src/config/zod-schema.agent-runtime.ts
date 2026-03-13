@@ -600,6 +600,16 @@ export const MemorySearchSchema = z
       .optional(),
     model: z.string().optional(),
     outputDimensionality: z.number().int().positive().optional(),
+    multimodal: z
+      .object({
+        enabled: z.boolean().optional(),
+        modalities: z
+          .array(z.union([z.literal("image"), z.literal("audio"), z.literal("all")]))
+          .optional(),
+        maxFileBytes: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     local: z
       .object({
         modelPath: z.string().optional(),

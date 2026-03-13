@@ -144,6 +144,7 @@ export abstract class MemoryManagerSyncOps {
   protected abstract sync(params?: {
     reason?: string;
     force?: boolean;
+    sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void>;
   protected abstract withTimeout<T>(
@@ -855,6 +856,7 @@ export abstract class MemoryManagerSyncOps {
   protected async runSync(params?: {
     reason?: string;
     force?: boolean;
+    sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
     const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
