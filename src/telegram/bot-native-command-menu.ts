@@ -145,7 +145,7 @@ async function writeCachedCommandHash(
   hash: string,
 ): Promise<void> {
   const filePath = resolveCommandHashPath(accountId, botIdentity);
-  try {
+      try {
     const dirPath = path.dirname(filePath);
     
     // Guard against invalid directory paths that could result from malformed
@@ -155,12 +155,13 @@ async function writeCachedCommandHash(
     //
     // Check for:
     // - Empty or current-directory paths
-    // - Incomplete Windows UNC/extended-length prefixes (\\?\, \\?\C:, etc.)
+    // - Bare/incomplete Windows UNC/extended-length prefixes (\\?, \\?\)
+    //   Note: Valid extended-length paths like \\?\C:\... should pass through
     // - Non-absolute paths (relative paths should not appear here)
     if (
       !dirPath ||
       dirPath === "." ||
-      /^\\\\[?]([/\\].*)?$/.test(dirPath) ||
+      /^\\\\[?]([/\\]?$|$)/.test(dirPath) ||
       !path.isAbsolute(dirPath)
     ) {
       throw new Error(`Invalid directory path for command hash: "${dirPath}"`);
