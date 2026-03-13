@@ -68,6 +68,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -772,8 +773,18 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     return@Button
                   }
                   gatewayUrl = parsedSetup.url
-                  parsedSetup.token?.let { viewModel.setGatewayToken(it) }
-                  gatewayPassword = parsedSetup.password.orEmpty()
+                  viewModel.setGatewayBootstrapToken(parsedSetup.bootstrapToken.orEmpty())
+                  val sharedToken = parsedSetup.token.orEmpty().trim()
+                  val password = parsedSetup.password.orEmpty().trim()
+                  if (sharedToken.isNotEmpty()) {
+                    viewModel.setGatewayToken(sharedToken)
+                  } else if (!parsedSetup.bootstrapToken.isNullOrBlank()) {
+                    viewModel.setGatewayToken("")
+                  }
+                  gatewayPassword = password
+                  if (password.isEmpty() && !parsedSetup.bootstrapToken.isNullOrBlank()) {
+                    viewModel.setGatewayPassword("")
+                  }
                 } else {
                   val manualUrl = composeGatewayManualUrl(manualHost, manualPort, manualTls)
                   val parsedGateway = manualUrl?.let(::parseGatewayEndpoint)
@@ -782,6 +793,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     return@Button
                   }
                   gatewayUrl = parsedGateway.displayUrl
+                  viewModel.setGatewayBootstrapToken("")
                 }
                 step = OnboardingStep.Permissions
               },
@@ -850,8 +862,13 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                   viewModel.setManualHost(parsed.host)
                   viewModel.setManualPort(parsed.port)
                   viewModel.setManualTls(parsed.tls)
+                  if (gatewayInputMode == GatewayInputMode.Manual) {
+                    viewModel.setGatewayBootstrapToken("")
+                  }
                   if (token.isNotEmpty()) {
                     viewModel.setGatewayToken(token)
+                  } else {
+                    viewModel.setGatewayToken("")
                   }
                   viewModel.setGatewayPassword(password)
                   viewModel.connectManual()
@@ -1555,10 +1572,12 @@ private fun CommandBlock(command: String) {
     modifier =
       Modifier
         .fillMaxWidth()
-        .background(onboardingCommandBg, RoundedCornerShape(12.dp))
+        .height(IntrinsicSize.Min)
+        .clip(RoundedCornerShape(12.dp))
+        .background(onboardingCommandBg)
         .border(width = 1.dp, color = onboardingCommandBorder, shape = RoundedCornerShape(12.dp)),
   ) {
-    Box(modifier = Modifier.width(3.dp).height(42.dp).background(onboardingCommandAccent))
+    Box(modifier = Modifier.width(3.dp).fillMaxHeight().background(onboardingCommandAccent))
     Text(
       command,
       modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),

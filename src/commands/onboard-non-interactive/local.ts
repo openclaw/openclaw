@@ -104,11 +104,33 @@ export async function runNonInteractiveOnboardingLocal(params: {
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: undefined,
     });
-    await waitForGatewayReachable({
+    const probe = await waitForGatewayReachable({
       url: links.wsUrl,
       token: gatewayResult.gatewayToken,
       deadlineMs: 15_000,
     });
+    if (!probe.ok) {
+      const message = [
+        `Gateway did not become reachable at ${links.wsUrl}.`,
+        probe.detail ? `Last probe: ${probe.detail}` : undefined,
+        !opts.installDaemon
+          ? [
+              "Non-interactive local onboarding only waits for an already-running gateway unless you pass --install-daemon.",
+              `Fix: start \`${formatCliCommand("openclaw gateway run")}\`, re-run with \`--install-daemon\`, or use \`--skip-health\`.`,
+              process.platform === "win32"
+                ? "Native Windows managed gateway install tries Scheduled Tasks first and falls back to a per-user Startup-folder login item when task creation is denied."
+                : undefined,
+            ]
+              .filter(Boolean)
+              .join("\n")
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n");
+      runtime.error(message);
+      runtime.exit(1);
+      return;
+    }
     await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
   }
 
