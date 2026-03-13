@@ -48,7 +48,8 @@ function combineDebounceEntries(entries: BlueBubblesDebounceEntry[]): Normalized
   const textParts: string[] = [];
 
   for (const entry of entries) {
-    const text = entry.message.text.trim();
+    // BlueBubbles may send text: null for attachment-only messages
+    const text = entry.message.text?.trim() ?? "";
     if (!text) {
       continue;
     }

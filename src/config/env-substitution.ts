@@ -135,6 +135,10 @@ function substituteString(
 }
 
 export function containsEnvVarReference(value: string): boolean {
+  // Type guard: non-string values can never contain env var references
+  if (typeof value !== "string") {
+    return false;
+  }
   if (!value.includes("$")) {
     return false;
   }
