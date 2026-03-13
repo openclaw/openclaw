@@ -107,6 +107,10 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText(":[[reply_to_current]hello")).toBe("hello");
   });
 
+  it("strips malformed leaked reply tags on later lines too", () => {
+    expect(sanitizeForPlainText("preamble\n:[[reply_to_current]hello")).toBe("preamble\nhello");
+  });
+
   it("strips leaked raw tool-call lines", () => {
     const input = [
       '{"name": "exec", "arguments": {"command":"pwd"}}',

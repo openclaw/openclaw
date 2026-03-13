@@ -47,7 +47,7 @@ export function sanitizeForPlainText(text: string): string {
     .replace(/<\/?(?:longcat_think|longcat_tool_call|x)>/gi, "")
     .replace(/<\|eot_id\|>/gi, "")
     // Drop malformed leaked reply tags before the normal directive parser can see them.
-    .replace(/^\s*:?\[\[\s*reply_to_current\s*\](?:\s*)/i, "")
+    .replace(/^\s*:?\[\[\s*reply_to_current\s*\](?:\s*)/im, "")
     // Drop raw tool-call JSON lines that leaked into plain text.
     .replace(/^\s*\{"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{.*$/gim, "")
     .replace(/^\s*<\/(?:longcat_tool_call|function)>\s*$/gim, "")
