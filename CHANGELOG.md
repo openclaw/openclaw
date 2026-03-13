@@ -4,6 +4,24 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Slack/agent replies: support `channelData.slack.blocks` in the shared reply delivery path so agents can send Block Kit messages through standard Slack outbound delivery. (#44592) Thanks @vincentkoc.
+
+### Fixes
+
+- Windows/gateway install: bound `schtasks` calls and fall back to the Startup-folder login item when task creation hangs, so native `openclaw gateway install` fails fast instead of wedging forever on broken Scheduled Task setups.
+- Docs/onboarding: align the legacy wizard reference and `openclaw onboard` command docs with the Ollama onboarding flow so all onboarding reference paths now document `--auth-choice ollama`, Cloud + Local mode, and non-interactive usage. (#43473) Thanks @BruceMacD.
+- Security/Slack and Teams routing: require stable channel and team IDs for allowlist routing by default, with mutable name matching only via each channel's `dangerouslyAllowNameMatching` break-glass flag.
+- Telegram/native command sync: suppress expected `BOT_COMMANDS_TOO_MUCH` retry error noise, add a final fallback summary log, and document the difference between command-menu overflow and real Telegram network failures.
+- Telegram/media downloads: thread the same direct or proxy transport policy into SSRF-guarded file fetches so inbound attachments keep working when Telegram falls back between env-proxy and direct networking. (#44639) Thanks @obviyus.
+- Agents/compaction safeguard: route missing-model and missing-API-key cancellation warnings through the shared subsystem logger so they land in structured and file logs. (#9974) Thanks @dinakars777.
+- Cron/doctor: stop flagging canonical `agentTurn` and `systemEvent` payload kinds as legacy cron storage, while still normalizing whitespace-padded and non-canonical variants. (#44012) Thanks @shuicici.
+- ACP/client final-message delivery: preserve terminal assistant text snapshots before resolving `end_turn`, so ACP clients no longer drop the last visible reply when the gateway sends the final message body on the terminal chat event. (#17615) Thanks @pjeby.
+- Telegram/Discord status reactions: show a temporary compacting reaction during auto-compaction pauses and restore thinking afterward so the bot no longer appears frozen while context is being compacted. (#35474) thanks @Cypherm.
+- Agents/compaction: compare post-compaction token sanity checks against full-session pre-compaction totals and skip the check when token estimation fails, so sessions with large bootstrap context keep real token counts instead of falling back to unknown. (#28347) thanks @efe-arv.
+- Discord/gateway startup: treat plain-text and transient `/gateway/bot` metadata fetch failures as transient startup errors so Discord gateway boot no longer crashes on unhandled rejections. (#44397) Thanks @jalehman.
+
 ## 2026.3.12
 
 ### Changes
@@ -14,7 +32,6 @@ Docs: https://docs.openclaw.ai
 - Models/plugins: move Ollama, vLLM, and SGLang onto the provider-plugin architecture, with provider-owned onboarding, discovery, model-picker setup, and post-selection hooks so core provider wiring is more modular.
 - Docs/Kubernetes: Add a starter K8s install path with raw manifests, Kind setup, and deployment docs. Thanks @sallyom @dzianisv @egkristi
 - Agents/subagents: add `sessions_yield` so orchestrators can end the current turn immediately, skip queued tool work, and carry a hidden follow-up payload into the next session turn. (#36537) thanks @jriff
-- Slack/agent replies: support `channelData.slack.blocks` in the shared reply delivery path so agents can send Block Kit messages through standard Slack outbound delivery. (#44592) Thanks @vincentkoc.
 
 ### Fixes
 
@@ -40,7 +57,6 @@ Docs: https://docs.openclaw.ai
 - Plugins/env-scoped roots: fix plugin discovery/load caches and provenance tracking so same-process `HOME`/`OPENCLAW_HOME` changes no longer reuse stale plugin state or misreport `~/...` plugins as untracked. (#44046) thanks @gumadeiras.
 - Models/OpenRouter native ids: canonicalize native OpenRouter model keys across config writes, runtime lookups, fallback management, and `models list --plain`, and migrate legacy duplicated `openrouter/openrouter/...` config entries forward on write.
 - Windows/native update: make package installs use the npm update path instead of the git path, carry portable Git into native Windows updates, and mirror the installer's Windows npm env so `openclaw update` no longer dies early on missing `git` or `node-llama-cpp` download setup.
-- Windows/gateway install: bound `schtasks` calls and fall back to the Startup-folder login item when task creation hangs, so native `openclaw gateway install` fails fast instead of wedging forever on broken Scheduled Task setups.
 - Sandbox/write: preserve pinned mutation-helper payload stdin so sandboxed `write` no longer reports success while creating empty files. (#43876) Thanks @glitch418x.
 - Security/exec approvals: escape invisible Unicode format characters in approval prompts so zero-width command text renders as visible `\u{...}` escapes instead of spoofing the reviewed command. (`GHSA-pcqg-f7rg-xfvv`)(#43687) Thanks @EkiXu and @vincentkoc.
 - Hooks/loader: fail closed when workspace hook paths cannot be resolved with `realpath`, so unreadable or broken internal hook paths are skipped instead of falling back to unresolved imports. (#44437) Thanks @vincentkoc.
@@ -55,7 +71,6 @@ Docs: https://docs.openclaw.ai
 - Security/agent tools: mark `nodes` as explicitly owner-only and document/test that `canvas` remains a shared trusted-operator surface unless a real boundary bypass exists.
 - Security/exec approvals: fail closed for Ruby approval flows that use `-r`, `--require`, or `-I` so approval-backed commands no longer bind only the main script while extra local code-loading flags remain outside the reviewed file snapshot.
 - Security/device pairing: cap issued and verified device-token scopes to each paired device's approved scope baseline so stale or overbroad tokens cannot exceed approved access. (`GHSA-2pwv-x786-56f8`)(#43686) Thanks @tdjackey and @vincentkoc.
-- Docs/onboarding: align the legacy wizard reference and `openclaw onboard` command docs with the Ollama onboarding flow so all onboarding reference paths now document `--auth-choice ollama`, Cloud + Local mode, and non-interactive usage. (#43473) Thanks @BruceMacD.
 - Models/secrets: enforce source-managed SecretRef markers in generated `models.json` so runtime-resolved provider secrets are not persisted when runtime projection is skipped. (#43759) Thanks @joshavant.
 - Security/WebSocket preauth: shorten unauthenticated handshake retention and reject oversized pre-auth frames before application-layer parsing to reduce pre-pairing exposure on unsupported public deployments. (`GHSA-jv4g-m82p-2j93`)(#44089) (`GHSA-xwx2-ppv2-wx98`)(#44089) Thanks @ez-lbz and @vincentkoc.
 - Security/proxy attachments: restore the shared media-store size cap for persisted browser proxy files so oversized payloads are rejected instead of overriding the intended 5 MB limit. (`GHSA-6rph-mmhp-h7h9`)(#43684) Thanks @tdjackey and @vincentkoc.
@@ -65,7 +80,6 @@ Docs: https://docs.openclaw.ai
 - Security/LINE webhook: require signatures for empty-event POST probes too so unsigned requests no longer confirm webhook reachability with a `200` response. (`GHSA-mhxh-9pjm-w7q5`)(#44090) Thanks @TerminalsandCoffee and @vincentkoc.
 - Security/Zalo webhook: rate limit invalid secret guesses before auth so weak webhook secrets cannot be brute-forced through unauthenticated churned requests without pre-auth `429` responses. (`GHSA-5m9r-p9g7-679c`)(#44173) Thanks @zpbrent and @vincentkoc.
 - Security/Zalouser groups: require stable group IDs for allowlist auth by default and gate mutable group-name matching behind `channels.zalouser.dangerouslyAllowNameMatching`. Thanks @zpbrent.
-- Security/Slack and Teams routing: require stable channel and team IDs for allowlist routing by default, with mutable name matching only via each channel's `dangerouslyAllowNameMatching` break-glass flag.
 - Security/exec approvals: fail closed for ambiguous inline loader and shell-payload script execution, bind the real script after POSIX shell value-taking flags, and unwrap `pnpm`/`npm exec`/`npx` script runners before approval binding. (`GHSA-57jw-9722-6rf2`)(`GHSA-jvqh-rfmh-jh27`)(`GHSA-x7pp-23xv-mmr4`)(`GHSA-jc5j-vg4r-j5jx`)(#44247) Thanks @tdjackey and @vincentkoc.
 - Doctor/gateway service audit: canonicalize service entrypoint paths before comparing them so symlink-vs-realpath installs no longer trigger false "entrypoint does not match the current install" repair prompts. (#43882) Thanks @ngutman.
 - Doctor/gateway service audit: earlier groundwork for this fix landed in the superseded #28338 branch. Thanks @realriphub.
@@ -74,8 +88,6 @@ Docs: https://docs.openclaw.ai
 - Agents/failover: classify z.ai `network_error` stop reasons as retryable timeouts so provider connectivity failures trigger fallback instead of surfacing raw unhandled-stop-reason errors. (#43884) Thanks @hougangdev.
 - Memory/session sync: add mode-aware post-compaction session reindexing with `agents.defaults.compaction.postIndexSync` plus `agents.defaults.memorySearch.sync.sessions.postCompactionForce`, so compacted session memory can refresh immediately without forcing every deployment into synchronous reindexing. (#25561) thanks @rodrigouroz.
 - Telegram/model picker: make inline model button selections persist the chosen session model correctly, clear overrides when selecting the configured default, and include effective fallback models in `/models` button validation. (#40105) Thanks @avirweb.
-- Telegram/native command sync: suppress expected `BOT_COMMANDS_TOO_MUCH` retry error noise, add a final fallback summary log, and document the difference between command-menu overflow and real Telegram network failures.
-- Telegram/media downloads: thread the same direct or proxy transport policy into SSRF-guarded file fetches so inbound attachments keep working when Telegram falls back between env-proxy and direct networking. (#44639) Thanks @obviyus.
 - Mattermost/reply media delivery: pass agent-scoped `mediaLocalRoots` through shared reply delivery so allowed local files upload correctly from button, slash-command, and model-picker replies. (#44021) Thanks @LyleLiu666.
 - Plugins/env-scoped roots: fix plugin discovery/load caches and provenance tracking so same-process `HOME`/`OPENCLAW_HOME` changes no longer reuse stale plugin state or misreport `~/...` plugins as untracked. (#44046) thanks @gumadeiras.
 - Gateway/session discovery: discover disk-only and retired ACP session stores under custom templated `session.store` roots so ACP reconciliation, session-id/session-label targeting, and run-id fallback keep working after restart. (#44176) thanks @gumadeiras.
@@ -83,12 +95,6 @@ Docs: https://docs.openclaw.ai
 - Gateway/hooks: bucket hook auth failures by forwarded client IP behind trusted proxies and warn when `hooks.allowedAgentIds` leaves hook routing unrestricted.
 - Agents/compaction: skip the post-compaction `cache-ttl` marker write when a compaction completed in the same attempt, preventing the next turn from immediately triggering a second tiny compaction. (#28548) thanks @MoerAI.
 - Native chat/macOS: add `/new`, `/reset`, and `/clear` reset triggers, keep shared main-session aliases aligned, and ignore stale model-selection completions so native chat state stays in sync across reset and fast model changes. (#10898) Thanks @Nachx639.
-- Agents/compaction safeguard: route missing-model and missing-API-key cancellation warnings through the shared subsystem logger so they land in structured and file logs. (#9974) Thanks @dinakars777.
-- Cron/doctor: stop flagging canonical `agentTurn` and `systemEvent` payload kinds as legacy cron storage, while still normalizing whitespace-padded and non-canonical variants. (#44012) Thanks @shuicici.
-- ACP/client final-message delivery: preserve terminal assistant text snapshots before resolving `end_turn`, so ACP clients no longer drop the last visible reply when the gateway sends the final message body on the terminal chat event. (#17615) Thanks @pjeby.
-- Telegram/Discord status reactions: show a temporary compacting reaction during auto-compaction pauses and restore thinking afterward so the bot no longer appears frozen while context is being compacted. (#35474) thanks @Cypherm.
-- Agents/compaction: compare post-compaction token sanity checks against full-session pre-compaction totals and skip the check when token estimation fails, so sessions with large bootstrap context keep real token counts instead of falling back to unknown. (#28347) thanks @efe-arv.
-- Discord/gateway startup: treat plain-text and transient `/gateway/bot` metadata fetch failures as transient startup errors so Discord gateway boot no longer crashes on unhandled rejections. (#44397) Thanks @jalehman.
 
 ## 2026.3.11
 
