@@ -1317,4 +1317,101 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       expect(usageStats["openai:p2"]?.cooldownUntil).toBe(now + 60 * 60 * 1000);
     });
   });
+
+  it("does not emit an API error notice after an earlier assistant reply in the same run", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      const onBlockReply = vi.fn();
+
+      runEmbeddedAttemptMock
+        .mockResolvedValueOnce(
+          makeAttempt({
+            assistantTexts: ["partial reply"],
+            lastAssistant: buildAssistant({
+              stopReason: "error",
+              errorMessage: "rate limit",
+            }),
+          }),
+        )
+        .mockResolvedValueOnce(
+          makeAttempt({
+            assistantTexts: [],
+            lastAssistant: buildAssistant({
+              stopReason: "error",
+              errorMessage: "rate limit",
+            }),
+          }),
+        );
+
+      await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:no-api-notice-after-assistant-reply",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "openai:p1",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:no-api-notice-after-assistant-reply",
+        onBlockReply,
+      });
+
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+      expect(onBlockReply).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not emit an API error notice after an earlier messaging-tool reply in the same run", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      const onBlockReply = vi.fn();
+
+      runEmbeddedAttemptMock
+        .mockResolvedValueOnce(
+          makeAttempt({
+            didSendViaMessagingTool: true,
+            messagingToolSentTexts: ["sent via channel"],
+            lastAssistant: buildAssistant({
+              stopReason: "error",
+              errorMessage: "rate limit",
+            }),
+          }),
+        )
+        .mockResolvedValueOnce(
+          makeAttempt({
+            assistantTexts: [],
+            lastAssistant: buildAssistant({
+              stopReason: "error",
+              errorMessage: "rate limit",
+            }),
+          }),
+        );
+
+      await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:no-api-notice-after-messaging-reply",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "openai:p1",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:no-api-notice-after-messaging-reply",
+        onBlockReply,
+      });
+
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+      expect(onBlockReply).not.toHaveBeenCalled();
+    });
+  });
 });

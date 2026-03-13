@@ -72,6 +72,8 @@ export type EmbeddedPiSubscribeState = {
   messagingToolSentTextsNormalized: string[];
   messagingToolSentTargets: MessagingToolSend[];
   messagingToolSentMediaUrls: string[];
+  messagingToolSentTextBaseline: number;
+  messagingToolSentMediaBaseline: number;
   pendingMessagingTexts: Map<string, string>;
   pendingMessagingTargets: Map<string, MessagingToolSend>;
   successfulCronAdds: number;

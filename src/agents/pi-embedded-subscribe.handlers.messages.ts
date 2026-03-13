@@ -476,8 +476,12 @@ export function handleMessageEnd(
   // inject a steer message asking the agent to reply to the user.
   // See: https://github.com/openclaw/openclaw/issues/38792
   const hasToolCalls = hasToolCallBlocks(assistantMessage);
-  if (cleanedText || hasMedia) {
-    // This turn produced text → reset the counter.
+  const sentMessagingReplyThisTurn =
+    ctx.state.messagingToolSentTexts.length > ctx.state.messagingToolSentTextBaseline ||
+    ctx.state.messagingToolSentMediaUrls.length > ctx.state.messagingToolSentMediaBaseline;
+  if (cleanedText || hasMedia || sentMessagingReplyThisTurn) {
+    // This turn produced user-visible output, either directly or via a
+    // messaging tool send, so it should reset the tool-only streak.
     ctx.state.consecutiveToolOnlyTurns = 0;
     ctx.state.toolOnlyNudgeInjected = false;
   } else if (hasToolCalls) {
