@@ -928,6 +928,60 @@ describe("web_search minimax provider", () => {
     expect((result?.details as { provider?: string } | undefined)?.provider).toBe("minimax");
   });
 
+  it("falls back to another provider when MiniMax verify fails during Brave fallback", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    vi.stubEnv("MINIMAX_API_KEY", "");
+    vi.stubEnv("MINIMAX_OAUTH_TOKEN", "minimax-oauth-token");
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+      if (mockFetch.mock.calls.length === 1) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              base_resp: { status_code: 401, status_msg: "forbidden" },
+              organic: [],
+            }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            candidates: [
+              {
+                content: { parts: [{ text: "gemini ok" }] },
+                groundingMetadata: { groundingChunks: [] },
+              },
+            ],
+          }),
+      } as Response);
+    });
+    global.fetch = withFetchPreconnect(mockFetch);
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+              gemini: {
+                apiKey: "gemini-config-test", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+    const result = await tool?.execute?.("call-1", { query: "fallback to gemini" });
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const verifyUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    const fallbackUrl = new URL(String(mockFetch.mock.calls[1]?.[0]));
+    expect(verifyUrl.pathname).toBe("/v1/coding_plan/search");
+    expect(fallbackUrl.hostname).toBe("generativelanguage.googleapis.com");
+    expect((result?.details as { provider?: string } | undefined)?.provider).toBe("gemini");
+  });
+
   it("shows MiniMax subscription hint only when OAuth credentials are present", async () => {
     const failingProbePayload = {
       base_resp: { status_code: 401, status_msg: "forbidden" },

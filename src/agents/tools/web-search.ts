@@ -2348,7 +2348,7 @@ export function createWebSearchTool(options?: {
     execute: async (_toolCallId, args) => {
       // Resolve Perplexity auth/transport lazily at execution time so unrelated providers
       // do not touch Perplexity-only credential surfaces during tool construction.
-      const perplexityRuntime =
+      let perplexityRuntime =
         provider === "perplexity" ? resolvePerplexityTransport(perplexityConfig) : undefined;
       let minimaxRuntime =
         provider === "minimax"
@@ -2380,8 +2380,40 @@ export function createWebSearchTool(options?: {
       });
       let minimaxVerified = false;
 
+      const resolveFallbackAfterMinimax = (): {
+        provider: "gemini" | "grok" | "kimi" | "perplexity";
+        apiKey: string;
+        perplexityRuntime?: ReturnType<typeof resolvePerplexityTransport>;
+      } | null => {
+        const geminiApiKey = resolveGeminiApiKey(geminiConfig);
+        if (geminiApiKey) {
+          return { provider: "gemini", apiKey: geminiApiKey };
+        }
+
+        const grokApiKey = resolveGrokApiKey(grokConfig);
+        if (grokApiKey) {
+          return { provider: "grok", apiKey: grokApiKey };
+        }
+
+        const kimiApiKey = resolveKimiApiKey(kimiConfig);
+        if (kimiApiKey) {
+          return { provider: "kimi", apiKey: kimiApiKey };
+        }
+
+        const fallbackPerplexityRuntime = resolvePerplexityTransport(perplexityConfig);
+        if (fallbackPerplexityRuntime?.apiKey) {
+          return {
+            provider: "perplexity",
+            apiKey: fallbackPerplexityRuntime.apiKey,
+            perplexityRuntime: fallbackPerplexityRuntime,
+          };
+        }
+        return null;
+      };
+
       if (!effectiveApiKey) {
         if (provider === "brave") {
+          let minimaxVerifyReason: string | undefined;
           minimaxRuntime =
             minimaxRuntime ??
             (await resolveMinimaxRuntimeCredentials({
@@ -2401,8 +2433,31 @@ export function createWebSearchTool(options?: {
               timeoutSeconds,
             });
             if (!verify.ok) {
+              minimaxVerifyReason = verify.reason;
+            } else {
+              logVerbose(
+                'web_search: provider "brave" missing key; auto-falling back to "minimax" credentials',
+              );
+              effectiveProvider = "minimax";
+              effectiveApiKey = minimaxRuntime.apiKey;
+              minimaxVerified = true;
+            }
+          }
+
+          if (!effectiveApiKey) {
+            const fallback = resolveFallbackAfterMinimax();
+            if (fallback) {
+              logVerbose(
+                `web_search: provider "brave" missing key; minimax unavailable, falling back to "${fallback.provider}"`,
+              );
+              effectiveProvider = fallback.provider;
+              effectiveApiKey = fallback.apiKey;
+              if (fallback.provider === "perplexity" && fallback.perplexityRuntime) {
+                perplexityRuntime = fallback.perplexityRuntime;
+              }
+            } else if (minimaxVerifyReason) {
               return jsonResult(
-                minimaxUnavailablePayload(verify.reason, {
+                minimaxUnavailablePayload(minimaxVerifyReason, {
                   includeApiFallbackHint: true,
                   includeSubscriptionHint: hasMinimaxOauthCredential({
                     minimax: minimaxConfig,
@@ -2410,15 +2465,9 @@ export function createWebSearchTool(options?: {
                   }),
                 }),
               );
+            } else {
+              return jsonResult(missingSearchKeyPayload(provider));
             }
-            logVerbose(
-              'web_search: provider "brave" missing key; auto-falling back to "minimax" credentials',
-            );
-            effectiveProvider = "minimax";
-            effectiveApiKey = minimaxRuntime.apiKey;
-            minimaxVerified = true;
-          } else {
-            return jsonResult(missingSearchKeyPayload(provider));
           }
         } else {
           return jsonResult(missingSearchKeyPayload(provider));

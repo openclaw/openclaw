@@ -371,6 +371,48 @@ describe("runtime web tools resolution", () => {
     expect(readMinimaxBaseUrl(resolvedConfig)).toBe("https://api.minimaxi.com");
   });
 
+  it("honors configured auth profile order when selecting minimax fallback credentials", async () => {
+    vi.spyOn(authProfiles, "loadAuthProfileStoreForSecretsRuntime").mockReturnValue({
+      version: 1,
+      profiles: {
+        "minimax:alpha": {
+          type: "token",
+          provider: "minimax",
+          token: "alpha-token", // pragma: allowlist secret
+        },
+        "minimax:beta": {
+          type: "token",
+          provider: "minimax",
+          token: "beta-token", // pragma: allowlist secret
+        },
+      },
+      order: {},
+    } as unknown as ReturnType<typeof authProfiles.loadAuthProfileStoreForSecretsRuntime>);
+
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        auth: {
+          order: {
+            minimax: ["minimax:beta", "minimax:alpha"],
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+            },
+          },
+        },
+      }),
+      env: {},
+    });
+
+    expect(metadata.search.providerSource).toBe("auto-detect");
+    expect(metadata.search.selectedProvider).toBe("minimax");
+    expect(metadata.search.selectedProviderKeySource).toBe("auth_profile");
+    expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("beta-token");
+  });
+
   it("prefers configured minimax-portal baseUrl when auth profile fallback is minimax-portal", async () => {
     vi.spyOn(authProfiles, "loadAuthProfileStoreForSecretsRuntime").mockReturnValue({
       version: 1,

@@ -1,7 +1,7 @@
 import {
   type AuthProfileStore,
-  listProfilesForProvider,
   loadAuthProfileStoreForSecretsRuntime,
+  resolveAuthProfileOrder,
   type AuthProfileCredential,
 } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -438,7 +438,11 @@ export async function resolveMinimaxApiKeyFromAuthProfiles(params: {
 
   const visited = new Set<string>();
   for (const provider of MINIMAX_AUTH_PROFILE_PROVIDERS) {
-    const profileIds = listProfilesForProvider(store, provider);
+    const profileIds = resolveAuthProfileOrder({
+      cfg: params.sourceConfig,
+      store,
+      provider,
+    });
     for (const profileId of profileIds) {
       if (visited.has(profileId)) {
         continue;
