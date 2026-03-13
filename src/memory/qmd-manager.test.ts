@@ -96,30 +96,6 @@ const originalPath = process.env.PATH;
 const originalPathExt = process.env.PATHEXT;
 const originalWindowsPath = (process.env as NodeJS.ProcessEnv & { Path?: string }).Path;
 
-async function installFakeWindowsCliPackage(params: {
-  rootDir: string;
-  packageName: "qmd" | "mcporter";
-}): Promise<string> {
-  const nodeModulesDir = path.join(params.rootDir, "node_modules");
-  const shimDir = path.join(nodeModulesDir, ".bin");
-  const packageDir = path.join(nodeModulesDir, params.packageName);
-  const scriptPath = path.join(packageDir, "dist", "cli.js");
-  await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-  await fs.mkdir(shimDir, { recursive: true });
-  await fs.writeFile(path.join(shimDir, `${params.packageName}.cmd`), "@echo off\r\n", "utf8");
-  await fs.writeFile(
-    path.join(packageDir, "package.json"),
-    JSON.stringify({
-      name: params.packageName,
-      version: "0.0.0",
-      bin: { [params.packageName]: "dist/cli.js" },
-    }),
-    "utf8",
-  );
-  await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");
-  return shimDir;
-}
-
 describe("QmdMemoryManager", () => {
   let fixtureRoot: string;
   let fixtureCount = 0;
@@ -167,20 +143,9 @@ describe("QmdMemoryManager", () => {
     // created lazily by manager code when needed.
     await fs.mkdir(workspaceDir);
     process.env.OPENCLAW_STATE_DIR = stateDir;
-    if (process.platform === "win32") {
-      const qmdShimDir = await installFakeWindowsCliPackage({
-        rootDir: path.join(tmpRoot, "fake-qmd-cli"),
-        packageName: "qmd",
-      });
-      const mcporterShimDir = await installFakeWindowsCliPackage({
-        rootDir: path.join(tmpRoot, "fake-mcporter-cli"),
-        packageName: "mcporter",
-      });
-      const nextPath = [qmdShimDir, mcporterShimDir, originalPath].filter(Boolean).join(";");
-      process.env.PATH = nextPath;
-      process.env.PATHEXT = ".CMD;.EXE";
-      (process.env as NodeJS.ProcessEnv & { Path?: string }).Path = nextPath;
-    }
+    // Keep the default Windows path unresolved for most tests so spawn mocks can
+    // match the logical package command. Tests that verify wrapper resolution
+    // install explicit shim fixtures inline.
     cfg = {
       agents: {
         list: [{ id: agentId, default: true, workspace: workspaceDir }],
