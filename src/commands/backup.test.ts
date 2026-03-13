@@ -41,6 +41,41 @@ describe("backup commands", () => {
     await tempHome.restore();
   });
 
+  async function withInvalidWorkspaceBackupConfig<T>(
+    fn: (runtime: {
+      log: ReturnType<typeof vi.fn>;
+      error: ReturnType<typeof vi.fn>;
+      exit: ReturnType<typeof vi.fn>;
+    }) => Promise<T>,
+  ) {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const configPath = path.join(tempHome.home, "custom-config.json");
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+    await fs.writeFile(configPath, '{"agents": { defaults: { workspace: ', "utf8");
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    try {
+      return await fn(runtime);
+    } finally {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+    }
+  }
+
+  function expectWorkspaceCoveredByState(
+    plan: Awaited<ReturnType<typeof resolveBackupPlanFromDisk>>,
+  ) {
+    expect(plan.included).toHaveLength(1);
+    expect(plan.included[0]?.kind).toBe("state");
+    expect(plan.skipped).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "workspace", reason: "covered" })]),
+    );
+  }
+
   it("collapses default config, credentials, and workspace into the state backup root", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
@@ -50,12 +85,7 @@ describe("backup commands", () => {
     await fs.writeFile(path.join(stateDir, "workspace", "SOUL.md"), "# soul\n", "utf8");
 
     const plan = await resolveBackupPlanFromDisk({ includeWorkspace: true, nowMs: 123 });
-
-    expect(plan.included).toHaveLength(1);
-    expect(plan.included[0]?.kind).toBe("state");
-    expect(plan.skipped).toEqual(
-      expect.arrayContaining([expect.objectContaining({ kind: "workspace", reason: "covered" })]),
-    );
+    expectWorkspaceCoveredByState(plan);
   });
 
   it("orders coverage checks by canonical path so symlinked workspaces do not duplicate state", async () => {
@@ -84,12 +114,7 @@ describe("backup commands", () => {
       );
 
       const plan = await resolveBackupPlanFromDisk({ includeWorkspace: true, nowMs: 123 });
-
-      expect(plan.included).toHaveLength(1);
-      expect(plan.included[0]?.kind).toBe("state");
-      expect(plan.skipped).toEqual(
-        expect.arrayContaining([expect.objectContaining({ kind: "workspace", reason: "covered" })]),
-      );
+      expectWorkspaceCoveredByState(plan);
     } finally {
       await fs.rm(symlinkDir, { recursive: true, force: true });
     }
@@ -336,41 +361,15 @@ describe("backup commands", () => {
   });
 
   it("fails fast when config is invalid and workspace backup is enabled", async () => {
-    const stateDir = path.join(tempHome.home, ".openclaw");
-    const configPath = path.join(tempHome.home, "custom-config.json");
-    process.env.OPENCLAW_CONFIG_PATH = configPath;
-    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
-    await fs.writeFile(configPath, '{"agents": { defaults: { workspace: ', "utf8");
-
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-
-    try {
+    await withInvalidWorkspaceBackupConfig(async (runtime) => {
       await expect(backupCreateCommand(runtime, { dryRun: true })).rejects.toThrow(
         /--no-include-workspace/i,
       );
-    } finally {
-      delete process.env.OPENCLAW_CONFIG_PATH;
-    }
+    });
   });
 
   it("allows explicit partial backups when config is invalid", async () => {
-    const stateDir = path.join(tempHome.home, ".openclaw");
-    const configPath = path.join(tempHome.home, "custom-config.json");
-    process.env.OPENCLAW_CONFIG_PATH = configPath;
-    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
-    await fs.writeFile(configPath, '{"agents": { defaults: { workspace: ', "utf8");
-
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-
-    try {
+    await withInvalidWorkspaceBackupConfig(async (runtime) => {
       const result = await backupCreateCommand(runtime, {
         dryRun: true,
         includeWorkspace: false,
@@ -378,9 +377,7 @@ describe("backup commands", () => {
 
       expect(result.includeWorkspace).toBe(false);
       expect(result.assets.some((asset) => asset.kind === "workspace")).toBe(false);
-    } finally {
-      delete process.env.OPENCLAW_CONFIG_PATH;
-    }
+    });
   });
 
   it("backs up only the active config file when --only-config is requested", async () => {

@@ -56,6 +56,7 @@ export type ProfileStatus = {
   cdpPort: number;
   cdpUrl: string;
   color: string;
+  driver: ResolvedBrowserProfile["driver"];
   running: boolean;
   tabCount: number;
   isDefault: boolean;

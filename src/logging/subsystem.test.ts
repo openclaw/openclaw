@@ -4,6 +4,17 @@ import { resetLogger, setLoggerOverride } from "./logger.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
+function installConsoleMethodSpy(method: "warn" | "error") {
+  const spy = vi.fn();
+  loggingState.rawConsole = {
+    log: vi.fn(),
+    info: vi.fn(),
+    warn: method === "warn" ? spy : vi.fn(),
+    error: method === "error" ? spy : vi.fn(),
+  };
+  return spy;
+}
+
 afterEach(() => {
   setConsoleSubsystemFilter(null);
   setLoggerOverride(null);
@@ -58,13 +69,7 @@ describe("createSubsystemLogger().isEnabled", () => {
 
   it("suppresses probe warnings for embedded subsystems based on structured run metadata", () => {
     setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-    const warn = vi.fn();
-    loggingState.rawConsole = {
-      log: vi.fn(),
-      info: vi.fn(),
-      warn,
-      error: vi.fn(),
-    };
+    const warn = installConsoleMethodSpy("warn");
     const log = createSubsystemLogger("agent/embedded").child("failover");
 
     log.warn("embedded run failover decision", {
@@ -77,13 +82,7 @@ describe("createSubsystemLogger().isEnabled", () => {
 
   it("does not suppress probe errors for embedded subsystems", () => {
     setLoggerOverride({ level: "silent", consoleLevel: "error" });
-    const error = vi.fn();
-    loggingState.rawConsole = {
-      log: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      error,
-    };
+    const error = installConsoleMethodSpy("error");
     const log = createSubsystemLogger("agent/embedded").child("failover");
 
     log.error("embedded run failover decision", {
@@ -96,13 +95,7 @@ describe("createSubsystemLogger().isEnabled", () => {
 
   it("suppresses probe warnings for model-fallback child subsystems based on structured run metadata", () => {
     setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-    const warn = vi.fn();
-    loggingState.rawConsole = {
-      log: vi.fn(),
-      info: vi.fn(),
-      warn,
-      error: vi.fn(),
-    };
+    const warn = installConsoleMethodSpy("warn");
     const log = createSubsystemLogger("model-fallback").child("decision");
 
     log.warn("model fallback decision", {
@@ -115,13 +108,7 @@ describe("createSubsystemLogger().isEnabled", () => {
 
   it("does not suppress probe errors for model-fallback child subsystems", () => {
     setLoggerOverride({ level: "silent", consoleLevel: "error" });
-    const error = vi.fn();
-    loggingState.rawConsole = {
-      log: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      error,
-    };
+    const error = installConsoleMethodSpy("error");
     const log = createSubsystemLogger("model-fallback").child("decision");
 
     log.error("model fallback decision", {
@@ -134,13 +121,7 @@ describe("createSubsystemLogger().isEnabled", () => {
 
   it("still emits non-probe warnings for embedded subsystems", () => {
     setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-    const warn = vi.fn();
-    loggingState.rawConsole = {
-      log: vi.fn(),
-      info: vi.fn(),
-      warn,
-      error: vi.fn(),
-    };
+    const warn = installConsoleMethodSpy("warn");
     const log = createSubsystemLogger("agent/embedded").child("auth-profiles");
 
     log.warn("auth profile failure state updated", {
@@ -153,13 +134,7 @@ describe("createSubsystemLogger().isEnabled", () => {
 
   it("still emits non-probe model-fallback child warnings", () => {
     setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-    const warn = vi.fn();
-    loggingState.rawConsole = {
-      log: vi.fn(),
-      info: vi.fn(),
-      warn,
-      error: vi.fn(),
-    };
+    const warn = installConsoleMethodSpy("warn");
     const log = createSubsystemLogger("model-fallback").child("decision");
 
     log.warn("model fallback decision", {
