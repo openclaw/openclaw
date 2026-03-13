@@ -56,7 +56,7 @@ Notes:
 1. Ensure AWS credentials are available on the **gateway host**:
 
 ```bash
-export AWS_ACCESS_KEY_ID="AKIA..."
+export AWS_ACCESS_KEY_ID="EXAMPLE_AWS_ACCESS_KEY_ID"
 export AWS_SECRET_ACCESS_KEY="..."
 export AWS_REGION="us-east-1"
 # Optional:

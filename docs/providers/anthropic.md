@@ -30,7 +30,7 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 
 ```json5
 {
-  env: { ANTHROPIC_API_KEY: "sk-ant-..." },
+  env: { ANTHROPIC_API_KEY: "example-anthropic-key-not-real" },
   agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
 }
 ```

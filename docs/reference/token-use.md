@@ -25,6 +25,10 @@ OpenClaw assembles its own system prompt on every run. It includes:
 
 See the full breakdown in [System Prompt](/concepts/system-prompt).
 
+When documenting credentials or auth snippets, use the
+[Secret Placeholder Conventions](/reference/secret-placeholder-conventions) to
+avoid secret-scanner false positives in docs-only changes.
+
 ## What counts in the context window
 
 Everything the model receives counts toward the context limit:
