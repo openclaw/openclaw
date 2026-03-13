@@ -165,10 +165,16 @@ function resolveDeliveryStatus(params: { job: CronJob; delivered?: boolean }): C
   if (params.delivered === true) {
     return "delivered";
   }
+  
+  const deliveryPlan = resolveCronDeliveryPlan(params.job);
+  if (!deliveryPlan.requested) {
+    return "not-requested";
+  }
+  
   if (params.delivered === false) {
     return "not-delivered";
   }
-  return resolveCronDeliveryPlan(params.job).requested ? "unknown" : "not-requested";
+  return "unknown";
 }
 
 function normalizeCronMessageChannel(input: unknown): CronMessageChannel | undefined {
