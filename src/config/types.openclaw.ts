@@ -120,6 +120,11 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  /** Provider usage panel cache (e.g. Anthropic OAuth usage). */
+  usage?: {
+    /** Cache TTL in ms for loadProviderUsageSummary results. Default: 300000 (5 min). */
+    cacheTtlMs?: number;
+  };
 };
 
 export type ConfigValidationIssue = {

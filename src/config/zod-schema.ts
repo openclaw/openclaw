@@ -826,6 +826,12 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    usage: z
+      .object({
+        cacheTtlMs: z.number().int().nonnegative().optional(),
+      })
+      .strict()
+      .optional(),
     memory: MemorySchema,
     skills: z
       .object({

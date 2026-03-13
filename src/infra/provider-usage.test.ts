@@ -291,7 +291,17 @@ describe("provider usage loading", () => {
 
         const claude = expectSingleAnthropicProvider(summary);
         expect(claude?.windows[0]?.label).toBe("5h");
-        expect(mockFetch).toHaveBeenCalled();
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+
+        // Second call with same opts hits cache; no additional fetch
+        const summary2 = await loadProviderUsageSummary({
+          now: usageNow,
+          providers: ["anthropic"],
+          agentDir,
+          fetch: mockFetch as unknown as typeof fetch,
+        });
+        expect(summary2).toEqual(summary);
+        expect(mockFetch).toHaveBeenCalledTimes(1);
       },
       {
         env: {
@@ -433,6 +443,26 @@ describe("provider usage loading", () => {
     } finally {
       ignoredErrors.delete("HTTP 500");
     }
+  });
+
+  it("bypasses cache when auth is passed, so each call fetches", async () => {
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      if (url.includes("api.anthropic.com/api/oauth/usage")) {
+        return makeResponse(200, {
+          five_hour: { utilization: 15, resets_at: "2026-01-07T01:00:00Z" },
+        });
+      }
+      return makeResponse(404, "not found");
+    });
+    const opts = {
+      now: usageNow,
+      auth: [{ provider: "anthropic", token: "token-a" }] as ProviderAuth[],
+      fetch: mockFetch as unknown as typeof fetch,
+    };
+    const a = await loadProviderUsageSummary(opts);
+    const b = await loadProviderUsageSummary(opts);
+    expect(a).toEqual(b);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
   it("throws when fetch is unavailable", async () => {
