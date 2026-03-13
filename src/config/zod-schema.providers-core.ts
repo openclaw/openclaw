@@ -68,6 +68,7 @@ const SlackCapabilitiesSchema = z.union([
     .strict(),
 ]);
 
+const TelegramErrorPolicySchema = z.enum(["always", "once", "silent"]).optional();
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -78,6 +79,7 @@ export const TelegramTopicSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     agentId: z.string().optional(),
+    errorPolicy: TelegramErrorPolicySchema,
   })
   .strict();
 
@@ -93,6 +95,8 @@ export const TelegramGroupSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
+    errorPolicy: TelegramErrorPolicySchema,
+    errorCooldownMs: z.number().int().nonnegative().optional(),
   })
   .strict();
 
@@ -106,6 +110,8 @@ export const TelegramDirectSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
+    errorPolicy: TelegramErrorPolicySchema,
+    errorCooldownMs: z.number().int().nonnegative().optional(),
     requireTopic: z.boolean().optional(),
   })
   .strict();
@@ -274,6 +280,8 @@ export const TelegramAccountSchemaBase = z
     linkPreview: z.boolean().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    errorPolicy: TelegramErrorPolicySchema,
+    errorCooldownMs: z.number().int().nonnegative().optional(),
   })
   .strict();
 
