@@ -311,7 +311,7 @@ export const registerTelegramHandlers = ({
     const dmThreadId = !params.isGroup ? params.messageThreadId : undefined;
     const topicThreadId = resolvedThreadId ?? dmThreadId;
     const { topicConfig } = resolveTelegramGroupConfig(params.chatId, topicThreadId);
-    const { route } = resolveTelegramConversationRoute({
+    const { route, skipDmThreadSuffix } = resolveTelegramConversationRoute({
       cfg,
       accountId,
       chatId: params.chatId,
@@ -323,7 +323,7 @@ export const registerTelegramHandlers = ({
     });
     const baseSessionKey = route.sessionKey;
     const threadKeys =
-      dmThreadId != null
+      dmThreadId != null && !skipDmThreadSuffix
         ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${params.chatId}:${dmThreadId}` })
         : null;
     const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;

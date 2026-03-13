@@ -474,7 +474,7 @@ export const registerTelegramNativeCommands = ({
       isForum,
       messageThreadId,
     });
-    let { route, configuredBinding } = resolveTelegramConversationRoute({
+    let { route, configuredBinding, skipDmThreadSuffix } = resolveTelegramConversationRoute({
       cfg,
       accountId,
       chatId,
@@ -652,7 +652,7 @@ export const registerTelegramNativeCommands = ({
           // DMs: use raw messageThreadId for thread sessions (not resolvedThreadId which is for forums)
           const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
           const threadKeys =
-            dmThreadId != null
+            dmThreadId != null && !skipDmThreadSuffix
               ? resolveThreadSessionKeys({
                   baseSessionKey,
                   threadId: `${chatId}:${dmThreadId}`,

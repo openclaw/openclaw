@@ -140,6 +140,19 @@ function buildStatusTopicCommandContext() {
   };
 }
 
+function buildStatusDmTopicCommandContext() {
+  return {
+    match: "",
+    message: {
+      message_id: 3,
+      date: Math.floor(Date.now() / 1000),
+      chat: { id: 100, type: "private" as const },
+      message_thread_id: 42,
+      from: { id: 200, username: "bob" },
+    },
+  };
+}
+
 function registerAndResolveStatusHandler(params: {
   cfg: OpenClawConfig;
   allowFrom?: string[];
@@ -483,6 +496,35 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       "default:-1001234567890:topic:42",
       undefined,
     );
+  });
+
+  it("routes Telegram native commands through bound DM topic sessions without a thread suffix", async () => {
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "default:100:topic:42",
+      targetSessionKey: "agent:codex-acp:session-dm-topic",
+    });
+
+    const { handler } = registerAndResolveStatusHandler({
+      cfg: {},
+      allowFrom: ["200"],
+      groupAllowFrom: ["200"],
+    });
+    await handler(buildStatusDmTopicCommandContext());
+
+    expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "100:topic:42",
+    });
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [{ ctx?: { CommandTargetSessionKey?: string } }]
+      >
+    )[0]?.[0];
+    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe(
+      "agent:codex-acp:session-dm-topic",
+    );
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("default:100:topic:42", undefined);
   });
 
   it("aborts native command dispatch when configured ACP topic binding cannot initialize", async () => {
