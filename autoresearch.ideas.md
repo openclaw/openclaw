@@ -1,43 +1,28 @@
-## Remaining opportunities (low priority)
+## Remaining opportunities (very low priority)
 
-All major cache invalidation scenarios have been addressed. The remaining ideas are
-architecture-level improvements or very rare events.
+All major cache invalidation scenarios have been addressed. Per-conversation is at 99.4%
+(theoretical maximum — the remaining 0.6% is the GroupChat content itself, which changes
+by definition). Other scenarios are at 95-99.6%.
 
-### Per-scenario ordering trade-offs
+### Final scenario summary
 
-The dynamic tail is ordered by frequency (most stable FIRST, most volatile LAST).
-This is the OPTIMAL combined ordering for expected KV cache savings across all events.
+- per-conversation: 99.4% (30,735/30,933) — THEORETICAL MAX (limited by GroupChat content)
+- MEMORY.md daily: ~99.5%
+- workspaceNotes (weekly): ~99.6%
+- skills (monthly): ~99.5%
+- modelAliases (quarterly): ~97.4%
+- toolNames (plugin install, rare): ~95.1%
+- deployConfig (yearly): ~95.4%
 
-For any individual scenario, the "perfect" ordering would put that scenario's section LAST
-(to maximise its stable prefix). But this conflicts with other scenarios. The frequency-based
-ordering is the Pareto-optimal trade-off:
+### ## Tooling section hasGateway conditional (~300 chars)
 
-- toolNames (plugin install, rare): 96.2% stable — theoretical max for this ordering
-- deployConfig (yearly): 90.7% stable
-- modelAliases (quarterly): ~97% stable
-- skills (monthly): 99.6% stable
-- workspaceNotes (weekly): 100.0% stable
-- MEMORY.md (daily): 99.5% stable
+When `gateway` tool is added/removed, the `## OpenClaw Self-Update` section (~300 chars)
+appears or disappears, causing a diff at position ~3,600 in the stable boilerplate.
 
-**Combined weighted expected savings** with this ordering vastly exceeds any single-scenario-
-optimised ordering. Do NOT change the tail ordering without considering the full impact.
-
-### toolNames scenario: 96.2% vs theoretical ~100%
-
-The 3.8% gap (1,138 chars) is `modelAliases + skills + workspaceNotes` that appear AFTER
-the tool manifest and become non-stable when plugin tools are added. These sections MUST be
-after tool manifest in the frequency-based ordering. Accept this gap.
-
-If plugin installs become a much more common event (e.g., auto-installed plugins), revisit.
-
-### ## Tooling section hasGateway conditional (~480 chars)
-
-When `gateway` tool is added/removed, the `## OpenClaw Self-Update` section (~480) appears
-or disappears, causing a diff at that position. This is in the STABLE BOILERPLATE.
-
-Fix: make `## OpenClaw Self-Update` section unconditional (always show if sections_spawn/gateway
-exists), or move to dynamic tail. Very low priority: `gateway` is always present in production
-deployments.
+Fix: make `## OpenClaw Self-Update` section unconditional (always show), or move to
+dynamic tail. Very low priority: `gateway` is always present in production deployments.
+Adding this would recover ~300 chars in the stable boilerplate for the "add gateway"
+scenario (essentially never happens in production).
 
 ### Build-time improvements (no primary metric impact)
 
@@ -51,8 +36,19 @@ deployments.
 
 - Separate AGENTS.md into base (stable global protocol) + project overlay (frequent per-project
   notes). User-facing design change. Would push AGENTS.md base into stable prefix, improving
-  the per-conversation boundary from ~28k to ~28k + AGENTS.md_base_size.
+  the per-conversation boundary further (already at 99.4% so marginal gain).
 
 - Combined benchmark: a single benchmark that measures weighted expected cache savings across
-  ALL scenarios simultaneously, rather than one scenario at a time. This would allow autoresearch
-  to directly optimise the combined objective.
+  ALL scenarios simultaneously. Useful for auditing but doesn't reveal new improvements at
+  current convergence level.
+
+### toolNames vs deployConfig ordering trade-off
+
+Current: TM → deployConfig → modelAliases → ... → MEMORY.md → GroupChat
+
+- toolNames: ~95.1% (loses ~1.9% because deployConfig comes after TM, adding non-stable content
+  for toolNames scenario when deployConfig is stable in toolNames v1/v2)
+- deployConfig: ~95.4% (benefits from TM being in stable prefix for deployConfig scenario)
+
+If toolNames installs become much more frequent (e.g., auto-installed plugins), consider
+swapping deployConfig back before TM. Currently: deployConfig yearly vs toolNames monthly at most.
