@@ -190,6 +190,7 @@ async function refreshGatewayServiceEnv(params: {
       continue;
     }
     const res = await runCommandWithTimeout([resolveNodeRunner(), candidate, ...args], {
+      cwd: params.result.root,
       timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
     });
     if (res.code === 0) {

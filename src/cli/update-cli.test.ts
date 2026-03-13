@@ -624,7 +624,7 @@ describe("update-cli", () => {
 
     expect(runCommandWithTimeout).toHaveBeenCalledWith(
       [expect.stringMatching(/node/), entryPath, "gateway", "install", "--force"],
-      expect.objectContaining({ timeoutMs: 60_000 }),
+      expect.objectContaining({ cwd: root, timeoutMs: 60_000 }),
     );
     expect(runDaemonInstall).not.toHaveBeenCalled();
     expect(runRestartScript).toHaveBeenCalled();
