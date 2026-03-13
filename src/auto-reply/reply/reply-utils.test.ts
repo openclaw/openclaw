@@ -8,7 +8,9 @@ import { createReplyReferencePlanner } from "./reply-reference.js";
 import {
   extractShortModelName,
   hasTemplateVariables,
+  resolveModelEmoji,
   resolveResponsePrefixTemplate,
+  resolveThinkEmoji,
 } from "./response-prefix-template.js";
 import { createStreamingDirectiveAccumulator } from "./streaming-directives.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -799,5 +801,93 @@ describe("hasTemplateVariables", () => {
     expect(hasTemplateVariables("[{model}]")).toBe(true);
     expect(hasTemplateVariables("[{model}]")).toBe(true);
     expect(hasTemplateVariables("[Claude]")).toBe(false);
+  });
+});
+
+describe("resolveModelEmoji", () => {
+  const map = {
+    "claude-opus-4-6": "🧠",
+    "claude-sonnet-4-5": "🎵",
+    "gpt-5.3-codex": "🤖",
+    "kimi-k2.5": "🌙",
+    anthropic: "🦞",
+  };
+
+  it("matches exact short model name", () => {
+    expect(resolveModelEmoji(map, "claude-opus-4-6")).toBe("🧠");
+    expect(resolveModelEmoji(map, "gpt-5.3-codex")).toBe("🤖");
+  });
+
+  it("matches case-insensitively", () => {
+    expect(resolveModelEmoji(map, "Claude-Opus-4-6")).toBe("🧠");
+  });
+
+  it("matches provider name as fallback", () => {
+    expect(resolveModelEmoji(map, "claude-haiku-4-5", undefined, "anthropic")).toBe("🦞");
+  });
+
+  it("matches full model ID", () => {
+    const fullMap = { "anthropic/claude-opus-4-6": "🧬" };
+    expect(resolveModelEmoji(fullMap, "other", "anthropic/claude-opus-4-6")).toBe("🧬");
+  });
+
+  it("matches substring in model name", () => {
+    const subMap = { opus: "🧠" };
+    expect(resolveModelEmoji(subMap, "claude-opus-4-6")).toBe("🧠");
+  });
+
+  it("returns empty string for no match", () => {
+    expect(resolveModelEmoji(map, "unknown-model")).toBe("");
+  });
+
+  it("returns empty string for undefined/empty map", () => {
+    expect(resolveModelEmoji(undefined, "claude-opus-4-6")).toBe("");
+    expect(resolveModelEmoji({}, "claude-opus-4-6")).toBe("");
+  });
+});
+
+describe("resolveThinkEmoji", () => {
+  it("returns active emoji for high/low thinking", () => {
+    expect(resolveThinkEmoji(["💭", ""], "high")).toBe("💭");
+    expect(resolveThinkEmoji(["💭", ""], "low")).toBe("💭");
+  });
+
+  it("returns inactive emoji for off thinking", () => {
+    expect(resolveThinkEmoji(["💭", "💤"], "off")).toBe("💤");
+  });
+
+  it("returns inactive emoji for undefined thinking level", () => {
+    expect(resolveThinkEmoji(["💭", ""], undefined)).toBe("");
+  });
+
+  it("returns empty string for undefined/invalid pair", () => {
+    expect(resolveThinkEmoji(undefined, "high")).toBe("");
+  });
+});
+
+describe("resolveResponsePrefixTemplate with emoji variables", () => {
+  it("resolves {modelEmoji} and {thinkEmoji} from context", () => {
+    const result = resolveResponsePrefixTemplate("{modelEmoji}{thinkEmoji}", {
+      model: "claude-opus-4-6",
+      modelEmoji: "🧠",
+      thinkEmoji: "💭",
+    });
+    expect(result).toBe("🧠💭");
+  });
+
+  it("resolves {modelEmoji} to empty string when not set", () => {
+    const result = resolveResponsePrefixTemplate("{modelEmoji} hello", {
+      model: "claude-opus-4-6",
+    });
+    expect(result).toBe(" hello");
+  });
+
+  it("resolves mixed emoji and text variables", () => {
+    const result = resolveResponsePrefixTemplate("{modelEmoji} [{model}]{thinkEmoji}", {
+      model: "claude-opus-4-6",
+      modelEmoji: "🧠",
+      thinkEmoji: "💭",
+    });
+    expect(result).toBe("🧠 [claude-opus-4-6]💭");
   });
 });

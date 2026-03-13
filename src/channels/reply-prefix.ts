@@ -1,6 +1,8 @@
 import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../agents/identity.js";
 import {
   extractShortModelName,
+  resolveModelEmoji,
+  resolveThinkEmoji,
   type ResponsePrefixContext,
 } from "../auto-reply/reply/response-prefix-template.js";
 import type { GetReplyOptions } from "../auto-reply/types.js";
@@ -31,20 +33,31 @@ export function createReplyPrefixContext(params: {
     identityName: resolveIdentityName(cfg, agentId),
   };
 
+  const effectiveMessages = resolveEffectiveMessagesConfig(cfg, agentId, {
+    channel: params.channel,
+    accountId: params.accountId,
+  });
+
   const onModelSelected = (ctx: ModelSelectionContext) => {
+    const shortModel = extractShortModelName(ctx.model);
+    const thinkLevel = ctx.thinkLevel ?? "off";
     // Mutate the object directly instead of reassigning to ensure closures see updates.
     prefixContext.provider = ctx.provider;
-    prefixContext.model = extractShortModelName(ctx.model);
+    prefixContext.model = shortModel;
     prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
-    prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
+    prefixContext.thinkingLevel = thinkLevel;
+    prefixContext.modelEmoji = resolveModelEmoji(
+      effectiveMessages.modelEmojiMap,
+      shortModel,
+      `${ctx.provider}/${ctx.model}`,
+      ctx.provider,
+    );
+    prefixContext.thinkEmoji = resolveThinkEmoji(effectiveMessages.thinkEmoji, thinkLevel);
   };
 
   return {
     prefixContext,
-    responsePrefix: resolveEffectiveMessagesConfig(cfg, agentId, {
-      channel: params.channel,
-      accountId: params.accountId,
-    }).responsePrefix,
+    responsePrefix: effectiveMessages.responsePrefix,
     responsePrefixContextProvider: () => prefixContext,
     onModelSelected,
   };

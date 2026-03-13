@@ -16,6 +16,10 @@ export type ResponsePrefixContext = {
   thinkingLevel?: string;
   /** Agent identity name */
   identityName?: string;
+  /** Resolved emoji from modelEmojiMap (pre-resolved by the caller) */
+  modelEmoji?: string;
+  /** Resolved thinking emoji (pre-resolved by the caller) */
+  thinkEmoji?: string;
 };
 
 // Regex pattern for template variables: {variableName} or {variable.name}
@@ -59,6 +63,10 @@ export function resolveResponsePrefixTemplate(
       case "identity.name":
       case "identityname":
         return context.identityName ?? match;
+      case "modelemoji":
+        return context.modelEmoji ?? "";
+      case "thinkemoji":
+        return context.thinkEmoji ?? "";
       default:
         // Leave unrecognized variables as-is
         return match;
@@ -86,6 +94,91 @@ export function extractShortModelName(fullModel: string): string {
 
   // Strip date suffixes (YYYYMMDD format)
   return modelPart.replace(/-\d{8}$/, "").replace(/-latest$/, "");
+}
+
+/**
+ * Resolve model emoji from a map by matching against model name, provider, alias, or partial match.
+ *
+ * Match order (first wins, case-insensitive):
+ * 1. Exact short model name (e.g., "claude-opus-4-6")
+ * 2. Full model ID (e.g., "anthropic/claude-opus-4-6")
+ * 3. Provider name (e.g., "anthropic")
+ * 4. Substring match on short model name (e.g., "opus" matches "claude-opus-4-6")
+ *
+ * @returns The matched emoji, or empty string if no match
+ */
+export function resolveModelEmoji(
+  map: Record<string, string> | undefined,
+  model?: string,
+  modelFull?: string,
+  provider?: string,
+): string {
+  if (!map || Object.keys(map).length === 0) {
+    return "";
+  }
+
+  // Build a lowercase lookup
+  const entries = Object.entries(map).map(([k, v]) => [k.toLowerCase(), v] as const);
+
+  const modelLower = model?.toLowerCase();
+  const modelFullLower = modelFull?.toLowerCase();
+  const providerLower = provider?.toLowerCase();
+
+  // 1. Exact short model name
+  if (modelLower) {
+    for (const [key, emoji] of entries) {
+      if (key === modelLower) {
+        return emoji;
+      }
+    }
+  }
+
+  // 2. Exact full model ID
+  if (modelFullLower) {
+    for (const [key, emoji] of entries) {
+      if (key === modelFullLower) {
+        return emoji;
+      }
+    }
+  }
+
+  // 3. Exact provider name
+  if (providerLower) {
+    for (const [key, emoji] of entries) {
+      if (key === providerLower) {
+        return emoji;
+      }
+    }
+  }
+
+  // 4. Substring match on model name (e.g., "opus" matches "claude-opus-4-6")
+  if (modelLower) {
+    for (const [key, emoji] of entries) {
+      if (modelLower.includes(key) || key.includes(modelLower)) {
+        return emoji;
+      }
+    }
+  }
+
+  return "";
+}
+
+/**
+ * Resolve thinking emoji from a pair based on current thinking level.
+ *
+ * @param pair - [activeEmoji, inactiveEmoji]
+ * @param thinkingLevel - Current thinking level ("high", "low", "off", etc.)
+ * @returns The appropriate emoji
+ */
+export function resolveThinkEmoji(
+  pair: [string, string] | undefined,
+  thinkingLevel?: string,
+): string {
+  if (!pair || pair.length < 2) {
+    return "";
+  }
+  const isActive = thinkingLevel === "high" || thinkingLevel === "low";
+  return isActive ? pair[0] : pair[1];
 }
 
 /**
