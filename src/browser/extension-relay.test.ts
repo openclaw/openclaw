@@ -43,8 +43,8 @@ function waitForClose(ws: WebSocket, timeoutMs = RELAY_MESSAGE_TIMEOUT_MS) {
   });
 }
 
-function relayAuthHeaders(url: string) {
-  return getChromeExtensionRelayAuthHeaders(url);
+async function relayAuthHeaders(url: string) {
+  return await getChromeExtensionRelayAuthHeaders(url);
 }
 
 function createMessageQueue(ws: WebSocket) {
@@ -186,7 +186,7 @@ describe("chrome extension relay server", () => {
     cdpUrl = `http://127.0.0.1:${port}`;
     await ensureChromeExtensionRelayServer({ cdpUrl });
     const ext = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
-      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+      headers: await relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
     });
     await waitForOpen(ext);
     return { port, ext };
@@ -198,19 +198,19 @@ describe("chrome extension relay server", () => {
     await ensureChromeExtensionRelayServer({ cdpUrl });
 
     const v1 = (await fetch(`${cdpUrl}/json/version`, {
-      headers: relayAuthHeaders(cdpUrl),
+      headers: await relayAuthHeaders(cdpUrl),
     }).then((r) => r.json())) as {
       webSocketDebuggerUrl?: string;
     };
     expect(v1.webSocketDebuggerUrl).toBeUndefined();
 
     const ext = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
-      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+      headers: await relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
     });
     await waitForOpen(ext);
 
     const v2 = (await fetch(`${cdpUrl}/json/version`, {
-      headers: relayAuthHeaders(cdpUrl),
+      headers: await relayAuthHeaders(cdpUrl),
     }).then((r) => r.json())) as {
       webSocketDebuggerUrl?: string;
     };
@@ -221,12 +221,12 @@ describe("chrome extension relay server", () => {
 
   it("uses relay-scoped token only for known relay ports", async () => {
     const port = await getFreePort();
-    const unknown = getChromeExtensionRelayAuthHeaders(`http://127.0.0.1:${port}`);
+    const unknown = await getChromeExtensionRelayAuthHeaders(`http://127.0.0.1:${port}`);
     expect(unknown).toEqual({});
 
     const sharedUrl = await ensureSharedRelayServer();
 
-    const headers = getChromeExtensionRelayAuthHeaders(sharedUrl);
+    const headers = await getChromeExtensionRelayAuthHeaders(sharedUrl);
     expect(Object.keys(headers)).toContain("x-openclaw-relay-token");
     expect(headers["x-openclaw-relay-token"]).not.toBe(TEST_GATEWAY_TOKEN);
   });
@@ -247,7 +247,7 @@ describe("chrome extension relay server", () => {
     const sharedUrl = await ensureSharedRelayServer();
 
     const res = await fetch(`${sharedUrl}/json/activate/%E0%A4%A`, {
-      headers: relayAuthHeaders(sharedUrl),
+      headers: await relayAuthHeaders(sharedUrl),
     });
     expect(res.status).toBe(400);
     expect(await res.text()).toContain("invalid targetId encoding");
@@ -305,7 +305,7 @@ describe("chrome extension relay server", () => {
     const res = await fetch(`${sharedUrl}/json/version`, {
       headers: {
         Origin: origin,
-        ...relayAuthHeaders(sharedUrl),
+        ...(await relayAuthHeaders(sharedUrl)),
       },
     });
 
@@ -328,12 +328,12 @@ describe("chrome extension relay server", () => {
     await ensureChromeExtensionRelayServer({ cdpUrl });
 
     const ext1 = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
-      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+      headers: await relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
     });
     await waitForOpen(ext1);
 
     const ext2 = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
-      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+      headers: await relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
     });
     const err = await waitForError(ext2);
     expect(err.message).toContain("409");
@@ -347,14 +347,14 @@ describe("chrome extension relay server", () => {
     await ensureChromeExtensionRelayServer({ cdpUrl });
 
     const ext1 = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
-      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+      headers: await relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
     });
     await waitForOpen(ext1);
     const ext1Closed = new Promise<void>((resolve) => ext1.once("close", () => resolve()));
 
     ext1.close();
     const ext2 = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
-      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+      headers: await relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
     });
     await waitForOpen(ext2);
     await ext1Closed;
@@ -370,7 +370,7 @@ describe("chrome extension relay server", () => {
   it("keeps CDP clients alive across a brief extension reconnect", async () => {
     const { port, ext: ext1 } = await startRelayWithExtension();
     const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
-      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
+      headers: await relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
     });
     await waitForOpen(cdp);
 
@@ -383,7 +383,7 @@ describe("chrome extension relay server", () => {
     ext1.close();
     await ext1Closed;
     const ext2 = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
-      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+      headers: await relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
     });
     await waitForOpen(ext2);
     expect(cdpClosed).toBe(false);
@@ -416,7 +416,7 @@ describe("chrome extension relay server", () => {
     await waitForListMatch(
       async () =>
         (await fetch(`${cdpUrl}/json/list`, {
-          headers: relayAuthHeaders(cdpUrl),
+          headers: await relayAuthHeaders(cdpUrl),
         }).then((r) => r.json())) as Array<{ id?: string }>,
       (list) => list.some((entry) => entry.id === "t-disconnect"),
     );
@@ -426,14 +426,14 @@ describe("chrome extension relay server", () => {
     await extClosed;
 
     const version = (await fetch(`${cdpUrl}/json/version`, {
-      headers: relayAuthHeaders(cdpUrl),
+      headers: await relayAuthHeaders(cdpUrl),
     }).then((r) => r.json())) as {
       webSocketDebuggerUrl?: string;
     };
     expect(String(version.webSocketDebuggerUrl ?? "")).toContain("/cdp");
 
     const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
-      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
+      headers: await relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
     });
     await waitForOpen(cdp);
     cdp.close();
@@ -460,7 +460,7 @@ describe("chrome extension relay server", () => {
     await waitForListMatch(
       async () =>
         (await fetch(`${cdpUrl}/json/list`, {
-          headers: relayAuthHeaders(cdpUrl),
+          headers: await relayAuthHeaders(cdpUrl),
         }).then((r) => r.json())) as Array<{ id?: string }>,
       (entries) => entries.some((entry) => entry.id === "t-minimal"),
     );
@@ -469,7 +469,7 @@ describe("chrome extension relay server", () => {
   it("waits briefly for extension reconnect before failing CDP commands", async () => {
     const { port, ext: ext1 } = await startRelayWithExtension();
     const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
-      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
+      headers: await relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
     });
     await waitForOpen(cdp);
     const cdpQueue = createMessageQueue(cdp);
@@ -482,7 +482,7 @@ describe("chrome extension relay server", () => {
     await new Promise((r) => setTimeout(r, 30));
 
     const ext2 = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
-      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+      headers: await relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
     });
     const ext2Queue = createMessageQueue(ext2);
     await waitForOpen(ext2);
@@ -520,7 +520,7 @@ describe("chrome extension relay server", () => {
 
     const { port, ext } = await startRelayWithExtension();
     const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
-      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
+      headers: await relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
     });
     await waitForOpen(cdp);
 
@@ -554,7 +554,7 @@ describe("chrome extension relay server", () => {
     await waitForListMatch(
       async () =>
         (await fetch(`${cdpUrl}/json/list`, {
-          headers: relayAuthHeaders(cdpUrl),
+          headers: await relayAuthHeaders(cdpUrl),
         }).then((r) => r.json())) as Array<{ id?: string }>,
       (list) => list.some((entry) => entry.id === "t-grace-expire"),
     );
@@ -564,7 +564,7 @@ describe("chrome extension relay server", () => {
       .poll(
         async () => {
           const version = (await fetch(`${cdpUrl}/json/version`, {
-            headers: relayAuthHeaders(cdpUrl),
+            headers: await relayAuthHeaders(cdpUrl),
           }).then((r) => r.json())) as { webSocketDebuggerUrl?: string };
           return version.webSocketDebuggerUrl === undefined;
         },
@@ -577,9 +577,8 @@ describe("chrome extension relay server", () => {
     const sharedUrl = await ensureSharedRelayServer();
     const sharedPort = new URL(sharedUrl).port;
 
-    const token = relayAuthHeaders(`ws://127.0.0.1:${sharedPort}/extension`)[
-      "x-openclaw-relay-token"
-    ];
+    const h = await relayAuthHeaders(`ws://127.0.0.1:${sharedPort}/extension`);
+    const token = h["x-openclaw-relay-token"];
     expect(token).toBeTruthy();
     const ext = new WebSocket(
       `ws://127.0.0.1:${sharedPort}/extension?token=${encodeURIComponent(String(token))}`,
@@ -591,7 +590,7 @@ describe("chrome extension relay server", () => {
   it("accepts /json endpoints with relay token query param", async () => {
     const sharedUrl = await ensureSharedRelayServer();
 
-    const token = relayAuthHeaders(sharedUrl)["x-openclaw-relay-token"];
+    const token = (await relayAuthHeaders(sharedUrl))["x-openclaw-relay-token"];
     expect(token).toBeTruthy();
     const versionRes = await fetch(
       `${sharedUrl}/json/version?token=${encodeURIComponent(String(token))}`,
@@ -641,7 +640,7 @@ describe("chrome extension relay server", () => {
       );
 
       const list = (await fetch(`${cdpUrl}/json/list`, {
-        headers: relayAuthHeaders(cdpUrl),
+        headers: await relayAuthHeaders(cdpUrl),
       }).then((r) => r.json())) as Array<{
         id?: string;
         url?: string;
@@ -670,7 +669,7 @@ describe("chrome extension relay server", () => {
       await waitForListMatch(
         async () =>
           (await fetch(`${cdpUrl}/json/list`, {
-            headers: relayAuthHeaders(cdpUrl),
+            headers: await relayAuthHeaders(cdpUrl),
           }).then((r) => r.json())) as Array<{
             id?: string;
             url?: string;
@@ -686,7 +685,7 @@ describe("chrome extension relay server", () => {
       );
 
       const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
-        headers: relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
+        headers: await relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
       });
       await waitForOpen(cdp);
       const q = createMessageQueue(cdp);
@@ -756,7 +755,7 @@ describe("chrome extension relay server", () => {
     await waitForListMatch(
       async () =>
         (await fetch(`${cdpUrl}/json/list`, {
-          headers: relayAuthHeaders(cdpUrl),
+          headers: await relayAuthHeaders(cdpUrl),
         }).then((r) => r.json())) as Array<{ id?: string }>,
       (list) => list.some((target) => target.id === "t1"),
     );
@@ -774,7 +773,7 @@ describe("chrome extension relay server", () => {
     await waitForListMatch(
       async () =>
         (await fetch(`${cdpUrl}/json/list`, {
-          headers: relayAuthHeaders(cdpUrl),
+          headers: await relayAuthHeaders(cdpUrl),
         }).then((r) => r.json())) as Array<{ id?: string }>,
       (list) => list.every((target) => target.id !== "t1"),
     );
@@ -807,13 +806,13 @@ describe("chrome extension relay server", () => {
     await waitForListMatch(
       async () =>
         (await fetch(`${cdpUrl}/json/list`, {
-          headers: relayAuthHeaders(cdpUrl),
+          headers: await relayAuthHeaders(cdpUrl),
         }).then((r) => r.json())) as Array<{ id?: string }>,
       (list) => list.some((target) => target.id === "t1"),
     );
 
     const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
-      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
+      headers: await relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
     });
     await waitForOpen(cdp);
     const cdpQueue = createMessageQueue(cdp);
@@ -861,7 +860,7 @@ describe("chrome extension relay server", () => {
     await waitForListMatch(
       async () =>
         (await fetch(`${cdpUrl}/json/list`, {
-          headers: relayAuthHeaders(cdpUrl),
+          headers: await relayAuthHeaders(cdpUrl),
         }).then((r) => r.json())) as Array<{ id?: string }>,
       (list) => list.every((target) => target.id !== "t1"),
     );
@@ -874,7 +873,7 @@ describe("chrome extension relay server", () => {
     const { port, ext } = await startRelayWithExtension();
 
     const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
-      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
+      headers: await relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
     });
     await waitForOpen(cdp);
     const q = createMessageQueue(cdp);
@@ -1012,7 +1011,7 @@ describe("chrome extension relay server", () => {
       await waitForListMatch(
         async () =>
           (await fetch(`${cdpUrl}/json/list`, {
-            headers: relayAuthHeaders(cdpUrl),
+            headers: await relayAuthHeaders(cdpUrl),
           }).then((r) => r.json())) as Array<{ id?: string }>,
         (list) => list.some((t) => t.id === "t10"),
       );
@@ -1024,14 +1023,14 @@ describe("chrome extension relay server", () => {
       await waitForListMatch(
         async () =>
           (await fetch(`${cdpUrl}/json/list`, {
-            headers: relayAuthHeaders(cdpUrl),
+            headers: await relayAuthHeaders(cdpUrl),
           }).then((r) => r.json())) as Array<{ id?: string }>,
         (list) => list.length === 0,
       );
 
       // Reconnect and re-announce the same tab (simulates reannounceAttachedTabs).
       const ext2 = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
-        headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+        headers: await relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
       });
       await waitForOpen(ext2);
 
@@ -1057,7 +1056,7 @@ describe("chrome extension relay server", () => {
       const list2 = await waitForListMatch(
         async () =>
           (await fetch(`${cdpUrl}/json/list`, {
-            headers: relayAuthHeaders(cdpUrl),
+            headers: await relayAuthHeaders(cdpUrl),
           }).then((r) => r.json())) as Array<{ id?: string; title?: string }>,
         (list) => list.some((t) => t.id === "t10"),
       );
@@ -1097,7 +1096,7 @@ describe("chrome extension relay server", () => {
       await waitForListMatch(
         async () =>
           (await fetch(`${cdpUrl}/json/list`, {
-            headers: relayAuthHeaders(cdpUrl),
+            headers: await relayAuthHeaders(cdpUrl),
           }).then((r) => r.json())) as Array<{ id?: string }>,
         (list) => list.some((t) => t.id === "t20"),
       );
@@ -1109,13 +1108,13 @@ describe("chrome extension relay server", () => {
 
       // Tab should still be listed during grace period.
       const listDuringGrace = (await fetch(`${cdpUrl}/json/list`, {
-        headers: relayAuthHeaders(cdpUrl),
+        headers: await relayAuthHeaders(cdpUrl),
       }).then((r) => r.json())) as Array<{ id?: string }>;
       expect(listDuringGrace.some((t) => t.id === "t20")).toBe(true);
 
       // Reconnect within grace and re-announce with updated info.
       const ext2 = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
-        headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+        headers: await relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
       });
       await waitForOpen(ext2);
 
@@ -1141,7 +1140,7 @@ describe("chrome extension relay server", () => {
       const list2 = await waitForListMatch(
         async () =>
           (await fetch(`${cdpUrl}/json/list`, {
-            headers: relayAuthHeaders(cdpUrl),
+            headers: await relayAuthHeaders(cdpUrl),
           }).then((r) => r.json())) as Array<{ id?: string; title?: string; url?: string }>,
         (list) => list.some((t) => t.id === "t20" && t.title === "Persistent Updated"),
       );

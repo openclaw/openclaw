@@ -347,7 +347,7 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
         const timeout = 5000 + attempt * 2000;
         const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(() => null);
         const endpoint = wsUrl ?? normalized;
-        const headers = getHeadersWithAuth(endpoint);
+        const headers = await getHeadersWithAuth(endpoint);
         // Bypass proxy for loopback CDP connections (#31219)
         const browser = await withNoProxyForCdpUrl(endpoint, () =>
           chromium.connectOverCDP(endpoint, { timeout, headers }),
