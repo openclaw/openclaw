@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { startWebLoginWithQr, waitForWebLogin } from "./login-qr.js";
+import { resetActiveWebLoginsForTest, startWebLoginWithQr, waitForWebLogin } from "./login-qr.js";
 import { createWaSocket, logoutWeb, waitForWaConnection } from "./session.js";
 
 vi.mock("./session.js", () => {
@@ -44,6 +44,30 @@ const logoutWebMock = vi.mocked(logoutWeb);
 describe("login-qr", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetActiveWebLoginsForTest();
+    waitForWaConnectionMock.mockResolvedValue(undefined);
+  });
+
+  it("reuses an in-progress forced login instead of resetting it on poll", async () => {
+    createWaSocketMock.mockImplementationOnce(
+      async (_printQr: boolean, _verbose: boolean, opts?: { onQr?: (qr: string) => void }) => {
+        const sock = { ws: { close: vi.fn() } };
+        setTimeout(() => opts?.onQr?.("delayed-qr"), 25);
+        return sock;
+      },
+    );
+
+    const first = startWebLoginWithQr({ force: true, timeoutMs: 5000 });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const second = await startWebLoginWithQr({ force: true, timeoutMs: 5000 });
+
+    expect(second.message).toContain("Still preparing the WhatsApp QR");
+    expect(createWaSocketMock).toHaveBeenCalledTimes(1);
+
+    const resolved = await first;
+    expect(resolved.qrDataUrl).toBe("data:image/png;base64,base64");
+    expect(createWaSocketMock).toHaveBeenCalledTimes(1);
   });
 
   it("restarts login once on status 515 and completes", async () => {

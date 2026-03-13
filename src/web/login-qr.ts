@@ -38,6 +38,13 @@ type ActiveLogin = {
 const ACTIVE_LOGIN_TTL_MS = 3 * 60_000;
 const activeLogins = new Map<string, ActiveLogin>();
 
+export function resetActiveWebLoginsForTest() {
+  for (const login of activeLogins.values()) {
+    closeSocket(login.sock);
+  }
+  activeLogins.clear();
+}
+
 function closeSocket(sock: WaSocket) {
   try {
     sock.ws?.close();
@@ -117,20 +124,34 @@ export async function startWebLoginWithQr(
   const runtime = opts.runtime ?? defaultRuntime;
   const cfg = loadConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });
+  const existing = activeLogins.get(account.accountId);
+  if (existing && isLoginFresh(existing)) {
+    if (existing.qrDataUrl) {
+      return {
+        qrDataUrl: existing.qrDataUrl,
+        message: "QR already active. Scan it in WhatsApp → Linked Devices.",
+      };
+    }
+    if (existing.qr) {
+      const base64 = await renderQrPngBase64(existing.qr);
+      existing.qrDataUrl = `data:image/png;base64,${base64}`;
+      return {
+        qrDataUrl: existing.qrDataUrl,
+        message: "QR already active. Scan it in WhatsApp → Linked Devices.",
+      };
+    }
+    return {
+      message:
+        "Still preparing the WhatsApp QR. Keep polling; the current login session is still active.",
+    };
+  }
+
   const hasWeb = await webAuthExists(account.authDir);
   const selfId = readWebSelfId(account.authDir);
   if (hasWeb && !opts.force) {
     const who = selfId.e164 ?? selfId.jid ?? "unknown";
     return {
       message: `WhatsApp is already linked (${who}). Say “relink” if you want a fresh QR.`,
-    };
-  }
-
-  const existing = activeLogins.get(account.accountId);
-  if (existing && isLoginFresh(existing) && existing.qrDataUrl) {
-    return {
-      qrDataUrl: existing.qrDataUrl,
-      message: "QR already active. Scan it in WhatsApp → Linked Devices.",
     };
   }
 
