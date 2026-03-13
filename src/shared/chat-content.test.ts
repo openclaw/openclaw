@@ -12,6 +12,7 @@ describe("shared/chat-content", () => {
         { type: "text", text: " hello " },
         { type: "image_url", image_url: "https://example.com" },
         { type: "text", text: "world" },
+        { text: "ignored without type" },
         null,
       ]),
     ).toBe("hello world");
@@ -37,6 +38,18 @@ describe("shared/chat-content", () => {
         },
       ),
     ).toBe("hello\nworld");
+
+    expect(
+      extractTextFromChatContent(
+        [
+          { type: "text", text: "keep" },
+          { type: "text", text: "drop" },
+        ],
+        {
+          sanitizeText: (text) => (text === "drop" ? "   " : text),
+        },
+      ),
+    ).toBe("keep");
   });
 
   it("returns null for unsupported or empty content", () => {
