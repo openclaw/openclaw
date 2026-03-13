@@ -492,6 +492,7 @@ export async function deliverOutboundPayloads(
         replyToId: params.replyToId,
         bestEffort: params.bestEffort,
         gifPlayback: params.gifPlayback,
+        forceDocument: params.forceDocument,
         silent: params.silent,
         mirror: params.mirror,
       }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
