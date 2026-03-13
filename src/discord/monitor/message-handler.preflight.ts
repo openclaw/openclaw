@@ -402,11 +402,20 @@ export async function preflightDiscordMessage(
   ) {
     logVerbose(`discord: drop bound-thread bot system message ${message.id}`);
     return null;
-  }
+    }
   const mentionRegexes = buildMentionRegexes(params.cfg, effectiveRoute.agentId);
-  const explicitlyMentioned = Boolean(
+  
+  // Check explicit mention via Discord's mentionedUsers array, with fallback
+  // to text-based detection for threads where mentionedUsers may be unpopulated.
+  // Fixes #44183: Discord thread mentions not working
+  const explicitlyMentionedViaArray = Boolean(
     botId && message.mentionedUsers?.some((user: User) => user.id === botId),
   );
+  const explicitlyMentionedViaText = Boolean(
+    botId && baseText && new RegExp(`<@!?${botId}>`).test(baseText),
+  );
+  const explicitlyMentioned = explicitlyMentionedViaArray || explicitlyMentionedViaText;
+  
   const hasAnyMention = Boolean(
     !isDirectMessage &&
     ((message.mentionedUsers?.length ?? 0) > 0 ||
