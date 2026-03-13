@@ -86,4 +86,47 @@ describe("cortex capture history", () => {
     expect(syncEntry?.timestamp).toBe(2_000);
     expect(syncEntry?.syncPlatforms).toEqual(["claude-code", "cursor", "copilot"]);
   });
+
+  it("finds an older matching conversation entry even when newer unrelated entries exceed 100", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cortex-history-scan-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    await appendCortexCaptureHistory({
+      agentId: "main",
+      sessionId: "session-target",
+      channelId: "channel-target",
+      captured: true,
+      score: 0.8,
+      reason: "target conversation capture",
+      timestamp: 1_000,
+    });
+
+    for (let index = 0; index < 150; index += 1) {
+      await appendCortexCaptureHistory({
+        agentId: "main",
+        sessionId: `session-${index}`,
+        channelId: `channel-${index}`,
+        captured: true,
+        score: 0.5,
+        reason: `other capture ${index}`,
+        timestamp: 2_000 + index,
+      });
+    }
+
+    const asyncEntry = await getLatestCortexCaptureHistoryEntry({
+      agentId: "main",
+      sessionId: "session-target",
+      channelId: "channel-target",
+    });
+    const syncEntry = getLatestCortexCaptureHistoryEntrySync({
+      agentId: "main",
+      sessionId: "session-target",
+      channelId: "channel-target",
+    });
+
+    expect(asyncEntry?.reason).toBe("target conversation capture");
+    expect(asyncEntry?.timestamp).toBe(1_000);
+    expect(syncEntry?.reason).toBe("target conversation capture");
+    expect(syncEntry?.timestamp).toBe(1_000);
+  });
 });

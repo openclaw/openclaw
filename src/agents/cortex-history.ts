@@ -18,6 +18,50 @@ export type CortexCaptureHistoryEntry = {
 
 const latestCortexCaptureHistoryByKey = new Map<string, CortexCaptureHistoryEntry>();
 
+function matchesHistoryEntry(
+  entry: CortexCaptureHistoryEntry,
+  params: {
+    agentId: string;
+    sessionId?: string;
+    channelId?: string;
+  },
+): boolean {
+  return (
+    entry.agentId === params.agentId &&
+    (params.sessionId ? entry.sessionId === params.sessionId : true) &&
+    (params.channelId ? entry.channelId === params.channelId : true)
+  );
+}
+
+function parseLatestMatchingHistoryEntry(
+  raw: string,
+  params: {
+    agentId: string;
+    sessionId?: string;
+    channelId?: string;
+  },
+): CortexCaptureHistoryEntry | null {
+  const lines = raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (!line) {
+      continue;
+    }
+    try {
+      const entry = JSON.parse(line) as CortexCaptureHistoryEntry;
+      if (matchesHistoryEntry(entry, params)) {
+        return entry;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 function buildHistoryCacheKey(params: {
   agentId: string;
   sessionId?: string;
@@ -91,29 +135,7 @@ export function getLatestCortexCaptureHistoryEntrySync(params: {
   } catch {
     return null;
   }
-  const lines = raw
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index];
-    if (!line) {
-      continue;
-    }
-    try {
-      const entry = JSON.parse(line) as CortexCaptureHistoryEntry;
-      if (
-        entry.agentId === params.agentId &&
-        (params.sessionId ? entry.sessionId === params.sessionId : true) &&
-        (params.channelId ? entry.channelId === params.channelId : true)
-      ) {
-        return entry;
-      }
-    } catch {
-      continue;
-    }
-  }
-  return null;
+  return parseLatestMatchingHistoryEntry(raw, params);
 }
 
 export function getCachedLatestCortexCaptureHistoryEntry(params: {
@@ -138,14 +160,14 @@ export async function getLatestCortexCaptureHistoryEntry(params: {
   channelId?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<CortexCaptureHistoryEntry | null> {
-  const recent = await readRecentCortexCaptureHistory({ limit: 100, env: params.env });
-  const match =
-    recent.find(
-      (entry) =>
-        entry.agentId === params.agentId &&
-        (params.sessionId ? entry.sessionId === params.sessionId : true) &&
-        (params.channelId ? entry.channelId === params.channelId : true),
-    ) ?? null;
+  const historyPath = resolveHistoryPath(params.env);
+  let raw: string;
+  try {
+    raw = await fsp.readFile(historyPath, "utf8");
+  } catch {
+    return null;
+  }
+  const match = parseLatestMatchingHistoryEntry(raw, params);
   if (match) {
     cacheHistoryEntry(match);
   }
