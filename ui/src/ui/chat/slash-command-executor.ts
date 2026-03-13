@@ -10,7 +10,6 @@ import {
   normalizeVerboseLevel,
   resolveThinkingDefaultForModel,
 } from "../../../../src/auto-reply/thinking.js";
-import type { HealthSummary } from "../../../../src/commands/health.js";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
@@ -45,8 +44,6 @@ export async function executeSlashCommand(
   switch (commandName) {
     case "help":
       return executeHelp();
-    case "status":
-      return await executeStatus(client);
     case "new":
       return { content: "Starting new session...", action: "new-session" };
     case "reset":
@@ -99,27 +96,6 @@ function executeHelp(): SlashCommandResult {
 
   lines.push("\nType `/` to open the command menu.");
   return { content: lines.join("\n") };
-}
-
-async function executeStatus(client: GatewayBrowserClient): Promise<SlashCommandResult> {
-  try {
-    const health = await client.request<HealthSummary>("health", {});
-    const status = health.ok ? "Healthy" : "Degraded";
-    const agentCount = health.agents?.length ?? 0;
-    const sessionCount = health.sessions?.count ?? 0;
-    const lines = [
-      `**System Status:** ${status}`,
-      `**Agents:** ${agentCount}`,
-      `**Sessions:** ${sessionCount}`,
-      `**Default Agent:** ${health.defaultAgentId || "none"}`,
-    ];
-    if (health.durationMs) {
-      lines.push(`**Response:** ${health.durationMs}ms`);
-    }
-    return { content: lines.join("\n") };
-  } catch (err) {
-    return { content: `Failed to fetch status: ${String(err)}` };
-  }
 }
 
 async function executeCompact(
