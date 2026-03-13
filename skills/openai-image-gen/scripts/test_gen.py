@@ -5,9 +5,11 @@ from pathlib import Path
 
 import pytest
 from gen import (
+    get_model_defaults,
     normalize_background,
     normalize_output_format,
     normalize_style,
+    slugify,
     write_gallery,
 )
 
@@ -82,6 +84,8 @@ def test_normalize_output_format_normalizes_case_for_supported_values():
 
 def test_normalize_output_format_strips_whitespace_for_supported_values():
     assert normalize_output_format("gpt-image-1", " png ") == "png"
+
+
 def test_normalize_output_format_keeps_supported_values():
     assert normalize_output_format("gpt-image-1", "png") == "png"
     assert normalize_output_format("gpt-image-1", "jpeg") == "jpeg"
@@ -138,3 +142,48 @@ def test_write_gallery_normal_output():
         assert "a lobster astronaut, golden hour" in html
         assert 'src="001-lobster.png"' in html
         assert "002-nook.png" in html
+
+
+def test_slugify_basic():
+    assert slugify("a lobster astronaut") == "a-lobster-astronaut"
+
+
+def test_slugify_strips_special_chars():
+    assert slugify("Hello, World! #2024") == "hello-world-2024"
+
+
+def test_slugify_collapses_multiple_dashes():
+    assert slugify("foo---bar") == "foo-bar"
+
+
+def test_slugify_empty_string_returns_image():
+    assert slugify("") == "image"
+    assert slugify("   ") == "image"
+
+
+def test_slugify_strips_leading_trailing_dashes():
+    assert slugify("--hello--") == "hello"
+
+
+def test_get_model_defaults_dalle2():
+    size, quality = get_model_defaults("dall-e-2")
+    assert size == "1024x1024"
+    assert quality == "standard"
+
+
+def test_get_model_defaults_dalle3():
+    size, quality = get_model_defaults("dall-e-3")
+    assert size == "1024x1024"
+    assert quality == "standard"
+
+
+def test_get_model_defaults_gpt_image():
+    size, quality = get_model_defaults("gpt-image-1")
+    assert size == "1024x1024"
+    assert quality == "high"
+
+
+def test_get_model_defaults_unknown_model():
+    size, quality = get_model_defaults("future-model-x")
+    assert size == "1024x1024"
+    assert quality == "high"
