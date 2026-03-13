@@ -242,7 +242,7 @@ Get your API key at [Moonshot Platform](https://platform.moonshot.cn/).
     "providers": {
       "volcengine": {
         "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
-        "apiKey": "${VOLCENGINE_API_KEY}",
+        "apiKey": "${VOLCANO_ENGINE_API_KEY}",
         "api": "openai-completions",
         "models": [
           {
@@ -297,9 +297,9 @@ Configure OpenClaw:
     "mode": "merge",
     "providers": {
       "ollama": {
-        "baseUrl": "http://localhost:11434/v1",
+        "baseUrl": "http://localhost:11434",
         "apiKey": "ollama-local",
-        "api": "openai-completions",
+        "api": "ollama",
         "models": [
           {
             "id": "qwen3:8b",
