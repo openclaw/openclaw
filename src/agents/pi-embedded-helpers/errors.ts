@@ -703,6 +703,12 @@ export function formatAssistantErrorText(
       "Context overflow: prompt too large for the model. " +
       "Try /reset (or /new) to start a fresh session, or use a larger-context model."
     );
+
+  if (isToolUseIdMismatchError(raw)) {
+    return (
+      "Tool call ID mismatch - session state is corrupted. " +
+      "Use /reset (or /new) to start a fresh session and try again."
+    );
   }
 
   if (isReasoningConstraintErrorMessage(raw)) {
@@ -843,6 +849,14 @@ export function isBillingAssistantError(msg: AssistantMessage | undefined): bool
   if (!msg || msg.stopReason !== "error") {
     return false;
   }
+export function isToolUseIdMismatchError(raw: string): boolean {
+  if (!raw) return false;
+  const lower = raw.toLowerCase();
+  return (
+    lower.includes("tool_use_id") &&
+    (lower.includes("does not match") || lower.includes("mismatch"))
+  );
+
   return isBillingErrorMessage(msg.errorMessage ?? "");
 }
 
