@@ -1,0 +1,6 @@
+apiVersion: v2
+name: openclaw
+description: Helm chart for deploying OpenClaw Gateway on Kubernetes
+type: application
+version: 0.1.0
+appVersion: "2026.3.12"
