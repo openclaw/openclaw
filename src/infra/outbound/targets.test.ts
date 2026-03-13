@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
@@ -445,7 +446,7 @@ describe("resolveSessionDeliveryTarget", () => {
         lastChannel: "imessage",
         lastTo: "chat-guid-unknown-shape",
         chatType: "direct",
-      },
+      } satisfies SessionEntry,
       expectedChannel: "imessage",
       expectedTo: "chat-guid-unknown-shape",
     },
@@ -457,7 +458,7 @@ describe("resolveSessionDeliveryTarget", () => {
         lastChannel: "imessage",
         lastTo: "chat-guid-unknown-shape",
         chatType: "direct",
-      },
+      } satisfies SessionEntry,
       directPolicy: "block" as const,
       expectedChannel: "none",
       expectedReason: "dm-blocked",
