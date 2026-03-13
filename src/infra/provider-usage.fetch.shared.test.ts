@@ -33,7 +33,7 @@ describe("provider usage fetch shared helpers", () => {
     vi.useFakeTimers();
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
     const fetchFn = vi.fn(
-      async (_url: string, init?: RequestInit) =>
+      async (input: RequestInfo | URL, init?: RequestInit) =>
         new Response(JSON.stringify({ aborted: init?.signal?.aborted ?? false }), { status: 200 }),
     );
 
@@ -63,7 +63,7 @@ describe("provider usage fetch shared helpers", () => {
     vi.useFakeTimers();
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
     const fetchFn = vi.fn(
-      (_url: string, init?: RequestInit) =>
+      (input: RequestInfo | URL, init?: RequestInit) =>
         new Promise<Response>((_, reject) => {
           init?.signal?.addEventListener("abort", () => reject(new Error("aborted by timeout")), {
             once: true,

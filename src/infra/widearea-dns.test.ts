@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as utils from "../utils.js";
+import type { WideAreaGatewayZoneOpts } from "./widearea-dns.js";
 import {
   getWideAreaZonePath,
   normalizeWideAreaDomain,
@@ -19,8 +20,8 @@ const baseZoneOpts = {
   instanceLabel: "studio-london",
 } as const;
 
-function makeZoneOpts(overrides: Partial<typeof baseZoneOpts> = {}) {
-  return { ...baseZoneOpts, ...overrides };
+function makeZoneOpts(overrides: Partial<WideAreaGatewayZoneOpts> = {}): WideAreaGatewayZoneOpts {
+  return { ...baseZoneOpts, ...overrides } as WideAreaGatewayZoneOpts;
 }
 
 afterEach(() => {

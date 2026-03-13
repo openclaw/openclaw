@@ -174,7 +174,7 @@ describe("format-datetime", () => {
             { type: "hour", value: "14" },
             { type: "minute", value: "30" },
           ],
-        } as Intl.DateTimeFormat;
+        } as unknown as Intl.DateTimeFormat;
       }
 
       vi.spyOn(Intl, "DateTimeFormat").mockImplementation(
@@ -192,7 +192,7 @@ describe("format-datetime", () => {
           formatToParts: () => {
             throw new Error("boom");
           },
-        } as Intl.DateTimeFormat;
+        } as unknown as Intl.DateTimeFormat;
       }
 
       vi.spyOn(Intl, "DateTimeFormat").mockImplementation(
