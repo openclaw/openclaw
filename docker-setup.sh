@@ -218,6 +218,7 @@ export OPENCLAW_BRIDGE_PORT="${OPENCLAW_BRIDGE_PORT:-18790}"
 export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-lan}"
 export OPENCLAW_IMAGE="$IMAGE_NAME"
 export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
+export OPENCLAW_INSTALL_BREW="${OPENCLAW_INSTALL_BREW:-}"
 export OPENCLAW_EXTENSIONS="${OPENCLAW_EXTENSIONS:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
 export OPENCLAW_HOME_VOLUME="$HOME_VOLUME_NAME"
@@ -408,14 +409,21 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_DOCKER_SOCKET \
   DOCKER_GID \
   OPENCLAW_INSTALL_DOCKER_CLI \
-  OPENCLAW_ALLOW_INSECURE_PRIVATE_WS
+  OPENCLAW_ALLOW_INSECURE_PRIVATE_WS \
+  OPENCLAW_INSTALL_BREW
 
-if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
+if [[ -n "${OPENCLAW_SKIP_BUILD:-}" ]]; then
+  echo "==> Skipping image build/pull (OPENCLAW_SKIP_BUILD is set)"
+  if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
+    fail "Image '$IMAGE_NAME' not found locally. Run 'openclaw build' first."
+  fi
+elif [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
   docker build \
     --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
     --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
     --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
+    --build-arg "OPENCLAW_INSTALL_BREW=${OPENCLAW_INSTALL_BREW}" \
     -t "$IMAGE_NAME" \
     -f "$ROOT_DIR/Dockerfile" \
     "$ROOT_DIR"
