@@ -591,10 +591,19 @@ Notes:
 - This affects ACPX-backed sessions only.
 - It does not change the browser tool, `existing-session` browser profiles, or
   the `openclaw acp` bridge.
+- ACPX applies this through its existing MCP proxy path. It does not add a new
+  `acpx` CLI flag for Chrome DevTools MCP.
 - If `plugins.entries.acpx.config.mcpServers.chrome-devtools` is already set,
   the explicit entry wins and the preset is skipped.
 - If `browser.evaluateEnabled=false`, the built-in preset is suppressed as a
   conservative safety boundary.
+- Because the preset uses `npx -y`, the first run needs npm registry access
+  unless `chrome-devtools-mcp@0.20.0` is already cached locally.
+- The `chrome-devtools-mcp` version is pinned by OpenClaw. Future version bumps
+  happen in later OpenClaw PRs and releases.
+- If you need offline packaging, a custom channel, or a different version, set
+  `plugins.entries.acpx.config.mcpServers.chrome-devtools` explicitly instead
+  of using the built-in preset.
 
 ## Permission configuration
 

@@ -153,6 +153,10 @@ openclaw config set plugins.entries.acpx.config.chromeDevtoolsMcp.enabled true
 That setting affects ACPX-backed agent sessions only. It does not add
 per-session `mcpServers` support to `openclaw acp`.
 
+ACPX applies that preset through its existing MCP proxy path when it launches
+the target agent. The `openclaw acp` bridge itself still rejects per-session
+`mcpServers`.
+
 ## Use from `acpx` (Codex, Claude, other ACP clients)
 
 If you want a coding agent such as Codex or Claude Code to talk to your
