@@ -59,6 +59,27 @@ function resolveArchiveType(spec: SkillInstallSpec, filename: string): string | 
   return undefined;
 }
 
+function basenameAcrossSeparators(value: string): string {
+  const withoutQuery = value.split(/[?#]/, 1)[0] ?? value;
+  return path.win32.basename(path.posix.basename(withoutQuery));
+}
+
+function resolveDownloadFilename(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const decodedPath = (() => {
+      try {
+        return decodeURIComponent(parsed.pathname);
+      } catch {
+        return parsed.pathname;
+      }
+    })();
+    return basenameAcrossSeparators(decodedPath);
+  } catch {
+    return basenameAcrossSeparators(url);
+  }
+}
+
 async function downloadFile(params: {
   url: string;
   rootDir: string;
@@ -119,13 +140,7 @@ export async function installDownloadSpec(params: {
     };
   }
 
-  let filename = "";
-  try {
-    const parsed = new URL(url);
-    filename = path.basename(parsed.pathname);
-  } catch {
-    filename = path.basename(url);
-  }
+  let filename = resolveDownloadFilename(url);
   if (!filename) {
     filename = "download";
   }

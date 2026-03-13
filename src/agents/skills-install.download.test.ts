@@ -167,6 +167,52 @@ beforeEach(() => {
 });
 
 describe("installDownloadSpec extraction safety", () => {
+  it("normalizes encoded Windows path segments in download URLs", async () => {
+    const entry = buildEntry("encoded-windows-path");
+    const targetDir = path.join(resolveSkillToolsRootDir(entry), "target");
+
+    mockArchiveResponse(new Uint8Array([1, 2, 3]));
+
+    const result = await installDownloadSpec({
+      entry,
+      spec: {
+        kind: "download",
+        id: "dl",
+        url: "https://example.invalid/%2E%2E%5Csecret.zip",
+        extract: false,
+        targetDir,
+      },
+      timeoutMs: 30_000,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.message).toContain(path.join(targetDir, "secret.zip"));
+    expect(result.message).not.toContain("..\\");
+  });
+
+  it("normalizes fallback download names across path separators", async () => {
+    const entry = buildEntry("raw-windows-path");
+    const targetDir = path.join(resolveSkillToolsRootDir(entry), "target");
+
+    mockArchiveResponse(new Uint8Array([1, 2, 3]));
+
+    const result = await installDownloadSpec({
+      entry,
+      spec: {
+        kind: "download",
+        id: "dl",
+        url: "..\\private\\archive.zip",
+        extract: false,
+        targetDir,
+      },
+      timeoutMs: 30_000,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.message).toContain(path.join(targetDir, "archive.zip"));
+    expect(result.message).not.toContain("..\\");
+  });
+
   it("rejects archive traversal writes outside targetDir", async () => {
     for (const testCase of [
       {
