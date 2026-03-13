@@ -153,7 +153,16 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
     spec.url = downloadUrl;
   }
   if (typeof raw.archive === "string") {
-    spec.archive = raw.archive;
+    // R7: rejeter les valeurs d'archive dangereuses pour éviter l'injection
+    // de flags tar (ex. --use-compress-program=cmd) ou de caractères shell.
+    const archiveVal = raw.archive.trim();
+    if (archiveVal.startsWith("--") || /[;&|`$<>()\n\r]/.test(archiveVal)) {
+      console.warn(
+        `[hardened] frontmatter: champ 'archive' rejeté — valeur dangereuse: "${archiveVal.slice(0, 60)}"`,
+      );
+    } else {
+      spec.archive = archiveVal;
+    }
   }
   if (typeof raw.extract === "boolean") {
     spec.extract = raw.extract;
