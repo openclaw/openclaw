@@ -4,6 +4,13 @@ import {
   buildModelAliasIndex,
   resolveDefaultModelForAgent,
 } from "../../agents/model-selection.js";
+import {
+  authorizeConfigWrite,
+  canBypassConfigWritePolicy,
+  formatConfigWriteDeniedMessage,
+  resolveConfigWriteTargetFromPath,
+} from "../../channels/plugins/config-writes.js";
+import { normalizeChannelId } from "../../channels/registry.js";
 import { readConfigFileSnapshot, writeConfigFile } from "../../config/config.js";
 import type { ButtonRow } from "../../telegram/model-buttons.js";
 import type { ReplyPayload } from "../types.js";
@@ -12,8 +19,8 @@ import { buildModelsProviderData } from "./commands-models.js";
 import type { CommandHandler } from "./commands-types.js";
 
 /**
- * Handle /defaultModel command.
- * - Without args: show current default model from config
+ * Handle /default_model command.
+ * - Without args: show current default model from config (with picker on Telegram)
  * - With args: set default model in config file (persists across restarts)
  */
 export const handleDefaultModelCommand: CommandHandler = async (params, allowTextCommands) => {
@@ -39,7 +46,7 @@ export const handleDefaultModelCommand: CommandHandler = async (params, allowTex
   if (!snapshot.valid || !snapshot.parsed || typeof snapshot.parsed !== "object") {
     return {
       shouldContinue: false,
-      reply: { text: "⚠️ Config file is invalid; fix it before using /defaultModel." },
+      reply: { text: "⚠️ Config file is invalid; fix it before using /default_model." },
     };
   }
 
@@ -57,47 +64,50 @@ export const handleDefaultModelCommand: CommandHandler = async (params, allowTex
         ? String((modelConfig as Record<string, unknown>).primary)
         : "not set";
 
-  // If no args, show model picker (provider list)
+  const isTelegram = params.command.channel === "telegram";
+
+  // If no args, show model picker (provider list) on Telegram, text fallback elsewhere
   if (!modelArg) {
-    const agentId = resolveSessionAgentId({
-      sessionKey: params.sessionKey,
-      config: params.cfg,
-    });
-
     let providerButtons: ButtonRow[] = [];
-    try {
-      const modelData = await buildModelsProviderData(params.cfg, agentId);
-      const { byProvider, providers } = modelData;
 
-      if (providers.length > 0) {
-        // Build provider buttons with defmdl_ prefix
-        const rows: ButtonRow[] = [];
-        for (let i = 0; i < providers.length; i += 2) {
-          const row: ButtonRow = [];
-          for (const prov of providers.slice(i, i + 2)) {
-            const count = byProvider.get(prov)?.size ?? 0;
-            row.push({
-              text: `${prov} (${count})`,
-              callback_data: `defmdl_list_${prov}_1`,
-            });
+    // Only build buttons for Telegram
+    if (isTelegram) {
+      try {
+        const agentId = resolveSessionAgentId({
+          sessionKey: params.sessionKey,
+          config: params.cfg,
+        });
+        const modelData = await buildModelsProviderData(params.cfg, agentId);
+        const { byProvider, providers } = modelData;
+
+        if (providers.length > 0) {
+          const rows: ButtonRow[] = [];
+          for (let i = 0; i < providers.length; i += 2) {
+            const row: ButtonRow = [];
+            for (const prov of providers.slice(i, i + 2)) {
+              const count = byProvider.get(prov)?.size ?? 0;
+              row.push({
+                text: `${prov} (${count})`,
+                callback_data: `defmdl_list_${prov}_1`,
+              });
+            }
+            rows.push(row);
           }
-          rows.push(row);
+          providerButtons = rows;
         }
-        providerButtons = rows;
+      } catch {
+        // Fall back to text if provider data fails
       }
-    } catch {
-      // If we can't build provider data, fall back to text
     }
 
+    const showPicker = isTelegram && providerButtons.length > 0;
     const text = [
       `📋 **Default model (config):** \`${currentDefault}\``,
       "",
-      providerButtons.length > 0
+      showPicker
         ? "Select a provider to choose default model:"
         : "Usage: `/default_model <model-id>`",
-      providerButtons.length === 0
-        ? "Example: `/default_model openrouter/stepfun/step-3.5-flash:free`"
-        : "",
+      !showPicker ? "Example: `/default_model openrouter/stepfun/step-3.5-flash:free`" : "",
       "",
       "This sets the default model in the config file.",
       "Changes persist across restarts.",
@@ -107,15 +117,40 @@ export const handleDefaultModelCommand: CommandHandler = async (params, allowTex
 
     const reply: ReplyPayload = {
       text,
-      ...(providerButtons.length > 0
-        ? { channelData: { telegram: { buttons: providerButtons } } }
-        : {}),
+      ...(showPicker ? { channelData: { telegram: { buttons: providerButtons } } } : {}),
     };
     return { shouldContinue: false, reply };
   }
 
+  // Check config write policy before persisting
+  const channelId = params.command.channelId ?? normalizeChannelId(params.command.channel);
+  const writeAuth = authorizeConfigWrite({
+    cfg: params.cfg,
+    origin: { channelId, accountId: params.ctx.AccountId },
+    target: resolveConfigWriteTargetFromPath(["agents", "defaults", "model"]),
+    allowBypass: canBypassConfigWritePolicy({
+      channel: params.command.channel,
+      gatewayClientScopes: params.ctx.GatewayClientScopes,
+    }),
+  });
+  if (!writeAuth.allowed) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: formatConfigWriteDeniedMessage({
+          result: writeAuth,
+          fallbackChannelId: channelId,
+        }),
+      },
+    };
+  }
+
   // Validate and normalize the model reference
-  const resolvedDefault = resolveDefaultModelForAgent({ cfg: params.cfg });
+  const agentId = resolveSessionAgentId({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+  });
+  const resolvedDefault = resolveDefaultModelForAgent({ cfg: params.cfg, agentId });
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: resolvedDefault.provider,
