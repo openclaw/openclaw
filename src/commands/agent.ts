@@ -9,6 +9,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 const log = createSubsystemLogger("commands/agent");
 import {
   listAgentIds,
+  resolveAgentConfig,
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
@@ -630,9 +631,14 @@ async function prepareAgentCommandExecution(
     agentId: sessionAgentId,
     sessionKey,
   });
-  // Internal callers (for example subagent spawns) may pin workspace inheritance.
-  const workspaceDirRaw =
-    normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  // Prefer the agent's configured workspace over any inherited workspaceDir from a
+  // parent spawn. This ensures subagents always run in their own workspace, not the
+  // parent's. Fall back to the spawned workspace only when the agent has no explicit
+  // workspace configured (e.g. ad-hoc subagent without a config entry).
+  const agentWorkspace = resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  const workspaceDirRaw = resolveAgentConfig(cfg, sessionAgentId)?.workspace?.trim()
+    ? agentWorkspace
+    : (normalizedSpawned.workspaceDir ?? agentWorkspace);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
