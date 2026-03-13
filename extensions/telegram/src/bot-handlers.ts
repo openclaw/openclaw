@@ -1024,11 +1024,17 @@ export const registerTelegramHandlers = ({
       // Don't send the error reply for group messages where requireMention is set
       // and the bot was not mentioned — the bot would have silently skipped this
       // message anyway, so responding with an error is unexpected and noisy.
+      // Check both explicit @bot mentions AND implicit mentions (replies to bot
+      // messages) to mirror the actual mention gate in bot-message-context.body.ts.
       const botUsername = ctx.me?.username;
+      const botId = ctx.me?.id;
+      const replyToBotMessage =
+        botId != null && msg.reply_to_message?.from?.id === botId;
       const wouldSkipMention =
         groupConfig?.requireMention === true &&
         botUsername != null &&
-        !hasBotMention(msg, botUsername);
+        !hasBotMention(msg, botUsername) &&
+        !replyToBotMessage;
       if (!wouldSkipMention) {
         await withTelegramApiErrorLogging({
           operation: "sendMessage",
