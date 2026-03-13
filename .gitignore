@@ -133,3 +133,6 @@ ui/src/ui/__screenshots__
 ui/src/ui/views/__screenshots__
 ui/.vitest-attachments
 docs/superpowers
+skills/Pulaoecho-voice-assistant/certs/
+skills/Pulaoecho-voice-assistant/config.json.example
+skills/Pulaoecho-voice-assistant/pulaoecho-voice-assistant.log

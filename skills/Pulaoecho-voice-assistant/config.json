@@ -1,0 +1,44 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 18181,
+    "tls": {
+      "enabled": true,
+      "certFile": "./certs/server.crt",
+      "keyFile": "./certs/server.key"
+    },
+    "password": "your password"
+  },
+  "openclaw": {
+    "url": "ws://127.0.0.1:18789",
+    "tokenPath": "~/.openclaw/openclaw.json"
+  },
+  "aliyunASR": {
+    "apiKey": "your-api-key",
+    "model": "qwen3-asr-flash",
+    "language": "en"
+  },
+  "sherpaONNX": {
+    "modelDir": "your-local-path",
+    "encoder": "distil-large-v3.5-encoder.int8.onnx",
+    "decoder": "distil-large-v3.5-decoder.int8.onnx",
+    "tokens": "distil-large-v3.5-tokens.txt",
+    "language": "en"
+  },
+  "asrEngine": "sherpa-onnx",
+  "wakeWords": [
+    "Hey, OpenCloud",
+    "hey claw",
+    "hi google",
+    "hey google",
+    "ok google",
+    "Okay google",
+    "Hey, Google.",
+    "Hi, OpenCloud",
+    "Hey, open Chrome"
+  ],
+  "logging": {
+    "level": "INFO",
+    "file": "./pulaoecho-voice-assistant.log"
+  }
+}
