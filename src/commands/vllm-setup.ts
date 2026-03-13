@@ -20,6 +20,7 @@ import {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "./self-hosted-provider-setup.js";
+import { isManagedVllmProvider } from "./vllm-default-model.js";
 
 export const VLLM_DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1";
 export const VLLM_DEFAULT_CONTEXT_WINDOW = SELF_HOSTED_DEFAULT_CONTEXT_WINDOW;
@@ -54,14 +55,9 @@ function normalizeBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }
 
-function isManagedVllmProviderKey(key: string): boolean {
-  const normalized = key.trim().toLowerCase();
-  return normalized === "vllm" || normalized.startsWith("vllm-");
-}
-
 function normalizeManagedVllmProviderKey(key: string): string | undefined {
   const normalized = key.trim().toLowerCase();
-  return isManagedVllmProviderKey(normalized) ? normalized : undefined;
+  return isManagedVllmProvider(normalized) ? normalized : undefined;
 }
 
 function createManualModelDefinition(id: string): ModelDefinitionConfig {
@@ -120,7 +116,7 @@ function collectManagedVllmProviders(params: {
     }
     if (
       credential.metadata?.kind !== VLLM_MANAGED_KIND &&
-      !isManagedVllmProviderKey(credential.provider)
+      !isManagedVllmProvider(credential.provider)
     ) {
       continue;
     }
@@ -141,7 +137,7 @@ function collectManagedVllmProviders(params: {
       const normalizedProviderKey = normalizeManagedVllmProviderKey(providerKey);
       return (
         Boolean(normalizedProviderKey && profileInfo.has(normalizedProviderKey)) ||
-        isManagedVllmProviderKey(providerKey)
+        isManagedVllmProvider(providerKey)
       );
     })
     .map(([providerKey, provider]) => {
