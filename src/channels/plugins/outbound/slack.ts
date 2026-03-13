@@ -54,7 +54,7 @@ async function sendSlackOutboundMessage(params: {
   text: string;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
-  blocks?: Parameters<typeof sendMessageSlack>[2]["blocks"];
+  blocks?: NonNullable<Parameters<typeof sendMessageSlack>[2]>["blocks"];
   accountId?: string | null;
   deps?: { sendSlack?: typeof sendMessageSlack } | null;
   replyToId?: string | null;
