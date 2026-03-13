@@ -110,8 +110,7 @@ const McpSchema = z
       )
       .optional(),
   })
-  .strict()
-  .optional();
+  .strict();
 
 const LoggingLevelSchema = z.union([
   z.literal("silent"),
@@ -918,7 +917,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
-    mcp: McpSchema,
+    mcp: McpSchema.optional(),
   })
   .strict()
   .superRefine((cfg, ctx) => {

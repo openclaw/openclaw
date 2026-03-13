@@ -55,11 +55,11 @@ describe("mcp servers config schema", () => {
     expect(res.success).toBe(true);
   });
 
-  it("rejects a server name with invalid characters", () => {
+  it("rejects a server name containing a space", () => {
     const res = OpenClawSchema.safeParse({
       mcp: {
         servers: {
-          "my__server name!": {
+          "my server": {
             command: "/usr/bin/thing",
           },
         },
@@ -72,7 +72,27 @@ describe("mcp servers config schema", () => {
     }
 
     const paths = res.error.issues.map((i) => i.path.join("."));
-    expect(paths.some((p) => p.includes("my__server name!"))).toBe(true);
+    expect(paths.some((p) => p.includes("my server"))).toBe(true);
+  });
+
+  it("rejects a server name containing a special character", () => {
+    const res = OpenClawSchema.safeParse({
+      mcp: {
+        servers: {
+          "bad!": {
+            command: "/usr/bin/thing",
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(false);
+    if (res.success) {
+      return;
+    }
+
+    const paths = res.error.issues.map((i) => i.path.join("."));
+    expect(paths.some((p) => p.includes("bad!"))).toBe(true);
   });
 
   it("rejects a server entry missing command", () => {
