@@ -222,6 +222,13 @@ describe("sanitizeRenderableText", () => {
   it.each([
     { label: "very long", input: "a".repeat(140) },
     { label: "moderately long", input: "b".repeat(90) },
+    { label: "runaway dashes", input: "-".repeat(60) },
+    { label: "runaway dots", input: ".".repeat(60) },
+    { label: "runaway underscores", input: "_".repeat(60) },
+    {
+      label: "hyphenated prose",
+      input: "this-is-a-very-long-natural-language-fragment-that-wraps-poorly",
+    },
   ])("breaks $label unbroken tokens to protect narrow terminals", ({ input }) => {
     expectTokenWidthUnderLimit(input);
   });
@@ -244,6 +251,48 @@ describe("sanitizeRenderableText", () => {
 
   it("preserves long file-like underscore tokens for copy safety", () => {
     const input = "administrators_authorized_keys_with_extra_suffix".repeat(2);
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves dotted entity IDs wrapped in markdown backticks", () => {
+    const input = "`binary_sensor.sense_energy_monitor_power_is_really_long`";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves dotted entity IDs wrapped in markdown asterisks", () => {
+    const input = "***binary_sensor.sense_energy_monitor_power_is_really_long***";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves long tracking identifiers bound tightly by underscores", () => {
+    const input = "__averyveryveryveryveryveryveryverylongidentifier__";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("does not split bare dotted entity IDs", () => {
+    const input = "binary_sensor.sense_energy_monitor_power_is_really_long";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves bare dotted IDs without underscores", () => {
+    const input = "sensor.someEntityIdentifierThatIsExtremelyLong";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves UUIDs ignoring surrounding quotes", () => {
+    const input = '"123e4567-e89b-12d3-a456-426614174000"';
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);

@@ -11,7 +11,7 @@ const BINARY_LINE_REPLACEMENT_THRESHOLD = 12;
 const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
-const EDGE_PUNCTUATION_RE = /^[`"'([{<]+|[`"')\]}>.,:;!?]+$/g;
+const EDGE_PUNCTUATION_RE = /^[`*"'([{<]+|[`*"')\]}>.,:;!?]+$/g;
 const TOKENISH_MIN_LENGTH = 24;
 const RTL_SCRIPT_RE = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]/;
 const BIDI_CONTROL_RE = /[\u202a-\u202e\u2066-\u2069]/;
@@ -61,24 +61,30 @@ function isCopySensitiveToken(token: string): boolean {
   const coreToken = token.replace(EDGE_PUNCTUATION_RE, "");
   const candidate = coreToken || token;
 
-  if (URL_PREFIX_RE.test(token)) {
+  if (URL_PREFIX_RE.test(candidate)) {
     return true;
   }
   if (
-    token.startsWith("/") ||
-    token.startsWith("~/") ||
-    token.startsWith("./") ||
-    token.startsWith("../")
+    candidate.startsWith("/") ||
+    candidate.startsWith("~/") ||
+    candidate.startsWith("./") ||
+    candidate.startsWith("../")
   ) {
     return true;
   }
-  if (WINDOWS_DRIVE_RE.test(token) || token.startsWith("\\\\")) {
+  if (WINDOWS_DRIVE_RE.test(candidate) || candidate.startsWith("\\\\")) {
     return true;
   }
-  if (token.includes("/") || token.includes("\\")) {
+  if (candidate.includes("/") || candidate.includes("\\")) {
     return true;
   }
-  if (token.includes("_") && FILE_LIKE_RE.test(token)) {
+  const hasDotOrUnderscore = candidate.includes("_") || candidate.includes(".");
+  const hasHyphenAndDigit = candidate.includes("-") && /\d/.test(candidate);
+  if (
+    (hasDotOrUnderscore || hasHyphenAndDigit) &&
+    FILE_LIKE_RE.test(candidate) &&
+    /[a-zA-Z0-9]/.test(candidate)
+  ) {
     return true;
   }
 
