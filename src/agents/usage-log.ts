@@ -3,7 +3,6 @@ import path from "path";
 
 export type TokenUsageRecord = {
   id: string;
-  taskId?: string;
   label: string;
   tokensUsed: number;
   tokenLimit?: number;
@@ -77,7 +76,6 @@ export async function recordTokenUsage(params: {
 
   const entry: TokenUsageRecord = {
     id: makeId(),
-    taskId: params.runId,
     label: params.label,
     tokensUsed: Math.trunc(total),
     ...(usage.input != null && usage.input > 0 && { inputTokens: Math.trunc(usage.input) }),
