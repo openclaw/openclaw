@@ -6,20 +6,20 @@ RUN --mount=type=cache,id=openclaw-install-sh-nonroot-apt-cache,target=/var/cach
   --mount=type=cache,id=openclaw-install-sh-nonroot-apt-lists,target=/var/lib/apt,sharing=locked \
   set -eux; \
   for attempt in 1 2 3; do \
-  if apt-get update -o Acquire::Retries=3; then break; fi; \
-  echo "apt-get update failed (attempt ${attempt})" >&2; \
-  if [ "${attempt}" -eq 3 ]; then exit 1; fi; \
-  sleep 3; \
+    if apt-get update -o Acquire::Retries=3; then break; fi; \
+    echo "apt-get update failed (attempt ${attempt})" >&2; \
+    if [ "${attempt}" -eq 3 ]; then exit 1; fi; \
+    sleep 3; \
   done; \
-  DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 upgrade -y --no-install-recommends; \
+  apt-get -o Acquire::Retries=3 upgrade -y; \
   apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-  bash \
-  ca-certificates \
-  curl \
-  g++ \
-  make \
-  python3 \
-  sudo
+    bash \
+    ca-certificates \
+    curl \
+    g++ \
+    make \
+    python3 \
+    sudo
 
 RUN useradd -m -s /bin/bash app \
   && echo "app ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/app

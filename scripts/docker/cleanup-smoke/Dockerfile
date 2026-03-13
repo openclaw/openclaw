@@ -5,11 +5,11 @@ FROM node:24-bookworm-slim@sha256:b4687aef2571c632a1953695ce4d61d6462a7eda471fe6
 RUN --mount=type=cache,id=openclaw-cleanup-smoke-apt-cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,id=openclaw-cleanup-smoke-apt-lists,target=/var/lib/apt,sharing=locked \
   apt-get update \
-  && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
+  && apt-get upgrade -y \
   && apt-get install -y --no-install-recommends \
-  bash \
-  ca-certificates \
-  git
+    bash \
+    ca-certificates \
+    git
 
 WORKDIR /repo
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
