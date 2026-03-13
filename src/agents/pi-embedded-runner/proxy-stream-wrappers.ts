@@ -1,6 +1,10 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import {
+  KILOCODE_ORG_ID_ENV_VAR,
+  KILOCODE_ORG_ID_HEADER,
+} from "../../providers/kilocode-shared.js";
 
 const OPENROUTER_APP_HEADERS: Record<string, string> = {
   "HTTP-Referer": "https://openclaw.ai",
@@ -10,9 +14,14 @@ const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
 const KILOCODE_FEATURE_DEFAULT = "openclaw";
 const KILOCODE_FEATURE_ENV_VAR = "KILOCODE_FEATURE";
 
-function resolveKilocodeAppHeaders(): Record<string, string> {
+function resolveKilocodeAppHeaders(orgId?: string): Record<string, string> {
   const feature = process.env[KILOCODE_FEATURE_ENV_VAR]?.trim() || KILOCODE_FEATURE_DEFAULT;
-  return { [KILOCODE_FEATURE_HEADER]: feature };
+  const headers: Record<string, string> = { [KILOCODE_FEATURE_HEADER]: feature };
+  const effectiveOrgId = orgId || process.env[KILOCODE_ORG_ID_ENV_VAR]?.trim();
+  if (effectiveOrgId) {
+    headers[KILOCODE_ORG_ID_HEADER] = effectiveOrgId;
+  }
+  return headers;
 }
 
 function isOpenRouterAnthropicModel(provider: string, modelId: string): boolean {
@@ -126,6 +135,7 @@ export function isProxyReasoningUnsupported(modelId: string): boolean {
 export function createKilocodeWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel?: ThinkLevel,
+  orgId?: string,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -134,7 +144,7 @@ export function createKilocodeWrapper(
       ...options,
       headers: {
         ...options?.headers,
-        ...resolveKilocodeAppHeaders(),
+        ...resolveKilocodeAppHeaders(orgId),
       },
       onPayload: (payload) => {
         normalizeProxyReasoningPayload(payload, thinkingLevel);

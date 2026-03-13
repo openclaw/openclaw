@@ -338,6 +338,8 @@ export type MemorySearchConfig = {
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
+    /** Kilocode organization ID override for embedding requests. Takes precedence over KILOCODE_ORG_ID env var and provider config headers. */
+    organizationId?: string;
     headers?: Record<string, string>;
     batch?: {
       /** Enable batch API for embedding indexing (OpenAI/Gemini; default: true). */

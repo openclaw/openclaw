@@ -53,7 +53,7 @@ function applyAndCapture(params: {
 }
 
 describe("extra-params: Kilocode wrapper", () => {
-  const envSnapshot = captureEnv(["KILOCODE_FEATURE"]);
+  const envSnapshot = captureEnv(["KILOCODE_FEATURE", "KILOCODE_ORG_ID"]);
 
   afterEach(() => {
     envSnapshot.restore();
@@ -116,6 +116,83 @@ describe("extra-params: Kilocode wrapper", () => {
     });
 
     expect(headers?.["X-KILOCODE-FEATURE"]).toBeUndefined();
+  });
+
+  it("injects X-KILOCODE-ORGANIZATIONID when KILOCODE_ORG_ID env var is set", () => {
+    process.env.KILOCODE_ORG_ID = "test-org-123";
+
+    const { headers } = applyAndCapture({
+      provider: "kilocode",
+      modelId: "anthropic/claude-sonnet-4",
+    });
+
+    expect(headers?.["X-KILOCODE-ORGANIZATIONID"]).toBe("test-org-123");
+  });
+
+  it("does not inject X-KILOCODE-ORGANIZATIONID when KILOCODE_ORG_ID is unset", () => {
+    delete process.env.KILOCODE_ORG_ID;
+
+    const { headers } = applyAndCapture({
+      provider: "kilocode",
+      modelId: "anthropic/claude-sonnet-4",
+    });
+
+    expect(headers?.["X-KILOCODE-ORGANIZATIONID"]).toBeUndefined();
+  });
+
+  it("does not inject X-KILOCODE-ORGANIZATIONID for non-kilocode providers even if env var is set", () => {
+    process.env.KILOCODE_ORG_ID = "test-org-123";
+
+    const { headers } = applyAndCapture({
+      provider: "openrouter",
+      modelId: "anthropic/claude-sonnet-4",
+    });
+
+    expect(headers?.["X-KILOCODE-ORGANIZATIONID"]).toBeUndefined();
+  });
+
+  it("injects X-KILOCODE-ORGANIZATIONID from provider config organizationId field", () => {
+    delete process.env.KILOCODE_ORG_ID;
+
+    const { headers } = applyAndCapture({
+      provider: "kilocode",
+      modelId: "anthropic/claude-sonnet-4",
+      cfg: {
+        models: {
+          providers: {
+            kilocode: {
+              baseUrl: "https://api.kilo.ai/api/gateway/",
+              models: [],
+              organizationId: "provider-org-555",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(headers?.["X-KILOCODE-ORGANIZATIONID"]).toBe("provider-org-555");
+  });
+
+  it("provider config organizationId takes precedence over env var", () => {
+    process.env.KILOCODE_ORG_ID = "env-org-999";
+
+    const { headers } = applyAndCapture({
+      provider: "kilocode",
+      modelId: "anthropic/claude-sonnet-4",
+      cfg: {
+        models: {
+          providers: {
+            kilocode: {
+              baseUrl: "https://api.kilo.ai/api/gateway/",
+              models: [],
+              organizationId: "provider-org-555",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(headers?.["X-KILOCODE-ORGANIZATIONID"]).toBe("provider-org-555");
   });
 });
 

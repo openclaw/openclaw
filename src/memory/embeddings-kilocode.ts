@@ -1,6 +1,10 @@
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
+import {
+  KILOCODE_BASE_URL,
+  KILOCODE_ORG_ID_HEADER,
+  resolveKilocodeOrgId,
+} from "../providers/kilocode-shared.js";
 import { normalizeEmbeddingModelWithPrefixes } from "./embeddings-model-normalize.js";
 import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
@@ -17,7 +21,7 @@ export type KilocodeEmbeddingClient = {
 export const DEFAULT_KILOCODE_EMBEDDING_MODEL = "mistralai/mistral-embed";
 
 const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
-const KILOCODE_FEATURE_VALUE = "embeddings";
+const KILOCODE_FEATURE_VALUE = "openclaw-embedding";
 
 export function normalizeKilocodeModel(model: string): string {
   return normalizeEmbeddingModelWithPrefixes({
@@ -85,11 +89,15 @@ export async function resolveKilocodeEmbeddingClient(
   const providerConfig = options.config.models?.providers?.kilocode;
   const baseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || KILOCODE_BASE_URL;
   const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
+  // Resolve org ID: explicit remote override → provider config field/headers → KILOCODE_ORG_ID env var
+  const remoteOrgId = remote?.organizationId?.trim();
+  const orgId = remoteOrgId || resolveKilocodeOrgId(providerConfig);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${apiKey}`,
     ...headerOverrides,
     [KILOCODE_FEATURE_HEADER]: KILOCODE_FEATURE_VALUE,
+    ...(orgId ? { [KILOCODE_ORG_ID_HEADER]: orgId } : {}),
   };
 
   const model = normalizeKilocodeModel(options.model);

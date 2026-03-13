@@ -1,5 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
-import { discoverKilocodeModels, KILOCODE_MODELS_URL } from "./kilocode-models.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
+import {
+  buildKilocodeModelsUrl,
+  discoverKilocodeModels,
+  KILOCODE_MODELS_URL,
+} from "./kilocode-models.js";
 
 // discoverKilocodeModels checks for VITEST env and returns static catalog,
 // so we need to temporarily unset it to test the fetch path.
@@ -82,6 +87,24 @@ async function withFetchPathTest(
   }
 }
 
+describe("buildKilocodeModelsUrl", () => {
+  it("returns the default models URL when no org ID is provided", () => {
+    expect(buildKilocodeModelsUrl()).toBe(KILOCODE_MODELS_URL);
+    expect(buildKilocodeModelsUrl(undefined)).toBe(KILOCODE_MODELS_URL);
+  });
+
+  it("returns an org-scoped URL when an org ID is provided", () => {
+    const url = buildKilocodeModelsUrl("org-abc-123");
+    expect(url).toBe("https://api.kilo.ai/api/organizations/org-abc-123/models");
+  });
+
+  it("strips the gateway segment and builds the correct org URL", () => {
+    const url = buildKilocodeModelsUrl("test-org");
+    expect(url).toContain("/api/organizations/test-org/models");
+    expect(url).not.toContain("/gateway/");
+  });
+});
+
 describe("discoverKilocodeModels", () => {
   it("returns static catalog in test environment", async () => {
     // Default vitest env — should return static catalog without fetching
@@ -100,6 +123,45 @@ describe("discoverKilocodeModels", () => {
     expect(auto?.contextWindow).toBe(1000000);
     expect(auto?.maxTokens).toBe(128000);
     expect(auto?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  });
+});
+
+describe("discoverKilocodeModels: org-scoped URL", () => {
+  const envSnapshot = captureEnv(["KILOCODE_ORG_ID"]);
+
+  afterEach(() => {
+    envSnapshot.restore();
+  });
+
+  it("uses org-scoped URL when KILOCODE_ORG_ID env var is set", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [makeAutoModel()] }),
+    });
+    await withFetchPathTest(mockFetch, async () => {
+      process.env.KILOCODE_ORG_ID = "org-xyz-789";
+      const models = await discoverKilocodeModels();
+      expect(models.length).toBeGreaterThan(0);
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.kilo.ai/api/organizations/org-xyz-789/models",
+        expect.objectContaining({ headers: { Accept: "application/json" } }),
+      );
+    });
+  });
+
+  it("uses default URL when KILOCODE_ORG_ID is not set", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [makeAutoModel()] }),
+    });
+    await withFetchPathTest(mockFetch, async () => {
+      delete process.env.KILOCODE_ORG_ID;
+      await discoverKilocodeModels();
+      expect(mockFetch).toHaveBeenCalledWith(
+        KILOCODE_MODELS_URL,
+        expect.objectContaining({ headers: { Accept: "application/json" } }),
+      );
+    });
   });
 });
 

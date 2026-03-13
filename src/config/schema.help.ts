@@ -819,6 +819,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Overrides the embedding API endpoint, such as an OpenAI-compatible proxy or custom Gemini base URL. Use this only when routing through your own gateway or vendor endpoint; keep provider defaults otherwise.",
   "agents.defaults.memorySearch.remote.apiKey":
     "Supplies a dedicated API key for remote embedding calls used by memory indexing and query-time embeddings. Use this when memory embeddings should use different credentials than global defaults or environment variables.",
+  "agents.defaults.memorySearch.remote.organizationId":
+    "Kilocode organization ID for embedding requests. Takes precedence over the KILOCODE_ORG_ID environment variable and provider config headers. Use this when embedding calls should be scoped to a specific organization and you need per-agent control over which organization is billed.",
   "agents.defaults.memorySearch.remote.headers":
     "Adds custom HTTP headers to remote embedding requests, merged with provider defaults. Use this for proxy auth and tenant routing headers, and keep values minimal to avoid leaking sensitive metadata.",
   "agents.defaults.memorySearch.remote.batch.enabled":

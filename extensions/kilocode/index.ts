@@ -4,6 +4,7 @@ import {
   createKilocodeWrapper,
   isProxyReasoningUnsupported,
 } from "../../src/agents/pi-embedded-runner/proxy-stream-wrappers.js";
+import { resolveKilocodeOrgId } from "../../src/providers/kilocode-shared.js";
 import {
   applyKilocodeConfig,
   KILOCODE_DEFAULT_MODEL_REF,
@@ -69,7 +70,9 @@ const kilocodePlugin = {
           ctx.modelId === "kilo/auto" || isProxyReasoningUnsupported(ctx.modelId)
             ? undefined
             : ctx.thinkingLevel;
-        return createKilocodeWrapper(ctx.streamFn, thinkingLevel);
+        // Resolve org ID from config (organizationId field or headers) with env var fallback.
+        const kilocodeOrgId = resolveKilocodeOrgId(ctx.config?.models?.providers?.kilocode);
+        return createKilocodeWrapper(ctx.streamFn, thinkingLevel, kilocodeOrgId);
       },
       isCacheTtlEligible: (ctx) => ctx.modelId.startsWith("anthropic/"),
     });

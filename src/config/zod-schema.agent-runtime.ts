@@ -624,6 +624,7 @@ export const MemorySearchSchema = z
       .object({
         baseUrl: z.string().optional(),
         apiKey: SecretInputSchema.optional().register(sensitive),
+        organizationId: z.string().optional(),
         headers: z.record(z.string(), z.string()).optional(),
         batch: z
           .object({
