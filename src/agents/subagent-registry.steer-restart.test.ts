@@ -65,6 +65,7 @@ vi.mock("../config/sessions.js", () => {
 
 const announceSpy = vi.fn(async (_params: unknown) => true);
 const runSubagentEndedHookMock = vi.fn(async (_event?: unknown, _ctx?: unknown) => {});
+const emitSessionLifecycleEventMock = vi.fn();
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
 }));
@@ -74,6 +75,10 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
     hasHooks: (hookName: string) => hookName === "subagent_ended",
     runSubagentEnded: runSubagentEndedHookMock,
   })),
+}));
+
+vi.mock("../sessions/session-lifecycle-events.js", () => ({
+  emitSessionLifecycleEvent: emitSessionLifecycleEventMock,
 }));
 
 vi.mock("./subagent-registry.store.js", () => ({
@@ -218,6 +223,7 @@ describe("subagent registry steer restarts", () => {
     announceSpy.mockClear();
     announceSpy.mockResolvedValue(true);
     runSubagentEndedHookMock.mockClear();
+    emitSessionLifecycleEventMock.mockClear();
     lifecycleHandler = undefined;
     mod.resetSubagentRegistryForTests({ persist: false });
   });
@@ -240,6 +246,7 @@ describe("subagent registry steer restarts", () => {
     await flushAnnounce();
     expect(announceSpy).not.toHaveBeenCalled();
     expect(runSubagentEndedHookMock).not.toHaveBeenCalled();
+    expect(emitSessionLifecycleEventMock).not.toHaveBeenCalled();
 
     replaceRunAfterSteer({
       previousRunId: "run-old",
@@ -380,6 +387,12 @@ describe("subagent registry steer restarts", () => {
       }),
       expect.objectContaining({
         runId: "run-terminal-state-new",
+      }),
+    );
+    expect(emitSessionLifecycleEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:subagent:terminal-state",
+        reason: "subagent-status",
       }),
     );
   });

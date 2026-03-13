@@ -15,6 +15,7 @@ import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
+import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
@@ -501,6 +502,22 @@ async function completeSubagentRun(params: {
   }
 
   const suppressedForSteerRestart = suppressAnnounceForSteerRestart(entry);
+  if (mutated && !suppressedForSteerRestart) {
+    // The gateway also emits sessions.changed directly from raw lifecycle
+    // events, but for subagent sessions the visible status comes from this
+    // registry. When a restarted follow-up run ends, the raw lifecycle `end`
+    // event can reach websocket subscribers before this registry records
+    // endedAt/outcome, leaving the dashboard stuck on the stale "running"
+    // snapshot. Emit a follow-up lifecycle change after persisting the
+    // registry update so subscribers receive the authoritative completed
+    // status.
+    emitSessionLifecycleEvent({
+      sessionKey: entry.childSessionKey,
+      reason: "subagent-status",
+      parentSessionKey: entry.requesterSessionKey,
+      label: entry.label,
+    });
+  }
   const shouldEmitEndedHook =
     !suppressedForSteerRestart &&
     shouldEmitEndedHookForRun({
