@@ -298,7 +298,7 @@ describe("compaction-safeguard toolResult trimming", () => {
         toolName: "exec",
         content: [{ type: "text", text: "original use payload" }],
         timestamp: 3,
-      } as AgentMessage,
+      } as unknown as AgentMessage,
     ];
     const prunedMessages: AgentMessage[] = [
       originalMessages[0],
@@ -315,7 +315,7 @@ describe("compaction-safeguard toolResult trimming", () => {
         toolName: "exec",
         content: [{ type: "text", text: "trimmed use payload" }],
         timestamp: 3,
-      } as AgentMessage,
+      } as unknown as AgentMessage,
     ];
 
     const restored = restoreOriginalToolResultsForKeptMessages({
