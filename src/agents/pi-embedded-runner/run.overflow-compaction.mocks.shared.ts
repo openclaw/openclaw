@@ -209,7 +209,6 @@ vi.mock("../defaults.js", () => ({
   DEFAULT_PROVIDER: "anthropic",
 }));
 
-export const mockedCoerceToFailoverError = vi.fn();
 type MockFailoverErrorDescription = {
   message: string;
   reason: string | undefined;
@@ -217,7 +216,15 @@ type MockFailoverErrorDescription = {
   code: string | undefined;
 };
 
-export const mockedDescribeFailoverError = vi.fn(
+type MockCoerceToFailoverError = (
+  err: unknown,
+  params?: { provider?: string; model?: string; profileId?: string },
+) => unknown;
+type MockDescribeFailoverError = (err: unknown) => MockFailoverErrorDescription;
+type MockResolveFailoverStatus = (reason: string) => number | undefined;
+
+export const mockedCoerceToFailoverError = vi.fn<MockCoerceToFailoverError>();
+export const mockedDescribeFailoverError = vi.fn<MockDescribeFailoverError>(
   (err: unknown): MockFailoverErrorDescription => ({
     message: err instanceof Error ? err.message : String(err),
     reason: undefined,
@@ -225,7 +232,7 @@ export const mockedDescribeFailoverError = vi.fn(
     code: undefined,
   }),
 );
-export const mockedResolveFailoverStatus = vi.fn();
+export const mockedResolveFailoverStatus = vi.fn<MockResolveFailoverStatus>();
 
 vi.mock("../failover-error.js", () => ({
   FailoverError: class extends Error {},
