@@ -62,6 +62,21 @@ function detectMarker(content: string): Marker | null {
   return null;
 }
 
+function detectMarkerLineWithGateway(contents: string): Marker | null {
+  const lower = contents.toLowerCase();
+  for (const line of lower.split(/\r?\n/)) {
+    if (!line.includes("gateway")) {
+      continue;
+    }
+    for (const marker of EXTRA_MARKERS) {
+      if (line.includes(marker)) {
+        return marker;
+      }
+    }
+  }
+  return null;
+}
+
 function hasGatewayServiceMarker(content: string): boolean {
   const lower = content.toLowerCase();
   const markerKeys = ["openclaw_service_marker"];
@@ -237,7 +252,7 @@ async function scanSystemdDir(params: {
   });
 
   for (const { entry, name, fullPath, contents } of candidates) {
-    const marker = detectMarker(contents);
+    const marker = detectMarkerLineWithGateway(contents);
     if (!marker) {
       continue;
     }
