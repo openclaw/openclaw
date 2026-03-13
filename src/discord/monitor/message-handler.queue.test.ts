@@ -1,23 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createDiscordMessageHandler,
+  preflightDiscordMessageMock,
+  processDiscordMessageMock,
+} from "./message-handler.module-test-helpers.js";
+import {
   createDiscordHandlerParams,
   createDiscordPreflightContext,
 } from "./message-handler.test-helpers.js";
 
-const preflightDiscordMessageMock = vi.hoisted(() => vi.fn());
-const processDiscordMessageMock = vi.hoisted(() => vi.fn());
 const eventualReplyDeliveredMock = vi.hoisted(() => vi.fn());
 type SetStatusFn = (patch: Record<string, unknown>) => void;
-
-vi.mock("./message-handler.preflight.js", () => ({
-  preflightDiscordMessage: preflightDiscordMessageMock,
-}));
-
-vi.mock("./message-handler.process.js", () => ({
-  processDiscordMessage: processDiscordMessageMock,
-}));
-
-const { createDiscordMessageHandler } = await import("./message-handler.js");
 
 function createDeferred<T = void>() {
   let resolve: (value: T | PromiseLike<T>) => void = () => {};
