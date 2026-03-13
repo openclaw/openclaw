@@ -1,16 +1,30 @@
+import { validateProtoMismatch, type ForwardedHeader } from "./forwarded-headers.js";
 import { isLoopbackHost, normalizeHostHeader } from "./net.js";
 
 type OriginCheckResult =
   | {
       ok: true;
       matchedBy: "allowlist" | "host-header-fallback" | "local-loopback";
-      wildcardMatched: boolean; // true if allowed via "*" wildcard
+      wildcardMatched: boolean;
     }
   | { ok: false; reason: string };
 
+type OriginCheckParams = {
+  requestHost?: string;
+  requestForwardedHost?: string;
+  requestForwardedProto?: string;
+  origin?: string;
+  allowedOrigins?: string[];
+  allowHostHeaderOriginFallback?: boolean;
+  isLocalClient?: boolean;
+  isTrustedProxy?: boolean;
+  forwardedHeader?: string | string[];
+  strictProtoValidation?: boolean;
+};
+
 function parseOrigin(
   originRaw?: string,
-): { origin: string; host: string; hostname: string } | null {
+): { origin: string; host: string; hostname: string; protocol: string } | null {
   const trimmed = (originRaw ?? "").trim();
   if (!trimmed || trimmed === "null") {
     return null;
@@ -21,6 +35,7 @@ function parseOrigin(
       origin: url.origin.toLowerCase(),
       host: url.host.toLowerCase(),
       hostname: url.hostname.toLowerCase(),
+      protocol: url.protocol.replace(":", "").toLowerCase(),
     };
   } catch {
     return null;
@@ -49,15 +64,7 @@ function normalizeHostToMatchUrlHost(host: string | undefined): string | undefin
   }
 }
 
-export function checkBrowserOrigin(params: {
-  requestHost?: string;
-  requestForwardedHost?: string;
-  origin?: string;
-  allowedOrigins?: string[];
-  allowHostHeaderOriginFallback?: boolean;
-  isLocalClient?: boolean;
-  isTrustedProxy?: boolean;
-}): OriginCheckResult {
+export function checkBrowserOrigin(params: OriginCheckParams): OriginCheckResult {
   const parsedOrigin = parseOrigin(params.origin);
   if (!parsedOrigin) {
     return { ok: false, reason: "origin missing or invalid" };
@@ -76,22 +83,30 @@ export function checkBrowserOrigin(params: {
     return { ok: false, reason: "origin not allowed" };
   }
 
-  // Security: Wildcard "*" bypasses all origin checks, disabling CSRF protection.
-  // This is intended only for development/trusted environments.
-  // Consider explicitly listing origins instead when possible.
+  // Security: When behind a trusted proxy, validate protocol BEFORE allowlist check.
+  // Even allowlisted origins must have matching protocol to prevent SSL stripping attacks.
+  if (params.isTrustedProxy === true && params.strictProtoValidation !== false) {
+    const forwardedProto = extractProtoFromForwardedHeader(params.forwardedHeader);
+    const protoValidation = validateProtoMismatch({
+      originProto: parsedOrigin.protocol,
+      forwardedProto,
+      xForwardedProto: params.requestForwardedProto,
+    });
+    if (!protoValidation.ok) {
+      return protoValidation;
+    }
+  }
+
   const wildcardMatched = allowlist.has("*");
   if (wildcardMatched || allowlist.has(parsedOrigin.origin)) {
     return { ok: true, matchedBy: "allowlist", wildcardMatched };
   }
 
-  // Security: Only trust X-Forwarded-Host from a verified trusted proxy
-  if (requestForwardedHost && params.isTrustedProxy === true) {
-    // Security: Origin MUST match the forwarded host (cross-validation)
-    if (parsedOrigin.host !== requestForwardedHost) {
+  if (params.isTrustedProxy === true) {
+    if (requestForwardedHost && parsedOrigin.host !== requestForwardedHost) {
       return { ok: false, reason: "origin does not match forwarded host" };
     }
 
-    // Legacy fallback for forwarded host with explicit opt-in
     if (params.allowHostHeaderOriginFallback === true) {
       return { ok: true, matchedBy: "host-header-fallback", wildcardMatched: false };
     }
@@ -102,10 +117,52 @@ export function checkBrowserOrigin(params: {
     return { ok: true, matchedBy: "host-header-fallback", wildcardMatched: false };
   }
 
-  // Dev fallback only for genuinely local socket clients, not Host-header claims.
   if (params.isLocalClient && isLoopbackHost(parsedOrigin.hostname)) {
     return { ok: true, matchedBy: "local-loopback", wildcardMatched: false };
   }
 
   return { ok: false, reason: "origin not allowed" };
+}
+
+function extractProtoFromForwardedHeader(
+  header: string | string[] | undefined,
+): string | undefined {
+  if (!header) {
+    return undefined;
+  }
+
+  const entries = parseForwardedHeaderForProto(header);
+  const firstEntry = entries[0];
+  return firstEntry?.proto;
+}
+
+function parseForwardedHeaderForProto(header: string | string[] | undefined): ForwardedHeader[] {
+  const raw = Array.isArray(header) ? header.join(",") : header;
+  if (!raw || typeof raw !== "string") {
+    return [];
+  }
+
+  const entries: ForwardedHeader[] = [];
+  const segments = raw.split(/\s*;\s*(?=[a-z]+=)/i);
+
+  for (const segment of segments) {
+    const entry: ForwardedHeader = {};
+    const regex = /([a-z]+)=(?:"([^"]+)"|([^;,]+))/gi;
+    let match: RegExpExecArray | null;
+
+    while ((match = regex.exec(segment)) !== null) {
+      const key = match[1].toLowerCase();
+      const value = match[2] ?? match[3];
+
+      if (key === "proto") {
+        entry.proto = value?.trim().toLowerCase();
+      }
+    }
+
+    if (entry.proto) {
+      entries.push(entry);
+    }
+  }
+
+  return entries;
 }
