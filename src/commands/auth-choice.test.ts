@@ -22,7 +22,6 @@ import {
 } from "./test-wizard-helpers.js";
 
 type DetectZaiEndpoint = typeof import("./zai-endpoint-detect.js").detectZaiEndpoint;
-type PromptAndConfigureOllama = typeof import("./ollama-setup.js").promptAndConfigureOllama;
 
 vi.mock("../providers/github-copilot-auth.js", () => ({
   githubCopilotLoginCommand: vi.fn(async () => {}),
@@ -43,16 +42,6 @@ vi.mock("../plugins/providers.js", () => ({
 const detectZaiEndpoint = vi.hoisted(() => vi.fn<DetectZaiEndpoint>(async () => null));
 vi.mock("./zai-endpoint-detect.js", () => ({
   detectZaiEndpoint,
-}));
-
-const promptAndConfigureOllama = vi.hoisted(() =>
-  vi.fn<PromptAndConfigureOllama>(async ({ cfg }) => ({
-    config: cfg,
-    defaultModelId: "qwen3.5:35b",
-  })),
-);
-vi.mock("./ollama-setup.js", () => ({
-  promptAndConfigureOllama,
 }));
 
 type StoredAuthProfile = {
@@ -142,11 +131,6 @@ describe("applyAuthChoice", () => {
     detectZaiEndpoint.mockResolvedValue(null);
     loginOpenAICodexOAuth.mockReset();
     loginOpenAICodexOAuth.mockResolvedValue(null);
-    promptAndConfigureOllama.mockReset();
-    promptAndConfigureOllama.mockImplementation(async ({ cfg }) => ({
-      config: cfg,
-      defaultModelId: "qwen3.5:35b",
-    }));
     await lifecycle.cleanup();
     activeStateDir = null;
   });
@@ -1369,7 +1353,7 @@ describe("resolvePreferredProviderForAuthChoice", () => {
       { authChoice: "unknown" as AuthChoice, expectedProvider: undefined },
     ] as const;
     for (const scenario of scenarios) {
-      expect(resolvePreferredProviderForAuthChoice(scenario.authChoice)).toBe(
+      expect(resolvePreferredProviderForAuthChoice({ choice: scenario.authChoice })).toBe(
         scenario.expectedProvider,
       );
     }

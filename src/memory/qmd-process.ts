@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import path from "node:path";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -12,25 +11,6 @@ export type CliSpawnInvocation = {
   windowsHide?: boolean;
 };
 
-function resolveWindowsCommandShim(command: string): string {
-  if (process.platform !== "win32") {
-    return command;
-  }
-  const trimmed = command.trim();
-  if (!trimmed) {
-    return command;
-  }
-  const ext = path.extname(trimmed).toLowerCase();
-  if (ext === ".cmd" || ext === ".exe" || ext === ".bat") {
-    return command;
-  }
-  const base = path.basename(trimmed).toLowerCase();
-  if (base === "qmd" || base === "mcporter") {
-    return `${trimmed}.cmd`;
-  }
-  return command;
-}
-
 export function resolveCliSpawnInvocation(params: {
   command: string;
   args: string[];
@@ -38,30 +18,14 @@ export function resolveCliSpawnInvocation(params: {
   packageName: string;
 }): CliSpawnInvocation {
   const program = resolveWindowsSpawnProgram({
-    command: resolveWindowsCommandShim(params.command),
+    command: params.command,
     platform: process.platform,
     env: params.env,
     execPath: process.execPath,
     packageName: params.packageName,
-    allowShellFallback: true,
+    allowShellFallback: false,
   });
   return materializeWindowsSpawnProgram(program, params.args);
-}
-
-export function isWindowsCommandShimEinval(params: {
-  err: unknown;
-  command: string;
-  commandBase: string;
-}): boolean {
-  if (process.platform !== "win32") {
-    return false;
-  }
-  const errno = params.err as NodeJS.ErrnoException | undefined;
-  if (errno?.code !== "EINVAL") {
-    return false;
-  }
-  const escapedBase = params.commandBase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[\\\\/])${escapedBase}\\.cmd$`, "i").test(params.command);
 }
 
 export async function runCliCommand(params: {
