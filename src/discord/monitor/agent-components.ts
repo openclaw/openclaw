@@ -873,8 +873,9 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
     } catch {
       // Interaction may have expired after the handler finished.
     }
+    return "handled";
   }
-  return "handled";
+  return "unmatched";
 }
 
 function resolveComponentCommandAuthorized(params: {
