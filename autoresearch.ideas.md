@@ -1,6 +1,7 @@
-- Cross-session mtime-gated bootstrap cache: track file mtimes between sessions, only re-read files that actually changed. Reduces build time, doesn't change stable_chars metric.
-- Skills hash-gated regeneration: cache the skills prompt by content hash of all SKILL.md files; only regenerate when a skill file changes. Performance improvement.
-- Separate AGENTS.md into base (stable global protocol) + project overlay (frequent per-project notes injected last). Needs user-facing design. Would push AGENTS.md base into stable prefix.
-- MEMORY.md scenario: if workspace has daily notes at root, AGENTS.md enters stable prefix too. Benchmark could model this with a mock MEMORY.md. Need to verify MEMORY.md loads after AGENTS.md (confirmed it does via resolveMemoryBootstrapEntries).
-- Remove per-file object allocation in trimBootstrapContent for non-truncated files (return original string reference) — micro-optimization, no metric impact.
-- Investigate whether userTimezone can be placed after AGENTS.md without hurting stable_chars: currently moving it to dynamic tail decreases stable_chars by 44 (AGENTS.md moves closer). Not beneficial unless combined with other changes.
+- Cross-session mtime-gated bootstrap cache: track file mtimes between sessions, only re-read files that actually changed. Reduces build time, no stable_chars impact.
+- Skills hash-gated regeneration: cache the skills prompt by content hash of all SKILL.md files; only regenerate when a skill file changes. Build time improvement.
+- MEMORY.md scenario: if workspace has a root-level MEMORY.md (daily notes at root), it loads AFTER AGENTS.md. The benchmark would then use MEMORY.md as the boundary, showing AGENTS.md content entering the stable prefix (+~1,500 chars). Verify by creating a mock MEMORY.md with BENCHMARK_WORKSPACE.
+- Separate AGENTS.md into base (stable global protocol) + project overlay (frequent per-project notes). User-facing design change. Would push AGENTS.md base into stable prefix.
+- workspaceNotes: these appear before AGENTS.md if set. For users with workspace notes that change frequently, this breaks cache at ~2,993. Could model this scenario and move workspaceNotes to dynamic tail. Low priority (workspaceNotes rarely change).
+- ownerNumbers: appear before AGENTS.md if set (at ~2,996). These are per-deployment (rarely change). Could move to dynamic tail. Low priority.
+- userTimezone: appears before AGENTS.md at ~4,881. Moving to dynamic tail HURTS stable_chars (AGENTS.md gets 44 chars closer). Not beneficial.
