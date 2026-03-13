@@ -203,6 +203,20 @@ function mockNdjsonReader(lines: string[]): ReadableStreamDefaultReader<Uint8Arr
   } as unknown as ReadableStreamDefaultReader<Uint8Array>;
 }
 
+async function expectDoneEventContent(lines: string[], expectedContent: unknown) {
+  await withMockNdjsonFetch(lines, async () => {
+    const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+    const events = await collectStreamEvents(stream);
+
+    const doneEvent = events.at(-1);
+    if (!doneEvent || doneEvent.type !== "done") {
+      throw new Error("Expected done event");
+    }
+
+    expect(doneEvent.message.content).toEqual(expectedContent);
+  });
+}
+
 describe("parseNdjsonStream", () => {
   it("parses text-only streaming chunks", async () => {
     const reader = mockNdjsonReader([
@@ -486,88 +500,48 @@ describe("createOllamaStreamFn", () => {
   });
 
   it("drops thinking chunks when no final content is emitted", async () => {
-    await withMockNdjsonFetch(
+    await expectDoneEventContent(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":"reasoned"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":" output"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
       ],
-      async () => {
-        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
-        const events = await collectStreamEvents(stream);
-
-        const doneEvent = events.at(-1);
-        if (!doneEvent || doneEvent.type !== "done") {
-          throw new Error("Expected done event");
-        }
-
-        expect(doneEvent.message.content).toEqual([]);
-      },
+      [],
     );
   });
 
   it("prefers streamed content over earlier thinking chunks", async () => {
-    await withMockNdjsonFetch(
+    await expectDoneEventContent(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":"internal"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"final"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":" answer"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
       ],
-      async () => {
-        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
-        const events = await collectStreamEvents(stream);
-
-        const doneEvent = events.at(-1);
-        if (!doneEvent || doneEvent.type !== "done") {
-          throw new Error("Expected done event");
-        }
-
-        expect(doneEvent.message.content).toEqual([{ type: "text", text: "final answer" }]);
-      },
+      [{ type: "text", text: "final answer" }],
     );
   });
 
   it("drops reasoning chunks when no final content is emitted", async () => {
-    await withMockNdjsonFetch(
+    await expectDoneEventContent(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":"reasoned"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":" output"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
       ],
-      async () => {
-        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
-        const events = await collectStreamEvents(stream);
-
-        const doneEvent = events.at(-1);
-        if (!doneEvent || doneEvent.type !== "done") {
-          throw new Error("Expected done event");
-        }
-
-        expect(doneEvent.message.content).toEqual([]);
-      },
+      [],
     );
   });
 
   it("prefers streamed content over earlier reasoning chunks", async () => {
-    await withMockNdjsonFetch(
+    await expectDoneEventContent(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":"internal"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"final"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":" answer"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
       ],
-      async () => {
-        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
-        const events = await collectStreamEvents(stream);
-
-        const doneEvent = events.at(-1);
-        if (!doneEvent || doneEvent.type !== "done") {
-          throw new Error("Expected done event");
-        }
-
-        expect(doneEvent.message.content).toEqual([{ type: "text", text: "final answer" }]);
-      },
+      [{ type: "text", text: "final answer" }],
     );
   });
 });
