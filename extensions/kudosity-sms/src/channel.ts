@@ -149,18 +149,20 @@ const capabilities: ChannelCapabilities = {
  * not channel scope.
  */
 const configSchema = {
-  type: "object" as const,
-  properties: {
-    apiKey: {
-      type: "string" as const,
-      description: "Kudosity API key for authenticating requests",
+  schema: {
+    type: "object" as const,
+    properties: {
+      apiKey: {
+        type: "string" as const,
+        description: "Kudosity API key for authenticating requests",
+      },
+      sender: {
+        type: "string" as const,
+        description: "Default sender number (E.164 format, e.g. +61400000000)",
+      },
     },
-    sender: {
-      type: "string" as const,
-      description: "Default sender number (E.164 format, e.g. +61400000000)",
-    },
+    required: ["apiKey", "sender"],
   },
-  required: ["apiKey", "sender"],
 };
 
 // ─── Outbound Adapter ────────────────────────────────────────────────────────

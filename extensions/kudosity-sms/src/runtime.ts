@@ -5,15 +5,15 @@
  * access to config, logging, and other platform services.
  */
 
-import type { RuntimeEnv } from "openclaw/plugin-sdk/kudosity-sms";
+import type { PluginRuntime } from "openclaw/plugin-sdk/kudosity-sms";
 
-let runtime: RuntimeEnv | undefined;
+let runtime: PluginRuntime | undefined;
 
-export function setKudositySmsRuntime(rt: RuntimeEnv): void {
+export function setKudositySmsRuntime(rt: PluginRuntime): void {
   runtime = rt;
 }
 
-export function getKudositySmsRuntime(): RuntimeEnv {
+export function getKudositySmsRuntime(): PluginRuntime {
   if (!runtime) {
     throw new Error("Kudosity SMS runtime not initialized — was the plugin registered?");
   }
