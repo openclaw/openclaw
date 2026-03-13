@@ -31,12 +31,28 @@ export type ModelAliasIndex = {
   byKey: Map<string, string[]>;
 };
 
-const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
-  "opus-4.6": "claude-opus-4-6",
-  "opus-4.5": "claude-opus-4-5",
-  "sonnet-4.6": "claude-sonnet-4-6",
-  "sonnet-4.5": "claude-sonnet-4-5",
-};
+/**
+ * Lazy-initialized to avoid TDZ issues when bundlers reorder module-scope
+ * declarations.  `applyContextPruningDefaults` (config/defaults.ts) calls
+ * `parseModelRef` → `normalizeAnthropicModelId` during early config loading,
+ * which can execute before this module-scope `const` is evaluated in the
+ * bundled output.  Wrapping in a getter ensures the map is created on first
+ * access rather than at declaration time.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/45076
+ */
+let _anthropicModelAliases: Record<string, string> | undefined;
+function getAnthropicModelAliases(): Record<string, string> {
+  if (!_anthropicModelAliases) {
+    _anthropicModelAliases = {
+      "opus-4.6": "claude-opus-4-6",
+      "opus-4.5": "claude-opus-4-5",
+      "sonnet-4.6": "claude-sonnet-4-6",
+      "sonnet-4.5": "claude-sonnet-4-5",
+    };
+  }
+  return _anthropicModelAliases;
+}
 
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
@@ -151,7 +167,7 @@ function normalizeAnthropicModelId(model: string): string {
     return trimmed;
   }
   const lower = trimmed.toLowerCase();
-  return ANTHROPIC_MODEL_ALIASES[lower] ?? trimmed;
+  return getAnthropicModelAliases()[lower] ?? trimmed;
 }
 
 function normalizeProviderModelId(provider: string, model: string): string {
