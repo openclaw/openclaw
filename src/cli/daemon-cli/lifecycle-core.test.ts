@@ -1,4 +1,12 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  defaultRuntime,
+  resetLifecycleRuntimeLogs,
+  resetLifecycleServiceMocks,
+  runtimeLogs,
+  service,
+  stubEmptyGatewayEnv,
+} from "./test-helpers/lifecycle-core-harness.js";
 
 const loadConfig = vi.fn(() => ({
   gateway: {
@@ -7,28 +15,6 @@ const loadConfig = vi.fn(() => ({
     },
   },
 }));
-
-const runtimeLogs: string[] = [];
-const defaultRuntime = {
-  log: (message: string) => runtimeLogs.push(message),
-  error: vi.fn(),
-  exit: (code: number) => {
-    throw new Error(`__exit__:${code}`);
-  },
-};
-
-const service = {
-  label: "TestService",
-  loadedText: "loaded",
-  notLoadedText: "not loaded",
-  install: vi.fn(),
-  uninstall: vi.fn(),
-  stop: vi.fn(),
-  isLoaded: vi.fn(),
-  readCommand: vi.fn(),
-  readRuntime: vi.fn(),
-  restart: vi.fn(),
-};
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
@@ -49,7 +35,7 @@ describe("runServiceRestart token drift", () => {
   });
 
   beforeEach(() => {
-    runtimeLogs.length = 0;
+    resetLifecycleRuntimeLogs();
     loadConfig.mockReset();
     loadConfig.mockReturnValue({
       gateway: {
@@ -58,19 +44,11 @@ describe("runServiceRestart token drift", () => {
         },
       },
     });
-    service.isLoaded.mockClear();
-    service.readCommand.mockClear();
-    service.restart.mockClear();
-    service.isLoaded.mockResolvedValue(true);
+    resetLifecycleServiceMocks();
     service.readCommand.mockResolvedValue({
       environment: { OPENCLAW_GATEWAY_TOKEN: "service-token" },
     });
-    service.restart.mockResolvedValue({ outcome: "completed" });
-    vi.unstubAllEnvs();
-    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
-    vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "");
-    vi.stubEnv("OPENCLAW_GATEWAY_URL", "");
-    vi.stubEnv("CLAWDBOT_GATEWAY_URL", "");
+    stubEmptyGatewayEnv();
   });
 
   it("emits drift warning when enabled", async () => {
