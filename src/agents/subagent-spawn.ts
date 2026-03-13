@@ -577,7 +577,6 @@ export async function spawnSubagentDirect(
     workspaceDir: resolveSpawnedWorkspaceInheritance({
       config: cfg,
       targetAgentId,
-      requesterSessionKey: requesterInternalKey,
       // For cross-agent spawns, ignore the caller's inherited workspace;
       // let targetAgentId resolve the correct workspace instead.
       explicitWorkspaceDir:
