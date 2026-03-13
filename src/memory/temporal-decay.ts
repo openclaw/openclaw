@@ -12,7 +12,31 @@ export const DEFAULT_TEMPORAL_DECAY_CONFIG: TemporalDecayConfig = {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const DATED_MEMORY_PATH_RE = /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/;
+
+/**
+ * Date extraction patterns for memory file paths, ordered from most specific to least.
+ *
+ * Supported formats:
+ *   memory/YYYY-MM-DD.md           (exact daily log)
+ *   memory/YYYY-MM-DD-<suffix>.md  (daily log with descriptive suffix)
+ *   memory/YYYY-MM-DD/<name>.md    (date-based subdirectory)
+ *   memory/YYYY/MM/DD.md           (nested year/month/day)
+ *   memory/YYYY/MM/DD-<suffix>.md  (nested with suffix)
+ *   memory/YYYY-MM/DD.md           (year-month dir, day file)
+ *   memory/YYYY-MM/DD-<suffix>.md  (year-month dir, day file with suffix)
+ */
+const DATED_MEMORY_PATH_PATTERNS: RegExp[] = [
+  // memory/YYYY-MM-DD.md (original exact match)
+  /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/,
+  // memory/YYYY-MM-DD-<suffix>.md (e.g. memory/2024-03-15-standup.md)
+  /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})-[^/]+\.md$/,
+  // memory/YYYY-MM-DD/<anything>.md (date subdirectory)
+  /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\/[^/]+\.md$/,
+  // memory/YYYY/MM/DD.md or memory/YYYY/MM/DD-<suffix>.md
+  /(?:^|\/)memory\/(\d{4})\/(\d{2})\/(\d{2})(?:-[^/]+)?\.md$/,
+  // memory/YYYY-MM/DD.md or memory/YYYY-MM/DD-<suffix>.md
+  /(?:^|\/)memory\/(\d{4})-(\d{2})\/(\d{2})(?:-[^/]+)?\.md$/,
+];
 
 export function toDecayLambda(halfLifeDays: number): number {
   if (!Number.isFinite(halfLifeDays) || halfLifeDays <= 0) {
@@ -41,31 +65,46 @@ export function applyTemporalDecayToScore(params: {
   return params.score * calculateTemporalDecayMultiplier(params);
 }
 
-function parseMemoryDateFromPath(filePath: string): Date | null {
+/**
+ * Returns "matched" if a dated pattern matched and the date is valid,
+ * "looks-dated" if a pattern matched but the date is invalid (e.g. 2025-13-40),
+ * or null if no pattern matched at all.
+ */
+function parseMemoryDateFromPath(
+  filePath: string,
+): { status: "matched"; date: Date } | { status: "looks-dated" } | null {
   const normalized = filePath.replaceAll("\\", "/").replace(/^\.\//, "");
-  const match = DATED_MEMORY_PATH_RE.exec(normalized);
-  if (!match) {
-    return null;
+
+  for (const pattern of DATED_MEMORY_PATH_PATTERNS) {
+    const match = pattern.exec(normalized);
+    if (!match) {
+      continue;
+    }
+
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
+      // Pattern matched but components are not integers — treat as "looks dated"
+      return { status: "looks-dated" };
+    }
+
+    const timestamp = Date.UTC(year, month - 1, day);
+    const parsed = new Date(timestamp);
+    if (
+      parsed.getUTCFullYear() !== year ||
+      parsed.getUTCMonth() !== month - 1 ||
+      parsed.getUTCDate() !== day
+    ) {
+      // Pattern matched but date is invalid (e.g. month=13, day=40)
+      // Return "looks-dated" so caller can fall back to fs.stat mtime
+      return { status: "looks-dated" };
+    }
+
+    return { status: "matched", date: parsed };
   }
 
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
-    return null;
-  }
-
-  const timestamp = Date.UTC(year, month - 1, day);
-  const parsed = new Date(timestamp);
-  if (
-    parsed.getUTCFullYear() !== year ||
-    parsed.getUTCMonth() !== month - 1 ||
-    parsed.getUTCDate() !== day
-  ) {
-    return null;
-  }
-
-  return parsed;
+  return null;
 }
 
 function isEvergreenMemoryPath(filePath: string): boolean {
@@ -76,7 +115,10 @@ function isEvergreenMemoryPath(filePath: string): boolean {
   if (!normalized.startsWith("memory/")) {
     return false;
   }
-  return !DATED_MEMORY_PATH_RE.test(normalized);
+  // A file is evergreen only if no dated pattern matched at all.
+  // Files with invalid dates (looks-dated) are NOT evergreen — they should
+  // fall back to fs.stat mtime decay instead of being treated as timeless.
+  return parseMemoryDateFromPath(normalized) === null;
 }
 
 async function extractTimestamp(params: {
@@ -84,9 +126,11 @@ async function extractTimestamp(params: {
   source?: string;
   workspaceDir?: string;
 }): Promise<Date | null> {
-  const fromPath = parseMemoryDateFromPath(params.filePath);
-  if (fromPath) {
-    return fromPath;
+  const parseResult = parseMemoryDateFromPath(params.filePath);
+
+  // Valid dated path — use the date from the filename
+  if (parseResult?.status === "matched") {
+    return parseResult.date;
   }
 
   // Memory root/topic files are evergreen knowledge and should not decay.
@@ -94,6 +138,8 @@ async function extractTimestamp(params: {
     return null;
   }
 
+  // For "looks-dated" files (invalid date in filename) and non-dated files,
+  // fall back to fs.stat mtime so they still get some decay rather than none.
   if (!params.workspaceDir) {
     return null;
   }
@@ -127,7 +173,7 @@ export async function applyTemporalDecayToHybridResults<
   nowMs?: number;
 }): Promise<T[]> {
   const config = { ...DEFAULT_TEMPORAL_DECAY_CONFIG, ...params.temporalDecay };
-  if (!config.enabled) {
+  if (!config.enabled || config.halfLifeDays <= 0) {
     return [...params.results];
   }
 
