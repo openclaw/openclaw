@@ -993,6 +993,7 @@ export abstract class MemoryManagerSyncOps {
         const reindexParams = {
           reason: params?.reason ?? "fallback",
           force: true,
+          sessionFiles: params?.sessionFiles,
           progress: progress ?? undefined,
         };
         if (
@@ -1141,7 +1142,7 @@ export abstract class MemoryManagerSyncOps {
       this.seedEmbeddingCache(originalDb);
       const shouldSyncMemory = this.sources.has("memory");
       const shouldSyncSessions = this.shouldSyncSessions(
-        { reason: params.reason, force: params.force },
+        { reason: params.reason, force: params.force, sessionFiles: params.sessionFiles },
         true,
       );
 
@@ -1217,7 +1218,7 @@ export abstract class MemoryManagerSyncOps {
 
     const shouldSyncMemory = this.sources.has("memory");
     const shouldSyncSessions = this.shouldSyncSessions(
-      { reason: params.reason, force: params.force },
+      { reason: params.reason, force: params.force, sessionFiles: params.sessionFiles },
       true,
     );
 
