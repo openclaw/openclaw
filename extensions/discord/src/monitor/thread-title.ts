@@ -51,6 +51,7 @@ export async function generateThreadTitle(params: {
     const timeoutMs = resolveThreadTitleTimeoutMs(params.timeoutMs);
     const response = await completeThreadTitle({
       model: prepared.model,
+      apiKey: prepared.auth.apiKey,
       userMessage,
       timeoutMs,
     });
@@ -64,6 +65,7 @@ export async function generateThreadTitle(params: {
 
 async function completeThreadTitle(params: {
   model: ThreadTitleModel;
+  apiKey: string | undefined;
   userMessage: string;
   timeoutMs: number;
 }) {
@@ -83,6 +85,7 @@ async function completeThreadTitle(params: {
         ],
       },
       {
+        apiKey: params.apiKey,
         maxTokens: DISCORD_THREAD_TITLE_MAX_TOKENS,
         temperature: DISCORD_THREAD_TITLE_TEMPERATURE,
         signal: controller.signal,
