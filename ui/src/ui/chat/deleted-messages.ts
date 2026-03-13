@@ -44,6 +44,10 @@ export class DeletedMessages {
   }
 
   private save(): void {
-    localStorage.setItem(this.key, JSON.stringify([...this._keys]));
+    try {
+      localStorage.setItem(this.key, JSON.stringify([...this._keys]));
+    } catch {
+      // ignore
+    }
   }
 }

@@ -61,6 +61,7 @@ class MockContextEngine implements ContextEngine {
 
   async ingest(_params: {
     sessionId: string;
+    sessionKey?: string;
     message: AgentMessage;
     isHeartbeat?: boolean;
   }): Promise<IngestResult> {
@@ -69,6 +70,7 @@ class MockContextEngine implements ContextEngine {
 
   async assemble(params: {
     sessionId: string;
+    sessionKey?: string;
     messages: AgentMessage[];
     tokenBudget?: number;
   }): Promise<AssembleResult> {
@@ -81,6 +83,7 @@ class MockContextEngine implements ContextEngine {
 
   async compact(_params: {
     sessionId: string;
+    sessionKey?: string;
     sessionFile: string;
     tokenBudget?: number;
     compactionTarget?: "budget" | "threshold";
