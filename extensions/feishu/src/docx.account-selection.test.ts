@@ -88,5 +88,8 @@ describe("feishu_doc account selection", () => {
       expect.arrayContaining(["read", "create", "list_blocks", "upload_image"]),
     );
     expect(schema.properties?.action?.description).toEqual(expect.stringContaining("create_table"));
+    expect(schema.properties?.doc_token?.description).toEqual(
+      expect.stringContaining("Required for all actions except create"),
+    );
   });
 });

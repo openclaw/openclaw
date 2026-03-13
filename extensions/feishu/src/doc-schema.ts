@@ -24,7 +24,6 @@ const FEISHU_DOC_ACTION_VALUES = [
 ] as const;
 
 const tableCreationProperties = {
-  doc_token: Type.Optional(Type.String({ description: "Document token" })),
   parent_block_id: Type.Optional(
     Type.String({ description: "Parent block ID (default: document root)" }),
   ),
