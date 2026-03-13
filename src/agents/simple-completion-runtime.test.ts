@@ -15,7 +15,7 @@ vi.mock("./model-auth.js", () => ({
   getApiKeyForModel: hoisted.getApiKeyForModelMock,
 }));
 
-vi.mock("../providers/github-copilot-token.js", () => ({
+vi.mock("../../extensions/github-copilot/token.js", () => ({
   resolveCopilotApiToken: hoisted.resolveCopilotApiTokenMock,
 }));
 
@@ -225,5 +225,20 @@ describe("prepareSimpleCompletionModel", () => {
     // not the original GitHub token
     expect(result.auth.apiKey).toBe("copilot-runtime-token");
     expect(result.auth.apiKey).not.toBe("ghu_original_github_token");
+  });
+
+  it("returns error when getApiKeyForModel throws", async () => {
+    hoisted.getApiKeyForModelMock.mockRejectedValueOnce(new Error("Profile not found: copilot"));
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+    });
+
+    expect(result).toEqual({
+      error: 'Auth lookup failed for provider "anthropic": Profile not found: copilot',
+    });
+    expect(hoisted.setRuntimeApiKeyMock).not.toHaveBeenCalled();
   });
 });

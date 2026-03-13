@@ -88,7 +88,7 @@ async function setRuntimeApiKeyForCompletion(params: {
   apiKey: string;
 }): Promise<string> {
   if (params.model.provider === "github-copilot") {
-    const { resolveCopilotApiToken } = await import("../providers/github-copilot-token.js");
+    const { resolveCopilotApiToken } = await import("../../extensions/github-copilot/token.js");
     const copilotToken = await resolveCopilotApiToken({
       githubToken: params.apiKey,
     });
@@ -122,13 +122,20 @@ export async function prepareSimpleCompletionModel(params: {
     };
   }
 
-  const auth = await getApiKeyForModel({
-    model: resolved.model,
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    profileId: params.profileId,
-    preferredProfile: params.preferredProfile,
-  });
+  let auth: ResolvedProviderAuth;
+  try {
+    auth = await getApiKeyForModel({
+      model: resolved.model,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+      profileId: params.profileId,
+      preferredProfile: params.preferredProfile,
+    });
+  } catch (err) {
+    return {
+      error: `Auth lookup failed for provider "${resolved.model.provider}": ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
   const rawApiKey = auth.apiKey?.trim();
   if (
     !rawApiKey &&
