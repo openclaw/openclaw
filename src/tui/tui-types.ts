@@ -13,7 +13,7 @@ export type TuiOptions = {
 export type ChatEvent = {
   runId: string;
   sessionKey: string;
-  state: "delta" | "final" | "aborted" | "error";
+  state: "delta" | "final" | "aborted" | "error" | "user-message";
   message?: unknown;
   errorMessage?: string;
 };

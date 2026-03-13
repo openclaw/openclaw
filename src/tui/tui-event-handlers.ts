@@ -200,6 +200,24 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
       return;
     }
+    // A remote user message arrived on this session (e.g. from Telegram/Discord).
+    // Append it to the chat log immediately so the TUI live-tails the conversation
+    // without requiring a manual reload.
+    if (evt.state === "user-message") {
+      const text =
+        evt.message && typeof evt.message === "object" && !Array.isArray(evt.message)
+          ? typeof (evt.message as Record<string, unknown>).text === "string"
+            ? ((evt.message as Record<string, unknown>).text as string)
+            : ""
+          : typeof evt.message === "string"
+            ? evt.message
+            : "";
+      if (text) {
+        chatLog.addUser(text);
+        tui.requestRender();
+      }
+      return;
+    }
     if (finalizedRuns.has(evt.runId)) {
       if (evt.state === "delta") {
         return;
