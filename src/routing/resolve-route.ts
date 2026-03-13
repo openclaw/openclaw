@@ -88,8 +88,9 @@ function normalizeId(value: unknown): string {
   return "";
 }
 
-function normalizePeerId(value: unknown): string {
-  return normalizeId(value).toLowerCase();
+function normalizePeerIdForChannel(channel: string, value: unknown): string {
+  const normalized = normalizeId(value);
+  return channel === "signal" ? normalized.toLowerCase() : normalized;
 }
 
 export function buildAgentSessionKey(params: {
@@ -109,7 +110,7 @@ export function buildAgentSessionKey(params: {
     channel,
     accountId: params.accountId,
     peerKind: peer?.kind ?? "direct",
-    peerId: peer ? normalizePeerId(peer.id) || "unknown" : null,
+    peerId: peer ? normalizeId(peer.id) || "unknown" : null,
     dmScope: params.dmScope,
     identityLinks: params.identityLinks,
   });
@@ -249,7 +250,7 @@ function buildEvaluatedBindingsByChannel(
     if (!channel) {
       continue;
     }
-    const match = normalizeBindingMatch(binding.match);
+    const match = normalizeBindingMatch(channel, binding.match);
     const evaluated: EvaluatedBinding = {
       binding,
       match,
@@ -475,13 +476,14 @@ function getEvaluatedBindingIndexForChannelAccount(
 }
 
 function normalizePeerConstraint(
+  channel: string,
   peer: { kind?: string; id?: string } | undefined,
 ): NormalizedPeerConstraint {
   if (!peer) {
     return { state: "none" };
   }
   const kind = normalizeChatType(peer.kind);
-  const id = normalizePeerId(peer.id);
+  const id = normalizePeerIdForChannel(channel, peer.id);
   if (!kind || !id) {
     return { state: "invalid" };
   }
@@ -489,6 +491,7 @@ function normalizePeerConstraint(
 }
 
 function normalizeBindingMatch(
+  channel: string,
   match:
     | {
         accountId?: string | undefined;
@@ -502,7 +505,7 @@ function normalizeBindingMatch(
   const rawRoles = match?.roles;
   return {
     accountPattern: (match?.accountId ?? "").trim(),
-    peer: normalizePeerConstraint(match?.peer),
+    peer: normalizePeerConstraint(channel, match?.peer),
     guildId: normalizeId(match?.guildId) || null,
     teamId: normalizeId(match?.teamId) || null,
     roles: Array.isArray(rawRoles) && rawRoles.length > 0 ? rawRoles : null,
@@ -621,7 +624,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const peer = input.peer
     ? {
         kind: normalizeChatType(input.peer.kind) ?? input.peer.kind,
-        id: normalizePeerId(input.peer.id),
+        id: normalizePeerIdForChannel(channel, input.peer.id),
       }
     : null;
   const guildId = normalizeId(input.guildId);
@@ -634,7 +637,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const parentPeer = input.parentPeer
     ? {
         kind: normalizeChatType(input.parentPeer.kind) ?? input.parentPeer.kind,
-        id: normalizePeerId(input.parentPeer.id),
+        id: normalizePeerIdForChannel(channel, input.parentPeer.id),
       }
     : null;
 

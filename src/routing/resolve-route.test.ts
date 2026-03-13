@@ -221,6 +221,34 @@ describe("resolveAgentRoute", () => {
     expect(route.matchedBy).toBe("binding.peer");
   });
 
+  test("keeps peer binding matching case-sensitive for non-signal channels", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "line-group",
+          match: {
+            channel: "line",
+            peer: {
+              kind: "group",
+              id: "AbCd123",
+            },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "line",
+      accountId: "default",
+      peer: {
+        kind: "group",
+        id: "abcd123",
+      },
+    });
+    expect(route.agentId).toBe("main");
+    expect(route.matchedBy).toBe("default");
+  });
+
   test("guild binding wins over account binding when peer not bound", () => {
     const cfg: OpenClawConfig = {
       bindings: [
