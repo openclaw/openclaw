@@ -45,6 +45,7 @@ export async function extractPdfContent(params: {
   maxPixels: number;
   minTextChars: number;
   pageNumbers?: number[];
+  preExtractedText?: string;
   skipImageExtraction?: boolean;
   onImageExtractionError?: (error: unknown) => void;
 }): Promise<PdfExtractedContent> {
@@ -54,6 +55,7 @@ export async function extractPdfContent(params: {
     maxPixels,
     minTextChars,
     pageNumbers,
+    preExtractedText,
     skipImageExtraction,
     onImageExtractionError,
   } = params;
@@ -64,20 +66,23 @@ export async function extractPdfContent(params: {
     ? pageNumbers.filter((p) => p >= 1 && p <= pdf.numPages).slice(0, maxPages)
     : Array.from({ length: Math.min(pdf.numPages, maxPages) }, (_, i) => i + 1);
 
-  const textParts: string[] = [];
-  for (const pageNum of effectivePages) {
-    const page = await pdf.getPage(pageNum);
-    const textContent = await page.getTextContent();
-    const pageText = textContent.items
-      .map((item) => ("str" in item ? String(item.str) : ""))
-      .filter(Boolean)
-      .join(" ");
-    if (pageText) {
-      textParts.push(pageText);
+  let text = preExtractedText ?? "";
+  if (preExtractedText === undefined) {
+    const textParts: string[] = [];
+    for (const pageNum of effectivePages) {
+      const page = await pdf.getPage(pageNum);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .map((item) => ("str" in item ? String(item.str) : ""))
+        .filter(Boolean)
+        .join(" ");
+      if (pageText) {
+        textParts.push(pageText);
+      }
     }
+    text = textParts.join("\n\n");
   }
 
-  const text = textParts.join("\n\n");
   if (text.trim().length >= minTextChars) {
     return { text, images: [] };
   }

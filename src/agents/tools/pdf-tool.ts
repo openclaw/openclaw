@@ -54,6 +54,7 @@ const ANTHROPIC_PDF_FALLBACK = "anthropic/claude-opus-4-5";
 
 const PDF_MIN_TEXT_CHARS = 200;
 const PDF_MAX_PIXELS = 4_000_000;
+const MISTRAL_MISSING_AUTH_ERROR = 'No API key found for provider "mistral".';
 
 function resolveProviderBaseUrl(
   cfg: OpenClawConfig | undefined,
@@ -77,6 +78,10 @@ function resolveProviderBaseUrl(
     }
   }
   return undefined;
+}
+
+function isMissingMistralAuthError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes(MISTRAL_MISSING_AUTH_ERROR);
 }
 
 // ---------------------------------------------------------------------------
@@ -557,32 +562,31 @@ export function createPdfTool(options?: {
       let mistralAuthPromise: Promise<{
         apiKey: string;
         baseUrl?: string;
-      } | null> | null = null;
+      }> | null = null;
 
-      const resolveMistralAuth = async (): Promise<{
+      const resolveRequiredMistralAuth = async (): Promise<{
         apiKey: string;
         baseUrl?: string;
-      } | null> => {
+      }> => {
         if (!mistralAuthPromise) {
           mistralAuthPromise = (async () => {
-            try {
-              const auth = await resolveApiKeyForProvider({
-                provider: "mistral",
-                cfg: options?.config,
-                agentDir,
-              });
-              const apiKey = auth.apiKey?.trim();
-              if (!apiKey) {
-                return null;
-              }
-              return {
-                apiKey,
-                baseUrl: resolveProviderBaseUrl(options?.config, "mistral"),
-              };
-            } catch {
-              return null;
+            const auth = await resolveApiKeyForProvider({
+              provider: "mistral",
+              cfg: options?.config,
+              agentDir,
+            });
+            const apiKey = auth.apiKey?.trim();
+            if (!apiKey) {
+              throw new Error(MISTRAL_MISSING_AUTH_ERROR);
             }
-          })();
+            return {
+              apiKey,
+              baseUrl: resolveProviderBaseUrl(options?.config, "mistral"),
+            };
+          })().catch((error) => {
+            mistralAuthPromise = null;
+            throw error;
+          });
         }
         return mistralAuthPromise;
       };
@@ -591,9 +595,16 @@ export function createPdfTool(options?: {
         const extractedAll: PdfExtractedContent[] = [];
         for (const pdf of loadedPdfs) {
           if (extractionMode === "ocr") {
-            const mistralAuth = await resolveMistralAuth();
-            if (!mistralAuth) {
-              throw new Error('PDF extractionMode "ocr" requires Mistral auth.');
+            let mistralAuth;
+            try {
+              mistralAuth = await resolveRequiredMistralAuth();
+            } catch (error) {
+              if (isMissingMistralAuthError(error)) {
+                throw new Error('PDF extractionMode "ocr" requires Mistral auth.', {
+                  cause: error,
+                });
+              }
+              throw error;
             }
             const text = await mistralOcrPdf({
               apiKey: mistralAuth.apiKey,
@@ -623,7 +634,12 @@ export function createPdfTool(options?: {
               continue;
             }
 
-            const mistralAuth = await resolveMistralAuth();
+            let mistralAuth: { apiKey: string; baseUrl?: string } | null = null;
+            try {
+              mistralAuth = await resolveRequiredMistralAuth();
+            } catch {
+              mistralAuth = null;
+            }
             if (mistralAuth) {
               try {
                 const text = await mistralOcrPdf({
@@ -642,6 +658,17 @@ export function createPdfTool(options?: {
                 // Auto mode preserves today's local fallback path when OCR is unavailable.
               }
             }
+
+            const extracted = await extractPdfContent({
+              buffer: pdf.buffer,
+              maxPages: configuredMaxPages,
+              maxPixels: PDF_MAX_PIXELS,
+              minTextChars: PDF_MIN_TEXT_CHARS,
+              pageNumbers,
+              preExtractedText: localTextOnly.text,
+            });
+            extractedAll.push(extracted);
+            continue;
           }
 
           const extracted = await extractPdfContent({

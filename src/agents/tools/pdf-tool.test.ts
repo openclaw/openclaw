@@ -640,6 +640,28 @@ describe("createPdfTool", () => {
     });
   });
 
+  it("surfaces auth resolution errors in OCR extraction mode", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await stubPdfToolInfra(agentDir, { provider: "openai", input: ["text"] });
+
+      const modelAuth = await import("../model-auth.js");
+      vi.spyOn(modelAuth, "resolveApiKeyForProvider").mockRejectedValue(
+        new Error("auth store exploded"),
+      );
+
+      const cfg = withPdfModel(OPENAI_PDF_MODEL);
+      const tool = requirePdfTool(createPdfTool({ config: cfg, agentDir }));
+
+      await expect(
+        tool.execute("t1", {
+          prompt: "summarize",
+          pdf: "/tmp/doc.pdf",
+          extractionMode: "ocr",
+        }),
+      ).rejects.toThrow("auth store exploded");
+    });
+  });
+
   it("errors in OCR extraction mode when OCR fails", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("MISTRAL_API_KEY", "mistral-test-key");
@@ -783,6 +805,55 @@ describe("createPdfTool", () => {
 
       expect(extractSpy).toHaveBeenCalledTimes(2);
       expect(extractSpy.mock.calls[0]?.[0]).toMatchObject({ skipImageExtraction: true });
+      expect(extractSpy.mock.calls[1]?.[0]).toMatchObject({ preExtractedText: "too short" });
+      expect(ocrSpy).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        content: [{ type: "text", text: "fallback summary" }],
+        details: { native: false, model: OPENAI_PDF_MODEL, extractionMode: "auto" },
+      });
+    });
+  });
+
+  it("falls back to local extraction in auto mode when auth resolution fails", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await stubPdfToolInfra(agentDir, { provider: "openai", input: ["text"] });
+
+      const extractModule = await import("../../media/pdf-extract.js");
+      const extractSpy = vi
+        .spyOn(extractModule, "extractPdfContent")
+        .mockResolvedValueOnce({ text: "too short", images: [] })
+        .mockResolvedValueOnce({
+          text: "too short",
+          images: [{ type: "image", data: "abc", mimeType: "image/png" }],
+        });
+
+      const modelAuth = await import("../model-auth.js");
+      vi.spyOn(modelAuth, "resolveApiKeyForProvider").mockRejectedValue(
+        new Error("auth store exploded"),
+      );
+
+      const nativeProviders = await import("./pdf-native-providers.js");
+      const ocrSpy = vi.spyOn(nativeProviders, "mistralOcrPdf");
+
+      const piAi = await import("@mariozechner/pi-ai");
+      vi.mocked(piAi.complete).mockResolvedValue({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "fallback summary" }],
+      } as never);
+
+      const cfg = withPdfModel(OPENAI_PDF_MODEL);
+      const tool = requirePdfTool(createPdfTool({ config: cfg, agentDir }));
+
+      const result = await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+        extractionMode: "auto",
+      });
+
+      expect(extractSpy).toHaveBeenCalledTimes(2);
+      expect(extractSpy.mock.calls[0]?.[0]).toMatchObject({ skipImageExtraction: true });
+      expect(extractSpy.mock.calls[1]?.[0]).toMatchObject({ preExtractedText: "too short" });
       expect(ocrSpy).not.toHaveBeenCalled();
       expect(result).toMatchObject({
         content: [{ type: "text", text: "fallback summary" }],
@@ -828,13 +899,85 @@ describe("createPdfTool", () => {
 
       expect(extractSpy).toHaveBeenCalledTimes(2);
       expect(extractSpy.mock.calls[0]?.[0]).toMatchObject({ skipImageExtraction: true });
-      expect(extractSpy.mock.calls[1]?.[0]).not.toHaveProperty("skipImageExtraction", true);
+      expect(extractSpy.mock.calls[1]?.[0]).toMatchObject({ preExtractedText: "too short" });
       expect(ocrSpy).toHaveBeenCalledTimes(1);
       expect(result).toMatchObject({
         content: [{ type: "text", text: "fallback summary" }],
         details: { native: false, model: OPENAI_PDF_MODEL, extractionMode: "auto" },
       });
       expect((result.details as Record<string, unknown>).ocrProvider).toBeUndefined();
+    });
+  });
+
+  it("errors in OCR extraction mode when selected pages normalize to none", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      vi.stubEnv("MISTRAL_API_KEY", "mistral-test-key");
+      await stubPdfToolInfra(agentDir, { provider: "openai", input: ["text"] });
+
+      const fetchMock = vi.fn();
+      global.fetch = Object.assign(fetchMock, { preconnect: vi.fn() }) as typeof global.fetch;
+
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { pdfModel: { primary: OPENAI_PDF_MODEL }, pdfMaxPages: 5 } },
+      };
+      const tool = requirePdfTool(createPdfTool({ config: cfg, agentDir }));
+
+      await expect(
+        tool.execute("t1", {
+          prompt: "summarize",
+          pdf: "/tmp/doc.pdf",
+          pages: "8-9",
+          extractionMode: "ocr",
+        }),
+      ).rejects.toThrow("Mistral OCR: no valid pages selected.");
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("falls back in auto mode when selected pages normalize to none for OCR", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      vi.stubEnv("MISTRAL_API_KEY", "mistral-test-key");
+      await stubPdfToolInfra(agentDir, { provider: "openai", input: ["text"] });
+
+      const extractModule = await import("../../media/pdf-extract.js");
+      const extractSpy = vi
+        .spyOn(extractModule, "extractPdfContent")
+        .mockResolvedValueOnce({ text: "too short", images: [] })
+        .mockResolvedValueOnce({
+          text: "too short",
+          images: [{ type: "image", data: "abc", mimeType: "image/png" }],
+        });
+
+      const fetchMock = vi.fn();
+      global.fetch = Object.assign(fetchMock, { preconnect: vi.fn() }) as typeof global.fetch;
+
+      const piAi = await import("@mariozechner/pi-ai");
+      vi.mocked(piAi.complete).mockResolvedValue({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "fallback summary" }],
+      } as never);
+
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { pdfModel: { primary: OPENAI_PDF_MODEL }, pdfMaxPages: 5 } },
+      };
+      const tool = requirePdfTool(createPdfTool({ config: cfg, agentDir }));
+
+      const result = await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+        pages: "8-9",
+        extractionMode: "auto",
+      });
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(extractSpy).toHaveBeenCalledTimes(2);
+      expect(extractSpy.mock.calls[1]?.[0]).toMatchObject({ preExtractedText: "too short" });
+      expect(result).toMatchObject({
+        content: [{ type: "text", text: "fallback summary" }],
+        details: { native: false, model: OPENAI_PDF_MODEL, extractionMode: "auto" },
+      });
     });
   });
 
@@ -1135,6 +1278,34 @@ describe("native PDF provider API calls", () => {
     expect(body.document.document_url).toContain("data:application/pdf;base64,");
     expect(body.include_image_base64).toBe(false);
     expect(body.pages).toEqual([0, 2]);
+  });
+
+  it("mistralOcrPdf omits pages when pageNumbers is undefined", async () => {
+    const { mistralOcrPdf } = await import("./pdf-native-providers.js");
+    const fetchMock = mockFetchResponse({
+      ok: true,
+      json: async () => ({
+        pages: [{ markdown: "Page 1" }],
+      }),
+    });
+
+    const result = await mistralOcrPdf(makeMistralOcrParams());
+
+    expect(result).toBe("Page 1");
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body).not.toHaveProperty("pages");
+  });
+
+  it("mistralOcrPdf rejects empty normalized page filters before fetch", async () => {
+    const { mistralOcrPdf } = await import("./pdf-native-providers.js");
+    const fetchMock = vi.fn();
+    global.fetch = Object.assign(fetchMock, { preconnect: vi.fn() }) as typeof global.fetch;
+
+    await expect(mistralOcrPdf(makeMistralOcrParams({ pageNumbers: [] }))).rejects.toThrow(
+      "Mistral OCR: no valid pages selected.",
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("mistralOcrPdf throws on API error", async () => {

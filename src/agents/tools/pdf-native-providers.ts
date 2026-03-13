@@ -201,6 +201,9 @@ export async function mistralOcrPdf(params: {
       .filter((page) => Number.isFinite(page) && page >= 0) ?? [];
   const pages =
     zeroBasedPages.length > 0 ? Array.from(new Set(zeroBasedPages)).toSorted((a, b) => a - b) : [];
+  if (params.pageNumbers !== undefined && pages.length === 0) {
+    throw new Error("Mistral OCR: no valid pages selected.");
+  }
 
   const body: Record<string, unknown> = {
     model: params.modelId?.trim() || "mistral-ocr-latest",
