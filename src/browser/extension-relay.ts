@@ -68,6 +68,7 @@ type AttachedToTargetEvent = {
   sessionId: string;
   targetInfo: TargetInfo;
   waitingForDebugger?: boolean;
+  attachEpoch?: number;
 };
 
 type DetachedFromTargetEvent = {
@@ -79,6 +80,7 @@ type ConnectedTarget = {
   sessionId: string;
   targetId: string;
   targetInfo: TargetInfo;
+  attachEpoch: number;
 };
 
 const RELAY_AUTH_HEADER = "x-openclaw-relay-token";
@@ -293,6 +295,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
     const relayAuthTokens = new Set(await resolveRelayAcceptedTokensForPort(info.port));
 
     let extensionWs: WebSocket | null = null;
+    let extensionStatusNeedsSeed = true;
     const cdpClients = new Set<WebSocket>();
     const connectedTargets = new Map<string, ConnectedTarget>();
     const extensionConnected = () => extensionWs?.readyState === WebSocket.OPEN;
@@ -638,14 +641,15 @@ export async function ensureChromeExtensionRelayServer(opts: {
             try {
               const data = JSON.parse(body);
               const epoch = (typeof data.activationEpoch === "number" && Number.isFinite(data.activationEpoch)) ? data.activationEpoch : 0;
-              
-              if (epoch <= currentActivationEpoch && currentActivationEpoch !== 0) {
+
+              if (!extensionStatusNeedsSeed && epoch <= currentActivationEpoch && currentActivationEpoch !== 0) {
                 console.log(`[browser/extension-relay] Ignoring stale lock update (epoch ${epoch} <= ${currentActivationEpoch})`);
                 res.writeHead(200, { "Content-Type": "application/json" });
                 res.end(JSON.stringify({ ok: true, lockTab: currentLockTab, lockTabId: currentLockTabId, activationEpoch: currentActivationEpoch }));
                 return;
               }
               if (typeof data.lockTab === "boolean") {
+                extensionStatusNeedsSeed = false;
                 currentActivationEpoch = epoch;
                 currentLockTab = data.lockTab;
                 const rawTabId = data.tabId;
@@ -856,6 +860,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
     wssExtension.on("connection", (ws, req) => {
       extensionWs = ws;
+      extensionStatusNeedsSeed = true;
       clearExtensionDisconnectCleanupTimer();
       flushExtensionReconnectWaiters(true);
 
@@ -928,10 +933,21 @@ export async function ensureChromeExtensionRelayServer(opts: {
               const prev = connectedTargets.get(attached.sessionId);
               const nextTargetId = attached.targetInfo.targetId;
               const prevTargetId = prev?.targetId;
+              const nextAttachEpoch = typeof attached.attachEpoch === "number" ? attached.attachEpoch : 0;
 
-              // De-duplicate by targetId: if another session already claims this targetId, drop it.
+              if (prev && prev.attachEpoch > nextAttachEpoch) {
+                return;
+              }
+
+              // De-duplicate by targetId: if another session already claims this targetId,
+              // keep the newer claim and ignore stale re-announcements.
+              let staleTargetClaim = false;
               for (const [sId, t] of connectedTargets.entries()) {
                 if (t.targetId === attached.targetInfo.targetId && sId !== attached.sessionId) {
+                  if (t.attachEpoch >= nextAttachEpoch) {
+                    staleTargetClaim = true;
+                    break;
+                  }
                   connectedTargets.delete(sId);
                   broadcastToCdpClients({
                     method: "Target.detachedFromTarget",
@@ -940,12 +956,16 @@ export async function ensureChromeExtensionRelayServer(opts: {
                   });
                 }
               }
+              if (staleTargetClaim) {
+                return;
+              }
 
               const changedTarget = Boolean(prev && prevTargetId && prevTargetId !== nextTargetId);
               connectedTargets.set(attached.sessionId, {
                 sessionId: attached.sessionId,
                 targetId: nextTargetId,
                 targetInfo: attached.targetInfo,
+                attachEpoch: nextAttachEpoch,
               });
               if (changedTarget && prevTargetId) {
                 broadcastToCdpClients({

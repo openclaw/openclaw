@@ -17,11 +17,30 @@ declare -a team_ids=()
 declare -a team_is_free=()
 declare -a team_names=()
 python_cmd=""
+home_dir="${HOME:-}"
+
+normalize_path() {
+  local candidate="$1"
+  [[ -z "$candidate" ]] && return 0
+  candidate="${candidate//$'\r'/}"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -u "$candidate" 2>/dev/null || printf '%s\n' "$candidate"
+    return 0
+  fi
+  printf '%s\n' "$candidate"
+}
+
+home_dir="$(normalize_path "$home_dir")"
 
 detect_python() {
   local candidate
   for candidate in "${IOS_PYTHON_BIN:-}" python3 python /usr/bin/python3; do
     [[ -n "$candidate" ]] || continue
+    candidate="$(normalize_path "$candidate")"
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
     if command -v "$candidate" >/dev/null 2>&1; then
       printf '%s\n' "$candidate"
       return 0
@@ -54,7 +73,7 @@ append_team() {
 }
 
 load_teams_from_xcode_preferences() {
-  local plist_path="${HOME}/Library/Preferences/com.apple.dt.Xcode.plist"
+  local plist_path="${home_dir}/Library/Preferences/com.apple.dt.Xcode.plist"
   [[ -f "$plist_path" ]] || return 0
   [[ -n "$python_cmd" ]] || return 0
 
@@ -102,7 +121,7 @@ load_teams_from_legacy_defaults_key() {
 }
 
 load_teams_from_xcode_managed_profiles() {
-  local profiles_dir="${HOME}/Library/MobileDevice/Provisioning Profiles"
+  local profiles_dir="${home_dir}/Library/MobileDevice/Provisioning Profiles"
   [[ -d "$profiles_dir" ]] || return 0
   [[ -n "$python_cmd" ]] || return 0
 
@@ -130,7 +149,7 @@ except Exception:
 }
 
 has_xcode_account() {
-  local plist_path="${HOME}/Library/Preferences/com.apple.dt.Xcode.plist"
+  local plist_path="${home_dir}/Library/Preferences/com.apple.dt.Xcode.plist"
   [[ -f "$plist_path" ]] || return 1
   local accts
   accts="$(defaults read com.apple.dt.Xcode DVTDeveloperAccountManagerAppleIDLists 2>/dev/null || true)"
