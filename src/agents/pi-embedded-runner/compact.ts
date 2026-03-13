@@ -722,7 +722,12 @@ export async function compactEmbeddedPiSessionDirect(
       const emitCompactionEndOnce = () => {
         if (chunkProgressFired && !compactionEndEmitted) {
           compactionEndEmitted = true;
-          emitAgentEvent({ runId, stream: "compaction", data: { phase: "end" } });
+          emitAgentEvent({
+            runId,
+            sessionKey: params.sessionKey,
+            stream: "compaction",
+            data: { phase: "end" },
+          });
         }
       };
       const extensionFactories = buildEmbeddedExtensionFactories({
@@ -735,6 +740,7 @@ export async function compactEmbeddedPiSessionDirect(
           chunkProgressFired = true;
           emitAgentEvent({
             runId,
+            sessionKey: params.sessionKey,
             stream: "compaction",
             data: { phase: "progress", attempt: current, maxAttempts: total },
           });
