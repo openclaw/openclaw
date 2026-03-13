@@ -22,6 +22,45 @@ export type DownloadMessageResourceResult = {
   fileName?: string;
 };
 
+function createConfiguredFeishuMediaClient(params: { cfg: ClawdbotConfig; accountId?: string }): {
+  account: ReturnType<typeof resolveFeishuAccount>;
+  client: ReturnType<typeof createFeishuClient>;
+} {
+  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
+  }
+
+  return {
+    account,
+    client: createFeishuClient({
+      ...account,
+      httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+    }),
+  };
+}
+
+function extractFeishuUploadKey(
+  response: unknown,
+  params: {
+    key: "image_key" | "file_key";
+    errorPrefix: string;
+  },
+): string {
+  // SDK v1.30+ returns data directly without code wrapper on success.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
+  const responseAny = response as any;
+  if (responseAny.code !== undefined && responseAny.code !== 0) {
+    throw new Error(`${params.errorPrefix}: ${responseAny.msg || `code ${responseAny.code}`}`);
+  }
+
+  const key = responseAny[params.key] ?? responseAny.data?.[params.key];
+  if (!key) {
+    throw new Error(`${params.errorPrefix}: no ${params.key} returned`);
+  }
+  return key;
+}
+
 async function readFeishuResponseBuffer(params: {
   response: unknown;
   tmpDirPrefix: string;
@@ -94,15 +133,7 @@ export async function downloadImageFeishu(params: {
   if (!normalizedImageKey) {
     throw new Error("Feishu image download failed: invalid image_key");
   }
-  const account = resolveFeishuAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient({
-    ...account,
-    httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
-  });
+  const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
   const response = await client.im.image.get({
     path: { image_key: normalizedImageKey },
@@ -132,15 +163,7 @@ export async function downloadMessageResourceFeishu(params: {
   if (!normalizedFileKey) {
     throw new Error("Feishu message resource download failed: invalid file_key");
   }
-  const account = resolveFeishuAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient({
-    ...account,
-    httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
-  });
+  const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
   const response = await client.im.messageResource.get({
     path: { message_id: messageId, file_key: normalizedFileKey },
@@ -179,15 +202,7 @@ export async function uploadImageFeishu(params: {
   accountId?: string;
 }): Promise<UploadImageResult> {
   const { cfg, image, imageType = "message", accountId } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient({
-    ...account,
-    httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
-  });
+  const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
   // SDK accepts Buffer directly or fs.ReadStream for file paths
   // Using Readable.from(buffer) causes issues with form-data library
@@ -202,20 +217,12 @@ export async function uploadImageFeishu(params: {
     },
   });
 
-  // SDK v1.30+ returns data directly without code wrapper on success
-  // On error, it throws or returns { code, msg }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
-  const responseAny = response as any;
-  if (responseAny.code !== undefined && responseAny.code !== 0) {
-    throw new Error(`Feishu image upload failed: ${responseAny.msg || `code ${responseAny.code}`}`);
-  }
-
-  const imageKey = responseAny.image_key ?? responseAny.data?.image_key;
-  if (!imageKey) {
-    throw new Error("Feishu image upload failed: no image_key returned");
-  }
-
-  return { imageKey };
+  return {
+    imageKey: extractFeishuUploadKey(response, {
+      key: "image_key",
+      errorPrefix: "Feishu image upload failed",
+    }),
+  };
 }
 
 /**
@@ -249,15 +256,7 @@ export async function uploadFileFeishu(params: {
   accountId?: string;
 }): Promise<UploadFileResult> {
   const { cfg, file, fileName, fileType, duration, accountId } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient({
-    ...account,
-    httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
-  });
+  const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
   // SDK accepts Buffer directly or fs.ReadStream for file paths
   // Using Readable.from(buffer) causes issues with form-data library
@@ -276,19 +275,12 @@ export async function uploadFileFeishu(params: {
     },
   });
 
-  // SDK v1.30+ returns data directly without code wrapper on success
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
-  const responseAny = response as any;
-  if (responseAny.code !== undefined && responseAny.code !== 0) {
-    throw new Error(`Feishu file upload failed: ${responseAny.msg || `code ${responseAny.code}`}`);
-  }
-
-  const fileKey = responseAny.file_key ?? responseAny.data?.file_key;
-  if (!fileKey) {
-    throw new Error("Feishu file upload failed: no file_key returned");
-  }
-
-  return { fileKey };
+  return {
+    fileKey: extractFeishuUploadKey(response, {
+      key: "file_key",
+      errorPrefix: "Feishu file upload failed",
+    }),
+  };
 }
 
 /**
