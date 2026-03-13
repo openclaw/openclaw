@@ -55,6 +55,22 @@ describe("resolveCliSpawnInvocation", () => {
     expect(invocation.windowsHide).toBe(true);
   });
 
+  it("keeps bare commands direct when no Windows shim is present", () => {
+    process.env.PATH = originalPath ?? "";
+    process.env.PATHEXT = ".EXE;.CMD";
+
+    const invocation = resolveCliSpawnInvocation({
+      command: "qmd",
+      args: ["query", "hello"],
+      env: process.env,
+      packageName: "qmd",
+    });
+
+    expect(invocation.command).toBe("qmd");
+    expect(invocation.argv).toEqual(["query", "hello"]);
+    expect(invocation.shell).not.toBe(true);
+  });
+
   it("fails closed when a Windows cmd shim cannot be resolved without shell execution", async () => {
     const binDir = path.join(tempDir, "bad-bin");
     await fs.mkdir(binDir, { recursive: true });
