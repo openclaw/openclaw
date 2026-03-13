@@ -16,6 +16,12 @@ export type TypingController = {
 export function createTypingController(params: {
   onReplyStart?: () => Promise<void> | void;
   onCleanup?: () => void;
+  /**
+   * Called when the typing TTL expires while the agent is still running.
+   * Use this to send a "still processing" feedback message to the user.
+   * The agent run continues after this callback fires.
+   */
+  onTtlExpired?: () => void;
   typingIntervalSeconds?: number;
   typingTtlMs?: number;
   silentToken?: string;
@@ -24,6 +30,7 @@ export function createTypingController(params: {
   const {
     onReplyStart,
     onCleanup,
+    onTtlExpired,
     typingIntervalSeconds = 6,
     typingTtlMs = 2 * 60_000,
     silentToken = SILENT_REPLY_TOKEN,
@@ -94,7 +101,14 @@ export function createTypingController(params: {
         return;
       }
       log?.(`typing TTL reached (${formatTypingTtl(typingTtlMs)}); stopping typing indicator`);
-      cleanup();
+      // Notify caller so it can send a "still processing" message to the user
+      // before the typing indicator disappears. The agent run continues.
+      // Use try/finally so cleanup() always runs even if the callback throws.
+      try {
+        onTtlExpired?.();
+      } finally {
+        cleanup();
+      }
     }, typingTtlMs);
   };
 

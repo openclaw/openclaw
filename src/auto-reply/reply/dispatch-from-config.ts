@@ -403,12 +403,36 @@ export async function dispatchReplyFromConfig(params: {
       systemEvent: shouldRouteToOriginating,
     });
 
+    // When the typing TTL fires the agent is still running but the typing
+    // indicator has stopped. Send a short "still processing" note so the user
+    // isn't left wondering whether their message was received.
+    // Only inject the default handler when typing is active and the caller
+    // hasn't supplied their own handler.
+    // Track the in-flight notice send so the final-reply loop can await it,
+    // preventing a message-ordering inversion on cross-channel routed flows
+    // when the agent finishes very shortly after the TTL fires.
+    let ttlNoticePromise: Promise<void> | undefined;
+    const onTypingTtlExpired =
+      !typing.suppressTyping && !params.replyOptions?.onTypingTtlExpired
+        ? () => {
+            const noticePayload: ReplyPayload = {
+              text: "⏳ Still working on it, this might take a little while longer…",
+            };
+            if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+              ttlNoticePromise = sendPayloadAsync(noticePayload);
+            } else {
+              dispatcher.sendBlockReply(noticePayload);
+            }
+          }
+        : params.replyOptions?.onTypingTtlExpired;
+
     const replyResult = await (params.replyResolver ?? getReplyFromConfig)(
       ctx,
       {
         ...params.replyOptions,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
+        onTypingTtlExpired,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
             const ttsPayload = await maybeApplyTtsToPayload({
@@ -494,6 +518,13 @@ export async function dispatchReplyFromConfig(params: {
     }
 
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
+
+    // Ensure the TTL notice has been delivered before we send the final reply.
+    // This preserves message ordering on cross-channel routed flows where the
+    // notice was fire-and-started (not fire-and-forgotten) above.
+    if (ttlNoticePromise) {
+      await ttlNoticePromise;
+    }
 
     let queuedFinal = false;
     let routedFinalCount = 0;
