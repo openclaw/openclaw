@@ -117,6 +117,14 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
   });
+  it("formats FastAPI-style detail error payloads", () => {
+    const msg = makeAssistantError(
+      '{"detail":"The \'gpt-5.3-codex\' model is not supported when using Codex with a ChatGPT account."}',
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("gpt-5.3-codex");
+    expect(result).not.toContain('"detail"');
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {
@@ -139,6 +147,14 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(formatRawAssistantErrorForUi("500 Internal Server Error")).toBe(
       "HTTP 500: Internal Server Error",
     );
+  });
+
+  it("formats FastAPI-style detail payloads", () => {
+    const text = formatRawAssistantErrorForUi(
+      '{"detail":"The \'gpt-5.3-codex\' model is not supported when using Codex with a ChatGPT account."}',
+    );
+    expect(text).toContain("gpt-5.3-codex");
+    expect(text).not.toContain('"detail"'); // raw JSON must not leak
   });
 
   it("sanitizes HTML error pages into a clean unavailable message", () => {
