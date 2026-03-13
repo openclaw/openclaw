@@ -60,6 +60,13 @@ function getTokenForOperation(
 
 function isSlackAccountConfigured(account: ResolvedSlackAccount): boolean {
   const mode = account.config.mode ?? "socket";
+  if (mode === "mux") {
+    // Mux URL may be inherited from base config (channels.slack.mux.url)
+    // rather than set per-account. Zod validation already rejects configs
+    // where mux mode is set without a URL at either level, so if we got
+    // here the account is configured.
+    return true;
+  }
   const hasBotToken = Boolean(account.botToken?.trim());
   if (!hasBotToken) {
     return false;

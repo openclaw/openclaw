@@ -162,11 +162,14 @@ export function inspectSlackAccount(params: {
         : envUser
           ? "available"
           : "missing",
-    configured: isHttpMode
-      ? (configBot.status !== "missing" || Boolean(envBot)) &&
-        configSigningSecret.status !== "missing"
-      : (configBot.status !== "missing" || Boolean(envBot)) &&
-        (configApp.status !== "missing" || Boolean(envApp)),
+    configured:
+      mode === "mux"
+        ? true // Mux URL may be inherited from base config; Zod validates presence
+        : isHttpMode
+          ? (configBot.status !== "missing" || Boolean(envBot)) &&
+            configSigningSecret.status !== "missing"
+          : (configBot.status !== "missing" || Boolean(envBot)) &&
+            (configApp.status !== "missing" || Boolean(envApp)),
     config: merged,
     groupPolicy: merged.groupPolicy,
     textChunkLimit: merged.textChunkLimit,

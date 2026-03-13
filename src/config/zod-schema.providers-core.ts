@@ -784,6 +784,14 @@ export const GoogleChatConfigSchema = GoogleChatAccountSchema.extend({
   defaultAccount: z.string().optional(),
 });
 
+export const SlackMuxSchema = z
+  .object({
+    url: z.string().min(1).optional(),
+    mcpServerUrl: z.string().optional(),
+    token: z.string().optional().register(sensitive),
+  })
+  .strict();
+
 export const SlackDmSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -828,9 +836,10 @@ const SlackReplyToModeByChatTypeSchema = z
 export const SlackAccountSchema = z
   .object({
     name: z.string().optional(),
-    mode: z.enum(["socket", "http"]).optional(),
+    mode: z.enum(["socket", "http", "mux"]).optional(),
     signingSecret: SecretInputSchema.optional().register(sensitive),
     webhookPath: z.string().optional(),
+    mux: SlackMuxSchema.optional(),
     capabilities: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
@@ -903,7 +912,7 @@ export const SlackAccountSchema = z
   });
 
 export const SlackConfigSchema = SlackAccountSchema.safeExtend({
-  mode: z.enum(["socket", "http"]).optional().default("socket"),
+  mode: z.enum(["socket", "http", "mux"]).optional().default("socket"),
   signingSecret: SecretInputSchema.optional().register(sensitive),
   webhookPath: z.string().optional().default("/slack/events"),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
@@ -932,6 +941,13 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   });
 
   const baseMode = value.mode ?? "socket";
+  if (baseMode === "mux" && !value.mux?.url) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["mux", "url"],
+      message: 'channels.slack.mode="mux" requires channels.slack.mux.url',
+    });
+  }
   if (!value.accounts) {
     validateSlackSigningSecretRequirements(value, ctx);
     return;
@@ -944,6 +960,13 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
       continue;
     }
     const accountMode = account.mode ?? baseMode;
+    if (accountMode === "mux" && !account.mux?.url && !value.mux?.url) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["accounts", accountId, "mux", "url"],
+        message: 'channels.slack.accounts.*.mode="mux" requires mux.url at account or base level',
+      });
+    }
     const effectivePolicy =
       account.dmPolicy ?? account.dm?.policy ?? value.dmPolicy ?? value.dm?.policy ?? "pairing";
     const effectiveAllowFrom =
