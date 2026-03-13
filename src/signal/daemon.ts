@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 export type SignalDaemonOpts = {
@@ -89,8 +90,15 @@ function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
 }
 
 export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
+  // Normalise cliPath so validation and spawn operate on the same value.
+  const cliPath = opts.cliPath.trim();
+  // Defense-in-depth: validate cliPath at spawn time to prevent OS command
+  // injection even if config-time validation is bypassed (CWE-78).
+  if (!isSafeExecutableValue(cliPath)) {
+    throw new Error(`Refused to spawn signal daemon: cliPath is not a safe executable value`);
+  }
   const args = buildDaemonArgs(opts);
-  const child = spawn(opts.cliPath, args, {
+  const child = spawn(cliPath, args, {
     stdio: ["ignore", "pipe", "pipe"],
   });
   const log = opts.runtime?.log ?? (() => {});
