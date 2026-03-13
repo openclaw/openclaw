@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 - Discord/gateway startup: treat plain-text and transient `/gateway/bot` metadata fetch failures as transient startup errors so Discord gateway boot no longer crashes on unhandled rejections. (#44397) Thanks @jalehman.
 - Gateway/session reset: preserve `lastAccountId` and `lastThreadId` across gateway session resets so replies keep routing back to the same account and thread after `/reset`. (#44773) Thanks @Lanfei.
 - Agents/memory bootstrap: load only one root memory file, preferring `MEMORY.md` and using `memory.md` as a fallback, so case-insensitive Docker mounts no longer inject duplicate memory context. (#26054) Thanks @Lanfei.
+- Agents/OpenAI-compatible compat overrides: respect explicit user `models[].compat` opt-ins for non-native `openai-completions` endpoints so usage-in-streaming capability overrides no longer get forced off when the endpoint actually supports them. (#44432) Thanks @cheapestinference.
 
 ## 2026.3.12
 
