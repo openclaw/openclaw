@@ -1,5 +1,4 @@
 import { describe, expect, test } from "vitest";
-import type { VerboseLevel } from "../auto-reply/thinking.js";
 import {
   clearAgentRunContext,
   emitAgentEvent,
@@ -92,13 +91,13 @@ describe("agent-events sequencing", () => {
       isControlUiVisible: true,
     });
     registerAgentRunContext("run-ctx", {
-      verboseLevel: "high" as VerboseLevel,
+      verboseLevel: "full",
       isHeartbeat: true,
     });
 
     expect(getAgentRunContext("run-ctx")).toEqual({
       sessionKey: "session-main",
-      verboseLevel: "high",
+      verboseLevel: "full",
       isHeartbeat: true,
       isControlUiVisible: true,
     });

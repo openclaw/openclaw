@@ -2,26 +2,26 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as utils from "../utils.js";
-import type { WideAreaGatewayZoneOpts } from "./widearea-dns.js";
 import {
   getWideAreaZonePath,
   normalizeWideAreaDomain,
   renderWideAreaGatewayZoneText,
   resolveWideAreaDiscoveryDomain,
+  type WideAreaGatewayZoneOpts,
   writeWideAreaGatewayZone,
 } from "./widearea-dns.js";
 
-const baseZoneOpts = {
+const baseZoneOpts: WideAreaGatewayZoneOpts = {
   domain: "openclaw.internal.",
   gatewayPort: 18789,
   displayName: "Mac Studio (OpenClaw)",
   tailnetIPv4: "100.123.224.76",
   hostLabel: "studio-london",
   instanceLabel: "studio-london",
-} as const;
+};
 
 function makeZoneOpts(overrides: Partial<WideAreaGatewayZoneOpts> = {}): WideAreaGatewayZoneOpts {
-  return { ...baseZoneOpts, ...overrides } as WideAreaGatewayZoneOpts;
+  return { ...baseZoneOpts, ...overrides };
 }
 
 afterEach(() => {

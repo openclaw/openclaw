@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { UpdateChannel, UpdateChannelSource } from "./update-channels.js";
 import {
   channelToNpmTag,
   formatUpdateChannelLabel,
@@ -8,6 +7,8 @@ import {
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
   resolveUpdateChannelDisplay,
+  type UpdateChannel,
+  type UpdateChannelSource,
 } from "./update-channels.js";
 
 describe("update-channels tag detection", () => {
@@ -33,9 +34,12 @@ describe("normalizeUpdateChannel", () => {
     { value: " nightly ", expected: null },
     { value: null, expected: null },
     { value: undefined, expected: null },
-  ])("normalizes %j", ({ value, expected }) => {
-    expect(normalizeUpdateChannel(value)).toBe(expected);
-  });
+  ] satisfies Array<{ value: string | null | undefined; expected: UpdateChannel | null }>)(
+    "normalizes %j",
+    ({ value, expected }) => {
+      expect(normalizeUpdateChannel(value)).toBe(expected);
+    },
+  );
 });
 
 describe("channelToNpmTag", () => {
@@ -43,9 +47,12 @@ describe("channelToNpmTag", () => {
     { channel: "stable", expected: "latest" },
     { channel: "beta", expected: "beta" },
     { channel: "dev", expected: "dev" },
-  ])("maps $channel to $expected", ({ channel, expected }) => {
-    expect(channelToNpmTag(channel as UpdateChannel)).toBe(expected);
-  });
+  ] satisfies Array<{ channel: UpdateChannel; expected: string }>)(
+    "maps $channel to $expected",
+    ({ channel, expected }) => {
+      expect(channelToNpmTag(channel)).toBe(expected);
+    },
+  );
 });
 
 describe("resolveEffectiveUpdateChannel", () => {
@@ -53,7 +60,7 @@ describe("resolveEffectiveUpdateChannel", () => {
     {
       name: "prefers config over git metadata",
       params: {
-        configChannel: "beta" as UpdateChannel,
+        configChannel: "beta",
         installKind: "git" as const,
         git: { tag: "v2026.2.24", branch: "feature/test" },
       },
@@ -101,7 +108,11 @@ describe("resolveEffectiveUpdateChannel", () => {
       params: { installKind: "unknown" as const },
       expected: { channel: "stable", source: "default" },
     },
-  ])("$name", ({ params, expected }) => {
+  ] satisfies Array<{
+    name: string;
+    params: Parameters<typeof resolveEffectiveUpdateChannel>[0];
+    expected: { channel: UpdateChannel; source: UpdateChannelSource };
+  }>)("$name", ({ params, expected }) => {
     expect(resolveEffectiveUpdateChannel(params)).toEqual(expected);
   });
 });
@@ -146,14 +157,12 @@ describe("formatUpdateChannelLabel", () => {
       params: { channel: "stable", source: "default" as const },
       expected: "stable (default)",
     },
-  ])("$name", ({ params, expected }) => {
-    expect(
-      formatUpdateChannelLabel({
-        ...params,
-        channel: params.channel as UpdateChannel,
-        source: params.source as UpdateChannelSource,
-      }),
-    ).toBe(expected);
+  ] satisfies Array<{
+    name: string;
+    params: Parameters<typeof formatUpdateChannelLabel>[0];
+    expected: string;
+  }>)("$name", ({ params, expected }) => {
+    expect(formatUpdateChannelLabel(params)).toBe(expected);
   });
 });
 
