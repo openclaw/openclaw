@@ -879,6 +879,37 @@ const discordConfig = {
 } as OpenClawConfig;
 
 describe("outbound policy", () => {
+  it("blocks same-provider sends by default when target differs from the bound channel", () => {
+    expect(() =>
+      enforceCrossContextPolicy({
+        cfg: slackConfig,
+        channel: "slack",
+        action: "send",
+        args: { to: "channel:C99999999" },
+        toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
+      }),
+    ).toThrow(/Cross-context messaging denied/);
+  });
+
+  it("allows same-provider sends when explicitly enabled", () => {
+    const cfg = {
+      ...slackConfig,
+      tools: {
+        message: { crossContext: { allowWithinProvider: true } },
+      },
+    } as OpenClawConfig;
+
+    expect(() =>
+      enforceCrossContextPolicy({
+        cfg,
+        channel: "slack",
+        action: "send",
+        args: { to: "channel:C99999999" },
+        toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
+      }),
+    ).not.toThrow();
+  });
+
   it("allows cross-provider sends when enabled", () => {
     const cfg = {
       ...slackConfig,
