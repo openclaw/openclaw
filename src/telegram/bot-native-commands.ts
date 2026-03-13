@@ -462,6 +462,7 @@ export const registerTelegramNativeCommands = ({
     chatId: number;
     threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
     route: ReturnType<typeof resolveTelegramConversationRoute>["route"];
+    skipDmThreadSuffix: boolean;
     mediaLocalRoots: readonly string[] | undefined;
     tableMode: ReturnType<typeof resolveMarkdownTableMode>;
     chunkMode: ReturnType<typeof resolveChunkMode>;
@@ -513,7 +514,15 @@ export const registerTelegramNativeCommands = ({
       accountId: route.accountId,
     });
     const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
-    return { chatId, threadSpec, route, mediaLocalRoots, tableMode, chunkMode };
+    return {
+      chatId,
+      threadSpec,
+      route,
+      skipDmThreadSuffix,
+      mediaLocalRoots,
+      tableMode,
+      chunkMode,
+    };
   };
   const buildCommandDeliveryBaseOptions = (params: {
     chatId: string | number;
@@ -595,7 +604,14 @@ export const registerTelegramNativeCommands = ({
           if (!runtimeContext) {
             return;
           }
-          const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
+          const {
+            threadSpec,
+            route,
+            skipDmThreadSuffix,
+            mediaLocalRoots,
+            tableMode,
+            chunkMode,
+          } = runtimeContext;
           const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
 
           const commandDefinition = findCommandByNativeName(command.name, "telegram");
