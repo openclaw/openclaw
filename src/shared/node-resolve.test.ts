@@ -20,6 +20,18 @@ describe("shared/node-resolve", () => {
     ).toBe("mac-123");
   });
 
+  it("passes the original node list to the default picker", () => {
+    expect(
+      resolveNodeIdFromNodeList(nodes, "", {
+        allowDefault: true,
+        pickDefaultNode: (entries) => {
+          expect(entries).toBe(nodes);
+          return entries[1] ?? null;
+        },
+      }),
+    ).toBe("pi-456");
+  });
+
   it("still throws when default selection is disabled or returns null", () => {
     expect(() => resolveNodeIdFromNodeList(nodes, "   ")).toThrow(/node required/);
     expect(() =>
