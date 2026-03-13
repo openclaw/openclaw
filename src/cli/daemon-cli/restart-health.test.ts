@@ -190,6 +190,32 @@ describe("inspectGatewayRestart", () => {
     );
   });
 
+  it("treats a busy port as healthy when runtime status lags but the probe succeeds", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+
+    const service = {
+      readRuntime: vi.fn(async () => ({ status: "stopped" })),
+    } as unknown as GatewayService;
+
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 9100, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+    classifyPortListener.mockReturnValue("gateway");
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+    });
+
+    const { inspectGatewayRestart } = await import("./restart-health.js");
+    const snapshot = await inspectGatewayRestart({ service, port: 18789 });
+
+    expect(snapshot.healthy).toBe(true);
+    expect(snapshot.staleGatewayPids).toEqual([]);
+  });
+
   it("treats auth-closed probe as healthy gateway reachability", async () => {
     const snapshot = await inspectAmbiguousOwnershipWithProbe({
       ok: false,
