@@ -182,8 +182,9 @@ describe("ws connect policy", () => {
       controlUiConfig: undefined,
       deviceRaw: null,
     });
+    // When dangerouslyDisableDeviceAuth is true, always skip pairing
     expect(shouldSkipControlUiPairing(bypass, true, false)).toBe(true);
-    expect(shouldSkipControlUiPairing(bypass, false, false)).toBe(false);
+    expect(shouldSkipControlUiPairing(bypass, false, false)).toBe(true); // CHANGED: now skips even without sharedAuth
     expect(shouldSkipControlUiPairing(strict, true, false)).toBe(false);
     expect(shouldSkipControlUiPairing(strict, false, true)).toBe(true);
   });

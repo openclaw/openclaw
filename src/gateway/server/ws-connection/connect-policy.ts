@@ -37,6 +37,11 @@ export function shouldSkipControlUiPairing(
   sharedAuthOk: boolean,
   trustedProxyAuthOk = false,
 ): boolean {
+  // When dangerouslyDisableDeviceAuth is true, skip pairing entirely
+  // This is the intended behavior for HTTP-only deployments
+  if (policy.dangerouslyDisableDeviceAuth) {
+    return true;
+  }
   if (trustedProxyAuthOk) {
     return true;
   }
