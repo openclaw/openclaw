@@ -935,7 +935,8 @@
   position: relative;
 }
 
-.chat-controls [data-tooltip]:hover::after {
+.chat-controls [data-tooltip]:hover::after,
+.chat-controls [data-tooltip]:focus-visible::after {
   content: attr(data-tooltip);
   position: absolute;
   bottom: -32px;

@@ -205,6 +205,18 @@ export function renderChatControls(state: AppViewState) {
       <circle cx="12" cy="12" r="3"></circle>
     </svg>
   `;
+
+  const refreshLabel = t("chat.refreshTitle");
+  const thinkingLabel = disableThinkingToggle
+    ? t("chat.onboardingDisabled")
+    : t("chat.thinkingToggle");
+  const focusLabel = disableFocusToggle ? t("chat.onboardingDisabled") : t("chat.focusToggle");
+  const cronLabel = hideCron
+    ? hiddenCronCount > 0
+      ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
+      : t("chat.showCronSessions")
+    : t("chat.hideCronSessions");
+
   return html`
     <div class="chat-controls">
       <button
@@ -228,7 +240,7 @@ export function renderChatControls(state: AppViewState) {
             });
           }
         }}
-        aria-label=${t("chat.refreshTitle")} data-tooltip=${t("chat.refreshTitle")}
+        aria-label=${refreshLabel} data-tooltip=${refreshLabel}
       >
         ${refreshIcon}
       </button>
@@ -246,7 +258,7 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${showThinking}
-        aria-label=${disableThinkingToggle ? t("chat.onboardingDisabled") : t("chat.thinkingToggle")} data-tooltip=${disableThinkingToggle ? t("chat.onboardingDisabled") : t("chat.thinkingToggle")}
+        aria-label=${thinkingLabel} data-tooltip=${thinkingLabel}
       >
         ${icons.brain}
       </button>
@@ -263,7 +275,7 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${focusActive}
-        aria-label=${disableFocusToggle ? t("chat.onboardingDisabled") : t("chat.focusToggle")} data-tooltip=${disableFocusToggle ? t("chat.onboardingDisabled") : t("chat.focusToggle")}
+        aria-label=${focusLabel} data-tooltip=${focusLabel}
       >
         ${focusIcon}
       </button>
@@ -273,7 +285,7 @@ export function renderChatControls(state: AppViewState) {
           state.sessionsHideCron = !hideCron;
         }}
         aria-pressed=${hideCron}
-        aria-label=${hideCron ? (hiddenCronCount > 0 ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) }) : t("chat.showCronSessions")) : t("chat.hideCronSessions")} data-tooltip=${hideCron ? (hiddenCronCount > 0 ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) }) : t("chat.showCronSessions")) : t("chat.hideCronSessions")}
+        aria-label=${cronLabel} data-tooltip=${cronLabel}
       >
         ${renderCronFilterIcon(hiddenCronCount)}
       </button>
