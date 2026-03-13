@@ -39,6 +39,7 @@ describe("toSanitizedMarkdownHtml", () => {
   it("preserves base64 data URI images (#15437)", () => {
     const html = toSanitizedMarkdownHtml("![Chart](data:image/png;base64,iVBORw0KGgo=)");
     expect(html).toContain("<img");
+    expect(html).toContain('class="markdown-inline-image"');
     expect(html).toContain("data:image/png;base64,");
   });
 

@@ -6,6 +6,7 @@ import {
   isCanonicalDottedDecimalIPv4,
   isCarrierGradeNatIpv4Address,
   isIpInCidr,
+  isIpv4Address,
   isIpv6Address,
   isLegacyIpv4Literal,
   isLoopbackIpAddress,
@@ -88,7 +89,7 @@ describe("shared ip helpers", () => {
 
     expect(loopback?.kind()).toBe("ipv4");
     expect(benchmark?.kind()).toBe("ipv4");
-    if (!loopback || loopback.kind() !== "ipv4" || !benchmark || benchmark.kind() !== "ipv4") {
+    if (!loopback || !isIpv4Address(loopback) || !benchmark || !isIpv4Address(benchmark)) {
       throw new Error("expected ipv4 fixtures");
     }
 

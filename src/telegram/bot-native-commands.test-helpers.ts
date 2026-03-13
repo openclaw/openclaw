@@ -3,12 +3,28 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { ChannelGroupPolicy } from "../config/group-policy.js";
 import type { TelegramAccountConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 
 type RegisterTelegramNativeCommandsParams = Parameters<typeof registerTelegramNativeCommands>[0];
 type GetPluginCommandSpecsFn = typeof import("../plugins/commands.js").getPluginCommandSpecs;
 type MatchPluginCommandFn = typeof import("../plugins/commands.js").matchPluginCommand;
 type ExecutePluginCommandFn = typeof import("../plugins/commands.js").executePluginCommand;
+type AnyMock = MockFn<(...args: unknown[]) => unknown>;
+type AnyAsyncMock = MockFn<(...args: unknown[]) => Promise<unknown>>;
+type NativeCommandHarness = {
+  handlers: Record<string, (ctx: unknown) => Promise<void>>;
+  sendMessage: AnyAsyncMock;
+  setMyCommands: AnyAsyncMock;
+  log: AnyMock;
+  bot: {
+    api: {
+      setMyCommands: AnyAsyncMock;
+      sendMessage: AnyAsyncMock;
+    };
+    command: (name: string, handler: (ctx: unknown) => Promise<void>) => void;
+  };
+};
 
 const pluginCommandMocks = vi.hoisted(() => ({
   getPluginCommandSpecs: vi.fn<GetPluginCommandSpecsFn>(() => []),
@@ -86,12 +102,12 @@ export function createNativeCommandsHarness(params?: {
   nativeEnabled?: boolean;
   groupConfig?: Record<string, unknown>;
   resolveGroupPolicy?: () => ChannelGroupPolicy;
-}) {
+}): NativeCommandHarness {
   const handlers: Record<string, (ctx: unknown) => Promise<void>> = {};
-  const sendMessage = vi.fn().mockResolvedValue(undefined);
-  const setMyCommands = vi.fn().mockResolvedValue(undefined);
-  const log = vi.fn();
-  const bot = {
+  const sendMessage: AnyAsyncMock = vi.fn(async () => undefined);
+  const setMyCommands: AnyAsyncMock = vi.fn(async () => undefined);
+  const log: AnyMock = vi.fn();
+  const bot: NativeCommandHarness["bot"] = {
     api: {
       setMyCommands,
       sendMessage,
@@ -153,7 +169,7 @@ export function createTelegramGroupCommandContext(params?: {
   };
 }
 
-export function findNotAuthorizedCalls(sendMessage: ReturnType<typeof vi.fn>) {
+export function findNotAuthorizedCalls(sendMessage: AnyAsyncMock) {
   return sendMessage.mock.calls.filter(
     (call) => typeof call[1] === "string" && call[1].includes("not authorized"),
   );
