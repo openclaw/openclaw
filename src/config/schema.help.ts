@@ -801,6 +801,14 @@ export const FIELD_HELP: Record<string, string> = {
     'Chooses which sources are indexed: "memory" reads MEMORY.md + memory files, and "sessions" includes transcript history. Keep ["memory"] unless you need recall from prior chat transcripts.',
   "agents.defaults.memorySearch.extraPaths":
     "Adds extra directories or .md files to the memory index beyond default memory files. Use this when key reference docs live elsewhere in your repo; keep paths small and intentional to avoid noisy recall.",
+  "agents.defaults.memorySearch.multimodal":
+    "Optional multimodal indexing for image/audio files discovered through memorySearch.extraPaths. Enable this only when you intentionally want Gemini multimodal embeddings to include image or audio reference files alongside markdown memory.",
+  "agents.defaults.memorySearch.multimodal.enabled":
+    "Turns on multimodal extra-path indexing for supported image/audio file types. Keep this off unless the selected memory embedding provider and model support structured multimodal inputs.",
+  "agents.defaults.memorySearch.multimodal.modalities":
+    'Chooses which non-markdown media kinds are indexed from extra paths: "image", "audio", or both via "all". Limit this to the media you actually want searchable so indexing stays focused and cheap.',
+  "agents.defaults.memorySearch.multimodal.maxFileBytes":
+    "Maximum file size accepted for multimodal memory indexing before the file is skipped. Lower this when large media files would bloat embedding payloads or raise provider limits.",
   "agents.defaults.memorySearch.experimental.sessionMemory":
     "Indexes session transcripts into memory search so responses can reference prior chat turns. Keep this off unless transcript recall is needed, because indexing cost and storage usage both increase.",
   "agents.defaults.memorySearch.provider":
@@ -1409,6 +1417,18 @@ export const FIELD_HELP: Record<string, string> = {
     "Telegram bot token used to authenticate Bot API requests for this account/provider config. Use secret/env substitution and rotate tokens if exposure is suspected.",
   "channels.telegram.capabilities.inlineButtons":
     "Enable Telegram inline button components for supported command and interaction surfaces. Disable if your deployment needs plain-text-only compatibility behavior.",
+  "channels.telegram.execApprovals":
+    "Telegram-side execution approval routing for commands that require a human approver before running. Use this when Telegram is part of your operator approval flow and keep the filters narrow so approval prompts only reach the right reviewers.",
+  "channels.telegram.execApprovals.enabled":
+    "Enables Telegram delivery of execution-approval requests when command approvals are pending. Keep this disabled unless Telegram operators are expected to review and approve tool execution from chat.",
+  "channels.telegram.execApprovals.approvers":
+    "Allowlist of Telegram user or chat identities permitted to receive and act on execution-approval prompts. Keep this list explicit so approval authority does not drift to unintended accounts.",
+  "channels.telegram.execApprovals.agentFilter":
+    "Optional agent filter that limits which agents can emit Telegram execution-approval requests. Use this to keep sensitive approval workflows tied to only the agents that need operator review.",
+  "channels.telegram.execApprovals.sessionFilter":
+    "Optional session filter that narrows which conversations may trigger Telegram approval requests. Use this to keep noisy or untrusted sessions from generating approval prompts in operator chats.",
+  "channels.telegram.execApprovals.target":
+    "Telegram destination used for approval prompts, such as a specific operator DM or admin group/thread. Point this at a controlled channel where approvers already expect to handle execution requests.",
   "channels.slack.configWrites":
     "Allow Slack to write config in response to channel events/commands (default: true).",
   "channels.slack.botToken":

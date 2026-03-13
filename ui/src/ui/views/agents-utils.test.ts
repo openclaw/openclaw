@@ -181,6 +181,9 @@ describe("renderOverview", () => {
     expect(renderedValues).toContain("Sync coding");
     expect(renderedValues).toContain("technical · stored");
     expect(renderedValues).toContain("high-signal memory candidate");
+  });
+});
+
 describe("agentLogoUrl", () => {
   it("keeps base-mounted control UI logo paths absolute to the mount", () => {
     expect(agentLogoUrl("/ui")).toBe("/ui/favicon.svg");

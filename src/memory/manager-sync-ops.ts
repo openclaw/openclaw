@@ -761,19 +761,30 @@ export abstract class MemoryManagerSyncOps {
   private async syncSessionFiles(params: {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
-  }) {
+    targetSessionFiles?: string[];
+  }): Promise<Set<string>> {
     // FTS-only mode: skip embedding sync (no provider)
     if (!this.provider) {
       log.debug("Skipping session file sync in FTS-only mode (no embedding provider)");
-      return;
+      return new Set();
     }
 
     const files = await listSessionFilesForAgent(this.agentId);
     const activePaths = new Set(files.map((file) => sessionPathForFile(file)));
-    const indexAll = params.needsFullReindex || this.sessionsDirtyFiles.size === 0;
+    const targetSessionFiles = new Set(
+      (params.targetSessionFiles ?? [])
+        .map((sessionFile) => sessionFile.trim())
+        .filter((sessionFile) => sessionFile.length > 0),
+    );
+    const targetedSync = targetSessionFiles.size > 0;
+    const indexAll =
+      params.needsFullReindex || (!targetedSync && this.sessionsDirtyFiles.size === 0);
+    const syncedPaths = new Set<string>();
     log.debug("memory sync: indexing session files", {
       files: files.length,
       indexAll,
+      targetedSync,
+      targetSessionFiles: targetSessionFiles.size,
       dirtyFiles: this.sessionsDirtyFiles.size,
       batch: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
@@ -788,7 +799,10 @@ export abstract class MemoryManagerSyncOps {
     }
 
     const tasks = files.map((absPath) => async () => {
-      if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
+      if (targetedSync && !targetSessionFiles.has(absPath)) {
+        return;
+      }
+      if (!indexAll && !targetedSync && !this.sessionsDirtyFiles.has(absPath)) {
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
@@ -800,6 +814,7 @@ export abstract class MemoryManagerSyncOps {
       }
       const entry = await buildSessionEntry(absPath);
       if (!entry) {
+        syncedPaths.add(absPath);
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
@@ -821,10 +836,12 @@ export abstract class MemoryManagerSyncOps {
           });
         }
         this.resetSessionDelta(absPath, entry.size);
+        syncedPaths.add(absPath);
         return;
       }
       await this.indexFile(entry, { source: "sessions", content: entry.content });
       this.resetSessionDelta(absPath, entry.size);
+      syncedPaths.add(absPath);
       if (params.progress) {
         params.progress.completed += 1;
         params.progress.report({
@@ -863,6 +880,7 @@ export abstract class MemoryManagerSyncOps {
         } catch {}
       }
     }
+    return syncedPaths;
   }
 
   private createSyncProgress(
@@ -948,9 +966,20 @@ export abstract class MemoryManagerSyncOps {
       }
 
       if (shouldSyncSessions) {
-        await this.syncSessionFiles({ needsFullReindex, progress: progress ?? undefined });
-        this.sessionsDirty = false;
-        this.sessionsDirtyFiles.clear();
+        const syncedSessionFiles = await this.syncSessionFiles({
+          needsFullReindex,
+          progress: progress ?? undefined,
+          targetSessionFiles: params?.sessionFiles,
+        });
+        if (needsFullReindex || !params?.sessionFiles?.length) {
+          this.sessionsDirty = false;
+          this.sessionsDirtyFiles.clear();
+        } else {
+          for (const syncedSessionFile of syncedSessionFiles) {
+            this.sessionsDirtyFiles.delete(syncedSessionFile);
+          }
+          this.sessionsDirty = this.sessionsDirtyFiles.size > 0;
+        }
       } else if (this.sessionsDirtyFiles.size > 0) {
         this.sessionsDirty = true;
       } else {
@@ -961,11 +990,19 @@ export abstract class MemoryManagerSyncOps {
       const activated =
         this.shouldFallbackOnError(reason) && (await this.activateFallbackProvider(reason));
       if (activated) {
-        await this.runSafeReindex({
+        const reindexParams = {
           reason: params?.reason ?? "fallback",
           force: true,
           progress: progress ?? undefined,
-        });
+        };
+        if (
+          process.env.OPENCLAW_TEST_FAST === "1" &&
+          process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1"
+        ) {
+          await this.runUnsafeReindex(reindexParams);
+        } else {
+          await this.runSafeReindex(reindexParams);
+        }
         return;
       }
       throw err;
@@ -1057,6 +1094,7 @@ export abstract class MemoryManagerSyncOps {
   private async runSafeReindex(params: {
     reason?: string;
     force?: boolean;
+    sessionFiles?: string[];
     progress?: MemorySyncProgressState;
   }): Promise<void> {
     const dbPath = resolveUserPath(this.settings.store.path);
@@ -1113,7 +1151,11 @@ export abstract class MemoryManagerSyncOps {
       }
 
       if (shouldSyncSessions) {
-        await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+        await this.syncSessionFiles({
+          needsFullReindex: true,
+          progress: params.progress,
+          targetSessionFiles: params.sessionFiles,
+        });
         this.sessionsDirty = false;
         this.sessionsDirtyFiles.clear();
       } else if (this.sessionsDirtyFiles.size > 0) {
@@ -1166,6 +1208,7 @@ export abstract class MemoryManagerSyncOps {
   private async runUnsafeReindex(params: {
     reason?: string;
     force?: boolean;
+    sessionFiles?: string[];
     progress?: MemorySyncProgressState;
   }): Promise<void> {
     // Perf: for test runs, skip atomic temp-db swapping. The index is isolated
@@ -1184,7 +1227,11 @@ export abstract class MemoryManagerSyncOps {
     }
 
     if (shouldSyncSessions) {
-      await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+      await this.syncSessionFiles({
+        needsFullReindex: true,
+        progress: params.progress,
+        targetSessionFiles: params.sessionFiles,
+      });
       this.sessionsDirty = false;
       this.sessionsDirtyFiles.clear();
     } else if (this.sessionsDirtyFiles.size > 0) {

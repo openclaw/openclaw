@@ -236,7 +236,7 @@ describe("embedding provider remote overrides", () => {
       remote: {
         apiKey: "gemini-key",
       },
-      model: "text-embedding-004",
+      model: "gemini-embedding-2-preview",
       outputDimensionality: 768,
       fallback: "openai",
     });
