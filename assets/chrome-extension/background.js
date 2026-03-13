@@ -351,10 +351,10 @@ async function ensureRelayConnection() {
  * @returns {Promise<{ok:boolean, lockTab:boolean}|null>}
  */
 async function setLockOnRelay(locked, tabId = null) {
-  const port = await getRelayPort()
-  const gatewayToken = await getGatewayToken()
-  const relayToken = await deriveRelayToken(gatewayToken, port)
   try {
+    const port = await getRelayPort()
+    const gatewayToken = await getGatewayToken()
+    const relayToken = await deriveRelayToken(gatewayToken, port)
     const resp = await fetch(`http://127.0.0.1:${port}/extension/status`, {
       method: 'PUT',
       headers: {
