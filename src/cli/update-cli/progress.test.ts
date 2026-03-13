@@ -1,6 +1,16 @@
-import { describe, expect, it } from "vitest";
+import os from "node:os";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
-import { inferUpdateFailureHints } from "./progress.js";
+
+const runtimeLog = vi.fn();
+
+vi.mock("../../runtime.js", () => ({
+  defaultRuntime: {
+    log: runtimeLog,
+  },
+}));
+
+const { inferUpdateFailureHints, printResult } = await import("./progress.js");
 
 function makeResult(
   stepName: string,
@@ -26,6 +36,10 @@ function makeResult(
 }
 
 describe("inferUpdateFailureHints", () => {
+  beforeEach(() => {
+    runtimeLog.mockReset();
+  });
+
   it("returns EACCES hint for global update permission failures", () => {
     const result = makeResult(
       "global update",
@@ -49,5 +63,24 @@ describe("inferUpdateFailureHints", () => {
       "pnpm",
     );
     expect(inferUpdateFailureHints(result)).toEqual([]);
+  });
+
+  it("shortens result root paths in human output", () => {
+    const home = os.homedir();
+    printResult(
+      {
+        status: "ok",
+        mode: "npm",
+        root: `${home}/.local/share/openclaw`,
+        steps: [],
+        durationMs: 1,
+      },
+      { json: false },
+    );
+
+    const lines = runtimeLog.mock.calls.map((call) => String(call[0]));
+    expect(lines.join("\n")).toContain("Root:");
+    expect(lines.join("\n")).toContain("~/.local/share/openclaw");
+    expect(lines.join("\n")).not.toContain(`${home}/.local/share/openclaw`);
   });
 });

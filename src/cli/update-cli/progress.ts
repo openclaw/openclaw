@@ -7,6 +7,7 @@ import type {
 } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
+import { shortenHomePath } from "../../utils.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
 const STEP_LABELS: Record<string, string> = {
@@ -150,7 +151,7 @@ export function printResult(result: UpdateRunResult, opts: PrintResultOptions): 
     `${theme.heading("Update Result:")} ${statusColor(result.status.toUpperCase())}`,
   );
   if (result.root) {
-    defaultRuntime.log(`  Root: ${theme.muted(result.root)}`);
+    defaultRuntime.log(`  Root: ${theme.muted(shortenHomePath(result.root))}`);
   }
   if (result.reason) {
     defaultRuntime.log(`  Reason: ${theme.muted(result.reason)}`);
