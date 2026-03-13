@@ -84,7 +84,7 @@ primary_region = "iad"
 
 | Setting                        | Why                                                                         |
 | ------------------------------ | --------------------------------------------------------------------------- |
-| `--bind lan`                   | Binds to `0.0.0.0` so Fly's proxy can reach the gateway                     |
+| `--bind lan`                   | Uses bind mode `lan` (all interfaces) so Fly's proxy can reach the gateway  |
 | `--allow-unconfigured`         | Starts without a config file (you'll create one after)                      |
 | `internal_port = 3000`         | Must match `--port 3000` (or `OPENCLAW_GATEWAY_PORT`) for Fly health checks |
 | `memory = "2048mb"`            | 512MB is too small; 2GB recommended                                         |
@@ -134,6 +134,9 @@ You should see:
 [gateway] listening on ws://0.0.0.0:3000 (PID xxx)
 [discord] logged in to discord as xxx
 ```
+
+This log line shows the resolved listener host for bind mode `lan`. Keep using bind
+mode values (`--bind lan`), not host aliases like `--bind 0.0.0.0`.
 
 ## 5) Create config file
 
@@ -246,7 +249,8 @@ fly ssh console
 
 ### "App is not listening on expected address"
 
-The gateway is binding to `127.0.0.1` instead of `0.0.0.0`.
+The gateway is running in loopback mode instead of LAN mode (for example, `--bind loopback`
+instead of `--bind lan`).
 
 **Fix:** Add `--bind lan` to your process command in `fly.toml`.
 
