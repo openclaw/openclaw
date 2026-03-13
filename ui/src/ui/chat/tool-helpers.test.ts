@@ -190,8 +190,9 @@ describe("tool-helpers", () => {
         '{"status":"running","data":{"items":[{"id":1,"name":"test"},' +
         '"details":{"nested":{"value":"very long content here"}}}}}...(truncated)';
       expect(looksLikeJson(malformedJson)).toBe(true);
-      // Before fix: !detectJson(text) && !looksLikeJson(text) would route to marked.parse()
-      // which hangs on unclosed code fences. Now it routes to <pre>, which is safe.
+      // Before fix: markdown content was always routed through toSanitizedMarkdownHtml()
+      // which calls marked.parse() — this hangs on malformed JSON with unclosed code fences.
+      // After fix: content starting with { or [ is rendered as <pre>, bypassing marked.parse().
     });
   });
 });
