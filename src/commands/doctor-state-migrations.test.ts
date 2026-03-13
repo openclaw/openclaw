@@ -41,6 +41,17 @@ function writeLegacyTelegramAllowFromStore(oauthDir: string) {
   );
 }
 
+async function runTelegramAllowFromMigration(params: { root: string; cfg: OpenClawConfig }) {
+  const oauthDir = ensureCredentialsDir(params.root);
+  writeLegacyTelegramAllowFromStore(oauthDir);
+  const detected = await detectLegacyStateMigrations({
+    cfg: params.cfg,
+    env: { OPENCLAW_STATE_DIR: params.root } as NodeJS.ProcessEnv,
+  });
+  const result = await runLegacyStateMigrations({ detected, now: () => 123 });
+  return { oauthDir, detected, result };
+}
+
 afterEach(async () => {
   resetAutoMigrateLegacyStateForTest();
   resetAutoMigrateLegacyStateDirForTest();
@@ -292,19 +303,11 @@ describe("doctor legacy state migrations", () => {
 
   it("migrates legacy Telegram pairing allowFrom store to account-scoped default file", async () => {
     const { root, cfg } = await makeRootWithEmptyCfg();
-    const oauthDir = ensureCredentialsDir(root);
-    writeLegacyTelegramAllowFromStore(oauthDir);
-
-    const detected = await detectLegacyStateMigrations({
-      cfg,
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
+    const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
     expect(detected.pairingAllowFrom.hasLegacyTelegram).toBe(true);
     expect(
       detected.pairingAllowFrom.copyPlans.map((plan) => path.basename(plan.targetPath)),
     ).toEqual(["telegram-default-allowFrom.json"]);
-
-    const result = await runLegacyStateMigrations({ detected, now: () => 123 });
     expect(result.warnings).toEqual([]);
 
     const target = path.join(oauthDir, "telegram-default-allowFrom.json");
@@ -327,19 +330,11 @@ describe("doctor legacy state migrations", () => {
         },
       },
     };
-    const oauthDir = ensureCredentialsDir(root);
-    writeLegacyTelegramAllowFromStore(oauthDir);
-
-    const detected = await detectLegacyStateMigrations({
-      cfg,
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
+    const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
     expect(detected.pairingAllowFrom.hasLegacyTelegram).toBe(true);
     expect(
       detected.pairingAllowFrom.copyPlans.map((plan) => path.basename(plan.targetPath)).toSorted(),
     ).toEqual(["telegram-bot1-allowFrom.json", "telegram-bot2-allowFrom.json"]);
-
-    const result = await runLegacyStateMigrations({ detected, now: () => 123 });
     expect(result.warnings).toEqual([]);
 
     const bot1Target = path.join(oauthDir, "telegram-bot1-allowFrom.json");
