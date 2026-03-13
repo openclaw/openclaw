@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { monitorTelegramProvider } from "./monitor.js";
 import { tagTelegramNetworkError } from "./network-errors.js";
 
@@ -576,7 +577,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     vi.useRealTimers();
   });
 
-  it("confirms persisted offset with Telegram before starting runner", async () => {
+  it("confirms persisted offset with Telegram before starting runner without dropping reactions", async () => {
     readTelegramUpdateOffsetSpy.mockResolvedValueOnce(549076203);
     const abort = new AbortController();
     const order: string[] = [];
@@ -597,7 +598,12 @@ describe("monitorTelegramProvider (grammY)", () => {
 
     await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
 
-    expect(api.getUpdates).toHaveBeenCalledWith({ offset: 549076204, limit: 1, timeout: 0 });
+    expect(api.getUpdates).toHaveBeenCalledWith({
+      offset: 549076204,
+      limit: 1,
+      timeout: 0,
+      allowed_updates: resolveTelegramAllowedUpdates(),
+    });
     expect(order).toEqual(["deleteWebhook", "getUpdates", "run"]);
   });
 

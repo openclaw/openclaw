@@ -171,8 +171,14 @@ export class TelegramPollingSession {
     if (lastUpdateId === null || lastUpdateId >= Number.MAX_SAFE_INTEGER) {
       return;
     }
+    const allowedUpdates = this.opts.runnerOptions.runner?.fetch?.allowed_updates;
     try {
-      await bot.api.getUpdates({ offset: lastUpdateId + 1, limit: 1, timeout: 0 });
+      await bot.api.getUpdates({
+        offset: lastUpdateId + 1,
+        limit: 1,
+        timeout: 0,
+        ...(allowedUpdates === undefined ? {} : { allowed_updates: allowedUpdates }),
+      });
     } catch {
       // Non-fatal: runner middleware still skips duplicates via shouldSkipUpdate.
     }
