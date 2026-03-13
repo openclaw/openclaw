@@ -144,6 +144,49 @@ describe("skills global env", () => {
     expect(process.env["SKILL_API_KEY"]).toBeUndefined();
   });
 
+  it("skill-level env wins over global env when the global pass ran first (concurrent sessions)", () => {
+    // Simulate session A running its global pass before session B runs its per-skill pass.
+    // Session A: only has a global env, no per-skill override for SHARED_KEY.
+    const configA = makeConfig({
+      skills: {
+        env: { SHARED_KEY: "global-value" },
+      },
+    });
+    const revertA = applySkillEnvOverrides({
+      skills: [makeSkillEntry("skill-a")],
+      config: configA,
+    });
+
+    // After session A's passes, SHARED_KEY should be "global-value".
+    expect(process.env["SHARED_KEY"]).toBe("global-value");
+
+    // Session B: has an explicit per-skill override for SHARED_KEY.
+    // Even though the global pass already acquired SHARED_KEY, session B's
+    // skill-level override must take precedence.
+    const configB = makeConfig({
+      skills: {
+        env: { SHARED_KEY: "global-value" },
+        entries: { "skill-b": { env: { SHARED_KEY: "skill-b-value" } } },
+      },
+    });
+    const revertB = applySkillEnvOverrides({
+      skills: [makeSkillEntry("skill-b")],
+      config: configB,
+    });
+
+    expect(process.env["SHARED_KEY"]).toBe("skill-b-value");
+
+    // Reverting B: A still holds the key (refcount > 0), so the key persists.
+    // The stored value reflects the last skill-level upgrade; the important
+    // invariant is that the key is not prematurely deleted.
+    revertB();
+    expect(process.env["SHARED_KEY"]).toBeDefined();
+
+    // Reverting A: no more owners, key should be gone.
+    revertA();
+    expect(process.env["SHARED_KEY"]).toBeUndefined();
+  });
+
   it("applySkillEnvOverridesFromSnapshot injects global env for a skill with no entries config", () => {
     const config = makeConfig({
       skills: {

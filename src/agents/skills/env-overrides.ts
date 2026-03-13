@@ -15,6 +15,13 @@ type ActiveSkillEnvEntry = {
   baseline: string | undefined;
   value: string;
   count: number;
+  /**
+   * True if at least one per-skill (non-global) session currently holds this
+   * key. Used to enforce skill > global precedence across concurrent sessions:
+   * if a global pass acquired the key first, a later per-skill pass must still
+   * win and upgrade the stored/active value.
+   */
+  hasSkillOwner: boolean;
 };
 
 /**
@@ -30,11 +37,19 @@ export function getActiveSkillEnvKeys(): ReadonlySet<string> {
   return new Set(activeSkillEnvEntries.keys());
 }
 
-function acquireActiveSkillEnvKey(key: string, value: string): boolean {
+function acquireActiveSkillEnvKey(key: string, value: string, isSkillOverride = false): boolean {
   const active = activeSkillEnvEntries.get(key);
   if (active) {
     active.count += 1;
-    if (process.env[key] === undefined) {
+    if (isSkillOverride && !active.hasSkillOwner) {
+      // A per-skill acquisition is taking over a key that was previously only
+      // held by global-env passes. Upgrade to the skill value so that
+      // skill > global precedence is preserved even for concurrent sessions
+      // where the global pass ran first.
+      active.value = value;
+      active.hasSkillOwner = true;
+      process.env[key] = value;
+    } else if (process.env[key] === undefined) {
       process.env[key] = active.value;
     }
     return true;
@@ -46,6 +61,7 @@ function acquireActiveSkillEnvKey(key: string, value: string): boolean {
     baseline: process.env[key],
     value,
     count: 1,
+    hasSkillOwner: isSkillOverride,
   });
   return true;
 }
@@ -197,7 +213,7 @@ function applySkillConfigEnvOverrides(params: {
   }
 
   for (const [envKey, envValue] of Object.entries(sanitized.allowed)) {
-    if (!acquireActiveSkillEnvKey(envKey, envValue)) {
+    if (!acquireActiveSkillEnvKey(envKey, envValue, /* isSkillOverride */ true)) {
       continue;
     }
     updates.push({ key: envKey });
