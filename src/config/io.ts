@@ -1348,6 +1348,12 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
    * the current on-disk state.
    */
   async function writeConfigFile(cfg: OpenClawConfig, options: ConfigWriteOptions = {}) {
+    // Pre-create the config directory with hardened permissions (0700) before
+    // acquireFileLock touches it.  The lock helper calls fs.mkdir with default
+    // mode (0755), and a subsequent mkdir with mode:0700 is a no-op on an
+    // existing directory, so omitting this step on first write would leave the
+    // directory world-readable until the next process run.
+    await deps.fs.promises.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
     return withFileLock(configPath, CONFIG_WRITE_LOCK_OPTIONS, async () => {
       clearConfigCache();
       const { snapshot } = await readConfigFileSnapshotInternal();
@@ -1374,6 +1380,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     transform: (current: OpenClawConfig) => OpenClawConfig | Promise<OpenClawConfig>,
     options: ConfigWriteOptions = {},
   ): Promise<void> {
+    // Same directory pre-creation as writeConfigFile — see comment there.
+    await deps.fs.promises.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
     return withFileLock(configPath, CONFIG_WRITE_LOCK_OPTIONS, async () => {
       clearConfigCache();
       const { snapshot } = await readConfigFileSnapshotInternal();
