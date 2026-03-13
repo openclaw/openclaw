@@ -32,6 +32,9 @@ export type GetReplyOptions = {
   onReplyStart?: () => Promise<void> | void;
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;
+  /** Called when the message is queued because the agent is busy with a previous run.
+   *  Channels can use this to provide immediate user-visible feedback (e.g., a ⏳ reaction). */
+  onQueued?: () => Promise<void> | void;
   onTypingController?: (typing: TypingController) => void;
   isHeartbeat?: boolean;
   /** Policy-level typing control for run classes (user/system/internal/heartbeat). */
