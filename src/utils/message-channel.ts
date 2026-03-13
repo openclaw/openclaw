@@ -38,8 +38,11 @@ const RESERVED_CHANNEL_IDS: ReadonlySet<string> = new Set([
   INTERNAL_MESSAGE_CHANNEL,
 ]);
 
-export function isReservedChannelId(raw?: string | null): boolean {
-  const normalized = raw?.trim().toLowerCase();
+export function isReservedChannelId(raw?: unknown): boolean {
+  if (typeof raw !== "string") {
+    return false;
+  }
+  const normalized = raw.trim().toLowerCase();
   return Boolean(normalized) && RESERVED_CHANNEL_IDS.has(normalized);
 }
 
@@ -110,7 +113,7 @@ export function normalizeMessageChannel(raw?: string | null): string | undefined
       return true;
     }
     return (entry.plugin.meta.aliases ?? []).some(
-      (alias) => alias.trim().toLowerCase() === normalized,
+      (alias) => typeof alias === "string" && alias.trim().toLowerCase() === normalized,
     );
   });
   return pluginMatch?.plugin.id ?? normalized;
@@ -129,7 +132,9 @@ const listPluginChannelAliases = (): string[] => {
   if (!registry) {
     return [];
   }
-  return registry.channels.flatMap((entry) => entry.plugin.meta.aliases ?? []);
+  return registry.channels.flatMap((entry) =>
+    (entry.plugin.meta.aliases ?? []).filter((alias): alias is string => typeof alias === "string"),
+  );
 };
 
 export const listDeliverableMessageChannels = (): ChannelId[] =>
