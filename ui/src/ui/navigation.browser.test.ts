@@ -69,9 +69,9 @@ describe("control UI routing", () => {
     await app.updateComplete;
 
     expect(app.querySelector(".topnav-shell")).not.toBeNull();
-    expect(app.querySelector(".topnav-shell__brand")).not.toBeNull();
     expect(app.querySelector(".topnav-shell__content")).not.toBeNull();
     expect(app.querySelector(".topnav-shell__actions")).not.toBeNull();
+    expect(app.querySelector(".topnav-shell .brand-title")).toBeNull();
   });
 
   it("renders the refreshed sidebar shell structure", async () => {
@@ -82,6 +82,9 @@ describe("control UI routing", () => {
     expect(app.querySelector(".sidebar-shell__header")).not.toBeNull();
     expect(app.querySelector(".sidebar-shell__body")).not.toBeNull();
     expect(app.querySelector(".sidebar-shell__footer")).not.toBeNull();
+    expect(app.querySelector(".sidebar-brand")).not.toBeNull();
+    expect(app.querySelector(".sidebar-brand__logo")).not.toBeNull();
+    expect(app.querySelector(".sidebar-brand__copy")).not.toBeNull();
   });
 
   it("does not render a desktop sidebar resizer or inject a custom nav width", async () => {

@@ -400,30 +400,6 @@ export function renderApp(state: AppViewState) {
     >
       <header class="topbar">
         <div class="topnav-shell">
-          <div class="topnav-shell__brand">
-            <button
-              type="button"
-              class="nav-collapse-toggle"
-              @click=${() =>
-                state.applySettings({
-                  ...state.settings,
-                  navCollapsed: !state.settings.navCollapsed,
-                })}
-              title="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
-              aria-label="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
-            >
-              <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.menu}</span>
-            </button>
-            <div class="brand">
-              <span class="brand-logo">
-                <img src="${agentLogoUrl(basePath)}" alt="OpenClaw" />
-              </span>
-              <span class="brand-text">
-                <span class="brand-sub">${t("nav.control")}</span>
-                <span class="brand-title">OpenClaw</span>
-              </span>
-            </div>
-          </div>
           <div class="topnav-shell__content">
             <dashboard-header .tab=${state.tab}></dashboard-header>
           </div>
@@ -449,16 +425,32 @@ export function renderApp(state: AppViewState) {
         <aside class="sidebar ${state.settings.navCollapsed ? "sidebar--collapsed" : ""}">
           <div class="sidebar-shell">
             <div class="sidebar-shell__header">
-              ${
-                state.settings.navCollapsed
-                  ? nothing
-                  : html`
-                      <div class="sidebar-shell__heading">
-                        <span class="sidebar-shell__eyebrow">${t("common.resources")}</span>
-                        <span class="sidebar-shell__title">${t("nav.control")}</span>
-                      </div>
-                    `
-              }
+              <div class="sidebar-brand">
+                <img class="sidebar-brand__logo" src="${agentLogoUrl(basePath)}" alt="OpenClaw" />
+                ${
+                  state.settings.navCollapsed
+                    ? nothing
+                    : html`
+                        <span class="sidebar-brand__copy">
+                          <span class="sidebar-brand__eyebrow">${t("nav.control")}</span>
+                          <span class="sidebar-brand__title">OpenClaw</span>
+                        </span>
+                      `
+                }
+              </div>
+              <button
+                type="button"
+                class="nav-collapse-toggle"
+                @click=${() =>
+                  state.applySettings({
+                    ...state.settings,
+                    navCollapsed: !state.settings.navCollapsed,
+                  })}
+                title="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
+                aria-label="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
+              >
+                <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.menu}</span>
+              </button>
             </div>
             <div class="sidebar-shell__body">
               <nav class="sidebar-nav">
