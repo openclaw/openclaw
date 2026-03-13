@@ -482,6 +482,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     nativeEnabled,
     nativeSkillsEnabled,
     nativeDisabledExplicit,
+    sendChatActionHandler,
     resolveGroupPolicy,
     resolveTelegramGroupConfig,
     shouldSkipUpdate,
