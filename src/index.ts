@@ -35,6 +35,16 @@ import { assertWebChannel, normalizeE164, toWhatsappJid } from "./utils.js";
 
 loadDotEnv({ quiet: true });
 normalizeEnv();
+
+// Windows: Force UTF-8 encoding to prevent GBK codepage issues with Chinese characters
+// https://github.com/openclaw/openclaw/issues/43743
+if (process.platform === "win32") {
+  process.env.LANG ??= "en_US.UTF-8";
+  process.env.LC_ALL ??= "en_US.UTF-8";
+  process.env.PYTHONIOENCODING ??= "utf-8";
+  process.env.FORCE_UTF8 ??= "1";
+}
+
 ensureOpenClawCliOnPath();
 
 // Capture all console output into structured logs while keeping stdout/stderr behavior.
