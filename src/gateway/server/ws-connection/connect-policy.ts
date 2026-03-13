@@ -83,6 +83,11 @@ export function evaluateMissingDeviceIdentity(params: {
   hasSharedAuth: boolean;
   isLocalClient: boolean;
 }): MissingDeviceIdentityDecision {
+  // When dangerouslyDisableDeviceAuth is true, always allow (skip all device identity checks)
+  // This is the intended behavior for HTTP-only deployments
+  if (params.isControlUi && params.controlUiAuthPolicy.dangerouslyDisableDeviceAuth) {
+    return { kind: "allow" };
+  }
   if (params.hasDeviceIdentity) {
     return { kind: "allow" };
   }
