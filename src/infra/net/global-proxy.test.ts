@@ -76,6 +76,16 @@ describe("applyGlobalProxyDispatcher", () => {
     });
   });
 
+  it("prefers lowercase all_proxy over uppercase ALL_PROXY", () => {
+    process.env.all_proxy = "http://127.0.0.1:1080";
+    process.env.ALL_PROXY = "http://127.0.0.1:7897";
+    applyGlobalProxyDispatcher();
+    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledWith({
+      httpProxy: "http://127.0.0.1:1080",
+      httpsProxy: "http://127.0.0.1:1080",
+    });
+  });
+
   it("does not pass explicit options when HTTP_PROXY is also set alongside ALL_PROXY", () => {
     process.env.HTTP_PROXY = "http://127.0.0.1:8080";
     process.env.ALL_PROXY = "socks5://127.0.0.1:7897";

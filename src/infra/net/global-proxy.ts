@@ -1,6 +1,10 @@
 import { EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { hasProxyEnvConfigured, PROXY_ENV_KEYS } from "./proxy-env.js";
+import {
+  hasProxyEnvConfigured,
+  PROXY_ENV_KEYS,
+  resolveAllProxyFallbackOptions,
+} from "./proxy-env.js";
 
 const log = createSubsystemLogger("net/global-proxy");
 
@@ -38,15 +42,7 @@ export function applyGlobalProxyDispatcher(): void {
     // EnvHttpProxyAgent natively reads HTTP_PROXY / HTTPS_PROXY but ignores
     // ALL_PROXY. When only ALL_PROXY (or all_proxy) is set, pass its value
     // explicitly as httpProxy/httpsProxy so the agent still routes through it.
-    const allProxy = (process.env.ALL_PROXY || process.env.all_proxy || "").trim();
-    const hasStandardProxy =
-      !!process.env.HTTP_PROXY?.trim() ||
-      !!process.env.HTTPS_PROXY?.trim() ||
-      !!process.env.http_proxy?.trim() ||
-      !!process.env.https_proxy?.trim();
-
-    const agentOptions =
-      !hasStandardProxy && allProxy ? { httpProxy: allProxy, httpsProxy: allProxy } : {};
+    const agentOptions = resolveAllProxyFallbackOptions() ?? {};
 
     setGlobalDispatcher(new EnvHttpProxyAgent(agentOptions));
     const active = PROXY_ENV_KEYS.find((k) => process.env[k]?.trim());

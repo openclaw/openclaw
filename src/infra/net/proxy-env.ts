@@ -53,3 +53,40 @@ export function hasEnvHttpProxyConfigured(
 ): boolean {
   return resolveEnvHttpProxyUrl(protocol, env) !== undefined;
 }
+
+/**
+ * When only ALL_PROXY (or all_proxy) is set and no standard HTTP_PROXY /
+ * HTTPS_PROXY vars exist, return explicit `httpProxy` / `httpsProxy` options
+ * that can be spread into an `EnvHttpProxyAgent` constructor call.
+ *
+ * undici's `EnvHttpProxyAgent` ignores ALL_PROXY entirely, so this bridges
+ * the gap for users who rely solely on ALL_PROXY (common in China behind
+ * SOCKS5 / mixed-protocol proxies).
+ *
+ * Returns `undefined` when no explicit options are needed (either no
+ * ALL_PROXY is set, or standard vars already cover the proxy).
+ */
+export function resolveAllProxyFallbackOptions(
+  env: NodeJS.ProcessEnv = process.env,
+): { httpProxy: string; httpsProxy: string } | undefined {
+  // Lower-case takes precedence over upper-case, matching the convention
+  // used by resolveEnvHttpProxyUrl for HTTP_PROXY / http_proxy.
+  const lowerAllProxy = normalizeProxyEnvValue(env.all_proxy);
+  const allProxy =
+    lowerAllProxy !== undefined ? lowerAllProxy : normalizeProxyEnvValue(env.ALL_PROXY);
+  if (!allProxy) {
+    return undefined;
+  }
+
+  const hasStandardProxy =
+    !!env.HTTP_PROXY?.trim() ||
+    !!env.HTTPS_PROXY?.trim() ||
+    !!env.http_proxy?.trim() ||
+    !!env.https_proxy?.trim();
+
+  if (hasStandardProxy) {
+    return undefined;
+  }
+
+  return { httpProxy: allProxy, httpsProxy: allProxy };
+}
