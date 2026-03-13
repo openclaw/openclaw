@@ -84,6 +84,18 @@ describe("cron protocol validators", () => {
     expect(validateCronRunsParams({ id: "job-1", offset: -1 })).toBe(false);
   });
 
+  it("accepts agentTurn add params with dedupContext", () => {
+    expect(
+      validateCronAddParams({
+        name: "daily-briefing",
+        schedule: { kind: "cron", expr: "0 8 * * *" },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "Send briefing", dedupContext: true },
+      }),
+    ).toBe(true);
+  });
+
   it("accepts all-scope runs with multi-select filters", () => {
     expect(
       validateCronRunsParams({

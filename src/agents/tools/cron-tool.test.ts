@@ -418,6 +418,28 @@ describe("cron tool", () => {
     expect(params?.sessionTarget).toBe("isolated");
   });
 
+  it("preserves dedupContext in agentTurn payload", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({ agentSessionKey: "agent:main:discord:dm:buddy" });
+    await tool.execute("call-dedup", {
+      action: "add",
+      job: {
+        name: "daily-briefing",
+        schedule: { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "Send daily briefing", dedupContext: true },
+      },
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.add") as
+      | { payload?: { kind?: string; message?: string; dedupContext?: boolean } }
+      | undefined;
+    expect(params?.payload?.kind).toBe("agentTurn");
+    expect(params?.payload?.dedupContext).toBe(true);
+  });
+
   it("does not recover flat params when no meaningful job field is present", async () => {
     const tool = createCronTool();
     await expect(
