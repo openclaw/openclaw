@@ -1,12 +1,12 @@
 name: PR template check
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, edited, synchronize]
 
 concurrency:
   group: pr-template-check-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 permissions: {}
 
@@ -138,7 +138,7 @@ jobs:
                     "",
                     ...issues.map((issue) => `- ${issue}`),
                     "",
-                    "Please update your PR description. See the [PR template](../blob/main/.github/pull_request_template.md) for guidance.",
+                    `Please update your PR description. See the [PR template](https://github.com/${context.repo.owner}/${context.repo.repo}/blob/main/.github/pull_request_template.md) for guidance.`,
                   ].join("\n");
 
             await github.rest.checks.create({
