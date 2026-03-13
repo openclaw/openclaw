@@ -236,8 +236,8 @@ export function detectCommandObfuscation(command: string): ObfuscationDetection 
       continue;
     }
 
-  const suppressed =
-    pattern.id === "curl-pipe-shell" && urlCount <= 1 && shouldSuppressCurlPipeShell(command);
+    const suppressed =
+      pattern.id === "curl-pipe-shell" && urlCount <= 1 && shouldSuppressCurlPipeShell(command);
 
     if (suppressed) {
       continue;
