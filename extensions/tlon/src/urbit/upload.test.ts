@@ -45,6 +45,27 @@ describe("uploadImageFromUrl", () => {
     });
   }
 
+  async function setupSuccessfulUpload(params?: {
+    sourceUrl?: string;
+    contentType?: string;
+    uploadedUrl?: string;
+  }) {
+    const { mockFetch, mockUploadFile, uploadImageFromUrl } = await loadUploadMocks();
+    const sourceUrl = params?.sourceUrl ?? "https://example.com/image.png";
+    const contentType = params?.contentType ?? "image/png";
+    const mockBlob = new Blob(["fake-image"], { type: contentType });
+    mockSuccessfulFetch({
+      mockFetch,
+      blob: mockBlob,
+      finalUrl: sourceUrl,
+      contentType,
+    });
+    if (params?.uploadedUrl) {
+      mockUploadFile.mockResolvedValue({ url: params.uploadedUrl });
+    }
+    return { mockBlob, mockUploadFile, uploadImageFromUrl };
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -54,16 +75,9 @@ describe("uploadImageFromUrl", () => {
   });
 
   it("fetches image and calls uploadFile, returns uploaded URL", async () => {
-    const { mockFetch, mockUploadFile, uploadImageFromUrl } = await loadUploadMocks();
-
-    const mockBlob = new Blob(["fake-image"], { type: "image/png" });
-    mockSuccessfulFetch({
-      mockFetch,
-      blob: mockBlob,
-      finalUrl: "https://example.com/image.png",
-      contentType: "image/png",
+    const { mockBlob, mockUploadFile, uploadImageFromUrl } = await setupSuccessfulUpload({
+      uploadedUrl: "https://memex.tlon.network/uploaded.png",
     });
-    mockUploadFile.mockResolvedValue({ url: "https://memex.tlon.network/uploaded.png" });
 
     const result = await uploadImageFromUrl("https://example.com/image.png");
 
@@ -95,15 +109,7 @@ describe("uploadImageFromUrl", () => {
   });
 
   it("returns original URL if upload fails", async () => {
-    const { mockFetch, mockUploadFile, uploadImageFromUrl } = await loadUploadMocks();
-
-    const mockBlob = new Blob(["fake-image"], { type: "image/png" });
-    mockSuccessfulFetch({
-      mockFetch,
-      blob: mockBlob,
-      finalUrl: "https://example.com/image.png",
-      contentType: "image/png",
-    });
+    const { mockUploadFile, uploadImageFromUrl } = await setupSuccessfulUpload();
     mockUploadFile.mockRejectedValue(new Error("Upload failed"));
 
     const result = await uploadImageFromUrl("https://example.com/image.png");
