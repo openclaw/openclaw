@@ -356,41 +356,21 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
 
 /**
  * Read the gateway port from the installed scheduled task's script file.
+ * Uses PowerShell to avoid locale-specific schtasks field names.
  * Falls back to default port 18789 if not found or on error.
  */
 async function readScheduledTaskPort(taskName: string): Promise<number> {
-  // First, get the task script path from schtasks query
-  const res = await execSchtasks(["/Query", "/TN", taskName, "/V", "/FO", "LIST"]);
-  if (res.code !== 0) {
+  // Use PowerShell to get the task command (avoids locale-specific field names)
+  const psScript = `Get-ScheduledTask -TaskName "${taskName}" | Select-Object -ExpandProperty Actions | Select-Object -ExpandProperty Command`;
+  const res = await execSchtasks(["/C", "powershell", "-NoProfile", "-Command", psScript]);
+  if (res.code !== 0 || !res.stdout) {
     return 18789;
   }
 
-  const output = res.stdout || res.stderr || "";
-  
-  // Parse the "Task To Run" field value from schtasks output
-  // Format: "Task To Run: C:\path\to\gateway.cmd"
-  const taskToRunMatch = output.match(/Task To Run\s*:\s*(.+?)(?:\r?\n|$)/i);
-  if (!taskToRunMatch) {
-    return 18789;
-  }
-
-  const taskToRun = taskToRunMatch[1].trim();
-
-  // Extract the .cmd script path (may be quoted or unquoted)
-  const scriptPathMatch = taskToRun.match(/"([^"]+)"|(\S+)/);
-  const scriptPath = scriptPathMatch ? (scriptPathMatch[1] || scriptPathMatch[2]) : taskToRun;
-
-  if (scriptPath) {
-    try {
-      // Read the script file and extract --port argument
-      const scriptContent = await fs.readFile(scriptPath, "utf8");
-      const portMatch = scriptContent.match(/--port\s+(\d+)/);
-      if (portMatch) {
-        return parseInt(portMatch[1], 10);
-      }
-    } catch {
-      // Failed to read script file, fall back to default
-    }
+  const command = res.stdout.trim();
+  const portMatch = command.match(/--port\s+(\d+)/);
+  if (portMatch) {
+    return parseInt(portMatch[1], 10);
   }
 
   // Fall back to default port
