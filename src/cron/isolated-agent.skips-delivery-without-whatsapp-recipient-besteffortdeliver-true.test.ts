@@ -197,7 +197,7 @@ describe("runCronIsolatedAgentTurn", () => {
     setupIsolatedAgentTurnMocks();
   });
 
-  it("delivers explicit targets with direct and final-payload text", async () => {
+  it("delivers explicit targets directly", async () => {
     await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
       await assertExplicitTelegramTargetDelivery({
         home,
@@ -206,7 +206,11 @@ describe("runCronIsolatedAgentTurn", () => {
         payloads: [{ text: "hello from cron" }],
         expectedText: "hello from cron",
       });
-      vi.clearAllMocks();
+    });
+  });
+
+  it("delivers explicit targets with final payload text", async () => {
+    await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
       await assertExplicitTelegramTargetDelivery({
         home,
         storePath,

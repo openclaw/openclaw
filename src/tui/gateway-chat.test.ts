@@ -147,8 +147,7 @@ describe("resolveGatewayConnection", () => {
       setup: () => pickPrimaryLanIPv4.mockReturnValue("192.168.1.42"),
     },
   ])("uses loopback host when local bind is $label", async ({ bind, setup }) => {
-    loadConfig.mockReturnValue({ gateway: { mode: "local", bind } });
-    resolveGatewayPort.mockReturnValue(18800);
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind, port: 18800 } });
     setup();
 
     const result = await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "env-token" }, async () => {
