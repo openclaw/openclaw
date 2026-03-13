@@ -70,6 +70,14 @@ export async function applyAuthChoiceAzureOpenAI(
   const noteAgentModel = createAuthChoiceAgentModelNoter(params);
   const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
 
+  // Validate explicit non-interactive values before mutating auth profile state.
+  if (params.opts?.azureOpenaiBaseUrl?.trim()) {
+    normalizeAzureOpenAIBaseUrl(params.opts.azureOpenaiBaseUrl);
+  }
+  if (params.opts?.azureOpenaiModelId?.trim()) {
+    normalizeAzureOpenAIModelId(params.opts.azureOpenaiModelId);
+  }
+
   await ensureApiKeyFromOptionEnvOrPrompt({
     token: params.opts?.azureOpenaiApiKey,
     tokenProvider: "azure-openai-responses",
