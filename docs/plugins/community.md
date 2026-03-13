@@ -45,7 +45,7 @@ Use this format when adding entries:
 
 ## Listed plugins
 
-- **ClawCollect** — Hosted form collection bridge for OpenClaw with public links, collector results pages, and chat summaries. Requires a separately deployed Cloudflare Workers backend.
+- **ClawCollect** — Hosted form collection bridge for OpenClaw with public links, collector results pages, and chat summaries. Supports both managed and self-hosted backends.
   npm: `@clawcollect/clawcollect`
   repo: `https://github.com/ruan11223344/clawcollect`
   install: `openclaw plugins install @clawcollect/clawcollect`
