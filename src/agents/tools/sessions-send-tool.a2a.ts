@@ -54,21 +54,21 @@ export async function runSessionsSendA2AFlow(params: {
       return;
     }
 
-    const announceTarget = await resolveAnnounceTarget({
-      sessionKey: params.targetSessionKey,
-      displayKey: params.displayKey,
-    });
-    const targetChannelRaw = announceTarget?.channel;
-    const targetChannel =
-      targetChannelRaw && isGatewayMessageChannel(targetChannelRaw) ? targetChannelRaw : undefined;
-
-    const requesterAnnounceTarget =
+    const [announceTarget, requesterAnnounceTarget] = await Promise.all([
+      resolveAnnounceTarget({
+        sessionKey: params.targetSessionKey,
+        displayKey: params.displayKey,
+      }),
       params.requesterSessionKey && !params.requesterChannel
-        ? await resolveAnnounceTarget({
+        ? resolveAnnounceTarget({
             sessionKey: params.requesterSessionKey,
             displayKey: params.requesterSessionKey,
           })
-        : null;
+        : Promise.resolve(null),
+    ]);
+    const targetChannelRaw = announceTarget?.channel;
+    const targetChannel =
+      targetChannelRaw && isGatewayMessageChannel(targetChannelRaw) ? targetChannelRaw : undefined;
     const requesterChannelRaw = params.requesterChannel ?? requesterAnnounceTarget?.channel;
     const requesterChannel =
       requesterChannelRaw && isGatewayMessageChannel(requesterChannelRaw)
