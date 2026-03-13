@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DedupeEntry } from "../server-shared.js";
 import {
   __testing,
   readTerminalSnapshotFromGatewayDedupe,
@@ -8,7 +9,7 @@ import {
 
 describe("agent wait dedupe helper", () => {
   function setRunEntry(params: {
-    dedupe: Map<unknown, unknown>;
+    dedupe: Map<string, DedupeEntry>;
     kind: "agent" | "chat";
     runId: string;
     ts?: number;
