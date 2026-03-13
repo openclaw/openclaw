@@ -972,6 +972,10 @@ export async function startGatewayServer(
             cronStorePath = cronState.storePath;
             browserControl = nextState.browserControl;
             channelHealthMonitor = nextState.channelHealthMonitor;
+            // Sync updated state to fallback gateway context for non-WS paths
+            // (Telegram polling, WhatsApp, etc.) that use the fallback context.
+            gatewayRequestContext.cron = cronState.cron;
+            gatewayRequestContext.cronStorePath = cronState.storePath;
           },
           startChannel,
           stopChannel,
