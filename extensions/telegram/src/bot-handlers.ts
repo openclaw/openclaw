@@ -60,6 +60,7 @@ import {
   getTelegramTextParts,
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
+  hasBotMention,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
 } from "./bot/helpers.js";
@@ -888,6 +889,7 @@ export const registerTelegramHandlers = ({
     storeAllowFrom: string[];
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
+    groupConfig?: TelegramGroupConfig;
   }) => {
     const {
       ctx,
@@ -898,6 +900,7 @@ export const registerTelegramHandlers = ({
       storeAllowFrom,
       sendOversizeWarning,
       oversizeLogMessage,
+      groupConfig,
     } = params;
 
     // Text fragment handling - Telegram splits long pastes into multiple inbound messages (~4096 chars).
@@ -1018,14 +1021,24 @@ export const registerTelegramHandlers = ({
         return;
       }
       logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
-      await withTelegramApiErrorLogging({
-        operation: "sendMessage",
-        runtime,
-        fn: () =>
-          bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
-            reply_to_message_id: msg.message_id,
-          }),
-      }).catch(() => {});
+      // Don't send the error reply for group messages where requireMention is set
+      // and the bot was not mentioned — the bot would have silently skipped this
+      // message anyway, so responding with an error is unexpected and noisy.
+      const botUsername = ctx.me?.username;
+      const wouldSkipMention =
+        groupConfig?.requireMention === true &&
+        botUsername != null &&
+        !hasBotMention(msg, botUsername);
+      if (!wouldSkipMention) {
+        await withTelegramApiErrorLogging({
+          operation: "sendMessage",
+          runtime,
+          fn: () =>
+            bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
+              reply_to_message_id: msg.message_id,
+            }),
+        }).catch(() => {});
+      }
       return;
     }
 
@@ -1684,6 +1697,7 @@ export const registerTelegramHandlers = ({
         storeAllowFrom,
         sendOversizeWarning: event.sendOversizeWarning,
         oversizeLogMessage: event.oversizeLogMessage,
+        groupConfig,
       });
     } catch (err) {
       runtime.error?.(danger(`${event.errorMessage}: ${String(err)}`));
