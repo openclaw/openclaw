@@ -37,6 +37,18 @@ import {
   isProxyReasoningUnsupported,
 } from "./proxy-stream-wrappers.js";
 
+const DEFAULT_TOOL_TEMPERATURE = 0.3;
+const DEFAULT_EXECUTION_TOOL_TEMPERATURE = 0.1;
+const EXECUTION_TOOL_NAMES = new Set([
+  "apply_patch",
+  "bash",
+  "edit",
+  "exec",
+  "exec_command",
+  "process",
+  "write",
+]);
+
 /**
  * Resolve provider-specific extra params from model config.
  * Used to pass through stream params like temperature/maxTokens.
@@ -84,6 +96,7 @@ function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
   provider: string,
+  options?: { skipCacheDefault?: boolean },
 ): StreamFn | undefined {
   if (!extraParams || Object.keys(extraParams).length === 0) {
     return undefined;
@@ -106,7 +119,9 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.openaiWsWarmup === "boolean") {
     streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
   }
-  const cacheRetention = resolveCacheRetention(extraParams, provider);
+  const cacheRetention = resolveCacheRetention(extraParams, provider, {
+    skipDefault: options?.skipCacheDefault,
+  });
   if (cacheRetention) {
     streamParams.cacheRetention = cacheRetention;
   }
@@ -296,6 +311,100 @@ function resolveAliasedParamValue(
   return seen ? resolved : undefined;
 }
 
+function normalizeToolNames(value: unknown): string[] {
+  const source =
+    value instanceof Set
+      ? Array.from(value)
+      : Array.isArray(value)
+        ? value
+        : value && typeof value === "object" && Symbol.iterator in value
+          ? Array.from(value as Iterable<unknown>)
+          : [];
+  return source
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function isThinkingDisabled(value: unknown): boolean {
+  if (value == null || value === false) {
+    return true;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return [
+      "off",
+      "none",
+      "disabled",
+      "disable",
+      "false",
+      "0",
+      "no",
+      "hide",
+      "hidden",
+      "null",
+      "undefined",
+    ].includes(normalized);
+  }
+  if (typeof value === "object" && !Array.isArray(value)) {
+    const obj = value as Record<string, unknown>;
+    if ("type" in obj) {
+      return isThinkingDisabled(obj.type);
+    }
+    if ("effort" in obj) {
+      return isThinkingDisabled(obj.effort);
+    }
+    // If it's an object without known 'type' or 'effort' fields, it's disabled only if empty.
+    // Non-empty objects (e.g. { budget_tokens: 1000 }) imply enabled thinking.
+    return Object.keys(obj).length === 0;
+  }
+  return false;
+}
+
+function resolveDynamicTemperature(params: {
+  merged: Record<string, unknown>;
+  override?: Record<string, unknown>;
+  thinkingLevel?: ThinkLevel;
+  reasoningLevel?: ReasoningLevel;
+}): number | undefined {
+  if (typeof params.merged.temperature === "number") {
+    return undefined;
+  }
+
+  const thinkingKeys = [
+    "thinking",
+    "thinkingEnabled",
+    "thinking_enabled",
+    "reasoning",
+    "reasoning_effort",
+    "effort",
+  ];
+
+  const explicitConfigs = thinkingKeys
+    .map((key) => params.merged[key])
+    .filter((val) => val !== undefined);
+
+  let isThinkingActive: boolean;
+  if (explicitConfigs.length > 0) {
+    isThinkingActive = explicitConfigs.some((val) => !isThinkingDisabled(val));
+  } else {
+    const thinkLevelActive = params.thinkingLevel != null && params.thinkingLevel !== "off";
+    const reasoningLevelActive = params.reasoningLevel != null && params.reasoningLevel !== "off";
+    isThinkingActive = thinkLevelActive || reasoningLevelActive;
+  }
+
+  if (isThinkingActive) {
+    return undefined;
+  }
+  const toolNames = normalizeToolNames(params.override?.availableToolNames);
+  if (toolNames.length === 0) {
+    return undefined;
+  }
+  return toolNames.some((name) => EXECUTION_TOOL_NAMES.has(name))
+    ? DEFAULT_EXECUTION_TOOL_TEMPERATURE
+    : DEFAULT_TOOL_TEMPERATURE;
+}
+
 function createParallelToolCallsWrapper(
   baseStreamFn: StreamFn | undefined,
   enabled: boolean,
@@ -335,6 +444,7 @@ export function applyExtraParamsToAgent(
   extraParamsOverride?: Record<string, unknown>,
   thinkingLevel?: ThinkLevel,
   agentId?: string,
+  reasoningLevel?: ReasoningLevel,
 ): void {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
@@ -356,7 +466,31 @@ export function applyExtraParamsToAgent(
         )
       : undefined;
   const merged = Object.assign({}, resolvedExtraParams, override);
-  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider);
+
+  const dynamicTemperature = resolveDynamicTemperature({
+    merged,
+    override,
+    thinkingLevel,
+    reasoningLevel,
+  });
+
+  // availableToolNames is used strictly for dynamic temperature resolution.
+  // We must strip it before passing it to the stream parameters to prevent
+  // unintended cache behavior overrides (e.g., Anthropic short cache).
+  delete merged.availableToolNames;
+
+  const hasUserParams = Object.keys(merged).length > 0;
+
+  if (dynamicTemperature !== undefined) {
+    merged.temperature = dynamicTemperature;
+    log.debug(
+      `applying dynamic temperature=${dynamicTemperature} for ${provider}/${modelId} based on available tools`,
+    );
+  }
+
+  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider, {
+    skipCacheDefault: !hasUserParams,
+  });
 
   if (wrappedStreamFn) {
     log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);

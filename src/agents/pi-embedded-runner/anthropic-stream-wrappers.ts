@@ -203,6 +203,7 @@ function normalizeOpenAiStringModeAnthropicToolChoice(toolChoice: unknown): unkn
 export function resolveCacheRetention(
   extraParams: Record<string, unknown> | undefined,
   provider: string,
+  options?: { skipDefault?: boolean },
 ): CacheRetention | undefined {
   const isAnthropicDirect = provider === "anthropic";
   const hasBedrockOverride =
@@ -224,6 +225,10 @@ export function resolveCacheRetention(
   }
   if (legacy === "1h") {
     return "long";
+  }
+
+  if (options?.skipDefault) {
+    return undefined;
   }
 
   return isAnthropicDirect ? "short" : undefined;
