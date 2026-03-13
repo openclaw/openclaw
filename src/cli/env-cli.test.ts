@@ -84,11 +84,12 @@ describe("env-cli helpers", () => {
     expect(fs.existsSync(envFile())).toBe(true);
   });
 
-  it("writeEnvFile sets file mode 0o600", async () => {
+  it.skipIf(process.platform === "win32")("writeEnvFile sets file mode 0o600", async () => {
     const { writeEnvFile } = await helpers();
     writeEnvFile(new Map([["SECRET", "hunter2"]]));
     const stat = fs.statSync(envFile());
     // 0o600 on the lower 9 permission bits.
+    // Skipped on Windows: POSIX permission bits are not supported.
     expect(stat.mode & 0o777).toBe(0o600);
   });
 
@@ -133,13 +134,17 @@ describe("env-cli helpers", () => {
     });
   });
 
-  it("writeEnvFile enforces 0o600 even when file already exists with 0o644", async () => {
-    const { writeEnvFile } = await helpers();
-    // Create with broader permissions first (simulates manual setup).
-    fs.writeFileSync(envFile(), "EXISTING=1\n", { mode: 0o644 });
-    expect(fs.statSync(envFile()).mode & 0o777).toBe(0o644);
+  it.skipIf(process.platform === "win32")(
+    "writeEnvFile enforces 0o600 even when file already exists with 0o644",
+    async () => {
+      const { writeEnvFile } = await helpers();
+      // Create with broader permissions first (simulates manual setup).
+      // Skipped on Windows: POSIX permission bits are not supported.
+      fs.writeFileSync(envFile(), "EXISTING=1\n", { mode: 0o644 });
+      expect(fs.statSync(envFile()).mode & 0o777).toBe(0o644);
 
-    writeEnvFile(new Map([["EXISTING", "1"]]));
-    expect(fs.statSync(envFile()).mode & 0o777).toBe(0o600);
-  });
+      writeEnvFile(new Map([["EXISTING", "1"]]));
+      expect(fs.statSync(envFile()).mode & 0o777).toBe(0o600);
+    },
+  );
 });
