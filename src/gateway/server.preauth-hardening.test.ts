@@ -32,6 +32,16 @@ describe("gateway pre-auth hardening", () => {
       resolveHandshakeTimeoutMs({
         req: createGatewayRequest({
           path: "/",
+          host: "[::1]:18789",
+          remoteAddress: "::1",
+        }),
+      }),
+    ).toBe(DEFAULT_LOCAL_HANDSHAKE_TIMEOUT_MS);
+
+    expect(
+      resolveHandshakeTimeoutMs({
+        req: createGatewayRequest({
+          path: "/",
           host: "gateway.example:18789",
           remoteAddress: "203.0.113.10",
         }),
