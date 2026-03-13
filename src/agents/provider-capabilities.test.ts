@@ -22,7 +22,19 @@ describe("resolveProviderCapabilities", () => {
       transcriptToolCallIdMode: "default",
       transcriptToolCallIdModelHints: [],
       geminiThoughtSignatureModelHints: [],
-      dropThinkingBlockModelHints: [],
+      dropThinkingBlockModelHints: ["claude"],
+    });
+    expect(resolveProviderCapabilities("amazon-bedrock")).toEqual({
+      anthropicToolSchemaMode: "native",
+      anthropicToolChoiceMode: "native",
+      providerFamily: "anthropic",
+      preserveAnthropicThinkingSignatures: true,
+      openAiCompatTurnValidation: true,
+      geminiThoughtSignatureSanitization: false,
+      transcriptToolCallIdMode: "default",
+      transcriptToolCallIdModelHints: [],
+      geminiThoughtSignatureModelHints: [],
+      dropThinkingBlockModelHints: ["claude"],
     });
   });
 
