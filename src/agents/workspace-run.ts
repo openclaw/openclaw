@@ -87,20 +87,29 @@ export function resolveRunWorkspaceDir(params: {
     agentId: params.agentId,
     config: params.config,
   });
-  // If the agent has a configured workspace, prefer it over any provided workspaceDir.
-  // This prevents subagents from inheriting the parent agent's workspace when spawned
-  // via sessions_spawn, where the parent's workspaceDir is forwarded to the child.
-  const agentConfiguredWorkspace = resolveAgentConfig(
+  // If the agent has an explicitly configured workspace, prefer it over any provided
+  // workspaceDir. This prevents subagents from inheriting the parent agent's workspace
+  // when spawned via sessions_spawn, where the parent's workspaceDir is forwarded.
+  // Delegates to resolveAgentWorkspaceDir for consistent sanitisation (stripNullBytes).
+  const explicitAgentWorkspace = resolveAgentConfig(
     params.config ?? {},
     agentId,
   )?.workspace?.trim();
-  if (agentConfiguredWorkspace && typeof requested === "string" && requested.trim()) {
-    const sanitized = sanitizeForPromptLiteral(agentConfiguredWorkspace);
-    if (sanitized !== agentConfiguredWorkspace) {
+  if (explicitAgentWorkspace && typeof requested === "string" && requested.trim()) {
+    const agentWorkspace = resolveAgentWorkspaceDir(params.config ?? {}, agentId);
+    const resolvedRequested = resolveUserPath(requested.trim());
+    if (resolvedRequested !== agentWorkspace) {
+      logWarn(
+        `Overriding provided workspaceDir with agent "${agentId}" configured workspace. ` +
+          `Provided: ${resolvedRequested}, using: ${agentWorkspace}`,
+      );
+    }
+    const sanitized = sanitizeForPromptLiteral(agentWorkspace);
+    if (sanitized !== agentWorkspace) {
       logWarn("Control/format characters stripped from workspaceDir (OC-19 hardening).");
     }
     return {
-      workspaceDir: resolveUserPath(sanitized),
+      workspaceDir: sanitized,
       usedFallback: false,
       agentId,
       agentIdSource,
