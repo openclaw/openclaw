@@ -191,10 +191,14 @@ export async function runAgentTurnWithFallback(params: {
           return undefined;
         }
         const { text, skip } = normalizeStreamingText(payload);
-        if (skip || !text) {
+        if (skip) {
           return undefined;
         }
-        await params.typingSignals.signalTextDelta(text);
+        const mediaUrls = payload.mediaUrls;
+        if (!text && (mediaUrls?.length ?? 0) === 0) {
+          return undefined;
+        }
+        await params.typingSignals.signalTextDelta(text, mediaUrls);
         return text;
       };
       const blockReplyPipeline = params.blockReplyPipeline;
@@ -449,7 +453,7 @@ export async function runAgentTurnWithFallback(params: {
                           if (skip) {
                             return;
                           }
-                          await params.typingSignals.signalTextDelta(text);
+                          await params.typingSignals.signalTextDelta(text, payload.mediaUrls);
                           await onToolResult({
                             ...payload,
                             text,
