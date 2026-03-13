@@ -64,20 +64,16 @@ describe("resolveProxyFetchFromEnv", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it("returns undefined when no proxy env vars are set", () => {
-    vi.stubEnv("HTTPS_PROXY", "");
-    vi.stubEnv("HTTP_PROXY", "");
-    vi.stubEnv("https_proxy", "");
-    vi.stubEnv("http_proxy", "");
-
-    expect(resolveProxyFetchFromEnv()).toBeUndefined();
+    expect(resolveProxyFetchFromEnv({})).toBeUndefined();
   });
 
   it("returns proxy fetch using EnvHttpProxyAgent when HTTPS_PROXY is set", async () => {
-    vi.stubEnv("HTTP_PROXY", "");
-    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
     undiciFetch.mockResolvedValue({ ok: true });
 
-    const fetchFn = resolveProxyFetchFromEnv();
+    const fetchFn = resolveProxyFetchFromEnv({
+      HTTP_PROXY: "",
+      HTTPS_PROXY: "http://proxy.test:8080",
+    });
     expect(fetchFn).toBeDefined();
     expect(envAgentSpy).toHaveBeenCalled();
 
@@ -89,46 +85,47 @@ describe("resolveProxyFetchFromEnv", () => {
   });
 
   it("returns proxy fetch when HTTP_PROXY is set", () => {
-    vi.stubEnv("HTTPS_PROXY", "");
-    vi.stubEnv("HTTP_PROXY", "http://fallback.test:3128");
-
-    const fetchFn = resolveProxyFetchFromEnv();
+    const fetchFn = resolveProxyFetchFromEnv({
+      HTTPS_PROXY: "",
+      HTTP_PROXY: "http://fallback.test:3128",
+    });
     expect(fetchFn).toBeDefined();
     expect(envAgentSpy).toHaveBeenCalled();
   });
 
   it("returns proxy fetch when lowercase https_proxy is set", () => {
-    vi.stubEnv("HTTPS_PROXY", "");
-    vi.stubEnv("HTTP_PROXY", "");
-    vi.stubEnv("http_proxy", "");
-    vi.stubEnv("https_proxy", "http://lower.test:1080");
-
-    const fetchFn = resolveProxyFetchFromEnv();
+    const fetchFn = resolveProxyFetchFromEnv({
+      HTTPS_PROXY: "",
+      HTTP_PROXY: "",
+      http_proxy: "",
+      https_proxy: "http://lower.test:1080",
+    });
     expect(fetchFn).toBeDefined();
     expect(envAgentSpy).toHaveBeenCalled();
   });
 
   it("returns proxy fetch when lowercase http_proxy is set", () => {
-    vi.stubEnv("HTTPS_PROXY", "");
-    vi.stubEnv("HTTP_PROXY", "");
-    vi.stubEnv("https_proxy", "");
-    vi.stubEnv("http_proxy", "http://lower-http.test:1080");
-
-    const fetchFn = resolveProxyFetchFromEnv();
+    const fetchFn = resolveProxyFetchFromEnv({
+      HTTPS_PROXY: "",
+      HTTP_PROXY: "",
+      https_proxy: "",
+      http_proxy: "http://lower-http.test:1080",
+    });
     expect(fetchFn).toBeDefined();
     expect(envAgentSpy).toHaveBeenCalled();
   });
 
   it("returns undefined when EnvHttpProxyAgent constructor throws", () => {
-    vi.stubEnv("HTTP_PROXY", "");
-    vi.stubEnv("https_proxy", "");
-    vi.stubEnv("http_proxy", "");
-    vi.stubEnv("HTTPS_PROXY", "not-a-valid-url");
     envAgentSpy.mockImplementationOnce(() => {
       throw new Error("Invalid URL");
     });
 
-    const fetchFn = resolveProxyFetchFromEnv();
+    const fetchFn = resolveProxyFetchFromEnv({
+      HTTP_PROXY: "",
+      https_proxy: "",
+      http_proxy: "",
+      HTTPS_PROXY: "not-a-valid-url",
+    });
     expect(fetchFn).toBeUndefined();
   });
 });

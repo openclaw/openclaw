@@ -50,7 +50,7 @@ describe("msteams policy", () => {
       expect(res.allowed).toBe(false);
     });
 
-    it("matches team and channel by name", () => {
+    it("blocks team and channel name matches by default", () => {
       const cfg: MSTeamsConfig = {
         teams: {
           "My Team": {
@@ -67,6 +67,31 @@ describe("msteams policy", () => {
         teamName: "My Team",
         channelName: "General Chat",
         conversationId: "ignored",
+      });
+
+      expect(res.teamConfig).toBeUndefined();
+      expect(res.channelConfig).toBeUndefined();
+      expect(res.allowed).toBe(false);
+    });
+
+    it("matches team and channel by name when dangerous name matching is enabled", () => {
+      const cfg: MSTeamsConfig = {
+        teams: {
+          "My Team": {
+            requireMention: true,
+            channels: {
+              "General Chat": { requireMention: false },
+            },
+          },
+        },
+      };
+
+      const res = resolveMSTeamsRouteConfig({
+        cfg,
+        teamName: "My Team",
+        channelName: "General Chat",
+        conversationId: "ignored",
+        allowNameMatching: true,
       });
 
       expect(res.teamConfig?.requireMention).toBe(true);
