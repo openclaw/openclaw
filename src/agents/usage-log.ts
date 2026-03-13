@@ -33,6 +33,17 @@ async function readJsonArray(file: string): Promise<TokenUsageRecord[]> {
   }
 }
 
+async function appendRecord(file: string, entry: TokenUsageRecord): Promise<void> {
+  const records = await readJsonArray(file);
+  records.push(entry);
+  await fs.writeFile(file, JSON.stringify(records, null, 2));
+}
+
+// Per-file write queue: serialises concurrent recordTokenUsage() calls so that
+// a fire-and-forget caller cannot cause two concurrent writers to read the same
+// snapshot and overwrite each other's entry.
+const writeQueues = new Map<string, Promise<void>>();
+
 export async function recordTokenUsage(params: {
   workspaceDir: string;
   runId?: string;
@@ -83,7 +94,11 @@ export async function recordTokenUsage(params: {
     createdAt: new Date().toISOString(),
   };
 
-  const records = await readJsonArray(file);
-  records.push(entry);
-  await fs.writeFile(file, JSON.stringify(records, null, 2));
+  const queued = writeQueues.get(file) ?? Promise.resolve();
+  const next = queued.then(() => appendRecord(file, entry));
+  writeQueues.set(
+    file,
+    next.catch(() => {}),
+  );
+  await next;
 }

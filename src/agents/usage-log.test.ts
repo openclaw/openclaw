@@ -119,4 +119,25 @@ describe("recordTokenUsage", () => {
     expect(records[0].inputTokens).toBe(100);
     expect(records[0].outputTokens).toBe(50);
   });
+
+  it("serialises concurrent writes — no record is lost", async () => {
+    const N = 20;
+    await Promise.all(
+      Array.from({ length: N }, (_, i) =>
+        recordTokenUsage({
+          workspaceDir: tmpDir,
+          label: "llm_output",
+          usage: { input: i + 1, output: 1, total: i + 2 },
+        }),
+      ),
+    );
+
+    const records = JSON.parse(await fs.readFile(usageFile, "utf-8"));
+    expect(records).toHaveLength(N);
+    // Every distinct tokensUsed value must appear exactly once
+    const totals = records
+      .map((r: { tokensUsed: number }) => r.tokensUsed)
+      .toSorted((a: number, b: number) => a - b);
+    expect(totals).toEqual(Array.from({ length: N }, (_, i) => i + 2));
+  });
 });
