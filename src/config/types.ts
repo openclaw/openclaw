@@ -6,6 +6,7 @@ export * from "./types.acp.js";
 export * from "./types.approvals.js";
 export * from "./types.auth.js";
 export * from "./types.base.js";
+export * from "./types.backup.js";
 export * from "./types.browser.js";
 export * from "./types.channels.js";
 export * from "./types.cli.js";

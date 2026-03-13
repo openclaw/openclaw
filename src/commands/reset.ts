@@ -45,7 +45,7 @@ async function stopGatewayIfRunning(runtime: RuntimeEnv) {
 }
 
 function logBackupRecommendation(runtime: RuntimeEnv) {
-  runtime.log(`Recommended first: ${formatCliCommand("openclaw backup create")}`);
+  runtime.log(`Recommended first: ${formatCliCommand("openclaw backup export")}`);
 }
 
 export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {

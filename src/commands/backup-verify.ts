@@ -1,17 +1,23 @@
+import { createReadStream } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
+import { isBlockedTarEntryType } from "../infra/archive.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
+const MAX_ARCHIVE_ENTRY_COUNT = 50_000;
+const MAX_ARCHIVE_ENTRY_PATH_BYTES = 4 * 1024 * 1024;
+const MAX_MANIFEST_BYTES = 1 * 1024 * 1024;
 
-type BackupManifestAsset = {
+export type BackupManifestAsset = {
   kind: string;
   sourcePath: string;
   archivePath: string;
 };
 
-type BackupManifest = {
+export type BackupManifest = {
   schemaVersion: number;
   createdAt: string;
   archiveRoot: string;
@@ -49,6 +55,14 @@ export type BackupVerifyResult = {
   runtimeVersion: string;
   assetCount: number;
   entryCount: number;
+  archiveBytes: number;
+  totalEntryBytes: number;
+  maxEntryBytes: number;
+};
+
+export type ArchiveScanTotals = {
+  entryCount: number;
+  totalPathBytes: number;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -59,7 +73,7 @@ function stripTrailingSlashes(value: string): string {
   return value.replace(/\/+$/u, "");
 }
 
-function normalizeArchivePath(entryPath: string, label: string): string {
+export function normalizeArchivePath(entryPath: string, label: string): string {
   const trimmed = stripTrailingSlashes(entryPath.trim());
   if (!trimmed) {
     throw new Error(`${label} is empty.`);
@@ -81,7 +95,7 @@ function normalizeArchivePath(entryPath: string, label: string): string {
   return normalized;
 }
 
-function normalizeArchiveRoot(rootName: string): string {
+export function normalizeArchiveRoot(rootName: string): string {
   const normalized = normalizeArchivePath(rootName, "Backup manifest archiveRoot");
   if (normalized.includes("/")) {
     throw new Error(`Backup manifest archiveRoot must be a single path segment: ${rootName}`);
@@ -94,7 +108,7 @@ function isArchivePathWithin(child: string, parent: string): boolean {
   return relative === "" || (!relative.startsWith("../") && relative !== "..");
 }
 
-function parseManifest(raw: string): BackupManifest {
+export function parseBackupManifest(raw: string): BackupManifest {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -170,14 +184,60 @@ function parseManifest(raw: string): BackupManifest {
   };
 }
 
-async function listArchiveEntries(archivePath: string): Promise<string[]> {
-  const entries: string[] = [];
-  await tar.t({
-    file: archivePath,
-    gzip: true,
-    onentry: (entry) => {
-      entries.push(entry.path);
-    },
+async function listArchiveEntries(
+  archivePath: string,
+): Promise<Array<{ path: string; type?: string; size: number }>> {
+  const entries: Array<{ path: string; type?: string; size: number }> = [];
+  let totals: ArchiveScanTotals = { entryCount: 0, totalPathBytes: 0 };
+  let limitError: Error | undefined;
+  let parser!: tar.Parser;
+  await new Promise<void>((resolve, reject) => {
+    let stream: ReturnType<typeof createReadStream> | undefined;
+    let settled = false;
+    const settle = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (error && stream && !stream.destroyed) {
+        stream.destroy(error);
+      }
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    };
+
+    parser = new tar.Parser({
+      gzip: true,
+      onReadEntry(entry) {
+        if (limitError) {
+          return;
+        }
+        try {
+          totals = advanceArchiveScanTotals(totals, entry.path);
+          entries.push({
+            path: entry.path,
+            type: entry.type,
+            size: Math.max(0, Number.isFinite(entry.size) ? entry.size : 0),
+          });
+        } catch (error) {
+          limitError = error instanceof Error ? error : new Error(String(error));
+          parser.abort(limitError);
+        }
+      },
+    });
+
+    parser.on("error", (error) =>
+      settle(error instanceof Error ? error : new Error(String(error))),
+    );
+    parser.on("end", () => settle(limitError));
+    stream = createReadStream(archivePath);
+    stream.on("error", (error) =>
+      settle(error instanceof Error ? error : new Error(String(error))),
+    );
+    stream.pipe(parser);
   });
   return entries;
 }
@@ -198,12 +258,43 @@ async function extractManifest(params: {
 
       manifestContentPromise = new Promise<string>((resolve, reject) => {
         const chunks: Buffer[] = [];
+        let totalBytes = 0;
+        let settled = false;
+        const fail = (err: Error) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          reject(err);
+          entry.removeAllListeners("data");
+          entry.resume();
+        };
+
         entry.on("data", (chunk: Buffer | string) => {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          if (settled) {
+            return;
+          }
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          totalBytes += buffer.byteLength;
+          if (totalBytes > MAX_MANIFEST_BYTES) {
+            fail(new Error(`Backup manifest exceeds maximum size of ${MAX_MANIFEST_BYTES} bytes.`));
+            return;
+          }
+          chunks.push(buffer);
         });
-        entry.on("error", reject);
+        entry.on("error", (err) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          reject(err);
+        });
         entry.on("end", () => {
-          resolve(Buffer.concat(chunks).toString("utf8"));
+          if (settled) {
+            return;
+          }
+          settled = true;
+          resolve(Buffer.concat(chunks, totalBytes).toString("utf8"));
         });
       });
     },
@@ -220,11 +311,47 @@ function isRootManifestEntry(entryPath: string): boolean {
   return parts.length === 2 && parts[0] !== "" && parts[1] === "manifest.json";
 }
 
+export function advanceArchiveScanTotals(
+  totals: ArchiveScanTotals,
+  entryPath: string,
+): ArchiveScanTotals {
+  const entryCount = totals.entryCount + 1;
+  if (entryCount > MAX_ARCHIVE_ENTRY_COUNT) {
+    throw new Error(`Backup archive exceeds maximum entry count of ${MAX_ARCHIVE_ENTRY_COUNT}.`);
+  }
+
+  const totalPathBytes = totals.totalPathBytes + Buffer.byteLength(entryPath, "utf8");
+  if (totalPathBytes > MAX_ARCHIVE_ENTRY_PATH_BYTES) {
+    throw new Error(
+      `Backup archive entry metadata exceeds maximum size of ${MAX_ARCHIVE_ENTRY_PATH_BYTES} bytes.`,
+    );
+  }
+
+  return { entryCount, totalPathBytes };
+}
+
+function requiresExactArchiveEntry(asset: BackupManifestAsset): boolean {
+  return asset.kind === "config";
+}
+
+function collectNestedArchiveParents(entries: Iterable<string>): Set<string> {
+  const nestedParents = new Set<string>();
+  for (const entry of entries) {
+    let parent = path.posix.dirname(entry);
+    while (parent !== "." && parent !== entry) {
+      nestedParents.add(parent);
+      parent = path.posix.dirname(parent);
+    }
+  }
+  return nestedParents;
+}
+
 function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<string>): void {
   const archiveRoot = normalizeArchiveRoot(manifest.archiveRoot);
   const manifestEntryPath = path.posix.join(archiveRoot, "manifest.json");
   const normalizedEntries = [...entries];
   const normalizedEntrySet = new Set(normalizedEntries);
+  const nestedArchiveParents = collectNestedArchiveParents(normalizedEntries);
 
   if (!normalizedEntrySet.has(manifestEntryPath)) {
     throw new Error(`Archive is missing manifest entry: ${manifestEntryPath}`);
@@ -243,10 +370,8 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
       throw new Error(`Manifest asset path is outside payload root: ${asset.archivePath}`);
     }
     const exact = normalizedEntrySet.has(assetArchivePath);
-    const nested = normalizedEntries.some(
-      (entry) => entry !== assetArchivePath && isArchivePathWithin(entry, assetArchivePath),
-    );
-    if (!exact && !nested) {
+    const nested = nestedArchiveParents.has(assetArchivePath);
+    if (!exact && (!nested || requiresExactArchiveEntry(asset))) {
       throw new Error(`Archive is missing payload for manifest asset: ${assetArchivePath}`);
     }
   }
@@ -276,19 +401,32 @@ function findDuplicateNormalizedEntryPath(
   return undefined;
 }
 
+export function findUnsupportedTarSpecialEntry(
+  entries: Array<{ path: string; type?: string }>,
+): { path: string; type?: string } | undefined {
+  return entries.find((entry) => isBlockedTarEntryType(entry.type ?? ""));
+}
+
 export async function backupVerifyCommand(
   runtime: RuntimeEnv,
   opts: BackupVerifyOptions,
 ): Promise<BackupVerifyResult> {
   const archivePath = resolveUserPath(opts.archive);
+  const archiveStat = await fs.stat(archivePath);
   const rawEntries = await listArchiveEntries(archivePath);
   if (rawEntries.length === 0) {
     throw new Error("Backup archive is empty.");
   }
+  const unsupportedSpecialEntry = findUnsupportedTarSpecialEntry(rawEntries);
+  if (unsupportedSpecialEntry) {
+    throw new Error(
+      `Archive contains unsupported tar special entry (${unsupportedSpecialEntry.type}): ${unsupportedSpecialEntry.path}`,
+    );
+  }
 
   const entries = rawEntries.map((entry) => ({
-    raw: entry,
-    normalized: normalizeArchivePath(entry, "Archive entry"),
+    raw: entry.path,
+    normalized: normalizeArchivePath(entry.path, "Archive entry"),
   }));
   const normalizedEntrySet = new Set(entries.map((entry) => entry.normalized));
 
@@ -306,7 +444,7 @@ export async function backupVerifyCommand(
   }
 
   const manifestRaw = await extractManifest({ archivePath, manifestEntryPath });
-  const manifest = parseManifest(manifestRaw);
+  const manifest = parseBackupManifest(manifestRaw);
   verifyManifestAgainstEntries(manifest, normalizedEntrySet);
 
   const result: BackupVerifyResult = {
@@ -317,6 +455,9 @@ export async function backupVerifyCommand(
     runtimeVersion: manifest.runtimeVersion,
     assetCount: manifest.assets.length,
     entryCount: rawEntries.length,
+    archiveBytes: archiveStat.size,
+    totalEntryBytes: rawEntries.reduce((sum, entry) => sum + entry.size, 0),
+    maxEntryBytes: rawEntries.reduce((max, entry) => Math.max(max, entry.size), 0),
   };
 
   runtime.log(opts.json ? JSON.stringify(result, null, 2) : formatResult(result));

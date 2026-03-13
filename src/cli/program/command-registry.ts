@@ -96,7 +96,7 @@ const coreEntries: CoreCliEntry[] = [
     commands: [
       {
         name: "backup",
-        description: "Create and verify local backup archives for OpenClaw state",
+        description: "Set up, run, inspect, export, and restore backups",
         hasSubcommands: true,
       },
     ],

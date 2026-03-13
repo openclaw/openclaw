@@ -1,6 +1,9 @@
+import { execFile } from "node:child_process";
+import type { PathLike } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
@@ -12,6 +15,7 @@ import {
 import { backupCreateCommand } from "./backup.js";
 
 const backupVerifyCommandMock = vi.hoisted(() => vi.fn());
+const execFileAsync = promisify(execFile);
 
 vi.mock("./backup-verify.js", () => ({
   backupVerifyCommand: backupVerifyCommandMock,
@@ -151,8 +155,12 @@ describe("backup commands", () => {
           ]),
         );
 
-        const stateAsset = result.assets.find((asset) => asset.kind === "state");
-        const workspaceAsset = result.assets.find((asset) => asset.kind === "workspace");
+        const stateAsset = result.assets.find(
+          (asset: (typeof result.assets)[number]) => asset.kind === "state",
+        );
+        const workspaceAsset = result.assets.find(
+          (asset: (typeof result.assets)[number]) => asset.kind === "workspace",
+        );
         expect(stateAsset).toBeDefined();
         expect(workspaceAsset).toBeDefined();
 
@@ -335,6 +343,296 @@ describe("backup commands", () => {
     expect(await fs.readFile(existingArchive, "utf8")).toBe("already here");
   });
 
+  it("rejects backup sources that contain symbolic links before writing an archive", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const externalWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    const configPath = path.join(tempHome.home, "custom-config.json");
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-"));
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-outside-"));
+    try {
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace: externalWorkspace,
+            },
+          },
+        }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+      await fs.writeFile(path.join(outsideDir, "shared.txt"), "shared\n", "utf8");
+      await fs.symlink(
+        path.join(outsideDir, "shared.txt"),
+        path.join(externalWorkspace, "shared.txt"),
+      );
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(
+        backupCreateCommand(runtime, {
+          output: backupDir,
+          includeWorkspace: true,
+        }),
+      ).rejects.toThrow(/contains symbolic links/i);
+    } finally {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      await fs.rm(externalWorkspace, { recursive: true, force: true });
+      await fs.rm(backupDir, { recursive: true, force: true });
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects backup sources that contain fifo special files before writing an archive", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const externalWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    const configPath = path.join(tempHome.home, "custom-config.json");
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-"));
+    const fifoPath = path.join(externalWorkspace, "workspace.pipe");
+    try {
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace: externalWorkspace,
+            },
+          },
+        }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+      await execFileAsync("mkfifo", [fifoPath]);
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(
+        backupCreateCommand(runtime, {
+          output: backupDir,
+          includeWorkspace: true,
+        }),
+      ).rejects.toThrow(/unsupported special file/i);
+    } finally {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      await fs.rm(externalWorkspace, { recursive: true, force: true });
+      await fs.rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects backup source symlinks even when readdir reports unknown dirent types", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const externalWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    const configPath = path.join(tempHome.home, "custom-config.json");
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-"));
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-outside-"));
+    const originalReaddirWithFileTypes = fs.readdir.bind(fs) as unknown as (
+      target: PathLike,
+      options: { encoding: "buffer"; withFileTypes: true; recursive?: boolean },
+    ) => ReturnType<typeof fs.readdir>;
+    const readdirSpy = vi.spyOn(fs, "readdir");
+    try {
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace: externalWorkspace,
+            },
+          },
+        }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+      await fs.writeFile(path.join(outsideDir, "shared.txt"), "shared\n", "utf8");
+      await fs.symlink(
+        path.join(outsideDir, "shared.txt"),
+        path.join(externalWorkspace, "shared.txt"),
+      );
+
+      readdirSpy.mockImplementation((async (
+        target: PathLike,
+        options: { encoding: "buffer"; withFileTypes: true; recursive?: boolean },
+      ) => {
+        if (target === externalWorkspace && typeof options === "object" && options?.withFileTypes) {
+          return [
+            {
+              name: "shared.txt",
+              isFile: () => false,
+              isDirectory: () => false,
+              isSymbolicLink: () => false,
+            },
+          ] as unknown;
+        }
+        return originalReaddirWithFileTypes(
+          target,
+          options as { encoding: "buffer"; withFileTypes: true; recursive?: boolean },
+        );
+      }) as never);
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(
+        backupCreateCommand(runtime, {
+          output: backupDir,
+          includeWorkspace: true,
+        }),
+      ).rejects.toThrow(/contains symbolic links/i);
+    } finally {
+      readdirSpy.mockRestore();
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      await fs.rm(externalWorkspace, { recursive: true, force: true });
+      await fs.rm(backupDir, { recursive: true, force: true });
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects file-valued state directories before writing an archive", async () => {
+    const statePath = path.join(tempHome.home, "state-file");
+    const configPath = path.join(tempHome.home, "custom-config.json");
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-"));
+    process.env.OPENCLAW_STATE_DIR = statePath;
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    await fs.writeFile(statePath, "not-a-directory\n", "utf8");
+    await fs.writeFile(configPath, JSON.stringify({}), "utf8");
+
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    try {
+      await expect(
+        backupCreateCommand(runtime, {
+          output: backupDir,
+        }),
+      ).rejects.toThrow(/state source must be a directory/i);
+    } finally {
+      delete process.env.OPENCLAW_STATE_DIR;
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      await fs.rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects directory-valued config sources before writing an archive", async () => {
+    const configPath = path.join(tempHome.home, "config-dir");
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-"));
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    await fs.mkdir(configPath, { recursive: true });
+
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    try {
+      await expect(
+        backupCreateCommand(runtime, {
+          output: backupDir,
+          onlyConfig: true,
+        }),
+      ).rejects.toThrow(/config source must be a regular file/i);
+    } finally {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      await fs.rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects file-valued credentials directories before writing an archive", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const oauthPath = path.join(tempHome.home, "oauth-file");
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-"));
+    process.env.OPENCLAW_OAUTH_DIR = oauthPath;
+    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+    await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+    await fs.writeFile(oauthPath, "not-a-directory\n", "utf8");
+
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    try {
+      await expect(
+        backupCreateCommand(runtime, {
+          output: backupDir,
+        }),
+      ).rejects.toThrow(/credentials source must be a directory/i);
+    } finally {
+      delete process.env.OPENCLAW_OAUTH_DIR;
+      await fs.rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects file-valued workspace sources before writing an archive", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const configPath = path.join(tempHome.home, "custom-config.json");
+    const workspacePath = path.join(tempHome.home, "workspace-file");
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-"));
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        agents: {
+          defaults: {
+            workspace: workspacePath,
+          },
+        },
+      }),
+      "utf8",
+    );
+    await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+    await fs.writeFile(workspacePath, "not-a-directory\n", "utf8");
+
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    try {
+      await expect(
+        backupCreateCommand(runtime, {
+          output: backupDir,
+          includeWorkspace: true,
+        }),
+      ).rejects.toThrow(/workspace source must be a directory/i);
+    } finally {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      await fs.rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails fast when config is invalid and workspace backup is enabled", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const configPath = path.join(tempHome.home, "custom-config.json");
@@ -377,7 +675,9 @@ describe("backup commands", () => {
       });
 
       expect(result.includeWorkspace).toBe(false);
-      expect(result.assets.some((asset) => asset.kind === "workspace")).toBe(false);
+      expect(
+        result.assets.some((asset: (typeof result.assets)[number]) => asset.kind === "workspace"),
+      ).toBe(false);
     } finally {
       delete process.env.OPENCLAW_CONFIG_PATH;
     }

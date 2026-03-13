@@ -2,6 +2,7 @@ import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
 import type { AuthConfig } from "./types.auth.js";
+import type { BackupConfig } from "./types.backup.js";
 import type { DiagnosticsConfig, LoggingConfig, SessionConfig, WebConfig } from "./types.base.js";
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
@@ -60,6 +61,7 @@ export type OpenClawConfig = {
     lastRunCommand?: string;
     lastRunMode?: "local" | "remote";
   };
+  backup?: BackupConfig;
   diagnostics?: DiagnosticsConfig;
   logging?: LoggingConfig;
   cli?: CliConfig;

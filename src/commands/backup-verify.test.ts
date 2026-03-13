@@ -5,7 +5,11 @@ import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { buildBackupArchiveRoot } from "./backup-shared.js";
-import { backupVerifyCommand } from "./backup-verify.js";
+import {
+  advanceArchiveScanTotals,
+  backupVerifyCommand,
+  findUnsupportedTarSpecialEntry,
+} from "./backup-verify.js";
 import { backupCreateCommand } from "./backup.js";
 
 describe("backupVerifyCommand", () => {
@@ -39,6 +43,9 @@ describe("backupVerifyCommand", () => {
       expect(verified.ok).toBe(true);
       expect(verified.archiveRoot).toBe(buildBackupArchiveRoot(nowMs));
       expect(verified.assetCount).toBeGreaterThan(0);
+      expect(verified.archiveBytes).toBeGreaterThan(0);
+      expect(verified.totalEntryBytes).toBeGreaterThan(0);
+      expect(verified.maxEntryBytes).toBeGreaterThan(0);
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }
@@ -388,5 +395,231 @@ describe("backupVerifyCommand", () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("fails when a config asset only has nested payload entries", async () => {
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-backup-nested-config-payload-"),
+    );
+    const archivePath = path.join(tempDir, "broken.tar.gz");
+    const manifestPath = path.join(tempDir, "manifest.json");
+    const nestedPayloadPath = path.join(tempDir, "nested.txt");
+    try {
+      const rootName = "2026-03-09T00-00-00.000Z-openclaw-backup";
+      const configArchivePath = `${rootName}/payload/posix/tmp/openclaw.json`;
+      const manifest = {
+        schemaVersion: 1,
+        createdAt: "2026-03-09T00:00:00.000Z",
+        archiveRoot: rootName,
+        runtimeVersion: "test",
+        platform: process.platform,
+        nodeVersion: process.version,
+        assets: [
+          {
+            kind: "config",
+            sourcePath: "/tmp/openclaw.json",
+            archivePath: configArchivePath,
+          },
+        ],
+      };
+      await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+      await fs.writeFile(nestedPayloadPath, "nested\n", "utf8");
+      await tar.c(
+        {
+          file: archivePath,
+          gzip: true,
+          portable: true,
+          preservePaths: true,
+          onWriteEntry: (entry) => {
+            if (entry.path === manifestPath) {
+              entry.path = `${rootName}/manifest.json`;
+              return;
+            }
+            if (entry.path === nestedPayloadPath) {
+              entry.path = `${configArchivePath}/nested.txt`;
+            }
+          },
+        },
+        [manifestPath, nestedPayloadPath],
+      );
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+        /missing payload for manifest asset/i,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts directory assets that are backed only by nested payload entries", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-nested-state-"));
+    const archivePath = path.join(tempDir, "ok.tar.gz");
+    const manifestPath = path.join(tempDir, "manifest.json");
+    const nestedPayloadPath = path.join(tempDir, "state.txt");
+    try {
+      const rootName = "2026-03-09T00-00-00.000Z-openclaw-backup";
+      const stateArchivePath = `${rootName}/payload/posix/tmp/.openclaw`;
+      const manifest = {
+        schemaVersion: 1,
+        createdAt: "2026-03-09T00:00:00.000Z",
+        archiveRoot: rootName,
+        runtimeVersion: "test",
+        platform: process.platform,
+        nodeVersion: process.version,
+        assets: [
+          {
+            kind: "state",
+            sourcePath: "/tmp/.openclaw",
+            archivePath: stateArchivePath,
+          },
+        ],
+      };
+      await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+      await fs.writeFile(nestedPayloadPath, "nested\n", "utf8");
+      await tar.c(
+        {
+          file: archivePath,
+          gzip: true,
+          portable: true,
+          preservePaths: true,
+          onWriteEntry: (entry) => {
+            if (entry.path === manifestPath) {
+              entry.path = `${rootName}/manifest.json`;
+              return;
+            }
+            if (entry.path === nestedPayloadPath) {
+              entry.path = `${stateArchivePath}/state.txt`;
+            }
+          },
+        },
+        [manifestPath, nestedPayloadPath],
+      );
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      const verified = await backupVerifyCommand(runtime, { archive: archivePath });
+      expect(verified.ok).toBe(true);
+      expect(verified.assetCount).toBe(1);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when the archive contains blocked tar special entries", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-link-entry-"));
+    const archivePath = path.join(tempDir, "broken.tar.gz");
+    try {
+      const rootName = "2026-03-09T00-00-00.000Z-openclaw-backup";
+      const root = path.join(tempDir, rootName);
+      const outsideDir = path.join(tempDir, "outside");
+      await fs.mkdir(root, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(path.join(outsideDir, "owned.txt"), "owned\n", "utf8");
+      await fs.writeFile(
+        path.join(root, "manifest.json"),
+        `${JSON.stringify(
+          {
+            schemaVersion: 1,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            archiveRoot: rootName,
+            runtimeVersion: "test",
+            platform: process.platform,
+            nodeVersion: process.version,
+            assets: [],
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      await fs.symlink("../outside", path.join(root, "payload"));
+
+      await tar.c({ file: archivePath, gzip: true, cwd: tempDir }, [rootName]);
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+        /unsupported tar special entry/i,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when the manifest entry exceeds the allowed size", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-large-manifest-"));
+    const archivePath = path.join(tempDir, "broken.tar.gz");
+    try {
+      const rootName = "2026-03-09T00-00-00.000Z-openclaw-backup";
+      const root = path.join(tempDir, rootName);
+      await fs.mkdir(root, { recursive: true });
+      await fs.writeFile(
+        path.join(root, "manifest.json"),
+        JSON.stringify({ pad: "a".repeat(1024 * 1024) }),
+        "utf8",
+      );
+      await tar.c({ file: archivePath, gzip: true, cwd: tempDir }, [rootName]);
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+        /manifest exceeds maximum size/i,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when archive entry metadata exceeds the scan limit", () => {
+    let totals = { entryCount: 0, totalPathBytes: 0 };
+    expect(() => {
+      for (let entryIndex = 0; entryIndex < 1024; entryIndex += 1) {
+        totals = advanceArchiveScanTotals(
+          totals,
+          `backup/payload/${String(entryIndex).padStart(4, "0")}-${"a".repeat(4096)}.txt`,
+        );
+      }
+    }).toThrow(/entry metadata exceeds maximum size/i);
+  });
+
+  it("fails when archive entry count exceeds the scan limit", () => {
+    let totals = { entryCount: 0, totalPathBytes: 0 };
+    expect(() => {
+      for (let entryIndex = 0; entryIndex <= 50_000; entryIndex += 1) {
+        totals = advanceArchiveScanTotals(totals, `backup/payload/${entryIndex}.txt`);
+      }
+    }).toThrow(/maximum entry count/i);
+  });
+
+  it("fails when the archive contains fifo tar entries", async () => {
+    expect(
+      findUnsupportedTarSpecialEntry([
+        {
+          path: "2026-03-09T00-00-00.000Z-openclaw-backup/payload/fifo",
+          type: "FIFO",
+        },
+      ]),
+    ).toEqual({
+      path: "2026-03-09T00-00-00.000Z-openclaw-backup/payload/fifo",
+      type: "FIFO",
+    });
   });
 });
