@@ -935,7 +935,7 @@ function clearToolCallArgumentsInMessage(message: unknown, contentIndex: number)
 
 function clearMalformedToolCallArgumentsForDispatch(params: {
   event: {
-    contentIndex?: number;
+    contentIndex?: unknown;
     partial?: unknown;
     message?: unknown;
     toolCall?: unknown;
