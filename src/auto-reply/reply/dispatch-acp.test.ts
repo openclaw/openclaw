@@ -52,6 +52,14 @@ const bindingServiceMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
 }));
 
+const agentEventMocks = vi.hoisted(() => ({
+  emitAgentEvent: vi.fn(),
+}));
+
+const projectorMocks = vi.hoisted(() => ({
+  nextFlushError: null as Error | null,
+}));
+
 vi.mock("../../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => managerMocks,
 }));
@@ -86,6 +94,31 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => ({
     listBySession: (sessionKey: string) => bindingServiceMocks.listBySession(sessionKey),
   }),
 }));
+
+vi.mock("../../infra/agent-events.js", () => ({
+  emitAgentEvent: (event: unknown) => agentEventMocks.emitAgentEvent(event),
+}));
+
+vi.mock("./acp-projector.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./acp-projector.js")>();
+  return {
+    ...actual,
+    createAcpReplyProjector: (...args: Parameters<typeof actual.createAcpReplyProjector>) => {
+      const projector = actual.createAcpReplyProjector(...args);
+      return {
+        ...projector,
+        flush: async (force?: boolean) => {
+          const flushError = projectorMocks.nextFlushError;
+          if (flushError) {
+            projectorMocks.nextFlushError = null;
+            throw flushError;
+          }
+          await projector.flush(force);
+        },
+      };
+    },
+  };
+});
 
 const { tryDispatchAcpReply } = await import("./dispatch-acp.js");
 const sessionKey = "agent:codex-acp:session-1";
@@ -132,6 +165,7 @@ async function runDispatch(params: {
   bodyForAgent: string;
   cfg?: OpenClawConfig;
   dispatcher?: ReplyDispatcher;
+  runId?: string;
   shouldRouteToOriginating?: boolean;
   onReplyStart?: () => void;
   ctxOverrides?: Record<string, unknown>;
@@ -146,6 +180,7 @@ async function runDispatch(params: {
     }),
     cfg: params.cfg ?? createAcpTestConfig(),
     dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
+    runId: params.runId,
     sessionKey,
     inboundAudio: false,
     shouldRouteToOriginating: params.shouldRouteToOriginating ?? false,
@@ -208,6 +243,12 @@ async function dispatchVisibleTurn(onReplyStart: () => void) {
   });
 }
 
+function getLifecycleEvents(runId: string) {
+  return agentEventMocks.emitAgentEvent.mock.calls
+    .map((call) => call[0])
+    .filter((event) => event?.runId === runId && event?.stream === "lifecycle");
+}
+
 describe("tryDispatchAcpReply", () => {
   beforeEach(() => {
     managerMocks.resolveSession.mockReset();
@@ -232,6 +273,8 @@ describe("tryDispatchAcpReply", () => {
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue(null);
     bindingServiceMocks.listBySession.mockReset();
     bindingServiceMocks.listBySession.mockReturnValue([]);
+    agentEventMocks.emitAgentEvent.mockReset();
+    projectorMocks.nextFlushError = null;
   });
 
   it("routes ACP block output to originating channel", async () => {
@@ -356,6 +399,366 @@ describe("tryDispatchAcpReply", () => {
 
     expect(managerMocks.runTurn).not.toHaveBeenCalled();
     expect(onReplyStart).not.toHaveBeenCalled();
+  });
+
+  it("bridges ACP lifecycle and runtime activity into agent events", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({
+          type: "status",
+          tag: "session/prompt",
+          text: "ACP prompt sent to runtime session",
+        });
+        await onEvent({
+          type: "status",
+          tag: "session_info_update",
+          text: "runtime connected",
+        });
+        await onEvent({
+          type: "tool_call",
+          tag: "tool_call",
+          toolCallId: "tool-1",
+          status: "in_progress",
+          title: "Check network",
+          text: "Check network (in_progress)",
+        });
+        await onEvent({
+          type: "tool_call",
+          tag: "tool_call_update",
+          toolCallId: "tool-1",
+          status: "completed",
+          title: "Check network",
+          text: "Check network (completed)",
+        });
+        await onEvent({
+          type: "text_delta",
+          text: "hello from acp",
+          stream: "output",
+          tag: "agent_message_chunk",
+        });
+        await onEvent({ type: "done", stopReason: "end_turn" });
+      },
+    );
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      runId: "run-acp-bridge",
+    });
+
+    const emitted = agentEventMocks.emitAgentEvent.mock.calls.map((call) => call[0]);
+    expect(getLifecycleEvents("run-acp-bridge").map((event) => event.data.phase)).toEqual([
+      "start",
+      "prompt",
+      "end",
+    ]);
+    expect(emitted).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          runId: "run-acp-bridge",
+          stream: "lifecycle",
+          data: expect.objectContaining({
+            phase: "start",
+            source: "acp",
+          }),
+        }),
+        expect.objectContaining({
+          runId: "run-acp-bridge",
+          stream: "lifecycle",
+          data: expect.objectContaining({
+            phase: "prompt",
+            text: "ACP prompt sent to runtime session",
+            tag: "session/prompt",
+            source: "acp",
+            promptDispatched: true,
+          }),
+        }),
+        expect.objectContaining({
+          runId: "run-acp-bridge",
+          stream: "status",
+          data: expect.objectContaining({
+            text: "runtime connected",
+            tag: "session_info_update",
+            source: "acp",
+          }),
+        }),
+        expect.objectContaining({
+          runId: "run-acp-bridge",
+          stream: "tool",
+          data: expect.objectContaining({
+            phase: "start",
+            name: "Check network",
+            toolCallId: "tool-1",
+            status: "in_progress",
+            source: "acp",
+          }),
+        }),
+        expect.objectContaining({
+          runId: "run-acp-bridge",
+          stream: "tool",
+          data: expect.objectContaining({
+            phase: "result",
+            name: "Check network",
+            toolCallId: "tool-1",
+            status: "completed",
+            source: "acp",
+          }),
+        }),
+        expect.objectContaining({
+          runId: "run-acp-bridge",
+          stream: "assistant",
+          data: expect.objectContaining({
+            text: "hello from acp",
+            delta: "hello from acp",
+            tag: "agent_message_chunk",
+            source: "acp",
+          }),
+        }),
+        expect.objectContaining({
+          runId: "run-acp-bridge",
+          stream: "lifecycle",
+          data: expect.objectContaining({
+            phase: "end",
+            stopReason: "end_turn",
+            source: "acp",
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("maps ACP tool events to start, update, and result phases", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({
+          type: "tool_call",
+          toolCallId: "tool-1",
+          status: "in_progress",
+          title: "Check network",
+          text: "Check network (in_progress)",
+        });
+        await onEvent({
+          type: "tool_call",
+          tag: "tool_call_update",
+          toolCallId: "tool-1",
+          status: "running",
+          title: "Check network",
+          text: "Check network (running)",
+        });
+        await onEvent({
+          type: "tool_call",
+          tag: "tool_call_update",
+          toolCallId: "tool-1",
+          status: "completed",
+          title: "Check network",
+          text: "Check network (completed)",
+        });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      runId: "run-acp-tool-phases",
+    });
+
+    const toolEvents = agentEventMocks.emitAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((event) => event?.runId === "run-acp-tool-phases" && event?.stream === "tool");
+
+    expect(toolEvents).toEqual([
+      expect.objectContaining({
+        runId: "run-acp-tool-phases",
+        stream: "tool",
+        data: expect.objectContaining({
+          phase: "start",
+          name: "Check network",
+          toolCallId: "tool-1",
+          status: "in_progress",
+          source: "acp",
+        }),
+      }),
+      expect.objectContaining({
+        runId: "run-acp-tool-phases",
+        stream: "tool",
+        data: expect.objectContaining({
+          phase: "update",
+          name: "Check network",
+          toolCallId: "tool-1",
+          status: "running",
+          tag: "tool_call_update",
+          source: "acp",
+        }),
+      }),
+      expect.objectContaining({
+        runId: "run-acp-tool-phases",
+        stream: "tool",
+        data: expect.objectContaining({
+          phase: "result",
+          name: "Check network",
+          toolCallId: "tool-1",
+          status: "completed",
+          tag: "tool_call_update",
+          source: "acp",
+        }),
+      }),
+    ]);
+  });
+
+  it("bridges normalized output deltas with explicit or missing stream and ignores non-output deltas", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({
+          type: "text_delta",
+          text: "alpha",
+          stream: "output",
+          tag: "agent_message_chunk",
+        });
+        await onEvent({
+          type: "text_delta",
+          text: "alpha beta",
+          tag: "agent_message_chunk",
+        });
+        await onEvent({
+          type: "text_delta",
+          text: "alpha beta",
+          tag: "agent_message_chunk",
+        });
+        await onEvent({
+          type: "text_delta",
+          text: " gamma",
+          stream: "output",
+          tag: "agent_message_chunk",
+        });
+        await onEvent({
+          type: "text_delta",
+          text: "ignored thought",
+          stream: "thought",
+          tag: "agent_thought_chunk",
+        });
+        await onEvent({ type: "done", stopReason: "end_turn" });
+      },
+    );
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      runId: "run-acp-output-streams",
+    });
+
+    const assistantEvents = agentEventMocks.emitAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (event) => event?.runId === "run-acp-output-streams" && event?.stream === "assistant",
+      );
+
+    expect(assistantEvents).toEqual([
+      expect.objectContaining({
+        runId: "run-acp-output-streams",
+        stream: "assistant",
+        data: expect.objectContaining({
+          text: "alpha",
+          delta: "alpha",
+          tag: "agent_message_chunk",
+          source: "acp",
+        }),
+      }),
+      expect.objectContaining({
+        runId: "run-acp-output-streams",
+        stream: "assistant",
+        data: expect.objectContaining({
+          text: "alpha beta",
+          delta: " beta",
+          tag: "agent_message_chunk",
+          source: "acp",
+        }),
+      }),
+      expect.objectContaining({
+        runId: "run-acp-output-streams",
+        stream: "assistant",
+        data: expect.objectContaining({
+          text: "alpha beta",
+          delta: "",
+          tag: "agent_message_chunk",
+          source: "acp",
+        }),
+      }),
+      expect.objectContaining({
+        runId: "run-acp-output-streams",
+        stream: "assistant",
+        data: expect.objectContaining({
+          text: "alpha beta gamma",
+          delta: " gamma",
+          tag: "agent_message_chunk",
+          source: "acp",
+        }),
+      }),
+    ]);
+  });
+
+  it("emits ACP lifecycle errors into agent events", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockRejectedValueOnce(
+      new AcpRuntimeError("ACP_TURN_FAILED", "network unreachable"),
+    );
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      runId: "run-acp-error",
+    });
+
+    const emitted = agentEventMocks.emitAgentEvent.mock.calls.map((call) => call[0]);
+    expect(getLifecycleEvents("run-acp-error").map((event) => event.data.phase)).toEqual([
+      "start",
+      "error",
+    ]);
+    expect(emitted).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          runId: "run-acp-error",
+          stream: "lifecycle",
+          data: expect.objectContaining({
+            phase: "start",
+            source: "acp",
+          }),
+        }),
+        expect.objectContaining({
+          runId: "run-acp-error",
+          stream: "lifecycle",
+          data: expect.objectContaining({
+            phase: "error",
+            error: "network unreachable",
+            code: "ACP_TURN_FAILED",
+            source: "acp",
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("emits only the ACP error terminal event when projector flush fails", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("hello from acp");
+    projectorMocks.nextFlushError = new Error("flush failed");
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      runId: "run-acp-flush-error",
+    });
+
+    const lifecycleEvents = getLifecycleEvents("run-acp-flush-error");
+    expect(lifecycleEvents.map((event) => event.data.phase)).toEqual(["start", "error"]);
+    expect(lifecycleEvents[1]).toEqual(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          phase: "error",
+          error: "flush failed",
+          code: "ACP_TURN_FAILED",
+          source: "acp",
+        }),
+      }),
+    );
   });
 
   it("forwards normalized image attachments into ACP turns", async () => {

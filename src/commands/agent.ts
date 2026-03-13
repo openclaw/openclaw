@@ -94,6 +94,8 @@ import { updateSessionStoreAfterAgentRun } from "./agent/session-store.js";
 import { resolveSession } from "./agent/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./agent/types.js";
 
+const ACP_TERMINAL_TOOL_STATUSES = new Set(["completed", "failed", "cancelled", "done", "error"]);
+
 type PersistSessionEntryParams = {
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
@@ -764,6 +766,54 @@ async function agentCommandInternal(
           onEvent: (event) => {
             if (event.type === "done") {
               stopReason = event.stopReason;
+              return;
+            }
+            if (event.type === "status") {
+              if (event.tag === "session/prompt") {
+                emitAgentEvent({
+                  runId,
+                  stream: "lifecycle",
+                  data: {
+                    phase: "prompt",
+                    text: event.text,
+                    tag: event.tag,
+                    source: "acp",
+                    promptDispatched: true,
+                  },
+                });
+                return;
+              }
+              emitAgentEvent({
+                runId,
+                stream: "status",
+                data: {
+                  text: event.text,
+                  ...(event.tag ? { tag: event.tag } : {}),
+                  source: "acp",
+                },
+              });
+              return;
+            }
+            if (event.type === "tool_call") {
+              const normalizedStatus = event.status?.trim().toLowerCase();
+              const phase =
+                normalizedStatus && ACP_TERMINAL_TOOL_STATUSES.has(normalizedStatus)
+                  ? "result"
+                  : event.tag === "tool_call_update"
+                    ? "update"
+                    : "start";
+              emitAgentEvent({
+                runId,
+                stream: "tool",
+                data: {
+                  phase,
+                  text: event.text,
+                  ...(event.title ? { name: event.title } : {}),
+                  ...(event.status ? { status: event.status } : {}),
+                  ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+                  source: "acp",
+                },
+              });
               return;
             }
             if (event.type !== "text_delta") {

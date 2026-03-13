@@ -44,6 +44,24 @@ describe("parsePromptEventLine", () => {
     });
   });
 
+  it("surfaces session/prompt as a runtime status event", () => {
+    const line = JSON.stringify({
+      jsonrpc: "2.0",
+      id: "req-1",
+      method: "session/prompt",
+      params: {
+        sessionId: "s1",
+        prompt: [{ type: "text", text: "hello" }],
+      },
+    });
+
+    expect(parsePromptEventLine(line)).toEqual({
+      type: "status",
+      text: "ACP prompt sent to runtime session",
+      tag: "session/prompt",
+    });
+  });
+
   it("parses tool_call_update without using call ids as primary fallback label", () => {
     const line = JSON.stringify({
       jsonrpc: "2.0",
