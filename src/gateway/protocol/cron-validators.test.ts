@@ -35,6 +35,11 @@ describe("cron protocol validators", () => {
     expect(validateCronAddParams(normalized)).toBe(true);
   });
 
+  it("accepts add params with invalid id shape (service layer applies UUID fallback)", () => {
+    const withInvalidId = { id: "has:colon", ...minimalAddParams };
+    expect(validateCronAddParams(withInvalidId)).toBe(true);
+  });
+
   it("accepts update params for id and jobId selectors", () => {
     expect(validateCronUpdateParams({ id: "job-1", patch: { enabled: false } })).toBe(true);
     expect(validateCronUpdateParams({ jobId: "job-2", patch: { enabled: true } })).toBe(true);
