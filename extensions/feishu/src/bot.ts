@@ -1050,7 +1050,13 @@ export async function handleFeishuMessage(params: {
       groupConfig,
     }));
 
+    // Gate diagnostic log behind the actual gate condition - only log when
+    // the message is being dropped due to requireMention=true and no mention.
+    // This helps troubleshoot #40766 without flooding logs on every message.
     if (requireMention && !ctx.mentionedBot) {
+      log(
+        `feishu[${account.accountId}]: group ${ctx.chatId} requireMention=${requireMention} (groupConfig=${groupConfig?.requireMention ?? "unset"}, globalConfig=${feishuCfg?.requireMention ?? "unset"})`,
+      );
       log(`feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot`);
       // Record to pending history for non-broadcast groups only. For broadcast groups,
       // the mentioned handler's broadcast dispatch writes the turn directly into all
