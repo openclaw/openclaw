@@ -1,10 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { loadConfig } from "../config/config.js";
 import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
-import {
-  hasConfiguredExecApprovalDmRoute,
-  resolveExecApprovalInitiatingSurfaceState,
-} from "../infra/exec-approval-surface.js";
 import {
   addAllowlistEntry,
   type ExecAsk,
@@ -26,7 +21,7 @@ import {
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
 import {
-  createDefaultExecApprovalRequestContext,
+  createAndRegisterDefaultExecApprovalRequest,
   resolveBaseExecApprovalDecision,
   resolveApprovalDecisionOrUndefined,
   resolveExecHostApprovalContext,
@@ -149,52 +144,36 @@ export async function processGatewayAllowlist(
       approvalId,
       approvalSlug,
       warningText,
-      expiresAtMs: defaultExpiresAtMs,
-      preResolvedDecision: defaultPreResolvedDecision,
-    } = createDefaultExecApprovalRequestContext({
+      expiresAtMs,
+      preResolvedDecision,
+      initiatingSurface,
+      sentApproverDms,
+      unavailableReason,
+    } = await createAndRegisterDefaultExecApprovalRequest({
       warnings: params.warnings,
       approvalRunningNoticeMs: params.approvalRunningNoticeMs,
       createApprovalSlug,
+      turnSourceChannel: params.turnSourceChannel,
+      turnSourceAccountId: params.turnSourceAccountId,
+      register: async (approvalId) =>
+        await registerExecApprovalRequestForHostOrThrow({
+          approvalId,
+          command: params.command,
+          workdir: params.workdir,
+          host: "gateway",
+          security: hostSecurity,
+          ask: hostAsk,
+          ...buildExecApprovalRequesterContext({
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+          }),
+          resolvedPath: allowlistEval.segments[0]?.resolution?.resolvedPath,
+          ...buildExecApprovalTurnSourceContext(params),
+        }),
     });
     const resolvedPath = allowlistEval.segments[0]?.resolution?.resolvedPath;
     const effectiveTimeout =
       typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
-    let expiresAtMs = defaultExpiresAtMs;
-    let preResolvedDecision = defaultPreResolvedDecision;
-
-    // Register first so the returned approval ID is actionable immediately.
-    const registration = await registerExecApprovalRequestForHostOrThrow({
-      approvalId,
-      command: params.command,
-      workdir: params.workdir,
-      host: "gateway",
-      security: hostSecurity,
-      ask: hostAsk,
-      ...buildExecApprovalRequesterContext({
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-      }),
-      resolvedPath,
-      ...buildExecApprovalTurnSourceContext(params),
-    });
-    expiresAtMs = registration.expiresAtMs;
-    preResolvedDecision = registration.finalDecision;
-    const initiatingSurface = resolveExecApprovalInitiatingSurfaceState({
-      channel: params.turnSourceChannel,
-      accountId: params.turnSourceAccountId,
-    });
-    const cfg = loadConfig();
-    const sentApproverDms =
-      (initiatingSurface.kind === "disabled" || initiatingSurface.kind === "unsupported") &&
-      hasConfiguredExecApprovalDmRoute(cfg);
-    const unavailableReason =
-      preResolvedDecision === null
-        ? "no-approval-route"
-        : initiatingSurface.kind === "disabled"
-          ? "initiating-platform-disabled"
-          : initiatingSurface.kind === "unsupported"
-            ? "initiating-platform-unsupported"
-            : null;
 
     void (async () => {
       const decision = await resolveApprovalDecisionOrUndefined({
