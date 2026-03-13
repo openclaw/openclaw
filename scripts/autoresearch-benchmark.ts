@@ -2,21 +2,21 @@
  * Autoresearch benchmark: measures stable prefix of the OpenClaw system prompt.
  * Run with: bun scripts/autoresearch-benchmark.ts
  *
- * SCENARIO: workspaceNotes project-hints user.
- * Models a user who has workspaceNotes (project-specific instructions) that
- * change when they update their project config — e.g., switching sprint focus,
- * updating coding guidelines, or switching between multiple projects.
- * Workspace files (SOUL.md, AGENTS.md, etc.) and session config remain the same.
+ * SCENARIO: Skills installation / model-aliases update.
+ * Models a user who installs a new skill (or updates model aliases) while
+ * workspace files, session config, and project notes remain unchanged.
+ * Skills and model aliases are deployment-level config that changes when users
+ * install new capabilities or update their model preferences.
  *
- * Method: build TWO prompts with identical parameters except workspaceNotes content
- * (project A notes vs project B notes). Find the first character that differs.
+ * Method: build TWO prompts with identical parameters except skillsPrompt content
+ * (1 skill vs 2 skills). Find the first character that differs.
  * Everything before that is the KV-cacheable stable prefix.
  *
- * stable_chars = first-diff position between prompt-with-notes-v1 and
- *                prompt-with-notes-v2.
+ * stable_chars = first-diff position between prompt-with-skills-v1 and
+ *                prompt-with-skills-v2.
  *
  * This is rigorous: it directly measures what Anthropic's KV cache would
- * actually reuse between project note updates.
+ * actually reuse between skill installations.
  */
 
 import os from "node:os";
@@ -75,19 +75,30 @@ const contextFiles = buildBootstrapContextFiles(rawFiles, {
   totalMaxChars: 150_000,
 });
 
-// ── workspaceNotes project-hints scenario ───────────────────────────────────
-// Two versions of workspaceNotes simulate switching sprint/project focus.
-// Everything else (workspace files, channel, reasoning) stays the same.
-const WORKSPACE_NOTES_V1 = [
-  "This project is a TypeScript CLI tool for OpenClaw.",
-  "Current sprint: KV cache optimization for the bootstrap system prompt.",
-  "Key files: src/agents/system-prompt.ts, scripts/autoresearch-benchmark.ts",
-];
-const WORKSPACE_NOTES_V2 = [
-  "This project is a TypeScript CLI tool for OpenClaw.",
-  "Current sprint: UI redesign for the web dashboard.",
-  "Key files: src/web/dashboard.ts, src/web/components/",
-];
+// ── Skills installation scenario ─────────────────────────────────────────────
+// Two versions of skillsPrompt simulate installing a new skill.
+// Everything else (workspace files, channel, reasoning, workspaceNotes) stays the same.
+const SKILLS_V1 =
+  "<available_skills>\n" +
+  "  <skill>\n" +
+  "    <name>example-skill</name>\n" +
+  "    <description>An example skill for benchmarking</description>\n" +
+  "    <location>/path/to/skill.md</location>\n" +
+  "  </skill>\n" +
+  "</available_skills>";
+const SKILLS_V2 =
+  "<available_skills>\n" +
+  "  <skill>\n" +
+  "    <name>example-skill</name>\n" +
+  "    <description>An example skill for benchmarking</description>\n" +
+  "    <location>/path/to/skill.md</location>\n" +
+  "  </skill>\n" +
+  "  <skill>\n" +
+  "    <name>new-skill</name>\n" +
+  "    <description>A newly installed skill for advanced workflows</description>\n" +
+  "    <location>/path/to/new-skill.md</location>\n" +
+  "  </skill>\n" +
+  "</available_skills>";
 
 // Build the system prompt with representative parameters.
 // Everything is IDENTICAL between the two prompts — only workspaceNotes differ
@@ -106,10 +117,14 @@ const sharedParams = {
     "- gemini: gemini-2.5-pro (Google)",
     "- gpt: gpt-4o (OpenAI)",
   ],
+  workspaceNotes: [
+    "This project is a TypeScript CLI tool for OpenClaw.",
+    "Current sprint: KV cache optimization for the bootstrap system prompt.",
+  ],
   extraSystemPrompt: GROUP_CHAT_EXTRA_PROMPT,
   reactionGuidance: { level: "minimal", channel: "WhatsApp" },
   reasoningLevel: "on",
-  // TTS hint: stable within the workspaceNotes scenario
+  // TTS hint: stable within the skills scenario
   ttsHint: "Reply with natural spoken language. Keep responses concise for voice delivery.",
   // Per-channel message tool hints: stable for a given channel
   messageToolHints: [
@@ -128,14 +143,14 @@ const sharedParams = {
   promptMode: "full",
 };
 
-// Build two prompts: identical except workspaceNotes (project A vs project B)
-const prompt = buildAgentSystemPrompt({ ...sharedParams, workspaceNotes: WORKSPACE_NOTES_V1 });
-const promptV2 = buildAgentSystemPrompt({ ...sharedParams, workspaceNotes: WORKSPACE_NOTES_V2 });
+// Build two prompts: identical except skillsPrompt (1 skill vs 2 skills)
+const prompt = buildAgentSystemPrompt({ ...sharedParams, skillsPrompt: SKILLS_V1 });
+const promptV2 = buildAgentSystemPrompt({ ...sharedParams, skillsPrompt: SKILLS_V2 });
 
 const totalChars = prompt.length;
 
-// ── workspaceNotes scenario: find first diff between notes-v1 and notes-v2 ──
-// This is the exact KV-cache stable prefix for "workspaceNotes changes".
+// ── Skills scenario: find first diff between skills-v1 and skills-v2 ─────────
+// This is the exact KV-cache stable prefix for "skillsPrompt changes".
 // Everything before firstDiff is IDENTICAL between the two prompts and will
 // be served from Anthropic's KV cache.
 let firstDiff = 0;
@@ -146,7 +161,7 @@ while (
 ) {
   firstDiff++;
 }
-const notesScenarioStableChars = firstDiff;
+const skillsScenarioStableChars = firstDiff;
 
 // ── Pattern-based detection (used to identify WHAT the boundary is) ─────────
 // Stable prefix = everything before the EARLIEST "most-dynamic" section.
@@ -244,11 +259,11 @@ for (const { label, pattern } of legacyPatterns) {
 // PRIMARY METRIC: MEMORY.md daily scenario (first-diff between day-1 and day-2 prompts)
 // This directly measures what Anthropic KV cache would reuse between daily note updates.
 // SECONDARY (pattern-based): shows what the boundary is for pattern identification.
-// PRIMARY METRIC: workspaceNotes scenario (first-diff between notes-v1 and notes-v2 prompts)
-// This directly measures what Anthropic KV cache would reuse between project note updates.
+// PRIMARY METRIC: skills scenario (first-diff between skills-v1 and skills-v2 prompts)
+// This directly measures what Anthropic KV cache would reuse between skill installations.
 // SECONDARY (pattern-based): shows what the boundary is for pattern identification.
-console.log(`METRIC system_prompt_stable_chars=${notesScenarioStableChars}`);
+console.log(`METRIC system_prompt_stable_chars=${skillsScenarioStableChars}`);
 console.log(`METRIC system_prompt_total_chars=${totalChars}`);
 console.log(
-  `stable_ratio=${((notesScenarioStableChars / totalChars) * 100).toFixed(1)}%  total=${totalChars} stable=${notesScenarioStableChars}  boundary=${hitLabel}(pattern) notes-diff=${notesScenarioStableChars}`,
+  `stable_ratio=${((skillsScenarioStableChars / totalChars) * 100).toFixed(1)}%  total=${totalChars} stable=${skillsScenarioStableChars}  boundary=${hitLabel}(pattern) skills-diff=${skillsScenarioStableChars}`,
 );
