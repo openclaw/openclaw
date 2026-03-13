@@ -150,7 +150,10 @@ export async function loadProviderUsageSummary(
   });
 
   const result = { updatedAt: now, providers };
-  if (key !== null) {
+  // Only cache when all included providers returned clean results (no transient errors
+  // like 429 or Timeout), so a failed poll cannot poison the cache for the full TTL.
+  const hasTransientError = providers.some((p) => p.error);
+  if (key !== null && !hasTransientError) {
     setCached(key, result, now, ttlMs);
   }
   return result;
