@@ -71,6 +71,7 @@ const pluginSdkEntrypoints = [
   "minimax-portal-auth",
   "nextcloud-talk",
   "nostr",
+  "pilot",
   "open-prose",
   "phone-control",
   "qwen-portal-auth",
