@@ -78,6 +78,25 @@ async function resolveReactionWithLookup(params: {
   });
 }
 
+async function resolveNonBotReaction(params?: { cfg?: ClawdbotConfig; uuid?: () => string }) {
+  return await resolveReactionSyntheticEvent({
+    cfg: params?.cfg ?? cfg,
+    accountId: "default",
+    event: makeReactionEvent(),
+    botOpenId: "ou_bot",
+    fetchMessage: async () => ({
+      messageId: "om_msg1",
+      chatId: "oc_group",
+      chatType: "group",
+      senderOpenId: "ou_other",
+      senderType: "user",
+      content: "hello",
+      contentType: "text",
+    }),
+    ...(params?.uuid ? { uuid: params.uuid } : {}),
+  });
+}
+
 type FeishuMention = NonNullable<FeishuMessageEvent["message"]["mentions"]>[number];
 
 function buildDebounceConfig(): ClawdbotConfig {
@@ -179,6 +198,19 @@ function getFirstDispatchedEvent(): FeishuMessageEvent {
   return firstParams.event;
 }
 
+function expectSingleDispatchedEvent(): FeishuMessageEvent {
+  expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
+  return getFirstDispatchedEvent();
+}
+
+function expectParsedFirstDispatchedEvent(botOpenId = "ou_bot") {
+  const dispatched = expectSingleDispatchedEvent();
+  return {
+    dispatched,
+    parsed: parseFeishuMessageEvent(dispatched, botOpenId),
+  };
+}
+
 function setDedupPassThroughMocks(): void {
   vi.spyOn(dedup, "tryRecordMessage").mockReturnValue(true);
   vi.spyOn(dedup, "tryRecordMessagePersistent").mockResolvedValue(true);
@@ -201,6 +233,13 @@ async function enqueueDebouncedMessage(
   await onMessage(event);
   await Promise.resolve();
   await Promise.resolve();
+}
+
+function setStaleRetryMocks(messageId = "om_old") {
+  vi.spyOn(dedup, "hasRecordedMessage").mockImplementation((key) => key.endsWith(`:${messageId}`));
+  vi.spyOn(dedup, "hasRecordedMessagePersistent").mockImplementation(
+    async (currentMessageId) => currentMessageId === messageId,
+  );
 }
 
 describe("resolveReactionSyntheticEvent", () => {
@@ -262,28 +301,12 @@ describe("resolveReactionSyntheticEvent", () => {
   });
 
   it("filters reactions on non-bot messages", async () => {
-    const event = makeReactionEvent();
-    const result = await resolveReactionSyntheticEvent({
-      cfg,
-      accountId: "default",
-      event,
-      botOpenId: "ou_bot",
-      fetchMessage: async () => ({
-        messageId: "om_msg1",
-        chatId: "oc_group",
-        chatType: "group",
-        senderOpenId: "ou_other",
-        senderType: "user",
-        content: "hello",
-        contentType: "text",
-      }),
-    });
+    const result = await resolveNonBotReaction();
     expect(result).toBeNull();
   });
 
   it("allows non-bot reactions when reactionNotifications is all", async () => {
-    const event = makeReactionEvent();
-    const result = await resolveReactionSyntheticEvent({
+    const result = await resolveNonBotReaction({
       cfg: {
         channels: {
           feishu: {
@@ -291,18 +314,6 @@ describe("resolveReactionSyntheticEvent", () => {
           },
         },
       } as ClawdbotConfig,
-      accountId: "default",
-      event,
-      botOpenId: "ou_bot",
-      fetchMessage: async () => ({
-        messageId: "om_msg1",
-        chatId: "oc_group",
-        chatType: "group",
-        senderOpenId: "ou_other",
-        senderType: "user",
-        content: "hello",
-        contentType: "text",
-      }),
       uuid: () => "fixed-uuid",
     });
     expect(result?.message.message_id).toBe("om_msg1:reaction:THUMBSUP:fixed-uuid");
@@ -457,8 +468,7 @@ describe("Feishu inbound debounce regressions", () => {
     );
     await vi.advanceTimersByTimeAsync(25);
 
-    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
-    const dispatched = getFirstDispatchedEvent();
+    const dispatched = expectSingleDispatchedEvent();
     const mergedMentions = dispatched.message.mentions ?? [];
     expect(mergedMentions.some((mention) => mention.id.open_id === "ou_bot")).toBe(true);
     expect(mergedMentions.some((mention) => mention.id.open_id === "ou_user_a")).toBe(false);
@@ -517,9 +527,7 @@ describe("Feishu inbound debounce regressions", () => {
     );
     await vi.advanceTimersByTimeAsync(25);
 
-    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
-    const dispatched = getFirstDispatchedEvent();
-    const parsed = parseFeishuMessageEvent(dispatched, "ou_bot");
+    const { dispatched, parsed } = expectParsedFirstDispatchedEvent();
     expect(parsed.mentionedBot).toBe(true);
     expect(parsed.mentionTargets).toBeUndefined();
     const mergedMentions = dispatched.message.mentions ?? [];
@@ -547,19 +555,14 @@ describe("Feishu inbound debounce regressions", () => {
     );
     await vi.advanceTimersByTimeAsync(25);
 
-    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
-    const dispatched = getFirstDispatchedEvent();
-    const parsed = parseFeishuMessageEvent(dispatched, "ou_bot");
+    const { parsed } = expectParsedFirstDispatchedEvent();
     expect(parsed.mentionedBot).toBe(true);
   });
 
   it("excludes previously processed retries from combined debounce text", async () => {
     vi.spyOn(dedup, "tryRecordMessage").mockReturnValue(true);
     vi.spyOn(dedup, "tryRecordMessagePersistent").mockResolvedValue(true);
-    vi.spyOn(dedup, "hasRecordedMessage").mockImplementation((key) => key.endsWith(":om_old"));
-    vi.spyOn(dedup, "hasRecordedMessagePersistent").mockImplementation(
-      async (messageId) => messageId === "om_old",
-    );
+    setStaleRetryMocks();
     const onMessage = await setupDebounceMonitor();
 
     await onMessage(createTextEvent({ messageId: "om_old", text: "stale" }));
@@ -576,8 +579,7 @@ describe("Feishu inbound debounce regressions", () => {
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(25);
 
-    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
-    const dispatched = getFirstDispatchedEvent();
+    const dispatched = expectSingleDispatchedEvent();
     expect(dispatched.message.message_id).toBe("om_new_2");
     const combined = JSON.parse(dispatched.message.content) as { text?: string };
     expect(combined.text).toBe("first\nsecond");
@@ -586,10 +588,7 @@ describe("Feishu inbound debounce regressions", () => {
   it("uses latest fresh message id when debounce batch ends with stale retry", async () => {
     const recordSpy = vi.spyOn(dedup, "tryRecordMessage").mockReturnValue(true);
     vi.spyOn(dedup, "tryRecordMessagePersistent").mockResolvedValue(true);
-    vi.spyOn(dedup, "hasRecordedMessage").mockImplementation((key) => key.endsWith(":om_old"));
-    vi.spyOn(dedup, "hasRecordedMessagePersistent").mockImplementation(
-      async (messageId) => messageId === "om_old",
-    );
+    setStaleRetryMocks();
     const onMessage = await setupDebounceMonitor();
 
     await onMessage(createTextEvent({ messageId: "om_new", text: "fresh" }));
@@ -600,8 +599,7 @@ describe("Feishu inbound debounce regressions", () => {
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(25);
 
-    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
-    const dispatched = getFirstDispatchedEvent();
+    const dispatched = expectSingleDispatchedEvent();
     expect(dispatched.message.message_id).toBe("om_new");
     const combined = JSON.parse(dispatched.message.content) as { text?: string };
     expect(combined.text).toBe("fresh");
