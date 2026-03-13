@@ -168,10 +168,20 @@ export async function listMemoryFiles(
   const seen = new Set<string>();
   const deduped: string[] = [];
   for (const entry of result) {
-    let key = entry;
+    let key: string;
     try {
-      key = await fs.realpath(entry);
-    } catch {}
+      // Use file identity (dev:ino) to handle case-insensitive filesystems
+      // where MEMORY.md and memory.md resolve to the same file.
+      // Guard against ino === 0 (FAT32/network FS) to avoid false dedup.
+      const stat = await fs.stat(entry);
+      key = stat.ino !== 0 ? `${stat.dev}:${stat.ino}` : await fs.realpath(entry);
+    } catch {
+      try {
+        key = await fs.realpath(entry);
+      } catch {
+        key = entry;
+      }
+    }
     if (seen.has(key)) {
       continue;
     }

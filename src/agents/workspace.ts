@@ -482,10 +482,20 @@ async function resolveMemoryBootstrapEntries(
   const seen = new Set<string>();
   const deduped: Array<{ name: WorkspaceBootstrapFileName; filePath: string }> = [];
   for (const entry of entries) {
-    let key = entry.filePath;
+    let key: string;
     try {
-      key = await fs.realpath(entry.filePath);
-    } catch {}
+      // Use file identity (dev:ino) to handle case-insensitive filesystems
+      // where MEMORY.md and memory.md resolve to the same file.
+      // Guard against ino === 0 (FAT32/network FS) to avoid false dedup.
+      const stat = await fs.stat(entry.filePath);
+      key = stat.ino !== 0 ? `${stat.dev}:${stat.ino}` : await fs.realpath(entry.filePath);
+    } catch {
+      try {
+        key = await fs.realpath(entry.filePath);
+      } catch {
+        key = entry.filePath;
+      }
+    }
     if (seen.has(key)) {
       continue;
     }
