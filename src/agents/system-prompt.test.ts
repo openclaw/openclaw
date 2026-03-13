@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
-import { buildAgentSystemPrompt, buildRuntimeLine } from "./system-prompt.js";
+import {
+  buildAgentSystemPrompt,
+  buildRuntimeLine,
+  buildRuntimeDynamicLine,
+} from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
   it("formats owner section for plain, hash, and missing owner lists", () => {
@@ -289,7 +293,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("- agents_list: List OpenClaw agent ids allowed for sessions_spawn");
   });
 
-  it("omits ACP harness spawn guidance for sandboxed sessions and shows ACP block note", () => {
+  it("shows ACP block note in sandbox section and includes ACP guidance (stable for KV cache)", () => {
+    // ACP guidance is now unconditional w.r.t. sandboxedRuntime so the tool descriptions
+    // and guidance block don't change when sandbox mode is toggled — maximizing KV cache
+    // reuse. The ## Sandbox section tells the model that ACP harness spawns are blocked.
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["sessions_spawn", "subagents", "agents_list", "exec"],
@@ -298,17 +305,18 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).not.toContain('runtime="acp" requires `agentId`');
-    expect(prompt).not.toContain("ACP harness ids follow acp.allowedAgents");
-    expect(prompt).not.toContain(
+    // ACP guidance IS present in the tooling section (stable for KV cache).
+    expect(prompt).toContain('runtime="acp" requires `agentId`');
+    expect(prompt).toContain("ACP harness ids follow acp.allowedAgents");
+    expect(prompt).toContain(
       'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
     );
-    expect(prompt).not.toContain(
-      'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
-    );
+    // The ## Sandbox section explicitly blocks ACP harness spawns.
     expect(prompt).toContain("ACP harness spawns are blocked from sandboxed sessions");
-    expect(prompt).toContain('`runtime: "acp"`');
     expect(prompt).toContain('Use `runtime: "subagent"` instead.');
+    // Sandbox section appears in the prompt.
+    expect(prompt).toContain("## Sandbox");
+    expect(prompt).toContain("You are running in a sandboxed runtime");
   });
 
   it("preserves tool casing in the prompt", () => {
@@ -385,7 +393,7 @@ describe("buildAgentSystemPrompt", () => {
 
     for (const testCase of cases) {
       const prompt = buildAgentSystemPrompt(testCase.params);
-      expect(prompt, testCase.name).toContain("## Current Date & Time");
+      expect(prompt, testCase.name).toContain("## Time Zone");
       expect(prompt, testCase.name).toContain("Time zone: America/Chicago");
     }
   });
@@ -423,6 +431,27 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Monday, January 5th, 2026");
     expect(prompt).not.toContain("3:26 PM");
     expect(prompt).not.toContain("15:26");
+  });
+
+  it("places project context after runtime/heartbeat stable boilerplate for cache stability", () => {
+    // Workspace files (# Project Context) change between sessions; they are placed LAST so
+    // that Silent Replies, Heartbeats, Time Zone, and Runtime remain in the stable
+    // Anthropic KV-cached prefix even when workspace files are updated.
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      userTimezone: "America/Chicago",
+      contextFiles: [{ path: "AGENTS.md", content: "Alpha" }],
+      runtimeInfo: {
+        model: "anthropic/claude-sonnet-4-5",
+      },
+    });
+
+    expect(prompt.indexOf("# Project Context")).toBeGreaterThan(-1);
+    // Runtime/Time Zone come BEFORE Project Context (stable prefix)
+    expect(prompt.indexOf("## Time Zone")).toBeLessThan(prompt.indexOf("# Project Context"));
+    expect(prompt.indexOf("## Runtime")).toBeLessThan(prompt.indexOf("# Project Context"));
+    // Heartbeats come BEFORE Project Context too
+    expect(prompt.indexOf("## Heartbeats")).toBeLessThan(prompt.indexOf("# Project Context"));
   });
 
   it("includes model alias guidance when aliases are provided", () => {
@@ -600,44 +629,81 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("agent=work");
   });
 
-  it("includes reasoning visibility hint", () => {
-    const prompt = buildAgentSystemPrompt({
+  it("includes static reasoning visibility hint (stable across reasoning levels)", () => {
+    // The Reasoning line must be stable text regardless of the current reasoning level.
+    // The actual level is emitted in buildRuntimeDynamicLine to preserve the KV-cache prefix.
+    for (const level of ["off", "on", "stream"] as const) {
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        reasoningLevel: level,
+      });
+
+      // Stable text (does NOT contain the dynamic level value inline)
+      expect(prompt).toContain("Reasoning: configurable");
+      expect(prompt).toContain("/reasoning");
+      expect(prompt).toContain("/status shows current level");
+      expect(prompt).not.toContain(`Reasoning: ${level} `);
+    }
+
+    // "on" and "stream" levels appear in the dynamic line, not the stable Reasoning line
+    const promptOn = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reasoningLevel: "on",
+    });
+    expect(promptOn).toContain("reasoning=on");
+
+    const promptStream = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reasoningLevel: "stream",
+    });
+    expect(promptStream).toContain("reasoning=stream");
+
+    // "off" is the default — not emitted in the dynamic line (saves tokens)
+    const promptOff = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       reasoningLevel: "off",
     });
-
-    expect(prompt).toContain("Reasoning: off");
-    expect(prompt).toContain("/reasoning");
-    expect(prompt).toContain("/status shows Reasoning");
+    expect(promptOff).not.toContain("reasoning=off");
   });
 
-  it("builds runtime line with agent and channel details", () => {
-    const line = buildRuntimeLine(
-      {
-        agentId: "work",
-        host: "host",
-        repoRoot: "/repo",
-        os: "macOS",
-        arch: "arm64",
-        node: "v20",
-        model: "anthropic/claude",
-        defaultModel: "anthropic/claude-opus-4-5",
-      },
-      "telegram",
-      ["inlineButtons"],
-      "low",
-    );
+  it("builds runtime line with only stable host/os/node fields", () => {
+    const runtimeInfo = {
+      agentId: "work",
+      host: "host",
+      repoRoot: "/repo",
+      os: "macOS",
+      arch: "arm64",
+      node: "v20",
+      model: "anthropic/claude",
+      defaultModel: "anthropic/claude-opus-4-5",
+      channel: "telegram",
+      capabilities: ["inlineButtons"],
+    };
+    const line = buildRuntimeLine(runtimeInfo);
 
-    expect(line).toContain("agent=work");
+    // Stable fields appear in the Runtime line
     expect(line).toContain("host=host");
     expect(line).toContain("repo=/repo");
     expect(line).toContain("os=macOS (arm64)");
     expect(line).toContain("node=v20");
-    expect(line).toContain("model=anthropic/claude");
-    expect(line).toContain("default_model=anthropic/claude-opus-4-5");
-    expect(line).toContain("channel=telegram");
-    expect(line).toContain("capabilities=inlineButtons");
-    expect(line).toContain("thinking=low");
+
+    // Per-conversation and per-session dynamic fields are NOT in the Runtime line
+    // (moved to buildRuntimeDynamicLine for KV-cache stability across channels/models)
+    expect(line).not.toContain("channel=telegram");
+    expect(line).not.toContain("capabilities=inlineButtons");
+    expect(line).not.toContain("thinking=");
+    expect(line).not.toContain("agent=work");
+    expect(line).not.toContain("model=anthropic/claude");
+    expect(line).not.toContain("default_model=");
+
+    // Dynamic fields are in the separate dynamic line
+    const dynamicLine = buildRuntimeDynamicLine(runtimeInfo, "low");
+    expect(dynamicLine).toContain("channel=telegram");
+    expect(dynamicLine).toContain("capabilities=inlineButtons");
+    expect(dynamicLine).toContain("thinking=low");
+    expect(dynamicLine).toContain("agent=work");
+    expect(dynamicLine).toContain("model=anthropic/claude");
+    expect(dynamicLine).toContain("default_model=anthropic/claude-opus-4-5");
   });
 
   it("describes sandboxed runtime and elevated when allowed", () => {
