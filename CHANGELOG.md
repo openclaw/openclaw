@@ -95,6 +95,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/Discord status reactions: show a temporary compacting reaction during auto-compaction pauses and restore thinking afterward so the bot no longer appears frozen while context is being compacted. (#35474) thanks @Cypherm.
 - Delivery/dedupe: trim completed direct-cron delivery cache correctly and keep mirrored transcript dedupe active even when transcript files contain malformed lines. (#44666) thanks @frankekn.
 - CLI/thinking help: add the missing `xhigh` level hints to `openclaw cron add`, `openclaw cron edit`, and `openclaw agent` so the help text matches the levels already accepted at runtime. (#44819) Thanks @kiki830621.
+- Agents/Anthropic replay: drop replayed assistant thinking blocks for native Anthropic and Bedrock Claude providers so persisted follow-up turns no longer fail on stored thinking blocks. (#44843) Thanks @jmcte.
 
 ## 2026.3.11
 
