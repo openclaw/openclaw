@@ -2,8 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
+import { resolveBundledInstallPlanForCatalogEntry } from "../../cli/plugin-install-plan.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  findBundledPluginSourceInMap,
+  resolveBundledPluginSources,
+} from "../../plugins/bundled-sources.js";
+import { clearPluginDiscoveryCache } from "../../plugins/discovery.js";
 import { enablePluginInConfig } from "../../plugins/enable.js";
 import { installPluginFromNpmSpec } from "../../plugins/install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "../../plugins/installs.js";
@@ -107,8 +113,12 @@ function resolveInstallDefaultChoice(params: {
   cfg: OpenClawConfig;
   entry: ChannelPluginCatalogEntry;
   localPath?: string | null;
+  bundledLocalPath?: string | null;
 }): InstallChoice {
-  const { cfg, entry, localPath } = params;
+  const { cfg, entry, localPath, bundledLocalPath } = params;
+  if (bundledLocalPath) {
+    return "local";
+  }
   const updateChannel = cfg.update?.channel;
   if (updateChannel === "dev") {
     return localPath ? "local" : "npm";
@@ -136,11 +146,20 @@ export async function ensureOnboardingPluginInstalled(params: {
   const { entry, prompter, runtime, workspaceDir } = params;
   let next = params.cfg;
   const allowLocal = hasGitWorkspace(workspaceDir);
-  const localPath = resolveLocalPath(entry, workspaceDir, allowLocal);
+  const bundledSources = resolveBundledPluginSources({ workspaceDir });
+  const bundledLocalPath =
+    resolveBundledInstallPlanForCatalogEntry({
+      pluginId: entry.id,
+      npmSpec: entry.install.npmSpec,
+      findBundledSource: (lookup) =>
+        findBundledPluginSourceInMap({ bundled: bundledSources, lookup }),
+    })?.bundledSource.localPath ?? null;
+  const localPath = bundledLocalPath ?? resolveLocalPath(entry, workspaceDir, allowLocal);
   const defaultChoice = resolveInstallDefaultChoice({
     cfg: next,
     entry,
     localPath,
+    bundledLocalPath,
   });
   const choice = await promptInstallChoice({
     entry,
@@ -206,6 +225,7 @@ export function reloadOnboardingPluginRegistry(params: {
   runtime: RuntimeEnv;
   workspaceDir?: string;
 }): void {
+  clearPluginDiscoveryCache();
   const workspaceDir =
     params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
   const log = createSubsystemLogger("plugins");

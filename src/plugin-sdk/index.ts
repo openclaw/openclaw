@@ -132,6 +132,17 @@ export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matchin
 
 export type { FileLockHandle, FileLockOptions } from "./file-lock.js";
 export { acquireFileLock, withFileLock } from "./file-lock.js";
+export {
+  mapAllowlistResolutionInputs,
+  mapBasicAllowlistResolutionEntries,
+  type BasicAllowlistResolutionEntry,
+} from "./allowlist-resolution.js";
+export { resolveRequestUrl } from "./request-url.js";
+export {
+  buildDiscordSendMediaOptions,
+  buildDiscordSendOptions,
+  tagDiscordChannelResult,
+} from "./discord-send.js";
 export type { KeyedAsyncQueueHooks } from "./keyed-async-queue.js";
 export { enqueueKeyedTask, KeyedAsyncQueue } from "./keyed-async-queue.js";
 export { normalizeWebhookPath, resolveWebhookPath } from "./webhook-path.js";
@@ -144,6 +155,7 @@ export {
   resolveSingleWebhookTarget,
   resolveSingleWebhookTargetAsync,
   resolveWebhookTargets,
+  withResolvedWebhookRequestPipeline,
 } from "./webhook-targets.js";
 export type {
   RegisterWebhookPluginRouteOptions,
@@ -161,13 +173,20 @@ export {
   WEBHOOK_IN_FLIGHT_DEFAULTS,
 } from "./webhook-request-guards.js";
 export type { WebhookBodyReadProfile, WebhookInFlightLimiter } from "./webhook-request-guards.js";
-export { keepHttpServerTaskAlive, waitUntilAbort } from "./channel-lifecycle.js";
+export {
+  createAccountStatusSink,
+  keepHttpServerTaskAlive,
+  runPassiveAccountLifecycle,
+  waitUntilAbort,
+} from "./channel-lifecycle.js";
 export type { AgentMediaPayload } from "./agent-media-payload.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export {
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
+  buildComputedAccountStatusSnapshot,
   buildProbeChannelStatusSummary,
+  buildRuntimeAccountStatusSnapshot,
   buildTokenChannelStatusSummary,
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
@@ -178,9 +197,23 @@ export {
 } from "../channels/plugins/onboarding/helpers.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
+export { buildChannelSendResult } from "./channel-send-result.js";
+export type { ChannelSendRawResult } from "./channel-send-result.js";
+export { createPluginRuntimeStore } from "./runtime-store.js";
+export { createScopedChannelConfigBase } from "./channel-config-helpers.js";
+export {
+  AllowFromEntrySchema,
+  AllowFromListSchema,
+  buildNestedDmConfigSchema,
+  buildCatchallMultiAccountChannelSchema,
+} from "../channels/plugins/config-schema.js";
 export type { ChannelDock } from "../channels/dock.js";
 export { getChatChannelMeta } from "../channels/registry.js";
-export { resolveAllowlistMatchByCandidates } from "../channels/allowlist-match.js";
+export {
+  compileAllowlist,
+  resolveAllowlistCandidates,
+  resolveAllowlistMatchByCandidates,
+} from "../channels/allowlist-match.js";
 export type {
   BlockStreamingCoalesceConfig,
   DmPolicy,
@@ -258,11 +291,20 @@ export {
 } from "../routing/session-key.js";
 export {
   formatAllowFromLowercase,
+  formatNormalizedAllowFromEntries,
   isAllowedParsedChatSender,
   isNormalizedSenderAllowed,
 } from "./allow-from.js";
 export {
+  evaluateGroupRouteAccessForPolicy,
+  evaluateMatchedGroupAccessForPolicy,
   evaluateSenderGroupAccess,
+  evaluateSenderGroupAccessForPolicy,
+  resolveSenderScopedGroupPolicy,
+  type GroupRouteAccessDecision,
+  type GroupRouteAccessReason,
+  type MatchedGroupAccessDecision,
+  type MatchedGroupAccessReason,
   type SenderGroupAccessDecision,
   type SenderGroupAccessReason,
 } from "./group-access.js";
@@ -278,6 +320,7 @@ export {
   resolveInboundRouteEnvelopeBuilder,
   resolveInboundRouteEnvelopeBuilderWithRuntime,
 } from "./inbound-envelope.js";
+export { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
 export {
   listConfiguredAccountIds,
   resolveAccountWithDefaultFallback,
@@ -288,17 +331,29 @@ export { extractToolSend } from "./tool-send.js";
 export {
   createNormalizedOutboundDeliverer,
   formatTextWithAttachmentLinks,
+  isNumericTargetId,
   normalizeOutboundReplyPayload,
   resolveOutboundMediaUrls,
+  sendPayloadWithChunkedTextAndMedia,
   sendMediaWithLeadingCaption,
 } from "./reply-payload.js";
 export type { OutboundReplyPayload } from "./reply-payload.js";
+export {
+  buildInboundReplyDispatchBase,
+  dispatchInboundReplyWithBase,
+  dispatchReplyFromConfigWithSettledDispatcher,
+  recordInboundSessionAndDispatchReply,
+} from "./inbound-reply-dispatch.js";
 export type { OutboundMediaLoadOptions } from "./outbound-media.js";
 export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export { resolveChannelAccountConfigBasePath } from "./config-paths.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
-export { createLoggerBackedRuntime } from "./runtime.js";
+export {
+  createLoggerBackedRuntime,
+  resolveRuntimeEnv,
+  resolveRuntimeEnvWithUnavailableExit,
+} from "./runtime.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
 export { readBooleanParam } from "./boolean-param.js";
 export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
@@ -342,7 +397,11 @@ export type { ChunkMode } from "../auto-reply/chunk.js";
 export { SILENT_REPLY_TOKEN, isSilentReplyText } from "../auto-reply/tokens.js";
 export { formatInboundFromLabel } from "../auto-reply/envelope.js";
 export {
+  createScopedAccountConfigAccessors,
   formatTrimmedAllowFromEntries,
+  mapAllowFromEntries,
+  resolveOptionalConfigString,
+  createScopedDmSecurityResolver,
   formatWhatsAppConfigAllowFromEntries,
   resolveIMessageConfigAllowFrom,
   resolveIMessageConfigDefaultTo,
@@ -487,14 +546,38 @@ export type { PollInput } from "../polls.js";
 
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export {
+  listDirectoryGroupEntriesFromMapKeys,
+  listDirectoryGroupEntriesFromMapKeysAndAllowFrom,
+  listDirectoryUserEntriesFromAllowFrom,
+  listDirectoryUserEntriesFromAllowFromAndMapKeys,
+} from "../channels/plugins/directory-config-helpers.js";
+export {
+  clearAccountEntryFields,
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
 export {
   applyAccountNameToChannelSection,
+  applySetupAccountConfigPatch,
   migrateBaseNameToDefaultAccount,
+  patchScopedAccountConfig,
 } from "../channels/plugins/setup-helpers.js";
-export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
+export {
+  buildOpenGroupPolicyConfigureRouteAllowlistWarning,
+  buildOpenGroupPolicyNoRouteAllowlistWarning,
+  buildOpenGroupPolicyRestrictSendersWarning,
+  buildOpenGroupPolicyWarning,
+  collectAllowlistProviderGroupPolicyWarnings,
+  collectAllowlistProviderRestrictSendersWarnings,
+  collectOpenProviderGroupPolicyWarnings,
+  collectOpenGroupPolicyConfiguredRouteWarnings,
+  collectOpenGroupPolicyRestrictSendersWarnings,
+  collectOpenGroupPolicyRouteAllowlistWarnings,
+} from "../channels/plugins/group-policy-warnings.js";
+export {
+  buildAccountScopedDmSecurityPolicy,
+  formatPairingApproveHint,
+} from "../channels/plugins/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 
 export type {
@@ -505,6 +588,10 @@ export {
   addWildcardAllowFrom,
   mergeAllowFromEntries,
   promptAccountId,
+  resolveAccountIdForConfigure,
+  setTopLevelChannelAllowFrom,
+  setTopLevelChannelDmPolicyWithAllowFrom,
+  setTopLevelChannelGroupPolicy,
 } from "../channels/plugins/onboarding/helpers.js";
 export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
 
@@ -589,12 +676,18 @@ export {
   normalizeIMessageMessagingTarget,
 } from "../channels/plugins/normalize/imessage.js";
 export {
+  createAllowedChatSenderMatcher,
   parseChatAllowTargetPrefixes,
   parseChatTargetPrefixesOrThrow,
+  resolveServicePrefixedChatTarget,
   resolveServicePrefixedAllowTarget,
+  resolveServicePrefixedOrChatAllowTarget,
   resolveServicePrefixedTarget,
 } from "../imessage/target-parsing-helpers.js";
-export type { ParsedChatTarget } from "../imessage/target-parsing-helpers.js";
+export type {
+  ChatSenderAllowParams,
+  ParsedChatTarget,
+} from "../imessage/target-parsing-helpers.js";
 
 // Channel: Slack
 export {
@@ -721,6 +814,39 @@ export type {
 } from "../context-engine/types.js";
 export { registerContextEngine } from "../context-engine/registry.js";
 export type { ContextEngineFactory } from "../context-engine/registry.js";
+
+// Model authentication types for plugins.
+// Plugins should use runtime.modelAuth (which strips unsafe overrides like
+// agentDir/store) rather than importing raw helpers directly.
+export { requireApiKey } from "../agents/model-auth.js";
+export type { ResolvedProviderAuth } from "../agents/model-auth.js";
+export type { ProviderDiscoveryContext } from "../plugins/types.js";
+export {
+  applyProviderDefaultModel,
+  promptAndConfigureOpenAICompatibleSelfHostedProvider,
+  SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+  SELF_HOSTED_DEFAULT_COST,
+  SELF_HOSTED_DEFAULT_MAX_TOKENS,
+} from "../commands/self-hosted-provider-setup.js";
+export {
+  OLLAMA_DEFAULT_BASE_URL,
+  OLLAMA_DEFAULT_MODEL,
+  configureOllamaNonInteractive,
+  ensureOllamaModelPulled,
+  promptAndConfigureOllama,
+} from "../commands/ollama-setup.js";
+export {
+  VLLM_DEFAULT_BASE_URL,
+  VLLM_DEFAULT_CONTEXT_WINDOW,
+  VLLM_DEFAULT_COST,
+  VLLM_DEFAULT_MAX_TOKENS,
+  promptAndConfigureVllm,
+} from "../commands/vllm-setup.js";
+export {
+  buildOllamaProvider,
+  buildSglangProvider,
+  buildVllmProvider,
+} from "../agents/models-config.providers.discovery.js";
 
 // Security utilities
 export { redactSensitiveText } from "../logging/redact.js";
