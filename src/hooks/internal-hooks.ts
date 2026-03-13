@@ -212,10 +212,12 @@ const log = createSubsystemLogger("internal-hooks");
  * ```
  */
 export function registerInternalHook(eventKey: string, handler: InternalHookHandler): void {
-  if (!handlers.has(eventKey)) {
-    handlers.set(eventKey, []);
+  let eventHandlers = handlers.get(eventKey);
+  if (!eventHandlers) {
+    eventHandlers = [];
+    handlers.set(eventKey, eventHandlers);
   }
-  handlers.get(eventKey)!.push(handler);
+  eventHandlers.push(handler);
 }
 
 /**

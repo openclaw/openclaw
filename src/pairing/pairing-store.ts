@@ -9,6 +9,7 @@ import { withFileLock as withPathLock } from "../infra/file-lock.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "../plugin-sdk/json-store.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import { logWarn } from "../logger.js";
 
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -439,7 +440,8 @@ function readAllowFromStateForPathSyncWithExists(
       entries,
     });
     return { entries, exists: true };
-  } catch {
+  } catch (error) {
+    logWarn(`pairing-store: malformed JSON in allow-from file (${filePath})`, { error });
     // Keep parity with async reads: malformed JSON still means the file exists.
     setAllowFromReadCache(filePath, {
       exists: true,
