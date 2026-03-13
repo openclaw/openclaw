@@ -18,6 +18,19 @@ describe("shared/chat-message-content", () => {
     ).toBe("");
   });
 
+  it("only considers the first content block even if later blocks have text", () => {
+    expect(
+      extractFirstTextBlock({
+        content: [null, { text: "later" }],
+      }),
+    ).toBeUndefined();
+    expect(
+      extractFirstTextBlock({
+        content: [{ type: "image" }, { text: "later" }],
+      }),
+    ).toBeUndefined();
+  });
+
   it("returns undefined for missing, empty, or non-text content", () => {
     expect(extractFirstTextBlock(null)).toBeUndefined();
     expect(extractFirstTextBlock({ content: [] })).toBeUndefined();
