@@ -619,6 +619,10 @@ describe("callGateway url override auth requirements", () => {
 
   it("throws when env URL override is set without env credentials", async () => {
     process.env.OPENCLAW_GATEWAY_URL = "wss://override.example/ws";
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+    delete process.env.CLAWDBOT_GATEWAY_PASSWORD;
     loadConfig.mockReturnValue({
       gateway: {
         mode: "local",

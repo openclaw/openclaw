@@ -1,0 +1,1411 @@
+╔══════════════════════════════════════════════════════════════╗
+║        UnitIQ SMS Triage Test Runner — Azure Bay            ║
+╚══════════════════════════════════════════════════════════════╝
+
+scenariosRes: {
+  scenarios: [
+    {
+      'Scenario ID': 'SCN-001',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6000',
+      Unit: '101',
+      Message: 'What is my current balance?',
+      'Expected Data (Field)': 'Account, Dues & Payments (Highest Volume)',
+      expected: '',
+      Notes: 'what_is_my_current_balance',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-002',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6001',
+      Unit: '102',
+      Message: 'When is my next HOA payment due?',
+      'Expected Data (Field)': 'Account, Dues & Payments (Highest Volume)',
+      expected: '',
+      Notes: 'when_is_my_next_hoa_payment_due',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-003',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6002',
+      Unit: '103',
+      Message: 'Did you receive my last payment?',
+      'Expected Data (Field)': 'Account, Dues & Payments (Highest Volume)',
+      expected: '',
+      Notes: 'did_you_receive_my_last_payment',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-004',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6003',
+      Unit: '104',
+      Message: 'How much do I owe right now?',
+      'Expected Data (Field)': 'Account, Dues & Payments (Highest Volume)',
+      expected: '',
+      Notes: 'how_much_do_i_owe_right_now',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-005',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6004',
+      Unit: '105',
+      Message: 'Am I delinquent?',
+      'Expected Data (Field)': 'Account, Dues & Payments (Highest Volume)',
+      expected: '',
+      Notes: 'am_i_delinquent',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-006',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6005',
+      Unit: '106',
+      Message: 'What was my last payment amount?',
+      'Expected Data (Field)': 'Account, Dues & Payments (Highest Volume)',
+      expected: '',
+      Notes: 'what_was_my_last_payment_amount',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-007',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6006',
+      Unit: '107',
+      Message: 'Can you send me my account statement?',
+      'Expected Data (Field)': 'Account, Dues & Payments (Highest Volume)',
+      expected: '',
+      Notes: 'can_you_send_me_my_account_statement',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-008',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6007',
+      Unit: '108',
+      Message: 'What fees were added to my account?',
+      'Expected Data (Field)': 'Account, Dues & Payments (Highest Volume)',
+      expected: '',
+      Notes: 'what_fees_were_added_to_my_account',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-009',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6008',
+      Unit: '109',
+      Message: 'Why was I charged a late fee?',
+      'Expected Data (Field)': 'Account, Dues & Payments (Highest Volume)',
+      expected: '',
+      Notes: 'why_was_i_charged_a_late_fee',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-010',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6009',
+      Unit: '110',
+      Message: 'How do I make a payment?',
+      'Expected Data (Field)': 'Account, Dues & Payments (Highest Volume)',
+      expected: '',
+      Notes: 'how_do_i_make_a_payment',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-011',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6010',
+      Unit: '111',
+      Message: 'Can I set up autopay?',
+      'Expected Data (Field)': 'Account, Dues & Payments (Highest Volume)',
+      expected: '',
+      Notes: 'can_i_set_up_autopay',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-012',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6011',
+      Unit: '112',
+      Message: 'Where do I mail my payment?',
+      'Expected Data (Field)': 'Account, Dues & Payments (Highest Volume)',
+      expected: '',
+      Notes: 'where_do_i_mail_my_payment',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-013',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6012',
+      Unit: '113',
+      Message: 'Do you accept credit cards?',
+      'Expected Data (Field)': 'Account, Dues & Payments (Highest Volume)',
+      expected: '',
+      Notes: 'do_you_accept_credit_cards',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-014',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6013',
+      Unit: '114',
+      Message: 'What is the current assessment amount?',
+      'Expected Data (Field)': 'Account, Dues & Payments (Highest Volume)',
+      expected: '',
+      Notes: 'what_is_the_current_assessment_amount',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-015',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6014',
+      Unit: '115',
+      Message: 'Did my check clear?',
+      'Expected Data (Field)': 'Account, Dues & Payments (Highest Volume)',
+      expected: '',
+      Notes: 'did_my_check_clear',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-016',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6015',
+      Unit: '116',
+      Message: 'What is my year-to-date payment history?',
+      'Expected Data (Field)': 'Account, Dues & Payments (Highest Volume)',
+      expected: '',
+      Notes: 'what_is_my_yeartodate_payment_history',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-017',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6016',
+      Unit: '117',
+      Message: 'Can you resend my coupon book?',
+      'Expected Data (Field)': 'Account, Dues & Payments (Highest Volume)',
+      expected: '',
+      Notes: 'can_you_resend_my_coupon_book',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-018',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6017',
+      Unit: '118',
+      Message: 'What is the special assessment amount?',
+      'Expected Data (Field)': 'Account, Dues & Payments (Highest Volume)',
+      expected: '',
+      Notes: 'what_is_the_special_assessment_amount',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-019',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6018',
+      Unit: '119',
+      Message: 'When does the special assessment start?',
+      'Expected Data (Field)': 'Account, Dues & Payments (Highest Volume)',
+      expected: '',
+      Notes: 'when_does_the_special_assessment_start',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-020',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6019',
+      Unit: '120',
+      Message: 'Can I get a payoff balance?',
+      'Expected Data (Field)': 'Account, Dues & Payments (Highest Volume)',
+      expected: '',
+      Notes: 'can_i_get_a_payoff_balance',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-021',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6020',
+      Unit: '121',
+      Message: 'I need to report a maintenance issue.',
+      'Expected Data (Field)': 'Maintenance & Work Orders',
+      expected: '',
+      Notes: 'i_need_to_report_a_maintenance_issue',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-022',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6021',
+      Unit: '122',
+      Message: 'What is the status of my work order?',
+      'Expected Data (Field)': 'Maintenance & Work Orders',
+      expected: '',
+      Notes: 'what_is_the_status_of_my_work_order',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-023',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6022',
+      Unit: '123',
+      Message: 'When will maintenance come?',
+      'Expected Data (Field)': 'Maintenance & Work Orders',
+      expected: '',
+      Notes: 'when_will_maintenance_come',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-024',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6023',
+      Unit: '124',
+      Message: 'Who is assigned to my repair?',
+      'Expected Data (Field)': 'Maintenance & Work Orders',
+      expected: '',
+      Notes: 'who_is_assigned_to_my_repair',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-025',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6024',
+      Unit: '125',
+      Message: 'Can I upload photos of the issue?',
+      'Expected Data (Field)': 'Maintenance & Work Orders',
+      expected: '',
+      Notes: 'can_i_upload_photos_of_the_issue',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-026',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6025',
+      Unit: '126',
+      Message: 'The problem is getting worse — can you escalate?',
+      'Expected Data (Field)': 'Maintenance & Work Orders',
+      expected: '',
+      Notes: 'the_problem_is_getting_worse_can_you_escalate',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-027',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6026',
+      Unit: '127',
+      Message: 'Can I schedule maintenance for a specific day?',
+      'Expected Data (Field)': 'Maintenance & Work Orders',
+      expected: '',
+      Notes: 'can_i_schedule_maintenance_for_a_specific_day',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-028',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6027',
+      Unit: '128',
+      Message: 'Is this repair my responsibility or the HOA’s?',
+      'Expected Data (Field)': 'Maintenance & Work Orders',
+      expected: '',
+      Notes: 'is_this_repair_my_responsibility_or_the_hoas',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-029',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6028',
+      Unit: '129',
+      Message: 'My AC is leaking — what should I do?',
+      'Expected Data (Field)': 'Maintenance & Work Orders',
+      expected: '',
+      Notes: 'my_ac_is_leaking_what_should_i_do',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-030',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6029',
+      Unit: '130',
+      Message: 'There is a plumbing issue in my unit.',
+      'Expected Data (Field)': 'Maintenance & Work Orders',
+      expected: '',
+      Notes: 'there_is_a_plumbing_issue_in_my_unit',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-031',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6030',
+      Unit: '131',
+      Message: 'There is a common area problem to report.',
+      'Expected Data (Field)': 'Maintenance & Work Orders',
+      expected: '',
+      Notes: 'there_is_a_common_area_problem_to_report',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-032',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6031',
+      Unit: '132',
+      Message: 'Can I cancel my work order?',
+      'Expected Data (Field)': 'Maintenance & Work Orders',
+      expected: '',
+      Notes: 'can_i_cancel_my_work_order',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-033',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6032',
+      Unit: '133',
+      Message: 'My previous repair didn’t fix the problem.',
+      'Expected Data (Field)': 'Maintenance & Work Orders',
+      expected: '',
+      Notes: 'my_previous_repair_didnt_fix_the_problem',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-034',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6033',
+      Unit: '134',
+      Message: 'Is this considered an emergency repair?',
+      'Expected Data (Field)': 'Maintenance & Work Orders',
+      expected: '',
+      Notes: 'is_this_considered_an_emergency_repair',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-035',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6034',
+      Unit: '135',
+      Message: 'How long do repairs usually take?',
+      'Expected Data (Field)': 'Maintenance & Work Orders',
+      expected: '',
+      Notes: 'how_long_do_repairs_usually_take',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-036',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6035',
+      Unit: '136',
+      Message: 'What are the parking rules?',
+      'Expected Data (Field)': 'Rules, Violations & Compliance',
+      expected: '',
+      Notes: 'what_are_the_parking_rules',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-037',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6036',
+      Unit: '137',
+      Message: 'Can I park in guest parking overnight?',
+      'Expected Data (Field)': 'Rules, Violations & Compliance',
+      expected: '',
+      Notes: 'can_i_park_in_guest_parking_overnight',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-038',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6037',
+      Unit: '138',
+      Message: 'I received a violation letter — what does it mean?',
+      'Expected Data (Field)': 'Rules, Violations & Compliance',
+      expected: '',
+      Notes: 'i_received_a_violation_letter_what_does_it_mean',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-039',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6038',
+      Unit: '139',
+      Message: 'How do I dispute a violation?',
+      'Expected Data (Field)': 'Rules, Violations & Compliance',
+      expected: '',
+      Notes: 'how_do_i_dispute_a_violation',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-040',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6039',
+      Unit: '140',
+      Message: 'What are the pet rules?',
+      'Expected Data (Field)': 'Rules, Violations & Compliance',
+      expected: '',
+      Notes: 'what_are_the_pet_rules',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-041',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6040',
+      Unit: '141',
+      Message: 'Are rentals allowed in this community?',
+      'Expected Data (Field)': 'Rules, Violations & Compliance',
+      expected: '',
+      Notes: 'are_rentals_allowed_in_this_community',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-042',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6041',
+      Unit: '142',
+      Message: 'What is the lease approval process?',
+      'Expected Data (Field)': 'Rules, Violations & Compliance',
+      expected: '',
+      Notes: 'what_is_the_lease_approval_process',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-043',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6042',
+      Unit: '143',
+      Message: 'Can I install a fence?',
+      'Expected Data (Field)': 'Rules, Violations & Compliance',
+      expected: '',
+      Notes: 'can_i_install_a_fence',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-044',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6043',
+      Unit: '144',
+      Message: 'Do I need ARC approval for renovations?',
+      'Expected Data (Field)': 'Rules, Violations & Compliance',
+      expected: '',
+      Notes: 'do_i_need_arc_approval_for_renovations',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-045',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6044',
+      Unit: '145',
+      Message: 'What are the quiet hours?',
+      'Expected Data (Field)': 'Rules, Violations & Compliance',
+      expected: '',
+      Notes: 'what_are_the_quiet_hours',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-046',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6045',
+      Unit: '146',
+      Message: 'Can I have short-term rentals (Airbnb)?',
+      'Expected Data (Field)': 'Rules, Violations & Compliance',
+      expected: '',
+      Notes: 'can_i_have_shortterm_rentals_airbnb',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-047',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6046',
+      Unit: '147',
+      Message: 'What are the pool rules?',
+      'Expected Data (Field)': 'Rules, Violations & Compliance',
+      expected: '',
+      Notes: 'what_are_the_pool_rules',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-048',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6047',
+      Unit: '148',
+      Message: 'What are the trash pickup rules?',
+      'Expected Data (Field)': 'Rules, Violations & Compliance',
+      expected: '',
+      Notes: 'what_are_the_trash_pickup_rules',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-049',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6048',
+      Unit: '149',
+      Message: 'Can I install hurricane shutters?',
+      'Expected Data (Field)': 'Rules, Violations & Compliance',
+      expected: '',
+      Notes: 'can_i_install_hurricane_shutters',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-050',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6049',
+      Unit: '150',
+      Message: 'What exterior changes require approval?',
+      'Expected Data (Field)': 'Rules, Violations & Compliance',
+      expected: '',
+      Notes: 'what_exterior_changes_require_approval',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-051',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6050',
+      Unit: '151',
+      Message: 'How do I submit an ARC request?',
+      'Expected Data (Field)': 'Rules, Violations & Compliance',
+      expected: '',
+      Notes: 'how_do_i_submit_an_arc_request',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-052',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6051',
+      Unit: '152',
+      Message: 'What is the fine schedule?',
+      'Expected Data (Field)': 'Rules, Violations & Compliance',
+      expected: '',
+      Notes: 'what_is_the_fine_schedule',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-053',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6052',
+      Unit: '153',
+      Message: 'Why did I receive this violation?',
+      'Expected Data (Field)': 'Rules, Violations & Compliance',
+      expected: '',
+      Notes: 'why_did_i_receive_this_violation',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-054',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6053',
+      Unit: '154',
+      Message: 'Has my violation been cleared?',
+      'Expected Data (Field)': 'Rules, Violations & Compliance',
+      expected: '',
+      Notes: 'has_my_violation_been_cleared',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-055',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6054',
+      Unit: '155',
+      Message: 'How long do I have to fix the issue?',
+      'Expected Data (Field)': 'Rules, Violations & Compliance',
+      expected: '',
+      Notes: 'how_long_do_i_have_to_fix_the_issue',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-056',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6055',
+      Unit: '156',
+      Message: 'How do I register my vehicle?',
+      'Expected Data (Field)': 'Parking, Vehicles & Amenities',
+      expected: '',
+      Notes: 'how_do_i_register_my_vehicle',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-057',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6056',
+      Unit: '157',
+      Message: 'Where can guests park?',
+      'Expected Data (Field)': 'Parking, Vehicles & Amenities',
+      expected: '',
+      Notes: 'where_can_guests_park',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-058',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6057',
+      Unit: '158',
+      Message: 'Can I get a replacement gate clicker?',
+      'Expected Data (Field)': 'Parking, Vehicles & Amenities',
+      expected: '',
+      Notes: 'can_i_get_a_replacement_gate_clicker',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-059',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6058',
+      Unit: '159',
+      Message: 'How do I get a pool key?',
+      'Expected Data (Field)': 'Parking, Vehicles & Amenities',
+      expected: '',
+      Notes: 'how_do_i_get_a_pool_key',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-060',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6059',
+      Unit: '160',
+      Message: 'How do I reserve the clubhouse?',
+      'Expected Data (Field)': 'Parking, Vehicles & Amenities',
+      expected: '',
+      Notes: 'how_do_i_reserve_the_clubhouse',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-061',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6060',
+      Unit: '161',
+      Message: 'Is the pool open today?',
+      'Expected Data (Field)': 'Parking, Vehicles & Amenities',
+      expected: '',
+      Notes: 'is_the_pool_open_today',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-062',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6061',
+      Unit: '162',
+      Message: 'What are the gym hours?',
+      'Expected Data (Field)': 'Parking, Vehicles & Amenities',
+      expected: '',
+      Notes: 'what_are_the_gym_hours',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-063',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6062',
+      Unit: '163',
+      Message: 'How do I reserve the boat dock?',
+      'Expected Data (Field)': 'Parking, Vehicles & Amenities',
+      expected: '',
+      Notes: 'how_do_i_reserve_the_boat_dock',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-064',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6063',
+      Unit: '164',
+      Message: 'Are trailers allowed in the community?',
+      'Expected Data (Field)': 'Parking, Vehicles & Amenities',
+      expected: '',
+      Notes: 'are_trailers_allowed_in_the_community',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-065',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6064',
+      Unit: '165',
+      Message: 'Can I park a commercial vehicle?',
+      'Expected Data (Field)': 'Parking, Vehicles & Amenities',
+      expected: '',
+      Notes: 'can_i_park_a_commercial_vehicle',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-066',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6065',
+      Unit: '166',
+      Message: 'Where do I get a parking decal?',
+      'Expected Data (Field)': 'Parking, Vehicles & Amenities',
+      expected: '',
+      Notes: 'where_do_i_get_a_parking_decal',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-067',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6066',
+      Unit: '167',
+      Message: 'How many guest passes do I get?',
+      'Expected Data (Field)': 'Parking, Vehicles & Amenities',
+      expected: '',
+      Notes: 'how_many_guest_passes_do_i_get',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-068',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6067',
+      Unit: '168',
+      Message: 'Is overnight street parking allowed?',
+      'Expected Data (Field)': 'Parking, Vehicles & Amenities',
+      expected: '',
+      Notes: 'is_overnight_street_parking_allowed',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-069',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6068',
+      Unit: '169',
+      Message: 'How do I report an illegally parked car?',
+      'Expected Data (Field)': 'Parking, Vehicles & Amenities',
+      expected: '',
+      Notes: 'how_do_i_report_an_illegally_parked_car',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-070',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6069',
+      Unit: '170',
+      Message: 'Can I reserve the tennis court?',
+      'Expected Data (Field)': 'Parking, Vehicles & Amenities',
+      expected: '',
+      Notes: 'can_i_reserve_the_tennis_court',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-071',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6070',
+      Unit: '171',
+      Message: 'I received a letter — can you explain it?',
+      'Expected Data (Field)': 'Communications, Letters & Notices',
+      expected: '',
+      Notes: 'i_received_a_letter_can_you_explain_it',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-072',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6071',
+      Unit: '172',
+      Message: 'Did you send me a notice recently?',
+      'Expected Data (Field)': 'Communications, Letters & Notices',
+      expected: '',
+      Notes: 'did_you_send_me_a_notice_recently',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-073',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6072',
+      Unit: '173',
+      Message: 'Where can I view community announcements?',
+      'Expected Data (Field)': 'Communications, Letters & Notices',
+      expected: '',
+      Notes: 'where_can_i_view_community_announcements',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-074',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6073',
+      Unit: '174',
+      Message: 'When is the next board meeting?',
+      'Expected Data (Field)': 'Communications, Letters & Notices',
+      expected: '',
+      Notes: 'when_is_the_next_board_meeting',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-075',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6074',
+      Unit: '175',
+      Message: 'Can I get a copy of the meeting minutes?',
+      'Expected Data (Field)': 'Communications, Letters & Notices',
+      expected: '',
+      Notes: 'can_i_get_a_copy_of_the_meeting_minutes',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-076',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6075',
+      Unit: '176',
+      Message: 'Was there a recent safety notice?',
+      'Expected Data (Field)': 'Communications, Letters & Notices',
+      expected: '',
+      Notes: 'was_there_a_recent_safety_notice',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-077',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6076',
+      Unit: '177',
+      Message: 'Is there any hurricane preparation guidance?',
+      'Expected Data (Field)': 'Communications, Letters & Notices',
+      expected: '',
+      Notes: 'is_there_any_hurricane_preparation_guidance',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-078',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6077',
+      Unit: '178',
+      Message: 'Are there any planned maintenance outages?',
+      'Expected Data (Field)': 'Communications, Letters & Notices',
+      expected: '',
+      Notes: 'are_there_any_planned_maintenance_outages',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-079',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6078',
+      Unit: '179',
+      Message: 'Can I update my contact information?',
+      'Expected Data (Field)': 'Communications, Letters & Notices',
+      expected: '',
+      Notes: 'can_i_update_my_contact_information',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-080',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6079',
+      Unit: '180',
+      Message: 'How do I sign up for community alerts?',
+      'Expected Data (Field)': 'Communications, Letters & Notices',
+      expected: '',
+      Notes: 'how_do_i_sign_up_for_community_alerts',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-081',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6080',
+      Unit: '181',
+      Message: 'I’m selling my unit — what do I need to do?',
+      'Expected Data (Field)': 'Ownership, Leasing & Account Changes',
+      expected: '',
+      Notes: 'im_selling_my_unit_what_do_i_need_to_do',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-082',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6081',
+      Unit: '182',
+      Message: 'I’m renting my unit — what is required?',
+      'Expected Data (Field)': 'Ownership, Leasing & Account Changes',
+      expected: '',
+      Notes: 'im_renting_my_unit_what_is_required',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-083',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6082',
+      Unit: '183',
+      Message: 'How do I add a tenant?',
+      'Expected Data (Field)': 'Ownership, Leasing & Account Changes',
+      expected: '',
+      Notes: 'how_do_i_add_a_tenant',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-084',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6083',
+      Unit: '184',
+      Message: 'How do I update my mailing address?',
+      'Expected Data (Field)': 'Ownership, Leasing & Account Changes',
+      expected: '',
+      Notes: 'how_do_i_update_my_mailing_address',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-085',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6084',
+      Unit: '185',
+      Message: 'How do I add an authorized user?',
+      'Expected Data (Field)': 'Ownership, Leasing & Account Changes',
+      expected: '',
+      Notes: 'how_do_i_add_an_authorized_user',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-086',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6085',
+      Unit: '186',
+      Message: 'Can you provide an estoppel?',
+      'Expected Data (Field)': 'Ownership, Leasing & Account Changes',
+      expected: '',
+      Notes: 'can_you_provide_an_estoppel',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-087',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6086',
+      Unit: '187',
+      Message: 'What documents are needed for closing?',
+      'Expected Data (Field)': 'Ownership, Leasing & Account Changes',
+      expected: '',
+      Notes: 'what_documents_are_needed_for_closing',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-088',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6087',
+      Unit: '188',
+      Message: 'How do I transfer ownership?',
+      'Expected Data (Field)': 'Ownership, Leasing & Account Changes',
+      expected: '',
+      Notes: 'how_do_i_transfer_ownership',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-089',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6088',
+      Unit: '189',
+      Message: 'How do I update my phone/email?',
+      'Expected Data (Field)': 'Ownership, Leasing & Account Changes',
+      expected: '',
+      Notes: 'how_do_i_update_my_phoneemail',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-090',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6089',
+      Unit: '190',
+      Message: 'Who is my property manager?',
+      'Expected Data (Field)': 'Ownership, Leasing & Account Changes',
+      expected: '',
+      Notes: 'who_is_my_property_manager',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-091',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6090',
+      Unit: '191',
+      Message: 'I need to speak with someone.',
+      'Expected Data (Field)': 'Support, Escalations & General Help',
+      expected: '',
+      Notes: 'i_need_to_speak_with_someone',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-092',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6091',
+      Unit: '192',
+      Message: 'Can someone call me back?',
+      'Expected Data (Field)': 'Support, Escalations & General Help',
+      expected: '',
+      Notes: 'can_someone_call_me_back',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-093',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6092',
+      Unit: '193',
+      Message: 'What are the office hours?',
+      'Expected Data (Field)': 'Support, Escalations & General Help',
+      expected: '',
+      Notes: 'what_are_the_office_hours',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-094',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6093',
+      Unit: '194',
+      Message: 'Who do I call after hours?',
+      'Expected Data (Field)': 'Support, Escalations & General Help',
+      expected: '',
+      Notes: 'who_do_i_call_after_hours',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-095',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6094',
+      Unit: '195',
+      Message: 'This is an emergency — what should I do?',
+      'Expected Data (Field)': 'Support, Escalations & General Help',
+      expected: '',
+      Notes: 'this_is_an_emergency_what_should_i_do',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-096',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6095',
+      Unit: '196',
+      Message: 'I have a complaint about a neighbor.',
+      'Expected Data (Field)': 'Support, Escalations & General Help',
+      expected: '',
+      Notes: 'i_have_a_complaint_about_a_neighbor',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-097',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6096',
+      Unit: '197',
+      Message: 'I want to report a safety issue.',
+      'Expected Data (Field)': 'Support, Escalations & General Help',
+      expected: '',
+      Notes: 'i_want_to_report_a_safety_issue',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-098',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6097',
+      Unit: '198',
+      Message: 'I need help using the resident portal.',
+      'Expected Data (Field)': 'Support, Escalations & General Help',
+      expected: '',
+      Notes: 'i_need_help_using_the_resident_portal',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-099',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6098',
+      Unit: '199',
+      Message: 'Can you connect me to management?',
+      'Expected Data (Field)': 'Support, Escalations & General Help',
+      expected: '',
+      Notes: 'can_you_connect_me_to_management',
+      meta: [Object]
+    },
+    {
+      'Scenario ID': 'SCN-100',
+      Channel: 'SMS',
+      'From (Phone)': '305-555-6099',
+      Unit: '200',
+      Message: 'Where is the management office located?',
+      'Expected Data (Field)': 'Support, Escalations & General Help',
+      expected: '',
+      Notes: 'where_is_the_management_office_located',
+      meta: [Object]
+    },
+    ... 40 more items
+  ]
+}
+Running 140 scenario(s)...
+
+✅ PASS  SCN-001  [SMS  ] Unit 101    What is my current balance?                
+         → Account, Dues & Payments (Highest Volume) = "UNKNOWN_FIELD: Account, Dues & Payments (Highest Volume)" [via none]
+✅ PASS  SCN-002  [SMS  ] Unit 102    When is my next HOA payment due?           
+         → Account, Dues & Payments (Highest Volume) = "UNKNOWN_FIELD: Account, Dues & Payments (Highest Volume)" [via none]
+✅ PASS  SCN-003  [SMS  ] Unit 103    Did you receive my last payment?           
+         → Account, Dues & Payments (Highest Volume) = "UNKNOWN_FIELD: Account, Dues & Payments (Highest Volume)" [via none]
+✅ PASS  SCN-004  [SMS  ] Unit 104    How much do I owe right now?               
+         → Account, Dues & Payments (Highest Volume) = "UNKNOWN_FIELD: Account, Dues & Payments (Highest Volume)" [via none]
+✅ PASS  SCN-005  [SMS  ] Unit 105    Am I delinquent?                           
+         → Account, Dues & Payments (Highest Volume) = "UNKNOWN_FIELD: Account, Dues & Payments (Highest Volume)" [via none]
+✅ PASS  SCN-006  [SMS  ] Unit 106    What was my last payment amount?           
+         → Account, Dues & Payments (Highest Volume) = "UNKNOWN_FIELD: Account, Dues & Payments (Highest Volume)" [via none]
+✅ PASS  SCN-007  [SMS  ] Unit 107    Can you send me my account statement?      
+         → Account, Dues & Payments (Highest Volume) = "UNKNOWN_FIELD: Account, Dues & Payments (Highest Volume)" [via none]
+✅ PASS  SCN-008  [SMS  ] Unit 108    What fees were added to my account?        
+         → Account, Dues & Payments (Highest Volume) = "UNKNOWN_FIELD: Account, Dues & Payments (Highest Volume)" [via none]
+✅ PASS  SCN-009  [SMS  ] Unit 109    Why was I charged a late fee?              
+         → Account, Dues & Payments (Highest Volume) = "UNKNOWN_FIELD: Account, Dues & Payments (Highest Volume)" [via none]
+✅ PASS  SCN-010  [SMS  ] Unit 110    How do I make a payment?                   
+         → Account, Dues & Payments (Highest Volume) = "UNKNOWN_FIELD: Account, Dues & Payments (Highest Volume)" [via none]
+✅ PASS  SCN-011  [SMS  ] Unit 111    Can I set up autopay?                      
+         → Account, Dues & Payments (Highest Volume) = "UNKNOWN_FIELD: Account, Dues & Payments (Highest Volume)" [via none]
+✅ PASS  SCN-012  [SMS  ] Unit 112    Where do I mail my payment?                
+         → Account, Dues & Payments (Highest Volume) = "UNKNOWN_FIELD: Account, Dues & Payments (Highest Volume)" [via none]
+✅ PASS  SCN-013  [SMS  ] Unit 113    Do you accept credit cards?                
+         → Account, Dues & Payments (Highest Volume) = "UNKNOWN_FIELD: Account, Dues & Payments (Highest Volume)" [via none]
+✅ PASS  SCN-014  [SMS  ] Unit 114    What is the current assessment amount?     
+         → Account, Dues & Payments (Highest Volume) = "UNKNOWN_FIELD: Account, Dues & Payments (Highest Volume)" [via none]
+✅ PASS  SCN-015  [SMS  ] Unit 115    Did my check clear?                        
+         → Account, Dues & Payments (Highest Volume) = "UNKNOWN_FIELD: Account, Dues & Payments (Highest Volume)" [via none]
+✅ PASS  SCN-016  [SMS  ] Unit 116    What is my year-to-date payment history?   
+         → Account, Dues & Payments (Highest Volume) = "UNKNOWN_FIELD: Account, Dues & Payments (Highest Volume)" [via none]
+✅ PASS  SCN-017  [SMS  ] Unit 117    Can you resend my coupon book?             
+         → Account, Dues & Payments (Highest Volume) = "UNKNOWN_FIELD: Account, Dues & Payments (Highest Volume)" [via none]
+✅ PASS  SCN-018  [SMS  ] Unit 118    What is the special assessment amount?     
+         → Account, Dues & Payments (Highest Volume) = "UNKNOWN_FIELD: Account, Dues & Payments (Highest Volume)" [via none]
+✅ PASS  SCN-019  [SMS  ] Unit 119    When does the special assessment start?    
+         → Account, Dues & Payments (Highest Volume) = "UNKNOWN_FIELD: Account, Dues & Payments (Highest Volume)" [via none]
+✅ PASS  SCN-020  [SMS  ] Unit 120    Can I get a payoff balance?                
+         → Account, Dues & Payments (Highest Volume) = "UNKNOWN_FIELD: Account, Dues & Payments (Highest Volume)" [via none]
+✅ PASS  SCN-021  [SMS  ] Unit 121    I need to report a maintenance issue.      
+         → Maintenance & Work Orders = "UNKNOWN_FIELD: Maintenance & Work Orders" [via none]
+✅ PASS  SCN-022  [SMS  ] Unit 122    What is the status of my work order?       
+         → Maintenance & Work Orders = "UNKNOWN_FIELD: Maintenance & Work Orders" [via none]
+✅ PASS  SCN-023  [SMS  ] Unit 123    When will maintenance come?                
+         → Maintenance & Work Orders = "UNKNOWN_FIELD: Maintenance & Work Orders" [via none]
+✅ PASS  SCN-024  [SMS  ] Unit 124    Who is assigned to my repair?              
+         → Maintenance & Work Orders = "UNKNOWN_FIELD: Maintenance & Work Orders" [via none]
+✅ PASS  SCN-025  [SMS  ] Unit 125    Can I upload photos of the issue?          
+         → Maintenance & Work Orders = "UNKNOWN_FIELD: Maintenance & Work Orders" [via none]
+✅ PASS  SCN-026  [SMS  ] Unit 126    The problem is getting worse — can you esc 
+         → Maintenance & Work Orders = "UNKNOWN_FIELD: Maintenance & Work Orders" [via none]
+✅ PASS  SCN-027  [SMS  ] Unit 127    Can I schedule maintenance for a specific  
+         → Maintenance & Work Orders = "UNKNOWN_FIELD: Maintenance & Work Orders" [via none]
+✅ PASS  SCN-028  [SMS  ] Unit 128    Is this repair my responsibility or the HO 
+         → Maintenance & Work Orders = "UNKNOWN_FIELD: Maintenance & Work Orders" [via none]
+✅ PASS  SCN-029  [SMS  ] Unit 129    My AC is leaking — what should I do?       
+         → Maintenance & Work Orders = "UNKNOWN_FIELD: Maintenance & Work Orders" [via none]
+✅ PASS  SCN-030  [SMS  ] Unit 130    There is a plumbing issue in my unit.      
+         → Maintenance & Work Orders = "UNKNOWN_FIELD: Maintenance & Work Orders" [via none]
+✅ PASS  SCN-031  [SMS  ] Unit 131    There is a common area problem to report.  
+         → Maintenance & Work Orders = "UNKNOWN_FIELD: Maintenance & Work Orders" [via none]
+✅ PASS  SCN-032  [SMS  ] Unit 132    Can I cancel my work order?                
+         → Maintenance & Work Orders = "UNKNOWN_FIELD: Maintenance & Work Orders" [via none]
+✅ PASS  SCN-033  [SMS  ] Unit 133    My previous repair didn’t fix the problem. 
+         → Maintenance & Work Orders = "UNKNOWN_FIELD: Maintenance & Work Orders" [via none]
+✅ PASS  SCN-034  [SMS  ] Unit 134    Is this considered an emergency repair?    
+         → Maintenance & Work Orders = "UNKNOWN_FIELD: Maintenance & Work Orders" [via none]
+✅ PASS  SCN-035  [SMS  ] Unit 135    How long do repairs usually take?          
+         → Maintenance & Work Orders = "UNKNOWN_FIELD: Maintenance & Work Orders" [via none]
+✅ PASS  SCN-036  [SMS  ] Unit 136    What are the parking rules?                
+         → Rules, Violations & Compliance = "UNKNOWN_FIELD: Rules, Violations & Compliance" [via none]
+✅ PASS  SCN-037  [SMS  ] Unit 137    Can I park in guest parking overnight?     
+         → Rules, Violations & Compliance = "UNKNOWN_FIELD: Rules, Violations & Compliance" [via none]
+✅ PASS  SCN-038  [SMS  ] Unit 138    I received a violation letter — what does  
+         → Rules, Violations & Compliance = "UNKNOWN_FIELD: Rules, Violations & Compliance" [via none]
+✅ PASS  SCN-039  [SMS  ] Unit 139    How do I dispute a violation?              
+         → Rules, Violations & Compliance = "UNKNOWN_FIELD: Rules, Violations & Compliance" [via none]
+✅ PASS  SCN-040  [SMS  ] Unit 140    What are the pet rules?                    
+         → Rules, Violations & Compliance = "UNKNOWN_FIELD: Rules, Violations & Compliance" [via none]
+✅ PASS  SCN-041  [SMS  ] Unit 141    Are rentals allowed in this community?     
+         → Rules, Violations & Compliance = "UNKNOWN_FIELD: Rules, Violations & Compliance" [via none]
+✅ PASS  SCN-042  [SMS  ] Unit 142    What is the lease approval process?        
+         → Rules, Violations & Compliance = "UNKNOWN_FIELD: Rules, Violations & Compliance" [via none]
+✅ PASS  SCN-043  [SMS  ] Unit 143    Can I install a fence?                     
+         → Rules, Violations & Compliance = "UNKNOWN_FIELD: Rules, Violations & Compliance" [via none]
+✅ PASS  SCN-044  [SMS  ] Unit 144    Do I need ARC approval for renovations?    
+         → Rules, Violations & Compliance = "UNKNOWN_FIELD: Rules, Violations & Compliance" [via none]
+✅ PASS  SCN-045  [SMS  ] Unit 145    What are the quiet hours?                  
+         → Rules, Violations & Compliance = "UNKNOWN_FIELD: Rules, Violations & Compliance" [via none]
+✅ PASS  SCN-046  [SMS  ] Unit 146    Can I have short-term rentals (Airbnb)?    
+         → Rules, Violations & Compliance = "UNKNOWN_FIELD: Rules, Violations & Compliance" [via none]
+✅ PASS  SCN-047  [SMS  ] Unit 147    What are the pool rules?                   
+         → Rules, Violations & Compliance = "UNKNOWN_FIELD: Rules, Violations & Compliance" [via none]
+✅ PASS  SCN-048  [SMS  ] Unit 148    What are the trash pickup rules?           
+         → Rules, Violations & Compliance = "UNKNOWN_FIELD: Rules, Violations & Compliance" [via none]
+✅ PASS  SCN-049  [SMS  ] Unit 149    Can I install hurricane shutters?          
+         → Rules, Violations & Compliance = "UNKNOWN_FIELD: Rules, Violations & Compliance" [via none]
+✅ PASS  SCN-050  [SMS  ] Unit 150    What exterior changes require approval?    
+         → Rules, Violations & Compliance = "UNKNOWN_FIELD: Rules, Violations & Compliance" [via none]
+✅ PASS  SCN-051  [SMS  ] Unit 151    How do I submit an ARC request?            
+         → Rules, Violations & Compliance = "UNKNOWN_FIELD: Rules, Violations & Compliance" [via none]
+✅ PASS  SCN-052  [SMS  ] Unit 152    What is the fine schedule?                 
+         → Rules, Violations & Compliance = "UNKNOWN_FIELD: Rules, Violations & Compliance" [via none]
+✅ PASS  SCN-053  [SMS  ] Unit 153    Why did I receive this violation?          
+         → Rules, Violations & Compliance = "UNKNOWN_FIELD: Rules, Violations & Compliance" [via none]
+✅ PASS  SCN-054  [SMS  ] Unit 154    Has my violation been cleared?             
+         → Rules, Violations & Compliance = "UNKNOWN_FIELD: Rules, Violations & Compliance" [via none]
+✅ PASS  SCN-055  [SMS  ] Unit 155    How long do I have to fix the issue?       
+         → Rules, Violations & Compliance = "UNKNOWN_FIELD: Rules, Violations & Compliance" [via none]
+✅ PASS  SCN-056  [SMS  ] Unit 156    How do I register my vehicle?              
+         → Parking, Vehicles & Amenities = "UNKNOWN_FIELD: Parking, Vehicles & Amenities" [via none]
+✅ PASS  SCN-057  [SMS  ] Unit 157    Where can guests park?                     
+         → Parking, Vehicles & Amenities = "UNKNOWN_FIELD: Parking, Vehicles & Amenities" [via none]
+✅ PASS  SCN-058  [SMS  ] Unit 158    Can I get a replacement gate clicker?      
+         → Parking, Vehicles & Amenities = "UNKNOWN_FIELD: Parking, Vehicles & Amenities" [via none]
+✅ PASS  SCN-059  [SMS  ] Unit 159    How do I get a pool key?                   
+         → Parking, Vehicles & Amenities = "UNKNOWN_FIELD: Parking, Vehicles & Amenities" [via none]
+✅ PASS  SCN-060  [SMS  ] Unit 160    How do I reserve the clubhouse?            
+         → Parking, Vehicles & Amenities = "UNKNOWN_FIELD: Parking, Vehicles & Amenities" [via none]
+✅ PASS  SCN-061  [SMS  ] Unit 161    Is the pool open today?                    
+         → Parking, Vehicles & Amenities = "UNKNOWN_FIELD: Parking, Vehicles & Amenities" [via none]
+✅ PASS  SCN-062  [SMS  ] Unit 162    What are the gym hours?                    
+         → Parking, Vehicles & Amenities = "UNKNOWN_FIELD: Parking, Vehicles & Amenities" [via none]
+✅ PASS  SCN-063  [SMS  ] Unit 163    How do I reserve the boat dock?            
+         → Parking, Vehicles & Amenities = "UNKNOWN_FIELD: Parking, Vehicles & Amenities" [via none]
+✅ PASS  SCN-064  [SMS  ] Unit 164    Are trailers allowed in the community?     
+         → Parking, Vehicles & Amenities = "UNKNOWN_FIELD: Parking, Vehicles & Amenities" [via none]
+✅ PASS  SCN-065  [SMS  ] Unit 165    Can I park a commercial vehicle?           
+         → Parking, Vehicles & Amenities = "UNKNOWN_FIELD: Parking, Vehicles & Amenities" [via none]
+✅ PASS  SCN-066  [SMS  ] Unit 166    Where do I get a parking decal?            
+         → Parking, Vehicles & Amenities = "UNKNOWN_FIELD: Parking, Vehicles & Amenities" [via none]
+✅ PASS  SCN-067  [SMS  ] Unit 167    How many guest passes do I get?            
+         → Parking, Vehicles & Amenities = "UNKNOWN_FIELD: Parking, Vehicles & Amenities" [via none]
+✅ PASS  SCN-068  [SMS  ] Unit 168    Is overnight street parking allowed?       
+         → Parking, Vehicles & Amenities = "UNKNOWN_FIELD: Parking, Vehicles & Amenities" [via none]
+✅ PASS  SCN-069  [SMS  ] Unit 169    How do I report an illegally parked car?   
+         → Parking, Vehicles & Amenities = "UNKNOWN_FIELD: Parking, Vehicles & Amenities" [via none]
+✅ PASS  SCN-070  [SMS  ] Unit 170    Can I reserve the tennis court?            
+         → Parking, Vehicles & Amenities = "UNKNOWN_FIELD: Parking, Vehicles & Amenities" [via none]
+✅ PASS  SCN-071  [SMS  ] Unit 171    I received a letter — can you explain it?  
+         → Communications, Letters & Notices = "UNKNOWN_FIELD: Communications, Letters & Notices" [via none]
+✅ PASS  SCN-072  [SMS  ] Unit 172    Did you send me a notice recently?         
+         → Communications, Letters & Notices = "UNKNOWN_FIELD: Communications, Letters & Notices" [via none]
+✅ PASS  SCN-073  [SMS  ] Unit 173    Where can I view community announcements?  
+         → Communications, Letters & Notices = "UNKNOWN_FIELD: Communications, Letters & Notices" [via none]
+✅ PASS  SCN-074  [SMS  ] Unit 174    When is the next board meeting?            
+         → Communications, Letters & Notices = "UNKNOWN_FIELD: Communications, Letters & Notices" [via none]
+✅ PASS  SCN-075  [SMS  ] Unit 175    Can I get a copy of the meeting minutes?   
+         → Communications, Letters & Notices = "UNKNOWN_FIELD: Communications, Letters & Notices" [via none]
+✅ PASS  SCN-076  [SMS  ] Unit 176    Was there a recent safety notice?          
+         → Communications, Letters & Notices = "UNKNOWN_FIELD: Communications, Letters & Notices" [via none]
+✅ PASS  SCN-077  [SMS  ] Unit 177    Is there any hurricane preparation guidanc 
+         → Communications, Letters & Notices = "UNKNOWN_FIELD: Communications, Letters & Notices" [via none]
+✅ PASS  SCN-078  [SMS  ] Unit 178    Are there any planned maintenance outages? 
+         → Communications, Letters & Notices = "UNKNOWN_FIELD: Communications, Letters & Notices" [via none]
+✅ PASS  SCN-079  [SMS  ] Unit 179    Can I update my contact information?       
+         → Communications, Letters & Notices = "UNKNOWN_FIELD: Communications, Letters & Notices" [via none]
+✅ PASS  SCN-080  [SMS  ] Unit 180    How do I sign up for community alerts?     
+         → Communications, Letters & Notices = "UNKNOWN_FIELD: Communications, Letters & Notices" [via none]
+✅ PASS  SCN-081  [SMS  ] Unit 181    I’m selling my unit — what do I need to do 
+         → Ownership, Leasing & Account Changes = "UNKNOWN_FIELD: Ownership, Leasing & Account Changes" [via none]
+✅ PASS  SCN-082  [SMS  ] Unit 182    I’m renting my unit — what is required?    
+         → Ownership, Leasing & Account Changes = "UNKNOWN_FIELD: Ownership, Leasing & Account Changes" [via none]
+✅ PASS  SCN-083  [SMS  ] Unit 183    How do I add a tenant?                     
+         → Ownership, Leasing & Account Changes = "UNKNOWN_FIELD: Ownership, Leasing & Account Changes" [via none]
+✅ PASS  SCN-084  [SMS  ] Unit 184    How do I update my mailing address?        
+         → Ownership, Leasing & Account Changes = "UNKNOWN_FIELD: Ownership, Leasing & Account Changes" [via none]
+✅ PASS  SCN-085  [SMS  ] Unit 185    How do I add an authorized user?           
+         → Ownership, Leasing & Account Changes = "UNKNOWN_FIELD: Ownership, Leasing & Account Changes" [via none]
+✅ PASS  SCN-086  [SMS  ] Unit 186    Can you provide an estoppel?               
+         → Ownership, Leasing & Account Changes = "UNKNOWN_FIELD: Ownership, Leasing & Account Changes" [via none]
+✅ PASS  SCN-087  [SMS  ] Unit 187    What documents are needed for closing?     
+         → Ownership, Leasing & Account Changes = "UNKNOWN_FIELD: Ownership, Leasing & Account Changes" [via none]
+✅ PASS  SCN-088  [SMS  ] Unit 188    How do I transfer ownership?               
+         → Ownership, Leasing & Account Changes = "UNKNOWN_FIELD: Ownership, Leasing & Account Changes" [via none]
+✅ PASS  SCN-089  [SMS  ] Unit 189    How do I update my phone/email?            
+         → Ownership, Leasing & Account Changes = "UNKNOWN_FIELD: Ownership, Leasing & Account Changes" [via none]
+✅ PASS  SCN-090  [SMS  ] Unit 190    Who is my property manager?                
+         → Ownership, Leasing & Account Changes = "UNKNOWN_FIELD: Ownership, Leasing & Account Changes" [via none]
+✅ PASS  SCN-091  [SMS  ] Unit 191    I need to speak with someone.              
+         → Support, Escalations & General Help = "UNKNOWN_FIELD: Support, Escalations & General Help" [via none]
+✅ PASS  SCN-092  [SMS  ] Unit 192    Can someone call me back?                  
+         → Support, Escalations & General Help = "UNKNOWN_FIELD: Support, Escalations & General Help" [via none]
+✅ PASS  SCN-093  [SMS  ] Unit 193    What are the office hours?                 
+         → Support, Escalations & General Help = "UNKNOWN_FIELD: Support, Escalations & General Help" [via none]
+✅ PASS  SCN-094  [SMS  ] Unit 194    Who do I call after hours?                 
+         → Support, Escalations & General Help = "UNKNOWN_FIELD: Support, Escalations & General Help" [via none]
+✅ PASS  SCN-095  [SMS  ] Unit 195    This is an emergency — what should I do?   
+         → Support, Escalations & General Help = "UNKNOWN_FIELD: Support, Escalations & General Help" [via none]
+✅ PASS  SCN-096  [SMS  ] Unit 196    I have a complaint about a neighbor.       
+         → Support, Escalations & General Help = "UNKNOWN_FIELD: Support, Escalations & General Help" [via none]
+✅ PASS  SCN-097  [SMS  ] Unit 197    I want to report a safety issue.           
+         → Support, Escalations & General Help = "UNKNOWN_FIELD: Support, Escalations & General Help" [via none]
+✅ PASS  SCN-098  [SMS  ] Unit 198    I need help using the resident portal.     
+         → Support, Escalations & General Help = "UNKNOWN_FIELD: Support, Escalations & General Help" [via none]
+✅ PASS  SCN-099  [SMS  ] Unit 199    Can you connect me to management?          
+         → Support, Escalations & General Help = "UNKNOWN_FIELD: Support, Escalations & General Help" [via none]
+✅ PASS  SCN-100  [SMS  ] Unit 200    Where is the management office located?    
+         → Support, Escalations & General Help = "UNKNOWN_FIELD: Support, Escalations & General Help" [via none]
+✅ PASS  SCN-101  [SMS  ] Unit 201    Show top 10 delinquent owners.             
+         → Financial & Delinquency Intelligence = "UNKNOWN_FIELD: Financial & Delinquency Intelligence" [via none]
+✅ PASS  SCN-102  [SMS  ] Unit 202    Total delinquency by association.          
+         → Financial & Delinquency Intelligence = "UNKNOWN_FIELD: Financial & Delinquency Intelligence" [via none]
+✅ PASS  SCN-103  [SMS  ] Unit 203    Delinquency aging summary (30/60/90+).     
+         → Financial & Delinquency Intelligence = "UNKNOWN_FIELD: Financial & Delinquency Intelligence" [via none]
+✅ PASS  SCN-104  [SMS  ] Unit 204    Which accounts just became delinquent this 
+         → Financial & Delinquency Intelligence = "UNKNOWN_FIELD: Financial & Delinquency Intelligence" [via none]
+✅ PASS  SCN-105  [SMS  ] Unit 205    Largest balances over $X.                  
+         → Financial & Delinquency Intelligence = "UNKNOWN_FIELD: Financial & Delinquency Intelligence" [via none]
+✅ PASS  SCN-106  [SMS  ] Unit 206    Accounts with recent partial payments.     
+         → Financial & Delinquency Intelligence = "UNKNOWN_FIELD: Financial & Delinquency Intelligence" [via none]
+✅ PASS  SCN-107  [SMS  ] Unit 207    Owners on payment plans.                   
+         → Financial & Delinquency Intelligence = "UNKNOWN_FIELD: Financial & Delinquency Intelligence" [via none]
+✅ PASS  SCN-108  [SMS  ] Unit 208    Collection status by unit.                 
+         → Financial & Delinquency Intelligence = "UNKNOWN_FIELD: Financial & Delinquency Intelligence" [via none]
+✅ PASS  SCN-109  [SMS  ] Unit 209    Total AR trend month over month.           
+         → Financial & Delinquency Intelligence = "UNKNOWN_FIELD: Financial & Delinquency Intelligence" [via none]
+✅ PASS  SCN-110  [SMS  ] Unit 210    Units approaching delinquency risk.        
+         → Financial & Delinquency Intelligence = "UNKNOWN_FIELD: Financial & Delinquency Intelligence" [via none]
+✅ PASS  SCN-111  [SMS  ] Unit 211    Open work orders by priority.              
+         → Operations & Maintenance = "UNKNOWN_FIELD: Operations & Maintenance" [via none]
+✅ PASS  SCN-112  [SMS  ] Unit 212    Work orders overdue more than X days.      
+         → Operations & Maintenance = "UNKNOWN_FIELD: Operations & Maintenance" [via none]
+✅ PASS  SCN-113  [SMS  ] Unit 213    Vendor response time report.               
+         → Operations & Maintenance = "UNKNOWN_FIELD: Operations & Maintenance" [via none]
+✅ PASS  SCN-114  [SMS  ] Unit 214    Repeat maintenance issues by unit.         
+         → Operations & Maintenance = "UNKNOWN_FIELD: Operations & Maintenance" [via none]
+✅ PASS  SCN-115  [SMS  ] Unit 215    Emergency work orders in last 7 days.      
+         → Operations & Maintenance = "UNKNOWN_FIELD: Operations & Maintenance" [via none]
+✅ PASS  SCN-116  [SMS  ] Unit 216    Maintenance backlog summary.               
+         → Operations & Maintenance = "UNKNOWN_FIELD: Operations & Maintenance" [via none]
+✅ PASS  SCN-117  [SMS  ] Unit 217    Average time to close work orders.         
+         → Operations & Maintenance = "UNKNOWN_FIELD: Operations & Maintenance" [via none]
+✅ PASS  SCN-118  [SMS  ] Unit 218    Units with multiple recent repairs.        
+         → Operations & Maintenance = "UNKNOWN_FIELD: Operations & Maintenance" [via none]
+✅ PASS  SCN-119  [SMS  ] Unit 219    Vendor performance comparison.             
+         → Operations & Maintenance = "UNKNOWN_FIELD: Operations & Maintenance" [via none]
+✅ PASS  SCN-120  [SMS  ] Unit 220    Upcoming scheduled maintenance.            
+         → Operations & Maintenance = "UNKNOWN_FIELD: Operations & Maintenance" [via none]
+✅ PASS  SCN-121  [SMS  ] Unit 221    Open violations by category.               
+         → Violations & Compliance = "UNKNOWN_FIELD: Violations & Compliance" [via none]
+✅ PASS  SCN-122  [SMS  ] Unit 222    Repeat violators.                          
+         → Violations & Compliance = "UNKNOWN_FIELD: Violations & Compliance" [via none]
+✅ PASS  SCN-123  [SMS  ] Unit 223    Violations nearing fine stage.             
+         → Violations & Compliance = "UNKNOWN_FIELD: Violations & Compliance" [via none]
+✅ PASS  SCN-124  [SMS  ] Unit 224    Compliance trend by month.                 
+         → Violations & Compliance = "UNKNOWN_FIELD: Violations & Compliance" [via none]
+✅ PASS  SCN-125  [SMS  ] Unit 225    Units with multiple violations.            
+         → Violations & Compliance = "UNKNOWN_FIELD: Violations & Compliance" [via none]
+✅ PASS  SCN-126  [SMS  ] Unit 226    Unresolved violations over X days.         
+         → Violations & Compliance = "UNKNOWN_FIELD: Violations & Compliance" [via none]
+✅ PASS  SCN-127  [SMS  ] Unit 227    ARC requests pending review.               
+         → Violations & Compliance = "UNKNOWN_FIELD: Violations & Compliance" [via none]
+✅ PASS  SCN-128  [SMS  ] Unit 228    Recently cleared violations.               
+         → Violations & Compliance = "UNKNOWN_FIELD: Violations & Compliance" [via none]
+✅ PASS  SCN-129  [SMS  ] Unit 229    Violation heat map by building.            
+         → Violations & Compliance = "UNKNOWN_FIELD: Violations & Compliance" [via none]
+✅ PASS  SCN-130  [SMS  ] Unit 230    Upcoming compliance deadlines.             
+         → Violations & Compliance = "UNKNOWN_FIELD: Violations & Compliance" [via none]
+✅ PASS  SCN-131  [SMS  ] Unit 231    Resident inquiry volume by topic.          
+         → Portfolio & Board Intelligence = "UNKNOWN_FIELD: Portfolio & Board Intelligence" [via none]
+✅ PASS  SCN-132  [SMS  ] Unit 232    Call deflection rate.                      
+         → Portfolio & Board Intelligence = "UNKNOWN_FIELD: Portfolio & Board Intelligence" [via none]
+✅ PASS  SCN-133  [SMS  ] Unit 233    Most common resident questions.            
+         → Portfolio & Board Intelligence = "UNKNOWN_FIELD: Portfolio & Board Intelligence" [via none]
+✅ PASS  SCN-134  [SMS  ] Unit 234    High-risk resident accounts.               
+         → Portfolio & Board Intelligence = "UNKNOWN_FIELD: Portfolio & Board Intelligence" [via none]
+✅ PASS  SCN-135  [SMS  ] Unit 235    Units flagged for follow-up.               
+         → Portfolio & Board Intelligence = "UNKNOWN_FIELD: Portfolio & Board Intelligence" [via none]
+✅ PASS  SCN-136  [SMS  ] Unit 236    Communication response times.              
+         → Portfolio & Board Intelligence = "UNKNOWN_FIELD: Portfolio & Board Intelligence" [via none]
+✅ PASS  SCN-137  [SMS  ] Unit 237    Associations with rising delinquency.      
+         → Portfolio & Board Intelligence = "UNKNOWN_FIELD: Portfolio & Board Intelligence" [via none]
+✅ PASS  SCN-138  [SMS  ] Unit 238    Maintenance cost trends.                   
+         → Portfolio & Board Intelligence = "UNKNOWN_FIELD: Portfolio & Board Intelligence" [via none]
+✅ PASS  SCN-139  [SMS  ] Unit 239    Amenity usage trends.                      
+         → Portfolio & Board Intelligence = "UNKNOWN_FIELD: Portfolio & Board Intelligence" [via none]
+✅ PASS  SCN-140  [SMS  ] Unit 240    Resident satisfaction signals.             
+         → Portfolio & Board Intelligence = "UNKNOWN_FIELD: Portfolio & Board Intelligence" [via none]
+
+──────────────────────────────────────────────────────────────
+Results: 140 passed  0 warned  0 failed  (140 total)
+
+Intent breakdown:
+  Account, Dues & Payments (Highest V  ████████████████████ (20)
+  Rules, Violations & Compliance       ████████████████████ (20)
+  Maintenance & Work Orders            ███████████████ (15)
+  Parking, Vehicles & Amenities        ███████████████ (15)
+  Communications, Letters & Notices    ██████████   (10)
+  Ownership, Leasing & Account Change  ██████████   (10)
+  Support, Escalations & General Help  ██████████   (10)
+  Financial & Delinquency Intelligenc  ██████████   (10)
+  Operations & Maintenance             ██████████   (10)
+  Violations & Compliance              ██████████   (10)
+  Portfolio & Board Intelligence       ██████████   (10)
+
+Channel breakdown:
+  SMS      ✅ 140  ⚠️  0  ❌ 0
+

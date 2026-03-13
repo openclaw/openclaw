@@ -101,6 +101,7 @@ export function ensureExplicitGatewayAuth(params: {
   urlOverrideSource?: "cli" | "env";
   explicitAuth?: ExplicitGatewayAuth;
   resolvedAuth?: ExplicitGatewayAuth;
+  envAuth?: ExplicitGatewayAuth;
   errorHint: string;
   configPath?: string;
 }): void {
@@ -114,14 +115,10 @@ export function ensureExplicitGatewayAuth(params: {
   if (params.urlOverrideSource === "cli" && (explicitToken || explicitPassword)) {
     return;
   }
-  const hasResolvedAuth =
-    params.resolvedAuth?.token ||
-    params.resolvedAuth?.password ||
-    explicitToken ||
-    explicitPassword;
+  const hasEnvAuth = params.envAuth?.token || params.envAuth?.password;
   // Env overrides are supported for deployment ergonomics, but only when explicit auth is available.
   // This avoids implicit device-token fallback against attacker-controlled WSS endpoints.
-  if (params.urlOverrideSource === "env" && hasResolvedAuth) {
+  if (params.urlOverrideSource === "env" && (explicitToken || explicitPassword || hasEnvAuth)) {
     return;
   }
   const message = [
@@ -872,6 +869,10 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     urlOverrideSource: context.urlOverrideSource,
     explicitAuth: context.explicitAuth,
     resolvedAuth: resolvedCredentials,
+    envAuth: {
+      token: trimToUndefined(process.env.OPENCLAW_GATEWAY_TOKEN),
+      password: trimToUndefined(process.env.OPENCLAW_GATEWAY_PASSWORD),
+    },
     errorHint: "Fix: pass --token or --password (or gatewayToken in tools).",
     configPath: context.configPath,
   });

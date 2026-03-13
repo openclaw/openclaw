@@ -1,0 +1,47 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.3.8",
+    "lastTouchedAt": "2026-03-10T16:36:36.889Z"
+  },
+  "auth": {
+    "profiles": {
+      "anthropic:default": {
+        "provider": "anthropic",
+        "mode": "token"
+      },
+      "anthropic:asktenant-openclaw": {
+        "provider": "anthropic",
+        "mode": "token"
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "workspace": "/Users/cliffordvaughn/AskTenant Workspace/openclaw/workspace",
+      "compaction": {
+        "mode": "safeguard"
+      }
+    },
+    "list": [
+      {
+        "id": "main"
+      },
+      {
+        "id": "anthropic",
+        "name": "anthropic",
+        "workspace": "/Users/cliffordvaughn/AskTenant Workspace/openclaw/workspace-anthropic",
+        "agentDir": "/Users/cliffordvaughn/AskTenant Workspace/openclaw/agents/anthropic/agent"
+      }
+    ]
+  },
+  "channels": {
+    "telegram": {
+      "groupPolicy": "allowlist",
+      "groupAllowFrom": []
+    }
+  },
+  "bindings": [
+    {
+      "type": "route",
+      "agentId": "anthropic",
+      ...existing code...

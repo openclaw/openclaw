@@ -1,0 +1,2102 @@
+[
+  {
+    "Scenario ID": "SCN-001",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6000",
+    "Unit": "101",
+    "Message": "What is my current balance?",
+    "Expected Data (Field)": "Account, Dues & Payments (Highest Volume)",
+    "expected": "",
+    "Notes": "what_is_my_current_balance",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H001",
+      "category": "Account, Dues & Payments (Highest Volume)"
+    }
+  },
+  {
+    "Scenario ID": "SCN-002",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6001",
+    "Unit": "102",
+    "Message": "When is my next HOA payment due?",
+    "Expected Data (Field)": "Account, Dues & Payments (Highest Volume)",
+    "expected": "",
+    "Notes": "when_is_my_next_hoa_payment_due",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H002",
+      "category": "Account, Dues & Payments (Highest Volume)"
+    }
+  },
+  {
+    "Scenario ID": "SCN-003",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6002",
+    "Unit": "103",
+    "Message": "Did you receive my last payment?",
+    "Expected Data (Field)": "Account, Dues & Payments (Highest Volume)",
+    "expected": "",
+    "Notes": "did_you_receive_my_last_payment",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H003",
+      "category": "Account, Dues & Payments (Highest Volume)"
+    }
+  },
+  {
+    "Scenario ID": "SCN-004",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6003",
+    "Unit": "104",
+    "Message": "How much do I owe right now?",
+    "Expected Data (Field)": "Account, Dues & Payments (Highest Volume)",
+    "expected": "",
+    "Notes": "how_much_do_i_owe_right_now",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H004",
+      "category": "Account, Dues & Payments (Highest Volume)"
+    }
+  },
+  {
+    "Scenario ID": "SCN-005",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6004",
+    "Unit": "105",
+    "Message": "Am I delinquent?",
+    "Expected Data (Field)": "Account, Dues & Payments (Highest Volume)",
+    "expected": "",
+    "Notes": "am_i_delinquent",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H005",
+      "category": "Account, Dues & Payments (Highest Volume)"
+    }
+  },
+  {
+    "Scenario ID": "SCN-006",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6005",
+    "Unit": "106",
+    "Message": "What was my last payment amount?",
+    "Expected Data (Field)": "Account, Dues & Payments (Highest Volume)",
+    "expected": "",
+    "Notes": "what_was_my_last_payment_amount",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H006",
+      "category": "Account, Dues & Payments (Highest Volume)"
+    }
+  },
+  {
+    "Scenario ID": "SCN-007",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6006",
+    "Unit": "107",
+    "Message": "Can you send me my account statement?",
+    "Expected Data (Field)": "Account, Dues & Payments (Highest Volume)",
+    "expected": "",
+    "Notes": "can_you_send_me_my_account_statement",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H007",
+      "category": "Account, Dues & Payments (Highest Volume)"
+    }
+  },
+  {
+    "Scenario ID": "SCN-008",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6007",
+    "Unit": "108",
+    "Message": "What fees were added to my account?",
+    "Expected Data (Field)": "Account, Dues & Payments (Highest Volume)",
+    "expected": "",
+    "Notes": "what_fees_were_added_to_my_account",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H008",
+      "category": "Account, Dues & Payments (Highest Volume)"
+    }
+  },
+  {
+    "Scenario ID": "SCN-009",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6008",
+    "Unit": "109",
+    "Message": "Why was I charged a late fee?",
+    "Expected Data (Field)": "Account, Dues & Payments (Highest Volume)",
+    "expected": "",
+    "Notes": "why_was_i_charged_a_late_fee",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H009",
+      "category": "Account, Dues & Payments (Highest Volume)"
+    }
+  },
+  {
+    "Scenario ID": "SCN-010",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6009",
+    "Unit": "110",
+    "Message": "How do I make a payment?",
+    "Expected Data (Field)": "Account, Dues & Payments (Highest Volume)",
+    "expected": "",
+    "Notes": "how_do_i_make_a_payment",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H010",
+      "category": "Account, Dues & Payments (Highest Volume)"
+    }
+  },
+  {
+    "Scenario ID": "SCN-011",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6010",
+    "Unit": "111",
+    "Message": "Can I set up autopay?",
+    "Expected Data (Field)": "Account, Dues & Payments (Highest Volume)",
+    "expected": "",
+    "Notes": "can_i_set_up_autopay",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H011",
+      "category": "Account, Dues & Payments (Highest Volume)"
+    }
+  },
+  {
+    "Scenario ID": "SCN-012",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6011",
+    "Unit": "112",
+    "Message": "Where do I mail my payment?",
+    "Expected Data (Field)": "Account, Dues & Payments (Highest Volume)",
+    "expected": "",
+    "Notes": "where_do_i_mail_my_payment",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H012",
+      "category": "Account, Dues & Payments (Highest Volume)"
+    }
+  },
+  {
+    "Scenario ID": "SCN-013",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6012",
+    "Unit": "113",
+    "Message": "Do you accept credit cards?",
+    "Expected Data (Field)": "Account, Dues & Payments (Highest Volume)",
+    "expected": "",
+    "Notes": "do_you_accept_credit_cards",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H013",
+      "category": "Account, Dues & Payments (Highest Volume)"
+    }
+  },
+  {
+    "Scenario ID": "SCN-014",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6013",
+    "Unit": "114",
+    "Message": "What is the current assessment amount?",
+    "Expected Data (Field)": "Account, Dues & Payments (Highest Volume)",
+    "expected": "",
+    "Notes": "what_is_the_current_assessment_amount",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H014",
+      "category": "Account, Dues & Payments (Highest Volume)"
+    }
+  },
+  {
+    "Scenario ID": "SCN-015",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6014",
+    "Unit": "115",
+    "Message": "Did my check clear?",
+    "Expected Data (Field)": "Account, Dues & Payments (Highest Volume)",
+    "expected": "",
+    "Notes": "did_my_check_clear",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H015",
+      "category": "Account, Dues & Payments (Highest Volume)"
+    }
+  },
+  {
+    "Scenario ID": "SCN-016",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6015",
+    "Unit": "116",
+    "Message": "What is my year-to-date payment history?",
+    "Expected Data (Field)": "Account, Dues & Payments (Highest Volume)",
+    "expected": "",
+    "Notes": "what_is_my_yeartodate_payment_history",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H016",
+      "category": "Account, Dues & Payments (Highest Volume)"
+    }
+  },
+  {
+    "Scenario ID": "SCN-017",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6016",
+    "Unit": "117",
+    "Message": "Can you resend my coupon book?",
+    "Expected Data (Field)": "Account, Dues & Payments (Highest Volume)",
+    "expected": "",
+    "Notes": "can_you_resend_my_coupon_book",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H017",
+      "category": "Account, Dues & Payments (Highest Volume)"
+    }
+  },
+  {
+    "Scenario ID": "SCN-018",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6017",
+    "Unit": "118",
+    "Message": "What is the special assessment amount?",
+    "Expected Data (Field)": "Account, Dues & Payments (Highest Volume)",
+    "expected": "",
+    "Notes": "what_is_the_special_assessment_amount",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H018",
+      "category": "Account, Dues & Payments (Highest Volume)"
+    }
+  },
+  {
+    "Scenario ID": "SCN-019",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6018",
+    "Unit": "119",
+    "Message": "When does the special assessment start?",
+    "Expected Data (Field)": "Account, Dues & Payments (Highest Volume)",
+    "expected": "",
+    "Notes": "when_does_the_special_assessment_start",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H019",
+      "category": "Account, Dues & Payments (Highest Volume)"
+    }
+  },
+  {
+    "Scenario ID": "SCN-020",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6019",
+    "Unit": "120",
+    "Message": "Can I get a payoff balance?",
+    "Expected Data (Field)": "Account, Dues & Payments (Highest Volume)",
+    "expected": "",
+    "Notes": "can_i_get_a_payoff_balance",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H020",
+      "category": "Account, Dues & Payments (Highest Volume)"
+    }
+  },
+  {
+    "Scenario ID": "SCN-021",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6020",
+    "Unit": "121",
+    "Message": "I need to report a maintenance issue.",
+    "Expected Data (Field)": "Maintenance & Work Orders",
+    "expected": "",
+    "Notes": "i_need_to_report_a_maintenance_issue",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H021",
+      "category": "Maintenance & Work Orders"
+    }
+  },
+  {
+    "Scenario ID": "SCN-022",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6021",
+    "Unit": "122",
+    "Message": "What is the status of my work order?",
+    "Expected Data (Field)": "Maintenance & Work Orders",
+    "expected": "",
+    "Notes": "what_is_the_status_of_my_work_order",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H022",
+      "category": "Maintenance & Work Orders"
+    }
+  },
+  {
+    "Scenario ID": "SCN-023",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6022",
+    "Unit": "123",
+    "Message": "When will maintenance come?",
+    "Expected Data (Field)": "Maintenance & Work Orders",
+    "expected": "",
+    "Notes": "when_will_maintenance_come",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H023",
+      "category": "Maintenance & Work Orders"
+    }
+  },
+  {
+    "Scenario ID": "SCN-024",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6023",
+    "Unit": "124",
+    "Message": "Who is assigned to my repair?",
+    "Expected Data (Field)": "Maintenance & Work Orders",
+    "expected": "",
+    "Notes": "who_is_assigned_to_my_repair",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H024",
+      "category": "Maintenance & Work Orders"
+    }
+  },
+  {
+    "Scenario ID": "SCN-025",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6024",
+    "Unit": "125",
+    "Message": "Can I upload photos of the issue?",
+    "Expected Data (Field)": "Maintenance & Work Orders",
+    "expected": "",
+    "Notes": "can_i_upload_photos_of_the_issue",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H025",
+      "category": "Maintenance & Work Orders"
+    }
+  },
+  {
+    "Scenario ID": "SCN-026",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6025",
+    "Unit": "126",
+    "Message": "The problem is getting worse — can you escalate?",
+    "Expected Data (Field)": "Maintenance & Work Orders",
+    "expected": "",
+    "Notes": "the_problem_is_getting_worse_can_you_escalate",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H026",
+      "category": "Maintenance & Work Orders"
+    }
+  },
+  {
+    "Scenario ID": "SCN-027",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6026",
+    "Unit": "127",
+    "Message": "Can I schedule maintenance for a specific day?",
+    "Expected Data (Field)": "Maintenance & Work Orders",
+    "expected": "",
+    "Notes": "can_i_schedule_maintenance_for_a_specific_day",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H027",
+      "category": "Maintenance & Work Orders"
+    }
+  },
+  {
+    "Scenario ID": "SCN-028",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6027",
+    "Unit": "128",
+    "Message": "Is this repair my responsibility or the HOA’s?",
+    "Expected Data (Field)": "Maintenance & Work Orders",
+    "expected": "",
+    "Notes": "is_this_repair_my_responsibility_or_the_hoas",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H028",
+      "category": "Maintenance & Work Orders"
+    }
+  },
+  {
+    "Scenario ID": "SCN-029",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6028",
+    "Unit": "129",
+    "Message": "My AC is leaking — what should I do?",
+    "Expected Data (Field)": "Maintenance & Work Orders",
+    "expected": "",
+    "Notes": "my_ac_is_leaking_what_should_i_do",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H029",
+      "category": "Maintenance & Work Orders"
+    }
+  },
+  {
+    "Scenario ID": "SCN-030",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6029",
+    "Unit": "130",
+    "Message": "There is a plumbing issue in my unit.",
+    "Expected Data (Field)": "Maintenance & Work Orders",
+    "expected": "",
+    "Notes": "there_is_a_plumbing_issue_in_my_unit",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H030",
+      "category": "Maintenance & Work Orders"
+    }
+  },
+  {
+    "Scenario ID": "SCN-031",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6030",
+    "Unit": "131",
+    "Message": "There is a common area problem to report.",
+    "Expected Data (Field)": "Maintenance & Work Orders",
+    "expected": "",
+    "Notes": "there_is_a_common_area_problem_to_report",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H031",
+      "category": "Maintenance & Work Orders"
+    }
+  },
+  {
+    "Scenario ID": "SCN-032",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6031",
+    "Unit": "132",
+    "Message": "Can I cancel my work order?",
+    "Expected Data (Field)": "Maintenance & Work Orders",
+    "expected": "",
+    "Notes": "can_i_cancel_my_work_order",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H032",
+      "category": "Maintenance & Work Orders"
+    }
+  },
+  {
+    "Scenario ID": "SCN-033",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6032",
+    "Unit": "133",
+    "Message": "My previous repair didn’t fix the problem.",
+    "Expected Data (Field)": "Maintenance & Work Orders",
+    "expected": "",
+    "Notes": "my_previous_repair_didnt_fix_the_problem",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H033",
+      "category": "Maintenance & Work Orders"
+    }
+  },
+  {
+    "Scenario ID": "SCN-034",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6033",
+    "Unit": "134",
+    "Message": "Is this considered an emergency repair?",
+    "Expected Data (Field)": "Maintenance & Work Orders",
+    "expected": "",
+    "Notes": "is_this_considered_an_emergency_repair",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H034",
+      "category": "Maintenance & Work Orders"
+    }
+  },
+  {
+    "Scenario ID": "SCN-035",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6034",
+    "Unit": "135",
+    "Message": "How long do repairs usually take?",
+    "Expected Data (Field)": "Maintenance & Work Orders",
+    "expected": "",
+    "Notes": "how_long_do_repairs_usually_take",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H035",
+      "category": "Maintenance & Work Orders"
+    }
+  },
+  {
+    "Scenario ID": "SCN-036",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6035",
+    "Unit": "136",
+    "Message": "What are the parking rules?",
+    "Expected Data (Field)": "Rules, Violations & Compliance",
+    "expected": "",
+    "Notes": "what_are_the_parking_rules",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H036",
+      "category": "Rules, Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-037",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6036",
+    "Unit": "137",
+    "Message": "Can I park in guest parking overnight?",
+    "Expected Data (Field)": "Rules, Violations & Compliance",
+    "expected": "",
+    "Notes": "can_i_park_in_guest_parking_overnight",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H037",
+      "category": "Rules, Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-038",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6037",
+    "Unit": "138",
+    "Message": "I received a violation letter — what does it mean?",
+    "Expected Data (Field)": "Rules, Violations & Compliance",
+    "expected": "",
+    "Notes": "i_received_a_violation_letter_what_does_it_mean",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H038",
+      "category": "Rules, Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-039",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6038",
+    "Unit": "139",
+    "Message": "How do I dispute a violation?",
+    "Expected Data (Field)": "Rules, Violations & Compliance",
+    "expected": "",
+    "Notes": "how_do_i_dispute_a_violation",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H039",
+      "category": "Rules, Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-040",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6039",
+    "Unit": "140",
+    "Message": "What are the pet rules?",
+    "Expected Data (Field)": "Rules, Violations & Compliance",
+    "expected": "",
+    "Notes": "what_are_the_pet_rules",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H040",
+      "category": "Rules, Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-041",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6040",
+    "Unit": "141",
+    "Message": "Are rentals allowed in this community?",
+    "Expected Data (Field)": "Rules, Violations & Compliance",
+    "expected": "",
+    "Notes": "are_rentals_allowed_in_this_community",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H041",
+      "category": "Rules, Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-042",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6041",
+    "Unit": "142",
+    "Message": "What is the lease approval process?",
+    "Expected Data (Field)": "Rules, Violations & Compliance",
+    "expected": "",
+    "Notes": "what_is_the_lease_approval_process",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H042",
+      "category": "Rules, Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-043",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6042",
+    "Unit": "143",
+    "Message": "Can I install a fence?",
+    "Expected Data (Field)": "Rules, Violations & Compliance",
+    "expected": "",
+    "Notes": "can_i_install_a_fence",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H043",
+      "category": "Rules, Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-044",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6043",
+    "Unit": "144",
+    "Message": "Do I need ARC approval for renovations?",
+    "Expected Data (Field)": "Rules, Violations & Compliance",
+    "expected": "",
+    "Notes": "do_i_need_arc_approval_for_renovations",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H044",
+      "category": "Rules, Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-045",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6044",
+    "Unit": "145",
+    "Message": "What are the quiet hours?",
+    "Expected Data (Field)": "Rules, Violations & Compliance",
+    "expected": "",
+    "Notes": "what_are_the_quiet_hours",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H045",
+      "category": "Rules, Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-046",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6045",
+    "Unit": "146",
+    "Message": "Can I have short-term rentals (Airbnb)?",
+    "Expected Data (Field)": "Rules, Violations & Compliance",
+    "expected": "",
+    "Notes": "can_i_have_shortterm_rentals_airbnb",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H046",
+      "category": "Rules, Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-047",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6046",
+    "Unit": "147",
+    "Message": "What are the pool rules?",
+    "Expected Data (Field)": "Rules, Violations & Compliance",
+    "expected": "",
+    "Notes": "what_are_the_pool_rules",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H047",
+      "category": "Rules, Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-048",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6047",
+    "Unit": "148",
+    "Message": "What are the trash pickup rules?",
+    "Expected Data (Field)": "Rules, Violations & Compliance",
+    "expected": "",
+    "Notes": "what_are_the_trash_pickup_rules",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H048",
+      "category": "Rules, Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-049",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6048",
+    "Unit": "149",
+    "Message": "Can I install hurricane shutters?",
+    "Expected Data (Field)": "Rules, Violations & Compliance",
+    "expected": "",
+    "Notes": "can_i_install_hurricane_shutters",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H049",
+      "category": "Rules, Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-050",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6049",
+    "Unit": "150",
+    "Message": "What exterior changes require approval?",
+    "Expected Data (Field)": "Rules, Violations & Compliance",
+    "expected": "",
+    "Notes": "what_exterior_changes_require_approval",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H050",
+      "category": "Rules, Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-051",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6050",
+    "Unit": "151",
+    "Message": "How do I submit an ARC request?",
+    "Expected Data (Field)": "Rules, Violations & Compliance",
+    "expected": "",
+    "Notes": "how_do_i_submit_an_arc_request",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H051",
+      "category": "Rules, Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-052",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6051",
+    "Unit": "152",
+    "Message": "What is the fine schedule?",
+    "Expected Data (Field)": "Rules, Violations & Compliance",
+    "expected": "",
+    "Notes": "what_is_the_fine_schedule",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H052",
+      "category": "Rules, Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-053",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6052",
+    "Unit": "153",
+    "Message": "Why did I receive this violation?",
+    "Expected Data (Field)": "Rules, Violations & Compliance",
+    "expected": "",
+    "Notes": "why_did_i_receive_this_violation",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H053",
+      "category": "Rules, Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-054",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6053",
+    "Unit": "154",
+    "Message": "Has my violation been cleared?",
+    "Expected Data (Field)": "Rules, Violations & Compliance",
+    "expected": "",
+    "Notes": "has_my_violation_been_cleared",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H054",
+      "category": "Rules, Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-055",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6054",
+    "Unit": "155",
+    "Message": "How long do I have to fix the issue?",
+    "Expected Data (Field)": "Rules, Violations & Compliance",
+    "expected": "",
+    "Notes": "how_long_do_i_have_to_fix_the_issue",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H055",
+      "category": "Rules, Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-056",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6055",
+    "Unit": "156",
+    "Message": "How do I register my vehicle?",
+    "Expected Data (Field)": "Parking, Vehicles & Amenities",
+    "expected": "",
+    "Notes": "how_do_i_register_my_vehicle",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H056",
+      "category": "Parking, Vehicles & Amenities"
+    }
+  },
+  {
+    "Scenario ID": "SCN-057",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6056",
+    "Unit": "157",
+    "Message": "Where can guests park?",
+    "Expected Data (Field)": "Parking, Vehicles & Amenities",
+    "expected": "",
+    "Notes": "where_can_guests_park",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H057",
+      "category": "Parking, Vehicles & Amenities"
+    }
+  },
+  {
+    "Scenario ID": "SCN-058",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6057",
+    "Unit": "158",
+    "Message": "Can I get a replacement gate clicker?",
+    "Expected Data (Field)": "Parking, Vehicles & Amenities",
+    "expected": "",
+    "Notes": "can_i_get_a_replacement_gate_clicker",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H058",
+      "category": "Parking, Vehicles & Amenities"
+    }
+  },
+  {
+    "Scenario ID": "SCN-059",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6058",
+    "Unit": "159",
+    "Message": "How do I get a pool key?",
+    "Expected Data (Field)": "Parking, Vehicles & Amenities",
+    "expected": "",
+    "Notes": "how_do_i_get_a_pool_key",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H059",
+      "category": "Parking, Vehicles & Amenities"
+    }
+  },
+  {
+    "Scenario ID": "SCN-060",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6059",
+    "Unit": "160",
+    "Message": "How do I reserve the clubhouse?",
+    "Expected Data (Field)": "Parking, Vehicles & Amenities",
+    "expected": "",
+    "Notes": "how_do_i_reserve_the_clubhouse",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H060",
+      "category": "Parking, Vehicles & Amenities"
+    }
+  },
+  {
+    "Scenario ID": "SCN-061",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6060",
+    "Unit": "161",
+    "Message": "Is the pool open today?",
+    "Expected Data (Field)": "Parking, Vehicles & Amenities",
+    "expected": "",
+    "Notes": "is_the_pool_open_today",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H061",
+      "category": "Parking, Vehicles & Amenities"
+    }
+  },
+  {
+    "Scenario ID": "SCN-062",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6061",
+    "Unit": "162",
+    "Message": "What are the gym hours?",
+    "Expected Data (Field)": "Parking, Vehicles & Amenities",
+    "expected": "",
+    "Notes": "what_are_the_gym_hours",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H062",
+      "category": "Parking, Vehicles & Amenities"
+    }
+  },
+  {
+    "Scenario ID": "SCN-063",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6062",
+    "Unit": "163",
+    "Message": "How do I reserve the boat dock?",
+    "Expected Data (Field)": "Parking, Vehicles & Amenities",
+    "expected": "",
+    "Notes": "how_do_i_reserve_the_boat_dock",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H063",
+      "category": "Parking, Vehicles & Amenities"
+    }
+  },
+  {
+    "Scenario ID": "SCN-064",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6063",
+    "Unit": "164",
+    "Message": "Are trailers allowed in the community?",
+    "Expected Data (Field)": "Parking, Vehicles & Amenities",
+    "expected": "",
+    "Notes": "are_trailers_allowed_in_the_community",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H064",
+      "category": "Parking, Vehicles & Amenities"
+    }
+  },
+  {
+    "Scenario ID": "SCN-065",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6064",
+    "Unit": "165",
+    "Message": "Can I park a commercial vehicle?",
+    "Expected Data (Field)": "Parking, Vehicles & Amenities",
+    "expected": "",
+    "Notes": "can_i_park_a_commercial_vehicle",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H065",
+      "category": "Parking, Vehicles & Amenities"
+    }
+  },
+  {
+    "Scenario ID": "SCN-066",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6065",
+    "Unit": "166",
+    "Message": "Where do I get a parking decal?",
+    "Expected Data (Field)": "Parking, Vehicles & Amenities",
+    "expected": "",
+    "Notes": "where_do_i_get_a_parking_decal",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H066",
+      "category": "Parking, Vehicles & Amenities"
+    }
+  },
+  {
+    "Scenario ID": "SCN-067",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6066",
+    "Unit": "167",
+    "Message": "How many guest passes do I get?",
+    "Expected Data (Field)": "Parking, Vehicles & Amenities",
+    "expected": "",
+    "Notes": "how_many_guest_passes_do_i_get",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H067",
+      "category": "Parking, Vehicles & Amenities"
+    }
+  },
+  {
+    "Scenario ID": "SCN-068",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6067",
+    "Unit": "168",
+    "Message": "Is overnight street parking allowed?",
+    "Expected Data (Field)": "Parking, Vehicles & Amenities",
+    "expected": "",
+    "Notes": "is_overnight_street_parking_allowed",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H068",
+      "category": "Parking, Vehicles & Amenities"
+    }
+  },
+  {
+    "Scenario ID": "SCN-069",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6068",
+    "Unit": "169",
+    "Message": "How do I report an illegally parked car?",
+    "Expected Data (Field)": "Parking, Vehicles & Amenities",
+    "expected": "",
+    "Notes": "how_do_i_report_an_illegally_parked_car",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H069",
+      "category": "Parking, Vehicles & Amenities"
+    }
+  },
+  {
+    "Scenario ID": "SCN-070",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6069",
+    "Unit": "170",
+    "Message": "Can I reserve the tennis court?",
+    "Expected Data (Field)": "Parking, Vehicles & Amenities",
+    "expected": "",
+    "Notes": "can_i_reserve_the_tennis_court",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H070",
+      "category": "Parking, Vehicles & Amenities"
+    }
+  },
+  {
+    "Scenario ID": "SCN-071",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6070",
+    "Unit": "171",
+    "Message": "I received a letter — can you explain it?",
+    "Expected Data (Field)": "Communications, Letters & Notices",
+    "expected": "",
+    "Notes": "i_received_a_letter_can_you_explain_it",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H071",
+      "category": "Communications, Letters & Notices"
+    }
+  },
+  {
+    "Scenario ID": "SCN-072",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6071",
+    "Unit": "172",
+    "Message": "Did you send me a notice recently?",
+    "Expected Data (Field)": "Communications, Letters & Notices",
+    "expected": "",
+    "Notes": "did_you_send_me_a_notice_recently",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H072",
+      "category": "Communications, Letters & Notices"
+    }
+  },
+  {
+    "Scenario ID": "SCN-073",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6072",
+    "Unit": "173",
+    "Message": "Where can I view community announcements?",
+    "Expected Data (Field)": "Communications, Letters & Notices",
+    "expected": "",
+    "Notes": "where_can_i_view_community_announcements",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H073",
+      "category": "Communications, Letters & Notices"
+    }
+  },
+  {
+    "Scenario ID": "SCN-074",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6073",
+    "Unit": "174",
+    "Message": "When is the next board meeting?",
+    "Expected Data (Field)": "Communications, Letters & Notices",
+    "expected": "",
+    "Notes": "when_is_the_next_board_meeting",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H074",
+      "category": "Communications, Letters & Notices"
+    }
+  },
+  {
+    "Scenario ID": "SCN-075",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6074",
+    "Unit": "175",
+    "Message": "Can I get a copy of the meeting minutes?",
+    "Expected Data (Field)": "Communications, Letters & Notices",
+    "expected": "",
+    "Notes": "can_i_get_a_copy_of_the_meeting_minutes",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H075",
+      "category": "Communications, Letters & Notices"
+    }
+  },
+  {
+    "Scenario ID": "SCN-076",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6075",
+    "Unit": "176",
+    "Message": "Was there a recent safety notice?",
+    "Expected Data (Field)": "Communications, Letters & Notices",
+    "expected": "",
+    "Notes": "was_there_a_recent_safety_notice",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H076",
+      "category": "Communications, Letters & Notices"
+    }
+  },
+  {
+    "Scenario ID": "SCN-077",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6076",
+    "Unit": "177",
+    "Message": "Is there any hurricane preparation guidance?",
+    "Expected Data (Field)": "Communications, Letters & Notices",
+    "expected": "",
+    "Notes": "is_there_any_hurricane_preparation_guidance",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H077",
+      "category": "Communications, Letters & Notices"
+    }
+  },
+  {
+    "Scenario ID": "SCN-078",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6077",
+    "Unit": "178",
+    "Message": "Are there any planned maintenance outages?",
+    "Expected Data (Field)": "Communications, Letters & Notices",
+    "expected": "",
+    "Notes": "are_there_any_planned_maintenance_outages",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H078",
+      "category": "Communications, Letters & Notices"
+    }
+  },
+  {
+    "Scenario ID": "SCN-079",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6078",
+    "Unit": "179",
+    "Message": "Can I update my contact information?",
+    "Expected Data (Field)": "Communications, Letters & Notices",
+    "expected": "",
+    "Notes": "can_i_update_my_contact_information",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H079",
+      "category": "Communications, Letters & Notices"
+    }
+  },
+  {
+    "Scenario ID": "SCN-080",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6079",
+    "Unit": "180",
+    "Message": "How do I sign up for community alerts?",
+    "Expected Data (Field)": "Communications, Letters & Notices",
+    "expected": "",
+    "Notes": "how_do_i_sign_up_for_community_alerts",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H080",
+      "category": "Communications, Letters & Notices"
+    }
+  },
+  {
+    "Scenario ID": "SCN-081",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6080",
+    "Unit": "181",
+    "Message": "I’m selling my unit — what do I need to do?",
+    "Expected Data (Field)": "Ownership, Leasing & Account Changes",
+    "expected": "",
+    "Notes": "im_selling_my_unit_what_do_i_need_to_do",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H081",
+      "category": "Ownership, Leasing & Account Changes"
+    }
+  },
+  {
+    "Scenario ID": "SCN-082",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6081",
+    "Unit": "182",
+    "Message": "I’m renting my unit — what is required?",
+    "Expected Data (Field)": "Ownership, Leasing & Account Changes",
+    "expected": "",
+    "Notes": "im_renting_my_unit_what_is_required",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H082",
+      "category": "Ownership, Leasing & Account Changes"
+    }
+  },
+  {
+    "Scenario ID": "SCN-083",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6082",
+    "Unit": "183",
+    "Message": "How do I add a tenant?",
+    "Expected Data (Field)": "Ownership, Leasing & Account Changes",
+    "expected": "",
+    "Notes": "how_do_i_add_a_tenant",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H083",
+      "category": "Ownership, Leasing & Account Changes"
+    }
+  },
+  {
+    "Scenario ID": "SCN-084",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6083",
+    "Unit": "184",
+    "Message": "How do I update my mailing address?",
+    "Expected Data (Field)": "Ownership, Leasing & Account Changes",
+    "expected": "",
+    "Notes": "how_do_i_update_my_mailing_address",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H084",
+      "category": "Ownership, Leasing & Account Changes"
+    }
+  },
+  {
+    "Scenario ID": "SCN-085",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6084",
+    "Unit": "185",
+    "Message": "How do I add an authorized user?",
+    "Expected Data (Field)": "Ownership, Leasing & Account Changes",
+    "expected": "",
+    "Notes": "how_do_i_add_an_authorized_user",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H085",
+      "category": "Ownership, Leasing & Account Changes"
+    }
+  },
+  {
+    "Scenario ID": "SCN-086",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6085",
+    "Unit": "186",
+    "Message": "Can you provide an estoppel?",
+    "Expected Data (Field)": "Ownership, Leasing & Account Changes",
+    "expected": "",
+    "Notes": "can_you_provide_an_estoppel",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H086",
+      "category": "Ownership, Leasing & Account Changes"
+    }
+  },
+  {
+    "Scenario ID": "SCN-087",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6086",
+    "Unit": "187",
+    "Message": "What documents are needed for closing?",
+    "Expected Data (Field)": "Ownership, Leasing & Account Changes",
+    "expected": "",
+    "Notes": "what_documents_are_needed_for_closing",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H087",
+      "category": "Ownership, Leasing & Account Changes"
+    }
+  },
+  {
+    "Scenario ID": "SCN-088",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6087",
+    "Unit": "188",
+    "Message": "How do I transfer ownership?",
+    "Expected Data (Field)": "Ownership, Leasing & Account Changes",
+    "expected": "",
+    "Notes": "how_do_i_transfer_ownership",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H088",
+      "category": "Ownership, Leasing & Account Changes"
+    }
+  },
+  {
+    "Scenario ID": "SCN-089",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6088",
+    "Unit": "189",
+    "Message": "How do I update my phone/email?",
+    "Expected Data (Field)": "Ownership, Leasing & Account Changes",
+    "expected": "",
+    "Notes": "how_do_i_update_my_phoneemail",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H089",
+      "category": "Ownership, Leasing & Account Changes"
+    }
+  },
+  {
+    "Scenario ID": "SCN-090",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6089",
+    "Unit": "190",
+    "Message": "Who is my property manager?",
+    "Expected Data (Field)": "Ownership, Leasing & Account Changes",
+    "expected": "",
+    "Notes": "who_is_my_property_manager",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H090",
+      "category": "Ownership, Leasing & Account Changes"
+    }
+  },
+  {
+    "Scenario ID": "SCN-091",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6090",
+    "Unit": "191",
+    "Message": "I need to speak with someone.",
+    "Expected Data (Field)": "Support, Escalations & General Help",
+    "expected": "",
+    "Notes": "i_need_to_speak_with_someone",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H091",
+      "category": "Support, Escalations & General Help"
+    }
+  },
+  {
+    "Scenario ID": "SCN-092",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6091",
+    "Unit": "192",
+    "Message": "Can someone call me back?",
+    "Expected Data (Field)": "Support, Escalations & General Help",
+    "expected": "",
+    "Notes": "can_someone_call_me_back",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H092",
+      "category": "Support, Escalations & General Help"
+    }
+  },
+  {
+    "Scenario ID": "SCN-093",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6092",
+    "Unit": "193",
+    "Message": "What are the office hours?",
+    "Expected Data (Field)": "Support, Escalations & General Help",
+    "expected": "",
+    "Notes": "what_are_the_office_hours",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H093",
+      "category": "Support, Escalations & General Help"
+    }
+  },
+  {
+    "Scenario ID": "SCN-094",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6093",
+    "Unit": "194",
+    "Message": "Who do I call after hours?",
+    "Expected Data (Field)": "Support, Escalations & General Help",
+    "expected": "",
+    "Notes": "who_do_i_call_after_hours",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H094",
+      "category": "Support, Escalations & General Help"
+    }
+  },
+  {
+    "Scenario ID": "SCN-095",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6094",
+    "Unit": "195",
+    "Message": "This is an emergency — what should I do?",
+    "Expected Data (Field)": "Support, Escalations & General Help",
+    "expected": "",
+    "Notes": "this_is_an_emergency_what_should_i_do",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H095",
+      "category": "Support, Escalations & General Help"
+    }
+  },
+  {
+    "Scenario ID": "SCN-096",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6095",
+    "Unit": "196",
+    "Message": "I have a complaint about a neighbor.",
+    "Expected Data (Field)": "Support, Escalations & General Help",
+    "expected": "",
+    "Notes": "i_have_a_complaint_about_a_neighbor",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H096",
+      "category": "Support, Escalations & General Help"
+    }
+  },
+  {
+    "Scenario ID": "SCN-097",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6096",
+    "Unit": "197",
+    "Message": "I want to report a safety issue.",
+    "Expected Data (Field)": "Support, Escalations & General Help",
+    "expected": "",
+    "Notes": "i_want_to_report_a_safety_issue",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H097",
+      "category": "Support, Escalations & General Help"
+    }
+  },
+  {
+    "Scenario ID": "SCN-098",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6097",
+    "Unit": "198",
+    "Message": "I need help using the resident portal.",
+    "Expected Data (Field)": "Support, Escalations & General Help",
+    "expected": "",
+    "Notes": "i_need_help_using_the_resident_portal",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H098",
+      "category": "Support, Escalations & General Help"
+    }
+  },
+  {
+    "Scenario ID": "SCN-099",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6098",
+    "Unit": "199",
+    "Message": "Can you connect me to management?",
+    "Expected Data (Field)": "Support, Escalations & General Help",
+    "expected": "",
+    "Notes": "can_you_connect_me_to_management",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H099",
+      "category": "Support, Escalations & General Help"
+    }
+  },
+  {
+    "Scenario ID": "SCN-100",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6099",
+    "Unit": "200",
+    "Message": "Where is the management office located?",
+    "Expected Data (Field)": "Support, Escalations & General Help",
+    "expected": "",
+    "Notes": "where_is_the_management_office_located",
+    "meta": {
+      "persona": "homeowner",
+      "intent_id": "H100",
+      "category": "Support, Escalations & General Help"
+    }
+  },
+  {
+    "Scenario ID": "SCN-101",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6100",
+    "Unit": "201",
+    "Message": "Show top 10 delinquent owners.",
+    "Expected Data (Field)": "Financial & Delinquency Intelligence",
+    "expected": "",
+    "Notes": "show_top_10_delinquent_owners",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM001",
+      "category": "Financial & Delinquency Intelligence"
+    }
+  },
+  {
+    "Scenario ID": "SCN-102",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6101",
+    "Unit": "202",
+    "Message": "Total delinquency by association.",
+    "Expected Data (Field)": "Financial & Delinquency Intelligence",
+    "expected": "",
+    "Notes": "total_delinquency_by_association",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM002",
+      "category": "Financial & Delinquency Intelligence"
+    }
+  },
+  {
+    "Scenario ID": "SCN-103",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6102",
+    "Unit": "203",
+    "Message": "Delinquency aging summary (30/60/90+).",
+    "Expected Data (Field)": "Financial & Delinquency Intelligence",
+    "expected": "",
+    "Notes": "delinquency_aging_summary_306090",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM003",
+      "category": "Financial & Delinquency Intelligence"
+    }
+  },
+  {
+    "Scenario ID": "SCN-104",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6103",
+    "Unit": "204",
+    "Message": "Which accounts just became delinquent this month?",
+    "Expected Data (Field)": "Financial & Delinquency Intelligence",
+    "expected": "",
+    "Notes": "which_accounts_just_became_delinquent_this_month",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM004",
+      "category": "Financial & Delinquency Intelligence"
+    }
+  },
+  {
+    "Scenario ID": "SCN-105",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6104",
+    "Unit": "205",
+    "Message": "Largest balances over $X.",
+    "Expected Data (Field)": "Financial & Delinquency Intelligence",
+    "expected": "",
+    "Notes": "largest_balances_over_x",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM005",
+      "category": "Financial & Delinquency Intelligence"
+    }
+  },
+  {
+    "Scenario ID": "SCN-106",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6105",
+    "Unit": "206",
+    "Message": "Accounts with recent partial payments.",
+    "Expected Data (Field)": "Financial & Delinquency Intelligence",
+    "expected": "",
+    "Notes": "accounts_with_recent_partial_payments",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM006",
+      "category": "Financial & Delinquency Intelligence"
+    }
+  },
+  {
+    "Scenario ID": "SCN-107",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6106",
+    "Unit": "207",
+    "Message": "Owners on payment plans.",
+    "Expected Data (Field)": "Financial & Delinquency Intelligence",
+    "expected": "",
+    "Notes": "owners_on_payment_plans",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM007",
+      "category": "Financial & Delinquency Intelligence"
+    }
+  },
+  {
+    "Scenario ID": "SCN-108",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6107",
+    "Unit": "208",
+    "Message": "Collection status by unit.",
+    "Expected Data (Field)": "Financial & Delinquency Intelligence",
+    "expected": "",
+    "Notes": "collection_status_by_unit",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM008",
+      "category": "Financial & Delinquency Intelligence"
+    }
+  },
+  {
+    "Scenario ID": "SCN-109",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6108",
+    "Unit": "209",
+    "Message": "Total AR trend month over month.",
+    "Expected Data (Field)": "Financial & Delinquency Intelligence",
+    "expected": "",
+    "Notes": "total_ar_trend_month_over_month",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM009",
+      "category": "Financial & Delinquency Intelligence"
+    }
+  },
+  {
+    "Scenario ID": "SCN-110",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6109",
+    "Unit": "210",
+    "Message": "Units approaching delinquency risk.",
+    "Expected Data (Field)": "Financial & Delinquency Intelligence",
+    "expected": "",
+    "Notes": "units_approaching_delinquency_risk",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM010",
+      "category": "Financial & Delinquency Intelligence"
+    }
+  },
+  {
+    "Scenario ID": "SCN-111",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6110",
+    "Unit": "211",
+    "Message": "Open work orders by priority.",
+    "Expected Data (Field)": "Operations & Maintenance",
+    "expected": "",
+    "Notes": "open_work_orders_by_priority",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM011",
+      "category": "Operations & Maintenance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-112",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6111",
+    "Unit": "212",
+    "Message": "Work orders overdue more than X days.",
+    "Expected Data (Field)": "Operations & Maintenance",
+    "expected": "",
+    "Notes": "work_orders_overdue_more_than_x_days",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM012",
+      "category": "Operations & Maintenance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-113",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6112",
+    "Unit": "213",
+    "Message": "Vendor response time report.",
+    "Expected Data (Field)": "Operations & Maintenance",
+    "expected": "",
+    "Notes": "vendor_response_time_report",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM013",
+      "category": "Operations & Maintenance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-114",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6113",
+    "Unit": "214",
+    "Message": "Repeat maintenance issues by unit.",
+    "Expected Data (Field)": "Operations & Maintenance",
+    "expected": "",
+    "Notes": "repeat_maintenance_issues_by_unit",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM014",
+      "category": "Operations & Maintenance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-115",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6114",
+    "Unit": "215",
+    "Message": "Emergency work orders in last 7 days.",
+    "Expected Data (Field)": "Operations & Maintenance",
+    "expected": "",
+    "Notes": "emergency_work_orders_in_last_7_days",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM015",
+      "category": "Operations & Maintenance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-116",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6115",
+    "Unit": "216",
+    "Message": "Maintenance backlog summary.",
+    "Expected Data (Field)": "Operations & Maintenance",
+    "expected": "",
+    "Notes": "maintenance_backlog_summary",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM016",
+      "category": "Operations & Maintenance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-117",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6116",
+    "Unit": "217",
+    "Message": "Average time to close work orders.",
+    "Expected Data (Field)": "Operations & Maintenance",
+    "expected": "",
+    "Notes": "average_time_to_close_work_orders",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM017",
+      "category": "Operations & Maintenance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-118",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6117",
+    "Unit": "218",
+    "Message": "Units with multiple recent repairs.",
+    "Expected Data (Field)": "Operations & Maintenance",
+    "expected": "",
+    "Notes": "units_with_multiple_recent_repairs",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM018",
+      "category": "Operations & Maintenance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-119",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6118",
+    "Unit": "219",
+    "Message": "Vendor performance comparison.",
+    "Expected Data (Field)": "Operations & Maintenance",
+    "expected": "",
+    "Notes": "vendor_performance_comparison",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM019",
+      "category": "Operations & Maintenance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-120",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6119",
+    "Unit": "220",
+    "Message": "Upcoming scheduled maintenance.",
+    "Expected Data (Field)": "Operations & Maintenance",
+    "expected": "",
+    "Notes": "upcoming_scheduled_maintenance",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM020",
+      "category": "Operations & Maintenance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-121",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6120",
+    "Unit": "221",
+    "Message": "Open violations by category.",
+    "Expected Data (Field)": "Violations & Compliance",
+    "expected": "",
+    "Notes": "open_violations_by_category",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM021",
+      "category": "Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-122",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6121",
+    "Unit": "222",
+    "Message": "Repeat violators.",
+    "Expected Data (Field)": "Violations & Compliance",
+    "expected": "",
+    "Notes": "repeat_violators",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM022",
+      "category": "Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-123",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6122",
+    "Unit": "223",
+    "Message": "Violations nearing fine stage.",
+    "Expected Data (Field)": "Violations & Compliance",
+    "expected": "",
+    "Notes": "violations_nearing_fine_stage",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM023",
+      "category": "Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-124",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6123",
+    "Unit": "224",
+    "Message": "Compliance trend by month.",
+    "Expected Data (Field)": "Violations & Compliance",
+    "expected": "",
+    "Notes": "compliance_trend_by_month",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM024",
+      "category": "Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-125",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6124",
+    "Unit": "225",
+    "Message": "Units with multiple violations.",
+    "Expected Data (Field)": "Violations & Compliance",
+    "expected": "",
+    "Notes": "units_with_multiple_violations",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM025",
+      "category": "Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-126",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6125",
+    "Unit": "226",
+    "Message": "Unresolved violations over X days.",
+    "Expected Data (Field)": "Violations & Compliance",
+    "expected": "",
+    "Notes": "unresolved_violations_over_x_days",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM026",
+      "category": "Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-127",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6126",
+    "Unit": "227",
+    "Message": "ARC requests pending review.",
+    "Expected Data (Field)": "Violations & Compliance",
+    "expected": "",
+    "Notes": "arc_requests_pending_review",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM027",
+      "category": "Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-128",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6127",
+    "Unit": "228",
+    "Message": "Recently cleared violations.",
+    "Expected Data (Field)": "Violations & Compliance",
+    "expected": "",
+    "Notes": "recently_cleared_violations",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM028",
+      "category": "Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-129",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6128",
+    "Unit": "229",
+    "Message": "Violation heat map by building.",
+    "Expected Data (Field)": "Violations & Compliance",
+    "expected": "",
+    "Notes": "violation_heat_map_by_building",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM029",
+      "category": "Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-130",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6129",
+    "Unit": "230",
+    "Message": "Upcoming compliance deadlines.",
+    "Expected Data (Field)": "Violations & Compliance",
+    "expected": "",
+    "Notes": "upcoming_compliance_deadlines",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM030",
+      "category": "Violations & Compliance"
+    }
+  },
+  {
+    "Scenario ID": "SCN-131",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6130",
+    "Unit": "231",
+    "Message": "Resident inquiry volume by topic.",
+    "Expected Data (Field)": "Portfolio & Board Intelligence",
+    "expected": "",
+    "Notes": "resident_inquiry_volume_by_topic",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM031",
+      "category": "Portfolio & Board Intelligence"
+    }
+  },
+  {
+    "Scenario ID": "SCN-132",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6131",
+    "Unit": "232",
+    "Message": "Call deflection rate.",
+    "Expected Data (Field)": "Portfolio & Board Intelligence",
+    "expected": "",
+    "Notes": "call_deflection_rate",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM032",
+      "category": "Portfolio & Board Intelligence"
+    }
+  },
+  {
+    "Scenario ID": "SCN-133",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6132",
+    "Unit": "233",
+    "Message": "Most common resident questions.",
+    "Expected Data (Field)": "Portfolio & Board Intelligence",
+    "expected": "",
+    "Notes": "most_common_resident_questions",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM033",
+      "category": "Portfolio & Board Intelligence"
+    }
+  },
+  {
+    "Scenario ID": "SCN-134",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6133",
+    "Unit": "234",
+    "Message": "High-risk resident accounts.",
+    "Expected Data (Field)": "Portfolio & Board Intelligence",
+    "expected": "",
+    "Notes": "highrisk_resident_accounts",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM034",
+      "category": "Portfolio & Board Intelligence"
+    }
+  },
+  {
+    "Scenario ID": "SCN-135",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6134",
+    "Unit": "235",
+    "Message": "Units flagged for follow-up.",
+    "Expected Data (Field)": "Portfolio & Board Intelligence",
+    "expected": "",
+    "Notes": "units_flagged_for_followup",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM035",
+      "category": "Portfolio & Board Intelligence"
+    }
+  },
+  {
+    "Scenario ID": "SCN-136",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6135",
+    "Unit": "236",
+    "Message": "Communication response times.",
+    "Expected Data (Field)": "Portfolio & Board Intelligence",
+    "expected": "",
+    "Notes": "communication_response_times",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM036",
+      "category": "Portfolio & Board Intelligence"
+    }
+  },
+  {
+    "Scenario ID": "SCN-137",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6136",
+    "Unit": "237",
+    "Message": "Associations with rising delinquency.",
+    "Expected Data (Field)": "Portfolio & Board Intelligence",
+    "expected": "",
+    "Notes": "associations_with_rising_delinquency",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM037",
+      "category": "Portfolio & Board Intelligence"
+    }
+  },
+  {
+    "Scenario ID": "SCN-138",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6137",
+    "Unit": "238",
+    "Message": "Maintenance cost trends.",
+    "Expected Data (Field)": "Portfolio & Board Intelligence",
+    "expected": "",
+    "Notes": "maintenance_cost_trends",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM038",
+      "category": "Portfolio & Board Intelligence"
+    }
+  },
+  {
+    "Scenario ID": "SCN-139",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6138",
+    "Unit": "239",
+    "Message": "Amenity usage trends.",
+    "Expected Data (Field)": "Portfolio & Board Intelligence",
+    "expected": "",
+    "Notes": "amenity_usage_trends",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM039",
+      "category": "Portfolio & Board Intelligence"
+    }
+  },
+  {
+    "Scenario ID": "SCN-140",
+    "Channel": "SMS",
+    "From (Phone)": "305-555-6139",
+    "Unit": "240",
+    "Message": "Resident satisfaction signals.",
+    "Expected Data (Field)": "Portfolio & Board Intelligence",
+    "expected": "",
+    "Notes": "resident_satisfaction_signals",
+    "meta": {
+      "persona": "pm",
+      "intent_id": "PM040",
+      "category": "Portfolio & Board Intelligence"
+    }
+  }
+]

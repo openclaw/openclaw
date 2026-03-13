@@ -10,9 +10,9 @@ services:
       - key: SETUP_PASSWORD
         sync: false
       - key: OPENCLAW_STATE_DIR
-        value: /data/.openclaw
+        value: /data/AskTenant Workspace/openclaw
       - key: OPENCLAW_WORKSPACE_DIR
-        value: /data/workspace
+        value: /data/AskTenant Workspace/openclaw/workspace
       - key: OPENCLAW_GATEWAY_TOKEN
         generateValue: true
     disk:

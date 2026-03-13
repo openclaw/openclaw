@@ -22,6 +22,9 @@ Use this page for day-1 startup and day-2 operations of the Gateway service.
   <Card title="Secrets plan contract" icon="shield-check" href="/gateway/secrets-plan-contract">
     Exact `secrets apply` target/path rules and ref-only auth-profile behavior.
   </Card>
+  <Card title="Request Triage Spec" icon="git-branch" href="/gateway/request-triage-round-trip-spec">
+    End-to-end request schema, lane routing, response envelope, and rollout gates.
+  </Card>
 </CardGroup>
 
 ## 5-minute local startup

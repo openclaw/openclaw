@@ -142,6 +142,8 @@ describe("gateway talk.config", () => {
   });
 
   it("returns Talk SecretRef payloads that satisfy the protocol schema", async () => {
+    const previousElevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
+    process.env.ELEVENLABS_API_KEY = previousElevenLabsApiKey ?? "test-elevenlabs-key";
     await writeTalkConfig({
       apiKey: {
         source: "env",
@@ -150,47 +152,55 @@ describe("gateway talk.config", () => {
       },
     });
 
-    await withServer(async (ws) => {
-      await connectOperator(ws, ["operator.read", "operator.write", "operator.talk.secrets"]);
-      const res = await rpcReq<{
-        config?: {
-          talk?: {
-            apiKey?: { source?: string; provider?: string; id?: string };
-            providers?: {
-              elevenlabs?: {
-                apiKey?: { source?: string; provider?: string; id?: string };
+    try {
+      await withServer(async (ws) => {
+        await connectOperator(ws, ["operator.read", "operator.write", "operator.talk.secrets"]);
+        const res = await rpcReq<{
+          config?: {
+            talk?: {
+              apiKey?: { source?: string; provider?: string; id?: string };
+              providers?: {
+                elevenlabs?: {
+                  apiKey?: { source?: string; provider?: string; id?: string };
+                };
               };
-            };
-            resolved?: {
-              provider?: string;
-              config?: {
-                apiKey?: { source?: string; provider?: string; id?: string };
+              resolved?: {
+                provider?: string;
+                config?: {
+                  apiKey?: { source?: string; provider?: string; id?: string };
+                };
               };
             };
           };
-        };
-      }>(ws, "talk.config", {
-        includeSecrets: true,
+        }>(ws, "talk.config", {
+          includeSecrets: true,
+        });
+        expect(res.ok).toBe(true);
+        expect(validateTalkConfigResult(res.payload)).toBe(true);
+        expect(res.payload?.config?.talk?.apiKey).toEqual({
+          source: "env",
+          provider: "default",
+          id: "ELEVENLABS_API_KEY",
+        });
+        expect(res.payload?.config?.talk?.providers?.elevenlabs?.apiKey).toEqual({
+          source: "env",
+          provider: "default",
+          id: "ELEVENLABS_API_KEY",
+        });
+        expect(res.payload?.config?.talk?.resolved?.provider).toBe("elevenlabs");
+        expect(res.payload?.config?.talk?.resolved?.config?.apiKey).toEqual({
+          source: "env",
+          provider: "default",
+          id: "ELEVENLABS_API_KEY",
+        });
       });
-      expect(res.ok).toBe(true);
-      expect(validateTalkConfigResult(res.payload)).toBe(true);
-      expect(res.payload?.config?.talk?.apiKey).toEqual({
-        source: "env",
-        provider: "default",
-        id: "ELEVENLABS_API_KEY",
-      });
-      expect(res.payload?.config?.talk?.providers?.elevenlabs?.apiKey).toEqual({
-        source: "env",
-        provider: "default",
-        id: "ELEVENLABS_API_KEY",
-      });
-      expect(res.payload?.config?.talk?.resolved?.provider).toBe("elevenlabs");
-      expect(res.payload?.config?.talk?.resolved?.config?.apiKey).toEqual({
-        source: "env",
-        provider: "default",
-        id: "ELEVENLABS_API_KEY",
-      });
-    });
+    } finally {
+      if (previousElevenLabsApiKey === undefined) {
+        delete process.env.ELEVENLABS_API_KEY;
+      } else {
+        process.env.ELEVENLABS_API_KEY = previousElevenLabsApiKey;
+      }
+    }
   });
 
   it("prefers normalized provider payload over conflicting legacy talk keys", async () => {

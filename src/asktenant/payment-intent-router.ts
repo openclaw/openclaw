@@ -104,3 +104,15 @@ export function routeTopPaymentIntent(userQuery: string): IntentRoutingResult | 
 
   return null;
 }
+
+
+/**
+ * Example usage:
+ *
+ * import { getCurrentBalance } from "./appfolio-api";
+ *
+ * async function handleCurrentBalanceIntent(residentId: string, unitId: string) {
+ *   const data = await getCurrentBalance(residentId, unitId);
+ *   // Use data as needed
+ * }
+ */

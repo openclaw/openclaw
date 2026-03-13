@@ -723,6 +723,17 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const { agentId, workspaceDir, name } = resolved;
     await fs.mkdir(workspaceDir, { recursive: true });
     const filePath = path.join(workspaceDir, name);
+    let requestLstat: Awaited<ReturnType<typeof fs.lstat>>;
+    try {
+      requestLstat = await fs.lstat(filePath);
+    } catch {
+      respondWorkspaceFileUnsafe(respond, name);
+      return;
+    }
+    if (requestLstat.isSymbolicLink()) {
+      respondWorkspaceFileUnsafe(respond, name);
+      return;
+    }
     const resolvedPath = await resolveWorkspaceFilePathOrRespond({
       respond,
       workspaceDir,

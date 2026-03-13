@@ -150,6 +150,9 @@ importers:
       node-edge-tts:
         specifier: ^1.2.10
         version: 1.2.10
+      node-fetch:
+        specifier: ^3.3.2
+        version: 3.3.2
       node-llama-cpp:
         specifier: 3.16.2
         version: 3.16.2(typescript@5.9.3)

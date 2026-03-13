@@ -66,6 +66,7 @@ import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common
 import { getBearerToken } from "./http-utils.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
+import { handleTriageHttpRequest } from "./triage-http.js";
 import {
   authorizeCanvasRequest,
   enforcePluginRouteGatewayAuth,
@@ -80,6 +81,7 @@ import {
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
+import type { LaneExecutorDeps } from "./lane-executors.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -856,6 +858,8 @@ export function createGatewayHttpServer(opts: {
   handlePluginRequest?: PluginHttpRequestHandler;
   shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
   resolvedAuth: ResolvedGatewayAuth;
+  triageLaneDeps?: LaneExecutorDeps;
+  triageIdentityLookup?: ReturnType<typeof createIdentityLookupFromEnv>;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   getReadiness?: ReadinessChecker;
@@ -876,6 +880,8 @@ export function createGatewayHttpServer(opts: {
     handlePluginRequest,
     shouldEnforcePluginGatewayAuth,
     resolvedAuth,
+    triageLaneDeps,
+    triageIdentityLookup,
     rateLimiter,
     getReadiness,
   } = opts;
@@ -918,6 +924,18 @@ export function createGatewayHttpServer(opts: {
         {
           name: "hooks",
           run: () => handleHooksRequest(req, res),
+        },
+        {
+          name: "triage",
+          run: () =>
+            handleTriageHttpRequest(req, res, {
+              auth: resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+              laneDeps: triageLaneDeps,
+              identityLookup: triageIdentityLookup,
+            }),
         },
         {
           name: "tools-invoke",

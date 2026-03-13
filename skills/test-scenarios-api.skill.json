@@ -1,0 +1,265 @@
+{
+  "id": "test-scenarios-api",
+  "name": "Test Scenarios API",
+  "type": "rest",
+  "baseUrl": "http://localhost:3740",
+  "endpoints": [
+
+    {
+      "method": "GET",
+      "path": "/api/az/accounts/email/:email"
+    },
+    {
+      "method": "GET",
+      "path": "/api/az/accounts/phone/:phone"
+    },
+    {
+      "method": "GET",
+      "path": "/api/az/accounts/:unit"
+    },
+      {
+        "method": "GET",
+        "path": "/api/az/amenities_parking/space-id/:unit"
+      },
+      {
+        "method": "GET",
+        "path": "/api/az/amenities_parking/level/:unit"
+      },
+      {
+        "method": "GET",
+        "path": "/api/az/amenities_parking/type/:unit"
+      },
+      {
+        "method": "GET",
+        "path": "/api/az/amenities_parking/assigned-unit/:unit"
+      },
+      {
+        "method": "GET",
+        "path": "/api/az/amenities_parking/notes/:unit"
+      },
+    {
+      "method": "GET",
+      "path": "/api/az/accounts_ar/monthly-assessment/:unit"
+    },
+    {
+      "method": "GET",
+      "path": "/api/az/accounts_ar/annual-assessment/:unit"
+    },
+    {
+      "method": "GET",
+      "path": "/api/az/accounts_ar/special-assessment-active/:unit"
+    },
+    {
+      "method": "GET",
+      "path": "/api/az/accounts_ar/special-assessment-balance/:unit"
+    },
+    {
+      "method": "GET",
+      "path": "/api/az/accounts_ar/current-balance/:unit"
+    },
+    {
+      "method": "GET",
+      "path": "/api/az/accounts_ar/last-payment-date/:unit"
+    },
+    {
+      "method": "GET",
+      "path": "/api/az/accounts_ar/last-payment-amount/:unit"
+    },
+    {
+      "method": "GET",
+      "path": "/api/az/accounts_ar/payment-method/:unit"
+    },
+    {
+      "method": "GET",
+      "path": "/api/az/accounts_ar/last-assessment-due-date/:unit"
+    },
+    {
+      "method": "GET",
+      "path": "/api/az/accounts_ar/days-past-due/:unit"
+    },
+    {
+      "method": "GET",
+      "path": "/api/az/accounts_ar/delinquency-bucket/:unit"
+    },
+    {
+      "method": "GET",
+      "path": "/api/az/accounts_ar/late-fees/:unit"
+    },
+    {
+      "method": "GET",
+      "path": "/api/az/accounts_ar/payment-plan/:unit"
+    },
+    {
+      "method": "GET",
+      "path": "/api/az/accounts_ar/autopay/:unit"
+    },
+    {
+      "method": "GET",
+      "path": "/api/az/units/:unit"
+    },
+    {
+      "method": "GET",
+      "path": "/api/az/work-orders"
+    },
+    {
+      "method": "GET",
+      "path": "/api/az/violations/:unit"
+    },
+    {
+      "method": "POST",
+      "path": "/api/az/identity/resolve"
+    },
+    {
+      "method": "POST",
+      "path": "/api/triage"
+    },
+    {
+      "method": "GET",
+      "path": "/api/az/test-scenarios"
+    }
+  ],
+  "mappings": [
+    {
+      "intent": "current_balance",
+      "endpoint": "/api/az/accounts_ar/current-balance/:unit",
+      "method": "GET",
+      "params": { "unit": "{{unit_id}}" }
+    },
+    {
+      "intent": "last_assessment_due_date",
+      "endpoint": "/api/az/accounts_ar/last-assessment-due-date/:unit",
+      "method": "GET",
+      "params": { "unit": "{{unit_id}}" }
+    },
+      {
+        "intent": "parking_space_id",
+        "endpoint": "/api/az/amenities_parking/space-id/:unit",
+        "method": "GET",
+        "params": { "unit": "{{unit_id}}" }
+      },
+      {
+        "intent": "parking_level",
+        "endpoint": "/api/az/amenities_parking/level/:unit",
+        "method": "GET",
+        "params": { "unit": "{{unit_id}}" }
+      },
+      {
+        "intent": "parking_type",
+        "endpoint": "/api/az/amenities_parking/type/:unit",
+        "method": "GET",
+        "params": { "unit": "{{unit_id}}" }
+      },
+      {
+        "intent": "parking_assigned_unit",
+        "endpoint": "/api/az/amenities_parking/assigned-unit/:unit",
+        "method": "GET",
+        "params": { "unit": "{{unit_id}}" }
+      },
+      {
+        "intent": "parking_notes",
+        "endpoint": "/api/az/amenities_parking/notes/:unit",
+        "method": "GET",
+        "params": { "unit": "{{unit_id}}" }
+      },
+    {
+      "intent": "am_i_delinquent",
+      "endpoint": "/api/az/accounts_ar/delinquency-bucket/:unit",
+      "method": "GET",
+      "params": { "unit": "{{unit_id}}" }
+    },
+        {
+          "intent": "monthly_assessment",
+          "endpoint": "/api/az/accounts_ar/monthly-assessment/:unit",
+          "method": "GET",
+          "params": { "unit": "{{unit_id}}" }
+        },
+        {
+          "intent": "annual_assessment",
+          "endpoint": "/api/az/accounts_ar/annual-assessment/:unit",
+          "method": "GET",
+          "params": { "unit": "{{unit_id}}" }
+        },
+        {
+          "intent": "special_assessment_active",
+          "endpoint": "/api/az/accounts_ar/special-assessment-active/:unit",
+          "method": "GET",
+          "params": { "unit": "{{unit_id}}" }
+        },
+        {
+          "intent": "special_assessment_balance",
+          "endpoint": "/api/az/accounts_ar/special-assessment-balance/:unit",
+          "method": "GET",
+          "params": { "unit": "{{unit_id}}" }
+        },
+        {
+          "intent": "last_payment_date",
+          "endpoint": "/api/az/accounts_ar/last-payment-date/:unit",
+          "method": "GET",
+          "params": { "unit": "{{unit_id}}" }
+        },
+        {
+          "intent": "last_payment_amount",
+          "endpoint": "/api/az/accounts_ar/last-payment-amount/:unit",
+          "method": "GET",
+          "params": { "unit": "{{unit_id}}" }
+        },
+        {
+          "intent": "payment_method",
+          "endpoint": "/api/az/accounts_ar/payment-method/:unit",
+          "method": "GET",
+          "params": { "unit": "{{unit_id}}" }
+        },
+        {
+          "intent": "days_past_due",
+          "endpoint": "/api/az/accounts_ar/days-past-due/:unit",
+          "method": "GET",
+          "params": { "unit": "{{unit_id}}" }
+        },
+        {
+          "intent": "late_fees",
+          "endpoint": "/api/az/accounts_ar/late-fees/:unit",
+          "method": "GET",
+          "params": { "unit": "{{unit_id}}" }
+        }
+    {
+      "intent": "can_i_set_up_autopay",
+      "endpoint": "/api/az/accounts_ar/autopay/:unit",
+      "method": "GET",
+      "params": { "unit": "{{unit_id}}" }
+    },
+    {
+      "intent": "what_is_the_status_of_my_work_order",
+      "endpoint": "/api/az/work-orders",
+      "method": "GET"
+    },
+    {
+      "intent": "open_work_orders_by_priority",
+      "endpoint": "/api/az/work-orders",
+      "method": "GET"
+    },
+    {
+      "intent": "show_top_10_delinquent_owners",
+      "endpoint": "/api/az/accounts_ar/delinquency-bucket/:unit",
+      "method": "GET",
+      "params": { "unit": "{{unit_id}}" }
+    },
+    {
+      "intent": "total_delinquency_by_association",
+      "endpoint": "/api/az/accounts_ar/delinquency-bucket/:unit",
+      "method": "GET",
+      "params": { "unit": "{{unit_id}}" }
+    },
+    {
+      "intent": "accounts_with_recent_partial_payments",
+      "endpoint": "/api/az/accounts_ar/payment-plan/:unit",
+      "method": "GET",
+      "params": { "unit": "{{unit_id}}" }
+    },
+    {
+      "intent": "owners_on_payment_plans",
+      "endpoint": "/api/az/accounts_ar/payment-plan/:unit",
+      "method": "GET",
+      "params": { "unit": "{{unit_id}}" }
+    }
+  ]
+}

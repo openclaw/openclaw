@@ -48,7 +48,7 @@ export const zh_TW: TranslationMap = {
     skills: "管理技能可用性和 API 密鑰注入。",
     nodes: "配對設備、功能和命令公開。",
     chat: "用於快速干預的直接網關聊天會話。",
-    config: "安全地編輯 ~/.openclaw/openclaw.json。",
+    config: "安全地編輯 ~/AskTenant Workspace/openclaw/openclaw.json。",
     debug: "網關快照、事件和手動 RPC 調用。",
     logs: "網關文件日志的實時追蹤。",
   },
