@@ -1,0 +1,17 @@
+{
+  "id": "selfhealing",
+  "name": "Self-Healing Agent",
+  "description": "Tracks what the agent creates, verifies success claims against reality, blocks wrong claims before they reach the user, and persists lessons across sessions.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean", "default": true },
+      "maxLessons": {
+        "type": "number",
+        "description": "Max past lessons to inject per session. Default: 10.",
+        "default": 10
+      }
+    }
+  }
+}

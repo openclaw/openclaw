@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/selfhealing",
+  "version": "2026.3.3",
+  "private": true,
+  "description": "Self-healing agent loop — verifies claims, tracks processes, and persists lessons across sessions",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
