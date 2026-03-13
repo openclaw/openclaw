@@ -14,6 +14,7 @@ import {
   resolveConfiguredModelRef,
   resolveThinkingDefault,
   resolveModelRefFromString,
+  normalizeProviderModelId,
 } from "./model-selection.js";
 
 const EXPLICIT_ALLOWLIST_CONFIG = {
@@ -699,6 +700,21 @@ describe("model-selection", () => {
         }),
       ).toBe("adaptive");
     });
+  });
+});
+
+describe("normalizeProviderModelId - prototype pollution prevention", () => {
+  it("rejects prototype chain property access (#44983 security fix)", () => {
+    // These should NOT resolve to inherited Object.prototype properties
+    expect(normalizeProviderModelId("anthropic", "__proto__")).toBe("__proto__");
+    expect(normalizeProviderModelId("anthropic", "constructor")).toBe("constructor");
+    expect(normalizeProviderModelId("anthropic", "toString")).toBe("toString");
+    expect(normalizeProviderModelId("anthropic", "hasOwnProperty")).toBe("hasOwnProperty");
+  });
+
+  it("normalizes valid Anthropic aliases correctly", () => {
+    expect(normalizeProviderModelId("anthropic", "opus-4.6")).toBe("claude-opus-4-6");
+    expect(normalizeProviderModelId("anthropic", "sonnet-4.5")).toBe("claude-sonnet-4-5");
   });
 });
 

@@ -122,7 +122,10 @@ function normalizeAnthropicModelId(model: string): string {
     return trimmed;
   }
   const lower = trimmed.toLowerCase();
-  return getAnthropicModelAliases()[lower] ?? trimmed;
+  const aliases = getAnthropicModelAliases();
+  // Use Object.hasOwn to prevent prototype-chain attacks (#44983 security review)
+  // This prevents keys like "__proto__" or "constructor" from returning inherited properties
+  return Object.hasOwn(aliases, lower) ? aliases[lower] : trimmed;
 }
 
 function normalizeProviderModelId(provider: string, model: string): string {
