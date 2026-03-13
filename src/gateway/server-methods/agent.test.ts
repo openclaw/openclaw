@@ -13,6 +13,13 @@ const mocks = vi.hoisted(() => ({
   getSubagentRunByChildSessionKey: vi.fn(),
   replaceSubagentRunAfterSteer: vi.fn(),
   loadConfigReturn: {} as Record<string, unknown>,
+  resolveMessageChannelSelection: vi.fn(
+    async ({ fallbackChannel }: { fallbackChannel?: string }) => ({
+      channel: fallbackChannel ?? "telegram",
+      configured: fallbackChannel ? [fallbackChannel] : ["telegram"],
+      source: fallbackChannel ? "tool-context-fallback" : "single-configured",
+    }),
+  ),
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -74,6 +81,17 @@ vi.mock("../../agents/subagent-registry.js", () => ({
 vi.mock("../session-reset-service.js", () => ({
   performGatewaySessionReset: (...args: unknown[]) =>
     (mocks.performGatewaySessionReset as (...args: unknown[]) => unknown)(...args),
+}));
+
+vi.mock("../../infra/outbound/channel-selection.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/outbound/channel-selection.js")>(
+    "../../infra/outbound/channel-selection.js",
+  );
+  return {
+    ...actual,
+    resolveMessageChannelSelection: mocks.resolveMessageChannelSelection,
+  };
+});
 }));
 
 vi.mock("../../sessions/send-policy.js", () => ({
@@ -735,6 +753,47 @@ describe("gateway agent handler", () => {
     expect(callArgs.channel).toBe("telegram");
     expect(callArgs.messageChannel).toBe("webchat");
     expect(callArgs.runContext?.messageChannel).toBe("webchat");
+  });
+
+  it("uses session lastChannel as fallback when delivery starts from an internal origin", async () => {
+    mocks.resolveMessageChannelSelection.mockClear();
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      lastChannel: "telegram",
+      lastTo: "12345",
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "fallback delivery",
+        sessionKey: "agent:main:main",
+        deliver: true,
+        replyChannel: "webchat",
+        idempotencyKey: "test-fallback-delivery-channel",
+      },
+      {
+        reqId: "fallback-delivery-1",
+        client: {
+          connect: {
+            client: { id: "webchat-ui", mode: "webchat" },
+          },
+        } as AgentHandlerArgs["client"],
+        isWebchatConnect: () => true,
+      },
+    );
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith(
+      expect.objectContaining({ fallbackChannel: "telegram" }),
+    );
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      channel?: string;
+    };
+    expect(callArgs.channel).toBe("telegram");
   });
 
   it("handles missing cliSessionIds gracefully", async () => {

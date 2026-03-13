@@ -97,6 +97,25 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText("hello world")).toBe("hello world");
   });
 
+  it("strips leaked LongCat wrapper tags and stop markers", () => {
+    expect(sanitizeForPlainText("hello</x>\n</longcat_think>\n<|eot_id|>\nworld")).toBe(
+      "hello\nworld",
+    );
+  });
+
+  it("strips malformed leaked reply tags", () => {
+    expect(sanitizeForPlainText(":[[reply_to_current]hello")).toBe("hello");
+  });
+
+  it("strips leaked raw tool-call lines", () => {
+    const input = [
+      '{"name": "exec", "arguments": {"command":"pwd"}}',
+      "</longcat_tool_call>",
+      "actual answer",
+    ].join("\n");
+    expect(sanitizeForPlainText(input)).toBe("actual answer");
+  });
+
   it("does not corrupt angle brackets in prose", () => {
     // `a < b` does not match `<tag>` pattern because there is no closing `>`
     // immediately after a tag-like sequence.

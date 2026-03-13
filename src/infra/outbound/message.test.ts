@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundTarget: vi.fn(),
   deliverOutboundPayloads: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
+  extractDeliveryInfo: vi.fn(() => ({ deliveryContext: undefined, threadId: undefined })),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -32,6 +33,17 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: ({ config }: { config: unknown }) => ({ config, changes: [] }),
 }));
 
+vi.mock("../../config/sessions.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
+    "../../config/sessions.js",
+  );
+  return {
+    ...actual,
+    extractDeliveryInfo: (...args: unknown[]) =>
+      (mocks.extractDeliveryInfo as (...args: unknown[]) => unknown)(...args),
+  };
+});
+
 vi.mock("../../plugins/loader.js", () => ({
   loadOpenClawPlugins: mocks.loadOpenClawPlugins,
 }));
@@ -58,6 +70,8 @@ describe("sendMessage", () => {
     mocks.resolveOutboundTarget.mockClear();
     mocks.deliverOutboundPayloads.mockClear();
     mocks.loadOpenClawPlugins.mockClear();
+    mocks.extractDeliveryInfo.mockClear();
+    mocks.extractDeliveryInfo.mockReturnValue({ deliveryContext: undefined, threadId: undefined });
 
     mocks.getChannelPlugin.mockReturnValue({
       outbound: { deliveryMode: "direct" },
@@ -130,5 +144,70 @@ describe("sendMessage", () => {
     });
 
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses mirror session deliveryContext channel as fallback in multi-channel mode", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            id: "telegram",
+            meta: {
+              id: "telegram",
+              label: "Telegram",
+              selectionLabel: "Telegram",
+              docsPath: "/channels/telegram",
+              blurb: "Telegram test stub.",
+            },
+            capabilities: { chatTypes: ["direct"] },
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({}),
+              isConfigured: async () => true,
+            },
+            outbound: { deliveryMode: "direct" },
+          },
+        },
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: {
+            id: "discord",
+            meta: {
+              id: "discord",
+              label: "Discord",
+              selectionLabel: "Discord",
+              docsPath: "/channels/discord",
+              blurb: "Discord test stub.",
+            },
+            capabilities: { chatTypes: ["direct"] },
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({}),
+              isConfigured: async () => true,
+            },
+            outbound: { deliveryMode: "direct" },
+          },
+        },
+      ]),
+    );
+    mocks.extractDeliveryInfo.mockReturnValue({
+      deliveryContext: { channel: "telegram", to: "123456" },
+      threadId: undefined,
+    });
+
+    await sendMessage({
+      cfg: {},
+      to: "123456",
+      content: "hi",
+      mirror: { sessionKey: "agent:main:main" },
+    });
+
+    expect(mocks.extractDeliveryInfo).toHaveBeenCalledWith("agent:main:main");
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "telegram", to: "123456" }),
+    );
   });
 });

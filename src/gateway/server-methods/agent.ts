@@ -571,8 +571,14 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
       const cfgResolved = cfgForAgent ?? cfg;
+      const selectionFallbackChannel = isDeliverableMessageChannel(turnSourceChannel)
+        ? turnSourceChannel
+        : deliveryPlan.baseDelivery.lastChannel;
       try {
-        const selection = await resolveMessageChannelSelection({ cfg: cfgResolved });
+        const selection = await resolveMessageChannelSelection({
+          cfg: cfgResolved,
+          fallbackChannel: selectionFallbackChannel,
+        });
         resolvedChannel = selection.channel;
         deliveryTargetMode = deliveryTargetMode ?? "implicit";
         effectivePlan = {

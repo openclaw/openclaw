@@ -344,6 +344,14 @@ describe("isContextOverflowError", () => {
     }
   });
 
+  it("matches input_length stop reason surfaced by OpenAI-compatible providers", () => {
+    const samples = ["Unhandled stop reason: input_length", "unhandled stop reason: input_length"];
+    for (const sample of samples) {
+      expect(isContextOverflowError(sample)).toBe(true);
+      expect(isLikelyContextOverflowError(sample)).toBe(true);
+    }
+  });
+
   it("matches Chinese context overflow error messages from proxy providers", () => {
     const samples = [
       "上下文过长",

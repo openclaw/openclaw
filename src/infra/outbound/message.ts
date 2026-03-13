@@ -1,6 +1,7 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import { extractDeliveryInfo } from "../../config/sessions.js";
 import { callGatewayLeastPrivilege, randomIdempotencyKey } from "../../gateway/call.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
@@ -131,11 +132,16 @@ function buildMessagePollResult(params: {
 async function resolveRequiredChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
+  sessionKey?: string;
 }): Promise<string> {
+  const fallbackChannel = params.sessionKey
+    ? extractDeliveryInfo(params.sessionKey).deliveryContext?.channel
+    : undefined;
   return (
     await resolveMessageChannelSelection({
       cfg: params.cfg,
       channel: params.channel,
+      fallbackChannel,
     })
   ).channel;
 }
@@ -189,7 +195,11 @@ async function callMessageGateway<T>(params: {
 
 export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
   const cfg = params.cfg ?? loadConfig();
-  const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
+  const channel = await resolveRequiredChannel({
+    cfg,
+    channel: params.channel,
+    sessionKey: params.mirror?.sessionKey,
+  });
   const plugin = resolveRequiredPlugin(channel, cfg);
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
   const normalizedPayloads = normalizeReplyPayloadsForDelivery([

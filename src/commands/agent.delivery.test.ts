@@ -8,6 +8,13 @@ const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(async () => []),
   getChannelPlugin: vi.fn(() => ({})),
   resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+15551234567" })),
+  resolveMessageChannelSelection: vi.fn(
+    async ({ fallbackChannel }: { fallbackChannel?: string }) => ({
+      channel: fallbackChannel ?? "telegram",
+      configured: fallbackChannel ? [fallbackChannel] : ["telegram"],
+      source: fallbackChannel ? "tool-context-fallback" : "single-configured",
+    }),
+  ),
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
@@ -17,6 +24,10 @@ vi.mock("../channels/plugins/index.js", () => ({
 
 vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+}));
+
+vi.mock("../infra/outbound/channel-selection.js", () => ({
+  resolveMessageChannelSelection: mocks.resolveMessageChannelSelection,
 }));
 
 vi.mock("../infra/outbound/targets.js", async () => {
@@ -75,6 +86,7 @@ describe("deliverAgentCommandResult", () => {
   beforeEach(() => {
     mocks.deliverOutboundPayloads.mockClear();
     mocks.resolveOutboundTarget.mockClear();
+    mocks.resolveMessageChannelSelection.mockClear();
   });
 
   it("prefers explicit accountId for outbound delivery", async () => {
@@ -233,6 +245,25 @@ describe("deliverAgentCommandResult", () => {
 
     expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "whatsapp", to: undefined }),
+    );
+  });
+
+  it("still routes via session lastChannel without requiring extra channel selection", async () => {
+    await runDelivery({
+      opts: {
+        message: "hello",
+        deliver: true,
+        messageChannel: "webchat",
+      },
+      sessionEntry: {
+        lastChannel: "telegram",
+        lastTo: "123",
+      } as SessionEntry,
+    });
+
+    expect(mocks.resolveMessageChannelSelection).not.toHaveBeenCalled();
+    expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "telegram", to: "123" }),
     );
   });
 

@@ -54,6 +54,7 @@ type TelegramPollingSessionOpts = {
 
 export class TelegramPollingSession {
   #restartAttempts = 0;
+  #conflictAttempts = 0;
   #webhookCleared = false;
   #forceRestarted = false;
   #activeRunner: ReturnType<typeof run> | undefined;
@@ -233,7 +234,7 @@ export class TelegramPollingSession {
       if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning()) {
         stalledRestart = true;
         this.opts.log(
-          `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart.`,
+          `[telegram:${this.opts.accountId}] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart.`,
         );
         void stopRunner();
         void stopBot();
@@ -263,8 +264,10 @@ export class TelegramPollingSession {
           ? "unhandled network error"
           : "runner stopped (maxRetryTime exceeded or graceful stop)";
       this.#forceRestarted = false;
+      this.#conflictAttempts = 0;
       const shouldRestart = await this.#waitBeforeRestart(
-        (delay) => `Telegram polling runner stopped (${reason}); restarting in ${delay}.`,
+        (delay) =>
+          `[telegram:${this.opts.accountId}] polling runner stopped (${reason}); restarting in ${delay}.`,
       );
       return shouldRestart ? "continue" : "exit";
     } catch (err) {
@@ -275,6 +278,9 @@ export class TelegramPollingSession {
       const isConflict = isGetUpdatesConflict(err);
       if (isConflict) {
         this.#webhookCleared = false;
+        this.#conflictAttempts += 1;
+      } else {
+        this.#conflictAttempts = 0;
       }
       const isRecoverable = isRecoverableTelegramNetworkError(err, { context: "polling" });
       if (!isConflict && !isRecoverable) {
@@ -282,9 +288,13 @@ export class TelegramPollingSession {
       }
       const reason = isConflict ? "getUpdates conflict" : "network error";
       const errMsg = formatErrorMessage(err);
-      const shouldRestart = await this.#waitBeforeRestart(
-        (delay) => `Telegram ${reason}: ${errMsg}; retrying in ${delay}.`,
-      );
+      const shouldRestart = await this.#waitBeforeRestart((delay) => {
+        const hint =
+          isConflict && this.#conflictAttempts >= 3
+            ? " likely another bot process or host is polling the same token."
+            : "";
+        return `[telegram:${this.opts.accountId}] ${reason}: ${errMsg}; retrying in ${delay}.${hint}`;
+      });
       return shouldRestart ? "continue" : "exit";
     } finally {
       clearInterval(watchdog);
