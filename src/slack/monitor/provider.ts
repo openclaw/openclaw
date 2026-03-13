@@ -28,8 +28,10 @@ import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveSlackAccount } from "../accounts.js";
 import { resolveSlackWebClientOptions } from "../client.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
+import { MuxReceiver, installMuxApiProxy } from "../mux-receiver.js";
 import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
 import { resolveSlackUserAllowlist } from "../resolve-users.js";
+import { setMuxProxyClient } from "../send.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "../token.js";
 import { normalizeAllowList } from "./allow-list.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
@@ -135,7 +137,15 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   });
   const botToken = resolveSlackBotToken(opts.botToken ?? account.botToken);
   const appToken = resolveSlackAppToken(opts.appToken ?? account.appToken);
-  if (!botToken || (slackMode !== "http" && !appToken)) {
+
+  if (slackMode === "mux") {
+    const muxUrl = account.config.mux?.url ?? cfg.channels?.slack?.mux?.url;
+    if (!muxUrl) {
+      throw new Error(
+        `Slack mux URL missing for account "${account.accountId}" (set channels.slack.mux.url or channels.slack.accounts.${account.accountId}.mux.url).`,
+      );
+    }
+  } else if (!botToken || (slackMode !== "http" && !appToken)) {
     const missing =
       slackMode === "http"
         ? `Slack bot token missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken or SLACK_BOT_TOKEN for default).`
@@ -185,7 +195,17 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
 
-  const receiver =
+  const muxReceiver =
+    slackMode === "mux"
+      ? new MuxReceiver({
+          mux: {
+            ...cfg.channels?.slack?.mux,
+            ...account.config.mux,
+          },
+          runtime,
+        })
+      : null;
+  const httpReceiver =
     slackMode === "http"
       ? new HTTPReceiver({
           signingSecret: signingSecret ?? "",
@@ -194,21 +214,31 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       : null;
   const clientOptions = resolveSlackWebClientOptions();
   const app = new App(
-    slackMode === "socket"
+    slackMode === "mux"
       ? {
-          token: botToken,
-          appToken,
-          socketMode: true,
+          authorize: async () => ({ botToken: "", botId: "", botUserId: "" }),
+          receiver: muxReceiver ?? undefined,
           clientOptions,
         }
-      : {
-          token: botToken,
-          receiver: receiver ?? undefined,
-          clientOptions,
-        },
+      : slackMode === "socket"
+        ? {
+            token: botToken,
+            appToken,
+            socketMode: true,
+            clientOptions,
+          }
+        : {
+            token: botToken,
+            receiver: httpReceiver ?? undefined,
+            clientOptions,
+          },
   );
+  if (muxReceiver) {
+    installMuxApiProxy(app as unknown as Parameters<typeof installMuxApiProxy>[0], muxReceiver);
+    setMuxProxyClient(app.client);
+  }
   const slackHttpHandler =
-    slackMode === "http" && receiver
+    slackMode === "http" && httpReceiver
       ? async (req: IncomingMessage, res: ServerResponse) => {
           const guard = installRequestBodyLimitGuard(req, res, {
             maxBytes: SLACK_WEBHOOK_MAX_BODY_BYTES,
@@ -219,7 +249,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             return;
           }
           try {
-            await Promise.resolve(receiver.requestListener(req, res));
+            await Promise.resolve(httpReceiver.requestListener(req, res));
           } catch (err) {
             if (!guard.isTripped()) {
               throw err;
@@ -235,25 +265,34 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   let teamId = "";
   let apiAppId = "";
   const expectedApiAppIdFromAppToken = parseApiAppIdFromAppToken(appToken);
-  try {
-    const auth = await app.client.auth.test({ token: botToken });
-    botUserId = auth.user_id ?? "";
-    teamId = auth.team_id ?? "";
-    apiAppId = (auth as { api_app_id?: string }).api_app_id ?? "";
-  } catch {
-    // auth test failing is non-fatal; message handler falls back to regex mentions.
-  }
 
-  if (apiAppId && expectedApiAppIdFromAppToken && apiAppId !== expectedApiAppIdFromAppToken) {
-    runtime.error?.(
-      `slack token mismatch: bot token api_app_id=${apiAppId} but app token looks like api_app_id=${expectedApiAppIdFromAppToken}`,
-    );
+  const runAuthTest = async () => {
+    try {
+      const auth = await app.client.auth.test(botToken ? { token: botToken } : {});
+      botUserId = auth.user_id ?? "";
+      teamId = auth.team_id ?? "";
+      apiAppId = (auth as { api_app_id?: string }).api_app_id ?? "";
+    } catch {
+      // auth test failing is non-fatal; message handler falls back to regex mentions.
+    }
+
+    if (apiAppId && expectedApiAppIdFromAppToken && apiAppId !== expectedApiAppIdFromAppToken) {
+      runtime.error?.(
+        `slack token mismatch: bot token api_app_id=${apiAppId} but app token looks like api_app_id=${expectedApiAppIdFromAppToken}`,
+      );
+    }
+  };
+
+  // In mux mode, auth.test is deferred until after app.start() because the
+  // WebSocket must be connected before proxied API calls can be made.
+  if (slackMode !== "mux") {
+    await runAuthTest();
   }
 
   const ctx = createSlackMonitorContext({
     cfg,
     accountId: account.accountId,
-    botToken,
+    botToken: botToken ?? "",
     app,
     runtime,
     botUserId,
@@ -405,7 +444,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   }
 
   const stopOnAbort = () => {
-    if (opts.abortSignal?.aborted && slackMode === "socket") {
+    if (opts.abortSignal?.aborted && (slackMode === "socket" || slackMode === "mux")) {
       void app.stop();
     }
   };
@@ -490,6 +529,26 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         } catch {
           break;
         }
+      }
+    } else if (slackMode === "mux") {
+      await app.start();
+      publishSlackConnectedStatus(opts.setStatus);
+      runtime.log?.("slack mux mode connected");
+
+      // Run deferred auth.test now that the WebSocket is connected
+      await runAuthTest();
+      ctx.botUserId = botUserId;
+      ctx.teamId = teamId;
+      ctx.apiAppId = apiAppId;
+      muxReceiver!.setAuthReady();
+
+      // Keep alive until abort
+      if (!opts.abortSignal?.aborted) {
+        await new Promise<void>((resolve) => {
+          opts.abortSignal?.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
+        });
       }
     } else {
       runtime.log?.(`slack http mode listening at ${slackWebhookPath}`);

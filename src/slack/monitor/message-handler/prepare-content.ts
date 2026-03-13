@@ -49,17 +49,23 @@ export async function resolveSlackMessageContent(params: {
     threadStarter: params.threadStarter,
   });
 
-  const media = await resolveSlackMedia({
-    files: ownFiles,
-    token: params.botToken,
-    maxBytes: params.mediaMaxBytes,
-  });
+  // In mux mode botToken is empty — skip media downloads that require a real
+  // Slack token for Bearer auth (file URLs are not proxied through the mux).
+  const media = params.botToken
+    ? await resolveSlackMedia({
+        files: ownFiles,
+        token: params.botToken,
+        maxBytes: params.mediaMaxBytes,
+      })
+    : null;
 
-  const attachmentContent = await resolveSlackAttachmentContent({
-    attachments: params.message.attachments,
-    token: params.botToken,
-    maxBytes: params.mediaMaxBytes,
-  });
+  const attachmentContent = params.botToken
+    ? await resolveSlackAttachmentContent({
+        attachments: params.message.attachments,
+        token: params.botToken,
+        maxBytes: params.mediaMaxBytes,
+      })
+    : null;
 
   const mergedMedia = [...(media ?? []), ...(attachmentContent?.media ?? [])];
   const effectiveDirectMedia = mergedMedia.length > 0 ? mergedMedia : null;
