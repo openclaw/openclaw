@@ -4,7 +4,11 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { logVerbose } from "../../globals.js";
-import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.js";
+import { createResolverContext } from "../../secrets/runtime-shared.js";
+import {
+  resolveMinimaxApiKeyFromAuthProfiles,
+  type RuntimeWebSearchMetadata,
+} from "../../secrets/runtime-web-tools.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import type { AnyAgentTool } from "./common.js";
@@ -959,6 +963,49 @@ function resolveMinimaxApiKey(minimax?: MinimaxConfig): string | undefined {
   }
   const fromEnvApiKey = normalizeApiKey(process.env.MINIMAX_API_KEY);
   return fromEnvApiKey || undefined;
+}
+
+async function resolveMinimaxRuntimeCredentials(params: {
+  cfg?: OpenClawConfig;
+  minimax?: MinimaxConfig;
+  runtimeWebSearch?: RuntimeWebSearchMetadata;
+}): Promise<{ apiKey?: string; apiHost?: string }> {
+  const apiKey = resolveMinimaxApiKey(params.minimax);
+  if (apiKey) {
+    return {
+      apiKey,
+      apiHost: resolveMinimaxApiHost({
+        cfg: params.cfg,
+        minimax: params.minimax,
+        runtimeApiHost: params.runtimeWebSearch?.minimaxApiHost,
+      }),
+    };
+  }
+
+  const cfg = params.cfg;
+  if (!cfg) {
+    return {};
+  }
+
+  const authProfileMatch = await resolveMinimaxApiKeyFromAuthProfiles({
+    sourceConfig: cfg,
+    context: createResolverContext({
+      sourceConfig: cfg,
+      env: process.env,
+    }),
+  });
+  if (!authProfileMatch) {
+    return {};
+  }
+
+  return {
+    apiKey: authProfileMatch.apiKey,
+    apiHost: resolveMinimaxApiHost({
+      cfg,
+      minimax: params.minimax,
+      runtimeApiHost: params.runtimeWebSearch?.minimaxApiHost ?? authProfileMatch.apiHost,
+    }),
+  };
 }
 
 function resolveUrlOrigin(raw?: string): string | undefined {
@@ -2215,6 +2262,14 @@ export function createWebSearchTool(options?: {
       // do not touch Perplexity-only credential surfaces during tool construction.
       const perplexityRuntime =
         provider === "perplexity" ? resolvePerplexityTransport(perplexityConfig) : undefined;
+      const minimaxRuntime =
+        provider === "minimax"
+          ? await resolveMinimaxRuntimeCredentials({
+              cfg: options?.config,
+              minimax: minimaxConfig,
+              runtimeWebSearch: options?.runtimeWebSearch,
+            })
+          : undefined;
       const apiKey =
         provider === "perplexity"
           ? perplexityRuntime?.apiKey
@@ -2223,7 +2278,7 @@ export function createWebSearchTool(options?: {
             : provider === "kimi"
               ? resolveKimiApiKey(kimiConfig)
               : provider === "minimax"
-                ? resolveMinimaxApiKey(minimaxConfig)
+                ? minimaxRuntime?.apiKey
                 : provider === "gemini"
                   ? resolveGeminiApiKey(geminiConfig)
                   : resolveSearchApiKey(search);
@@ -2465,7 +2520,7 @@ export function createWebSearchTool(options?: {
         minimaxApiHost: resolveMinimaxApiHost({
           cfg: options?.config,
           minimax: minimaxConfig,
-          runtimeApiHost: options?.runtimeWebSearch?.minimaxApiHost,
+          runtimeApiHost: minimaxRuntime?.apiHost ?? options?.runtimeWebSearch?.minimaxApiHost,
         }),
         braveMode,
       });
@@ -2498,6 +2553,7 @@ export const __testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   resolveMinimaxApiKey,
+  resolveMinimaxRuntimeCredentials,
   resolveMinimaxApiHost,
   normalizeMinimaxRelatedSearches,
   extractKimiCitations,

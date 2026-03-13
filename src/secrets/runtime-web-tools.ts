@@ -421,7 +421,7 @@ function resolveMinimaxApiHostFromProfile(params: {
   return MINIMAX_DEFAULT_API_HOST_BY_PROVIDER[params.profileProvider];
 }
 
-async function resolveMinimaxApiKeyFromAuthProfiles(params: {
+export async function resolveMinimaxApiKeyFromAuthProfiles(params: {
   sourceConfig: OpenClawConfig;
   context: ResolverContext;
   loadAuthStore?: AuthStoreLoader;

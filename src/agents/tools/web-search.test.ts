@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { withEnv } from "../../test-utils/env.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { withEnv, withEnvAsync } from "../../test-utils/env.js";
+import * as authProfiles from "../auth-profiles.js";
 import { __testing } from "./web-search.js";
 
 const {
@@ -22,6 +23,7 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   resolveMinimaxApiKey,
+  resolveMinimaxRuntimeCredentials,
   resolveMinimaxApiHost,
   normalizeMinimaxRelatedSearches,
   extractKimiCitations,
@@ -38,6 +40,10 @@ const perplexityApiKeyEnv = ["PERPLEXITY_API", "KEY"].join("_");
 const openRouterPerplexityApiKey = ["sk", "or", "v1", "test"].join("-");
 const directPerplexityApiKey = ["pplx", "test"].join("-");
 const enterprisePerplexityApiKey = ["enterprise", "perplexity", "test"].join("-");
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("web_search perplexity compatibility routing", () => {
   it("detects API key prefixes", () => {
@@ -380,6 +386,43 @@ describe("web_search minimax credential resolution", () => {
       expect(resolveMinimaxApiKey({})).toBeUndefined();
       expect(resolveMinimaxApiKey(undefined)).toBeUndefined();
     });
+  });
+
+  it("falls back to readonly auth-profile oauth when config and env are missing", async () => {
+    vi.spyOn(authProfiles, "loadAuthProfileStoreForSecretsRuntime").mockReturnValue({
+      version: 1,
+      profiles: {
+        "minimax-portal:default": {
+          type: "oauth",
+          provider: "minimax-portal",
+          access: "profile-oauth-token", // pragma: allowlist secret
+          refresh: "refresh-token", // pragma: allowlist secret
+          expires: Date.now() + 60_000,
+        },
+      },
+      order: {},
+    } as unknown as ReturnType<typeof authProfiles.loadAuthProfileStoreForSecretsRuntime>);
+    vi.spyOn(authProfiles, "listProfilesForProvider").mockImplementation((store, provider) =>
+      provider === "minimax-portal" ? ["minimax-portal:default"] : [],
+    );
+
+    await withEnvAsync(
+      {
+        [minimaxOauthTokenEnv]: undefined,
+        [minimaxApiKeyEnv]: undefined,
+        OPENCLAW_AGENT_DIR: undefined,
+      },
+      async () => {
+        await expect(
+          resolveMinimaxRuntimeCredentials({
+            cfg: {} as import("../../config/config.js").OpenClawConfig,
+          }),
+        ).resolves.toEqual({
+          apiKey: "profile-oauth-token",
+          apiHost: "https://api.minimax.io",
+        });
+      },
+    );
   });
 });
 
