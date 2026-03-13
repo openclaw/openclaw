@@ -169,4 +169,203 @@ describe("resolveTranscriptPolicy", () => {
       includeCamelCase: true,
     });
   });
+
+  describe("preserveSignatures with session history", () => {
+    it("forces preserveSignatures when history has signed thinking blocks and target is non-Anthropic", () => {
+      const messages = [
+        { role: "user", content: "hello" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "Let me think...",
+              thinkingSignature: "EvEICkYICxgCKkAzskjLD0odKeC/D5...",
+            },
+            { type: "text", text: "Here is my response." },
+          ],
+        },
+      ];
+
+      const policy = resolveTranscriptPolicy({
+        modelApi: "google-generative-ai",
+        provider: "google",
+        modelId: "gemini-3-pro",
+        messages,
+      });
+
+      expect(policy.preserveSignatures).toBe(true);
+    });
+
+    it("does not force preserveSignatures when history has no signed blocks", () => {
+      const messages = [
+        { role: "user", content: "hello" },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Here is my response." }],
+        },
+      ];
+
+      const policy = resolveTranscriptPolicy({
+        modelApi: "google-generative-ai",
+        provider: "google",
+        modelId: "gemini-3-pro",
+        messages,
+      });
+
+      expect(policy.preserveSignatures).toBe(false);
+    });
+
+    it("does not force preserveSignatures when thinking blocks lack signatures", () => {
+      const messages = [
+        { role: "user", content: "hello" },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "reasoning without signature" },
+            { type: "text", text: "response" },
+          ],
+        },
+      ];
+
+      const policy = resolveTranscriptPolicy({
+        modelApi: "google-generative-ai",
+        provider: "google",
+        modelId: "gemini-3-pro",
+        messages,
+      });
+
+      expect(policy.preserveSignatures).toBe(false);
+    });
+
+    it("preserveSignatures remains true for Anthropic target regardless of history", () => {
+      const policy = resolveTranscriptPolicy({
+        modelApi: "anthropic-messages",
+        provider: "anthropic",
+        modelId: "claude-opus-4-6",
+      });
+
+      expect(policy.preserveSignatures).toBe(true);
+    });
+
+    it("handles redacted_thinking blocks with signatures", () => {
+      const messages = [
+        { role: "user", content: "hello" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "redacted_thinking",
+              data: "...",
+              thinkingSignature: "EvEICkYICxgCKkAzskjLD0odKeC/D5...",
+            },
+            { type: "text", text: "response" },
+          ],
+        },
+      ];
+
+      const policy = resolveTranscriptPolicy({
+        modelApi: "openai-completions",
+        provider: "openai",
+        modelId: "gpt-4.1",
+        messages,
+      });
+
+      expect(policy.preserveSignatures).toBe(true);
+    });
+
+    it("respects provider opt-outs even when history has signed thinking blocks", () => {
+      const messages = [
+        { role: "user", content: "hello" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "Let me think...",
+              thinkingSignature: "EvEICkYICxgCKkAzskjLD0odKeC/D5...",
+            },
+            { type: "text", text: "response" },
+          ],
+        },
+      ];
+
+      const policy = resolveTranscriptPolicy({
+        modelApi: "anthropic-messages",
+        provider: "kimi-coding",
+        modelId: "k2p5",
+        messages,
+      });
+
+      expect(policy.preserveSignatures).toBe(false);
+    });
+
+    it("continues scanning past newer assistant messages without array content", () => {
+      const messages = [
+        { role: "user", content: "hello" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "Let me think...",
+              thinkingSignature: "EvEICkYICxgCKkAzskjLD0odKeC/D5...",
+            },
+            { type: "text", text: "working" },
+          ],
+        },
+        { role: "assistant", content: "done" },
+      ];
+
+      const policy = resolveTranscriptPolicy({
+        modelApi: "google-generative-ai",
+        provider: "google",
+        modelId: "gemini-3-pro",
+        messages,
+      });
+
+      expect(policy.preserveSignatures).toBe(true);
+    });
+
+    it("continues scanning past newer assistant messages with unsigned array content", () => {
+      const messages = [
+        { role: "user", content: "do task" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "Let me think...",
+              thinkingSignature: "EvEICkYICxgCKkAzskjLD0odKeC/D5...",
+            },
+            { type: "text", text: "working" },
+          ],
+        },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "abc", content: "ok" }] },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "done" }],
+        },
+      ];
+
+      const policy = resolveTranscriptPolicy({
+        modelApi: "google-generative-ai",
+        provider: "google",
+        modelId: "gemini-3-pro",
+        messages,
+      });
+
+      expect(policy.preserveSignatures).toBe(true);
+    });
+
+    it("handles missing messages parameter (backward compatible)", () => {
+      const policy = resolveTranscriptPolicy({
+        modelApi: "google-generative-ai",
+        provider: "google",
+        modelId: "gemini-3-pro",
+      });
+
+      expect(policy.preserveSignatures).toBe(false);
+    });
+  });
 });

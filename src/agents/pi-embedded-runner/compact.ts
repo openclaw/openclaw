@@ -692,7 +692,7 @@ export async function compactEmbeddedPiSessionDirect(
         warn: (message) => log.warn(message),
       });
       await prewarmSessionFile(params.sessionFile);
-      const transcriptPolicy = resolveTranscriptPolicy({
+      let transcriptPolicy = resolveTranscriptPolicy({
         modelApi: model.api,
         provider,
         modelId,
@@ -748,6 +748,12 @@ export async function compactEmbeddedPiSessionDirect(
         sessionManager,
         settingsManager,
         resourceLoader,
+      });
+      transcriptPolicy = resolveTranscriptPolicy({
+        modelApi: model.api,
+        provider,
+        modelId,
+        messages: session.messages as Array<{ role: string; content?: unknown }>,
       });
       applySystemPromptOverrideToSession(session, systemPromptOverride());
       if (model.api === "ollama") {

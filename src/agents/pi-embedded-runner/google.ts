@@ -14,6 +14,7 @@ import {
   downgradeOpenAIReasoningBlocks,
   isCompactionFailureError,
   isGoogleModelApi,
+  sanitizeOpenAICompletionsThinkingSignatures,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
 } from "../pi-embedded-helpers.js";
@@ -535,6 +536,7 @@ export async function sanitizeSessionHistory(params: {
       modelApi: params.modelApi,
       provider: params.provider,
       modelId: params.modelId,
+      messages: params.messages,
     });
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
   const sanitizedImages = await sanitizeSessionMessagesImages(
@@ -579,7 +581,11 @@ export async function sanitizeSessionHistory(params: {
     ? downgradeOpenAIFunctionCallReasoningPairs(
         downgradeOpenAIReasoningBlocks(sanitizedCompactionUsage),
       )
-    : sanitizedCompactionUsage;
+    : // Preserve provider-native signatures earlier in transcript sanitization, then
+      // strip unsupported ones only at the openai-completions replay boundary.
+      params.modelApi === "openai-completions"
+      ? sanitizeOpenAICompletionsThinkingSignatures(sanitizedCompactionUsage)
+      : sanitizedCompactionUsage;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {
