@@ -1134,14 +1134,21 @@ async function handleForwardCdpCommand(msg) {
   /** @type {chrome.debugger.DebuggerSession} */
   const debuggee = { tabId }
 
+  const tabState = tabs.get(tabId)
+  const mainSessionId = tabState?.sessionId
+  const debuggerSession =
+    sessionId && mainSessionId && sessionId !== mainSessionId
+      ? { ...debuggee, sessionId }
+      : debuggee
+
   if (method === 'Runtime.enable') {
     try {
-      await chrome.debugger.sendCommand(debuggee, 'Runtime.disable')
+      await chrome.debugger.sendCommand(debuggerSession, 'Runtime.disable')
       await new Promise((r) => setTimeout(r, 50))
     } catch {
       // ignore
     }
-    return await chrome.debugger.sendCommand(debuggee, 'Runtime.enable', params)
+    return await chrome.debugger.sendCommand(debuggerSession, 'Runtime.enable', params)
   }
 
   if (method === 'Target.createTarget') {
