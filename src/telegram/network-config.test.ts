@@ -187,7 +187,7 @@ describe("resolveTelegramDnsResultOrderDecision", () => {
   }>)("$name", ({ env, network, nodeMajor, expected }) => {
     const decision = resolveTelegramDnsResultOrderDecision({
       env,
-      network,
+      network: network as TelegramNetworkConfig | undefined,
       nodeMajor,
     });
     expect(decision).toEqual(expected);

@@ -281,7 +281,7 @@ describe("resolveGatewayRuntimeConfig", () => {
             auth: { mode: "none" },
             http: {
               securityHeaders: {
-                strictTransportSecurity,
+                strictTransportSecurity: strictTransportSecurity,
               },
             },
           },

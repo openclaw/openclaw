@@ -1480,7 +1480,7 @@ describe("loadOpenClawPlugins", () => {
       body: `module.exports = { id: "warn-open-allow-once", register() {} };`,
     });
     const warnings: string[] = [];
-    const options = {
+    const options: Parameters<typeof loadOpenClawPlugins>[0] = {
       cache: false,
       logger: createWarningLogger(warnings),
       config: {

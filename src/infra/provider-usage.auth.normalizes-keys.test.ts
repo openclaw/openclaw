@@ -154,7 +154,7 @@ describe("resolveProviderAuths key normalization", () => {
 
   async function expectResolvedAuthsFromSuiteHome(params: {
     providers: Parameters<typeof resolveProviderAuths>[0]["providers"];
-    expected: Awaited<ReturnType<typeof resolveProviderAuths>>;
+    expected: ProviderAuth[];
     env?: Record<string, string | undefined>;
     setup?: (home: string) => Promise<void>;
   }) {
@@ -173,7 +173,7 @@ describe("resolveProviderAuths key normalization", () => {
     );
   }
 
-  it.each([
+  const envNormalizationCases = [
     {
       name: "strips embedded CR/LF from env keys",
       providers: ["zai", "minimax", "xiaomi"] as const,
@@ -219,7 +219,9 @@ describe("resolveProviderAuths key normalization", () => {
     providers: readonly Parameters<typeof resolveProviderAuths>[0]["providers"][number][];
     env: Record<string, string | undefined>;
     expected: ProviderAuth[];
-  }>)("$name", async ({ providers, env, expected }) => {
+  }>;
+
+  it.each(envNormalizationCases)("$name", async ({ providers, env, expected }) => {
     await expectResolvedAuthsFromSuiteHome({ providers: [...providers], env, expected });
   });
 
