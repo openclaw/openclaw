@@ -1,4 +1,5 @@
 import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../agents/identity.js";
+import { resolveDefaultModelForAgent, resolveThinkingDefault } from "../agents/model-selection.js";
 import {
   extractShortModelName,
   type ResponsePrefixContext,
@@ -27,8 +28,21 @@ export function createReplyPrefixContext(params: {
   accountId?: string;
 }): ReplyPrefixContextBundle {
   const { cfg, agentId } = params;
+
+  // Pre-seed with config defaults so early-exit paths (e.g. abort) resolve the prefix template.
+  const defaultModel = resolveDefaultModelForAgent({ cfg, agentId });
+  const defaultThinking = resolveThinkingDefault({
+    cfg,
+    provider: defaultModel.provider,
+    model: defaultModel.model,
+  });
+
   const prefixContext: ResponsePrefixContext = {
     identityName: resolveIdentityName(cfg, agentId),
+    provider: defaultModel.provider,
+    model: extractShortModelName(defaultModel.model),
+    modelFull: `${defaultModel.provider}/${defaultModel.model}`,
+    thinkingLevel: defaultThinking,
   };
 
   const onModelSelected = (ctx: ModelSelectionContext) => {
