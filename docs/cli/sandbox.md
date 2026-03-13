@@ -73,7 +73,7 @@ openclaw sandbox recreate --all --force        # Skip confirmation
 ```bash
 # Pull new image
 docker pull openclaw-sandbox:latest
-docker tag openclaw-sandbox:latest openclaw-sandbox:bookworm-slim
+docker tag openclaw-sandbox:latest openclaw-sandbox:trixie-slim
 
 # Update config to use new image
 # Edit config: agents.defaults.sandbox.docker.image (or agents.list[].sandbox.docker.image)
@@ -131,7 +131,7 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
         "mode": "all", // off, non-main, all
         "scope": "agent", // session, agent, shared
         "docker": {
-          "image": "openclaw-sandbox:bookworm-slim",
+          "image": "openclaw-sandbox:trixie-slim",
           "containerPrefix": "openclaw-sbx-",
           // ... more Docker options
         },

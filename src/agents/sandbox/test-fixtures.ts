@@ -7,7 +7,7 @@ export function createSandboxTestContext(params?: {
   const overrides = params?.overrides ?? {};
   const { docker: _unusedDockerOverrides, ...sandboxOverrides } = overrides;
   const docker = {
-    image: "openclaw-sandbox:bookworm-slim",
+    image: "openclaw-sandbox:trixie-slim",
     containerPrefix: "openclaw-sbx-",
     network: "none",
     user: "1000:1000",

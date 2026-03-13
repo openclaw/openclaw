@@ -502,9 +502,9 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
 
   # Build sandbox image if Dockerfile.sandbox exists.
   if [[ -f "$ROOT_DIR/Dockerfile.sandbox" ]]; then
-    echo "Building sandbox image: openclaw-sandbox:bookworm-slim"
+    echo "Building sandbox image: openclaw-sandbox:trixie-slim"
     docker build \
-      -t "openclaw-sandbox:bookworm-slim" \
+      -t "openclaw-sandbox:trixie-slim" \
       -f "$ROOT_DIR/Dockerfile.sandbox" \
       "$ROOT_DIR"
   else

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_IMAGE="${BASE_IMAGE:-openclaw-sandbox:bookworm-slim}"
-TARGET_IMAGE="${TARGET_IMAGE:-openclaw-sandbox-common:bookworm-slim}"
+BASE_IMAGE="${BASE_IMAGE:-openclaw-sandbox:trixie-slim}"
+TARGET_IMAGE="${TARGET_IMAGE:-openclaw-sandbox-common:trixie-slim}"
 PACKAGES="${PACKAGES:-curl wget jq coreutils grep nodejs npm python3 git ca-certificates golang-go rustc cargo unzip pkg-config libasound2-dev build-essential file}"
 INSTALL_PNPM="${INSTALL_PNPM:-1}"
 INSTALL_BUN="${INSTALL_BUN:-1}"

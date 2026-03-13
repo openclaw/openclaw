@@ -261,8 +261,8 @@ export async function ensureDockerImage(image: string) {
     return;
   }
   if (image === DEFAULT_SANDBOX_IMAGE) {
-    await execDocker(["pull", "debian:bookworm-slim"]);
-    await execDocker(["tag", "debian:bookworm-slim", DEFAULT_SANDBOX_IMAGE]);
+    await execDocker(["pull", "debian:trixie-slim"]);
+    await execDocker(["tag", "debian:trixie-slim", DEFAULT_SANDBOX_IMAGE]);
     return;
   }
   throw new Error(`Sandbox image not found: ${image}. Build or pull it first.`);

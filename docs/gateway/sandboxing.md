@@ -116,7 +116,7 @@ Security notes:
 
 ## Images + setup
 
-Default image: `openclaw-sandbox:bookworm-slim`
+Default image: `openclaw-sandbox:trixie-slim`
 
 Build it once:
 
@@ -137,7 +137,7 @@ scripts/sandbox-common-setup.sh
 ```
 
 Then set `agents.defaults.sandbox.docker.image` to
-`openclaw-sandbox-common:bookworm-slim`.
+`openclaw-sandbox-common:trixie-slim`.
 
 Sandboxed browser image:
 

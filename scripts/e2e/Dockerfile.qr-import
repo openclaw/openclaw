@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:24-bookworm@sha256:9f3b13503acdf9bc1e0213ccb25ebe86ac881cad17636733a1da1be1d44509df
+FROM node:24-trixie@sha256:81649592d9833d9220423561fc517b34e932b751873274024c2a969ff4a9bfc2
 
 RUN corepack enable
 

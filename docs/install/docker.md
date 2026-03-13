@@ -109,7 +109,7 @@ Notes:
   `agents.defaults.sandbox.mode` to `off` to avoid stale/broken sandbox config
   on reruns.
 - If `Dockerfile.sandbox` is missing, the script prints a warning and continues;
-  build `openclaw-sandbox:bookworm-slim` with `scripts/sandbox-setup.sh` if
+  build `openclaw-sandbox:trixie-slim` with `scripts/sandbox-setup.sh` if
   needed.
 - For non-local `OPENCLAW_IMAGE` values, the image must already contain Docker
   CLI support for sandbox execution.
@@ -165,13 +165,13 @@ Common tags:
 
 The main Docker image currently uses:
 
-- `node:24-bookworm`
+- `node:24-trixie`
 
 The docker image now publishes OCI base-image annotations (sha256 is an example,
 and points at the pinned multi-arch manifest list for that tag):
 
-- `org.opencontainers.image.base.name=docker.io/library/node:24-bookworm`
-- `org.opencontainers.image.base.digest=sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b`
+- `org.opencontainers.image.base.name=docker.io/library/node:24-trixie`
+- `org.opencontainers.image.base.digest=sha256:81649592d9833d9220423561fc517b34e932b751873274024c2a969ff4a9bfc2`
 - `org.opencontainers.image.source=https://github.com/openclaw/openclaw`
 - `org.opencontainers.image.url=https://openclaw.ai`
 - `org.opencontainers.image.documentation=https://docs.openclaw.ai/install/docker`
@@ -184,8 +184,8 @@ and points at the pinned multi-arch manifest list for that tag):
 
 Reference: [OCI image annotations](https://github.com/opencontainers/image-spec/blob/main/annotations.md)
 
-Release context: this repository's tagged history already uses Bookworm in
-`v2026.2.22` and earlier 2026 tags (for example `v2026.2.21`, `v2026.2.9`).
+Release context: tagged releases through `v2026.2.22` used Bookworm in the
+Docker base image; the current Dockerfiles now pin Trixie.
 
 By default the setup script builds the image from source. To pull a pre-built
 image instead, set `OPENCLAW_IMAGE` before running the script:
@@ -408,7 +408,7 @@ To speed up rebuilds, order your Dockerfile so dependency layers are cached.
 This avoids re-running `pnpm install` unless lockfiles change:
 
 ```dockerfile
-FROM node:24-bookworm
+FROM node:24-trixie
 
 # Install Bun (required for build scripts)
 RUN curl -fsSL https://bun.sh/install | bash
@@ -576,7 +576,7 @@ precedence, and troubleshooting.
 
 ### Default behavior
 
-- Image: `openclaw-sandbox:bookworm-slim`
+- Image: `openclaw-sandbox:trixie-slim`
 - One container per agent
 - Agent workspace access: `workspaceAccess: "none"` (default) uses `~/.openclaw/sandboxes`
   - `"ro"` keeps the sandbox workspace at `/workspace` and mounts the agent workspace read-only at `/agent` (disables `write`/`edit`/`apply_patch`)
@@ -612,7 +612,7 @@ If you plan to install packages in `setupCommand`, note:
         workspaceAccess: "none", // none | ro | rw
         workspaceRoot: "~/.openclaw/sandboxes",
         docker: {
-          image: "openclaw-sandbox:bookworm-slim",
+          image: "openclaw-sandbox:trixie-slim",
           workdir: "/workspace",
           readOnlyRoot: true,
           tmpfs: ["/tmp", "/var/tmp", "/run"],
@@ -677,7 +677,7 @@ Multi-agent: override `agents.defaults.sandbox.{docker,browser,prune}.*` per age
 scripts/sandbox-setup.sh
 ```
 
-This builds `openclaw-sandbox:bookworm-slim` using `Dockerfile.sandbox`.
+This builds `openclaw-sandbox:trixie-slim` using `Dockerfile.sandbox`.
 
 ### Sandbox common image (optional)
 
@@ -687,13 +687,13 @@ If you want a sandbox image with common build tooling (Node, Go, Rust, etc.), bu
 scripts/sandbox-common-setup.sh
 ```
 
-This builds `openclaw-sandbox-common:bookworm-slim`. To use it:
+This builds `openclaw-sandbox-common:trixie-slim`. To use it:
 
 ```json5
 {
   agents: {
     defaults: {
-      sandbox: { docker: { image: "openclaw-sandbox-common:bookworm-slim" } },
+      sandbox: { docker: { image: "openclaw-sandbox-common:trixie-slim" } },
     },
   },
 }
@@ -707,7 +707,7 @@ To run the browser tool inside the sandbox, build the browser image:
 scripts/sandbox-browser-setup.sh
 ```
 
-This builds `openclaw-sandbox-browser:bookworm-slim` using
+This builds `openclaw-sandbox-browser:trixie-slim` using
 `Dockerfile.sandbox-browser`. The container runs Chromium with CDP enabled and
 an optional noVNC observer (headful via Xvfb).
 
