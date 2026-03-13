@@ -270,6 +270,12 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
+  extensions/context-lancedb:
+    dependencies:
+      '@lancedb/lancedb':
+        specifier: ^0.26.2
+        version: 0.26.2(apache-arrow@18.1.0)
+
   extensions/copilot-proxy: {}
 
   extensions/diagnostics-otel:

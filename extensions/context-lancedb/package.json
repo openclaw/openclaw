@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/context-lancedb",
+  "version": "2026.3.13",
+  "private": true,
+  "description": "OpenClaw LanceDB-backed context engine with same-session-key recall",
+  "type": "module",
+  "dependencies": {
+    "@lancedb/lancedb": "^0.26.2"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

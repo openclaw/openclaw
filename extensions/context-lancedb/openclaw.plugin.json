@@ -1,0 +1,178 @@
+{
+  "id": "lancedb-context",
+  "name": "Context Engine (LanceDB)",
+  "description": "LanceDB-backed context engine with same-session-key history recall.",
+  "kind": "context-engine",
+  "uiHints": {
+    "dbPath": {
+      "label": "Database Path",
+      "placeholder": "~/.openclaw/context/lancedb",
+      "advanced": true
+    },
+    "embedding.provider": {
+      "label": "Embedding Provider",
+      "help": "Embedding provider used for message, summary, and query vectors."
+    },
+    "embedding.fallback": {
+      "label": "Embedding Fallback",
+      "help": "Fallback provider when the primary provider is unavailable.",
+      "advanced": true
+    },
+    "embedding.model": {
+      "label": "Embedding Model",
+      "help": "Embedding model id passed to the selected provider."
+    },
+    "embedding.dimensions": {
+      "label": "Embedding Dimensions",
+      "help": "Required vector size for LanceDB schemas."
+    },
+    "embedding.baseUrl": {
+      "label": "Embedding Base URL",
+      "advanced": true
+    },
+    "embedding.apiKey": {
+      "label": "Embedding API Key",
+      "sensitive": true,
+      "advanced": true
+    },
+    "assembly.recentTailTokens": {
+      "label": "Recent Tail Tokens",
+      "advanced": true
+    },
+    "assembly.retrievalTopK": {
+      "label": "Retrieval Top K",
+      "advanced": true
+    },
+    "assembly.retrievalMinScore": {
+      "label": "Retrieval Min Score",
+      "advanced": true
+    },
+    "assembly.maxRetrievedChars": {
+      "label": "Max Retrieved Chars",
+      "advanced": true
+    },
+    "assembly.crossSessionScope": {
+      "label": "Cross Session Scope",
+      "advanced": true
+    },
+    "assembly.crossSessionRecallMode": {
+      "label": "Cross Session Recall Mode",
+      "advanced": true
+    },
+    "maintenance.optimizeIntervalMinutes": {
+      "label": "Optimize Interval Minutes",
+      "advanced": true
+    },
+    "limits.maxMessageCharsForEmbedding": {
+      "label": "Max Message Chars For Embedding",
+      "advanced": true
+    },
+    "limits.skipLargeToolResultChars": {
+      "label": "Skip Large Tool Result Chars",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "dbPath": {
+        "type": "string"
+      },
+      "embedding": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": ["auto", "openai", "gemini", "voyage", "mistral", "ollama", "local"]
+          },
+          "fallback": {
+            "type": "string",
+            "enum": ["none", "openai", "gemini", "voyage", "mistral", "ollama", "local"]
+          },
+          "model": {
+            "type": "string"
+          },
+          "dimensions": {
+            "type": "number",
+            "minimum": 1
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "localModelPath": {
+            "type": "string"
+          },
+          "localModelCacheDir": {
+            "type": "string"
+          }
+        }
+      },
+      "assembly": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "recentTailTokens": {
+            "type": "number",
+            "minimum": 1
+          },
+          "retrievalTopK": {
+            "type": "number",
+            "minimum": 1
+          },
+          "retrievalMinScore": {
+            "type": "number",
+            "minimum": -1,
+            "maximum": 1
+          },
+          "maxRetrievedChars": {
+            "type": "number",
+            "minimum": 1
+          },
+          "crossSessionScope": {
+            "type": "string",
+            "enum": ["session_key"]
+          },
+          "crossSessionRecallMode": {
+            "type": "string",
+            "enum": ["summary-first"]
+          }
+        }
+      },
+      "maintenance": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "optimizeIntervalMinutes": {
+            "type": "number",
+            "minimum": 1
+          }
+        }
+      },
+      "limits": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "maxMessageCharsForEmbedding": {
+            "type": "number",
+            "minimum": 1
+          },
+          "skipLargeToolResultChars": {
+            "type": "number",
+            "minimum": 1
+          }
+        }
+      }
+    }
+  }
+}

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { registerLegacyContextEngine, resolveContextEngine } from "../context-engine/index.js";
 import { withEnv } from "../test-utils/env.js";
 async function importFreshPluginTestModules() {
   vi.resetModules();
@@ -1285,6 +1286,41 @@ describe("loadOpenClawPlugins", () => {
     const b = registry.plugins.find((entry) => entry.id === "memory-b");
     expect(b?.status).toBe("loaded");
     expect(a?.status).toBe("disabled");
+  });
+
+  it("supports configuring memory and contextEngine slots together", async () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    registerLegacyContextEngine();
+    const memoryA = writePlugin({
+      id: "memory-a",
+      body: `module.exports = { id: "memory-a", kind: "memory", register() {} };`,
+    });
+    const memoryB = writePlugin({
+      id: "memory-b",
+      body: `module.exports = { id: "memory-b", kind: "memory", register() {} };`,
+    });
+    const config = {
+      plugins: {
+        load: { paths: [memoryA.file, memoryB.file] },
+        slots: {
+          memory: "memory-b",
+          contextEngine: "legacy",
+        },
+      },
+    };
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config,
+    });
+
+    const a = registry.plugins.find((entry) => entry.id === "memory-a");
+    const b = registry.plugins.find((entry) => entry.id === "memory-b");
+    expect(b?.status).toBe("loaded");
+    expect(a?.status).toBe("disabled");
+
+    const engine = await resolveContextEngine(config);
+    expect(engine.info.id).toBe("legacy");
   });
 
   it("skips importing bundled memory plugins that are disabled by memory slot", () => {
