@@ -327,7 +327,7 @@ describe("runCronIsolatedAgentTurn", () => {
         workspaceDir?: string;
         sessionFile?: string;
       };
-      expect(call?.sessionKey).toBe("agent:ops:cron:job-ops");
+      expect(call?.sessionKey).toMatch(/^agent:ops:cron:job-ops:run:/);
       expect(call?.workspaceDir).toBe(opsWorkspace);
       expect(call?.sessionFile).toContain(path.join("agents", "ops"));
     });
