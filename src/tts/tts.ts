@@ -44,6 +44,7 @@ import {
   summarizeText,
 } from "./tts-core.js";
 export { OPENAI_TTS_MODELS, OPENAI_TTS_VOICES } from "./tts-core.js";
+import * as tc from "./typecast.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
@@ -72,6 +73,7 @@ const TELEGRAM_OUTPUT = {
   // ElevenLabs output formats use codec_sample_rate_bitrate naming.
   // Opus @ 48kHz/64kbps is a good voice-note tradeoff for Telegram.
   elevenlabs: "opus_48000_64",
+  typecast: "mp3" as const,
   extension: ".opus",
   voiceCompatible: true,
 };
@@ -79,6 +81,7 @@ const TELEGRAM_OUTPUT = {
 const DEFAULT_OUTPUT = {
   openai: "mp3" as const,
   elevenlabs: "mp3_44100_128",
+  typecast: "mp3" as const,
   extension: ".mp3",
   voiceCompatible: false,
 };
@@ -121,6 +124,7 @@ export type ResolvedTtsConfig = {
     speed?: number;
     instructions?: string;
   };
+  typecast: ReturnType<typeof tc.resolveTypecastDefaults>;
   edge: {
     enabled: boolean;
     voice: string;
@@ -310,6 +314,17 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       speed: raw.openai?.speed,
       instructions: raw.openai?.instructions?.trim() || undefined,
     },
+    typecast: tc.resolveTypecastDefaults(
+      raw.typecast
+        ? {
+            ...raw.typecast,
+            apiKey: normalizeResolvedSecretInputString({
+              value: raw.typecast.apiKey,
+              path: "messages.tts.typecast.apiKey",
+            }),
+          }
+        : undefined,
+    ),
     edge: {
       enabled: raw.edge?.enabled ?? true,
       voice: raw.edge?.voice?.trim() || DEFAULT_EDGE_VOICE,
@@ -461,6 +476,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  if (resolveTtsApiKey(config, "typecast")) {
+    return "typecast";
+  }
   return "edge";
 }
 
@@ -528,10 +546,13 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (provider === "typecast") {
+    return config.typecast.apiKey || process.env.TYPECAST_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "typecast", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -688,6 +709,14 @@ export async function textToSpeech(params: {
           voiceSettings,
           timeoutMs: config.timeoutMs,
         });
+      } else if (provider === "typecast") {
+        audioBuffer = await tc.callTypecast(
+          config.typecast,
+          params.text,
+          apiKey,
+          output.typecast,
+          config.timeoutMs,
+        );
       } else {
         const openaiModelOverride = params.overrides?.openai?.model;
         const openaiVoiceOverride = params.overrides?.openai?.voice;
@@ -718,8 +747,9 @@ export async function textToSpeech(params: {
         audioPath,
         latencyMs,
         provider,
-        outputFormat: provider === "openai" ? output.openai : output.elevenlabs,
-        voiceCompatible: output.voiceCompatible,
+        outputFormat: (output as unknown as Record<string, string>)[provider] ?? output.openai,
+        // Typecast only supports WAV/MP3, not Opus; voice-bubble channels require Opus.
+        voiceCompatible: output.voiceCompatible && provider !== "typecast",
       };
     } catch (err) {
       errors.push(formatTtsProviderError(provider, err));
@@ -787,6 +817,16 @@ export async function textToSpeechTelephony(params: {
           outputFormat: output.format,
           sampleRate: output.sampleRate,
         };
+      }
+
+      if (provider === "typecast") {
+        return tc.callTypecastTelephony(
+          config.typecast,
+          params.text,
+          apiKey,
+          config.timeoutMs,
+          providerStart,
+        );
       }
 
       const output = TELEPHONY_OUTPUT.openai;

@@ -1,6 +1,6 @@
 import type { SecretInput } from "./types.secrets.js";
 
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "typecast";
 
 export type TtsMode = "final" | "all";
 
@@ -65,6 +65,23 @@ export type TtsConfig = {
     speed?: number;
     /** System-level instructions for the TTS model (gpt-4o-mini-tts only). */
     instructions?: string;
+  };
+  /** Typecast AI configuration. */
+  typecast?: {
+    apiKey?: SecretInput;
+    baseHost?: string;
+    voiceId?: string;
+    model?: "ssfm-v21" | "ssfm-v30";
+    language?: string;
+    emotionPreset?: "normal" | "happy" | "sad" | "angry" | "whisper" | "toneup" | "tonedown";
+    emotionIntensity?: number;
+    seed?: number;
+    output?: {
+      volume?: number;
+      audioPitch?: number;
+      audioTempo?: number;
+      audioFormat?: "wav" | "mp3";
+    };
   };
   /** Microsoft Edge (node-edge-tts) configuration. */
   edge?: {

@@ -9,13 +9,14 @@ title: "Text-to-Speech"
 
 # Text-to-speech (TTS)
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
+OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, Typecast, or Edge TTS.
 It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubble.
 
 ## Supported services
 
 - **ElevenLabs** (primary or fallback provider)
 - **OpenAI** (primary or fallback provider; also used for summaries)
+- **Typecast** (primary or fallback provider; AI voices with emotion control, 37+ languages)
 - **Edge TTS** (primary or fallback provider; uses `node-edge-tts`, default when no API keys)
 
 ### Edge TTS notes
@@ -32,10 +33,11 @@ does not publish limits, so assume similar or lower limits. citeturn0searc
 
 ## Optional keys
 
-If you want OpenAI or ElevenLabs:
+If you want OpenAI, ElevenLabs, or Typecast:
 
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
 - `OPENAI_API_KEY`
+- `TYPECAST_API_KEY`
 
 Edge TTS does **not** require an API key. If no API keys are found, OpenClaw defaults
 to Edge TTS (unless disabled via `messages.tts.edge.enabled=false`).
@@ -52,6 +54,8 @@ so that provider must also be authenticated if you enable summaries.
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
 - [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
 - [Microsoft Speech output formats](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
+- [Typecast API](https://docs.typecast.ai)
+- [Typecast Voices](https://typecast.ai)
 
 ## Is it enabled by default?
 
@@ -111,6 +115,33 @@ Full schema is in [Gateway configuration](/gateway/configuration).
           style: 0.0,
           useSpeakerBoost: true,
           speed: 1.0,
+        },
+      },
+    },
+  },
+}
+```
+
+### Typecast primary with emotion control
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "typecast",
+      typecast: {
+        apiKey: "typecast_api_key", // pragma: allowlist secret
+        voiceId: "tc_your_voice_id",
+        model: "ssfm-v30",
+        language: "kor",
+        emotionPreset: "happy",
+        emotionIntensity: 1.2,
+        output: {
+          audioFormat: "mp3",
+          audioTempo: 1.0,
+          volume: 100,
+          audioPitch: 0,
         },
       },
     },
@@ -236,6 +267,18 @@ Then run:
 - `edge.saveSubtitles`: write JSON subtitles alongside the audio file.
 - `edge.proxy`: proxy URL for Edge TTS requests.
 - `edge.timeoutMs`: request timeout override (ms).
+- `typecast.apiKey`: Typecast API key (falls back to `TYPECAST_API_KEY`).
+- `typecast.baseHost`: override Typecast API base URL (default `https://api.typecast.ai`).
+- `typecast.voiceId`: Typecast voice ID (required; format `tc_xxx` or `uc_xxx`).
+- `typecast.model`: TTS model (`ssfm-v21` or `ssfm-v30`; default `ssfm-v30`).
+- `typecast.language`: ISO 639-3 language code (e.g. `kor`, `eng`, `jpn`). Auto-detected if unset.
+- `typecast.emotionPreset`: emotion preset (`normal`, `happy`, `sad`, `angry`, `whisper`, `toneup`, `tonedown`).
+- `typecast.emotionIntensity`: emotion intensity `0..2` (default `1.0`).
+- `typecast.seed`: integer for reproducible output.
+- `typecast.output.volume`: output volume `0..200` (default `100`).
+- `typecast.output.audioPitch`: pitch adjustment in semitones `-12..12` (default `0`).
+- `typecast.output.audioTempo`: speed multiplier `0.5..2.0` (default `1.0`).
+- `typecast.output.audioFormat`: `wav` or `mp3` (default `mp3`).
 
 ## Model-driven overrides (default on)
 
@@ -260,7 +303,7 @@ Here you go.
 
 Available directive keys (when enabled):
 
-- `provider` (`openai` | `elevenlabs` | `edge`, requires `allowProvider: true`)
+- `provider` (`openai` | `elevenlabs` | `typecast` | `edge`, requires `allowProvider: true`)
 - `voice` (OpenAI voice) or `voiceId` (ElevenLabs)
 - `model` (OpenAI TTS model or ElevenLabs model id)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
