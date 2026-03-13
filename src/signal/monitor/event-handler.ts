@@ -76,6 +76,24 @@ function formatAttachmentSummaryPlaceholder(contentTypes: Array<string | undefin
   return `[${parts.join(" + ")} attached]`;
 }
 
+function resolveSignalInboundRoute(params: {
+  cfg: SignalEventHandlerDeps["cfg"];
+  accountId: SignalEventHandlerDeps["accountId"];
+  isGroup: boolean;
+  groupId?: string;
+  senderPeerId: string;
+}) {
+  return resolveAgentRoute({
+    cfg: params.cfg,
+    channel: "signal",
+    accountId: params.accountId,
+    peer: {
+      kind: params.isGroup ? "group" : "direct",
+      id: params.isGroup ? (params.groupId ?? "unknown") : params.senderPeerId,
+    },
+  });
+}
+
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   type SignalInboundEntry = {
     senderName: string;
@@ -106,14 +124,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       directLabel: entry.senderName,
       directId: entry.senderDisplay,
     });
-    const route = resolveAgentRoute({
+    const route = resolveSignalInboundRoute({
       cfg: deps.cfg,
-      channel: "signal",
       accountId: deps.accountId,
-      peer: {
-        kind: entry.isGroup ? "group" : "direct",
-        id: entry.isGroup ? (entry.groupId ?? "unknown") : entry.senderPeerId,
-      },
+      isGroup: entry.isGroup,
+      groupId: entry.groupId,
+      senderPeerId: entry.senderPeerId,
     });
     const storePath = resolveStorePath(deps.cfg.session?.store, {
       agentId: route.agentId,
@@ -412,14 +428,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     const senderPeerId = resolveSignalPeerId(params.sender);
-    const route = resolveAgentRoute({
+    const route = resolveSignalInboundRoute({
       cfg: deps.cfg,
-      channel: "signal",
       accountId: deps.accountId,
-      peer: {
-        kind: isGroup ? "group" : "direct",
-        id: isGroup ? (groupId ?? "unknown") : senderPeerId,
-      },
+      isGroup,
+      groupId,
+      senderPeerId,
     });
     const groupLabel = isGroup ? `${groupName ?? "Signal Group"} id:${groupId}` : undefined;
     const messageId = params.reaction.targetSentTimestamp
@@ -610,14 +624,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    const route = resolveAgentRoute({
+    const route = resolveSignalInboundRoute({
       cfg: deps.cfg,
-      channel: "signal",
       accountId: deps.accountId,
-      peer: {
-        kind: isGroup ? "group" : "direct",
-        id: isGroup ? (groupId ?? "unknown") : senderPeerId,
-      },
+      isGroup,
+      groupId,
+      senderPeerId,
     });
     const mentionRegexes = buildMentionRegexes(deps.cfg, route.agentId);
     const wasMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
