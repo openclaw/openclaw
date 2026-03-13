@@ -1,0 +1,46 @@
+diff --git a/build/cjs/src/gaxios.js b/build/cjs/src/gaxios.js
+index 84ddd4a40cfff0e2869e14f2c1029f21ffc4e602..da8466619fcf1e9c9d81005d6de5e47abc92b3c4 100644
+--- a/build/cjs/src/gaxios.js
++++ b/build/cjs/src/gaxios.js
+@@ -525,9 +525,15 @@ class Gaxios {
+     }
+     static async #getFetch() {
+         const hasWindow = typeof window !== 'undefined' && !!window;
+-        this.#fetch ||= hasWindow
+-            ? window.fetch
+-            : (await import('node-fetch')).default;
++        if (!this.#fetch) {
++            if (hasWindow) {
++                this.#fetch = window.fetch;
++            } else if (typeof globalThis !== 'undefined' && typeof globalThis.fetch === 'function') {
++                this.#fetch = globalThis.fetch;
++            } else {
++                this.#fetch = (await import('node-fetch')).default;
++            }
++        }
+         return this.#fetch;
+     }
+     /**
+diff --git a/build/esm/src/gaxios.js b/build/esm/src/gaxios.js
+index 4c0708e8366a2c3ddcfbf13d5fa8018985aee339..158b89e2504bc9b8ef60d2dedfbcdffa2f532bbf 100644
+--- a/build/esm/src/gaxios.js
++++ b/build/esm/src/gaxios.js
+@@ -519,9 +519,15 @@ export class Gaxios {
+     }
+     static async #getFetch() {
+         const hasWindow = typeof window !== 'undefined' && !!window;
+-        this.#fetch ||= hasWindow
+-            ? window.fetch
+-            : (await import('node-fetch')).default;
++        if (!this.#fetch) {
++            if (hasWindow) {
++                this.#fetch = window.fetch;
++            } else if (typeof globalThis !== 'undefined' && typeof globalThis.fetch === 'function') {
++                this.#fetch = globalThis.fetch;
++            } else {
++                this.#fetch = (await import('node-fetch')).default;
++            }
++        }
+         return this.#fetch;
+     }
+     /**

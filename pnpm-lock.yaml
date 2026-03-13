@@ -21,6 +21,11 @@ overrides:
 
 packageExtensionsChecksum: sha256-n+P/SQo4Pf+dHYpYn1Y6wL4cJEVoVzZ835N0OEp4TM8=
 
+patchedDependencies:
+  gaxios@7.1.3:
+    hash: 99a8750bfe41ed342e8eb0573c489cd263eac600436482791080020bb0d241e8
+    path: patches/gaxios@7.1.3.patch
+
 importers:
 
   .:
@@ -12415,7 +12420,7 @@ snapshots:
       wide-align: 1.1.5
     optional: true
 
-  gaxios@7.1.3:
+  gaxios@7.1.3(patch_hash=99a8750bfe41ed342e8eb0573c489cd263eac600436482791080020bb0d241e8):
     dependencies:
       extend: 3.0.2
       https-proxy-agent: 7.0.6
@@ -12426,7 +12431,7 @@ snapshots:
 
   gcp-metadata@8.1.2:
     dependencies:
-      gaxios: 7.1.3
+      gaxios: 7.1.3(patch_hash=99a8750bfe41ed342e8eb0573c489cd263eac600436482791080020bb0d241e8)
       google-logging-utils: 1.1.3
       json-bigint: 1.0.0
     transitivePeerDependencies:
@@ -12511,7 +12516,7 @@ snapshots:
     dependencies:
       base64-js: 1.5.1
       ecdsa-sig-formatter: 1.0.11
-      gaxios: 7.1.3
+      gaxios: 7.1.3(patch_hash=99a8750bfe41ed342e8eb0573c489cd263eac600436482791080020bb0d241e8)
       gcp-metadata: 8.1.2
       google-logging-utils: 1.1.3
       jws: 4.0.1
