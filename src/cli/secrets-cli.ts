@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { confirm } from "@clack/prompts";
 import type { Command } from "commander";
 import { danger } from "../globals.js";
@@ -30,6 +31,15 @@ type SecretsApplyOptions = {
   dryRun?: boolean;
   json?: boolean;
 };
+
+function basenameAcrossSeparators(filePath: string): string {
+  return path.win32.basename(path.posix.basename(filePath));
+}
+
+function formatSecretsAuditFindingLocation(filePath: string, jsonPath?: string): string {
+  const normalizedFile = basenameAcrossSeparators(filePath);
+  return jsonPath ? `${normalizedFile}:${jsonPath}` : normalizedFile;
+}
 
 function readPlanFile(pathname: string): SecretsApplyPlan {
   const raw = fs.readFileSync(pathname, "utf8");
@@ -95,7 +105,7 @@ export function registerSecretsCli(program: Command) {
           if (report.findings.length > 0) {
             for (const finding of report.findings.slice(0, 20)) {
               defaultRuntime.log(
-                `- [${finding.code}] ${finding.file}:${finding.jsonPath} ${finding.message}`,
+                `- [${finding.code}] ${formatSecretsAuditFindingLocation(finding.file, finding.jsonPath)} ${finding.message}`,
               );
             }
             if (report.findings.length > 20) {

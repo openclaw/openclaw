@@ -1,3 +1,4 @@
+import path from "node:path";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
@@ -99,6 +100,42 @@ describe("secrets CLI", () => {
     ).rejects.toBeTruthy();
     expect(runSecretsAudit).toHaveBeenCalled();
     expect(resolveSecretsAuditExitCode).toHaveBeenCalledWith(expect.anything(), true);
+  });
+
+  it("normalizes audit finding file paths in human output", async () => {
+    const absoluteConfigPath = path.join(
+      path.parse(process.cwd()).root,
+      "tmp",
+      "outside",
+      "secret-config.json",
+    );
+    runSecretsAudit.mockResolvedValue({
+      version: 1,
+      status: "findings",
+      filesScanned: [],
+      summary: {
+        plaintextCount: 1,
+        unresolvedRefCount: 0,
+        shadowedRefCount: 0,
+        legacyResidueCount: 0,
+      },
+      findings: [
+        {
+          code: "plaintext-secret",
+          file: absoluteConfigPath,
+          jsonPath: "providers.openai.apiKey",
+          message: "Plaintext secret found",
+        },
+      ],
+    });
+    resolveSecretsAuditExitCode.mockReturnValue(0);
+
+    await createProgram().parseAsync(["secrets", "audit"], { from: "user" });
+
+    expect(
+      runtimeLogs.some((line) => line.includes("secret-config.json:providers.openai.apiKey")),
+    ).toBe(true);
+    expect(runtimeLogs.some((line) => line.includes(absoluteConfigPath))).toBe(false);
   });
 
   it("runs secrets configure then apply when confirmed", async () => {
