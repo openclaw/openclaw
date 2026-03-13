@@ -296,6 +296,12 @@ Inbound policy defaults to `disabled`. To enable inbound calls, set:
 }
 ```
 
+`inboundPolicy: "allowlist"` is a low-assurance caller-ID screen. The plugin
+normalizes the provider-supplied `From` value and compares it to `allowFrom`.
+Webhook verification authenticates provider delivery and payload integrity, but
+it does not prove PSTN/VoIP caller-number ownership. Treat `allowFrom` as
+caller-ID filtering, not strong caller identity.
+
 Auto-responses use the agent system. Tune with:
 
 - `responseModel`
