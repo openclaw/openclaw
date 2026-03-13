@@ -37,7 +37,7 @@ export type ActivitySubscriber = (entry: ActivityEntry) => void;
 
 // ── Store ──────────────────────────────────────────────────────────
 
-const MAX_ENTRIES = 500;
+const MAX_ENTRIES = 5000;
 
 export class ActivityLogStore {
   private db: DatabaseSync;
@@ -73,6 +73,19 @@ export class ActivityLogStore {
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_activity_ts ON agent_activity_log (timestamp DESC)",
     );
+    // Archive table for soft-deleted entries (30-day retention)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS archived_activity_log (
+        id TEXT PRIMARY KEY,
+        timestamp INTEGER NOT NULL,
+        category TEXT NOT NULL,
+        action TEXT NOT NULL,
+        strategy_id TEXT,
+        detail TEXT NOT NULL,
+        metadata_json TEXT,
+        archived_at INTEGER NOT NULL
+      )
+    `);
   }
 
   // ── Load ───────────────────────────────────────────────────────
@@ -180,10 +193,27 @@ export class ActivityLogStore {
   private trimEntries(): void {
     if (this.entries.length > MAX_ENTRIES) {
       const removed = this.entries.splice(0, this.entries.length - MAX_ENTRIES);
+      const now = Date.now();
+      const archiveStmt = this.db.prepare(
+        "INSERT OR IGNORE INTO archived_activity_log (id, timestamp, category, action, strategy_id, detail, metadata_json, archived_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      );
       const deleteStmt = this.db.prepare("DELETE FROM agent_activity_log WHERE id = ?");
       for (const e of removed) {
+        archiveStmt.run(
+          e.id,
+          e.timestamp,
+          e.category,
+          e.action,
+          e.strategyId ?? null,
+          e.detail,
+          e.metadata ? JSON.stringify(e.metadata) : null,
+          now,
+        );
         deleteStmt.run(e.id);
       }
+      // Purge archived entries older than 30 days
+      const cutoff = now - 30 * 86_400_000;
+      this.db.prepare("DELETE FROM archived_activity_log WHERE archived_at < ?").run(cutoff);
     }
   }
 }

@@ -20,7 +20,7 @@ export type {
   EventSubscriber,
 } from "./agent-event-store.js";
 
-const MAX_EVENTS = 500;
+const MAX_EVENTS = 2000;
 
 export class AgentEventSqliteStore {
   private db: DatabaseSync;
@@ -50,12 +50,46 @@ export class AgentEventSqliteStore {
     `);
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_events_status ON agent_events (status)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_events_ts ON agent_events (timestamp DESC)");
+    // Archive table for soft-deleted events (30-day retention)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS archived_agent_events (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        title TEXT NOT NULL,
+        detail TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        action_params_json TEXT,
+        archived_at INTEGER NOT NULL
+      )
+    `);
+
+    // ── v0.2 migration: add feed card columns ──
+    this.migrateAddFeedColumns();
+  }
+
+  /** Idempotent migration: add v0.2 feed card columns to both tables. */
+  private migrateAddFeedColumns(): void {
+    for (const table of ["agent_events", "archived_agent_events"]) {
+      for (const col of [
+        "narration TEXT",
+        "feed_type TEXT",
+        "chips_json TEXT",
+        "sparkline_json TEXT",
+      ]) {
+        try {
+          this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`);
+        } catch {
+          // Column already exists — ignore
+        }
+      }
+    }
   }
 
   /** Load the most recent MAX_EVENTS rows into memory and restore the counter. */
   private loadFromDisk(): void {
     const stmt = this.db.prepare(
-      "SELECT id, type, title, detail, timestamp, status, action_params_json FROM agent_events ORDER BY timestamp DESC, rowid DESC LIMIT ?",
+      "SELECT id, type, title, detail, timestamp, status, action_params_json, narration, feed_type, chips_json, sparkline_json FROM agent_events ORDER BY timestamp DESC, rowid DESC LIMIT ?",
     );
     const rows = stmt.all(MAX_EVENTS) as Array<Record<string, unknown>>;
 
@@ -74,6 +108,14 @@ export class AgentEventSqliteStore {
           string,
           unknown
         >;
+      }
+      if (row.narration != null) event.narration = row.narration as string;
+      if (row.feed_type != null) event.feedType = row.feed_type as string;
+      if (row.chips_json != null) {
+        event.chips = JSON.parse(row.chips_json as string) as AgentEvent["chips"];
+      }
+      if (row.sparkline_json != null) {
+        event.sparkline = JSON.parse(row.sparkline_json as string) as number[];
       }
       return event;
     });
@@ -100,7 +142,7 @@ export class AgentEventSqliteStore {
 
     // Persist to SQLite.
     const stmt = this.db.prepare(
-      "INSERT INTO agent_events (id, type, title, detail, timestamp, status, action_params_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO agent_events (id, type, title, detail, timestamp, status, action_params_json, narration, feed_type, chips_json, sparkline_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     );
     stmt.run(
       event.id,
@@ -110,6 +152,10 @@ export class AgentEventSqliteStore {
       event.timestamp,
       event.status,
       event.actionParams ? JSON.stringify(event.actionParams) : null,
+      event.narration ?? null,
+      event.feedType ?? null,
+      event.chips ? JSON.stringify(event.chips) : null,
+      event.sparkline ? JSON.stringify(event.sparkline) : null,
     );
 
     this.events.push(event);
@@ -161,11 +207,15 @@ export class AgentEventSqliteStore {
       detail: `Action approved by user`,
       timestamp: Date.now(),
       status: "completed",
+      narration: undefined,
+      feedType: undefined,
+      chips: undefined,
+      sparkline: undefined,
     };
 
     // Persist notification.
     const insertStmt = this.db.prepare(
-      "INSERT INTO agent_events (id, type, title, detail, timestamp, status, action_params_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO agent_events (id, type, title, detail, timestamp, status, action_params_json, narration, feed_type, chips_json, sparkline_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     );
     insertStmt.run(
       notification.id,
@@ -175,6 +225,10 @@ export class AgentEventSqliteStore {
       notification.timestamp,
       notification.status,
       notification.actionParams ? JSON.stringify(notification.actionParams) : null,
+      null,
+      null,
+      null,
+      null,
     );
 
     this.events.push(notification);
@@ -206,11 +260,15 @@ export class AgentEventSqliteStore {
       detail: reason ?? "Action rejected by user",
       timestamp: Date.now(),
       status: "completed",
+      narration: undefined,
+      feedType: undefined,
+      chips: undefined,
+      sparkline: undefined,
     };
 
     // Persist notification.
     const insertStmt = this.db.prepare(
-      "INSERT INTO agent_events (id, type, title, detail, timestamp, status, action_params_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO agent_events (id, type, title, detail, timestamp, status, action_params_json, narration, feed_type, chips_json, sparkline_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     );
     insertStmt.run(
       notification.id,
@@ -220,6 +278,10 @@ export class AgentEventSqliteStore {
       notification.timestamp,
       notification.status,
       notification.actionParams ? JSON.stringify(notification.actionParams) : null,
+      null,
+      null,
+      null,
+      null,
     );
 
     this.events.push(notification);
@@ -249,15 +311,35 @@ export class AgentEventSqliteStore {
     this.db.close();
   }
 
-  /** Trim in-memory array and purge old rows from disk when over MAX_EVENTS. */
+  /** Trim in-memory array and archive old rows when over MAX_EVENTS. */
   private trimEvents(): void {
     if (this.events.length > MAX_EVENTS) {
       const removed = this.events.splice(0, this.events.length - MAX_EVENTS);
-      // Delete the evicted rows from SQLite.
+      const now = Date.now();
+      const archiveStmt = this.db.prepare(
+        "INSERT OR IGNORE INTO archived_agent_events (id, type, title, detail, timestamp, status, action_params_json, archived_at, narration, feed_type, chips_json, sparkline_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      );
       const deleteStmt = this.db.prepare("DELETE FROM agent_events WHERE id = ?");
       for (const evt of removed) {
+        archiveStmt.run(
+          evt.id,
+          evt.type,
+          evt.title,
+          evt.detail,
+          evt.timestamp,
+          evt.status,
+          evt.actionParams ? JSON.stringify(evt.actionParams) : null,
+          now,
+          evt.narration ?? null,
+          evt.feedType ?? null,
+          evt.chips ? JSON.stringify(evt.chips) : null,
+          evt.sparkline ? JSON.stringify(evt.sparkline) : null,
+        );
         deleteStmt.run(evt.id);
       }
+      // Purge archived events older than 30 days
+      const cutoff = now - 30 * 86_400_000;
+      this.db.prepare("DELETE FROM archived_agent_events WHERE archived_at < ?").run(cutoff);
     }
   }
 }

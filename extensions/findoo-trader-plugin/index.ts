@@ -33,10 +33,12 @@ import { DailyBriefScheduler } from "./src/core/daily-brief-scheduler.js";
 import type { DataGatheringDeps } from "./src/core/data-gathering.js";
 import { ExchangeHealthStore } from "./src/core/exchange-health-store.js";
 import { ExchangeRegistry } from "./src/core/exchange-registry.js";
+import { HealthProbe } from "./src/core/health-probe.js";
 import { LifecycleEngine } from "./src/core/lifecycle-engine.js";
 import { NotificationRouter } from "./src/core/notification-router.js";
 import { buildFinancialContext } from "./src/core/prompt-context.js";
 import { RiskController } from "./src/core/risk-controller.js";
+import { RiskStateStore } from "./src/core/risk-state-store.js";
 import { registerHttpRoutes } from "./src/core/route-handlers.js";
 import { registerSseRoutes } from "./src/core/sse-handlers.js";
 import { registerTelegramApprovalRoute } from "./src/core/telegram-approval.js";
@@ -44,6 +46,7 @@ import { loadDashboardTemplates } from "./src/core/template-renderer.js";
 import { LiveExecutor } from "./src/execution/live-executor.js";
 import { LiveHealthMonitor } from "./src/execution/live-health-monitor.js";
 import { LiveReconciler } from "./src/execution/live-reconciler.js";
+import { OrderTracker } from "./src/execution/order-tracker.js";
 import { registerTradingTools } from "./src/execution/trading-tools.js";
 import { CapitalFlowStore } from "./src/fund/capital-flow-store.js";
 import { ColdStartSeeder } from "./src/fund/cold-start-seeder.js";
@@ -84,6 +87,9 @@ export { LiveExecutor } from "./src/execution/live-executor.js";
 export { LiveHealthMonitor } from "./src/execution/live-health-monitor.js";
 export { LiveReconciler } from "./src/execution/live-reconciler.js";
 export { RiskController } from "./src/core/risk-controller.js";
+export { RiskStateStore } from "./src/core/risk-state-store.js";
+export { HealthProbe } from "./src/core/health-probe.js";
+export { OrderTracker } from "./src/execution/order-tracker.js";
 export { CcxtBridge, CcxtBridgeError } from "./src/execution/ccxt-bridge.js";
 export { PaperEngine } from "./src/paper/paper-engine.js";
 export { PaperStore } from "./src/paper/paper-store.js";
@@ -133,7 +139,7 @@ const findooTraderPlugin = {
   kind: "financial" as const,
 
   register(api: OpenClawPluginApi) {
-    const { apiKey, exchanges, riskConfig } = resolveConfig(api);
+    const { apiKey, usingDevKey, exchanges, riskConfig } = resolveConfig(api);
 
     // ── License Gate: no key → skip all registration ──
     if (!apiKey) {
@@ -144,8 +150,16 @@ const findooTraderPlugin = {
       return;
     }
 
-    // ── Exchange Registry ──
+    // P3-1: Warn when using built-in dev API key
+    if (usingDevKey) {
+      api.logger.warn(
+        "Findoo Trader: using built-in dev API key — NOT suitable for production. " +
+          "Set FINDOO_TRADER_API_KEY or OPENFINCLAW_TRADER_API_KEY for production use.",
+      );
+    }
 
+    // ── Exchange Registry ──
+    // Note: healthStore is created after registry — pass it later via constructor
     const registry = new ExchangeRegistry();
     for (const [name, cfg] of Object.entries(exchanges)) {
       registry.addExchange(name, cfg as ExchangeConfig);
@@ -157,9 +171,10 @@ const findooTraderPlugin = {
       instance: registry,
     } as Parameters<typeof api.registerService>[0]);
 
-    // ── Risk Controller ──
+    // ── Risk Controller (P0-1: persisted daily loss state) ──
 
-    const riskController = new RiskController(riskConfig);
+    const riskStateStore = new RiskStateStore(api.resolvePath("state/findoo-risk-state.sqlite"));
+    const riskController = new RiskController(riskConfig, riskStateStore);
 
     api.registerService({
       id: "fin-risk-controller",
@@ -251,9 +266,13 @@ const findooTraderPlugin = {
       instance: healthStore,
     } as Parameters<typeof api.registerService>[0]);
 
-    // ── Live Executor (NEW — fixes L3_LIVE broken path) ──
+    // ── Live Executor (P0-2: write-ahead order tracking) ──
 
-    const liveExecutor = new LiveExecutor(registry);
+    const orderTracker = new OrderTracker(api.resolvePath("state/findoo-orders.sqlite"));
+    const liveExecutor = new LiveExecutor(registry, orderTracker);
+
+    // Reconcile any in-flight orders from previous session
+    setTimeout(() => void liveExecutor.reconcileInflight(), 3000);
 
     api.registerService({
       id: "fin-live-executor",
@@ -508,6 +527,8 @@ const findooTraderPlugin = {
 
     // ── L3 Live Reconciler (position drift detection: live vs paper) ──
 
+    // P2-1: reconciler thresholds configurable from financial config
+    const reconcilerCfg = (financialConfig?.reconciler ?? {}) as Record<string, unknown>;
     const liveReconciler = new LiveReconciler({
       liveExecutor,
       paperEngine,
@@ -515,6 +536,14 @@ const findooTraderPlugin = {
       eventStore,
       activityLog,
       wakeBridge,
+      thresholds: {
+        ...(typeof reconcilerCfg.warningDriftPct === "number"
+          ? { warningDriftPct: reconcilerCfg.warningDriftPct }
+          : {}),
+        ...(typeof reconcilerCfg.criticalDriftPct === "number"
+          ? { criticalDriftPct: reconcilerCfg.criticalDriftPct }
+          : {}),
+      },
     });
 
     // ── Lifecycle Engine (autonomous promotion/demotion, runs every 5 min) ──
@@ -536,6 +565,8 @@ const findooTraderPlugin = {
         liveHealthMonitor,
         liveReconciler,
         alertEngine,
+        exchangeRegistry: registry,
+        exchangeHealthStore: healthStore,
         garbageCollector: {
           collect(profiles: Parameters<GarbageCollector["collect"]>[0]) {
             return gcRef.gc?.collect(profiles) ?? { killed: [], reasons: new Map() };
@@ -563,6 +594,28 @@ const findooTraderPlugin = {
     );
     lifecycleEngine.start();
     lifecycleRef.engine = lifecycleEngine;
+
+    // ── Health Probe (P1-1: external liveness endpoint) ──
+
+    const healthProbe = new HealthProbe({
+      healthStore,
+      riskController,
+      lifecycleEngineResolver: () => lifecycleRef.engine,
+      orderTracker,
+    });
+    healthProbe.startHeartbeatWriter(api.resolvePath("state/heartbeat.json"));
+
+    api.registerHttpRoute({
+      auth: "gateway",
+      path: "/api/v1/finance/health",
+      handler: async (_req: unknown, res: unknown) => {
+        const httpRes = res as import("./src/types-http.js").HttpRes;
+        const result = healthProbe.check();
+        const statusCode = result.status === "unhealthy" ? 503 : 200;
+        httpRes.writeHead(statusCode, { "Content-Type": "application/json" });
+        httpRes.end(JSON.stringify(result));
+      },
+    });
 
     // ── Paper Health Monitor (rules layer: detect conditions → emit events → LLM decides) ──
 

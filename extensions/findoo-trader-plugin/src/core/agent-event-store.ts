@@ -25,6 +25,15 @@ export interface AgentEvent {
   status: AgentEventStatus;
   /** Original action parameters for re-execution on approval. */
   actionParams?: Record<string, unknown>;
+  // ── v0.2 Feed Card rendering fields ──
+  /** First-person lobster narration for the feed card. */
+  narration?: string;
+  /** Feed card visual type: buy, evo, appr, risk, brief, sleep. */
+  feedType?: string;
+  /** Inline metric chips: [{label, value, color?}]. */
+  chips?: Array<{ label: string; value: string; color?: string }>;
+  /** Mini sparkline data points for inline charts. */
+  sparkline?: number[];
 }
 
 export type EventSubscriber = (event: AgentEvent) => void;
@@ -91,6 +100,10 @@ export class AgentEventStore {
       detail: `Action approved by user`,
       timestamp: Date.now(),
       status: "completed",
+      narration: undefined,
+      feedType: undefined,
+      chips: undefined,
+      sparkline: undefined,
     };
     this.events.push(notification);
 
@@ -117,6 +130,10 @@ export class AgentEventStore {
       detail: reason ?? "Action rejected by user",
       timestamp: Date.now(),
       status: "completed",
+      narration: undefined,
+      feedType: undefined,
+      chips: undefined,
+      sparkline: undefined,
     };
     this.events.push(notification);
 

@@ -47,8 +47,8 @@ export interface ReconcilerThresholds {
 }
 
 const DEFAULT_THRESHOLDS: ReconcilerThresholds = {
-  warningDriftPct: 15,
-  criticalDriftPct: 30,
+  warningDriftPct: 10,
+  criticalDriftPct: 20,
   alertCooldownMs: 3_600_000,
 };
 

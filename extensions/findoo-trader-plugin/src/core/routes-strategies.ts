@@ -141,6 +141,8 @@ export function registerStrategyRoutes(
           title: `Strategy killed: ${strategy.name}`,
           detail: `${strategy.name} permanently killed by user`,
           status: "completed",
+          narration: `策略「${strategy.name}」已被永久终止。我已清理相关资源。`,
+          feedType: "risk",
         });
 
         jsonResponse(res, 200, { status: "killed", id });
@@ -228,6 +230,8 @@ export function registerStrategyRoutes(
             title: `Promote ${strategy.name} → L3_LIVE (approval required)`,
             detail: `Strategy ${strategy.name} promotion from ${strategy.level} to L3_LIVE requires human confirmation`,
             status: "pending",
+            narration: `我建议将「${strategy.name}」从 ${strategy.level} 提升到 L3 实盘。这涉及真实资金，需要你的确认。`,
+            feedType: "appr",
             actionParams: { action: "promote_l3", strategyId: id, from: strategy.level },
           });
           jsonResponse(res, 202, { status: "pending_approval", id, targetLevel: "L3_LIVE" });
@@ -241,6 +245,8 @@ export function registerStrategyRoutes(
           title: `${strategy.name} → ${nextLevel}`,
           detail: `Strategy promoted from ${strategy.level} to ${nextLevel}`,
           status: "completed",
+          narration: `策略「${strategy.name}」已从 ${strategy.level} 晋升到 ${nextLevel}。继续观察中。`,
+          feedType: "evo",
         });
 
         jsonResponse(res, 200, { status: "promoted", id, from: strategy.level, to: nextLevel });

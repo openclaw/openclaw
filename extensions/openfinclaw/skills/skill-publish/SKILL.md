@@ -18,15 +18,16 @@ When the user talks about **publishing a strategy**, **submitting a skill**, **c
 
 Before publishing, **always check** `identity.visibility` in the strategy's `fep.yaml`:
 
-| Visibility | Behavior |
-|------------|----------|
-| `public` | Strategy will be uploaded to **https://hub.openfinclaw.ai** and made **publicly visible**. Community members can view, fork, and evolve the strategy. |
-| `private` | Strategy is stored privately; only the owner can access it. |
-| `unlisted` | Strategy is accessible via direct link but not listed in public galleries. |
+| Visibility | Behavior                                                                                                                                              |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `public`   | Strategy will be uploaded to **https://hub.openfinclaw.ai** and made **publicly visible**. Community members can view, fork, and evolve the strategy. |
+| `private`  | Strategy is stored privately; only the owner can access it.                                                                                           |
+| `unlisted` | Strategy is accessible via direct link but not listed in public galleries.                                                                            |
 
 **If `visibility: public` is detected:**
 
 1. **Warn the user** before proceeding:
+
    > ⚠️ 该策略将上传到 **https://hub.openfinclaw.ai** 并设为**公开**。社区成员可以查看、fork 和进化您的策略。如果您希望保持私有，请将 `fep.yaml` 中的 `identity.visibility` 改为 `private`。
 
 2. **Wait for user confirmation** before zipping/publishing.
@@ -34,7 +35,7 @@ Before publishing, **always check** `identity.visibility` in the strategy's `fep
 3. If user wants private: instruct them to update `fep.yaml`:
    ```yaml
    identity:
-     visibility: private  # change from public to private
+     visibility: private # change from public to private
    ```
 
 ## Recommended flow

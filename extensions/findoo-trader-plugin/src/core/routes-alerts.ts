@@ -69,6 +69,12 @@ export function registerAlertRoutes(
           title: `Alert created: ${kind}`,
           detail: `${kind} alert for ${symbol ?? "portfolio"}`,
           status: "completed",
+          narration: `已创建${kind}告警：${symbol ?? "组合"}。触发时我会第一时间通知你。`,
+          feedType: "risk",
+          chips: [
+            { label: "Type", value: String(kind) },
+            ...(symbol ? [{ label: "Symbol", value: String(symbol) }] : []),
+          ],
         });
 
         jsonResponse(res, 201, { id: alertId, condition, message });

@@ -101,6 +101,7 @@ describe("Phase 2: Emergency Pause/Resume", () => {
     confirmThresholdUsd: 1000,
     maxDailyLossUsd: 5000,
     maxLeverage: 10,
+    maxPositionPct: 25,
   };
 
   it("rejects all orders when paused", () => {

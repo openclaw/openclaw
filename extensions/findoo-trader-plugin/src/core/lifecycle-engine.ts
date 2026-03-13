@@ -166,10 +166,28 @@ type AlertEngineLike = {
     condition: { kind: string; symbol?: string; price?: number };
   }>;
   checkAndTrigger(getPrice: (symbol: string) => number | undefined): string[];
+  acknowledgeAlert?(id: string): boolean;
+  getUnacknowledged?(maxRetries?: number): Array<{
+    id: string;
+    condition: { kind: string; symbol?: string; price?: number };
+    message: string | null;
+    retryCount: number;
+  }>;
+  incrementRetry?(id: string): void;
 };
 
 type DataProviderLike = {
   getTicker(symbol: string, market: string): Promise<{ close?: number } | null>;
+};
+
+type ExchangeRegistryLike = {
+  listExchanges(): Array<{ id: string; exchange: string }>;
+  getInstance(id: string): Promise<unknown>;
+};
+
+type ExchangeHealthStoreLike = {
+  recordPing(exchangeId: string, latencyMs: number): void;
+  recordError(exchangeId: string, message: string): void;
 };
 
 export type LifecycleEngineDeps = {
@@ -187,6 +205,9 @@ export type LifecycleEngineDeps = {
   alertEngine?: AlertEngineLike;
   /** Optional data provider — fetches current prices for alert checks. */
   dataProvider?: DataProviderLike;
+  /** Optional exchange registry + health store — for auto-reconnect health pings. */
+  exchangeRegistry?: ExchangeRegistryLike;
+  exchangeHealthStore?: ExchangeHealthStoreLike;
   /** Optional garbage collector — kills strategies meeting multi-rule criteria. */
   garbageCollector?: {
     collect(
@@ -467,11 +488,62 @@ export class LifecycleEngine {
 
           const triggered = this.deps.alertEngine.checkAndTrigger((s) => priceCache.get(s));
           for (const alertId of triggered) {
+            try {
+              this.deps.wakeBridge.onHealthAlert({
+                accountId: "alert",
+                condition: `alert_triggered:${alertId}`,
+                value: 0,
+              });
+              // Acknowledge on successful delivery
+              this.deps.alertEngine.acknowledgeAlert?.(alertId);
+            } catch {
+              // Delivery failed — will be retried via unacknowledged loop below
+            }
+          }
+        }
+
+        // ── 5b. Retry unacknowledged alerts (max 5 retries per alert) ──
+        const unacked = this.deps.alertEngine.getUnacknowledged?.(5) ?? [];
+        for (const alert of unacked) {
+          try {
             this.deps.wakeBridge.onHealthAlert({
               accountId: "alert",
-              condition: `alert_triggered:${alertId}`,
-              value: 0,
+              condition: `alert_retry:${alert.id}`,
+              value: alert.retryCount,
             });
+            this.deps.alertEngine.acknowledgeAlert?.(alert.id);
+          } catch {
+            this.deps.alertEngine.incrementRetry?.(alert.id);
+          }
+        }
+      }
+    } catch {
+      // non-critical
+    }
+
+    // ── 6. Exchange health ping — probe all configured exchanges ──
+    try {
+      if (this.deps.exchangeRegistry && this.deps.exchangeHealthStore) {
+        const exchanges = this.deps.exchangeRegistry.listExchanges();
+        for (const ex of exchanges) {
+          const start = Date.now();
+          try {
+            const instance = await this.deps.exchangeRegistry.getInstance(ex.id);
+            // Use fetchTicker as a lightweight health probe
+            if (
+              instance &&
+              typeof (instance as Record<string, unknown>).fetchTicker === "function"
+            ) {
+              await (instance as { fetchTicker: (s: string) => Promise<unknown> }).fetchTicker(
+                "BTC/USDT",
+              );
+            }
+            this.deps.exchangeHealthStore.recordPing(ex.id, Date.now() - start);
+          } catch (err) {
+            this.deps.exchangeHealthStore.recordError(
+              ex.id,
+              err instanceof Error ? err.message : String(err),
+            );
           }
         }
       }
@@ -601,6 +673,12 @@ export class LifecycleEngine {
       title: `L3 Promotion: ${name}`,
       detail: `Strategy "${name}" is eligible for live trading. Reasons: ${check.reasons.join("; ")}`,
       status: "pending",
+      narration: `我检测到「${name}」的模拟盘表现已达到实盘标准。${check.reasons.join("；")}。建议批准上线，我会严格执行风控。`,
+      feedType: "appr",
+      chips: check.reasons.slice(0, 4).map((r) => {
+        const kv = r.split(/[:=]\s*/);
+        return { label: kv[0] ?? r, value: kv[1] ?? "OK" };
+      }),
       actionParams: {
         action: "promote_l3",
         strategyId,

@@ -182,6 +182,14 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
               title: `${side.toUpperCase()} ${amount} ${symbol}`,
               detail: evaluation.reason ?? "Requires user confirmation",
               status: "pending",
+              narration: `我需要你确认这笔交易：${side.toUpperCase()} ${amount} ${symbol}，预估价值 $${estimatedUsd.toFixed(2)}。风控提示：${evaluation.reason ?? "需人工确认"}。`,
+              feedType: "appr",
+              chips: [
+                { label: "Symbol", value: symbol },
+                { label: "Side", value: side.toUpperCase() },
+                { label: "Amount", value: String(amount) },
+                ...(price ? [{ label: "Price", value: `$${price}` }] : []),
+              ],
               actionParams: {
                 symbol,
                 side,
@@ -240,6 +248,14 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
             title: `[LIVE] ${side.toUpperCase()} ${amount} ${symbol}`,
             detail: `Order ${(order as { status?: string }).status ?? "submitted"} via live executor`,
             status: "completed",
+            narration: `实盘交易已执行：${side.toUpperCase()} ${amount} ${symbol}。订单状态 ${(order as { status?: string }).status ?? "submitted"}。`,
+            feedType: "buy",
+            chips: [
+              { label: "Symbol", value: symbol },
+              { label: "Side", value: side.toUpperCase(), color: side === "buy" ? "green" : "red" },
+              { label: "Amount", value: String(amount) },
+              ...(price ? [{ label: "Price", value: `$${price}` }] : []),
+            ],
           });
 
           jsonResponse(res, 201, { domain, order });
@@ -302,6 +318,14 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
           title: `${side.toUpperCase()} ${amount} ${symbol}`,
           detail: `Order ${(order as { status?: string }).status ?? "submitted"} via paper engine`,
           status: "completed",
+          narration: `模拟交易已执行：${side.toUpperCase()} ${amount} ${symbol}。我会持续跟踪这笔交易的表现。`,
+          feedType: "buy",
+          chips: [
+            { label: "Symbol", value: symbol },
+            { label: "Side", value: side.toUpperCase(), color: side === "buy" ? "green" : "red" },
+            { label: "Amount", value: String(amount) },
+            ...(price ? [{ label: "Price", value: `$${price}` }] : []),
+          ],
         });
 
         jsonResponse(res, 201, { domain, order });
@@ -331,6 +355,8 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
           title: `Cancel order ${orderId}`,
           detail: `Order cancellation requested${accountId ? ` for account ${accountId}` : ""}`,
           status: "completed",
+          narration: `订单 ${orderId} 已取消${accountId ? `（账户 ${accountId}）` : ""}。`,
+          feedType: "risk",
         });
 
         jsonResponse(res, 200, { status: "cancelled", orderId });
@@ -419,6 +445,13 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
           title: `Close ${symbol} ${position.side}`,
           detail: `Closed ${position.quantity} ${symbol} at ${position.currentPrice}`,
           status: "completed",
+          narration: `已平仓 ${symbol} ${position.side} 仓位：${position.quantity} @ ${position.currentPrice}。`,
+          feedType: "buy",
+          chips: [
+            { label: "Symbol", value: String(symbol) },
+            { label: "Qty", value: String(position.quantity) },
+            { label: "Price", value: String(position.currentPrice) },
+          ],
         });
 
         jsonResponse(res, 200, { status: "closed", order });
@@ -476,6 +509,9 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
           title: "EMERGENCY STOP ACTIVATED",
           detail: `Trading disabled. ${pausedStrategies.length} strategies paused.`,
           status: "completed",
+          narration: `紧急停止已激活！所有交易已禁用，${pausedStrategies.length} 个策略已暂停。请检查风险状况后再恢复交易。`,
+          feedType: "risk",
+          chips: [{ label: "Paused", value: String(pausedStrategies.length), color: "red" }],
         });
 
         jsonResponse(res, 200, {

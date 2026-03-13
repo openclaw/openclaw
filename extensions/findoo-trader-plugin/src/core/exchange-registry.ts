@@ -1,12 +1,24 @@
 import type { ExchangeConfig, ExchangeId } from "../types.js";
 
+type ExchangeHealthStoreLike = {
+  get(exchangeId: string): { consecutiveFailures: number } | null;
+};
+
 /**
  * Manages CCXT exchange instances. Lazily creates and caches connections.
  * All exchange credentials are stored locally — never transmitted.
+ *
+ * When a healthStore is provided, getInstance() checks for consecutive
+ * failures and rebuilds the connection if threshold is reached.
  */
 export class ExchangeRegistry {
   private configs = new Map<string, ExchangeConfig>();
   private instances = new Map<string, unknown>();
+  private healthStore?: ExchangeHealthStoreLike;
+
+  constructor(healthStore?: ExchangeHealthStoreLike) {
+    this.healthStore = healthStore;
+  }
 
   addExchange(id: string, config: ExchangeConfig): void {
     this.configs.set(id, config);
@@ -36,6 +48,14 @@ export class ExchangeRegistry {
    * Lazily imports ccxt to avoid startup cost when trading is disabled.
    */
   async getInstance(id: string): Promise<unknown> {
+    // Auto-reconnect: if health store shows ≥3 consecutive failures, drop cached instance
+    if (this.healthStore) {
+      const health = this.healthStore.get(id);
+      if (health && health.consecutiveFailures >= 3 && this.instances.has(id)) {
+        this.instances.delete(id);
+      }
+    }
+
     const cached = this.instances.get(id);
     if (cached) return cached;
 

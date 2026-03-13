@@ -360,7 +360,19 @@ export function gatherOverviewData(deps: DataGatheringDeps) {
     lastCycleAt: 0,
   };
 
-  return { ...mc, config, topStrategies, alertSummary, riskDetails, pipeline, alphaFactory };
+  // Feed events: most recent 20 events (with narration for v0.2 Feed Cards)
+  const feedEvents = deps.eventStore.listEvents().slice(0, 20);
+
+  return {
+    ...mc,
+    config,
+    topStrategies,
+    alertSummary,
+    riskDetails,
+    pipeline,
+    alphaFactory,
+    feedEvents,
+  };
 }
 
 /** Gather strategy lab data (strategies + backtests + fund allocations). */
@@ -589,6 +601,27 @@ export async function gatherTraderData(
   const { runtime, eventStore, riskConfig } = deps;
   const domain = options?.domain ?? "paper";
 
+  // Trade-related feed events for v0.2 Feed Cards
+  const feedEvents = eventStore
+    .listEvents()
+    .filter(
+      (e) =>
+        e.type === "trade_executed" ||
+        e.type === "trade_pending" ||
+        e.type === "order_filled" ||
+        e.type === "order_cancelled" ||
+        e.type === "emergency_stop" ||
+        e.type === "alert_triggered",
+    )
+    .slice(0, 20);
+
+  const riskData = {
+    enabled: riskConfig.enabled,
+    maxAutoTradeUsd: riskConfig.maxAutoTradeUsd,
+    confirmThresholdUsd: riskConfig.confirmThresholdUsd,
+    maxDailyLossUsd: riskConfig.maxDailyLossUsd,
+  };
+
   if (domain === "backtest") {
     // Return backtest results from strategy registry
     const strategyRegistry = runtime.services?.get?.("fin-strategy-registry") as
@@ -606,16 +639,9 @@ export async function gatherTraderData(
     return {
       domain,
       backtestResults,
-      events: {
-        events: eventStore.listEvents(),
-        pendingCount: eventStore.pendingCount(),
-      },
-      risk: {
-        enabled: riskConfig.enabled,
-        maxAutoTradeUsd: riskConfig.maxAutoTradeUsd,
-        confirmThresholdUsd: riskConfig.confirmThresholdUsd,
-        maxDailyLossUsd: riskConfig.maxDailyLossUsd,
-      },
+      events: { events: eventStore.listEvents(), pendingCount: eventStore.pendingCount() },
+      risk: riskData,
+      feedEvents,
     };
   }
 
@@ -629,16 +655,9 @@ export async function gatherTraderData(
       domain,
       trading,
       alerts,
-      events: {
-        events: eventStore.listEvents(),
-        pendingCount: eventStore.pendingCount(),
-      },
-      risk: {
-        enabled: riskConfig.enabled,
-        maxAutoTradeUsd: riskConfig.maxAutoTradeUsd,
-        confirmThresholdUsd: riskConfig.confirmThresholdUsd,
-        maxDailyLossUsd: riskConfig.maxDailyLossUsd,
-      },
+      events: { events: eventStore.listEvents(), pendingCount: eventStore.pendingCount() },
+      risk: riskData,
+      feedEvents,
     };
   }
 
@@ -647,16 +666,9 @@ export async function gatherTraderData(
   return {
     domain,
     trading,
-    events: {
-      events: eventStore.listEvents(),
-      pendingCount: eventStore.pendingCount(),
-    },
-    risk: {
-      enabled: riskConfig.enabled,
-      maxAutoTradeUsd: riskConfig.maxAutoTradeUsd,
-      confirmThresholdUsd: riskConfig.confirmThresholdUsd,
-      maxDailyLossUsd: riskConfig.maxDailyLossUsd,
-    },
+    events: { events: eventStore.listEvents(), pendingCount: eventStore.pendingCount() },
+    risk: riskData,
+    feedEvents,
   };
 }
 
@@ -924,6 +936,17 @@ export function gatherStrategyData(deps: DataGatheringDeps) {
     },
     evolutionEvents,
     evolutionStats,
+    // Feed events: strategy-related events for v0.2 Feed Cards
+    feedEvents: eventStore
+      .listEvents()
+      .filter(
+        (e) =>
+          e.type === "strategy_promoted" ||
+          e.type === "strategy_killed" ||
+          e.type === "trade_pending" ||
+          e.type === "system",
+      )
+      .slice(0, 20),
   };
 }
 

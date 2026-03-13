@@ -42,16 +42,20 @@ export function registerTools(api: OpenClawPluginApi, expertManager: ExpertManag
       ),
     }),
 
-    async execute(_conversationId: string, params: Record<string, unknown>) {
+    async execute(conversationId: string, params: Record<string, unknown>) {
       const query = String(params.query ?? "");
       if (!query) return json({ error: "query is required" });
 
       try {
+        // Derive sessionKey from conversationId for multi-user isolation.
+        // Format mirrors OpenClaw convention: "agent:<agentId>:<conversationId>".
+        const sessionKey = conversationId ? `agent:main:${conversationId}` : "agent:main:main";
+
         const { taskId, threadId, label } = await expertManager.submit({
           query,
           context: (params.context as Record<string, unknown>) ?? undefined,
           threadId: params.thread_id as string | undefined,
-          sessionKey: "agent:main:main",
+          sessionKey,
         });
 
         return json({

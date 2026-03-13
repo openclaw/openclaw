@@ -47,6 +47,27 @@ export class AlertEngine implements AlertEngineLike {
         notified INTEGER NOT NULL DEFAULT 0
       )
     `);
+    // Migration: add acknowledged, retry_count, last_retry_at columns
+    this.migrateAddRetryColumns();
+  }
+
+  /** Idempotent migration: add retry/acknowledgment columns. */
+  private migrateAddRetryColumns(): void {
+    try {
+      this.db.exec("ALTER TABLE alerts ADD COLUMN acknowledged INTEGER NOT NULL DEFAULT 0");
+    } catch {
+      // Column already exists — ignore
+    }
+    try {
+      this.db.exec("ALTER TABLE alerts ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0");
+    } catch {
+      // Column already exists — ignore
+    }
+    try {
+      this.db.exec("ALTER TABLE alerts ADD COLUMN last_retry_at TEXT");
+    } catch {
+      // Column already exists — ignore
+    }
   }
 
   addAlert(condition: AlertCondition, message?: string): string {
@@ -87,12 +108,49 @@ export class AlertEngine implements AlertEngineLike {
     }));
   }
 
-  /** Mark an alert as triggered. */
+  /** Mark an alert as triggered (sets triggered_at but NOT notified — use acknowledgeAlert for that). */
   triggerAlert(id: string): boolean {
     const now = new Date().toISOString();
-    const stmt = this.db.prepare("UPDATE alerts SET triggered_at = ?, notified = 1 WHERE id = ?");
+    const stmt = this.db.prepare(
+      "UPDATE alerts SET triggered_at = ? WHERE id = ? AND triggered_at IS NULL",
+    );
     const result = stmt.run(now, id);
     return (result as { changes: number }).changes > 0;
+  }
+
+  /** Acknowledge an alert (marks notified=1 + acknowledged=1). Called after successful delivery. */
+  acknowledgeAlert(id: string): boolean {
+    const stmt = this.db.prepare("UPDATE alerts SET notified = 1, acknowledged = 1 WHERE id = ?");
+    const result = stmt.run(id);
+    return (result as { changes: number }).changes > 0;
+  }
+
+  /** Get triggered but unacknowledged alerts eligible for retry. */
+  getUnacknowledged(maxRetries = 5): Array<{
+    id: string;
+    condition: AlertCondition;
+    message: string | null;
+    retryCount: number;
+  }> {
+    const stmt = this.db.prepare(
+      "SELECT id, condition_json, message, retry_count FROM alerts WHERE triggered_at IS NOT NULL AND acknowledged = 0 AND retry_count < ?",
+    );
+    const rows = stmt.all(maxRetries) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      id: row.id as string,
+      condition: JSON.parse(row.condition_json as string) as AlertCondition,
+      message: row.message as string | null,
+      retryCount: (row.retry_count as number) ?? 0,
+    }));
+  }
+
+  /** Increment retry count for a failed delivery attempt. */
+  incrementRetry(id: string): void {
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(
+      "UPDATE alerts SET retry_count = retry_count + 1, last_retry_at = ? WHERE id = ?",
+    );
+    stmt.run(now, id);
   }
 
   /** Get all active (untriggered) alerts with parsed conditions. */
