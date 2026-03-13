@@ -42,6 +42,7 @@ export const __testing = {
   decodeDataUrl,
   coerceImageAssistantText,
   resolveImageToolMaxTokens,
+  pickCompressionOptions,
 } as const;
 
 function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requestedMaxTokens = 4096) {
@@ -166,6 +167,18 @@ function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undef
     return Math.floor(configured * 1024 * 1024);
   }
   return undefined;
+}
+
+function pickCompressionOptions(cfg?: OpenClawConfig): {
+  minQuality?: number;
+  maxSide?: number;
+} {
+  const q = cfg?.agents?.defaults?.imageCompressionQuality;
+  const s = cfg?.agents?.defaults?.imageCompressionMaxSide;
+  return {
+    ...(typeof q === "number" && q > 0 ? { minQuality: q } : {}),
+    ...(typeof s === "number" && s > 0 ? { maxSide: s } : {}),
+  };
 }
 
 function buildImageContext(
@@ -371,6 +384,7 @@ export function createImageTool(options?: {
       );
       const maxBytesMb = typeof record.maxBytesMb === "number" ? record.maxBytesMb : undefined;
       const maxBytes = pickMaxBytes(options?.config, maxBytesMb);
+      const compressionOptions = pickCompressionOptions(options?.config);
 
       const sandboxConfig: SandboxedBridgeMediaPathConfig | null =
         options?.sandbox && options?.sandbox.root.trim()
@@ -456,10 +470,12 @@ export function createImageTool(options?: {
                 maxBytes,
                 sandboxValidated: true,
                 readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
+                ...compressionOptions,
               })
             : await loadWebMedia(resolvedPath ?? resolvedImage, {
                 maxBytes,
                 localRoots,
+                ...compressionOptions,
               });
         if (media.kind !== "image") {
           throw new Error(`Unsupported media type: ${media.kind}`);

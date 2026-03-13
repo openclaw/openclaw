@@ -1012,6 +1012,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum number of PDF pages to process for the PDF tool (default: 20).",
   "agents.defaults.imageMaxDimensionPx":
     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
+  "agents.defaults.imageCompressionQuality":
+    "Minimum JPEG quality (1–100) for the image tool compression optimizer. Higher values preserve more detail (default: 40). Set to 95 for text-dense documents such as contracts and business licenses.",
+  "agents.defaults.imageCompressionMaxSide":
+    "Maximum pixel side length used by the image tool compression optimizer (default: 2048). Set to 2000 for high-fidelity mode.",
   "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",
   "agents.defaults.compaction":
     "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",

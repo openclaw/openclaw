@@ -214,6 +214,21 @@ export type AgentDefaultsConfig = {
    * Default: 1200.
    */
   imageMaxDimensionPx?: number;
+  /**
+   * Image compression quality for the image tool (1–100, JPEG).
+   * Lower values produce smaller files; higher values preserve more detail.
+   * This sets the minimum quality floor — the optimizer will not drop below this value.
+   * Default: 40 (matches the built-in optimization ladder floor).
+   * Set to 95 for text-dense documents (business licenses, contracts, etc.).
+   */
+  imageCompressionQuality?: number;
+  /**
+   * Maximum image side length (pixels) when compressing images for the image tool.
+   * The optimizer will not resize any side below this value.
+   * Default: 2048 (matches the built-in optimization ladder ceiling).
+   * Set to 2000 for high-fidelity mode that preserves fine detail.
+   */
+  imageCompressionMaxSide?: number;
   typingIntervalSeconds?: number;
   /** Typing indicator start mode (never|instant|thinking|message). */
   typingMode?: TypingMode;

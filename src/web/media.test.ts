@@ -503,3 +503,43 @@ describe("local media root guard", () => {
     );
   });
 });
+
+describe("optimizeImageToJpeg compression constraints", () => {
+  let testJpegBuffer: Buffer;
+
+  beforeAll(async () => {
+    // Create a simple 256x256 JPEG for constraint tests.
+    testJpegBuffer = await sharp({
+      create: {
+        width: 256,
+        height: 256,
+        channels: 3,
+        background: { r: 100, g: 150, b: 200 },
+      },
+    })
+      .jpeg({ quality: 90 })
+      .toBuffer();
+  });
+
+  it("respects minQuality: output quality is not below the floor", async () => {
+    const cap = testJpegBuffer.length * 10; // generous cap so size isn't the constraint
+    const result = await optimizeImageToJpeg(testJpegBuffer, cap, { minQuality: 75 });
+    // The returned quality should be at or above the minQuality floor.
+    expect(result.quality).toBeGreaterThanOrEqual(75);
+  });
+
+  it("respects maxSide: resizeSide does not exceed the configured maximum", async () => {
+    const cap = testJpegBuffer.length * 10;
+    const result = await optimizeImageToJpeg(testJpegBuffer, cap, { maxSide: 1024 });
+    expect(result.resizeSide).toBeLessThanOrEqual(1024);
+  });
+
+  it("falls back to smallest viable result when constraints prevent hitting size cap", async () => {
+    // Extremely tight cap that can't be met even with heavy compression.
+    // Should still return the smallest result without throwing.
+    const cap = 1;
+    const result = await optimizeImageToJpeg(testJpegBuffer, cap, { minQuality: 80 });
+    expect(result.buffer.length).toBeGreaterThan(0);
+    expect(result.quality).toBeGreaterThanOrEqual(80);
+  });
+});

@@ -881,3 +881,41 @@ describe("image tool response validation", () => {
     expect(text).toBe("hello");
   });
 });
+
+describe("pickCompressionOptions", () => {
+  it("returns empty object when no compression config is set", () => {
+    expect(__testing.pickCompressionOptions()).toEqual({});
+    expect(__testing.pickCompressionOptions({})).toEqual({});
+    expect(
+      __testing.pickCompressionOptions({ agents: { defaults: {} } } as OpenClawConfig),
+    ).toEqual({});
+  });
+
+  it("returns minQuality when imageCompressionQuality is configured", () => {
+    const cfg = {
+      agents: { defaults: { imageCompressionQuality: 95 } },
+    } as unknown as OpenClawConfig;
+    expect(__testing.pickCompressionOptions(cfg)).toEqual({ minQuality: 95 });
+  });
+
+  it("returns maxSide when imageCompressionMaxSide is configured", () => {
+    const cfg = {
+      agents: { defaults: { imageCompressionMaxSide: 2000 } },
+    } as unknown as OpenClawConfig;
+    expect(__testing.pickCompressionOptions(cfg)).toEqual({ maxSide: 2000 });
+  });
+
+  it("returns both when both are configured", () => {
+    const cfg = {
+      agents: { defaults: { imageCompressionQuality: 80, imageCompressionMaxSide: 1536 } },
+    } as unknown as OpenClawConfig;
+    expect(__testing.pickCompressionOptions(cfg)).toEqual({ minQuality: 80, maxSide: 1536 });
+  });
+
+  it("ignores zero or negative values", () => {
+    const cfg = {
+      agents: { defaults: { imageCompressionQuality: 0, imageCompressionMaxSide: -1 } },
+    } as unknown as OpenClawConfig;
+    expect(__testing.pickCompressionOptions(cfg)).toEqual({});
+  });
+});

@@ -32,6 +32,10 @@ type WebMediaOptions = {
   /** Caller already validated the local path (sandbox/other guards); requires readFile override. */
   sandboxValidated?: boolean;
   readFile?: (filePath: string) => Promise<Buffer>;
+  /** Minimum JPEG quality (1–100) for the image tool compression optimizer. */
+  minQuality?: number;
+  /** Maximum pixel side length for the image tool compression optimizer. */
+  maxSide?: number;
 };
 
 function resolveWebMediaOptions(params: {
@@ -209,6 +213,8 @@ async function optimizeImageWithFallback(params: {
   buffer: Buffer;
   cap: number;
   meta?: { contentType?: string; fileName?: string };
+  minQuality?: number;
+  maxSide?: number;
 }): Promise<OptimizedImage> {
   const { buffer, cap, meta } = params;
   const isPng = meta?.contentType === "image/png" || meta?.fileName?.toLowerCase().endsWith(".png");
@@ -226,7 +232,11 @@ async function optimizeImageWithFallback(params: {
     }
   }
 
-  const optimized = await optimizeImageToJpeg(buffer, cap, meta);
+  const optimized = await optimizeImageToJpeg(buffer, cap, {
+    ...meta,
+    minQuality: params.minQuality,
+    maxSide: params.maxSide,
+  });
   return { ...optimized, format: "jpeg" };
 }
 
@@ -241,6 +251,8 @@ async function loadWebMediaInternal(
     localRoots,
     sandboxValidated = false,
     readFile: readFileOverride,
+    minQuality,
+    maxSide,
   } = options;
   // Strip MEDIA: prefix used by agent tools (e.g. TTS) to tag media paths.
   // Be lenient: LLM output may add extra whitespace (e.g. "  MEDIA :  /tmp/x.png").
@@ -260,7 +272,7 @@ async function loadWebMediaInternal(
     meta?: { contentType?: string; fileName?: string },
   ) => {
     const originalSize = buffer.length;
-    const optimized = await optimizeImageWithFallback({ buffer, cap, meta });
+    const optimized = await optimizeImageWithFallback({ buffer, cap, meta, minQuality, maxSide });
     logOptimizedImage({ originalSize, optimized });
 
     if (optimized.buffer.length > cap) {
@@ -426,7 +438,7 @@ export async function loadWebMediaRaw(
 export async function optimizeImageToJpeg(
   buffer: Buffer,
   maxBytes: number,
-  opts: { contentType?: string; fileName?: string } = {},
+  opts: { contentType?: string; fileName?: string; minQuality?: number; maxSide?: number } = {},
 ): Promise<{
   buffer: Buffer;
   optimizedSize: number;
@@ -442,8 +454,21 @@ export async function optimizeImageToJpeg(
       throw new Error(`HEIC image conversion failed: ${String(err)}`, { cause: err });
     }
   }
-  const sides = [2048, 1536, 1280, 1024, 800];
-  const qualities = [80, 70, 60, 50, 40];
+  // Apply caller constraints: cap the max side, floor the quality.
+  const allSides = [2048, 1536, 1280, 1024, 800];
+  const allQualities = [80, 70, 60, 50, 40];
+  const sides =
+    typeof opts.maxSide === "number" && opts.maxSide > 0
+      ? allSides.filter((s) => s <= opts.maxSide!)
+      : allSides;
+  const qualities =
+    typeof opts.minQuality === "number" && opts.minQuality > 0
+      ? allQualities.filter((q) => q >= opts.minQuality!)
+      : allQualities;
+  // Ensure at least one candidate per dimension to avoid empty grids.
+  const effectiveSides = sides.length > 0 ? sides : [allSides[allSides.length - 1]];
+  const effectiveQualities =
+    qualities.length > 0 ? qualities : [allQualities[allQualities.length - 1]];
   let smallest: {
     buffer: Buffer;
     size: number;
@@ -451,8 +476,8 @@ export async function optimizeImageToJpeg(
     quality: number;
   } | null = null;
 
-  for (const side of sides) {
-    for (const quality of qualities) {
+  for (const side of effectiveSides) {
+    for (const quality of effectiveQualities) {
       try {
         const out = await resizeToJpeg({
           buffer: source,
