@@ -99,10 +99,9 @@ describe("truncateSessionAfterCompaction", () => {
     const first = await truncateSessionAfterCompaction({ sessionFile });
     expect(first.truncated).toBe(true);
 
-    // Run again — compaction is now at root, nothing more to remove
+    // Run again — no message entries left to remove
     const second = await truncateSessionAfterCompaction({ sessionFile });
     expect(second.truncated).toBe(false);
-    expect(second.reason).toBe("compaction already at root");
   });
 
   it("archives original file when archivePath is provided (#39953)", async () => {
@@ -151,16 +150,135 @@ describe("truncateSessionAfterCompaction", () => {
 
     expect(result.truncated).toBe(true);
 
-    // Should keep only the latest compaction + entries after it
+    // Should preserve both compactions (older compactions are non-message state)
+    // but remove the summarized message entries
     const smAfter = SessionManager.open(sessionFile);
     const branchAfter = smAfter.getBranch();
     expect(branchAfter[0].type).toBe("compaction");
 
-    // Only the latest compaction should remain
+    // Both compaction entries are preserved (non-message state is kept)
     const compactionEntries = branchAfter.filter((e) => e.type === "compaction");
-    expect(compactionEntries).toHaveLength(1);
+    expect(compactionEntries).toHaveLength(2);
 
+    // But message entries before the latest compaction were removed
     const entriesAfter = smAfter.getEntries().length;
     expect(entriesAfter).toBeLessThan(entriesBefore);
+
+    // No message entries should exist before the latest compaction
+    const latestCompIdx = branchAfter.findIndex(
+      (e) => e.type === "compaction" && e === compactionEntries[compactionEntries.length - 1],
+    );
+    const messagesBeforeLatest = branchAfter.slice(0, latestCompIdx).filter((e) => e.type === "message");
+    expect(messagesBeforeLatest).toHaveLength(0);
+  });
+
+  it("preserves non-message session state during truncation", async () => {
+    const dir = await createTmpDir();
+    const sm = SessionManager.create(dir, dir);
+
+    // Messages before compaction
+    sm.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+    sm.appendMessage(makeAssistant("hi", 2));
+
+    // Non-message state entries interleaved with messages
+    sm.appendModelChange("anthropic", "claude-sonnet-4-5-20250514");
+    sm.appendThinkingLevelChange("high");
+    sm.appendCustomEntry("my-extension", { key: "value" });
+    sm.appendSessionInfo("my session");
+
+    sm.appendMessage({ role: "user", content: "do task", timestamp: 3 });
+    sm.appendMessage(makeAssistant("done", 4));
+
+    // Compaction summarizing the conversation
+    const branch = sm.getBranch();
+    const firstKeptId = branch[branch.length - 1].id;
+    sm.appendCompaction("Summary.", firstKeptId, 5000);
+
+    // Post-compaction messages
+    sm.appendMessage({ role: "user", content: "next", timestamp: 5 });
+
+    const sessionFile = sm.getSessionFile()!;
+    const result = await truncateSessionAfterCompaction({ sessionFile });
+
+    expect(result.truncated).toBe(true);
+
+    // Verify non-message entries are preserved
+    const smAfter = SessionManager.open(sessionFile);
+    const allAfter = smAfter.getEntries();
+    const types = allAfter.map((e) => e.type);
+
+    expect(types).toContain("model_change");
+    expect(types).toContain("thinking_level_change");
+    expect(types).toContain("custom");
+    expect(types).toContain("session_info");
+    expect(types).toContain("compaction");
+
+    // Message entries before compaction should be gone
+    const branchAfter = smAfter.getBranch();
+    const compIdx = branchAfter.findIndex((e) => e.type === "compaction");
+    const msgsBefore = branchAfter.slice(0, compIdx).filter((e) => e.type === "message");
+    expect(msgsBefore).toHaveLength(0);
+
+    // Session context should still work
+    const ctx = smAfter.buildSessionContext();
+    expect(ctx.messages.length).toBeGreaterThan(0);
+    // Model and thinking state should be recoverable
+    expect(ctx.model?.modelId).toBe("claude-sonnet-4-5-20250514");
+    expect(ctx.thinkingLevel).toBe("high");
+  });
+
+  it("preserves unsummarized sibling branches during truncation", async () => {
+    const dir = await createTmpDir();
+    const sm = SessionManager.create(dir, dir);
+
+    // Build main conversation
+    sm.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+    sm.appendMessage(makeAssistant("hi there", 2));
+
+    // Save a branch point
+    const branchPoint = sm.getBranch();
+    const branchFromId = branchPoint[branchPoint.length - 1].id;
+
+    // Continue main branch
+    sm.appendMessage({ role: "user", content: "do task A", timestamp: 3 });
+    sm.appendMessage(makeAssistant("done A", 4));
+
+    // Create a sibling branch from the earlier point
+    sm.branch(branchFromId);
+    sm.appendMessage({ role: "user", content: "do task B instead", timestamp: 5 });
+    const siblingMsg = sm.appendMessage(makeAssistant("done B", 6));
+
+    // Go back to main branch tip and add compaction there
+    sm.branch(branchFromId);
+    sm.appendMessage({ role: "user", content: "do task A", timestamp: 3 });
+    sm.appendMessage(makeAssistant("done A take 2", 7));
+    const mainBranch = sm.getBranch();
+    const firstKeptId = mainBranch[mainBranch.length - 1].id;
+    sm.appendCompaction("Summary of main branch.", firstKeptId, 5000);
+    sm.appendMessage({ role: "user", content: "next", timestamp: 8 });
+
+    const sessionFile = sm.getSessionFile()!;
+
+    const entriesBefore = sm.getEntries();
+
+    const result = await truncateSessionAfterCompaction({ sessionFile });
+
+    expect(result.truncated).toBe(true);
+
+    // Verify sibling branch is preserved in the full entry list
+    const smAfter = SessionManager.open(sessionFile);
+    const allAfter = smAfter.getEntries();
+
+    // The sibling branch message should still exist
+    const siblingAfter = allAfter.find((e) => e.id === siblingMsg);
+    expect(siblingAfter).toBeDefined();
+
+    // The tree should have entries from both branches
+    const tree = smAfter.getTree();
+    expect(tree.length).toBeGreaterThan(0);
+
+    // Total entries should be less (main branch messages removed) but not zero
+    expect(allAfter.length).toBeGreaterThan(0);
+    expect(allAfter.length).toBeLessThan(entriesBefore.length);
   });
 });
