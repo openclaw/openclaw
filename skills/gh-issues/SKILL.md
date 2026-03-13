@@ -243,10 +243,10 @@ Run these checks sequentially via exec:
      "https://api.github.com/repos/{SOURCE_REPO}/commits/{head_sha}/check-runs"
    ```
 
-   Extract the `conclusion` field from each check run. Possible values: `success`, `failure`, `neutral`, `cancelled`, `timed_out`, `action_required`, `stale`, `null` (still running).
+   Extract the `conclusion` field from each check run. Possible values: `success`, `failure`, `neutral`, `skipped`, `cancelled`, `timed_out`, `action_required`, `stale`, `null` (still running).
 
    **Determine overall CI status:**
-   - If commit status `state` is `success` AND all check runs have `conclusion` of `success` or `neutral` or `skipped` → CI is passing
+   - If commit status `state` is `success` AND all check runs have `conclusion` of `success` or `neutral` or `skipped` or `cancelled` or `stale` → CI is passing
    - If any check run has `conclusion` of `failure`, `timed_out`, or `action_required` → CI is failing
    - If commit status `state` is `failure` or `error` → CI is failing
    - If any check run is still running (`conclusion` is `null`) or commit status is `pending` → CI is in progress
@@ -266,6 +266,11 @@ Run these checks sequentially via exec:
      If age >= 60 minutes AND CI is failing → allow dispatch (PR is stale, needs new attempt):
 
      > "Found stale PR #{N} ({age}m old, CI failing) — will dispatch new fix attempt: {html_url}"
+     > Do NOT skip this issue — it will proceed to spawning.
+
+     If age >= 60 minutes AND CI is in progress (still running) → allow dispatch (CI likely stuck):
+
+     > "Found stale PR #{N} ({age}m old, CI still running after 60m) — will dispatch new fix attempt: {html_url}"
      > Do NOT skip this issue — it will proceed to spawning.
 
    If all issues are skipped after this check, report and stop (or loop back if in watch mode).
