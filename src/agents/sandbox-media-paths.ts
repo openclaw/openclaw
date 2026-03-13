@@ -8,6 +8,10 @@ export type SandboxedBridgeMediaPathConfig = {
   workspaceOnly?: boolean;
 };
 
+function basenameAcrossSeparators(filePath: string): string {
+  return path.win32.basename(path.posix.basename(filePath));
+}
+
 export function createSandboxBridgeReadFile(params: {
   sandbox: Pick<SandboxedBridgeMediaPathConfig, "root" | "bridge">;
 }): (filePath: string) => Promise<Buffer> {
@@ -51,7 +55,7 @@ export async function resolveSandboxedBridgeMediaPath(params: {
     if (!fallbackDir) {
       throw err;
     }
-    const fallbackPath = path.join(fallbackDir, path.basename(filePath));
+    const fallbackPath = path.join(fallbackDir, basenameAcrossSeparators(filePath));
     try {
       const stat = await params.sandbox.bridge.stat({
         filePath: fallbackPath,
