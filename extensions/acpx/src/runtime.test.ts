@@ -26,6 +26,7 @@ beforeAll(async () => {
       nonInteractivePermissions: "fail",
       strictWindowsCmdWrapper: true,
       queueOwnerTtlSeconds: 0.1,
+      chromeDevtoolsMcp: { enabled: false },
       mcpServers: {},
     },
     { logger: NOOP_LOGGER },

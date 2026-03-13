@@ -35,6 +35,15 @@
         "type": "number",
         "minimum": 0
       },
+      "chromeDevtoolsMcp": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
       "mcpServers": {
         "type": "object",
         "additionalProperties": {
@@ -94,6 +103,11 @@
     "queueOwnerTtlSeconds": {
       "label": "Queue Owner TTL Seconds",
       "help": "Idle queue-owner TTL for acpx prompt turns. Keep this short in OpenClaw to avoid delayed completion after each turn.",
+      "advanced": true
+    },
+    "chromeDevtoolsMcp.enabled": {
+      "label": "Enable Chrome DevTools MCP Preset",
+      "help": "Inject the built-in chrome-devtools-mcp live-session preset into ACPX-backed agent sessions. This affects ACPX only, not the browser tool or openclaw acp bridge.",
       "advanced": true
     },
     "mcpServers": {

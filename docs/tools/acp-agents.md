@@ -565,6 +565,37 @@ Notes:
 
 See [Plugins](/tools/plugin).
 
+### Chrome live session preset
+
+If you want ACPX-backed agent sessions to reuse your live Chrome session
+through Chrome DevTools MCP, enable the built-in ACPX preset:
+
+```bash
+openclaw config set plugins.entries.acpx.config.chromeDevtoolsMcp.enabled true
+```
+
+When enabled, ACPX injects this MCP server definition into ACPX-backed
+sessions:
+
+```json
+{
+  "chrome-devtools": {
+    "command": "npx",
+    "args": ["-y", "chrome-devtools-mcp@0.20.0", "--autoConnect", "--experimental-page-id-routing"]
+  }
+}
+```
+
+Notes:
+
+- This affects ACPX-backed sessions only.
+- It does not change the browser tool, `existing-session` browser profiles, or
+  the `openclaw acp` bridge.
+- If `plugins.entries.acpx.config.mcpServers.chrome-devtools` is already set,
+  the explicit entry wins and the preset is skipped.
+- If `browser.evaluateEnabled=false`, the built-in preset is suppressed as a
+  conservative safety boundary.
+
 ## Permission configuration
 
 ACP sessions run non-interactively — there is no TTY to approve or deny file-write and shell-exec permission prompts. The acpx plugin provides two config keys that control how permissions are handled:

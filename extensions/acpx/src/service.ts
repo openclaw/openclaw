@@ -5,9 +5,17 @@ import type {
   PluginLogger,
 } from "openclaw/plugin-sdk/acpx";
 import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "openclaw/plugin-sdk/acpx";
-import { resolveAcpxPluginConfig, type ResolvedAcpxPluginConfig } from "./config.js";
+import {
+  resolveAcpxPluginConfig,
+  type McpServerConfig,
+  type ResolvedAcpxPluginConfig,
+} from "./config.js";
 import { ensureAcpx } from "./ensure.js";
 import { ACPX_BACKEND_ID, AcpxRuntime } from "./runtime.js";
+
+const CHROME_DEVTOOLS_MCP_SERVER_NAME = "chrome-devtools";
+const CHROME_DEVTOOLS_MCP_PINNED_VERSION = "0.20.0";
+const CHROME_DEVTOOLS_MCP_PACKAGE = `chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_PINNED_VERSION}`;
 
 type AcpxRuntimeLike = AcpRuntime & {
   probeAvailability(): Promise<void>;
@@ -32,6 +40,33 @@ function createDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike
   });
 }
 
+export function buildChromeDevtoolsMcpPreset(): McpServerConfig {
+  return {
+    command: "npx",
+    args: ["-y", CHROME_DEVTOOLS_MCP_PACKAGE, "--autoConnect", "--experimental-page-id-routing"],
+  };
+}
+
+function resolveChromeDevtoolsPresetAction(params: {
+  config: OpenClawPluginServiceContext["config"];
+  pluginConfig: ResolvedAcpxPluginConfig;
+}):
+  | { kind: "disabled" }
+  | { kind: "override" }
+  | { kind: "blocked" }
+  | { kind: "inject"; preset: McpServerConfig } {
+  if (!params.pluginConfig.chromeDevtoolsMcp.enabled) {
+    return { kind: "disabled" };
+  }
+  if (params.pluginConfig.mcpServers[CHROME_DEVTOOLS_MCP_SERVER_NAME]) {
+    return { kind: "override" };
+  }
+  if (params.config.browser?.evaluateEnabled === false) {
+    return { kind: "blocked" };
+  }
+  return { kind: "inject", preset: buildChromeDevtoolsMcpPreset() };
+}
+
 export function createAcpxRuntimeService(
   params: CreateAcpxRuntimeServiceParams = {},
 ): OpenClawPluginService {
@@ -41,10 +76,33 @@ export function createAcpxRuntimeService(
   return {
     id: "acpx-runtime",
     async start(ctx: OpenClawPluginServiceContext): Promise<void> {
-      const pluginConfig = resolveAcpxPluginConfig({
+      let pluginConfig = resolveAcpxPluginConfig({
         rawConfig: params.pluginConfig,
         workspaceDir: ctx.workspaceDir,
       });
+      const chromeDevtoolsPresetAction = resolveChromeDevtoolsPresetAction({
+        config: ctx.config,
+        pluginConfig,
+      });
+      if (chromeDevtoolsPresetAction.kind === "inject") {
+        pluginConfig = {
+          ...pluginConfig,
+          // Keep user-supplied plugin config immutable across service restarts.
+          mcpServers: {
+            ...pluginConfig.mcpServers,
+            [CHROME_DEVTOOLS_MCP_SERVER_NAME]: chromeDevtoolsPresetAction.preset,
+          },
+        };
+        ctx.logger.info("chrome-devtools-mcp preset injected from acpx plugin config");
+      } else if (chromeDevtoolsPresetAction.kind === "override") {
+        ctx.logger.info(
+          "chrome-devtools-mcp preset skipped: existing mcpServers entry takes precedence",
+        );
+      } else if (chromeDevtoolsPresetAction.kind === "blocked") {
+        ctx.logger.warn(
+          "chrome-devtools-mcp preset blocked: browser.evaluateEnabled=false disables the built-in ACPX preset",
+        );
+      }
       const runtimeFactory = params.runtimeFactory ?? createDefaultRuntime;
       runtime = runtimeFactory({
         pluginConfig,

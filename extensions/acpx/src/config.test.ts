@@ -127,6 +127,38 @@ describe("acpx plugin config parsing", () => {
     expect(resolved.strictWindowsCmdWrapper).toBe(true);
   });
 
+  it("accepts chromeDevtoolsMcp enablement and preserves mcpServers", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        chromeDevtoolsMcp: { enabled: true },
+        mcpServers: {
+          example: {
+            command: "npx",
+            args: ["example-mcp"],
+          },
+        },
+      },
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(resolved.chromeDevtoolsMcp.enabled).toBe(true);
+    expect(resolved.mcpServers.example).toEqual({
+      command: "npx",
+      args: ["example-mcp"],
+    });
+  });
+
+  it("rejects invalid chromeDevtoolsMcp config", () => {
+    expect(() =>
+      resolveAcpxPluginConfig({
+        rawConfig: {
+          chromeDevtoolsMcp: { enabled: "yes" },
+        },
+        workspaceDir: "/tmp/workspace",
+      }),
+    ).toThrow("chromeDevtoolsMcp must be an object with an optional boolean enabled field");
+  });
+
   it("rejects non-boolean strictWindowsCmdWrapper", () => {
     expect(() =>
       resolveAcpxPluginConfig({

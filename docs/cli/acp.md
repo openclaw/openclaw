@@ -143,6 +143,16 @@ Per-session `mcpServers` are not supported in bridge mode. If an ACP client
 sends them during `newSession` or `loadSession`, the bridge returns a clear
 error instead of silently ignoring them.
 
+If you want ACPX-backed OpenClaw sessions to use a live Chrome session, enable
+the ACPX plugin preset instead:
+
+```bash
+openclaw config set plugins.entries.acpx.config.chromeDevtoolsMcp.enabled true
+```
+
+That setting affects ACPX-backed agent sessions only. It does not add
+per-session `mcpServers` support to `openclaw acp`.
+
 ## Use from `acpx` (Codex, Claude, other ACP clients)
 
 If you want a coding agent such as Codex or Claude Code to talk to your

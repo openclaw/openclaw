@@ -31,6 +31,14 @@ export type AcpxMcpServer = {
   env: Array<{ name: string; value: string }>;
 };
 
+export type AcpxChromeDevtoolsMcpConfig = {
+  enabled?: boolean;
+};
+
+export type ResolvedAcpxChromeDevtoolsMcpConfig = {
+  enabled: boolean;
+};
+
 export type AcpxPluginConfig = {
   command?: string;
   expectedVersion?: string;
@@ -40,6 +48,7 @@ export type AcpxPluginConfig = {
   strictWindowsCmdWrapper?: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds?: number;
+  chromeDevtoolsMcp?: AcpxChromeDevtoolsMcpConfig;
   mcpServers?: Record<string, McpServerConfig>;
 };
 
@@ -55,6 +64,7 @@ export type ResolvedAcpxPluginConfig = {
   strictWindowsCmdWrapper: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds: number;
+  chromeDevtoolsMcp: ResolvedAcpxChromeDevtoolsMcpConfig;
   mcpServers: Record<string, McpServerConfig>;
 };
 
@@ -111,6 +121,19 @@ function isMcpServerConfig(value: unknown): value is McpServerConfig {
   return true;
 }
 
+function isChromeDevtoolsMcpConfig(value: unknown): value is AcpxChromeDevtoolsMcpConfig {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const allowedKeys = new Set(["enabled"]);
+  for (const key of Object.keys(value)) {
+    if (!allowedKeys.has(key)) {
+      return false;
+    }
+  }
+  return value.enabled === undefined || typeof value.enabled === "boolean";
+}
+
 function parseAcpxPluginConfig(value: unknown): ParseResult {
   if (value === undefined) {
     return { ok: true, value: undefined };
@@ -127,6 +150,7 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
     "strictWindowsCmdWrapper",
     "timeoutSeconds",
     "queueOwnerTtlSeconds",
+    "chromeDevtoolsMcp",
     "mcpServers",
   ]);
   for (const key of Object.keys(value)) {
@@ -199,6 +223,14 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
     return { ok: false, message: "queueOwnerTtlSeconds must be a non-negative number" };
   }
 
+  const chromeDevtoolsMcp = value.chromeDevtoolsMcp;
+  if (chromeDevtoolsMcp !== undefined && !isChromeDevtoolsMcpConfig(chromeDevtoolsMcp)) {
+    return {
+      ok: false,
+      message: "chromeDevtoolsMcp must be an object with an optional boolean enabled field",
+    };
+  }
+
   const mcpServers = value.mcpServers;
   if (mcpServers !== undefined) {
     if (!isRecord(mcpServers)) {
@@ -228,6 +260,7 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
       timeoutSeconds: typeof timeoutSeconds === "number" ? timeoutSeconds : undefined,
       queueOwnerTtlSeconds:
         typeof queueOwnerTtlSeconds === "number" ? queueOwnerTtlSeconds : undefined,
+      chromeDevtoolsMcp: chromeDevtoolsMcp as AcpxChromeDevtoolsMcpConfig | undefined,
       mcpServers: mcpServers as Record<string, McpServerConfig> | undefined,
     },
   };
@@ -282,6 +315,13 @@ export function createAcpxPluginConfigSchema(): OpenClawPluginConfigSchema {
         strictWindowsCmdWrapper: { type: "boolean" },
         timeoutSeconds: { type: "number", minimum: 0.001 },
         queueOwnerTtlSeconds: { type: "number", minimum: 0 },
+        chromeDevtoolsMcp: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            enabled: { type: "boolean" },
+          },
+        },
         mcpServers: {
           type: "object",
           additionalProperties: {
@@ -355,6 +395,9 @@ export function resolveAcpxPluginConfig(params: {
       normalized.strictWindowsCmdWrapper ?? DEFAULT_STRICT_WINDOWS_CMD_WRAPPER,
     timeoutSeconds: normalized.timeoutSeconds,
     queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS,
+    chromeDevtoolsMcp: {
+      enabled: normalized.chromeDevtoolsMcp?.enabled === true,
+    },
     mcpServers: normalized.mcpServers ?? {},
   };
 }

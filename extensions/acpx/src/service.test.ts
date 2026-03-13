@@ -7,7 +7,7 @@ import {
   requireAcpRuntimeBackend,
 } from "../../../src/acp/runtime/registry.js";
 import { ACPX_BUNDLED_BIN, ACPX_PINNED_VERSION } from "./config.js";
-import { createAcpxRuntimeService } from "./service.js";
+import { buildChromeDevtoolsMcpPreset, createAcpxRuntimeService } from "./service.js";
 
 const { ensureAcpxSpy } = vi.hoisted(() => ({
   ensureAcpxSpy: vi.fn(async () => {}),
@@ -158,6 +158,138 @@ describe("createAcpxRuntimeService", () => {
       expect.objectContaining({
         queueOwnerTtlSeconds: 0.1,
       }),
+    );
+  });
+
+  it("builds the chrome-devtools-mcp preset with pinned args", () => {
+    expect(buildChromeDevtoolsMcpPreset()).toEqual({
+      command: "npx",
+      args: ["-y", "chrome-devtools-mcp@0.20.0", "--autoConnect", "--experimental-page-id-routing"],
+    });
+  });
+
+  it("injects the chrome-devtools-mcp preset when enabled", async () => {
+    const { runtime } = createRuntimeStub(true);
+    const runtimeFactory = vi.fn(() => runtime);
+    const service = createAcpxRuntimeService({
+      runtimeFactory,
+      pluginConfig: {
+        chromeDevtoolsMcp: { enabled: true },
+      },
+    });
+    const context = createServiceContext();
+
+    await service.start(context);
+
+    expect(runtimeFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginConfig: expect.objectContaining({
+          mcpServers: {
+            "chrome-devtools": buildChromeDevtoolsMcpPreset(),
+          },
+        }),
+      }),
+    );
+    expect(context.logger.info).toHaveBeenCalledWith(
+      "chrome-devtools-mcp preset injected from acpx plugin config",
+    );
+  });
+
+  it("does not override an explicit chrome-devtools mcpServers entry", async () => {
+    const { runtime } = createRuntimeStub(true);
+    const runtimeFactory = vi.fn(() => runtime);
+    const userDefined = { command: "custom-chrome-mcp", args: ["--custom"] };
+    const service = createAcpxRuntimeService({
+      runtimeFactory,
+      pluginConfig: {
+        chromeDevtoolsMcp: { enabled: true },
+        mcpServers: { "chrome-devtools": userDefined },
+      },
+    });
+    const context = createServiceContext();
+
+    await service.start(context);
+
+    expect(runtimeFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginConfig: expect.objectContaining({
+          mcpServers: { "chrome-devtools": userDefined },
+        }),
+      }),
+    );
+    expect(context.logger.info).toHaveBeenCalledWith(
+      "chrome-devtools-mcp preset skipped: existing mcpServers entry takes precedence",
+    );
+  });
+
+  it("does not leak the injected preset into later restarts", async () => {
+    const { runtime } = createRuntimeStub(true);
+    const runtimeFactory = vi.fn(() => runtime);
+    const service = createAcpxRuntimeService({
+      runtimeFactory,
+      pluginConfig: {
+        chromeDevtoolsMcp: { enabled: true },
+        mcpServers: { canva: { command: "npx", args: ["canva-mcp"] } },
+      },
+    });
+    const enabledContext = createServiceContext();
+
+    await service.start(enabledContext);
+    await service.stop?.(enabledContext);
+
+    const disabledContext = createServiceContext({
+      config: {
+        browser: {
+          evaluateEnabled: false,
+        },
+      },
+    });
+
+    await service.start(disabledContext);
+
+    expect(runtimeFactory).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        pluginConfig: expect.objectContaining({
+          mcpServers: {
+            canva: { command: "npx", args: ["canva-mcp"] },
+          },
+        }),
+      }),
+    );
+    expect(disabledContext.logger.warn).toHaveBeenCalledWith(
+      "chrome-devtools-mcp preset blocked: browser.evaluateEnabled=false disables the built-in ACPX preset",
+    );
+  });
+
+  it("blocks the built-in preset when browser.evaluateEnabled is false", async () => {
+    const { runtime } = createRuntimeStub(true);
+    const runtimeFactory = vi.fn(() => runtime);
+    const service = createAcpxRuntimeService({
+      runtimeFactory,
+      pluginConfig: {
+        chromeDevtoolsMcp: { enabled: true },
+      },
+    });
+    const context = createServiceContext({
+      config: {
+        browser: {
+          evaluateEnabled: false,
+        },
+      },
+    });
+
+    await service.start(context);
+
+    expect(runtimeFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginConfig: expect.objectContaining({
+          mcpServers: {},
+        }),
+      }),
+    );
+    expect(context.logger.warn).toHaveBeenCalledWith(
+      "chrome-devtools-mcp preset blocked: browser.evaluateEnabled=false disables the built-in ACPX preset",
     );
   });
 
