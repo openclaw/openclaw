@@ -11,6 +11,7 @@ import {
   resolveCronSessionMock,
   resetRunCronIsolatedAgentTurnHarness,
   restoreFastTestEnv,
+  runEmbeddedPiAgentMock,
   runWithModelFallbackMock,
   updateSessionStoreMock,
 } from "./run.test-harness.js";
@@ -249,5 +250,109 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     // on the session entry rather than left undefined.
     expect(cronSession.sessionEntry.model).toBe("claude-opus-4-6");
     expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
+  });
+
+  it("returns error when explicit pacing provider target cannot resolve", async () => {
+    const jobWithoutModel = makeJob({
+      pacing: { providerTarget: "gemini", role: "maintenance" },
+      payload: { kind: "agentTurn", message: "run deep research digest" },
+    });
+
+    resolveAllowedModelRefMock.mockReturnValueOnce({
+      error: "model not allowed: google/gemini-3.1-pro-preview",
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeParams({ job: jobWithoutModel }));
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("explicit pacing.providerTarget 'gemini'");
+    expect(result.error).toContain("google/gemini-3.1-pro-preview");
+    expect(runWithModelFallbackMock).not.toHaveBeenCalled();
+  });
+
+  it("continues with defaults when inferred provider target cannot resolve", async () => {
+    const jobWithoutModel = makeJob({
+      name: "Deep Research Digest",
+      payload: { kind: "agentTurn", message: "perform deep research and market comparison" },
+    });
+
+    resolveAllowedModelRefMock.mockReturnValueOnce({
+      error: "model not allowed: google/gemini-3.1-pro-preview",
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeParams({ job: jobWithoutModel }));
+
+    expect(result.status).toBe("ok");
+    expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
+    expect(cronSession.sessionEntry.model).toBe("claude-opus-4-6");
+    expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
+  });
+
+  it("disables model fallback when pacing provider target is explicit", async () => {
+    const jobWithoutModel = makeJob({
+      pacing: { providerTarget: "gemini", role: "maintenance" },
+      payload: { kind: "agentTurn", message: "run deep research digest" },
+    });
+
+    resolveAllowedModelRefMock.mockReturnValue({
+      ref: { provider: "blockrun", model: "google/gemini-3.1-pro" },
+    });
+
+    runWithModelFallbackMock.mockResolvedValueOnce(
+      makeSuccessfulRunResult({
+        provider: "blockrun",
+        model: "google/gemini-3.1-pro",
+        result: {
+          payloads: [{ text: "digest complete" }],
+          meta: {
+            agentMeta: {
+              model: "google/gemini-3.1-pro",
+              provider: "blockrun",
+              usage: { input: 100, output: 50 },
+            },
+          },
+        },
+      }),
+    );
+
+    const result = await runCronIsolatedAgentTurn(makeParams({ job: jobWithoutModel }));
+
+    expect(result.status).toBe("ok");
+    expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
+    expect(runWithModelFallbackMock.mock.calls[0][0].fallbacksOverride).toEqual([]);
+  });
+
+  it("runs embedded cron exec with ask=off to avoid approval-pending prompts", async () => {
+    const jobWithoutModel = makeJob({
+      payload: { kind: "agentTurn", message: "inspect workspace and summarize" },
+    });
+
+    resolveAllowedModelRefMock.mockReturnValue({
+      ref: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    });
+
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: {
+        agentMeta: {
+          model: "claude-sonnet-4-6",
+          provider: "anthropic",
+          usage: { input: 10, output: 5 },
+        },
+      },
+    });
+
+    runWithModelFallbackMock.mockImplementationOnce(async ({ provider, model, run }) => ({
+      provider,
+      model,
+      attempts: [],
+      result: await run(provider, model, {}),
+    }));
+
+    const result = await runCronIsolatedAgentTurn(makeParams({ job: jobWithoutModel }));
+
+    expect(result.status).toBe("ok");
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedPiAgentMock.mock.calls[0][0].execOverrides).toEqual({ ask: "off" });
   });
 });

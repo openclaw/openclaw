@@ -21,12 +21,6 @@ import {
   type ResolvedZulipAccount,
 } from "./zulip/accounts.js";
 import { normalizeZulipBaseUrl } from "./zulip/client.js";
-import { readZulipComponentSpec } from "./zulip/components.js";
-import { listZulipDirectoryGroups, listZulipDirectoryPeers } from "./zulip/directory.js";
-import { monitorZulipProvider } from "./zulip/monitor.js";
-import { probeZulip } from "./zulip/probe.js";
-import { sendZulipComponentMessage } from "./zulip/send-components.js";
-import { sendMessageZulip } from "./zulip/send.js";
 
 const meta = {
   id: "zulip",
@@ -40,6 +34,13 @@ const meta = {
   order: 66,
   quickstartAllowFrom: true,
 } as const;
+
+const loadZulipComponents = () => import("./zulip/components.js");
+const loadZulipDirectory = () => import("./zulip/directory.js");
+const loadZulipMonitor = () => import("./zulip/monitor.js");
+const loadZulipProbe = () => import("./zulip/probe.js");
+const loadZulipSendComponents = () => import("./zulip/send-components.js");
+const loadZulipSend = () => import("./zulip/send.js");
 
 function normalizeAllowEntry(entry: string): string {
   return entry
@@ -114,28 +115,37 @@ const zulipMessageActions: ChannelMessageActionAdapter = {
 
     const result =
       rawButtons && rawButtons.length > 0
-        ? await sendZulipComponentMessage(
-            to,
-            message,
-            readZulipComponentSpec({
-              heading: typeof params.heading === "string" ? params.heading : undefined,
-              buttons: rawButtons,
-            }),
-            {
+        ? await (async () => {
+            const [{ readZulipComponentSpec }, { sendZulipComponentMessage }] = await Promise.all([
+              loadZulipComponents(),
+              loadZulipSendComponents(),
+            ]);
+            return sendZulipComponentMessage(
+              to,
+              message,
+              readZulipComponentSpec({
+                heading: typeof params.heading === "string" ? params.heading : undefined,
+                buttons: rawButtons,
+              }),
+              {
+                cfg,
+                accountId: resolvedAccountId,
+                replyToTopic,
+                mediaUrl,
+                sessionKey,
+                agentId,
+              },
+            );
+          })()
+        : await (async () => {
+            const { sendMessageZulip } = await loadZulipSend();
+            return sendMessageZulip(to, message, {
               cfg,
               accountId: resolvedAccountId,
               replyToTopic,
               mediaUrl,
-              sessionKey,
-              agentId,
-            },
-          )
-        : await sendMessageZulip(to, message, {
-            cfg,
-            accountId: resolvedAccountId,
-            replyToTopic,
-            mediaUrl,
-          });
+            });
+          })();
 
     return {
       content: [
@@ -258,10 +268,22 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
   actions: zulipMessageActions,
   directory: {
     self: async () => null,
-    listPeers: async (params) => listZulipDirectoryPeers(params),
-    listPeersLive: async (params) => listZulipDirectoryPeers(params),
-    listGroups: async (params) => listZulipDirectoryGroups(params),
-    listGroupsLive: async (params) => listZulipDirectoryGroups(params),
+    listPeers: async (params) => {
+      const { listZulipDirectoryPeers } = await loadZulipDirectory();
+      return listZulipDirectoryPeers(params);
+    },
+    listPeersLive: async (params) => {
+      const { listZulipDirectoryPeers } = await loadZulipDirectory();
+      return listZulipDirectoryPeers(params);
+    },
+    listGroups: async (params) => {
+      const { listZulipDirectoryGroups } = await loadZulipDirectory();
+      return listZulipDirectoryGroups(params);
+    },
+    listGroupsLive: async (params) => {
+      const { listZulipDirectoryGroups } = await loadZulipDirectory();
+      return listZulipDirectoryGroups(params);
+    },
   },
   messaging: {
     normalizeTarget: (raw) => raw.trim(),
@@ -298,6 +320,7 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
       return { ok: true, to: trimmed };
     },
     sendText: async ({ to, text, accountId, replyToId }) => {
+      const { sendMessageZulip } = await loadZulipSend();
       const result = await sendMessageZulip(to, text, {
         accountId: accountId ?? undefined,
         replyToTopic: replyToId ?? undefined,
@@ -305,6 +328,7 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
       return { channel: "zulip", ...result };
     },
     sendMedia: async ({ to, text, mediaUrl, accountId, replyToId }) => {
+      const { sendMessageZulip } = await loadZulipSend();
       const result = await sendMessageZulip(to, text, {
         accountId: accountId ?? undefined,
         mediaUrl,
@@ -342,6 +366,7 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
       if (!email || !key || !baseUrl) {
         return { ok: false, error: "bot credentials or baseUrl missing" };
       }
+      const { probeZulip } = await loadZulipProbe();
       return await probeZulip(baseUrl, email, key, timeoutMs);
     },
     buildAccountSnapshot: ({ account, runtime, probe }) => ({
@@ -441,6 +466,7 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
         baseUrl: account.baseUrl,
       });
       ctx.log?.info(`[${account.accountId}] starting zulip channel`);
+      const { monitorZulipProvider } = await loadZulipMonitor();
       return monitorZulipProvider({
         botEmail: account.botEmail ?? undefined,
         botApiKey: account.botApiKey ?? undefined,
