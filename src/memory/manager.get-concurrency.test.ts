@@ -49,9 +49,8 @@ describe("memory manager cache hydration", () => {
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
-  it("deduplicates concurrent manager creation for the same cache key", async () => {
-    const indexPath = path.join(workspaceDir, "index.sqlite");
-    const cfg = {
+  function createMemoryConcurrencyConfig(indexPath: string): OpenClawConfig {
+    return {
       agents: {
         defaults: {
           workspace: workspaceDir,
@@ -65,6 +64,11 @@ describe("memory manager cache hydration", () => {
         list: [{ id: "main", default: true }],
       },
     } as OpenClawConfig;
+  }
+
+  it("deduplicates concurrent manager creation for the same cache key", async () => {
+    const indexPath = path.join(workspaceDir, "index.sqlite");
+    const cfg = createMemoryConcurrencyConfig(indexPath);
 
     const results = await Promise.all(
       Array.from(
@@ -85,20 +89,7 @@ describe("memory manager cache hydration", () => {
 
   it("drains in-flight manager creation during global teardown", async () => {
     const indexPath = path.join(workspaceDir, "index.sqlite");
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexPath, vector: { enabled: false } },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    } as OpenClawConfig;
+    const cfg = createMemoryConcurrencyConfig(indexPath);
 
     hoisted.providerDelayMs = 100;
 
