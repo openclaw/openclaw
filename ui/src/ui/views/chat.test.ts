@@ -480,7 +480,11 @@ describe("chat view", () => {
   });
 
   it("opens delete confirm on the left for user messages", () => {
-    localStorage.removeItem("openclaw:skipDeleteConfirm");
+    try {
+      localStorage.removeItem("openclaw:skipDeleteConfirm");
+    } catch {
+      /* noop */
+    }
     const container = document.createElement("div");
     render(
       renderChat(
@@ -509,7 +513,11 @@ describe("chat view", () => {
   });
 
   it("opens delete confirm on the right for assistant messages", () => {
-    localStorage.removeItem("openclaw:skipDeleteConfirm");
+    try {
+      localStorage.removeItem("openclaw:skipDeleteConfirm");
+    } catch {
+      /* noop */
+    }
     const container = document.createElement("div");
     render(
       renderChat(
