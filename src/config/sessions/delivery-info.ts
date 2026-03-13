@@ -1,5 +1,5 @@
 import { loadConfig } from "../io.js";
-import type { OpenClawConfig } from "../schema.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveStorePath } from "./paths.js";
 import { loadSessionStore } from "./store.js";
 
