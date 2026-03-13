@@ -33,9 +33,9 @@ describe("boundary-file-read", () => {
       realpathSync() {},
       readFileSync() {},
       constants: {},
-    } as never;
+    };
 
-    expect(canUseBoundaryFileOpen(validFs)).toBe(true);
+    expect(canUseBoundaryFileOpen(validFs as never)).toBe(true);
     expect(
       canUseBoundaryFileOpen({
         ...validFs,

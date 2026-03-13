@@ -5,8 +5,8 @@ const MAP_KEY = Symbol("process-scoped-map:test");
 const OTHER_MAP_KEY = Symbol("process-scoped-map:other");
 
 afterEach(() => {
-  delete (process as Record<PropertyKey, unknown>)[MAP_KEY];
-  delete (process as Record<PropertyKey, unknown>)[OTHER_MAP_KEY];
+  delete (process as unknown as Record<symbol, unknown>)[MAP_KEY];
+  delete (process as unknown as Record<symbol, unknown>)[OTHER_MAP_KEY];
 });
 
 describe("shared/process-scoped-map", () => {

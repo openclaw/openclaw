@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { MemorySearchConfig } from "../config/types.tools.js";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 
 const { watchMock } = vi.hoisted(() => ({
@@ -59,23 +60,22 @@ describe("memory watcher config", () => {
     await fs.writeFile(path.join(extraDir, seedFile.name), seedFile.contents);
   }
 
-  function createWatcherConfig(
-    overrides?: Partial<NonNullable<OpenClawConfig["agents"]>["defaults"]["memorySearch"]>,
-  ): OpenClawConfig {
+  function createWatcherConfig(overrides?: Partial<MemorySearchConfig>): OpenClawConfig {
+    const defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> = {
+      workspace: workspaceDir,
+      memorySearch: {
+        provider: "openai",
+        model: "mock-embed",
+        store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+        sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
+        query: { minScore: 0, hybrid: { enabled: false } },
+        extraPaths: [extraDir],
+        ...overrides,
+      },
+    };
     return {
       agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
-            sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
-            query: { minScore: 0, hybrid: { enabled: false } },
-            extraPaths: [extraDir],
-            ...overrides,
-          },
-        },
+        defaults,
         list: [{ id: "main", default: true }],
       },
     } as OpenClawConfig;
