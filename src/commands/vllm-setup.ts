@@ -16,7 +16,6 @@ import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   applyProviderDefaultModel,
-  promptAndConfigureOpenAICompatibleSelfHostedProvider,
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
