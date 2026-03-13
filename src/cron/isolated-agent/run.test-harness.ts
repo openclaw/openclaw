@@ -63,10 +63,14 @@ vi.mock("../../agents/skills/refresh.js", () => ({
   getSkillsSnapshotVersion: vi.fn().mockReturnValue(42),
 }));
 
-vi.mock("../../agents/workspace.js", () => ({
-  DEFAULT_IDENTITY_FILENAME: "IDENTITY.md",
-  ensureAgentWorkspace: vi.fn().mockResolvedValue({ dir: "/tmp/workspace" }),
-}));
+vi.mock("../../agents/workspace.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/workspace.js")>();
+  return {
+    ...actual,
+    DEFAULT_IDENTITY_FILENAME: "IDENTITY.md",
+    ensureAgentWorkspace: vi.fn().mockResolvedValue({ dir: "/tmp/workspace" }),
+  };
+});
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn().mockResolvedValue({ models: [] }),
@@ -172,12 +176,16 @@ vi.mock("../../logger.js", () => ({
   logWarn: (...args: unknown[]) => logWarnMock(...args),
 }));
 
-vi.mock("../../security/external-content.js", () => ({
-  buildSafeExternalPrompt: vi.fn().mockReturnValue("safe prompt"),
-  detectSuspiciousPatterns: vi.fn().mockReturnValue([]),
-  getHookType: vi.fn().mockReturnValue("unknown"),
-  isExternalHookSession: vi.fn().mockReturnValue(false),
-}));
+vi.mock("../../security/external-content.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../security/external-content.js")>();
+  return {
+    ...actual,
+    buildSafeExternalPrompt: vi.fn().mockReturnValue("safe prompt"),
+    detectSuspiciousPatterns: vi.fn().mockReturnValue([]),
+    getHookType: vi.fn().mockReturnValue("unknown"),
+    isExternalHookSession: vi.fn().mockReturnValue(false),
+  };
+});
 
 vi.mock("../delivery.js", () => ({
   resolveCronDeliveryPlan: resolveCronDeliveryPlanMock,

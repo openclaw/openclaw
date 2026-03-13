@@ -1,5 +1,5 @@
 import "./isolated-agent.mocks.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import {
   createCliDeps,
@@ -15,45 +15,36 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
     setupIsolatedAgentTurnMocks();
   });
 
-  it("routes forum-topic and plain telegram targets through the correct delivery path", async () => {
+  it.each([
+    {
+      label: "forum-topic targets",
+      text: "forum message",
+      to: "123:topic:42",
+      expected: { chatId: "123", text: "forum message", messageThreadId: 42 },
+    },
+    {
+      label: "plain telegram targets",
+      text: "plain message",
+      to: "123",
+      expected: { chatId: "123", text: "plain message" },
+    },
+  ])("routes $label through the direct telegram delivery path", async ({ text, to, expected }) => {
     await withTempCronHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = createCliDeps();
-      mockAgentPayloads([{ text: "forum message" }]);
+      mockAgentPayloads([{ text }]);
 
       const res = await runTelegramAnnounceTurn({
         home,
         storePath,
         deps,
-        delivery: { mode: "announce", channel: "telegram", to: "123:topic:42" },
+        delivery: { mode: "announce", channel: "telegram", to },
       });
 
       expect(res.status).toBe("ok");
       expect(res.delivered).toBe(true);
       expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-      expectDirectTelegramDelivery(deps, {
-        chatId: "123",
-        text: "forum message",
-        messageThreadId: 42,
-      });
-
-      vi.clearAllMocks();
-      mockAgentPayloads([{ text: "plain message" }]);
-
-      const plainRes = await runTelegramAnnounceTurn({
-        home,
-        storePath,
-        deps,
-        delivery: { mode: "announce", channel: "telegram", to: "123" },
-      });
-
-      expect(plainRes.status).toBe("ok");
-      expect(plainRes.delivered).toBe(true);
-      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-      expectDirectTelegramDelivery(deps, {
-        chatId: "123",
-        text: "plain message",
-      });
+      expectDirectTelegramDelivery(deps, expected);
     });
   });
 });
