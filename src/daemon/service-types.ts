@@ -20,8 +20,7 @@ export type GatewayServiceControlArgs = {
 };
 
 export type GatewayServiceRestartResult =
-  | { outcome: "completed" }
-  | { outcome: "completed"; scope?: "user" | "system"; detail?: string; tried?: string[] }
+  | { outcome: "completed"; scope?: "user" | "system" }
   | { outcome: "scheduled" };
 
 export type GatewayServiceEnvArgs = {
