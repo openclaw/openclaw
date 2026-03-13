@@ -74,7 +74,7 @@ export function createGhlClient(env: Env = process.env): GhlClient {
       const payload = await requestJson({
         baseUrl,
         apiKey,
-        path: `${searchPath}?locationId=${locationId}&email=${encodeURIComponent(lookupEmail)}&limit=1`,
+        path: `${searchPath}?locationId=${locationId}&query=${encodeURIComponent(lookupEmail)}&limit=1`,
         method: "GET",
       });
 
