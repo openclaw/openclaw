@@ -33,7 +33,7 @@ describe("provider usage fetch shared helpers", () => {
     vi.useFakeTimers();
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
     const fetchFn = vi.fn(
-      async (_url: string, init?: RequestInit) =>
+      async (_input: RequestInfo | URL, init?: RequestInit) =>
         new Response(JSON.stringify({ aborted: init?.signal?.aborted ?? false }), { status: 200 }),
     );
 
@@ -44,7 +44,7 @@ describe("provider usage fetch shared helpers", () => {
         headers: { authorization: "Bearer test" },
       },
       1_000,
-      fetchFn,
+      fetchFn as unknown as typeof fetch,
     );
 
     expect(fetchFn).toHaveBeenCalledWith(
@@ -63,7 +63,7 @@ describe("provider usage fetch shared helpers", () => {
     vi.useFakeTimers();
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
     const fetchFn = vi.fn(
-      (_url: string, init?: RequestInit) =>
+      (_input: RequestInfo | URL, init?: RequestInit) =>
         new Promise<Response>((_, reject) => {
           init?.signal?.addEventListener("abort", () => reject(new Error("aborted by timeout")), {
             once: true,
@@ -71,7 +71,12 @@ describe("provider usage fetch shared helpers", () => {
         }),
     );
 
-    const request = fetchJson("https://example.com/usage", {}, 50, fetchFn);
+    const request = fetchJson(
+      "https://example.com/usage",
+      {},
+      50,
+      fetchFn as unknown as typeof fetch,
+    );
     const rejection = expect(request).rejects.toThrow("aborted by timeout");
     await vi.advanceTimersByTimeAsync(50);
 

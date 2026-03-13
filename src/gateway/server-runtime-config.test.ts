@@ -259,7 +259,7 @@ describe("resolveGatewayRuntimeConfig", () => {
       },
       {
         name: "does not set strict transport security when explicitly disabled",
-        strictTransportSecurity: false,
+        strictTransportSecurity: false as const,
         expected: undefined,
       },
       {
@@ -267,7 +267,7 @@ describe("resolveGatewayRuntimeConfig", () => {
         strictTransportSecurity: "   ",
         expected: undefined,
       },
-    ])("$name", async ({ strictTransportSecurity, expected }) => {
+    ] as const)("$name", async ({ strictTransportSecurity, expected }) => {
       const result = await resolveGatewayRuntimeConfig({
         cfg: {
           gateway: {

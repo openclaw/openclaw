@@ -1488,7 +1488,7 @@ describe("loadOpenClawPlugins", () => {
           load: { paths: [plugin.file] },
         },
       },
-    } as const;
+    } satisfies Parameters<typeof loadOpenClawPlugins>[0];
 
     loadOpenClawPlugins(options);
     loadOpenClawPlugins(options);

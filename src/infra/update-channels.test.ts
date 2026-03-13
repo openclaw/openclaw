@@ -42,7 +42,7 @@ describe("channelToNpmTag", () => {
     { channel: "stable", expected: "latest" },
     { channel: "beta", expected: "beta" },
     { channel: "dev", expected: "dev" },
-  ])("maps $channel to $expected", ({ channel, expected }) => {
+  ] as const)("maps $channel to $expected", ({ channel, expected }) => {
     expect(channelToNpmTag(channel)).toBe(expected);
   });
 });
@@ -100,7 +100,7 @@ describe("resolveEffectiveUpdateChannel", () => {
       params: { installKind: "unknown" as const },
       expected: { channel: "stable", source: "default" },
     },
-  ])("$name", ({ params, expected }) => {
+  ] as const)("$name", ({ params, expected }) => {
     expect(resolveEffectiveUpdateChannel(params)).toEqual(expected);
   });
 });
@@ -145,7 +145,7 @@ describe("formatUpdateChannelLabel", () => {
       params: { channel: "stable", source: "default" as const },
       expected: "stable (default)",
     },
-  ])("$name", ({ params, expected }) => {
+  ] as const)("$name", ({ params, expected }) => {
     expect(formatUpdateChannelLabel(params)).toBe(expected);
   });
 });
