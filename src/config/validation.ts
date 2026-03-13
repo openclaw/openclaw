@@ -406,9 +406,6 @@ function validateConfigObjectWithPluginsBase(
 
   const builtInChannelIds = new Set<string>(CHANNEL_IDS);
   const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...CHANNEL_IDS]);
-  for (const channelId of activeChannelPlugins.keys()) {
-    allowedChannels.add(channelId);
-  }
 
   if (config.channels && isRecord(config.channels)) {
     for (const key of Object.keys(config.channels)) {
@@ -435,9 +432,6 @@ function validateConfigObjectWithPluginsBase(
 
   const heartbeatChannelIds = new Set<string>();
   for (const channelId of CHANNEL_IDS) {
-    heartbeatChannelIds.add(channelId.toLowerCase());
-  }
-  for (const channelId of activeChannelPlugins.keys()) {
     heartbeatChannelIds.add(channelId.toLowerCase());
   }
 

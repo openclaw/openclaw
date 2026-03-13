@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { validateConfigObjectWithPlugins } from "./config.js";
 
 async function chmodSafeDir(dir: string) {
@@ -45,6 +47,7 @@ async function writePluginFixture(params: {
 
 describe("config plugin validation", () => {
   const previousUmask = process.umask(0o022);
+  const emptyRegistry = createTestRegistry([]);
   let fixtureRoot = "";
   let suiteHome = "";
   let badPluginDir = "";
@@ -63,6 +66,14 @@ describe("config plugin validation", () => {
 
   const validateInSuite = (raw: unknown) =>
     validateConfigObjectWithPlugins(raw, { env: suiteEnv() });
+
+  beforeEach(() => {
+    setActivePluginRegistry(emptyRegistry);
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(emptyRegistry);
+  });
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-plugin-validation-"));
@@ -355,6 +366,67 @@ describe("config plugin validation", () => {
       plugins: { enabled: false, load: { paths: [bluebubblesPluginDir] } },
     });
     expect(res.ok).toBe(true);
+  });
+
+  it("rejects stale active plugin channel ids missing from the incoming plugin set", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "stale-plugin",
+          source: "test",
+          plugin: createChannelTestPluginBase({
+            id: "stale-plugin-channel",
+            label: "Stale Plugin Channel",
+            docsPath: "/channels/stale-plugin-channel",
+          }),
+        },
+      ]),
+    );
+
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      channels: {
+        "stale-plugin-channel": {},
+      },
+      plugins: { enabled: false },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues).toContainEqual({
+        path: "channels.stale-plugin-channel",
+        message: "unknown channel id: stale-plugin-channel",
+      });
+    }
+  });
+
+  it("rejects stale active plugin heartbeat targets missing from the incoming plugin set", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "stale-plugin",
+          source: "test",
+          plugin: createChannelTestPluginBase({
+            id: "stale-plugin-channel",
+            label: "Stale Plugin Channel",
+            docsPath: "/channels/stale-plugin-channel",
+          }),
+        },
+      ]),
+    );
+
+    const res = validateInSuite({
+      agents: { defaults: { heartbeat: { target: "stale-plugin-channel" } }, list: [{ id: "pi" }] },
+      plugins: { enabled: false },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues).toContainEqual({
+        path: "agents.defaults.heartbeat.target",
+        message: "unknown heartbeat target: stale-plugin-channel",
+      });
+    }
   });
 
   it("rejects unknown heartbeat targets", async () => {
