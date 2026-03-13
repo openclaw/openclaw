@@ -46,4 +46,19 @@ if [ "${#format_files[@]}" -gt 0 ]; then
   "$RUN_NODE_TOOL" oxfmt --write -- "${format_files[@]}"
 fi
 
+# Update repo-map for changed src/extensions files
+map_files=()
+for file in "${files[@]}"; do
+  case "$file" in
+    src/*.ts|extensions/*.ts)
+      [[ "$file" != *.test.ts && "$file" != *.e2e.test.ts ]] && map_files+=("$file")
+      ;;
+  esac
+done
+
+if [ "${#map_files[@]}" -gt 0 ]; then
+  node "$ROOT_DIR/scripts/pre-commit/update-repo-map.mjs" -- "${map_files[@]}" || true
+  files+=("docs/repo-map.json")
+fi
+
 git add -- "${files[@]}"

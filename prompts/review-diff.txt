@@ -1,0 +1,51 @@
+# Authored by: cc (Claude Code) | 2026-03-13
+# Template: Review Diff
+# Variables: {DIFF}, {PR_URL}
+
+You are reviewing a code change in the OpenClaw repo (TypeScript/ESM).
+
+## Setup
+1. Read docs/repo-map.json to understand module boundaries.
+2. Read docs/architecture_summary.md for data flow context.
+
+## Diff to Review
+```diff
+{DIFF}
+```
+
+PR: {PR_URL}
+
+## Review Checklist
+For each changed file, evaluate:
+
+**Correctness**
+- Does the logic match the stated intent (PR description / issue)?
+- Are edge cases handled at system boundaries?
+- Could this cause a regression in existing behavior?
+
+**Style & Conventions**
+- TypeScript strict mode: no `any`, no `@ts-nocheck`
+- Naming: OpenClaw (product) vs openclaw (CLI/package)
+- American English in comments and strings
+- Files under 700 LOC guideline
+
+**Security**
+- No command injection in shell/exec calls
+- No user input passed to eval/Function/template literals unsanitized
+- Credential handling uses src/secrets/, not raw env vars
+- External input validated at boundaries
+
+**Testing**
+- Are there new/updated *.test.ts files for changed logic?
+- Do tests cover the happy path and at least one error case?
+
+**Performance**
+- No unnecessary file reads or network calls in hot paths
+- Dynamic imports follow the *.runtime.ts boundary pattern
+
+## Output Format
+Return a structured review:
+1. **Summary**: One sentence — what this change does.
+2. **Issues**: Numbered list of problems (severity: critical/warning/nit).
+3. **Questions**: Anything ambiguous that needs author clarification.
+4. **Verdict**: approve / request-changes / needs-discussion.
