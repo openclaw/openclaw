@@ -197,6 +197,27 @@ describe("resolvePreferredOpenClawTmpDir", () => {
     expectFallsBackToOsTmpDir({ lstatSync: vi.fn(() => makeDirStat({ mode: 0o40777 })) });
   });
 
+  it("repairs existing /tmp/openclaw permissions when they are too broad", () => {
+    let preferredMode = 0o40777;
+    const chmodSync = vi.fn((target: string, mode: number) => {
+      if (target === POSIX_OPENCLAW_TMP_DIR && mode === 0o700) {
+        preferredMode = 0o40700;
+      }
+    });
+    const warn = vi.fn();
+
+    const { resolved, tmpdir } = resolveWithMocks({
+      lstatSync: vi.fn(() => makeDirStat({ mode: preferredMode })),
+      chmodSync,
+      warn,
+    });
+
+    expect(resolved).toBe(POSIX_OPENCLAW_TMP_DIR);
+    expect(chmodSync).toHaveBeenCalledWith(POSIX_OPENCLAW_TMP_DIR, 0o700);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("tightened permissions on temp dir"));
+    expect(tmpdir).not.toHaveBeenCalled();
+  });
+
   it("throws when fallback path is a symlink", () => {
     const lstatSync = symlinkTmpDirLstat();
     const fallbackLstatSync = vi.fn(() => makeDirStat({ isSymbolicLink: true, mode: 0o120777 }));
@@ -220,6 +241,35 @@ describe("resolvePreferredOpenClawTmpDir", () => {
 
     expect(resolved).toBe(fallbackTmp());
     expect(mkdirSync).toHaveBeenCalledWith(fallbackTmp(), { recursive: true, mode: 0o700 });
+  });
+
+  it("uses an unscoped fallback suffix when process uid is unavailable", () => {
+    const tmpdirPath = "/var/fallback";
+    const fallbackPath = path.join(tmpdirPath, "openclaw");
+
+    const resolved = resolvePreferredOpenClawTmpDir({
+      accessSync: vi.fn((target: string) => {
+        if (target === "/tmp") {
+          throw new Error("read-only");
+        }
+      }),
+      lstatSync: vi.fn((target: string) => {
+        if (target === POSIX_OPENCLAW_TMP_DIR) {
+          throw nodeErrorWithCode("ENOENT");
+        }
+        if (target === fallbackPath) {
+          return makeDirStat({ uid: 0, mode: 0o40777 });
+        }
+        return secureDirStat();
+      }),
+      mkdirSync: vi.fn(),
+      chmodSync: vi.fn(),
+      getuid: vi.fn(() => undefined),
+      tmpdir: vi.fn(() => tmpdirPath),
+      warn: vi.fn(),
+    });
+
+    expect(resolved).toBe(fallbackPath);
   });
 
   it("repairs fallback directory permissions after create when umask makes it group-writable", () => {
@@ -286,5 +336,26 @@ describe("resolvePreferredOpenClawTmpDir", () => {
     expect(resolved).toBe(fallbackPath);
     expect(chmodSync).toHaveBeenCalledWith(fallbackPath, 0o700);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("tightened permissions on temp dir"));
+  });
+
+  it("throws when the fallback directory cannot be created", () => {
+    expect(() =>
+      resolvePreferredOpenClawTmpDir({
+        accessSync: readOnlyTmpAccessSync(),
+        lstatSync: vi.fn((target: string) => {
+          if (target === POSIX_OPENCLAW_TMP_DIR || target === fallbackTmp()) {
+            throw nodeErrorWithCode("ENOENT");
+          }
+          return secureDirStat();
+        }),
+        mkdirSync: vi.fn(() => {
+          throw new Error("mkdir failed");
+        }),
+        chmodSync: vi.fn(),
+        getuid: vi.fn(() => 501),
+        tmpdir: vi.fn(() => "/var/fallback"),
+        warn: vi.fn(),
+      }),
+    ).toThrow(/Unable to create fallback OpenClaw temp dir/);
   });
 });
