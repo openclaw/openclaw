@@ -43,6 +43,7 @@ interface OllamaChatRequest {
   stream: boolean;
   tools?: OllamaTool[];
   options?: Record<string, unknown>;
+  think?: boolean;
 }
 
 interface OllamaChatMessage {
@@ -459,10 +460,16 @@ export function createOllamaStreamFn(
           ollamaOptions.num_predict = options.maxTokens;
         }
 
+        // Ollama ≥0.6 supports `think` parameter for reasoning models (e.g. Qwen 3).
+        // Map pi-agent-core's reasoning level: undefined/"off" → think:false, else think:true.
+        const reasoning = (options as Record<string, unknown> | undefined)?.reasoning;
+        const think = reasoning != null && reasoning !== "off" && reasoning !== "none";
+
         const body: OllamaChatRequest = {
           model: model.id,
           messages: ollamaMessages,
           stream: true,
+          think,
           ...(ollamaTools.length > 0 ? { tools: ollamaTools } : {}),
           options: ollamaOptions,
         };
