@@ -215,6 +215,64 @@ describe("maybeRepairLegacyCronStore", () => {
     );
   });
 
+  it("does not report canonical payload kinds as legacy cron issues", async () => {
+    const storePath = await makeTempStorePath();
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "canonical-agent-turn",
+              name: "Canonical agent turn",
+              createdAtMs: Date.parse("2026-03-13T00:00:00.000Z"),
+              updatedAtMs: Date.parse("2026-03-13T00:00:00.000Z"),
+              enabled: true,
+              wakeMode: "now",
+              sessionTarget: "isolated",
+              schedule: {
+                kind: "every",
+                everyMs: 60_000,
+                anchorMs: Date.parse("2026-03-13T00:00:00.000Z"),
+              },
+              payload: {
+                kind: "agentTurn",
+                message: "Status",
+              },
+              delivery: {
+                mode: "announce",
+              },
+              state: {},
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const original = await fs.readFile(storePath, "utf-8");
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    const prompter = makePrompter(true);
+
+    await maybeRepairLegacyCronStore({
+      cfg: {
+        cron: {
+          store: storePath,
+        },
+      },
+      options: {},
+      prompter,
+    });
+
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(noteSpy).not.toHaveBeenCalled();
+    expect(await fs.readFile(storePath, "utf-8")).toBe(original);
+  });
+
   it("migrates notify fallback none delivery jobs to cron.webhook", async () => {
     const storePath = await makeTempStorePath();
     await fs.mkdir(path.dirname(storePath), { recursive: true });

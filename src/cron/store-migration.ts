@@ -29,15 +29,16 @@ function incrementIssue(issues: CronStoreIssues, key: CronStoreIssueKey) {
 
 function normalizePayloadKind(payload: Record<string, unknown>) {
   const raw = typeof payload.kind === "string" ? payload.kind.trim().toLowerCase() : "";
-  if (raw === "agentturn") {
-    payload.kind = "agentTurn";
-    return true;
+  const normalizedKind =
+    raw === "agentturn" ? "agentTurn" : raw === "systemevent" ? "systemEvent" : null;
+  if (!normalizedKind) {
+    return false;
   }
-  if (raw === "systemevent") {
-    payload.kind = "systemEvent";
-    return true;
+  if (payload.kind === normalizedKind) {
+    return false;
   }
-  return false;
+  payload.kind = normalizedKind;
+  return true;
 }
 
 function inferPayloadIfMissing(raw: Record<string, unknown>) {

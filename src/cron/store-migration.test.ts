@@ -75,4 +75,53 @@ describe("normalizeStoredCronJobs", () => {
       channel: "slack",
     });
   });
+
+  it("does not flag canonical payload kinds as legacy normalization issues", () => {
+    const jobs = [
+      {
+        id: "canonical-agent-turn",
+        name: "Canonical agent turn",
+        enabled: true,
+        wakeMode: "now",
+        sessionTarget: "isolated",
+        schedule: {
+          kind: "every",
+          everyMs: 60_000,
+          anchorMs: Date.parse("2026-03-13T00:00:00.000Z"),
+        },
+        payload: {
+          kind: "agentTurn",
+          message: "ping",
+        },
+        delivery: {
+          mode: "announce",
+        },
+        state: {},
+      },
+      {
+        id: "canonical-system-event",
+        name: "Canonical system event",
+        enabled: true,
+        wakeMode: "now",
+        sessionTarget: "main",
+        schedule: {
+          kind: "every",
+          everyMs: 60_000,
+          anchorMs: Date.parse("2026-03-13T00:00:00.000Z"),
+        },
+        payload: {
+          kind: "systemEvent",
+          text: "tick",
+        },
+        state: {},
+      },
+    ] as Array<Record<string, unknown>>;
+    const before = structuredClone(jobs);
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(false);
+    expect(result.issues.legacyPayloadKind).toBeUndefined();
+    expect(jobs).toEqual(before);
+  });
 });
