@@ -395,6 +395,14 @@ export async function tryDispatchAcpReply(params: {
       isError: true,
     });
     queuedFinal = queuedFinal || delivered;
+    if (delivered) {
+      params.onLatencyStage?.({
+        stage: "acp_error_visible",
+        durationMs: Math.max(0, Date.now() - acpDispatchStartedAt),
+        firstVisibleKind: "final",
+        backend: "acp",
+      });
+    }
     const counts = params.dispatcher.getQueuedCounts();
     delivery.applyRoutedCounts(counts);
     const acpStats = acpManager.getObservabilitySnapshot(params.cfg);

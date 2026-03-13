@@ -475,6 +475,20 @@ export async function dispatchReplyFromConfig(params: {
     if (acpDispatch) {
       return acpDispatch;
     }
+    if (turnLatencyId && (bypassAcpForCommand || ctx.AcpDispatchTailAfterReset === true)) {
+      logTurnLatencyStage({
+        turnLatencyId,
+        stage: "fallback_started",
+        channel,
+        chatId,
+        messageId,
+        sessionKey,
+        originatingChannel: ctx.OriginatingChannel,
+        routed: shouldRouteToOriginating,
+        replyGeneration,
+        durationMs: Math.max(0, Date.now() - startTime),
+      });
+    }
 
     // Track accumulated block text for TTS generation after streaming completes.
     // When block streaming succeeds, there's no final reply, so we need to generate
@@ -660,6 +674,20 @@ export async function dispatchReplyFromConfig(params: {
       // Command handling prepared a trailing prompt after ACP in-place reset.
       // Route that tail through ACP now (same turn) instead of embedded dispatch.
       ctx.AcpDispatchTailAfterReset = false;
+      if (turnLatencyId) {
+        logTurnLatencyStage({
+          turnLatencyId,
+          stage: "acp_reset_tail_started",
+          channel,
+          chatId,
+          messageId,
+          sessionKey,
+          originatingChannel: ctx.OriginatingChannel,
+          routed: shouldRouteToOriginating,
+          replyGeneration,
+          durationMs: Math.max(0, Date.now() - startTime),
+        });
+      }
       const acpTailDispatch = await tryDispatchAcpReply({
         ctx,
         cfg,
@@ -679,7 +707,35 @@ export async function dispatchReplyFromConfig(params: {
         markIdle,
       });
       if (acpTailDispatch) {
+        if (turnLatencyId) {
+          logTurnLatencyStage({
+            turnLatencyId,
+            stage: "acp_reset_tail_completed",
+            channel,
+            chatId,
+            messageId,
+            sessionKey,
+            originatingChannel: ctx.OriginatingChannel,
+            routed: shouldRouteToOriginating,
+            replyGeneration,
+            durationMs: Math.max(0, Date.now() - startTime),
+          });
+        }
         return acpTailDispatch;
+      }
+      if (turnLatencyId) {
+        logTurnLatencyStage({
+          turnLatencyId,
+          stage: "fallback_started",
+          channel,
+          chatId,
+          messageId,
+          sessionKey,
+          originatingChannel: ctx.OriginatingChannel,
+          routed: shouldRouteToOriginating,
+          replyGeneration,
+          durationMs: Math.max(0, Date.now() - startTime),
+        });
       }
     }
 

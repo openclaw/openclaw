@@ -1033,6 +1033,9 @@ describe("dispatchReplyFromConfig", () => {
         enabled: true,
         dispatch: { enabled: true },
       },
+      diagnostics: {
+        enabled: true,
+      },
       session: {
         sendPolicy: {
           default: "deny",
@@ -1082,6 +1085,9 @@ describe("dispatchReplyFromConfig", () => {
         enabled: true,
         dispatch: { enabled: true },
       },
+      diagnostics: {
+        enabled: true,
+      },
       session: {
         sendPolicy: {
           default: "deny",
@@ -1106,6 +1112,11 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
       text: "command output",
     });
+    expect(diagnosticMocks.logTurnLatencyStage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "fallback_started",
+      }),
+    );
   });
 
   it("routes ACP reset tails through ACP after command handling", async () => {
@@ -1138,6 +1149,9 @@ describe("dispatchReplyFromConfig", () => {
       acp: {
         enabled: true,
         dispatch: { enabled: true },
+      },
+      diagnostics: {
+        enabled: true,
       },
       session: {
         sendPolicy: {
@@ -1173,6 +1187,9 @@ describe("dispatchReplyFromConfig", () => {
     expect(runtime.runTurn.mock.calls[0]?.[0]).toMatchObject({
       text: "continue with deployment",
     });
+    expect(diagnosticMocks.logTurnLatencyStage.mock.calls.map((call) => call[0]?.stage)).toEqual(
+      expect.arrayContaining(["acp_reset_tail_started", "acp_reset_tail_completed"]),
+    );
   });
 
   it("does not bypass ACP slash aliases when text commands are disabled on native surfaces", async () => {

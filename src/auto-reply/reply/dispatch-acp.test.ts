@@ -451,6 +451,25 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
+  it("records a visible ACP error stage when the backend fails before completion", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockRejectedValueOnce(new Error("runtime exploded"));
+
+    const onLatencyStage = vi.fn();
+    await runDispatch({
+      bodyForAgent: "boom",
+      onLatencyStage,
+    });
+
+    expect(onLatencyStage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "acp_error_visible",
+        firstVisibleKind: "final",
+        backend: "acp",
+      }),
+    );
+  });
+
   it("forwards normalized image attachments into ACP turns", async () => {
     setReadyAcpResolution();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
