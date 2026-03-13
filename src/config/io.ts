@@ -1513,8 +1513,20 @@ export async function writeConfigFile(
   const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
   const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
   if (hadBothSnapshots) {
+    let projectionBase = runtimeConfigSourceSnapshot!;
+    try {
+      const latestSnapshot = await io.readConfigFileSnapshot();
+      if (latestSnapshot.valid && latestSnapshot.exists) {
+        // Prefer the latest on-disk source so write-back doesn't drop keys that were
+        // added after the active runtime snapshot was created.
+        projectionBase = latestSnapshot.resolved;
+      }
+    } catch {
+      // Fall back to the last-known runtime source snapshot when the current file
+      // cannot be read; the write path will surface the underlying I/O error later.
+    }
     const runtimePatch = createMergePatch(runtimeConfigSnapshot!, cfg);
-    nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot!, runtimePatch));
+    nextCfg = coerceConfig(applyMergePatch(projectionBase, runtimePatch));
   }
   const sameConfigPath =
     options.expectedConfigPath === undefined || options.expectedConfigPath === io.configPath;

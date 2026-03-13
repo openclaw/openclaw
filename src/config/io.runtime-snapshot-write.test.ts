@@ -213,6 +213,40 @@ describe("runtime config snapshot writes", () => {
     });
   });
 
+  it("preserves disk-added session dmScope when writing from a stale runtime snapshot", async () => {
+    await withTempHome("openclaw-config-runtime-write-stale-session-", async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const sourceConfig = createSourceConfig();
+      const runtimeConfig = createRuntimeConfig();
+      const diskConfig: OpenClawConfig = {
+        ...sourceConfig,
+        session: { dmScope: "per-channel-peer" },
+      };
+
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `${JSON.stringify(diskConfig, null, 2)}\n`, "utf8");
+
+      try {
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+        await writeConfigFile(loadConfig());
+
+        const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+          session?: { dmScope?: unknown };
+          models?: { providers?: { openai?: { apiKey?: unknown } } };
+        };
+        expect(persisted.session?.dmScope).toBe("per-channel-peer");
+        expect(persisted.models?.providers?.openai?.apiKey).toEqual({
+          source: "env",
+          provider: "default",
+          id: "OPENAI_API_KEY",
+        });
+      } finally {
+        resetRuntimeConfigState();
+      }
+    });
+  });
+
   it("keeps the last-known-good runtime snapshot active while a specialized refresh is pending", async () => {
     await withTempHome("openclaw-config-runtime-refresh-pending-", async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
