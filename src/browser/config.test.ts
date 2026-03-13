@@ -165,8 +165,43 @@ describe("browser config", () => {
     expect(work?.cdpUrl).toBe("https://example.com:18801");
   });
 
+  it("preserves wss:// cdpUrl with query params for the default profile", () => {
+    const resolved = resolveBrowserConfig({
+      cdpUrl: "wss://connect.browserbase.com?apiKey=test-key",
+    });
+    const profile = resolveProfile(resolved, "openclaw");
+    expect(profile?.cdpUrl).toBe("wss://connect.browserbase.com/?apiKey=test-key");
+    expect(profile?.cdpHost).toBe("connect.browserbase.com");
+    expect(profile?.cdpPort).toBe(443);
+    expect(profile?.cdpIsLoopback).toBe(false);
+  });
+
+  it("preserves loopback direct WebSocket cdpUrl for explicit profiles", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        localws: {
+          cdpUrl: "ws://127.0.0.1:9222/devtools/browser/ABC?token=test-key",
+          color: "#0066CC",
+        },
+      },
+    });
+    const profile = resolveProfile(resolved, "localws");
+    expect(profile?.cdpUrl).toBe("ws://127.0.0.1:9222/devtools/browser/ABC?token=test-key");
+    expect(profile?.cdpPort).toBe(9222);
+    expect(profile?.cdpIsLoopback).toBe(true);
+  });
+
+  it("trims relayBindHost when configured", () => {
+    const resolved = resolveBrowserConfig({
+      relayBindHost: " 0.0.0.0 ",
+    });
+    expect(resolved.relayBindHost).toBe("0.0.0.0");
+  });
+
   it("rejects unsupported protocols", () => {
-    expect(() => resolveBrowserConfig({ cdpUrl: "ws://127.0.0.1:18791" })).toThrow(/must be http/i);
+    expect(() => resolveBrowserConfig({ cdpUrl: "ftp://127.0.0.1:18791" })).toThrow(
+      "must be http(s) or ws(s)",
+    );
   });
 
   it("does not add the built-in chrome extension profile if the derived relay port is already used", () => {

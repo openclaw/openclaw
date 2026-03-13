@@ -24,11 +24,19 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.accounts?.main?.requireMention).toBeUndefined();
   });
 
+  it("normalizes legacy groupPolicy allowall to open", () => {
+    const result = FeishuConfigSchema.parse({
+      groupPolicy: "allowall",
+    });
+
+    expect(result.groupPolicy).toBe("open");
+  });
+
   it("rejects top-level webhook mode without verificationToken", () => {
     const result = FeishuConfigSchema.safeParse({
       connectionMode: "webhook",
       appId: "cli_top",
-      appSecret: "secret_top",
+      appSecret: "secret_top", // pragma: allowlist secret
     });
 
     expect(result.success).toBe(false);
@@ -39,12 +47,27 @@ describe("FeishuConfigSchema webhook validation", () => {
     }
   });
 
-  it("accepts top-level webhook mode with verificationToken", () => {
+  it("rejects top-level webhook mode without encryptKey", () => {
     const result = FeishuConfigSchema.safeParse({
       connectionMode: "webhook",
       verificationToken: "token_top",
       appId: "cli_top",
-      appSecret: "secret_top",
+      appSecret: "secret_top", // pragma: allowlist secret
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => issue.path.join(".") === "encryptKey")).toBe(true);
+    }
+  });
+
+  it("accepts top-level webhook mode with verificationToken and encryptKey", () => {
+    const result = FeishuConfigSchema.safeParse({
+      connectionMode: "webhook",
+      verificationToken: "token_top",
+      encryptKey: "encrypt_top",
+      appId: "cli_top",
+      appSecret: "secret_top", // pragma: allowlist secret
     });
 
     expect(result.success).toBe(true);
@@ -56,7 +79,7 @@ describe("FeishuConfigSchema webhook validation", () => {
         main: {
           connectionMode: "webhook",
           appId: "cli_main",
-          appSecret: "secret_main",
+          appSecret: "secret_main", // pragma: allowlist secret
         },
       },
     });
@@ -71,14 +94,35 @@ describe("FeishuConfigSchema webhook validation", () => {
     }
   });
 
-  it("accepts account webhook mode inheriting top-level verificationToken", () => {
+  it("rejects account webhook mode without encryptKey", () => {
+    const result = FeishuConfigSchema.safeParse({
+      accounts: {
+        main: {
+          connectionMode: "webhook",
+          verificationToken: "token_main",
+          appId: "cli_main",
+          appSecret: "secret_main", // pragma: allowlist secret
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(
+        result.error.issues.some((issue) => issue.path.join(".") === "accounts.main.encryptKey"),
+      ).toBe(true);
+    }
+  });
+
+  it("accepts account webhook mode inheriting top-level verificationToken and encryptKey", () => {
     const result = FeishuConfigSchema.safeParse({
       verificationToken: "token_top",
+      encryptKey: "encrypt_top",
       accounts: {
         main: {
           connectionMode: "webhook",
           appId: "cli_main",
-          appSecret: "secret_main",
+          appSecret: "secret_main", // pragma: allowlist secret
         },
       },
     });
@@ -93,6 +137,31 @@ describe("FeishuConfigSchema webhook validation", () => {
         source: "env",
         provider: "default",
         id: "FEISHU_VERIFICATION_TOKEN",
+      },
+      encryptKey: "encrypt_top",
+      appId: "cli_top",
+      appSecret: {
+        source: "env",
+        provider: "default",
+        id: "FEISHU_APP_SECRET",
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts SecretRef encryptKey in webhook mode", () => {
+    const result = FeishuConfigSchema.safeParse({
+      connectionMode: "webhook",
+      verificationToken: {
+        source: "env",
+        provider: "default",
+        id: "FEISHU_VERIFICATION_TOKEN",
+      },
+      encryptKey: {
+        source: "env",
+        provider: "default",
+        id: "FEISHU_ENCRYPT_KEY",
       },
       appId: "cli_top",
       appSecret: {
@@ -163,7 +232,7 @@ describe("FeishuConfigSchema defaultAccount", () => {
     const result = FeishuConfigSchema.safeParse({
       defaultAccount: "router-d",
       accounts: {
-        "router-d": { appId: "cli_router", appSecret: "secret_router" },
+        "router-d": { appId: "cli_router", appSecret: "secret_router" }, // pragma: allowlist secret
       },
     });
 
@@ -174,7 +243,7 @@ describe("FeishuConfigSchema defaultAccount", () => {
     const result = FeishuConfigSchema.safeParse({
       defaultAccount: "router-d",
       accounts: {
-        backup: { appId: "cli_backup", appSecret: "secret_backup" },
+        backup: { appId: "cli_backup", appSecret: "secret_backup" }, // pragma: allowlist secret
       },
     });
 

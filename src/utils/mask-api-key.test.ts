@@ -15,6 +15,6 @@ describe("maskApiKey", () => {
   });
 
   it("masks long values with first and last 8 chars", () => {
-    expect(maskApiKey("1234567890abcdefghijklmnop")).toBe("12345678...ijklmnop");
+    expect(maskApiKey("1234567890abcdefghijklmnop")).toBe("12345678...ijklmnop"); // pragma: allowlist secret
   });
 });

@@ -4,7 +4,10 @@ export { z };
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
 
 const DmPolicySchema = z.enum(["open", "pairing", "allowlist"]);
-const GroupPolicySchema = z.enum(["open", "allowlist", "disabled"]);
+const GroupPolicySchema = z.union([
+  z.enum(["open", "allowlist", "disabled"]),
+  z.literal("allowall").transform(() => "open" as const),
+]);
 const FeishuDomainSchema = z.union([
   z.enum(["feishu", "lark"]),
   z.string().url().startsWith("https://"),
@@ -162,6 +165,7 @@ const FeishuSharedConfigShape = {
   chunkMode: z.enum(["length", "newline"]).optional(),
   blockStreamingCoalesce: BlockStreamingCoalesceSchema,
   mediaMaxMb: z.number().positive().optional(),
+  httpTimeoutMs: z.number().int().positive().max(300_000).optional(),
   heartbeat: ChannelHeartbeatVisibilitySchema,
   renderMode: RenderModeSchema,
   streaming: StreamingModeSchema,
@@ -182,7 +186,7 @@ export const FeishuAccountConfigSchema = z
     name: z.string().optional(), // Display name for this account
     appId: z.string().optional(),
     appSecret: buildSecretInputSchema().optional(),
-    encryptKey: z.string().optional(),
+    encryptKey: buildSecretInputSchema().optional(),
     verificationToken: buildSecretInputSchema().optional(),
     domain: FeishuDomainSchema.optional(),
     connectionMode: FeishuConnectionModeSchema.optional(),
@@ -200,7 +204,7 @@ export const FeishuConfigSchema = z
     // Top-level credentials (backward compatible for single-account mode)
     appId: z.string().optional(),
     appSecret: buildSecretInputSchema().optional(),
-    encryptKey: z.string().optional(),
+    encryptKey: buildSecretInputSchema().optional(),
     verificationToken: buildSecretInputSchema().optional(),
     domain: FeishuDomainSchema.optional().default("feishu"),
     connectionMode: FeishuConnectionModeSchema.optional().default("websocket"),
@@ -236,13 +240,23 @@ export const FeishuConfigSchema = z
 
     const defaultConnectionMode = value.connectionMode ?? "websocket";
     const defaultVerificationTokenConfigured = hasConfiguredSecretInput(value.verificationToken);
-    if (defaultConnectionMode === "webhook" && !defaultVerificationTokenConfigured) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["verificationToken"],
-        message:
-          'channels.feishu.connectionMode="webhook" requires channels.feishu.verificationToken',
-      });
+    const defaultEncryptKeyConfigured = hasConfiguredSecretInput(value.encryptKey);
+    if (defaultConnectionMode === "webhook") {
+      if (!defaultVerificationTokenConfigured) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["verificationToken"],
+          message:
+            'channels.feishu.connectionMode="webhook" requires channels.feishu.verificationToken',
+        });
+      }
+      if (!defaultEncryptKeyConfigured) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["encryptKey"],
+          message: 'channels.feishu.connectionMode="webhook" requires channels.feishu.encryptKey',
+        });
+      }
     }
 
     for (const [accountId, account] of Object.entries(value.accounts ?? {})) {
@@ -255,6 +269,8 @@ export const FeishuConfigSchema = z
       }
       const accountVerificationTokenConfigured =
         hasConfiguredSecretInput(account.verificationToken) || defaultVerificationTokenConfigured;
+      const accountEncryptKeyConfigured =
+        hasConfiguredSecretInput(account.encryptKey) || defaultEncryptKeyConfigured;
       if (!accountVerificationTokenConfigured) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -262,6 +278,15 @@ export const FeishuConfigSchema = z
           message:
             `channels.feishu.accounts.${accountId}.connectionMode="webhook" requires ` +
             "a verificationToken (account-level or top-level)",
+        });
+      }
+      if (!accountEncryptKeyConfigured) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["accounts", accountId, "encryptKey"],
+          message:
+            `channels.feishu.accounts.${accountId}.connectionMode="webhook" requires ` +
+            "an encryptKey (account-level or top-level)",
         });
       }
     }

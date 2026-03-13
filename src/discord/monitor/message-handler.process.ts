@@ -1,4 +1,4 @@
-import { ChannelType } from "@buape/carbon";
+import { ChannelType, type RequestClient } from "@buape/carbon";
 import { resolveAckReaction, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { EmbeddedBlockChunker } from "../../agents/pi-embedded-block-chunker.js";
 import { resolveChunkMode } from "../../auto-reply/chunk.js";
@@ -30,16 +30,17 @@ import { convertMarkdownTables } from "../../markdown/tables.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
-import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.js";
 import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { resolveDiscordDraftStreamingChunking } from "../draft-chunking.js";
 import { createDiscordDraftStream } from "../draft-stream.js";
 import { reactMessageDiscord, removeReactionDiscord } from "../send.js";
 import { editMessageDiscord } from "../send.messages.js";
-import { normalizeDiscordSlug, resolveDiscordOwnerAllowFrom } from "./allow-list.js";
+import { normalizeDiscordSlug } from "./allow-list.js";
 import { resolveTimestampMs } from "./format.js";
+import { buildDiscordInboundAccessContext } from "./inbound-context.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 import {
   buildDiscordMediaPayload,
@@ -161,15 +162,17 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       }),
     );
   const statusReactionsEnabled = shouldAckReaction();
+  // Discord outbound helpers expect Carbon's request client shape explicitly.
+  const discordRest = client.rest as unknown as RequestClient;
   const discordAdapter: StatusReactionAdapter = {
     setReaction: async (emoji) => {
       await reactMessageDiscord(messageChannelId, message.id, emoji, {
-        rest: client.rest as never,
+        rest: discordRest,
       });
     },
     removeReaction: async (emoji) => {
       await removeReactionDiscord(messageChannelId, message.id, emoji, {
-        rest: client.rest as never,
+        rest: discordRest,
       });
     },
   };
@@ -210,13 +213,6 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   const forumContextLine = isForumStarter ? `[Forum parent: #${forumParentSlug}]` : null;
   const groupChannel = isGuildMessage && displayChannelSlug ? `#${displayChannelSlug}` : undefined;
   const groupSubject = isDirectMessage ? undefined : groupChannel;
-  const untrustedChannelMetadata = isGuildMessage
-    ? buildUntrustedChannelMetadata({
-        source: "discord",
-        label: "Discord channel topic",
-        entries: [channelInfo?.topic],
-      })
-    : undefined;
   const senderName = sender.isPluralKit
     ? (sender.name ?? author.username)
     : (data.member?.nickname ?? author.globalName ?? author.username);
@@ -224,16 +220,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ? (sender.tag ?? sender.name ?? author.username)
     : author.username;
   const senderTag = sender.tag;
-  const systemPromptParts = [channelConfig?.systemPrompt?.trim() || null].filter(
-    (entry): entry is string => Boolean(entry),
-  );
-  const groupSystemPrompt =
-    systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
-  const ownerAllowFrom = resolveDiscordOwnerAllowFrom({
+  const { groupSystemPrompt, ownerAllowFrom, untrustedContext } = buildDiscordInboundAccessContext({
     channelConfig,
     guildInfo,
     sender: { id: sender.id, name: sender.name, tag: sender.tag },
     allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
+    isGuild: isGuildMessage,
+    channelTopic: channelInfo?.topic,
   });
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: route.agentId,
@@ -372,7 +365,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     SenderTag: senderTag,
     GroupSubject: groupSubject,
     GroupChannel: groupChannel,
-    UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
+    UntrustedContext: untrustedContext,
     GroupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
     GroupSpace: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
     OwnerAllowFrom: ownerAllowFrom,
@@ -434,6 +427,11 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     channel: "discord",
     accountId,
   });
+  const maxLinesPerMessage = resolveDiscordMaxLinesPerMessage({
+    cfg,
+    discordConfig,
+    accountId,
+  });
   const chunkMode = resolveChunkMode(cfg, "discord", accountId);
 
   const typingCallbacks = createTypingCallbacks({
@@ -492,7 +490,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     const formatted = convertMarkdownTables(text, tableMode);
     const chunks = chunkDiscordTextWithMode(formatted, {
       maxChars: draftMaxChars,
-      maxLines: discordConfig?.maxLinesPerMessage,
+      maxLines: maxLinesPerMessage,
       chunkMode,
     });
     if (!chunks.length && formatted) {
@@ -686,6 +684,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
 
         const replyToId = replyReference.use();
         await deliverDiscordReply({
+          cfg,
           replies: [payload],
           target: deliverTarget,
           token,
@@ -695,7 +694,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           replyToId,
           replyToMode,
           textLimit,
-          maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+          maxLinesPerMessage,
           tableMode,
           chunkMode,
           sessionKey: ctxPayload.SessionKey,
@@ -769,6 +768,19 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
             return;
           }
           await statusReactions.setTool(payload.name);
+        },
+        onCompactionStart: async () => {
+          if (isProcessAborted(abortSignal)) {
+            return;
+          }
+          await statusReactions.setCompacting();
+        },
+        onCompactionEnd: async () => {
+          if (isProcessAborted(abortSignal)) {
+            return;
+          }
+          statusReactions.cancelPending();
+          await statusReactions.setThinking();
         },
       },
     });

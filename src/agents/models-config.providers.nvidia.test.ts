@@ -5,13 +5,14 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveApiKeyForProvider } from "./model-auth.js";
-import { buildNvidiaProvider, resolveImplicitProviders } from "./models-config.providers.js";
+import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
+import { buildNvidiaProvider } from "./models-config.providers.js";
 
 describe("NVIDIA provider", () => {
   it("should include nvidia when NVIDIA_API_KEY is configured", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     await withEnvAsync({ NVIDIA_API_KEY: "test-key" }, async () => {
-      const providers = await resolveImplicitProviders({ agentDir });
+      const providers = await resolveImplicitProvidersForTest({ agentDir });
       expect(providers?.nvidia).toBeDefined();
       expect(providers?.nvidia?.models?.length).toBeGreaterThan(0);
     });
@@ -52,7 +53,7 @@ describe("MiniMax implicit provider (#15275)", () => {
   it("should use anthropic-messages API for API-key provider", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     await withEnvAsync({ MINIMAX_API_KEY: "test-key" }, async () => {
-      const providers = await resolveImplicitProviders({ agentDir });
+      const providers = await resolveImplicitProvidersForTest({ agentDir });
       expect(providers?.minimax).toBeDefined();
       expect(providers?.minimax?.api).toBe("anthropic-messages");
       expect(providers?.minimax?.authHeader).toBe(true);
@@ -71,10 +72,9 @@ describe("MiniMax implicit provider (#15275)", () => {
             "minimax-portal:default": {
               type: "oauth",
               provider: "minimax-portal",
-              oauth: {
-                access: "token",
-                expires: Date.now() + 60_000,
-              },
+              access: "token",
+              refresh: "refresh-token",
+              expires: Date.now() + 60_000,
             },
           },
         },
@@ -84,8 +84,20 @@ describe("MiniMax implicit provider (#15275)", () => {
       "utf8",
     );
 
-    const providers = await resolveImplicitProviders({ agentDir });
+    const providers = await resolveImplicitProvidersForTest({ agentDir });
     expect(providers?.["minimax-portal"]?.authHeader).toBe(true);
+  });
+
+  it("should include minimax portal provider when MINIMAX_OAUTH_TOKEN is configured", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    await withEnvAsync({ MINIMAX_OAUTH_TOKEN: "portal-token" }, async () => {
+      const providers = await resolveImplicitProvidersForTest({ agentDir });
+      expect(providers?.["minimax-portal"]).toBeDefined();
+      expect(providers?.["minimax-portal"]?.authHeader).toBe(true);
+      expect(providers?.["minimax-portal"]?.models?.some((m) => m.id === "MiniMax-VL-01")).toBe(
+        true,
+      );
+    });
   });
 });
 
@@ -93,7 +105,7 @@ describe("vLLM provider", () => {
   it("should not include vllm when no API key is configured", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     await withEnvAsync({ VLLM_API_KEY: undefined }, async () => {
-      const providers = await resolveImplicitProviders({ agentDir });
+      const providers = await resolveImplicitProvidersForTest({ agentDir });
       expect(providers?.vllm).toBeUndefined();
     });
   });
@@ -101,7 +113,7 @@ describe("vLLM provider", () => {
   it("should include vllm when VLLM_API_KEY is set", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     await withEnvAsync({ VLLM_API_KEY: "test-key" }, async () => {
-      const providers = await resolveImplicitProviders({ agentDir });
+      const providers = await resolveImplicitProvidersForTest({ agentDir });
 
       expect(providers?.vllm).toBeDefined();
       expect(providers?.vllm?.apiKey).toBe("VLLM_API_KEY");
