@@ -59,6 +59,23 @@ describe("message-normalizer", () => {
       });
     });
 
+    it("skips malformed content blocks without throwing", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [null, undefined, { type: "text", text: "Recovered text" }],
+      });
+
+      expect(result.role).toBe("assistant");
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text: "Recovered text",
+          name: undefined,
+          args: undefined,
+        },
+      ]);
+    });
+
     it("normalizes message with text field (alternative format)", () => {
       const result = normalizeMessage({
         role: "user",

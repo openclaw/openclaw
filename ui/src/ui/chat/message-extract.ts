@@ -5,6 +5,10 @@ import { stripThinkingTags } from "../format.ts";
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
+function asObjectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
 function processMessageText(text: string, role: string): string {
   const shouldStripInboundMetadata = role.toLowerCase() === "user";
   if (role === "assistant") {
@@ -44,7 +48,10 @@ export function extractThinking(message: unknown): string | null {
   const parts: string[] = [];
   if (Array.isArray(content)) {
     for (const p of content) {
-      const item = p as Record<string, unknown>;
+      const item = asObjectRecord(p);
+      if (!item) {
+        continue;
+      }
       if (item.type === "thinking" && typeof item.thinking === "string") {
         const cleaned = item.thinking.trim();
         if (cleaned) {
@@ -91,7 +98,10 @@ export function extractRawText(message: unknown): string | null {
   if (Array.isArray(content)) {
     const parts = content
       .map((p) => {
-        const item = p as Record<string, unknown>;
+        const item = asObjectRecord(p);
+        if (!item) {
+          return null;
+        }
         if (item.type === "text" && typeof item.text === "string") {
           return item.text;
         }
