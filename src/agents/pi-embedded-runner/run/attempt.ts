@@ -2407,6 +2407,16 @@ export async function runEmbeddedAttempt(
             note: `images: prompt=${imageResult.images.length}`,
           });
 
+          // When the model lacks vision and images were present, append a note
+          // so the agent knows images were received and can use the image tool.
+          if (imageResult.droppedForVision > 0) {
+            const imageNote =
+              `\n\n[System note: ${imageResult.droppedForVision} image(s) were attached to this message, ` +
+              `but the current model does not support vision input. ` +
+              `Use the image tool to analyze the image(s) if an imageModel is configured.]`;
+            effectivePrompt = effectivePrompt + imageNote;
+          }
+
           // Diagnostic: log context sizes before prompt to help debug early overflow errors.
           if (log.isEnabled("debug")) {
             const msgCount = activeSession.messages.length;

@@ -297,14 +297,27 @@ export async function detectAndLoadPromptImages(params: {
   detectedRefs: DetectedImageRef[];
   loadedCount: number;
   skippedCount: number;
+  /** Number of images dropped because the model lacks vision support. */
+  droppedForVision: number;
 }> {
-  // If model doesn't support images, return empty results
+  // If model doesn't support images, still detect refs so the caller can
+  // inform the agent about dropped images and suggest the image tool.
   if (!modelSupportsImages(params.model)) {
+    const existingCount = params.existingImages?.length ?? 0;
+    const detectedRefs = detectImageReferences(params.prompt);
+    const droppedForVision = existingCount + detectedRefs.length;
+    if (droppedForVision > 0) {
+      log.info(
+        `Native image: model lacks vision — dropped ${droppedForVision} image(s) ` +
+          `(${existingCount} attached, ${detectedRefs.length} detected in prompt)`,
+      );
+    }
     return {
       images: [],
-      detectedRefs: [],
+      detectedRefs,
       loadedCount: 0,
       skippedCount: 0,
+      droppedForVision,
     };
   }
 
@@ -317,6 +330,7 @@ export async function detectAndLoadPromptImages(params: {
       detectedRefs: [],
       loadedCount: 0,
       skippedCount: 0,
+      droppedForVision: 0,
     };
   }
 
@@ -356,5 +370,6 @@ export async function detectAndLoadPromptImages(params: {
     detectedRefs: allRefs,
     loadedCount,
     skippedCount,
+    droppedForVision: 0,
   };
 }
