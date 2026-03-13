@@ -56,6 +56,23 @@ describe("phase hooks merger", () => {
     expect(result?.skipReason).toBe("screened-out");
   });
 
+  it("before_agent_run lets a higher-priority non-skip override a lower-priority skip", async () => {
+    addTypedHook(registry, "before_agent_run", "low", () => ({ skip: true }), 1);
+    addTypedHook(
+      registry,
+      "before_agent_run",
+      "high",
+      () => ({ skip: false, skipReason: "continue" }),
+      10,
+    );
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforeAgentRun({ prompt: "test" }, {});
+
+    expect(result?.skip).toBe(false);
+    expect(result?.skipReason).toBe("continue");
+  });
+
   it("before_model_resolve keeps higher-priority override values", async () => {
     addTypedHook(registry, "before_model_resolve", "low", () => ({ modelOverride: "gpt-4o" }), 1);
     addTypedHook(

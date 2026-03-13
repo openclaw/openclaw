@@ -274,6 +274,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   /**
    * Run before_agent_run hook.
    * Allows plugins to skip the default agent run after preprocessing/directives.
+   * Like other modifying hooks, the highest-priority defined skip decision wins.
    */
   async function runBeforeAgentRun(
     event: PluginHookBeforeAgentRunEvent,

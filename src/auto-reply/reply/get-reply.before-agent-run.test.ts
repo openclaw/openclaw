@@ -178,6 +178,7 @@ describe("getReplyFromConfig before_agent_run hook", () => {
     mocks.hasHooks.mockReset();
     mocks.runBeforeAgentRun.mockReset();
 
+    mocks.runPreparedReply.mockResolvedValue({ text: "ran" });
     mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult());
     mocks.handleInlineActions.mockResolvedValue({
       kind: "continue",
