@@ -56,6 +56,10 @@ const agentEventMocks = vi.hoisted(() => ({
   emitAgentEvent: vi.fn(),
 }));
 
+const projectorMocks = vi.hoisted(() => ({
+  nextFlushError: null as Error | null,
+}));
+
 vi.mock("../../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => managerMocks,
 }));
@@ -94,6 +98,27 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => ({
 vi.mock("../../infra/agent-events.js", () => ({
   emitAgentEvent: (event: unknown) => agentEventMocks.emitAgentEvent(event),
 }));
+
+vi.mock("./acp-projector.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./acp-projector.js")>();
+  return {
+    ...actual,
+    createAcpReplyProjector: (...args: Parameters<typeof actual.createAcpReplyProjector>) => {
+      const projector = actual.createAcpReplyProjector(...args);
+      return {
+        ...projector,
+        flush: async (force?: boolean) => {
+          const flushError = projectorMocks.nextFlushError;
+          if (flushError) {
+            projectorMocks.nextFlushError = null;
+            throw flushError;
+          }
+          await projector.flush(force);
+        },
+      };
+    },
+  };
+});
 
 const { tryDispatchAcpReply } = await import("./dispatch-acp.js");
 const sessionKey = "agent:codex-acp:session-1";
@@ -218,6 +243,12 @@ async function dispatchVisibleTurn(onReplyStart: () => void) {
   });
 }
 
+function getLifecycleEvents(runId: string) {
+  return agentEventMocks.emitAgentEvent.mock.calls
+    .map((call) => call[0])
+    .filter((event) => event?.runId === runId && event?.stream === "lifecycle");
+}
+
 describe("tryDispatchAcpReply", () => {
   beforeEach(() => {
     managerMocks.resolveSession.mockReset();
@@ -243,6 +274,7 @@ describe("tryDispatchAcpReply", () => {
     bindingServiceMocks.listBySession.mockReset();
     bindingServiceMocks.listBySession.mockReturnValue([]);
     agentEventMocks.emitAgentEvent.mockReset();
+    projectorMocks.nextFlushError = null;
   });
 
   it("routes ACP block output to originating channel", async () => {
@@ -407,6 +439,11 @@ describe("tryDispatchAcpReply", () => {
     });
 
     const emitted = agentEventMocks.emitAgentEvent.mock.calls.map((call) => call[0]);
+    expect(getLifecycleEvents("run-acp-bridge").map((event) => event.data.phase)).toEqual([
+      "start",
+      "prompt",
+      "end",
+    ]);
     expect(emitted).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -543,6 +580,10 @@ describe("tryDispatchAcpReply", () => {
     });
 
     const emitted = agentEventMocks.emitAgentEvent.mock.calls.map((call) => call[0]);
+    expect(getLifecycleEvents("run-acp-error").map((event) => event.data.phase)).toEqual([
+      "start",
+      "error",
+    ]);
     expect(emitted).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -564,6 +605,30 @@ describe("tryDispatchAcpReply", () => {
           }),
         }),
       ]),
+    );
+  });
+
+  it("emits only the ACP error terminal event when projector flush fails", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("hello from acp");
+    projectorMocks.nextFlushError = new Error("flush failed");
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      runId: "run-acp-flush-error",
+    });
+
+    const lifecycleEvents = getLifecycleEvents("run-acp-flush-error");
+    expect(lifecycleEvents.map((event) => event.data.phase)).toEqual(["start", "error"]);
+    expect(lifecycleEvents[1]).toEqual(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          phase: "error",
+          error: "flush failed",
+          code: "ACP_TURN_FAILED",
+          source: "acp",
+        }),
+      }),
     );
   });
 

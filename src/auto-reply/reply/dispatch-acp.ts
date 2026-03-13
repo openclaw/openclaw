@@ -465,15 +465,6 @@ export async function tryDispatchAcpReply(params: {
       },
     });
 
-    emitAcpLifecycleAgentEvent({
-      runId: params.runId,
-      sessionKey,
-      phase: "end",
-      startedAt: acpDispatchStartedAt,
-      endedAt: Date.now(),
-      stopReason: agentEventBridgeState.stopReason,
-    });
-
     await projector.flush(true);
     const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
     const accumulatedBlockText = delivery.getAccumulatedBlockText();
@@ -529,6 +520,14 @@ export async function tryDispatchAcpReply(params: {
     );
     params.recordProcessed("completed", { reason: "acp_dispatch" });
     params.markIdle("message_completed");
+    emitAcpLifecycleAgentEvent({
+      runId: params.runId,
+      sessionKey,
+      phase: "end",
+      startedAt: acpDispatchStartedAt,
+      endedAt: Date.now(),
+      stopReason: agentEventBridgeState.stopReason,
+    });
     return { queuedFinal, counts };
   } catch (err) {
     await projector.flush(true);
