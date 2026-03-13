@@ -85,8 +85,10 @@ export async function loadTypeDefinitions(params: {
       const relativePath = path.join(relativeBase, entry.name);
 
       if (entry.isDirectory()) {
-        // Recursively scan subdirectories
-        await scanDir(absolutePath, relativePath);
+        // Recursively scan subdirectories (only if we still have budget)
+        if (totalSize < maxTotalBytes) {
+          await scanDir(absolutePath, relativePath);
+        }
         continue;
       }
 
@@ -94,12 +96,8 @@ export async function loadTypeDefinitions(params: {
         continue;
       }
 
-      // Only include .ts and .d.ts files
-      if (
-        !entry.name.endsWith(".ts") &&
-        !entry.name.endsWith(".d.ts") &&
-        !entry.name.endsWith(".tsx")
-      ) {
+      // Only include .ts and .tsx files (this already covers .d.ts)
+      if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".tsx")) {
         continue;
       }
 
@@ -150,10 +148,13 @@ export async function loadTypeDefinitions(params: {
 
   await scanDir(typesDirPath, typesDir);
 
-  // Sort files: index.ts first (barrel export), then alphabetically
+  // Sort files: root index.ts first (barrel export), then alphabetically
   files.sort((a, b) => {
-    const aIsIndex = path.basename(a.relativePath).toLowerCase() === "index.ts";
-    const bIsIndex = path.basename(b.relativePath).toLowerCase() === "index.ts";
+    // Only prioritize root-level index.ts, not nested ones
+    const aIsIndex =
+      a.relativePath === `${typesDir}/index.ts` || a.relativePath === `${typesDir}\\index.ts`;
+    const bIsIndex =
+      b.relativePath === `${typesDir}/index.ts` || b.relativePath === `${typesDir}\\index.ts`;
 
     if (aIsIndex && !bIsIndex) {
       return -1;
