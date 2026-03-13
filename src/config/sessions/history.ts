@@ -1,21 +1,12 @@
 // src/config/sessions/history.ts
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import fs from "node:fs";
+import { SessionManager, type SessionEntry } from "@mariozechner/pi-coding-agent";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "./paths.js";
 import { loadSessionStore, resolveSessionStoreEntry } from "./store.js";
 
 export type SessionHistoryMessage = {
-  role: string;
+  role: "user" | "assistant";
   content: string;
-  senderName?: string;
-};
-
-type MessageEntry = {
-  type?: string;
-  message?: {
-    role?: string;
-    content?: unknown;
-    senderName?: string;
-  };
 };
 
 function extractTextContent(content: unknown): string {
@@ -55,12 +46,19 @@ export async function readSessionRecentMessages(params: {
     const opts = resolveSessionFilePathOptions({ agentId, storePath });
     const sessionFile = resolveSessionFilePath(entry.sessionId, entry, opts);
 
+    if (!fs.existsSync(sessionFile)) {
+      return [];
+    }
+
     const sessionManager = SessionManager.open(sessionFile);
-    const entries = sessionManager.getEntries() as MessageEntry[];
+    const entries: SessionEntry[] = sessionManager.getEntries();
 
     const messages: SessionHistoryMessage[] = [];
     for (const e of entries) {
-      if (e.type !== "message" || !e.message?.role) {
+      if (e.type !== "message" || !("message" in e) || !e.message?.role) {
+        continue;
+      }
+      if (e.message.role !== "user" && e.message.role !== "assistant") {
         continue;
       }
       const content = extractTextContent(e.message.content);
@@ -70,7 +68,6 @@ export async function readSessionRecentMessages(params: {
       messages.push({
         role: e.message.role,
         content,
-        senderName: e.message.senderName,
       });
     }
 

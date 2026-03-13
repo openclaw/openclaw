@@ -147,4 +147,111 @@ describe("readSessionRecentMessages", () => {
     });
     expect(result).toEqual([]);
   });
+
+  it("does not create directories when session file does not exist", async () => {
+    const sessionId = "ghost-session-no-file";
+    await saveSessionStore(storePath, {
+      "ghost-key": { sessionId, updatedAt: Date.now() },
+    });
+
+    // sessions directory that should NOT be created
+    const sessionsDir = path.join(tmpDir, "sessions");
+
+    const result = await readSessionRecentMessages({
+      storePath,
+      sessionKey: "ghost-key",
+    });
+
+    expect(result).toEqual([]);
+    // The sessions directory must not have been created as a side effect
+    await expect(fs.access(sessionsDir)).rejects.toThrow();
+  });
+
+  it("excludes toolResult messages from returned history", async () => {
+    const sessionId = "test-session-tool-result";
+    const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
+
+    await saveSessionStore(storePath, {
+      "tool-key": { sessionId, updatedAt: Date.now() },
+    });
+
+    const header = JSON.stringify({
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: sessionId,
+      timestamp: new Date().toISOString(),
+      cwd: tmpDir,
+    });
+
+    const lines: string[] = [header];
+    // user message
+    lines.push(
+      JSON.stringify({
+        type: "message",
+        id: "user001",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "run my tool" }],
+          timestamp: Date.now(),
+        },
+      }),
+    );
+    // toolResult message — should be excluded
+    lines.push(
+      JSON.stringify({
+        type: "message",
+        id: "tool001",
+        parentId: "user001",
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "toolResult",
+          toolCallId: "call_abc",
+          toolName: "bash",
+          content: [{ type: "text", text: "tool output" }],
+          isError: false,
+          timestamp: Date.now(),
+        },
+      }),
+    );
+    // assistant message
+    lines.push(
+      JSON.stringify({
+        type: "message",
+        id: "asst001",
+        parentId: "tool001",
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "done" }],
+          api: "openai-responses",
+          provider: "openclaw",
+          model: "test",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: Date.now(),
+        },
+      }),
+    );
+    await fs.writeFile(sessionFile, lines.join("\n") + "\n", "utf-8");
+
+    const result = await readSessionRecentMessages({
+      storePath,
+      sessionKey: "tool-key",
+    });
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toMatchObject({ role: "user", content: "run my tool" });
+    expect(result[1]).toMatchObject({ role: "assistant", content: "done" });
+    // toolResult must not appear
+    expect(result.find((m) => m.role === ("toolResult" as string))).toBeUndefined();
+  });
 });
