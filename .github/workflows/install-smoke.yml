@@ -10,6 +10,9 @@ concurrency:
   group: install-smoke-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   docs-scope:
     runs-on: blacksmith-16vcpu-ubuntu-2404
