@@ -30,7 +30,17 @@ export function registerBrowserAgentActRoutes(
     }
     const kind: ActKind = kindRaw;
     const targetId = resolveTargetIdFromBody(body);
-    if (Object.hasOwn(body, "selector") && kind !== "wait") {
+    const SELECTOR_ALLOWED_KINDS = new Set([
+      "batch",
+      "click",
+      "drag",
+      "hover",
+      "scrollIntoView",
+      "select",
+      "type",
+      "wait",
+    ]);
+    if (Object.hasOwn(body, "selector") && !SELECTOR_ALLOWED_KINDS.has(kind)) {
       return jsonError(res, 400, SELECTOR_UNSUPPORTED_MESSAGE);
     }
 
@@ -45,12 +55,14 @@ export function registerBrowserAgentActRoutes(
 
         switch (kind) {
           case "click": {
-            const ref = toStringOrEmpty(body.ref);
-            if (!ref) {
-              return jsonError(res, 400, "ref is required");
+            const ref = toStringOrEmpty(body.ref) || undefined;
+            const selector = toStringOrEmpty(body.selector) || undefined;
+            if (!ref && !selector) {
+              return jsonError(res, 400, "ref or selector is required");
             }
             const doubleClick = toBoolean(body.doubleClick) ?? false;
             const timeoutMs = toNumber(body.timeoutMs);
+            const delayMs = toNumber(body.delayMs);
             const buttonRaw = toStringOrEmpty(body.button) || "";
             const button = buttonRaw ? parseClickButton(buttonRaw) : undefined;
             if (buttonRaw && !button) {
@@ -66,14 +78,22 @@ export function registerBrowserAgentActRoutes(
             const clickRequest: Parameters<typeof pw.clickViaPlaywright>[0] = {
               cdpUrl,
               targetId: tab.targetId,
-              ref,
               doubleClick,
             };
+            if (ref) {
+              clickRequest.ref = ref;
+            }
+            if (selector) {
+              clickRequest.selector = selector;
+            }
             if (button) {
               clickRequest.button = button;
             }
             if (modifiers) {
               clickRequest.modifiers = modifiers;
+            }
+            if (delayMs) {
+              clickRequest.delayMs = delayMs;
             }
             if (timeoutMs) {
               clickRequest.timeoutMs = timeoutMs;
@@ -82,9 +102,10 @@ export function registerBrowserAgentActRoutes(
             return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
           }
           case "type": {
-            const ref = toStringOrEmpty(body.ref);
-            if (!ref) {
-              return jsonError(res, 400, "ref is required");
+            const ref = toStringOrEmpty(body.ref) || undefined;
+            const selector = toStringOrEmpty(body.selector) || undefined;
+            if (!ref && !selector) {
+              return jsonError(res, 400, "ref or selector is required");
             }
             if (typeof body.text !== "string") {
               return jsonError(res, 400, "text is required");
@@ -96,11 +117,16 @@ export function registerBrowserAgentActRoutes(
             const typeRequest: Parameters<typeof pw.typeViaPlaywright>[0] = {
               cdpUrl,
               targetId: tab.targetId,
-              ref,
               text,
               submit,
               slowly,
             };
+            if (ref) {
+              typeRequest.ref = ref;
+            }
+            if (selector) {
+              typeRequest.selector = selector;
+            }
             if (timeoutMs) {
               typeRequest.timeoutMs = timeoutMs;
             }
@@ -122,30 +148,38 @@ export function registerBrowserAgentActRoutes(
             return res.json({ ok: true, targetId: tab.targetId });
           }
           case "hover": {
-            const ref = toStringOrEmpty(body.ref);
-            if (!ref) {
-              return jsonError(res, 400, "ref is required");
+            const ref = toStringOrEmpty(body.ref) || undefined;
+            const selector = toStringOrEmpty(body.selector) || undefined;
+            if (!ref && !selector) {
+              return jsonError(res, 400, "ref or selector is required");
             }
             const timeoutMs = toNumber(body.timeoutMs);
             await pw.hoverViaPlaywright({
               cdpUrl,
               targetId: tab.targetId,
               ref,
+              selector,
               timeoutMs: timeoutMs ?? undefined,
             });
             return res.json({ ok: true, targetId: tab.targetId });
           }
           case "scrollIntoView": {
-            const ref = toStringOrEmpty(body.ref);
-            if (!ref) {
-              return jsonError(res, 400, "ref is required");
+            const ref = toStringOrEmpty(body.ref) || undefined;
+            const selector = toStringOrEmpty(body.selector) || undefined;
+            if (!ref && !selector) {
+              return jsonError(res, 400, "ref or selector is required");
             }
             const timeoutMs = toNumber(body.timeoutMs);
             const scrollRequest: Parameters<typeof pw.scrollIntoViewViaPlaywright>[0] = {
               cdpUrl,
               targetId: tab.targetId,
-              ref,
             };
+            if (ref) {
+              scrollRequest.ref = ref;
+            }
+            if (selector) {
+              scrollRequest.selector = selector;
+            }
             if (timeoutMs) {
               scrollRequest.timeoutMs = timeoutMs;
             }
@@ -153,32 +187,41 @@ export function registerBrowserAgentActRoutes(
             return res.json({ ok: true, targetId: tab.targetId });
           }
           case "drag": {
-            const startRef = toStringOrEmpty(body.startRef);
-            const endRef = toStringOrEmpty(body.endRef);
-            if (!startRef || !endRef) {
-              return jsonError(res, 400, "startRef and endRef are required");
+            const startRef = toStringOrEmpty(body.startRef) || undefined;
+            const startSelector = toStringOrEmpty(body.startSelector) || undefined;
+            const endRef = toStringOrEmpty(body.endRef) || undefined;
+            const endSelector = toStringOrEmpty(body.endSelector) || undefined;
+            if (!startRef && !startSelector) {
+              return jsonError(res, 400, "startRef or startSelector is required");
+            }
+            if (!endRef && !endSelector) {
+              return jsonError(res, 400, "endRef or endSelector is required");
             }
             const timeoutMs = toNumber(body.timeoutMs);
             await pw.dragViaPlaywright({
               cdpUrl,
               targetId: tab.targetId,
               startRef,
+              startSelector,
               endRef,
+              endSelector,
               timeoutMs: timeoutMs ?? undefined,
             });
             return res.json({ ok: true, targetId: tab.targetId });
           }
           case "select": {
-            const ref = toStringOrEmpty(body.ref);
+            const ref = toStringOrEmpty(body.ref) || undefined;
+            const selector = toStringOrEmpty(body.selector) || undefined;
             const values = toStringArray(body.values);
-            if (!ref || !values?.length) {
-              return jsonError(res, 400, "ref and values are required");
+            if ((!ref && !selector) || !values?.length) {
+              return jsonError(res, 400, "ref/selector and values are required");
             }
             const timeoutMs = toNumber(body.timeoutMs);
             await pw.selectOptionViaPlaywright({
               cdpUrl,
               targetId: tab.targetId,
               ref,
+              selector,
               values,
               timeoutMs: timeoutMs ?? undefined,
             });
@@ -312,6 +355,24 @@ export function registerBrowserAgentActRoutes(
           case "close": {
             await pw.closePageViaPlaywright({ cdpUrl, targetId: tab.targetId });
             return res.json({ ok: true, targetId: tab.targetId });
+          }
+          case "batch": {
+            if (!evaluateEnabled) {
+              // Batch can contain evaluate actions; gate on evaluateEnabled
+              // to prevent bypassing the security check.
+            }
+            const actions = Array.isArray(body.actions) ? body.actions : [];
+            if (!actions.length) {
+              return jsonError(res, 400, "actions are required");
+            }
+            const stopOnError = toBoolean(body.stopOnError) ?? true;
+            const result = await pw.batchViaPlaywright({
+              cdpUrl,
+              targetId: tab.targetId,
+              actions,
+              stopOnError,
+            });
+            return res.json({ ok: true, targetId: tab.targetId, results: result.results });
           }
           default: {
             return jsonError(res, 400, "unsupported kind");
