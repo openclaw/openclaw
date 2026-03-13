@@ -46,6 +46,7 @@ class MicCaptureManager(
    */
   private val sendToGateway: suspend (message: String, onRunIdKnown: (String) -> Unit) -> String?,
   private val speakAssistantReply: suspend (String) -> Unit = {},
+  private val languageOverride: () -> String = { "auto" },
 ) {
   companion object {
     private const val tag = "MicCapture"
@@ -234,6 +235,13 @@ class MicCaptureManager(
           RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
           speechPossibleSilenceMs,
         )
+        val localeOverride = languageOverride().trim()
+        if (localeOverride.isNotEmpty() && localeOverride != "auto") {
+          putExtra(RecognizerIntent.EXTRA_LANGUAGE, localeOverride)
+          putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, localeOverride)
+          putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, true)
+          putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", arrayOf(localeOverride))
+        }
       }
     _statusText.value =
       when {

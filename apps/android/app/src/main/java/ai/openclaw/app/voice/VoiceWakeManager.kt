@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 class VoiceWakeManager(
   private val context: Context,
   private val scope: CoroutineScope,
+  private val languageOverride: () -> String = { "auto" },
   private val onCommand: suspend (String) -> Unit,
 ) {
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -83,6 +84,13 @@ class VoiceWakeManager(
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
         putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
+        val localeOverride = languageOverride().trim()
+        if (localeOverride.isNotEmpty() && localeOverride != "auto") {
+          putExtra(RecognizerIntent.EXTRA_LANGUAGE, localeOverride)
+          putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, localeOverride)
+          putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, true)
+          putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", arrayOf(localeOverride))
+        }
       }
 
     _statusText.value = "Listening"

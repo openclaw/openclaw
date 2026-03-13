@@ -60,6 +60,9 @@ class SecurePrefs(
   private val _preventSleep = MutableStateFlow(plainPrefs.getBoolean("screen.preventSleep", true))
   val preventSleep: StateFlow<Boolean> = _preventSleep
 
+  private val _languageOverride = MutableStateFlow(plainPrefs.getString("node.languageOverride", "auto") ?: "auto")
+  val languageOverride: StateFlow<String> = _languageOverride
+
   private val _manualEnabled =
     MutableStateFlow(plainPrefs.getBoolean("gateway.manual.enabled", false))
   val manualEnabled: StateFlow<Boolean> = _manualEnabled
@@ -133,6 +136,12 @@ class SecurePrefs(
   fun setLocationPreciseEnabled(value: Boolean) {
     plainPrefs.edit { putBoolean("location.preciseEnabled", value) }
     _locationPreciseEnabled.value = value
+  }
+
+  fun setLanguageOverride(value: String) {
+    val trimmed = value.trim()
+    plainPrefs.edit { putString("node.languageOverride", trimmed) }
+    _languageOverride.value = trimmed
   }
 
   fun setPreventSleep(value: Boolean) {

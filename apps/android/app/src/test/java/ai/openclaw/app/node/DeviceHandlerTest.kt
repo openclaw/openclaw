@@ -19,7 +19,7 @@ import org.robolectric.RuntimeEnvironment
 class DeviceHandlerTest {
   @Test
   fun handleDeviceInfo_returnsStablePayload() {
-    val handler = DeviceHandler(appContext())
+    val handler = DeviceHandler(appContext(), languageOverride = { "auto" })
 
     val result = handler.handleDeviceInfo(null)
 
@@ -36,7 +36,7 @@ class DeviceHandlerTest {
 
   @Test
   fun handleDeviceStatus_returnsExpectedShape() {
-    val handler = DeviceHandler(appContext())
+    val handler = DeviceHandler(appContext(), languageOverride = { "auto" })
 
     val result = handler.handleDeviceStatus(null)
 
@@ -75,7 +75,7 @@ class DeviceHandlerTest {
 
   @Test
   fun handleDevicePermissions_returnsExpectedShape() {
-    val handler = DeviceHandler(appContext())
+    val handler = DeviceHandler(appContext(), languageOverride = { "auto" })
 
     val result = handler.handleDevicePermissions(null)
 
@@ -105,7 +105,7 @@ class DeviceHandlerTest {
 
   @Test
   fun handleDeviceHealth_returnsExpectedShape() {
-    val handler = DeviceHandler(appContext())
+    val handler = DeviceHandler(appContext(), languageOverride = { "auto" })
 
     val result = handler.handleDeviceHealth(null)
 

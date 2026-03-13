@@ -42,6 +42,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val cameraEnabled: StateFlow<Boolean> = runtime.cameraEnabled
   val locationMode: StateFlow<LocationMode> = runtime.locationMode
   val locationPreciseEnabled: StateFlow<Boolean> = runtime.locationPreciseEnabled
+  val languageOverride: StateFlow<String> = runtime.languageOverride
   val preventSleep: StateFlow<Boolean> = runtime.preventSleep
   val micEnabled: StateFlow<Boolean> = runtime.micEnabled
   val micCooldown: StateFlow<Boolean> = runtime.micCooldown
@@ -90,6 +91,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun setLocationPreciseEnabled(value: Boolean) {
     runtime.setLocationPreciseEnabled(value)
+  }
+
+  fun setLanguageOverride(value: String) {
+    runtime.setLanguageOverride(value)
   }
 
   fun setPreventSleep(value: Boolean) {

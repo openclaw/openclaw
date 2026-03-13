@@ -9,6 +9,7 @@ import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayTlsParams
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.VoiceWakeMode
+import java.util.Locale
 
 class ConnectionManager(
   private val prefs: SecurePrefs,
@@ -125,6 +126,14 @@ class ConnectionManager(
     )
   }
 
+  private fun resolveLocale(): String {
+    val override = prefs.languageOverride.value.trim()
+    if (override.isNotEmpty() && override != "auto") {
+      return override
+    }
+    return Locale.getDefault().toLanguageTag()
+  }
+
   fun buildNodeConnectOptions(): GatewayConnectOptions {
     return GatewayConnectOptions(
       role = "node",
@@ -134,6 +143,7 @@ class ConnectionManager(
       permissions = emptyMap(),
       client = buildClientInfo(clientId = "openclaw-android", clientMode = "node"),
       userAgent = buildUserAgent(),
+      locale = resolveLocale(),
     )
   }
 
@@ -146,6 +156,7 @@ class ConnectionManager(
       permissions = emptyMap(),
       client = buildClientInfo(clientId = "openclaw-android", clientMode = "ui"),
       userAgent = buildUserAgent(),
+      locale = resolveLocale(),
     )
   }
 

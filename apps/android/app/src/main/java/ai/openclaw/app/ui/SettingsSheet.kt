@@ -46,6 +46,9 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
@@ -76,6 +79,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val lifecycleOwner = LocalLifecycleOwner.current
   val instanceId by viewModel.instanceId.collectAsState()
   val displayName by viewModel.displayName.collectAsState()
+  val languageOverride by viewModel.languageOverride.collectAsState()
   val cameraEnabled by viewModel.cameraEnabled.collectAsState()
   val locationMode by viewModel.locationMode.collectAsState()
   val locationPreciseEnabled by viewModel.locationPreciseEnabled.collectAsState()
@@ -379,6 +383,55 @@ fun SettingsSheet(viewModel: MainViewModel) {
         textStyle = mobileBody.copy(color = mobileText),
         colors = settingsTextFieldColors(),
       )
+    }
+    item {
+      val languageOptions = listOf(
+        "auto" to "System Auto",
+        "en-US" to "English (US)",
+        "en-GB" to "English (UK)",
+        "ja-JP" to "Japanese",
+        "fr-FR" to "French",
+        "es-ES" to "Spanish",
+        "de-DE" to "German",
+        "zh-CN" to "Chinese (Simplified)",
+        "zh-TW" to "Chinese (Traditional)"
+      )
+      var expanded by remember { mutableStateOf(false) }
+      val selectedLabel = languageOptions.find { it.first == languageOverride }?.second ?: languageOverride
+      
+      @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+      androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxWidth()) {
+        @Suppress("DEPRECATION")
+        ExposedDropdownMenuBox(
+          expanded = expanded,
+          onExpandedChange = { expanded = it }
+        ) {
+          OutlinedTextField(
+            value = selectedLabel,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Language", style = mobileCaption1, color = mobileTextSecondary) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            colors = settingsTextFieldColors(),
+            modifier = Modifier.fillMaxWidth().menuAnchor()
+          )
+          ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.background(mobileSurface)
+          ) {
+            languageOptions.forEach { (code, label) ->
+              DropdownMenuItem(
+                text = { Text(label, color = mobileText) },
+                onClick = {
+                  viewModel.setLanguageOverride(code)
+                  expanded = false
+                }
+              )
+            }
+          }
+        }
+      }
     }
       item { Text("Instance ID: $instanceId", style = mobileCallout.copy(fontFamily = FontFamily.Monospace), color = mobileTextSecondary) }
       item { Text("Device: $deviceModel", style = mobileCallout, color = mobileTextSecondary) }

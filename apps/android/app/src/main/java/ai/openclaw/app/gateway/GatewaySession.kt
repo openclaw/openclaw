@@ -50,6 +50,7 @@ data class GatewayConnectOptions(
   val permissions: Map<String, Boolean>,
   val client: GatewayClientInfo,
   val userAgent: String? = null,
+  val locale: String? = null,
 )
 
 private enum class GatewayConnectAuthSource {
@@ -463,7 +464,7 @@ class GatewaySession(
       selectedAuth: SelectedConnectAuth,
     ): JsonObject {
       val client = options.client
-      val locale = Locale.getDefault().toLanguageTag()
+      val locale = options.locale ?: Locale.getDefault().toLanguageTag()
       val clientObj =
         buildJsonObject {
           put("id", JsonPrimitive(client.id))
