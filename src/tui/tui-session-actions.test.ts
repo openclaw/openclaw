@@ -59,6 +59,60 @@ describe("tui session actions", () => {
     expect(requestRender).toHaveBeenCalled();
   });
 
+  it("clears stale active runs when chat.abort reports aborted: false", async () => {
+    const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: false });
+    const addSystem = vi.fn();
+    const requestRender = vi.fn();
+    const setActivityStatus = vi.fn();
+    const clearAbortPending = vi.fn();
+    const state: TuiStateAccess = {
+      agentDefaultId: "main",
+      sessionMainKey: "agent:main:main",
+      sessionScope: "global",
+      agents: [],
+      currentAgentId: "main",
+      currentSessionKey: "agent:main:main",
+      currentSessionId: null,
+      activeChatRunId: "run-stale",
+      historyLoaded: false,
+      sessionInfo: {},
+      initialSessionApplied: true,
+      isConnected: true,
+      autoMessageSent: false,
+      toolsExpanded: false,
+      showThinking: false,
+      connectionStatus: "connected",
+      activityStatus: "running",
+      statusTimeout: null,
+      lastCtrlCAt: 0,
+    };
+
+    const { abortActive } = createSessionActions({
+      client: { abortChat } as unknown as GatewayChatClient,
+      chatLog: { addSystem } as unknown as import("./components/chat-log.js").ChatLog,
+      tui: { requestRender } as unknown as import("@mariozechner/pi-tui").TUI,
+      opts: {},
+      state,
+      agentNames: new Map(),
+      initialSessionInput: "",
+      initialSessionAgentId: null,
+      resolveSessionKey: vi.fn(),
+      updateHeader: vi.fn(),
+      updateFooter: vi.fn(),
+      updateAutocompleteProvider: vi.fn(),
+      setActivityStatus,
+      clearAbortPending,
+    });
+
+    await abortActive();
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(clearAbortPending).toHaveBeenCalledWith("run-stale");
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+    expect(addSystem).not.toHaveBeenCalled();
+    expect(requestRender).toHaveBeenCalled();
+  });
+
   it("queues session refreshes and applies the latest result", async () => {
     let resolveFirst: ((value: unknown) => void) | undefined;
     let resolveSecond: ((value: unknown) => void) | undefined;

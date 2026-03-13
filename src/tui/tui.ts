@@ -297,12 +297,13 @@ type CtrlCAction = "abort" | "clear" | "warn" | "exit";
 export function resolveCtrlCAction(params: {
   hasInput: boolean;
   hasActiveRun?: boolean;
+  abortPending?: boolean;
   now: number;
   lastCtrlCAt: number;
   exitWindowMs?: number;
 }): { action: CtrlCAction; nextLastCtrlCAt: number } {
   const exitWindowMs = Math.max(1, Math.floor(params.exitWindowMs ?? 1000));
-  if (params.hasActiveRun) {
+  if (params.hasActiveRun && !params.abortPending) {
     return {
       action: "abort",
       nextLastCtrlCAt: 0,
@@ -351,6 +352,7 @@ export async function runTui(opts: TuiOptions) {
   let showThinking = false;
   let pairingHintShown = false;
   const localRunIds = new Set<string>();
+  let abortPendingRunId: string | null = null;
 
   const deliverDefault = opts.deliver ?? false;
   const autoMessage = opts.message?.trim();
@@ -364,6 +366,16 @@ export async function runTui(opts: TuiOptions) {
   let statusTimer: NodeJS.Timeout | null = null;
   let statusStartedAt: number | null = null;
   let lastActivityStatus = activityStatus;
+
+  const clearAbortPending = (runId?: string | null) => {
+    if (!abortPendingRunId) {
+      return;
+    }
+    if (runId && abortPendingRunId !== runId) {
+      return;
+    }
+    abortPendingRunId = null;
+  };
 
   const state: TuiStateAccess = {
     get agentDefaultId() {
@@ -412,6 +424,9 @@ export async function runTui(opts: TuiOptions) {
       return activeChatRunId;
     },
     set activeChatRunId(value) {
+      if (activeChatRunId !== value && (!value || abortPendingRunId === activeChatRunId)) {
+        clearAbortPending(activeChatRunId);
+      }
       activeChatRunId = value;
     },
     get historyLoaded() {
@@ -802,6 +817,10 @@ export async function runTui(opts: TuiOptions) {
     updateAutocompleteProvider,
     setActivityStatus,
     clearLocalRunIds,
+    markAbortPending: (runId) => {
+      abortPendingRunId = runId;
+    },
+    clearAbortPending,
   });
   const {
     refreshAgents,
@@ -883,6 +902,7 @@ export async function runTui(opts: TuiOptions) {
     const decision = resolveCtrlCAction({
       hasInput: editor.getText().trim().length > 0,
       hasActiveRun: Boolean(activeChatRunId),
+      abortPending: abortPendingRunId === activeChatRunId && Boolean(activeChatRunId),
       now,
       lastCtrlCAt,
     });
@@ -931,6 +951,14 @@ export async function runTui(opts: TuiOptions) {
   };
 
   client.onEvent = (evt) => {
+    if (evt.event === "chat" && evt.payload && typeof evt.payload === "object") {
+      const payload = evt.payload as { runId?: unknown; state?: unknown };
+      const runId = typeof payload.runId === "string" ? payload.runId : undefined;
+      const state = typeof payload.state === "string" ? payload.state : undefined;
+      if (runId && (state === "final" || state === "aborted" || state === "error")) {
+        clearAbortPending(runId);
+      }
+    }
     if (evt.event === "chat") {
       handleChatEvent(evt.payload);
     }
@@ -961,6 +989,7 @@ export async function runTui(opts: TuiOptions) {
   };
 
   client.onDisconnected = (reason) => {
+    clearAbortPending();
     isConnected = false;
     wasDisconnected = true;
     historyLoaded = false;

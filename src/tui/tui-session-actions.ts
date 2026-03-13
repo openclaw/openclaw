@@ -25,6 +25,8 @@ type SessionActionContext = {
   updateAutocompleteProvider: () => void;
   setActivityStatus: (text: string) => void;
   clearLocalRunIds?: () => void;
+  markAbortPending?: (runId: string) => void;
+  clearAbortPending?: (runId?: string | null) => void;
 };
 
 type SessionInfoDefaults = {
@@ -54,6 +56,8 @@ export function createSessionActions(context: SessionActionContext) {
     updateAutocompleteProvider,
     setActivityStatus,
     clearLocalRunIds,
+    markAbortPending,
+    clearAbortPending,
   } = context;
   let refreshSessionInfoPromise: Promise<void> = Promise.resolve();
   let lastSessionDefaults: SessionInfoDefaults | null = null;
@@ -378,16 +382,25 @@ export function createSessionActions(context: SessionActionContext) {
       tui.requestRender();
       return;
     }
+    const runId = state.activeChatRunId;
+    markAbortPending?.(runId);
     try {
-      await client.abortChat({
+      const result = await client.abortChat({
         sessionKey: state.currentSessionKey,
-        runId: state.activeChatRunId,
+        runId,
       });
-      setActivityStatus("aborted");
+      if (result?.aborted) {
+        setActivityStatus("aborted");
+      } else {
+        state.activeChatRunId = null;
+        clearAbortPending?.(runId);
+        setActivityStatus("idle");
+      }
     } catch (err) {
       // If the abort RPC fails, drop the local active-run pointer so Ctrl+C can
       // fall back to the normal warn/exit path instead of looping forever.
       state.activeChatRunId = null;
+      clearAbortPending?.(runId);
       chatLog.addSystem(`abort failed: ${String(err)}`);
       setActivityStatus("abort failed");
     }
