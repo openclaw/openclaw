@@ -460,10 +460,14 @@ export async function handleToolExecutionEnd(
         meta,
         actionFingerprint: callSummary?.actionFingerprint,
       });
-      // Also clear when the same tool type succeeds on a different target,
-      // which indicates the agent retried the operation successfully (issue #42912).
+      // Also clear when the same tool type performs a *different* mutating action
+      // successfully, which indicates the agent retried the operation on a new
+      // target (issue #42912).  Require the success to also be mutating so that
+      // read-only calls (e.g. `list`, `get`) don't accidentally clear an
+      // unresolved write failure.
       const sameToolRetried =
         !sameAction &&
+        callSummary?.mutatingAction === true &&
         toolName.trim().toLowerCase() === ctx.state.lastToolError.toolName.trim().toLowerCase();
       if (sameAction || sameToolRetried) {
         ctx.state.lastToolError = undefined;
