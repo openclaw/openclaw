@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
+import type { EmbeddingInput } from "./embedding-inputs.js";
 import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
 import {
   createMistralEmbeddingProvider,
@@ -35,6 +36,7 @@ export type EmbeddingProvider = {
   maxInputTokens?: number;
   embedQuery: (text: string) => Promise<number[]>;
   embedBatch: (texts: string[]) => Promise<number[][]>;
+  embedBatchInputs?: (inputs: EmbeddingInput[]) => Promise<number[][]>;
 };
 
 export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
@@ -64,6 +66,7 @@ export type EmbeddingProviderOptions = {
   agentDir?: string;
   provider: EmbeddingProviderRequest;
   outputDimensionality?: number;
+  taskType?: string;
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
