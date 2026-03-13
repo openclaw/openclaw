@@ -248,11 +248,14 @@ export function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | und
       | (SimpleStreamOptions & { openaiWsWarmup?: boolean })
       | undefined;
     const inferredTransport =
-      options?.transport ?? (isDirectOpenAIBaseUrl(model.baseUrl) ? "auto" : "sse");
+      options?.transport ??
+      (typeof model.baseUrl === "string" && !isDirectOpenAIBaseUrl(model.baseUrl) ? "sse" : "auto");
+
+    const warmupDefault = inferredTransport !== "sse";
     const mergedOptions = {
       ...options,
       transport: inferredTransport,
-      openaiWsWarmup: typedOptions?.openaiWsWarmup ?? inferredTransport === "auto",
+      openaiWsWarmup: typedOptions?.openaiWsWarmup ?? warmupDefault,
     } as SimpleStreamOptions;
     return underlying(model, context, mergedOptions);
   };

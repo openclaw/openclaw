@@ -1075,7 +1075,6 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-responses",
       provider: "openai",
       id: "gpt-5",
-      baseUrl: "https://api.openai.com/v1",
     } as Model<"openai-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
