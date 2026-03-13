@@ -1,5 +1,5 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { getLatestCortexCaptureHistoryEntrySync } from "../../agents/cortex-history.js";
+import { getCachedLatestCortexCaptureHistoryEntry } from "../../agents/cortex-history.js";
 import { resolveAgentCortexConfig } from "../../agents/cortex.js";
 import { getHealthSnapshot, type HealthSummary } from "../../commands/health.js";
 import { STATE_DIR, createConfigIO, loadConfig } from "../../config/config.js";
@@ -22,7 +22,7 @@ export function buildGatewaySnapshot(): Snapshot {
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const cortex = resolveAgentCortexConfig(cfg, defaultAgentId);
   const latestCortexCapture = cortex
-    ? getLatestCortexCaptureHistoryEntrySync({ agentId: defaultAgentId })
+    ? getCachedLatestCortexCaptureHistoryEntry({ agentId: defaultAgentId })
     : null;
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
   const mainSessionKey = resolveMainSessionKey(cfg);
