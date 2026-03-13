@@ -91,7 +91,7 @@ async function sendNotification(params: {
         log.warn("pairing-notify: WhatsApp send function not available");
         return;
       }
-      await send(target, text, { accountId });
+      await send(target, text, { verbose: false, accountId });
       break;
     }
     case "discord": {
