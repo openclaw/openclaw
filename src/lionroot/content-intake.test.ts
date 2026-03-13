@@ -63,22 +63,22 @@ function createConfig(): OpenClawConfig {
     channels: {
       zulip: {
         botEmail: "liev-bot@example.com",
-        botApiKey: "liev-key",
+        botApiKey: "liev-key", // pragma: allowlist secret
         baseUrl: "https://zulip.example.com",
         accounts: {
           cody: {
             botEmail: "cody-bot@example.com",
-            botApiKey: "cody-key",
+            botApiKey: "cody-key", // pragma: allowlist secret
             baseUrl: "https://zulip.example.com",
           },
           liev: {
             botEmail: "liev-bot@example.com",
-            botApiKey: "liev-key",
+            botApiKey: "liev-key", // pragma: allowlist secret
             baseUrl: "https://zulip.example.com",
           },
           leo: {
             botEmail: "leo-bot@example.com",
-            botApiKey: "leo-key",
+            botApiKey: "leo-key", // pragma: allowlist secret
             baseUrl: "https://zulip.example.com",
           },
         },
@@ -146,6 +146,7 @@ describe("handleContentIntake forwarded agent routing", () => {
     mockDeliverOutboundPayloads.mockReset().mockResolvedValue([]);
     mockResolveTwitterContent.mockReset().mockResolvedValue(null);
     mockClassifyContentWithLLM.mockReset().mockResolvedValue({
+      kind: "recognized",
       agentId: "cody",
       confidence: "high",
       reason: "LLM classified as Cody",
@@ -239,28 +240,22 @@ describe("handleContentIntake forwarded agent routing", () => {
     );
   });
 
-  it("forwards main fallback classifications to the configured default agent", async () => {
+  it("lets abstained classifications fall back to normal dispatch", async () => {
     const params = createParams();
+    params.bodyText = "some ambiguous note";
     mockClassifyContentWithLLM.mockResolvedValueOnce({
-      agentId: "main",
+      kind: "abstain",
       confidence: "low",
       reason: "LLM timeout/error",
     });
 
     const result = await handleContentIntake(params);
 
-    expect(result).toEqual({ handled: true });
-    expect(params.decision.route.agentId).toBe("leo");
-    expect(params.decision.route.sessionKey).toContain("agent:leo:");
-
-    expect(mockDispatchInboundMessage).toHaveBeenCalledTimes(1);
-    const [{ ctx }] = mockDispatchInboundMessage.mock.calls.map(([arg]) => arg);
-    expect(ctx.SessionKey).toContain("agent:leo:");
-
-    expect(mockDeliverOutboundPayloads).toHaveBeenCalledTimes(2);
-    for (const [call] of mockDeliverOutboundPayloads.mock.calls) {
-      expect(call.accountId).toBe("leo");
-    }
+    expect(result).toEqual({ handled: false });
+    expect(params.decision.route.agentId).toBe("liev");
+    expect(mockDispatchInboundMessage).not.toHaveBeenCalled();
+    expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(params.sendMessage).not.toHaveBeenCalled();
   });
 
   it("does not leak raw provider errors into forwarded iMessage summaries", async () => {
@@ -291,6 +286,7 @@ describe("handleContentIntake forwarded agent routing", () => {
 
   it("passes readable attachment text into content classification", async () => {
     const params = createParams();
+    params.bodyText = "please route this attachment";
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-content-intake-"));
     const textPath = path.join(tempDir, "PastedText.txt");
     await fs.writeFile(
@@ -311,5 +307,19 @@ describe("handleContentIntake forwarded agent routing", () => {
         attachmentText: expect.stringContaining("infrastructure bug report"),
       }),
     );
+  });
+
+  it("fast-path routes explicit health tags to Liev without calling the LLM", async () => {
+    const params = createParams();
+    params.bodyText = "health: check these recovery numbers";
+
+    const result = await handleContentIntake(params);
+
+    expect(result).toEqual({ handled: true });
+    expect(mockClassifyContentWithLLM).not.toHaveBeenCalled();
+    expect(params.decision.route.agentId).toBe("liev");
+    expect(mockDeliverOutboundPayloads).toHaveBeenCalledTimes(2);
+    const [firstForwardCall] = mockDeliverOutboundPayloads.mock.calls;
+    expect(firstForwardCall?.[0].to).toContain("08🌱 life-loop");
   });
 });

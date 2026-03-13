@@ -152,11 +152,12 @@ describe("buildForwardTarget", () => {
 });
 
 describe("formatForwardBody", () => {
-  it("includes tweet text, URL, and classification reason", () => {
+  it("includes tweet text, URL, and stable routed target text", () => {
     const body = formatForwardBody({
       tweetText: "Best supplements for sleep",
       tweetUrl: "https://x.com/user/status/123",
       classification: {
+        kind: "recognized",
         agentId: "liev",
         confidence: "high",
         reason: "LLM classified as health & wellness",
@@ -164,7 +165,8 @@ describe("formatForwardBody", () => {
     });
     expect(body).toContain("Best supplements for sleep");
     expect(body).toContain("https://x.com/user/status/123");
-    expect(body).toContain("LLM classified as health & wellness");
+    expect(body).toContain("Routed to liev");
+    expect(body).not.toContain("LLM classified as health & wellness");
   });
 
   it("includes tweet author when provided", () => {
@@ -173,6 +175,7 @@ describe("formatForwardBody", () => {
       tweetUrl: "https://x.com/user/status/123",
       tweetAuthor: "someuser",
       classification: {
+        kind: "recognized",
         agentId: "cody",
         confidence: "medium",
         reason: "LLM classified as code",
@@ -476,17 +479,28 @@ describe("formatGeneralForwardBody", () => {
   it("formats text-only content", () => {
     const body = formatGeneralForwardBody({
       text: "had a great run today",
-      classification: { agentId: "liev", confidence: "high", reason: "LLM classified as health" },
+      classification: {
+        kind: "recognized",
+        agentId: "liev",
+        confidence: "high",
+        reason: "LLM classified as health",
+      },
     });
     expect(body).toContain("had a great run today");
-    expect(body).toContain("LLM classified as health");
+    expect(body).toContain("Routed to liev");
+    expect(body).not.toContain("LLM classified as health");
   });
 
   it("includes media type when present", () => {
     const body = formatGeneralForwardBody({
       text: "<media:image>",
       mediaType: "image/jpeg",
-      classification: { agentId: "liev", confidence: "high", reason: "LLM classified as intake" },
+      classification: {
+        kind: "recognized",
+        agentId: "liev",
+        confidence: "high",
+        reason: "LLM classified as intake",
+      },
     });
     expect(body).toContain("image/jpeg");
   });

@@ -17,6 +17,7 @@ import {
 import {
   classifyContentWithLLM,
   parseAgentCategory,
+  resolveContentRouteFastPath,
   resolveContentRoutingConfig,
 } from "./content-route.js";
 
@@ -65,6 +66,10 @@ describe("intake pipe: scenario walkthrough", () => {
       agentDescriptions: AGENT_DESCRIPTIONS,
     });
 
+    expect(classification.kind).toBe("recognized");
+    if (classification.kind !== "recognized") {
+      throw new Error("expected recognized classification");
+    }
     expect(classification.agentId).toBe("liev");
     expect(classification.category).toBe("health");
 
@@ -104,6 +109,10 @@ describe("intake pipe: scenario walkthrough", () => {
       agentDescriptions: AGENT_DESCRIPTIONS,
     });
 
+    expect(classification.kind).toBe("recognized");
+    if (classification.kind !== "recognized") {
+      throw new Error("expected recognized classification");
+    }
     expect(classification.agentId).toBe("liev");
     expect(classification.category).toBe("intake");
 
@@ -141,6 +150,10 @@ describe("intake pipe: scenario walkthrough", () => {
       agentDescriptions: AGENT_DESCRIPTIONS,
     });
 
+    expect(classification.kind).toBe("recognized");
+    if (classification.kind !== "recognized") {
+      throw new Error("expected recognized classification");
+    }
     expect(classification.agentId).toBe("liev");
     expect(classification.category).toBe("intake");
 
@@ -174,6 +187,10 @@ describe("intake pipe: scenario walkthrough", () => {
       agentDescriptions: AGENT_DESCRIPTIONS,
     });
 
+    expect(classification.kind).toBe("recognized");
+    if (classification.kind !== "recognized") {
+      throw new Error("expected recognized classification");
+    }
     expect(classification.agentId).toBe("cody");
     expect(classification.category).toBeUndefined();
 
@@ -207,6 +224,10 @@ describe("intake pipe: scenario walkthrough", () => {
       agentDescriptions: AGENT_DESCRIPTIONS,
     });
 
+    expect(classification.kind).toBe("recognized");
+    if (classification.kind !== "recognized") {
+      throw new Error("expected recognized classification");
+    }
     expect(classification.agentId).toBe("liev");
     expect(classification.category).toBe("fitness");
 
@@ -246,6 +267,7 @@ describe("intake pipe: general forward body", () => {
     const body = formatGeneralForwardBody({
       text: "had a great run today 5k in 22min",
       classification: {
+        kind: "recognized",
         agentId: "liev",
         category: "fitness",
         confidence: "high",
@@ -253,7 +275,7 @@ describe("intake pipe: general forward body", () => {
       },
     });
     expect(body).toContain("had a great run today");
-    expect(body).toContain("Routed:");
+    expect(body).toContain("Routed to liev:fitness");
     expect(body).not.toContain("📎");
   });
 
@@ -262,6 +284,7 @@ describe("intake pipe: general forward body", () => {
       text: "<media:image>",
       mediaType: "image/jpeg",
       classification: {
+        kind: "recognized",
         agentId: "liev",
         category: "intake",
         confidence: "high",
@@ -270,6 +293,26 @@ describe("intake pipe: general forward body", () => {
     });
     expect(body).toContain("📎");
     expect(body).toContain("image/jpeg");
+  });
+});
+
+describe("intake pipe: fast-path abstain helpers", () => {
+  it("routes explicit health tags to liev without requiring a URL", () => {
+    const fastPath = resolveContentRouteFastPath({
+      text: "health: imported recovery screenshot",
+      mediaType: "image/heic",
+    });
+    expect(fastPath).toEqual(
+      expect.objectContaining({
+        kind: "recognized",
+        agentId: "liev",
+        confidence: "high",
+      }),
+    );
+    if (!fastPath || fastPath.kind !== "recognized") {
+      throw new Error("expected recognized fast-path");
+    }
+    expect(fastPath.category).toBe("health");
   });
 });
 

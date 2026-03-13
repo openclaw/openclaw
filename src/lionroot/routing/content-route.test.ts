@@ -4,6 +4,7 @@ import {
   parseAgentCategory,
   resolveContentRouteFastPath,
   classifyContentWithLLM,
+  isRecognizedContentRoute,
   resolveContentRouteWithStickiness,
   resolveContentRoutingConfig,
   resolveTwitterContent,
@@ -63,9 +64,13 @@ describe("resolveContentRouteFastPath", () => {
       text: "Check this out https://github.com/openclaw/openclaw/pull/123",
     });
     expect(result).not.toBeNull();
-    expect(result!.agentId).toBe("cody");
-    expect(result!.confidence).toBe("high");
-    expect(result!.reason).toContain("GitHub URL");
+    expect(isRecognizedContentRoute(result)).toBe(true);
+    if (!isRecognizedContentRoute(result)) {
+      throw new Error("expected recognized fast-path");
+    }
+    expect(result.agentId).toBe("cody");
+    expect(result.confidence).toBe("high");
+    expect(result.reason).toContain("GitHub URL");
   });
 
   it("returns null for non-matching URLs", () => {
@@ -87,7 +92,24 @@ describe("resolveContentRouteFastPath", () => {
       text: "See https://docs.example.com and https://github.com/user/repo/issues/42",
     });
     expect(result).not.toBeNull();
-    expect(result!.agentId).toBe("cody");
+    if (!isRecognizedContentRoute(result)) {
+      throw new Error("expected recognized fast-path");
+    }
+    expect(result.agentId).toBe("cody");
+  });
+
+  it("routes explicit health prefixes to liev without requiring a URL", () => {
+    const result = resolveContentRouteFastPath({
+      text: "sleep: awful last night",
+    });
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: "recognized",
+        agentId: "liev",
+        category: "health",
+        confidence: "high",
+      }),
+    );
   });
 });
 
@@ -270,8 +292,13 @@ describe("classifyContentWithLLM", () => {
       agentDescriptions: AGENT_DESCRIPTIONS,
     });
 
-    expect(result.agentId).toBe("liev");
-    expect(result.confidence).toBe("high");
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: "recognized",
+        agentId: "liev",
+        confidence: "high",
+      }),
+    );
     expect(mockFetch).toHaveBeenCalledOnce();
     const fetchArgs = mockFetch.mock.calls[0];
     expect(fetchArgs[0]).toBe("http://localhost:11434/api/chat");
@@ -293,11 +320,16 @@ describe("classifyContentWithLLM", () => {
       agentDescriptions: AGENT_DESCRIPTIONS,
     });
 
-    expect(result.agentId).toBe("cody");
-    expect(result.confidence).toBe("medium"); // not clean response
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: "recognized",
+        agentId: "cody",
+        confidence: "medium",
+      }),
+    ); // not clean response
   });
 
-  it("falls back to main on unrecognized agent", async () => {
+  it("abstains on unrecognized agent", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValueOnce({
@@ -313,11 +345,15 @@ describe("classifyContentWithLLM", () => {
       agentDescriptions: AGENT_DESCRIPTIONS,
     });
 
-    expect(result.agentId).toBe("main");
-    expect(result.confidence).toBe("low");
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: "abstain",
+        confidence: "low",
+      }),
+    );
   });
 
-  it("falls back to main on fetch error", async () => {
+  it("abstains on fetch error", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValueOnce(new Error("connection refused")));
 
     const result = await classifyContentWithLLM({
@@ -327,12 +363,12 @@ describe("classifyContentWithLLM", () => {
       agentDescriptions: AGENT_DESCRIPTIONS,
     });
 
-    expect(result.agentId).toBe("main");
+    expect(result.kind).toBe("abstain");
     expect(result.confidence).toBe("low");
     expect(result.reason).toContain("timeout/error");
   });
 
-  it("falls back to main on non-ok response", async () => {
+  it("abstains on non-ok response", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({ ok: false, status: 503 }));
 
     const result = await classifyContentWithLLM({
@@ -342,7 +378,7 @@ describe("classifyContentWithLLM", () => {
       agentDescriptions: AGENT_DESCRIPTIONS,
     });
 
-    expect(result.agentId).toBe("main");
+    expect(result.kind).toBe("abstain");
     expect(result.confidence).toBe("low");
     expect(result.reason).toContain("LLM error");
   });
@@ -404,9 +440,14 @@ describe("classifyContentWithLLM", () => {
       agentDescriptions: AGENT_DESCRIPTIONS,
     });
 
-    expect(result.agentId).toBe("liev");
-    expect(result.category).toBe("intake");
-    expect(result.confidence).toBe("high");
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: "recognized",
+        agentId: "liev",
+        category: "intake",
+        confidence: "high",
+      }),
+    );
   });
 
   it("returns category as undefined for plain agent response", async () => {
@@ -425,7 +466,15 @@ describe("classifyContentWithLLM", () => {
       agentDescriptions: AGENT_DESCRIPTIONS,
     });
 
-    expect(result.agentId).toBe("cody");
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: "recognized",
+        agentId: "cody",
+      }),
+    );
+    if (result.kind !== "recognized") {
+      throw new Error("expected recognized classification");
+    }
     expect(result.category).toBeUndefined();
   });
 
@@ -513,13 +562,15 @@ describe("resolveContentRouteWithStickiness", () => {
     });
 
     expect(result).not.toBeNull();
-    expect(result!.agentId).toBe("cody");
+    if (!isRecognizedContentRoute(result)) {
+      throw new Error("expected recognized fast-path");
+    }
+    expect(result.agentId).toBe("cody");
     // LLM should not be called for fast-path
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it("applies stickiness after LLM classification", async () => {
-    // First message: LLM classifies as liev
+  it("returns abstain when a follow-up LLM response is unknown", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -534,10 +585,11 @@ describe("resolveContentRouteWithStickiness", () => {
       peer: "+15555550010",
       isGroup: false,
     });
-    expect(result1!.agentId).toBe("liev");
+    if (!isRecognizedContentRoute(result1)) {
+      throw new Error("expected recognized classification");
+    }
+    expect(result1.agentId).toBe("liev");
 
-    // Second message: ambiguous "thanks" — LLM returns main with low confidence,
-    // but stickiness keeps liev
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -552,10 +604,11 @@ describe("resolveContentRouteWithStickiness", () => {
       peer: "+15555550010",
       isGroup: false,
     });
-    // Stickiness should keep the agent as liev since "main" from LLM
-    // is a recognized agent but with low confidence the sticky should hold
-    // (if LLM returned exact "main" it's high confidence, so it switches)
-    // Actually, exact "main" → high confidence → switches. Let's test the actual behavior.
-    expect(result2).not.toBeNull();
+    expect(result2).toEqual(
+      expect.objectContaining({
+        kind: "abstain",
+        confidence: "low",
+      }),
+    );
   });
 });

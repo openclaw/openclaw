@@ -11,7 +11,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import { withFileLock, type FileLockOptions } from "../../plugin-sdk/file-lock.js";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "../../plugin-sdk/json-store.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import type { ContentRouteResult } from "./content-route.js";
+import type { RecognizedContentRouteResult } from "./content-route.js";
 
 export type ResolvedContentForwardConfig = {
   enabled: boolean;
@@ -34,10 +34,26 @@ const ZULIP_TOPIC_MAX = 60;
 function sanitizeZulipTopic(topic: string): string {
   // Remove control characters (U+0000–U+001F, U+007F–U+009F), zero-width
   // spaces/joiners, and other problematic Unicode (direction marks, etc.).
-  // eslint-disable-next-line no-control-regex
-  return topic
-    .replace(/[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202f\u2060\ufeff\ufff0-\uffff]/g, "")
-    .trim();
+  let sanitized = "";
+  for (const char of topic) {
+    const codePoint = char.codePointAt(0);
+    if (codePoint === undefined) {
+      continue;
+    }
+    const isControl =
+      (codePoint >= 0x0000 && codePoint <= 0x001f) || (codePoint >= 0x007f && codePoint <= 0x009f);
+    const isZeroWidthOrDirectional =
+      (codePoint >= 0x200b && codePoint <= 0x200f) ||
+      (codePoint >= 0x2028 && codePoint <= 0x202f) ||
+      codePoint === 0x2060 ||
+      codePoint === 0xfeff;
+    const isNoncharacter = codePoint >= 0xfff0 && codePoint <= 0xffff;
+    if (isControl || isZeroWidthOrDirectional || isNoncharacter) {
+      continue;
+    }
+    sanitized += char;
+  }
+  return sanitized.trim();
 }
 
 /**
@@ -101,7 +117,7 @@ export function formatForwardBody(params: {
   tweetText: string;
   tweetUrl: string;
   tweetAuthor?: string;
-  classification: ContentRouteResult;
+  classification: RecognizedContentRouteResult;
 }): string {
   const lines: string[] = [];
   if (params.tweetAuthor) {
@@ -111,7 +127,7 @@ export function formatForwardBody(params: {
   lines.push("");
   lines.push(params.tweetUrl);
   lines.push("");
-  lines.push(`*Routed: ${params.classification.reason}*`);
+  lines.push(formatRoutingSummary(params.classification));
   return lines.join("\n");
 }
 
@@ -121,7 +137,7 @@ export function formatForwardBody(params: {
 export function formatGeneralForwardBody(params: {
   text: string;
   mediaType?: string;
-  classification: ContentRouteResult;
+  classification: RecognizedContentRouteResult;
 }): string {
   const lines: string[] = [];
   if (params.mediaType) {
@@ -131,8 +147,15 @@ export function formatGeneralForwardBody(params: {
     lines.push(params.text);
   }
   lines.push("");
-  lines.push(`*Routed: ${params.classification.reason}*`);
+  lines.push(formatRoutingSummary(params.classification));
   return lines.join("\n");
+}
+
+function formatRoutingSummary(classification: RecognizedContentRouteResult): string {
+  const routedTarget = classification.category
+    ? `${classification.agentId}:${classification.category}`
+    : classification.agentId;
+  return `*Routed to ${routedTarget}*`;
 }
 
 function extractNonUrlContextText(text: string): string {

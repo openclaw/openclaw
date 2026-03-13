@@ -44,14 +44,15 @@ import {
 import {
   applyContentRouteOverride,
   classifyContentWithLLM,
+  isRecognizedContentRoute,
   resolveContentRoutingConfig,
+  resolveContentRouteFastPath,
   resolveTwitterContent,
   TWITTER_STATUS_RE,
   URL_RE,
 } from "./routing/content-route.js";
 
 const IMESSAGE_REPLY_TIMEOUT_SECONDS = 90;
-const DEFAULT_CONTENT_FORWARD_AGENT_ID = "leo";
 const FORWARDED_AGENT_FAILURE_SUMMARY =
   "⚠️ Forwarded to Zulip, but the agent hit a provider error while processing it. Retry the thread if needed.";
 const MAX_ROUTING_ATTACHMENT_TEXT_CHARS = 12_000;
@@ -169,29 +170,12 @@ function resolveZulipForwardAccountId(cfg: OpenClawConfig, agentId: string): str
   return Object.hasOwn(zulip.accounts, trimmedAgentId) ? trimmedAgentId : undefined;
 }
 
-function resolveForwardAgentId(params: {
-  cfg: OpenClawConfig;
-  contentRoutingCfg: { defaultAgentId?: string };
-  classifiedAgentId: string;
-}): string {
-  const resolvedAgentId = pickFirstExistingAgentId(params.cfg, params.classifiedAgentId);
-  const mainAgentId = pickFirstExistingAgentId(params.cfg, "main");
-  if (resolvedAgentId.trim().toLowerCase() !== mainAgentId.trim().toLowerCase()) {
-    return resolvedAgentId;
-  }
-  const defaultAgentId =
-    params.contentRoutingCfg.defaultAgentId?.trim() || DEFAULT_CONTENT_FORWARD_AGENT_ID;
-  return pickFirstExistingAgentId(params.cfg, defaultAgentId);
-}
-
 function shouldForwardClassification(params: {
-  cfg: OpenClawConfig;
   forwardCfg: ResolvedContentForwardConfig;
   agentId: string;
 }): boolean {
   const normalizedAgentId = params.agentId.trim().toLowerCase();
-  const mainAgentId = pickFirstExistingAgentId(params.cfg, "main").trim().toLowerCase();
-  if (!normalizedAgentId || normalizedAgentId === mainAgentId) {
+  if (!normalizedAgentId) {
     return false;
   }
   if (params.forwardCfg.streams[normalizedAgentId]) {
@@ -542,144 +526,147 @@ export async function handleContentIntake(
     });
 
     // 2. Classify content
-    const classification = await classifyContentWithLLM({
-      text: bodyText,
-      mediaType,
-      attachmentText,
-      tweetText,
-      model: contentRoutingCfg.model ?? "qwen3.5:9b",
-      ollamaUrl: contentRoutingCfg.ollamaUrl ?? "http://localhost:11434",
-      agentDescriptions: contentRoutingCfg.agents,
-    });
+    const fastPathClassification = resolveContentRouteFastPath({ text: bodyText, mediaType });
+    const classification =
+      fastPathClassification ??
+      (await classifyContentWithLLM({
+        text: bodyText,
+        mediaType,
+        attachmentText,
+        tweetText,
+        model: contentRoutingCfg.model ?? "qwen3.5:9b",
+        ollamaUrl: contentRoutingCfg.ollamaUrl ?? "http://localhost:11434",
+        agentDescriptions: contentRoutingCfg.agents,
+      }));
 
-    const agentId = resolveForwardAgentId({
-      cfg,
-      contentRoutingCfg,
-      classifiedAgentId: classification.agentId,
-    });
-    const category = classification.category;
-    if (!shouldForwardClassification({ cfg, forwardCfg, agentId })) {
-      logVerbose(
-        `content-forward: skipped forward for ${agentId || "(empty)"}; falling back to normal dispatch`,
-      );
+    if (!isRecognizedContentRoute(classification)) {
+      logVerbose(`content-forward: ${classification.reason}; falling back to normal dispatch`);
     } else {
-      const zulipAccountId = resolveZulipForwardAccountId(cfg, agentId);
-      if (!zulipAccountId) {
+      const agentId = pickFirstExistingAgentId(cfg, classification.agentId);
+      const category = classification.category;
+      if (!shouldForwardClassification({ forwardCfg, agentId })) {
         logVerbose(
-          `content-forward: no Zulip account configured for ${agentId}; using channel default`,
+          `content-forward: skipped forward for ${agentId || "(empty)"}; falling back to normal dispatch`,
         );
-      }
-
-      // 3. Build topic suffix and target
-      const topicInfo = buildTopicSuffix({ text: bodyText, mediaType, tweetText });
-      const target = buildForwardTarget({
-        config: forwardCfg,
-        agentId,
-        category,
-        topicSuffix: truncateUtf16Safe(topicInfo.suffix, 40),
-        topicPrefix: topicInfo.prefix,
-      });
-
-      // 4. Forward content to Zulip
-      const forwardPayloads: ReplyPayload[] = [];
-      if (tweetText && tweetUrl) {
-        forwardPayloads.push({
-          text: formatForwardBody({
-            tweetText,
-            tweetUrl,
-            classification,
-          }),
-        });
       } else {
-        forwardPayloads.push({
-          text: formatGeneralForwardBody({
-            text: bodyText,
-            mediaType,
-            classification,
-          }),
-          ...(mediaPath ? { mediaUrl: mediaPath } : {}),
+        const zulipAccountId = resolveZulipForwardAccountId(cfg, agentId);
+        if (!zulipAccountId) {
+          logVerbose(
+            `content-forward: no Zulip account configured for ${agentId}; using channel default`,
+          );
+        }
+
+        // 3. Build topic suffix and target
+        const topicInfo = buildTopicSuffix({ text: bodyText, mediaType, tweetText });
+        const target = buildForwardTarget({
+          config: forwardCfg,
+          agentId,
+          category,
+          topicSuffix: truncateUtf16Safe(topicInfo.suffix, 40),
+          topicPrefix: topicInfo.prefix,
         });
+
+        // 4. Forward content to Zulip
+        const forwardPayloads: ReplyPayload[] = [];
+        if (tweetText && tweetUrl) {
+          forwardPayloads.push({
+            text: formatForwardBody({
+              tweetText,
+              tweetUrl,
+              classification,
+            }),
+          });
+        } else {
+          forwardPayloads.push({
+            text: formatGeneralForwardBody({
+              text: bodyText,
+              mediaType,
+              classification,
+            }),
+            ...(mediaPath ? { mediaUrl: mediaPath } : {}),
+          });
+        }
+        const forwardResults = await deliverOutboundPayloads({
+          cfg,
+          channel: target.channel as "zulip",
+          to: target.to,
+          accountId: zulipAccountId,
+          payloads: forwardPayloads,
+          skipQueue: true,
+        });
+
+        // 5. Ack to iMessage sender
+        const streamName = target.to.match(/^stream:([^:]+):/)?.[1] ?? agentId;
+        const topic = target.to.match(/:topic:(.+)$/)?.[1];
+        const ack = formatForwardAck({
+          agentId,
+          stream: streamName,
+          topic,
+          zulipBaseUrl,
+          zulipMessageId: forwardResults[0]?.messageId,
+        });
+        await sendMessage(sender, ack, {
+          client,
+          maxBytes: mediaMaxBytes,
+          accountId: accountInfo.accountId,
+          ...(chatId ? { chatId } : {}),
+        });
+
+        // 6. Remember forward for follow-ups
+        const forwardEntry = {
+          channel: target.channel,
+          to: target.to,
+          agentId,
+          stream: streamName,
+          messageId: forwardResults[0]?.messageId,
+          ...(tweetId ? { tweetId } : {}),
+          ...(tweetText ? { tweetText } : {}),
+          ...(category ? { category } : {}),
+          timestamp: Date.now(),
+        };
+        recordLastForward(decision.senderNormalized, forwardEntry);
+        if (tweetId) {
+          await recordRecentTweetForward(decision.senderNormalized, tweetId, forwardEntry);
+        }
+
+        // 7. Dispatch agent for processing — re-route replies to Zulip
+        assignForwardedAgentRoute({
+          cfg,
+          decision,
+          agentId,
+          accountId: accountInfo.accountId,
+        });
+
+        await dispatchForwardedToAgent({
+          cfg,
+          decision,
+          message,
+          previousTimestamp: readSessionUpdatedAt({
+            storePath: resolveStorePath(cfg.session?.store, { agentId }),
+            sessionKey: decision.route.sessionKey,
+          }),
+          remoteHost,
+          historyLimit,
+          groupHistories,
+          media: { path: mediaPath, type: mediaType, paths: mediaPaths, types: mediaTypes },
+          target: { channel: target.channel, to: target.to },
+          zulipAccountId,
+          accountInfo,
+          runtime,
+          client,
+          mediaMaxBytes,
+          textLimit,
+          sentMessageCache,
+          chatId,
+          sender,
+          sendMessage,
+        });
+
+        logVerbose(
+          `content-forward: ${classification.reason}${category ? `:${category}` : ""}${classification.agentId !== agentId ? ` (resolved → ${agentId})` : ""} → ${target.channel}:${agentId}`,
+        );
+        return { handled: true };
       }
-      const forwardResults = await deliverOutboundPayloads({
-        cfg,
-        channel: target.channel as "zulip",
-        to: target.to,
-        accountId: zulipAccountId,
-        payloads: forwardPayloads,
-        skipQueue: true,
-      });
-
-      // 5. Ack to iMessage sender
-      const streamName = target.to.match(/^stream:([^:]+):/)?.[1] ?? agentId;
-      const topic = target.to.match(/:topic:(.+)$/)?.[1];
-      const ack = formatForwardAck({
-        agentId,
-        stream: streamName,
-        topic,
-        zulipBaseUrl,
-        zulipMessageId: forwardResults[0]?.messageId,
-      });
-      await sendMessage(sender, ack, {
-        client,
-        maxBytes: mediaMaxBytes,
-        accountId: accountInfo.accountId,
-        ...(chatId ? { chatId } : {}),
-      });
-
-      // 6. Remember forward for follow-ups
-      const forwardEntry = {
-        channel: target.channel,
-        to: target.to,
-        agentId,
-        stream: streamName,
-        messageId: forwardResults[0]?.messageId,
-        ...(tweetId ? { tweetId } : {}),
-        ...(tweetText ? { tweetText } : {}),
-        ...(category ? { category } : {}),
-        timestamp: Date.now(),
-      };
-      recordLastForward(decision.senderNormalized, forwardEntry);
-      if (tweetId) {
-        await recordRecentTweetForward(decision.senderNormalized, tweetId, forwardEntry);
-      }
-
-      // 7. Dispatch agent for processing — re-route replies to Zulip
-      assignForwardedAgentRoute({
-        cfg,
-        decision,
-        agentId,
-        accountId: accountInfo.accountId,
-      });
-
-      await dispatchForwardedToAgent({
-        cfg,
-        decision,
-        message,
-        previousTimestamp: readSessionUpdatedAt({
-          storePath: resolveStorePath(cfg.session?.store, { agentId }),
-          sessionKey: decision.route.sessionKey,
-        }),
-        remoteHost,
-        historyLimit,
-        groupHistories,
-        media: { path: mediaPath, type: mediaType, paths: mediaPaths, types: mediaTypes },
-        target: { channel: target.channel, to: target.to },
-        zulipAccountId,
-        accountInfo,
-        runtime,
-        client,
-        mediaMaxBytes,
-        textLimit,
-        sentMessageCache,
-        chatId,
-        sender,
-        sendMessage,
-      });
-
-      logVerbose(
-        `content-forward: ${classification.reason}${category ? `:${category}` : ""}${classification.agentId !== agentId ? ` (default → ${agentId})` : ""} → ${target.channel}:${agentId}`,
-      );
-      return { handled: true };
     }
   }
 

@@ -11,12 +11,21 @@ import { runExec } from "../../process/exec.js";
 import { buildAgentSessionKey, pickFirstExistingAgentId } from "../../routing/resolve-route.js";
 import { resolveWithStickiness, type ContentConfidence } from "./content-session-sticky.js";
 
-export type ContentRouteResult = {
+export type RecognizedContentRouteResult = {
+  kind: "recognized";
   agentId: string;
   category?: string;
   confidence: ContentConfidence;
   reason: string;
 };
+
+export type AbstainedContentRouteResult = {
+  kind: "abstain";
+  confidence: "low";
+  reason: string;
+};
+
+export type ContentRouteResult = RecognizedContentRouteResult | AbstainedContentRouteResult;
 
 export type ContentRoutingConfig = {
   enabled: boolean;
@@ -39,6 +48,25 @@ export const TWITTER_STATUS_RE = /(?:twitter\.com|x\.com)\/[^/]+\/status\/(\d+)/
 
 // GitHub URL pattern
 const GITHUB_RE = /github\.com\//i;
+
+const HEALTH_TAG_PATTERNS: Array<{
+  pattern: RegExp;
+  category?: string;
+  reason: string;
+}> = [
+  { pattern: /^\s*health\s*:/i, category: "health", reason: "fast-path: health tag" },
+  { pattern: /^\s*recovery\s*:/i, category: "health", reason: "fast-path: recovery tag" },
+  { pattern: /^\s*sleep\s*:/i, category: "health", reason: "fast-path: sleep tag" },
+  { pattern: /^\s*workout\s*:/i, category: "fitness", reason: "fast-path: workout tag" },
+  { pattern: /^\s*\[liev\]/i, reason: "fast-path: [liev]" },
+  { pattern: /^\s*liev\s*:/i, reason: "fast-path: liev prefix" },
+];
+
+export function isRecognizedContentRoute(
+  result: ContentRouteResult | null | undefined,
+): result is RecognizedContentRouteResult {
+  return Boolean(result && result.kind === "recognized");
+}
 
 /**
  * Resolve the content routing config from OpenClawConfig.
@@ -71,6 +99,18 @@ export function resolveContentRouteFastPath(opts: {
   text: string;
   mediaType?: string;
 }): ContentRouteResult | null {
+  for (const tagPattern of HEALTH_TAG_PATTERNS) {
+    if (tagPattern.pattern.test(opts.text)) {
+      return {
+        kind: "recognized",
+        agentId: "liev",
+        ...(tagPattern.category ? { category: tagPattern.category } : {}),
+        confidence: "high",
+        reason: tagPattern.reason,
+      };
+    }
+  }
+
   const urls = opts.text.match(URL_RE);
   if (!urls) {
     return null;
@@ -78,6 +118,7 @@ export function resolveContentRouteFastPath(opts: {
   for (const url of urls) {
     if (GITHUB_RE.test(url)) {
       return {
+        kind: "recognized",
         agentId: "cody",
         confidence: "high",
         reason: `fast-path: GitHub URL (${url})`,
@@ -166,7 +207,7 @@ ${agentLines}
 Message:
 ${messageContext}
 
-Reply with ONLY the agent name, optionally followed by a colon and content category. Examples: "liev", "liev:intake", "cody:review". If unsure, reply "main".`;
+Reply with ONLY the agent name, optionally followed by a colon and content category. Examples: "liev", "liev:intake", "cody:review". If unsure, reply "unknown".`;
 
   try {
     const response = await fetch(`${opts.ollamaUrl}/api/chat`, {
@@ -187,7 +228,7 @@ Reply with ONLY the agent name, optionally followed by a colon and content categ
 
     if (!response.ok) {
       logDebug(`[content-route] Ollama returned ${response.status}`);
-      return { agentId: "main", confidence: "low", reason: "LLM error" };
+      return { kind: "abstain", confidence: "low", reason: "LLM error" };
     }
 
     const data = (await response.json()) as { message?: { content?: string } };
@@ -195,11 +236,20 @@ Reply with ONLY the agent name, optionally followed by a colon and content categ
     // Parse agent:category format — split on first colon
     const parsed = parseAgentCategory(rawResponse);
 
-    if (parsed.agentId && parsed.agentId in opts.agentDescriptions) {
+    if (!parsed.agentId || parsed.agentId === "unknown" || parsed.agentId === "main") {
+      return {
+        kind: "abstain",
+        confidence: "low",
+        reason: rawResponse ? `LLM abstained: "${rawResponse}"` : "LLM abstained",
+      };
+    }
+
+    if (parsed.agentId in opts.agentDescriptions) {
       // Determine confidence: if the response was clean (just agent or agent:category), high confidence
       const isClean =
         rawResponse === (parsed.category ? `${parsed.agentId}:${parsed.category}` : parsed.agentId);
       return {
+        kind: "recognized",
         agentId: parsed.agentId,
         category: parsed.category,
         confidence: isClean ? "high" : "medium",
@@ -208,13 +258,13 @@ Reply with ONLY the agent name, optionally followed by a colon and content categ
     }
 
     return {
-      agentId: "main",
+      kind: "abstain",
       confidence: "low",
       reason: `LLM returned unrecognized: "${rawResponse}"`,
     };
   } catch (err) {
     logDebug(`[content-route] Ollama classification failed: ${String(err)}`);
-    return { agentId: "main", confidence: "low", reason: "LLM timeout/error" };
+    return { kind: "abstain", confidence: "low", reason: "LLM timeout/error" };
   }
 }
 
@@ -248,7 +298,7 @@ export async function resolveContentRouteWithStickiness(opts: {
 
   // 1. Fast-path: URL pattern matching (no LLM, <1ms)
   const fastPath = resolveContentRouteFastPath({ text, mediaType: opts.mediaType });
-  if (fastPath) {
+  if (isRecognizedContentRoute(fastPath)) {
     const finalAgentId = resolveWithStickiness({
       peer: opts.peer,
       newAgentId: fastPath.agentId,
@@ -279,6 +329,11 @@ export async function resolveContentRouteWithStickiness(opts: {
     ollamaUrl,
     agentDescriptions: opts.cfg.agents,
   });
+
+  if (!isRecognizedContentRoute(llmResult)) {
+    opts.logVerbose?.(`content-route: ${llmResult.reason} → abstain`);
+    return llmResult;
+  }
 
   // 4. Apply session stickiness
   const finalAgentId = resolveWithStickiness({
@@ -320,7 +375,7 @@ export async function applyContentRouteOverride(params: {
     isGroup: params.isGroup,
     logVerbose: params.logVerbose,
   });
-  if (!contentResult) {
+  if (!isRecognizedContentRoute(contentResult)) {
     return null;
   }
 
