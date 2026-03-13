@@ -16,6 +16,7 @@ import { ACPX_BACKEND_ID, AcpxRuntime } from "./runtime.js";
 const CHROME_DEVTOOLS_MCP_SERVER_NAME = "chrome-devtools";
 const CHROME_DEVTOOLS_MCP_PINNED_VERSION = "0.20.0";
 const CHROME_DEVTOOLS_MCP_PACKAGE = `chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_PINNED_VERSION}`;
+const CHROME_DEVTOOLS_MCP_PAGE_ID_ROUTING_FLAG = "--experimental-page-id-routing";
 
 /**
  * Build the chrome-devtools-mcp server config from core browser.mcp settings.
@@ -37,7 +38,12 @@ export function buildChromeDevToolsMcpPreset(params: {
   if (params.existingMcpServers[CHROME_DEVTOOLS_MCP_SERVER_NAME]) {
     return undefined;
   }
-  const args: string[] = ["-y", CHROME_DEVTOOLS_MCP_PACKAGE, "--autoConnect"];
+  const args: string[] = [
+    "-y",
+    CHROME_DEVTOOLS_MCP_PACKAGE,
+    "--autoConnect",
+    CHROME_DEVTOOLS_MCP_PAGE_ID_ROUTING_FLAG,
+  ];
   const mode = params.browserMcp.mode ?? "full";
   if (mode === "slim") {
     args.push("--slim");
@@ -86,10 +92,15 @@ export function createAcpxRuntimeService(
         workspaceDir: ctx.workspaceDir,
       });
 
+      const browserMcpEnabled = ctx.config.browser?.mcp?.enabled === true;
+      const browserEvaluateEnabled = ctx.config.browser?.evaluateEnabled !== false;
+
       // Inject chrome-devtools-mcp preset when browser.mcp is enabled in core config.
       // Use a fresh object to avoid mutating the shared mcpServers reference across restarts.
+      // Preset injection also respects browser.evaluateEnabled because slim mode exposes evaluate_script.
       const chromePreset = buildChromeDevToolsMcpPreset({
-        browserMcp: ctx.config.browser?.mcp,
+        browserMcp:
+          browserMcpEnabled && browserEvaluateEnabled ? ctx.config.browser?.mcp : undefined,
         existingMcpServers: pluginConfig.mcpServers,
       });
       if (chromePreset) {
@@ -101,12 +112,13 @@ export function createAcpxRuntimeService(
           },
         };
         ctx.logger.info("chrome-devtools-mcp preset injected from browser.mcp config");
-      } else if (
-        ctx.config.browser?.mcp?.enabled &&
-        pluginConfig.mcpServers[CHROME_DEVTOOLS_MCP_SERVER_NAME]
-      ) {
+      } else if (browserMcpEnabled && pluginConfig.mcpServers[CHROME_DEVTOOLS_MCP_SERVER_NAME]) {
         ctx.logger.info(
           "chrome-devtools-mcp preset skipped: existing mcpServers entry takes precedence",
+        );
+      } else if (browserMcpEnabled && !browserEvaluateEnabled) {
+        ctx.logger.info(
+          "chrome-devtools-mcp preset skipped: browser.evaluateEnabled=false requires an explicit mcpServers override",
         );
       }
 

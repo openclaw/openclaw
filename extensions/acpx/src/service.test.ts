@@ -104,7 +104,7 @@ describe("buildChromeDevToolsMcpPreset", () => {
     });
     expect(result).toEqual({
       command: "npx",
-      args: ["-y", "chrome-devtools-mcp@0.20.0", "--autoConnect"],
+      args: ["-y", "chrome-devtools-mcp@0.20.0", "--autoConnect", "--experimental-page-id-routing"],
     });
   });
 
@@ -245,7 +245,7 @@ describe("createAcpxRuntimeService", () => {
     const passedConfig = getPassedPluginConfig(runtimeFactory);
     expect(passedConfig.mcpServers["chrome-devtools"]).toEqual({
       command: "npx",
-      args: ["-y", "chrome-devtools-mcp@0.20.0", "--autoConnect"],
+      args: ["-y", "chrome-devtools-mcp@0.20.0", "--autoConnect", "--experimental-page-id-routing"],
     });
   });
 
@@ -262,7 +262,13 @@ describe("createAcpxRuntimeService", () => {
     const passedConfig = getPassedPluginConfig(runtimeFactory);
     expect(passedConfig.mcpServers["chrome-devtools"]).toEqual({
       command: "npx",
-      args: ["-y", "chrome-devtools-mcp@0.20.0", "--autoConnect", "--slim"],
+      args: [
+        "-y",
+        "chrome-devtools-mcp@0.20.0",
+        "--autoConnect",
+        "--experimental-page-id-routing",
+        "--slim",
+      ],
     });
   });
 
@@ -276,6 +282,23 @@ describe("createAcpxRuntimeService", () => {
 
     const passedConfig = getPassedPluginConfig(runtimeFactory);
     expect(passedConfig.mcpServers["chrome-devtools"]).toBeUndefined();
+  });
+
+  it("skips the preset when browser.evaluateEnabled is false", async () => {
+    const { runtime } = createRuntimeStub(true);
+    const runtimeFactory = createRuntimeFactorySpy(runtime);
+    const service = createAcpxRuntimeService({ runtimeFactory });
+    const context = createServiceContext({
+      config: { browser: { evaluateEnabled: false, mcp: { enabled: true, mode: "slim" } } },
+    });
+
+    await service.start(context);
+
+    const passedConfig = getPassedPluginConfig(runtimeFactory);
+    expect(passedConfig.mcpServers["chrome-devtools"]).toBeUndefined();
+    expect(context.logger.info).toHaveBeenCalledWith(
+      "chrome-devtools-mcp preset skipped: browser.evaluateEnabled=false requires an explicit mcpServers override",
+    );
   });
 
   it("does not override explicit user-defined chrome-devtools entry", async () => {

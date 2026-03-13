@@ -31,13 +31,17 @@ export type BrowserSsrFPolicyConfig = {
   hostnameAllowlist?: string[];
 };
 export type BrowserMcpConfig = {
-  /** Enable Chrome DevTools MCP server for agent sessions. Default: false */
+  /**
+   * Enable the Chrome DevTools MCP preset for agent sessions. Default: false.
+   * The preset is skipped when browser.evaluateEnabled=false unless you configure an explicit
+   * mcpServers["chrome-devtools"] override in the ACPX plugin config.
+   */
   enabled?: boolean;
   /**
    * Tool exposure mode.
    * - "full": all 29 DevTools MCP tools (input, navigation, debugging, performance, network, emulation).
    * - "slim": 3 essential tools only (navigate, evaluate_script, take_screenshot).
-   *   Note: evaluate_script is unaffected by browser.evaluateEnabled; ACPX permission mode controls it.
+   *   Preset injection respects browser.evaluateEnabled because slim mode includes evaluate_script.
    * Default: "full"
    */
   mode?: "full" | "slim";
