@@ -9,6 +9,10 @@ describe("buildAuthHealthSummary", () => {
   const now = 1_700_000_000_000;
   const profileStatuses = (summary: ReturnType<typeof buildAuthHealthSummary>) =>
     Object.fromEntries(summary.profiles.map((profile) => [profile.profileId, profile.status]));
+  const profileRefreshable = (summary: ReturnType<typeof buildAuthHealthSummary>) =>
+    Object.fromEntries(
+      summary.profiles.map((profile) => [profile.profileId, profile.refreshable ?? false]),
+    );
   const profileReasonCodes = (summary: ReturnType<typeof buildAuthHealthSummary>) =>
     Object.fromEntries(summary.profiles.map((profile) => [profile.profileId, profile.reasonCode]));
 
@@ -58,11 +62,18 @@ describe("buildAuthHealthSummary", () => {
     const statuses = profileStatuses(summary);
 
     expect(statuses["anthropic:ok"]).toBe("ok");
-    // OAuth credentials with refresh tokens are auto-renewable, so they report "ok"
-    expect(statuses["anthropic:expiring"]).toBe("ok");
-    expect(statuses["anthropic:expired"]).toBe("ok");
+    // OAuth credentials with refresh tokens report true status with refreshable flag
+    expect(statuses["anthropic:expiring"]).toBe("expiring");
+    expect(statuses["anthropic:expired"]).toBe("expired");
     expect(statuses["anthropic:api"]).toBe("static");
 
+    const refreshableFlags = profileRefreshable(summary);
+    expect(refreshableFlags["anthropic:ok"]).toBe(true);
+    expect(refreshableFlags["anthropic:expiring"]).toBe(true);
+    expect(refreshableFlags["anthropic:expired"]).toBe(true);
+    expect(refreshableFlags["anthropic:api"]).toBe(false);
+
+    // Provider-level rollup treats refreshable expired/expiring profiles as ok
     const provider = summary.providers.find((entry) => entry.provider === "anthropic");
     expect(provider?.status).toBe("ok");
   });

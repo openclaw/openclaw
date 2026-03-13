@@ -311,9 +311,13 @@ export async function modelsStatusCommand(
 
   const checkStatus = (() => {
     const hasExpiredOrMissing =
-      oauthProfiles.some((profile) => ["expired", "missing"].includes(profile.status)) ||
-      missingProvidersInUse.length > 0;
-    const hasExpiring = oauthProfiles.some((profile) => profile.status === "expiring");
+      oauthProfiles.some(
+        (profile) =>
+          profile.status === "missing" || (profile.status === "expired" && !profile.refreshable),
+      ) || missingProvidersInUse.length > 0;
+    const hasExpiring = oauthProfiles.some(
+      (profile) => profile.status === "expiring" && !profile.refreshable,
+    );
     if (hasExpiredOrMissing) {
       return 1;
     }
@@ -614,13 +618,17 @@ export async function modelsStatusCommand(
         const labelText = profile.label || profile.profileId;
         const label = colorize(rich, theme.accent, labelText);
         const status = formatStatus(profile.status);
+        const refreshable =
+          profile.refreshable && (profile.status === "expired" || profile.status === "expiring")
+            ? colorize(rich, theme.muted, " (refreshable)")
+            : "";
         const expiry =
           profile.status === "static"
             ? ""
             : profile.expiresAt
               ? ` expires in ${formatRemainingShort(profile.remainingMs)}`
               : " expires unknown";
-        runtime.log(`  - ${label} ${status}${expiry}`);
+        runtime.log(`  - ${label} ${status}${refreshable}${expiry}`);
       }
     }
   }
