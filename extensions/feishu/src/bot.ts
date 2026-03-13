@@ -771,7 +771,6 @@ export function buildBroadcastSessionKey(
 export function parseFeishuMessageEvent(
   event: FeishuMessageEvent,
   botOpenId?: string,
-  _botName?: string,
 ): FeishuMessageContext {
   const rawContent = parseMessageContent(event.message.content, event.message.message_type);
   const mentionedBot = checkBotMentioned(event, botOpenId);
@@ -863,12 +862,11 @@ export async function handleFeishuMessage(params: {
   cfg: ClawdbotConfig;
   event: FeishuMessageEvent;
   botOpenId?: string;
-  botName?: string;
   runtime?: RuntimeEnv;
   chatHistories?: Map<string, HistoryEntry[]>;
   accountId?: string;
 }): Promise<void> {
-  const { cfg, event, botOpenId, botName, runtime, chatHistories, accountId } = params;
+  const { cfg, event, botOpenId, runtime, chatHistories, accountId } = params;
 
   // Resolve account with merged config
   const account = resolveFeishuAccount({ cfg, accountId });
@@ -891,7 +889,7 @@ export async function handleFeishuMessage(params: {
     return;
   }
 
-  let ctx = parseFeishuMessageEvent(event, botOpenId, botName);
+  let ctx = parseFeishuMessageEvent(event, botOpenId);
   const isGroup = ctx.chatType === "group";
   const isDirect = !isGroup;
   const senderUserId = event.sender.sender_id.user_id?.trim() || undefined;
