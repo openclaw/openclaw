@@ -116,12 +116,12 @@ export default defineConfig([
       "line/template-messages": "src/line/template-messages.ts",
     },
   }),
-  ...pluginSdkEntrypoints.map((entry) =>
-    nodeBuildConfig({
-      entry: `src/plugin-sdk/${entry}.ts`,
-      outDir: "dist/plugin-sdk",
-    }),
-  ),
+  nodeBuildConfig({
+    // Bundle all plugin-sdk entries in a single build so the bundler can share
+    // common chunks instead of duplicating them per entry (~712MB heap saved).
+    entry: Object.fromEntries(pluginSdkEntrypoints.map((e) => [e, `src/plugin-sdk/${e}.ts`])),
+    outDir: "dist/plugin-sdk",
+  }),
   nodeBuildConfig({
     entry: "src/extensionAPI.ts",
   }),
