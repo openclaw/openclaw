@@ -85,6 +85,17 @@ const AcpBindingSchema = z
       });
       return;
     }
+    // Feishu/QQ allow omitting peer entirely (catch-all), but if peer is
+    // provided its id must be non-empty to avoid accidental catch-all.
+    if ((channel === "feishu" || channel === "qqbot") && value.match.peer && !peerId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["match", "peer", "id"],
+        message:
+          "Feishu/QQ ACP bindings require a non-empty peer.id when match.peer is specified. Omit peer entirely for catch-all.",
+      });
+      return;
+    }
     if (channel === "telegram" && !/^-\d+:topic:\d+$/.test(peerId)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

@@ -366,8 +366,13 @@ export function resolveConfiguredAcpBindingRecord(params: {
 
   // Feishu and QQ use direct conversationId matching.
   // When a binding omits peer.id it acts as a catch-all for the channel/account.
+  // Peer-specific bindings always take priority over catch-all bindings,
+  // regardless of declaration order.
   if (channel === "feishu" || channel === "qqbot") {
-    let wildcardMatch: AgentAcpBinding | null = null;
+    let peerExactMatch: AgentAcpBinding | null = null;
+    let peerWildcardMatch: AgentAcpBinding | null = null;
+    let catchAllExactMatch: AgentAcpBinding | null = null;
+    let catchAllWildcardMatch: AgentAcpBinding | null = null;
     for (const binding of listAcpBindings(params.cfg)) {
       if (normalizeBindingChannel(binding.match.channel) !== channel) {
         continue;
@@ -377,33 +382,35 @@ export function resolveConfiguredAcpBindingRecord(params: {
         continue;
       }
       const bindingConversationId = resolveBindingConversationId(binding);
-      if (bindingConversationId && bindingConversationId !== conversationId) {
-        continue;
-      }
-      if (accountMatchPriority === 2) {
-        const spec = toConfiguredBindingSpec({
-          cfg: params.cfg,
-          channel,
-          accountId,
-          conversationId,
-          binding,
-        });
-        return {
-          spec,
-          record: toConfiguredAcpBindingRecord(spec),
-        };
-      }
-      if (!wildcardMatch) {
-        wildcardMatch = binding;
+      if (bindingConversationId) {
+        // Peer-specific binding — must match conversationId exactly.
+        if (bindingConversationId !== conversationId) {
+          continue;
+        }
+        if (accountMatchPriority === 2 && !peerExactMatch) {
+          peerExactMatch = binding;
+        } else if (!peerWildcardMatch) {
+          peerWildcardMatch = binding;
+        }
+      } else {
+        // Catch-all binding (no peer.id).
+        if (accountMatchPriority === 2 && !catchAllExactMatch) {
+          catchAllExactMatch = binding;
+        } else if (!catchAllWildcardMatch) {
+          catchAllWildcardMatch = binding;
+        }
       }
     }
-    if (wildcardMatch) {
+    // Priority: peer exact > peer wildcard > catch-all exact > catch-all wildcard.
+    const bestMatch =
+      peerExactMatch ?? peerWildcardMatch ?? catchAllExactMatch ?? catchAllWildcardMatch;
+    if (bestMatch) {
       const spec = toConfiguredBindingSpec({
         cfg: params.cfg,
         channel,
         accountId,
         conversationId,
-        binding: wildcardMatch,
+        binding: bestMatch,
       });
       return {
         spec,
