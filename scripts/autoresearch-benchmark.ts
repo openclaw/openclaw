@@ -130,6 +130,11 @@ function escapeRegExp(s: string): string {
 const primaryPatterns: Array<{ label: string; pattern: RegExp }> = [
   { label: "group-chat-context", pattern: /^## Group Chat Context$/m },
   { label: "subagent-context", pattern: /^## Subagent Context$/m },
+  // channel= and capabilities= change per conversation in multi-channel deployments
+  // (same OpenClaw instance serving WhatsApp + Telegram + iMessage).
+  // Anything before these in the prompt can't be KV-cached across channels.
+  { label: "channel-runtime", pattern: /\bchannel=\w/m },
+  { label: "capabilities-runtime", pattern: /\bcapabilities=\w/m },
   {
     label: "memory-md-header",
     pattern: new RegExp(`^## ${escapeRegExp(workspaceDir)}/(MEMORY|memory)\\.md$`, "m"),
