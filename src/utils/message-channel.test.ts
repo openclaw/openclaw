@@ -52,6 +52,21 @@ describe("message-channel", () => {
     expect(normalizeMessageChannel(INTER_SESSION_CHANNEL)).toBe(INTER_SESSION_CHANNEL);
   });
 
+  it("ignores non-string plugin aliases during channel normalization", () => {
+    const plugin: ChannelPlugin = {
+      ...createMSTeamsTestPluginBase(),
+      meta: {
+        ...createMSTeamsTestPluginBase().meta,
+        aliases: ["teams", 42 as never, null as never],
+      },
+    };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "msteams", plugin, source: "test" }]));
+
+    expect(resolveGatewayMessageChannel("teams")).toBe("msteams");
+    expect(() => normalizeMessageChannel("unknown-channel")).not.toThrow();
+    expect(normalizeMessageChannel("unknown-channel")).toBe("unknown-channel");
+  });
+
   it("does not let callers mutate the reserved channel source of truth", () => {
     const reserved = listReservedChannelIds();
 
