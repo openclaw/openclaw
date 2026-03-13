@@ -32,8 +32,11 @@ describe("loader", () => {
     await fs.mkdir(tmpDir, { recursive: true });
 
     // Disable bundled hooks during tests by setting env var to non-existent directory
-    envSnapshot = captureEnv(["OPENCLAW_BUNDLED_HOOKS_DIR"]);
+    // Disable color output to ensure consistent log format across platforms
+    envSnapshot = captureEnv(["OPENCLAW_BUNDLED_HOOKS_DIR", "NO_COLOR", "FORCE_COLOR"]);
     process.env.OPENCLAW_BUNDLED_HOOKS_DIR = "/nonexistent/bundled/hooks";
+    process.env.NO_COLOR = "1";
+    delete process.env.FORCE_COLOR;
     setLoggerOverride({ level: "silent", consoleLevel: "error" });
     loggingState.rawConsole = {
       log: vi.fn(),
