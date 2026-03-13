@@ -949,3 +949,33 @@
   background: var(--panel-strong);
   border-color: var(--accent);
 }
+
+/* New messages scroll button */
+.agent-chat__scroll-pill {
+  position: absolute;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 100px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  z-index: 10;
+}
+
+.agent-chat__scroll-pill:hover {
+  background: var(--accent-hover);
+}
+
+.agent-chat__scroll-pill svg {
+  width: 16px;
+  height: 16px;
+}
