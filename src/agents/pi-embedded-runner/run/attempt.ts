@@ -2796,14 +2796,40 @@ export async function runEmbeddedAttempt(
       // synthetic "missing tool result" errors and causing silent agent failures.
       // See: https://github.com/openclaw/openclaw/issues/8643
       removeToolResultContextGuard?.();
-      await flushPendingToolResultsAfterIdle({
-        agent: session?.agent,
-        sessionManager,
-        clearPendingOnTimeout: true,
+      try {
+        await flushPendingToolResultsAfterIdle({
+          agent: session?.agent,
+          sessionManager,
+          clearPendingOnTimeout: true,
+        });
+      } catch (err) {
+        log.warn("flushPendingToolResultsAfterIdle failed during attempt cleanup", {
+          errorMessage: err instanceof Error ? err.message : String(err),
+          errorStack: err instanceof Error ? err.stack : undefined,
+        });
+      }
+      try {
+        session?.dispose();
+      } catch (err) {
+        log.warn("session.dispose failed during attempt cleanup", {
+          errorMessage: err instanceof Error ? err.message : String(err),
+          errorStack: err instanceof Error ? err.stack : undefined,
+        });
+      }
+      try {
+        releaseWsSession(params.sessionId);
+      } catch (err) {
+        log.warn("releaseWsSession failed during attempt cleanup", {
+          errorMessage: err instanceof Error ? err.message : String(err),
+          errorStack: err instanceof Error ? err.stack : undefined,
+        });
+      }
+      await sessionLock.release().catch((err) => {
+        log.warn("session lock release failed during attempt cleanup", {
+          errorMessage: err instanceof Error ? err.message : String(err),
+          errorStack: err instanceof Error ? err.stack : undefined,
+        });
       });
-      session?.dispose();
-      releaseWsSession(params.sessionId);
-      await sessionLock.release();
     }
   } finally {
     restoreSkillEnv?.();

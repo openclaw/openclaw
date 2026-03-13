@@ -28,6 +28,8 @@ const hoisted = vi.hoisted(() => {
   const resolveSandboxContextMock = vi.fn();
   const subscribeEmbeddedPiSessionMock = vi.fn();
   const acquireSessionWriteLockMock = vi.fn();
+  const flushPendingToolResultsAfterIdleMock = vi.fn(async () => {});
+  const releaseWsSessionMock = vi.fn();
   const sessionManager = {
     getLeafEntry: vi.fn(() => null),
     branch: vi.fn(),
@@ -42,6 +44,8 @@ const hoisted = vi.hoisted(() => {
     resolveSandboxContextMock,
     subscribeEmbeddedPiSessionMock,
     acquireSessionWriteLockMock,
+    flushPendingToolResultsAfterIdleMock,
+    releaseWsSessionMock,
     sessionManager,
   };
 });
@@ -155,7 +159,8 @@ vi.mock("../tool-result-context-guard.js", () => ({
 }));
 
 vi.mock("../wait-for-idle-before-flush.js", () => ({
-  flushPendingToolResultsAfterIdle: async () => {},
+  flushPendingToolResultsAfterIdle: (...args: unknown[]) =>
+    hoisted.flushPendingToolResultsAfterIdleMock(...args),
 }));
 
 vi.mock("../runs.js", () => ({
@@ -192,7 +197,7 @@ vi.mock("../extra-params.js", () => ({
 
 vi.mock("../../openai-ws-stream.js", () => ({
   createOpenAIWebSocketStreamFn: vi.fn(),
-  releaseWsSession: () => {},
+  releaseWsSession: (...args: unknown[]) => hoisted.releaseWsSessionMock(...args),
 }));
 
 vi.mock("../../anthropic-payload-log.js", () => ({
@@ -281,6 +286,8 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
     hoisted.acquireSessionWriteLockMock.mockReset().mockResolvedValue({
       release: async () => {},
     });
+    hoisted.flushPendingToolResultsAfterIdleMock.mockReset().mockResolvedValue(undefined);
+    hoisted.releaseWsSessionMock.mockReset();
     hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
     hoisted.sessionManager.branch.mockReset();
     hoisted.sessionManager.resetLeaf.mockReset();
@@ -504,6 +511,69 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
         timestamp: expect.any(Number),
       }),
     );
+  });
+
+  it("releases session lock even when flushPendingToolResultsAfterIdle throws", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cleanup-workspace-"));
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cleanup-agent-"));
+    const sessionFile = path.join(workspaceDir, "session.jsonl");
+    tempPaths.push(workspaceDir, agentDir);
+    await fs.writeFile(sessionFile, "", "utf8");
+
+    const releaseLock = vi.fn(async () => {});
+    hoisted.acquireSessionWriteLockMock.mockResolvedValue({
+      release: releaseLock,
+    });
+    hoisted.flushPendingToolResultsAfterIdleMock.mockRejectedValue(
+      new Error("flush cleanup failure"),
+    );
+    hoisted.createAgentSessionMock.mockImplementation(async () => {
+      const session: MutableSession = {
+        sessionId: "embedded-session",
+        messages: [],
+        isCompacting: false,
+        isStreaming: false,
+        agent: {
+          replaceMessages: (messages: unknown[]) => {
+            session.messages = [...messages];
+          },
+        },
+        prompt: async () => {
+          session.messages = [
+            ...session.messages,
+            { role: "assistant", content: "done", timestamp: 2 },
+          ];
+        },
+        abort: async () => {},
+        dispose: () => {},
+        steer: async () => {},
+      };
+
+      return { session };
+    });
+
+    const result = await runEmbeddedAttempt({
+      sessionId: "embedded-session",
+      sessionKey: "agent:main:test-cleanup-lock-release",
+      sessionFile,
+      workspaceDir,
+      agentDir,
+      config: {},
+      prompt: "hello",
+      timeoutMs: 10_000,
+      runId: "run-cleanup-lock-release",
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-20250514",
+      model: cacheTtlEligibleModel,
+      authStorage: {} as AuthStorage,
+      modelRegistry: {} as ModelRegistry,
+      thinkLevel: "off",
+      senderIsOwner: true,
+      disableMessageTool: true,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 });
 
