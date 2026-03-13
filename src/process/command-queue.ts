@@ -76,12 +76,14 @@ function getLaneState(lane: string): LaneState {
   return created;
 }
 
-function completeTask(state: LaneState, taskId: number, taskGeneration: number): boolean {
-  if (taskGeneration !== state.generation) {
-    return false;
-  }
-  state.activeTaskIds.delete(taskId);
-  return true;
+function completeTask(state: LaneState, taskId: number, _taskGeneration: number): boolean {
+  // Always remove the specific task ID when it settles. Task IDs are globally
+  // unique, so this cannot remove work started by a newer generation.
+  //
+  // This preserves lane concurrency safety after force-reset generation bumps:
+  // in-flight tasks from the previous generation still free a slot when they
+  // eventually finish instead of leaving the lane blocked forever.
+  return state.activeTaskIds.delete(taskId);
 }
 
 function drainLane(lane: string) {
@@ -294,8 +296,13 @@ export function resetLane(lane: string, opts?: ResetLaneOptions): ResetLaneResul
   }
 
   state.generation += 1;
-  state.activeTaskIds.clear();
-  state.draining = false;
+
+  // Preserve active bookkeeping when tasks are still running so force-reset
+  // cannot create artificial concurrency headroom.
+  if (activeBefore === 0) {
+    state.activeTaskIds.clear();
+    state.draining = false;
+  }
 
   if (!opts?.dropQueued && state.queue.length > 0) {
     drainLane(cleaned);

@@ -356,6 +356,59 @@ describe("command queue", () => {
     await expect(first).resolves.toBe("first");
   });
 
+  it("resetLane force mode preserves concurrency bookkeeping for active tasks", async () => {
+    const lane = `reset-force-safe-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    let releaseFirst!: () => void;
+    const blocker = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    let activeNow = 0;
+    let maxActive = 0;
+    const runTask = async (name: string, wait?: Promise<void>) => {
+      activeNow += 1;
+      maxActive = Math.max(maxActive, activeNow);
+      try {
+        if (wait) {
+          await wait;
+        }
+        return name;
+      } finally {
+        activeNow -= 1;
+      }
+    };
+
+    const first = enqueueCommandInLane(lane, async () => runTask("first", blocker));
+    const second = enqueueCommandInLane(lane, async () => runTask("second"));
+
+    await vi.waitFor(() => {
+      expect(getQueueSize(lane)).toBeGreaterThanOrEqual(2);
+    });
+
+    const result = resetLane(lane, {
+      dropQueued: false,
+      skipIfActive: false,
+      force: true,
+    });
+
+    expect(result.reset).toBe(true);
+    expect(result.activeBefore).toBe(1);
+    expect(result.droppedQueued).toBe(0);
+
+    const third = enqueueCommandInLane(lane, async () => runTask("third"));
+
+    releaseFirst();
+
+    await expect(Promise.all([first, second, third])).resolves.toEqual([
+      "first",
+      "second",
+      "third",
+    ]);
+    expect(maxActive).toBe(1);
+  });
+
   it("resetLane drops queued tasks and resets when lane is idle", () => {
     const lane = `reset-idle-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setCommandLaneConcurrency(lane, 1);
