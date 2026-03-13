@@ -527,8 +527,12 @@ export async function runOnboardingWizard(
   if (opts.skipSearch) {
     await prompter.note("Skipping search setup.", "Search");
   } else {
-    const { setupSearch } = await import("../commands/onboard-search.js");
+    const { setupSearch, setupXSearch } = await import("../commands/onboard-search.js");
     nextConfig = await setupSearch(nextConfig, runtime, prompter, {
+      quickstartDefaults: flow === "quickstart",
+      secretInputMode: opts.secretInputMode,
+    });
+    nextConfig = await setupXSearch(nextConfig, runtime, prompter, {
       quickstartDefaults: flow === "quickstart",
       secretInputMode: opts.secretInputMode,
     });
