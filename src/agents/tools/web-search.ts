@@ -1748,7 +1748,7 @@ async function runWebSearch(params: {
             ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
             : params.provider === "searxng"
               ? `${params.searxngUrl ?? DEFAULT_SEARXNG_URL}:${params.searxngCategories || DEFAULT_SEARXNG_CATEGORIES}:${params.searxngEngines?.join(",") || ""}:${params.searxngLanguage || DEFAULT_SEARXNG_LANGUAGE}:${params.searxngSafeSearch ?? 0}`
-            : "";
+              : "";
   const cacheKey = normalizeCacheKey(
     params.provider === "brave" && effectiveBraveMode === "llm-context"
       ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}`
@@ -2104,7 +2104,7 @@ export function createWebSearchTool(options?: {
               ? "Search the web using a self-hosted SearXNG metasearch engine. Aggregates results across multiple engines (Google, Bing, DuckDuckGo, and more) with no API key required. Supports category filtering (general, images, news, videos, files, social media) and engine selection."
               : braveMode === "llm-context"
                 ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
-              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+                : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",

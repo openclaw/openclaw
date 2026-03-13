@@ -58,15 +58,7 @@ services:
     tmpfs:
       - /tmp:size=64m
     healthcheck:
-      test:
-        [
-          "CMD",
-          "wget",
-          "--quiet",
-          "--tries=1",
-          "--spider",
-          "http://127.0.0.1:8080/",
-        ]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -95,11 +87,10 @@ networks:
   # No internet egress — containers here cannot reach external hosts.
   internal:
     driver: bridge
-    internal: true  # <-- This is the key: Docker blocks all outbound traffic
+    internal: true # <-- This is the key: Docker blocks all outbound traffic
 
   # Egress network: SearXNG only. Has internet access for upstream queries.
   # OpenClaw containers are NOT attached to this network.
   egress:
     driver: bridge
     # NOT internal — this network has internet access
-

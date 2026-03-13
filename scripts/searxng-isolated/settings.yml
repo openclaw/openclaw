@@ -33,10 +33,10 @@ search:
   #   - json
   #   - html
 
-  safe_search: 0       # 0=off, 1=moderate, 2=strict. Override via OpenClaw config.
+  safe_search: 0 # 0=off, 1=moderate, 2=strict. Override via OpenClaw config.
   default_lang: "en"
-  autocomplete: ""      # Disabled — not used by API clients
-  ban_time_on_fail: 5   # Seconds to ban an engine after failure
+  autocomplete: "" # Disabled — not used by API clients
+  ban_time_on_fail: 5 # Seconds to ban an engine after failure
   max_ban_time_on_fail: 120
 
 server:
@@ -69,7 +69,6 @@ ui:
 #   5. No API key required (engines that need keys are listed but disabled)
 
 engines:
-
   # ── General web search (primary) ─────────────────────────────
   #
   # These 3 engines provided all results in lab testing.
