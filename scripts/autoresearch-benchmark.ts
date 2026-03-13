@@ -72,11 +72,9 @@ const contextFiles = buildBootstrapContextFiles(rawFiles, {
   totalMaxChars: 150_000,
 });
 
-// Build the system prompt with representative parameters (group chat + extended thinking scenario)
-// reasoningLevel: "on" models the case where the user/agent has extended thinking enabled —
-// a common config for coding agents and power users. When the reasoning level changes
-// (user toggles /reasoning or a new session starts with a different default), the
-// Reasoning line changes and breaks the KV cache prefix.
+// Build the system prompt with representative parameters.
+// Includes ttsHint (voice assistant config) and messageToolHints (per-channel tool hints)
+// which are session/channel-specific and currently injected into the stable boilerplate.
 const prompt = buildAgentSystemPrompt({
   workspaceDir,
   toolNames,
@@ -94,6 +92,12 @@ const prompt = buildAgentSystemPrompt({
   extraSystemPrompt: GROUP_CHAT_EXTRA_PROMPT,
   reactionGuidance: { level: "minimal", channel: "WhatsApp" },
   reasoningLevel: "on",
+  // TTS hint: changes when voice assistant config changes (on/off, voice model, instructions)
+  ttsHint: "Reply with natural spoken language. Keep responses concise for voice delivery.",
+  // Per-channel message tool hints: change per channel (WhatsApp vs Telegram vs iMessage)
+  messageToolHints: [
+    "- For WhatsApp group chats: use reactions to acknowledge messages without noise.",
+  ],
   runtimeInfo: {
     host: "benchmark-host",
     os: "darwin",
@@ -138,9 +142,13 @@ const primaryPatterns: Array<{ label: string; pattern: RegExp }> = [
   // Reasoning line: `Reasoning: on/stream` breaks cache when reasoning is enabled.
   // The "off" default is stable; "on" and "stream" are per-session settings.
   { label: "reasoning-level", pattern: /\bReasoning: (on|stream)\b/m },
-  // Inline buttons note in messaging boilerplate contains the channel name
-  // (e.g. "not enabled for whatsapp") — breaks cache across different channels.
-  { label: "inline-buttons-channel", pattern: /not enabled for \w+/ },
+  // messageToolHints are per-channel (WhatsApp vs Telegram vs iMessage);
+  // they appear inside the message tool subsection of ## Messaging.
+  // These change every time the conversation switches channels.
+  { label: "message-tool-hints", pattern: /^- For WhatsApp/m },
+  // ttsHint: voice TTS config — changes when voice assistant is enabled/disabled or reconfigured.
+  // Appears in ## Voice (TTS) section in the stable boilerplate.
+  { label: "tts-hint", pattern: /^## Voice \(TTS\)$/m },
   // channel= and capabilities= change per conversation in multi-channel deployments
   { label: "channel-runtime", pattern: /\bchannel=\w/m },
   { label: "capabilities-runtime", pattern: /\bcapabilities=\w/m },
