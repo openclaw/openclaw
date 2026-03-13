@@ -13,6 +13,7 @@ import {
   toPluginMessageSentEvent,
 } from "../../hooks/message-hook-mappers.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
 import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
 import { isGifMedia, kindFromMime } from "../../media/mime.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -558,6 +559,7 @@ function emitMessageSentHooks(params: {
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
+  currentMessageId?: string;
   chatId: string;
   accountId?: string;
   sessionKeyForInternalHooks?: string;
@@ -592,7 +594,18 @@ export async function deliverReplies(params: {
     chunkMode: params.chunkMode ?? "length",
     tableMode: params.tableMode,
   });
-  for (const originalReply of params.replies) {
+  const validReplies: ReplyPayload[] = [];
+  for (const reply of params.replies) {
+    if (!reply) {
+      params.runtime.error?.(danger("reply is null or undefined"));
+      continue;
+    }
+    validReplies.push(reply);
+  }
+
+  for (const originalReply of normalizeReplyPayloadsForDelivery(validReplies, {
+    currentMessageId: params.currentMessageId,
+  })) {
     let reply = originalReply;
     const mediaList = reply?.mediaUrls?.length
       ? reply.mediaUrls
