@@ -139,6 +139,41 @@ describe("system events (session routing)", () => {
       vi.useRealTimers();
     }
   });
+
+  it("uses the config-resolved default agent timezone for legacy main session keys", async () => {
+    const key = "main";
+    const cfg = {
+      agents: {
+        defaults: {
+          envelopeTimezone: "user",
+          userTimezone: "America/New_York",
+        },
+        list: [{ id: "work", default: true, userTimezone: "America/Los_Angeles" }],
+      },
+    } as OpenClawConfig;
+    const timestamp = new Date("2026-01-12T20:19:17Z");
+    const expectedTimestamp = formatZonedTimestamp(timestamp, {
+      timeZone: "America/Los_Angeles",
+      displaySeconds: true,
+    });
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(timestamp);
+      enqueueSystemEvent("Model switched.", { sessionKey: key });
+
+      const result = await drainFormattedSystemEvents({
+        cfg,
+        sessionKey: key,
+        isMainSession: true,
+        isNewSession: false,
+      });
+
+      expect(expectedTimestamp).toBeDefined();
+      expect(result).toContain(`System: [${expectedTimestamp}] Model switched.`);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("isCronSystemEvent", () => {
