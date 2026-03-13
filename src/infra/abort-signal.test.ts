@@ -26,4 +26,32 @@ describe("waitForAbortSignal", () => {
     await task;
     expect(resolved).toBe(true);
   });
+
+  it("registers and removes the abort listener exactly once", async () => {
+    let handler: (() => void) | undefined;
+    const addEventListener = (
+      _type: string,
+      listener: () => void,
+      options?: AddEventListenerOptions,
+    ) => {
+      handler = listener;
+      expect(options).toEqual({ once: true });
+    };
+    const removeEventListener = (_type: string, listener: () => void) => {
+      expect(listener).toBe(handler);
+      removed += 1;
+    };
+    let removed = 0;
+
+    const task = waitForAbortSignal({
+      aborted: false,
+      addEventListener,
+      removeEventListener,
+    } as unknown as AbortSignal);
+
+    expect(handler).toBeTypeOf("function");
+    handler?.();
+    await expect(task).resolves.toBeUndefined();
+    expect(removed).toBe(1);
+  });
 });
