@@ -9,7 +9,9 @@ import {
   formatResolvedUnresolvedNote,
   mergeAllowFromEntries,
   normalizeAccountId,
+  normalizeNonTelegramGroupPolicy,
   patchScopedAccountConfig,
+  promptAccountId,
   promptChannelAccessConfig,
   resolveAccountIdForConfigure,
   setTopLevelChannelDmPolicyWithAllowFrom,
@@ -300,7 +302,9 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
 
     if (accessConfig) {
       if (accessConfig.policy !== "allowlist") {
-        next = setZalouserGroupPolicy(next, accountId, accessConfig.policy);
+        // "members" is Telegram-only; normalize to "open" for Zalo
+        const normalizedPolicy = normalizeNonTelegramGroupPolicy(accessConfig.policy);
+        next = setZalouserGroupPolicy(next, accountId, normalizedPolicy);
       } else {
         let keys = accessConfig.entries;
         if (accessConfig.entries.length > 0) {

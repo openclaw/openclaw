@@ -30,11 +30,12 @@ All channels support DM policies and group policies:
 | `open`              | Allow all inbound DMs (requires `allowFrom: ["*"]`)             |
 | `disabled`          | Ignore all inbound DMs                                          |
 
-| Group policy          | Behavior                                               |
-| --------------------- | ------------------------------------------------------ |
-| `allowlist` (default) | Only groups matching the configured allowlist          |
-| `open`                | Bypass group allowlists (mention-gating still applies) |
-| `disabled`            | Block all group/room messages                          |
+| Group policy          | Behavior                                                                          |
+| --------------------- | --------------------------------------------------------------------------------- |
+| `allowlist` (default) | Only groups matching the configured allowlist                                     |
+| `open`                | Bypass group allowlists (mention-gating still applies)                            |
+| `disabled`            | Block all group/room messages                                                     |
+| `members`             | Verify all group members are in the trusted `groupAllowFrom` list (Telegram only) |
 
 <Note>
 `channels.defaults.groupPolicy` sets the default when a provider's `groupPolicy` is unset.

@@ -8,6 +8,7 @@ import {
   buildChannelKeyCandidates,
   evaluateMatchedGroupAccessForPolicy,
   normalizeChannelSlug,
+  normalizeNonTelegramGroupPolicy,
   resolveChannelEntryMatchWithFallback,
   resolveMentionGatingWithBypass,
   resolveNestedAllowlistDecision,
@@ -129,6 +130,8 @@ export function resolveNextcloudTalkGroupAllow(params: {
   innerAllowFrom: Array<string | number> | undefined;
   senderId: string;
 }): { allowed: boolean; outerMatch: AllowlistMatch; innerMatch: AllowlistMatch } {
+  // "members" is Telegram-only; normalize to "open" for Nextcloud Talk
+  const groupPolicy = normalizeNonTelegramGroupPolicy(params.groupPolicy);
   const outerAllow = normalizeNextcloudTalkAllowlist(params.outerAllowFrom);
   const innerAllow = normalizeNextcloudTalkAllowlist(params.innerAllowFrom);
   const outerMatch = resolveNextcloudTalkAllowlistMatch({
@@ -140,7 +143,7 @@ export function resolveNextcloudTalkGroupAllow(params: {
     senderId: params.senderId,
   });
   const access = evaluateMatchedGroupAccessForPolicy({
-    groupPolicy: params.groupPolicy,
+    groupPolicy,
     allowlistConfigured: outerAllow.length > 0 || innerAllow.length > 0,
     allowlistMatched: resolveNestedAllowlistDecision({
       outerConfigured: outerAllow.length > 0 || innerAllow.length > 0,
@@ -153,15 +156,15 @@ export function resolveNextcloudTalkGroupAllow(params: {
   return {
     allowed: access.allowed,
     outerMatch:
-      params.groupPolicy === "open"
+      groupPolicy === "open"
         ? { allowed: true }
-        : params.groupPolicy === "disabled"
+        : groupPolicy === "disabled"
           ? { allowed: false }
           : outerMatch,
     innerMatch:
-      params.groupPolicy === "open"
+      groupPolicy === "open"
         ? { allowed: true }
-        : params.groupPolicy === "disabled"
+        : groupPolicy === "disabled"
           ? { allowed: false }
           : innerMatch,
   };

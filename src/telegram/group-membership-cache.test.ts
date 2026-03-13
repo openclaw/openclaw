@@ -1,0 +1,292 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { NormalizedAllowFrom } from "./bot-access.js";
+import {
+  clearGroupMembershipCache,
+  getMembershipCacheSize,
+  invalidateGroupMembership,
+  verifyGroupMembership,
+} from "./group-membership-cache.js";
+
+function makeAllowFrom(entries: string[], hasWildcard = false): NormalizedAllowFrom {
+  return {
+    entries,
+    hasWildcard,
+    hasEntries: entries.length > 0 || hasWildcard,
+    invalidEntries: [],
+  };
+}
+
+function makeApi(opts: {
+  memberCount?: number;
+  members?: Record<number, string>; // userId -> status
+  countError?: boolean;
+  memberError?: boolean;
+}) {
+  return {
+    getChatMemberCount: vi.fn(async () => {
+      if (opts.countError) {
+        throw new Error("API error");
+      }
+      return opts.memberCount ?? 0;
+    }),
+    getChatMember: vi.fn(async (_chatId: number, userId: number) => {
+      if (opts.memberError) {
+        throw new Error("API error");
+      }
+      const status = opts.members?.[userId] ?? "left";
+      return { status };
+    }),
+  } as unknown as import("grammy").Api;
+}
+
+describe("group-membership-cache", () => {
+  afterEach(() => {
+    clearGroupMembershipCache();
+  });
+
+  it("returns trusted when all members are in allowlist + bot", async () => {
+    const api = makeApi({
+      memberCount: 3, // 2 trusted users + 1 bot
+      members: { 111: "member", 222: "member", 999: "member" },
+    });
+    const result = await verifyGroupMembership({
+      chatId: -100123,
+      api,
+      botId: 999,
+      allowFrom: makeAllowFrom(["111", "222"]),
+    });
+    expect(result.trusted).toBe(true);
+    expect(result.reason).toBeUndefined();
+  });
+
+  it("returns untrusted when unknown members present (count mismatch)", async () => {
+    const api = makeApi({
+      memberCount: 5, // more than 2 trusted + 1 bot
+      members: { 111: "member", 222: "member" },
+    });
+    const result = await verifyGroupMembership({
+      chatId: -100456,
+      api,
+      botId: 999,
+      allowFrom: makeAllowFrom(["111", "222"]),
+    });
+    expect(result.trusted).toBe(false);
+    expect(result.reason).toContain("member-count-mismatch");
+  });
+
+  it("caches results (no API call on second check)", async () => {
+    const api = makeApi({
+      memberCount: 2,
+      members: { 111: "member", 999: "member" },
+    });
+    const allowFrom = makeAllowFrom(["111"]);
+
+    const r1 = await verifyGroupMembership({ chatId: -100789, api, botId: 999, allowFrom });
+    expect(r1.trusted).toBe(true);
+
+    const r2 = await verifyGroupMembership({ chatId: -100789, api, botId: 999, allowFrom });
+    expect(r2.trusted).toBe(true);
+
+    // getChatMemberCount should only be called once (first call), not on cached second call
+    expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+  });
+
+  it("invalidateGroupMembership clears cache for that chat", async () => {
+    const api = makeApi({
+      memberCount: 2,
+      members: { 111: "member", 999: "member" },
+    });
+    const allowFrom = makeAllowFrom(["111"]);
+
+    await verifyGroupMembership({ chatId: -100111, api, botId: 999, allowFrom });
+    expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+
+    invalidateGroupMembership(-100111);
+
+    await verifyGroupMembership({ chatId: -100111, api, botId: 999, allowFrom });
+    // Should have called API again after invalidation
+    expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
+  });
+
+  it("fails closed on API error (getChatMemberCount)", async () => {
+    const api = makeApi({ countError: true });
+    const result = await verifyGroupMembership({
+      chatId: -100222,
+      api,
+      botId: 999,
+      allowFrom: makeAllowFrom(["111"]),
+    });
+    expect(result.trusted).toBe(false);
+    expect(result.reason).toBe("api-error");
+  });
+
+  it("returns untrusted when no numeric entries in allowFrom", async () => {
+    const api = makeApi({ memberCount: 2 });
+    const result = await verifyGroupMembership({
+      chatId: -100333,
+      api,
+      botId: 999,
+      allowFrom: makeAllowFrom(["@alice", "@bob"]),
+    });
+    expect(result.trusted).toBe(false);
+    expect(result.reason).toBe("no-numeric-ids");
+    // Should not call API at all
+    expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0);
+  });
+
+  it("returns trusted immediately if allowFrom has wildcard", async () => {
+    const api = makeApi({ memberCount: 100 });
+    const result = await verifyGroupMembership({
+      chatId: -100444,
+      api,
+      botId: 999,
+      allowFrom: makeAllowFrom([], true),
+    });
+    expect(result.trusted).toBe(true);
+    // Should not call API at all
+    expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0);
+  });
+
+  it("handles members who left the group correctly", async () => {
+    const api = makeApi({
+      memberCount: 2, // 1 trusted user + 1 bot
+      members: { 111: "member", 222: "left", 999: "member" },
+    });
+    const result = await verifyGroupMembership({
+      chatId: -100555,
+      api,
+      botId: 999,
+      allowFrom: makeAllowFrom(["111", "222"]),
+    });
+    // 2 present (111 + bot 999), 222 left → 2 present = 2 total = trusted
+    expect(result.trusted).toBe(true);
+  });
+
+  it("returns untrusted when getChatMember fails for all users", async () => {
+    const api = makeApi({
+      memberCount: 2,
+      memberError: true,
+    });
+    const result = await verifyGroupMembership({
+      chatId: -100666,
+      api,
+      botId: 999,
+      allowFrom: makeAllowFrom(["111"]),
+    });
+    // 0 present (all getChatMember calls fail), but total is 2 → untrusted
+    expect(result.trusted).toBe(false);
+  });
+
+  it("same entries with different hasWildcard produce different cache keys (no collision)", async () => {
+    // allowFrom with hasWildcard=false: needs API to verify
+    const apiNoWild = makeApi({
+      memberCount: 2,
+      members: { 111: "member", 999: "member" },
+    });
+    const allowNoWild = makeAllowFrom(["111"], false);
+    const r1 = await verifyGroupMembership({
+      chatId: -100700,
+      api: apiNoWild,
+      botId: 999,
+      allowFrom: allowNoWild,
+    });
+    expect(r1.trusted).toBe(true);
+    // API was called for the non-wildcard path
+    expect((apiNoWild.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+
+    // allowFrom with same entries but hasWildcard=true: should be cached separately
+    const apiWild = makeApi({ memberCount: 100 });
+    const allowWild = makeAllowFrom(["111"], true);
+    const r2 = await verifyGroupMembership({
+      chatId: -100700,
+      api: apiWild,
+      botId: 999,
+      allowFrom: allowWild,
+    });
+    expect(r2.trusted).toBe(true);
+    // The wildcard path should NOT have hit the non-wildcard cache entry;
+    // it uses its own cache key and resolves immediately without calling the API.
+    expect((apiWild.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0);
+  });
+
+  it("uses separate cache entries for different botIds with same chatId and allowFrom", async () => {
+    const allowFrom: NormalizedAllowFrom = {
+      entries: ["111"],
+      hasWildcard: false,
+      hasEntries: true,
+      invalidEntries: [],
+    };
+    const mockApi = {
+      getChatMemberCount: vi.fn(async () => 2),
+      getChatMember: vi.fn(async () => ({ status: "member" })),
+    } as unknown as import("grammy").Api;
+
+    // Bot A: verified trusted
+    await verifyGroupMembership({ chatId: 1, api: mockApi, botId: 100, allowFrom });
+    // Bot B: same chat, same allowFrom — should make its own API call
+    await verifyGroupMembership({ chatId: 1, api: mockApi, botId: 200, allowFrom });
+
+    // Each bot should have triggered its own getChatMemberCount call
+    expect((mockApi.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
+  });
+
+  describe("eviction sweep", () => {
+    const TTL_MS = 5 * 60 * 1000;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      // Reset the cache and eviction timer AFTER installing fake timers so that
+      // the interval created by clearGroupMembershipCache() is under fake timer
+      // control. The module-level timer started at import time is a real timer.
+      clearGroupMembershipCache();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      clearGroupMembershipCache();
+    });
+
+    it("sweep removes stale entries from the Map independently of the TTL read-check", async () => {
+      const api = makeApi({
+        memberCount: 2,
+        members: { 111: "member", 999: "member" },
+      });
+      const allowFrom = makeAllowFrom(["111"]);
+
+      // Populate the cache; entry should be present immediately.
+      await verifyGroupMembership({ chatId: -100800, api, botId: 999, allowFrom });
+      expect(getMembershipCacheSize()).toBe(1);
+
+      // Advance time past TTL to fire the eviction interval.
+      vi.advanceTimersByTime(TTL_MS + 1);
+
+      // The sweep should have deleted the entry without any verifyGroupMembership call.
+      expect(getMembershipCacheSize()).toBe(0);
+    });
+
+    it("forces an API re-call after sweep evicts the entry (even if read-path TTL would still pass)", async () => {
+      const api = makeApi({
+        memberCount: 2,
+        members: { 111: "member", 999: "member" },
+      });
+      const allowFrom = makeAllowFrom(["111"]);
+
+      // Populate the cache and confirm one API call.
+      await verifyGroupMembership({ chatId: -100801, api, botId: 999, allowFrom });
+      expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+
+      // Fire the sweep interval (entry is now evicted).
+      vi.advanceTimersByTime(TTL_MS + 1);
+      expect(getMembershipCacheSize()).toBe(0);
+
+      // Reset fake clock to a point BEFORE the TTL would expire so the TTL
+      // read-check alone would return a cache-hit if the entry were still present.
+      // Because the sweep already deleted it, the API must be called again.
+      vi.setSystemTime(Date.now() - (TTL_MS - 1000));
+      const r2 = await verifyGroupMembership({ chatId: -100801, api, botId: 999, allowFrom });
+      expect(r2.trusted).toBe(true);
+      // API called a second time — proves the sweep (not TTL read-check) evicted the entry.
+      expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
+    });
+  });
+});

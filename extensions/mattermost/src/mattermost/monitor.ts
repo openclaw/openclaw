@@ -19,6 +19,7 @@ import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   recordPendingHistoryEntryIfEnabled,
   isDangerousNameMatchingEnabled,
+  normalizeNonTelegramGroupPolicy,
   parseStrictPositiveInteger,
   registerPluginHttpRoute,
   resolveControlCommandGate,
@@ -748,12 +749,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   );
   const channelHistories = new Map<string, HistoryEntry[]>();
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-  const { groupPolicy, providerMissingFallbackApplied } =
+  const { groupPolicy: rawGroupPolicy, providerMissingFallbackApplied } =
     resolveAllowlistProviderRuntimeGroupPolicy({
       providerConfigPresent: cfg.channels?.mattermost !== undefined,
       groupPolicy: account.config.groupPolicy,
       defaultGroupPolicy,
     });
+  // "members" is Telegram-only; normalize to "open" for Mattermost
+  const groupPolicy = normalizeNonTelegramGroupPolicy(rawGroupPolicy);
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "mattermost",

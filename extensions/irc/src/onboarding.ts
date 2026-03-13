@@ -1,7 +1,9 @@
 import {
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
+  normalizeNonTelegramGroupPolicy,
   patchScopedAccountConfig,
+  promptAccountId,
   promptChannelAccessConfig,
   resolveAccountIdForConfigure,
   setTopLevelChannelAllowFrom,
@@ -393,7 +395,9 @@ export const ircOnboardingAdapter: ChannelOnboardingAdapter = {
       updatePrompt: Boolean(afterConfig.config.groups),
     });
     if (accessConfig) {
-      next = setIrcGroupAccess(next, accountId, accessConfig.policy, accessConfig.entries);
+      // "members" is Telegram-only; normalize to "open" for IRC
+      const normalizedPolicy = normalizeNonTelegramGroupPolicy(accessConfig.policy);
+      next = setIrcGroupAccess(next, accountId, normalizedPolicy, accessConfig.entries);
 
       // Mention gating: groups/channels are mention-gated by default. Make this explicit in onboarding.
       const wantsMentions = await prompter.confirm({

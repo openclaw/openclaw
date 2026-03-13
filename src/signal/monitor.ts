@@ -344,9 +344,11 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const account = opts.account?.trim() || accountInfo.config.account?.trim();
   const dmPolicy = accountInfo.config.dmPolicy ?? "pairing";
   const allowFrom = normalizeAllowList(opts.allowFrom ?? accountInfo.config.allowFrom);
+  const defaultGroupAllowFrom = cfg.channels?.defaults?.groupAllowFrom;
   const groupAllowFrom = normalizeAllowList(
     opts.groupAllowFrom ??
       accountInfo.config.groupAllowFrom ??
+      defaultGroupAllowFrom ??
       (accountInfo.config.allowFrom && accountInfo.config.allowFrom.length > 0
         ? accountInfo.config.allowFrom
         : []),

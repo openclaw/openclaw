@@ -1,7 +1,7 @@
 import type { WizardPrompter } from "../../../wizard/prompts.js";
 import { splitOnboardingEntries } from "./helpers.js";
 
-export type ChannelAccessPolicy = "allowlist" | "open" | "disabled";
+export type ChannelAccessPolicy = "allowlist" | "open" | "disabled" | "members";
 
 export function parseAllowlistEntries(raw: string): string[] {
   return splitOnboardingEntries(String(raw ?? ""));

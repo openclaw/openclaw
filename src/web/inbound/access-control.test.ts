@@ -67,6 +67,112 @@ describe("checkInboundAccessControl pairing grace", () => {
   });
 });
 
+describe("channels.defaults.groupAllowFrom in checkInboundAccessControl", () => {
+  // Verifies that cfg.channels.defaults.groupAllowFrom is consulted when no
+  // account-level groupAllowFrom is set, and that group messages from senders
+  // not in the list are blocked while senders in the list are allowed.
+  it("blocks group messages from a sender not in defaults.groupAllowFrom", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+        },
+        defaults: {
+          groupAllowFrom: ["allowed-sender"],
+        },
+      },
+    });
+
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: true,
+      pushName: "Stranger",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "120363000000000001@g.us",
+    });
+
+    expect(result.allowed).toBe(false);
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("allows group messages from a sender in defaults.groupAllowFrom", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+        },
+        defaults: {
+          groupAllowFrom: ["allowed-sender"],
+        },
+      },
+    });
+
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "allowed-sender",
+      selfE164: "+15550009999",
+      senderE164: "allowed-sender",
+      group: true,
+      pushName: "Friend",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "120363000000000001@g.us",
+    });
+
+    expect(result.allowed).toBe(true);
+  });
+
+  it("uses defaults.groupAllowFrom and not an account-level override when account has none", async () => {
+    // Ensure we're picking up the channel default, not a per-account override.
+    // The account has no groupAllowFrom; the default list is the only source.
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+          accounts: {
+            default: {
+              // No groupAllowFrom here — falls through to channels.defaults
+            },
+          },
+        },
+        defaults: {
+          groupAllowFrom: ["allowed-sender"],
+        },
+      },
+    });
+
+    const blocked = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+15550001111",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: true,
+      pushName: "NotInList",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "120363000000000001@g.us",
+    });
+    expect(blocked.allowed).toBe(false);
+
+    const allowed = await checkInboundAccessControl({
+      accountId: "default",
+      from: "allowed-sender",
+      selfE164: "+15550009999",
+      senderE164: "allowed-sender",
+      group: true,
+      pushName: "InList",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "120363000000000001@g.us",
+    });
+    expect(allowed.allowed).toBe(true);
+  });
+});
+
 describe("WhatsApp dmPolicy precedence", () => {
   it("uses account-level dmPolicy instead of channel-level (#8736)", async () => {
     // Channel-level says "pairing" but the account-level says "allowlist".

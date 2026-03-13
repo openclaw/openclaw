@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  normalizeNonTelegramGroupPolicy,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
@@ -64,7 +65,7 @@ export function buildOpenGroupPolicyConfigureRouteAllowlistWarning(params: {
 
 export function collectOpenGroupPolicyRestrictSendersWarnings(
   params: Parameters<typeof buildOpenGroupPolicyRestrictSendersWarning>[0] & {
-    groupPolicy: "open" | "allowlist" | "disabled";
+    groupPolicy: GroupPolicy;
   },
 ): string[] {
   if (params.groupPolicy !== "open") {
@@ -86,7 +87,7 @@ export function collectAllowlistProviderRestrictSendersWarnings(
     configuredGroupPolicy: params.configuredGroupPolicy,
     collect: (groupPolicy) =>
       collectOpenGroupPolicyRestrictSendersWarnings({
-        groupPolicy,
+        groupPolicy: normalizeNonTelegramGroupPolicy(groupPolicy),
         surface: params.surface,
         openScope: params.openScope,
         groupPolicyPath: params.groupPolicyPath,
@@ -127,7 +128,7 @@ export function collectOpenProviderGroupPolicyWarnings(params: {
 }
 
 export function collectOpenGroupPolicyRouteAllowlistWarnings(params: {
-  groupPolicy: "open" | "allowlist" | "disabled";
+  groupPolicy: GroupPolicy;
   routeAllowlistConfigured: boolean;
   restrictSenders: Parameters<typeof buildOpenGroupPolicyRestrictSendersWarning>[0];
   noRouteAllowlist: Parameters<typeof buildOpenGroupPolicyNoRouteAllowlistWarning>[0];
@@ -142,7 +143,7 @@ export function collectOpenGroupPolicyRouteAllowlistWarnings(params: {
 }
 
 export function collectOpenGroupPolicyConfiguredRouteWarnings(params: {
-  groupPolicy: "open" | "allowlist" | "disabled";
+  groupPolicy: GroupPolicy;
   routeAllowlistConfigured: boolean;
   configureRouteAllowlist: Parameters<typeof buildOpenGroupPolicyConfigureRouteAllowlistWarning>[0];
   missingRouteAllowlist: Parameters<typeof buildOpenGroupPolicyWarning>[0];

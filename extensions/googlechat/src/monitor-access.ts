@@ -4,6 +4,7 @@ import {
   evaluateGroupRouteAccessForPolicy,
   issuePairingChallenge,
   isDangerousNameMatchingEnabled,
+  normalizeNonTelegramGroupPolicy,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveDmGroupAccessWithLists,
@@ -173,12 +174,14 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   });
 
   const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
-  const { groupPolicy, providerMissingFallbackApplied } =
+  const { groupPolicy: rawGroupPolicy, providerMissingFallbackApplied } =
     resolveAllowlistProviderRuntimeGroupPolicy({
       providerConfigPresent: config.channels?.googlechat !== undefined,
       groupPolicy: account.config.groupPolicy,
       defaultGroupPolicy,
     });
+  // "members" is Telegram-only; normalize to "open" for Google Chat
+  const groupPolicy = normalizeNonTelegramGroupPolicy(rawGroupPolicy);
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "googlechat",

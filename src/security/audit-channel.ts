@@ -659,7 +659,9 @@ export async function collectChannelSecurityFindings(params: {
       const groups = telegramCfg.groups as Record<string, unknown> | undefined;
       const groupsConfigured = Boolean(groups) && Object.keys(groups ?? {}).length > 0;
       const groupAccessPossible =
-        groupPolicy === "open" || (groupPolicy === "allowlist" && groupsConfigured);
+        groupPolicy === "open" ||
+        groupPolicy === "members" ||
+        (groupPolicy === "allowlist" && groupsConfigured);
       if (!groupAccessPossible) {
         continue;
       }
@@ -722,8 +724,29 @@ export async function collectChannelSecurityFindings(params: {
         }),
       );
 
+      const defaultGroupAllowFrom = Array.isArray(params.cfg.channels?.defaults?.groupAllowFrom)
+        ? params.cfg.channels.defaults.groupAllowFrom
+        : [];
+      // Validate default entries so non-numeric defaults don't silently suppress
+      // the "missing sender allowlist" finding for Telegram.
+      collectInvalidTelegramAllowFromEntries({
+        entries: defaultGroupAllowFrom,
+        target: invalidTelegramAllowFromEntries,
+      });
+      // Only count default entries that are valid numeric Telegram user IDs.
+      const validDefaultGroupAllowFrom = defaultGroupAllowFrom.filter((entry) => {
+        const normalized = normalizeTelegramAllowFromEntry(entry);
+        return normalized !== null && (normalized === "*" || isNumericTelegramUserId(normalized));
+      });
       const hasAnySenderAllowlist =
-        storeAllowFrom.length > 0 || groupAllowFrom.length > 0 || anyGroupOverride;
+        storeAllowFrom.length > 0 ||
+        groupAllowFrom.length > 0 ||
+        validDefaultGroupAllowFrom.length > 0 ||
+        anyGroupOverride ||
+        // For "members" policy, per-account allowFrom is a valid runtime fallback
+        // (bot.ts uses allowFrom when groupAllowFrom is not set). Count it here to
+        // avoid false-positive "no sender allowlist" findings.
+        (groupPolicy === "members" && dmAllowFrom.length > 0);
 
       if (invalidTelegramAllowFromEntries.size > 0) {
         const examples = Array.from(invalidTelegramAllowFromEntries).slice(0, 5);
