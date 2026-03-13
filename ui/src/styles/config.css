@@ -22,6 +22,7 @@
     opacity: 0;
     transform: translateY(6px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -222,6 +223,7 @@
     opacity: 0;
     transform: scale(0.9);
   }
+
   to {
     opacity: 1;
     transform: scale(1);
@@ -248,6 +250,7 @@
 }
 
 .config-search--top {
+  position: relative;
   padding: 0;
   border-bottom: none;
   min-width: 200px;
@@ -688,6 +691,7 @@
     opacity: 0;
     transform: translateY(4px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -769,18 +773,23 @@
 .config-form--modern .config-section-card:nth-child(1) {
   animation-delay: 0ms;
 }
+
 .config-form--modern .config-section-card:nth-child(2) {
   animation-delay: 40ms;
 }
+
 .config-form--modern .config-section-card:nth-child(3) {
   animation-delay: 80ms;
 }
+
 .config-form--modern .config-section-card:nth-child(4) {
   animation-delay: 120ms;
 }
+
 .config-form--modern .config-section-card:nth-child(5) {
   animation-delay: 160ms;
 }
+
 .config-form--modern .config-section-card:nth-child(n + 6) {
   animation-delay: 200ms;
 }
