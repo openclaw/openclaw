@@ -42,4 +42,14 @@ describe("summarizeStringEntries", () => {
       }),
     ).toBe("a, b, c, d, e, f (+1)");
   });
+
+  it("does not add a suffix when the limit exactly matches the entry count", () => {
+    expect(
+      summarizeStringEntries({
+        entries: ["a", "b", "c"],
+        limit: 3,
+        emptyText: "ignored",
+      }),
+    ).toBe("a, b, c");
+  });
 });
