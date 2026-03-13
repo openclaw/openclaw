@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   hasNodeErrorCode,
   isNodeError,
@@ -7,6 +7,21 @@ import {
   isSymlinkOpenError,
   normalizeWindowsPathForComparison,
 } from "./path-guards.js";
+
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
+function setPlatform(platform: NodeJS.Platform): void {
+  Object.defineProperty(process, "platform", {
+    value: platform,
+    configurable: true,
+  });
+}
+
+afterEach(() => {
+  if (originalPlatformDescriptor) {
+    Object.defineProperty(process, "platform", originalPlatformDescriptor);
+  }
+});
 
 describe("normalizeWindowsPathForComparison", () => {
   it("normalizes extended-length and UNC windows paths", () => {
@@ -46,5 +61,20 @@ describe("isPathInside", () => {
     expect(isPathInside("/workspace/root", "/workspace/root")).toBe(true);
     expect(isPathInside("/workspace/root", "/workspace/root/nested/file.txt")).toBe(true);
     expect(isPathInside("/workspace/root", "/workspace/root/../escape.txt")).toBe(false);
+  });
+
+  it("uses win32 path semantics for windows containment checks", () => {
+    setPlatform("win32");
+
+    expect(isPathInside(String.raw`C:\workspace\root`, String.raw`C:\workspace\root`)).toBe(true);
+    expect(
+      isPathInside(String.raw`C:\workspace\root`, String.raw`C:\workspace\root\Nested\File.txt`),
+    ).toBe(true);
+    expect(
+      isPathInside(String.raw`C:\workspace\root`, String.raw`C:\workspace\root\..\escape.txt`),
+    ).toBe(false);
+    expect(
+      isPathInside(String.raw`C:\workspace\root`, String.raw`D:\workspace\root\file.txt`),
+    ).toBe(false);
   });
 });
