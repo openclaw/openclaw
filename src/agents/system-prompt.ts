@@ -470,7 +470,6 @@ export function buildAgentSystemPrompt(params: {
     "- openclaw gateway restart",
     "If unsure, ask the user to run `openclaw help` (or `openclaw gateway --help`) and paste the output.",
     "",
-    ...skillsSection,
     ...memorySection,
     // Skip self-update for subagent/none modes
     hasGateway && !isMinimal ? "## OpenClaw Self-Update" : "",
@@ -485,17 +484,10 @@ export function buildAgentSystemPrompt(params: {
       : "",
     hasGateway && !isMinimal ? "" : "",
     "",
-    // Skip model aliases for subagent/none modes
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-      ? "## Model Aliases"
-      : "",
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-      ? "Prefer aliases when specifying model overrides; full provider/model is also accepted."
-      : "",
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal
-      ? params.modelAliasLines.join("\n")
-      : "",
-    params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
+    // Note: skillsSection and modelAliasLines are injected in the dynamic tail (after
+    // workspace files) for KV-cache stability. Skills and model aliases change when
+    // users install new skills or update model preferences; placing them after workspace
+    // files ensures SOUL.md, AGENTS.md, and boilerplate remain in the cached prefix.
     userTimezone
       ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
       : "",
@@ -760,12 +752,28 @@ export function buildAgentSystemPrompt(params: {
     lines.push("## Reasoning Format", reasoningHint, "");
   }
 
+  // Model aliases and skills: deployment-level config that changes when users update model
+  // preferences or install new skills. Injected here (after per-conversation dynamic context,
+  // before workspaceNotes) so that installing a skill or changing model aliases does not
+  // invalidate the stable prefix of workspace files + boilerplate.
+  if (!isMinimal && params.modelAliasLines && params.modelAliasLines.length > 0) {
+    lines.push(
+      "## Model Aliases",
+      "Prefer aliases when specifying model overrides; full provider/model is also accepted.",
+      params.modelAliasLines.join("\n"),
+      "",
+    );
+  }
+  // Skills are included in ALL prompt modes (cron/subagent sessions need them).
+  if (skillsSection.length > 0) {
+    lines.push(...skillsSection);
+  }
+
   // workspaceNotes: project-specific notes injected second-to-last (after per-conversation
-  // context, before MEMORY.md). This maximises the stable prefix for both:
+  // context and deployment config, before MEMORY.md). This maximises the stable prefix for:
   //   1. Per-conversation changes (channel/group-chat): workspaceNotes is in stable prefix
   //   2. workspaceNotes changes (sprint update): everything before workspaceNotes is stable
-  // Placing workspaceNotes here ensures SOUL.md, AGENTS.md, group-chat context, and all
-  // per-session config remain KV-cached when only project notes change.
+  //   3. Skills/aliases changes: workspaceNotes and MEMORY.md remain in stable prefix
   if (workspaceNotes.length > 0) {
     lines.push("## Project Notes", "");
     for (const note of workspaceNotes) {
