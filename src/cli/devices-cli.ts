@@ -99,7 +99,11 @@ function normalizeErrorMessage(error: unknown): string {
 
 function shouldUseLocalPairingFallback(opts: DevicesRpcOpts, error: unknown): boolean {
   const message = normalizeErrorMessage(error).toLowerCase();
-  if (!message.includes("pairing required")) {
+  const pairingRequired = message.includes("pairing required");
+  const normalClosureWithoutReason =
+    message.includes("gateway closed (1000") &&
+    (message.includes("normal closure") || message.includes("no close reason"));
+  if (!pairingRequired && !normalClosureWithoutReason) {
     return false;
   }
   if (typeof opts.url === "string" && opts.url.trim().length > 0) {
