@@ -125,6 +125,11 @@ export function setConsoleSubsystemFilter(filters?: string[] | null): void {
   loggingState.consoleSubsystemFilter = normalized.length > 0 ? normalized : null;
 }
 
+export function getConsoleSubsystemFilter(): string[] | null {
+  const current = loggingState.consoleSubsystemFilter;
+  return current ? [...current] : null;
+}
+
 export function setConsoleTimestampPrefix(enabled: boolean): void {
   loggingState.consoleTimestampPrefix = enabled;
 }
