@@ -20,6 +20,7 @@ import {
   queueOverflowAttemptWithOversizedToolOutput,
 } from "./run.overflow-compaction.fixture.js";
 import {
+  mockedBuildEmbeddedRunPayloads,
   mockedContextEngine,
   mockedCompactDirect,
   mockedRunEmbeddedAttempt,
@@ -64,6 +65,7 @@ describe("overflow compaction in run loop", () => {
       compacted: false,
       reason: "nothing to compact",
     });
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([]);
     mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
     mockedTruncateOversizedToolResultsInSession.mockResolvedValue({
       truncated: false,
@@ -319,6 +321,45 @@ describe("overflow compaction in run loop", () => {
 
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
+  });
+
+  it("preserves the timeout payload instead of the silent exec fallback", async () => {
+    mockedBuildEmbeddedRunPayloads.mockImplementation((params) => {
+      if (params.lastToolError?.toolName === "exec" && !params.suppressSilentExecFailureFallback) {
+        return [
+          {
+            text:
+              "⚠️ I couldn't complete a command before the reply finished. " +
+              "Please try again, or turn /verbose on for more detail.",
+            isError: true,
+          },
+        ];
+      }
+      return [];
+    });
+
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        aborted: true,
+        timedOut: true,
+        timedOutDuringCompaction: false,
+        assistantTexts: [],
+        lastToolError: { toolName: "exec", error: "command not found" },
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedBuildEmbeddedRunPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lastToolError: expect.objectContaining({ toolName: "exec" }),
+        suppressSilentExecFailureFallback: true,
+      }),
+    );
+    expect(result.payloads).toHaveLength(1);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("timed out");
+    expect(result.payloads?.[0]?.text).not.toContain("couldn't complete a command");
   });
 
   it("sets promptTokens from the latest model call usage, not accumulated attempt usage", async () => {

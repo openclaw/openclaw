@@ -229,8 +229,10 @@ vi.mock("./logger.js", () => ({
   },
 }));
 
+export const mockedBuildEmbeddedRunPayloads = vi.fn(() => []);
+
 vi.mock("./run/payloads.js", () => ({
-  buildEmbeddedRunPayloads: vi.fn(() => []),
+  buildEmbeddedRunPayloads: mockedBuildEmbeddedRunPayloads,
 }));
 
 vi.mock("./tool-result-truncation.js", () => ({

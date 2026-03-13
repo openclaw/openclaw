@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import {
+  mockedBuildEmbeddedRunPayloads,
   mockedContextEngine,
   mockedContextEngineCompact,
 } from "./run.overflow-compaction.mocks.shared.js";
@@ -17,7 +18,7 @@ export const mockedSessionLikelyHasOversizedToolResults = vi.mocked(
 export const mockedTruncateOversizedToolResultsInSession = vi.mocked(
   truncateOversizedToolResultsInSession,
 );
-export { mockedContextEngine };
+export { mockedBuildEmbeddedRunPayloads, mockedContextEngine };
 
 export const overflowBaseRunParams = {
   sessionId: "test-session",

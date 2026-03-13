@@ -315,6 +315,16 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads).toHaveLength(0);
   });
 
+  it("does not add the generic exec fallback when timeout handling will emit the terminal error", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "exec", error: "command not found" },
+      verboseLevel: "off",
+      suppressSilentExecFailureFallback: true,
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
   it.each([
     {
       name: "still shows mutating tool errors when messages.suppressToolErrors is enabled",
