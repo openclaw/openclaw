@@ -20,7 +20,6 @@ function createMockJob(overrides: Partial<CronJob> = {}): CronJob {
     payload: { text: "test" },
     delivery: { channel: "test-channel" },
     state: {
-      status: "pending",
       nextRunAtMs: Date.now(),
       ...overrides.state,
     },
@@ -40,21 +39,20 @@ describe("cron reliability", () => {
   });
 
   describe("isJobStuck", () => {
-    it("returns false for pending jobs", () => {
-      const job = createMockJob({ state: { status: "pending" } });
+    it("returns false for pending jobs (no runningAtMs)", () => {
+      const job = createMockJob({ state: { lastRunStatus: "ok" } });
       expect(isJobStuck(job, Date.now())).toBe(false);
     });
 
     it("returns false for completed jobs", () => {
-      const job = createMockJob({ state: { status: "completed", startedAt: Date.now() - 1000, endedAt: Date.now() } });
+      const job = createMockJob({ state: { lastRunStatus: "ok", lastDurationMs: 1000 } });
       expect(isJobStuck(job, Date.now())).toBe(false);
     });
 
     it("returns true for running jobs exceeding threshold", () => {
       const job = createMockJob({
         state: {
-          status: "running",
-          startedAt: Date.now() - (3 * 60 * 60 * 1000), // 3 hours ago
+          runningAtMs: Date.now() - 3 * 60 * 60 * 1000, // 3 hours ago
         },
       });
       expect(isJobStuck(job, Date.now())).toBe(true);
@@ -63,8 +61,7 @@ describe("cron reliability", () => {
     it("returns false for running jobs within threshold", () => {
       const job = createMockJob({
         state: {
-          status: "running",
-          startedAt: Date.now() - 60000, // 1 minute ago
+          runningAtMs: Date.now() - 60000, // 1 minute ago
         },
       });
       expect(isJobStuck(job, Date.now())).toBe(false);
@@ -91,17 +88,14 @@ describe("cron reliability", () => {
 
   describe("extractCronJobError", () => {
     it("extracts string error", () => {
-      const job = createMockJob({ state: { status: "failed", error: "Something went wrong" } });
+      const job = createMockJob({
+        state: { lastRunStatus: "error", lastError: "Something went wrong" },
+      });
       expect(extractCronJobError(job)).toBe("Something went wrong");
     });
 
-    it("extracts error object message", () => {
-      const job = createMockJob({ state: { status: "failed", error: { message: "Error object" } } });
-      expect(extractCronJobError(job)).toBe("Error object");
-    });
-
     it("returns undefined for successful jobs", () => {
-      const job = createMockJob({ state: { status: "completed" } });
+      const job = createMockJob({ state: { lastRunStatus: "ok" } });
       expect(extractCronJobError(job)).toBeUndefined();
     });
   });
@@ -116,10 +110,10 @@ describe("cron reliability", () => {
     it("calculates metrics with mixed job states", () => {
       const now = Date.now();
       const jobs = [
-        createMockJob({ state: { status: "running", startedAt: now - 1000 } }),
-        createMockJob({ state: { status: "completed", startedAt: now - 10000, endedAt: now - 5000 } }),
-        createMockJob({ state: { status: "failed", error: "failed" } }),
-        createMockJob({ enabled: false, state: { status: "pending" } }),
+        createMockJob({ state: { runningAtMs: now - 1000 } }),
+        createMockJob({ state: { lastRunStatus: "ok", lastDurationMs: 5000 } }),
+        createMockJob({ state: { lastRunStatus: "error", lastError: "failed" } }),
+        createMockJob({ enabled: false, state: {} }),
       ];
 
       const metrics = calculateCronReliabilityMetrics(jobs, now);
@@ -135,8 +129,7 @@ describe("cron reliability", () => {
         createMockJob({
           id: "stuck-job",
           state: {
-            status: "running",
-            startedAt: now - (3 * 60 * 60 * 1000), // 3 hours ago
+            runningAtMs: now - 3 * 60 * 60 * 1000, // 3 hours ago
           },
         }),
       ];
@@ -172,23 +165,21 @@ describe("cron reliability", () => {
     it("returns true for stuck jobs", () => {
       const job = createMockJob({
         state: {
-          status: "running",
-          startedAt: Date.now() - (3 * 60 * 60 * 1000),
+          runningAtMs: Date.now() - 3 * 60 * 60 * 1000,
         },
       });
       expect(cronJobNeedsAttention(job, Date.now())).toBe(true);
     });
 
     it("returns true for failed jobs", () => {
-      const job = createMockJob({ state: { status: "failed", error: "error" } });
+      const job = createMockJob({ state: { lastRunStatus: "error", lastError: "error" } });
       expect(cronJobNeedsAttention(job, Date.now())).toBe(true);
     });
 
     it("returns false for healthy running jobs", () => {
       const job = createMockJob({
         state: {
-          status: "running",
-          startedAt: Date.now() - 60000,
+          runningAtMs: Date.now() - 60000,
         },
       });
       expect(cronJobNeedsAttention(job, Date.now())).toBe(false);
@@ -197,14 +188,14 @@ describe("cron reliability", () => {
 
   describe("getCronJobRecommendations", () => {
     it("provides recommendations for failed jobs", () => {
-      const job = createMockJob({ state: { status: "failed", error: "Timeout error" } });
+      const job = createMockJob({ state: { lastRunStatus: "error", lastError: "Timeout error" } });
       const recommendations = getCronJobRecommendations(job);
       expect(recommendations.length).toBeGreaterThan(0);
       expect(recommendations.some((r) => r.includes("Timeout error"))).toBe(true);
     });
 
     it("provides recommendations for disabled jobs", () => {
-      const job = createMockJob({ enabled: false, state: { status: "pending" } });
+      const job = createMockJob({ enabled: false, state: {} });
       const recommendations = getCronJobRecommendations(job);
       expect(recommendations.some((r) => r.includes("disabled"))).toBe(true);
     });
