@@ -164,8 +164,7 @@ function coercePayload(payload: UnknownRecord) {
 }
 
 function coerceAdditionalTarget(entry: UnknownRecord): UnknownRecord | null {
-  const channel =
-    typeof entry.channel === "string" ? entry.channel.trim().toLowerCase() : "";
+  const channel = typeof entry.channel === "string" ? entry.channel.trim().toLowerCase() : "";
   const to = typeof entry.to === "string" ? entry.to.trim() : "";
   if (!channel || !to) {
     return null;

@@ -633,8 +633,15 @@ export async function deliverToAdditionalTargets(
     });
     if (!resolved.ok) {
       const errMsg = resolved.error.message;
-      logWarn(`[additional-delivery] failed to resolve target ${target.channel}:${target.to}: ${errMsg}`);
-      results.push({ channel: target.channel, to: target.to, delivered: false, error: errMsg });
+      logWarn(
+        `[additional-delivery] failed to resolve target ${target.channel}:${target.to}: ${errMsg}`,
+      );
+      results.push({
+        channel: target.channel,
+        to: target.to,
+        delivered: false,
+        error: errMsg,
+      });
       continue;
     }
     try {
@@ -654,8 +661,15 @@ export async function deliverToAdditionalTargets(
       results.push({ channel: target.channel, to: target.to, delivered: true });
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      logWarn(`[additional-delivery] delivery to ${target.channel}:${target.to} failed: ${errMsg}`);
-      results.push({ channel: target.channel, to: target.to, delivered: false, error: errMsg });
+      logWarn(
+        `[additional-delivery] delivery to ${target.channel}:${target.to} failed: ${errMsg}`,
+      );
+      results.push({
+        channel: target.channel,
+        to: target.to,
+        delivered: false,
+        error: errMsg,
+      });
     }
   }
   return results;
