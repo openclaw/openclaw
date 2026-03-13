@@ -25,12 +25,12 @@ export function formatTokenShort(value?: number) {
     return `${n}`;
   }
   if (n < 10_000) {
-    return `${(n / 1_000).toFixed(1).replace(/\\.0$/, "")}k`;
+    return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
   }
   if (n < 1_000_000) {
     return `${Math.round(n / 1_000)}k`;
   }
-  return `${(n / 1_000_000).toFixed(1).replace(/\\.0$/, "")}m`;
+  return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}m`;
 }
 
 export function truncateLine(value: string, maxLength: number) {
@@ -47,50 +47,70 @@ export type TokenUsageLike = {
 };
 
 export function resolveTotalTokens(entry?: TokenUsageLike) {
-  if (!entry || typeof entry !== "object") {
+  // Defensive check: entry must be a non-null object
+  if (!entry || entry === null || typeof entry !== "object") {
     return undefined;
   }
-  if (typeof entry.totalTokens === "number" && Number.isFinite(entry.totalTokens)) {
-    return entry.totalTokens;
+  try {
+    if (
+      typeof entry.totalTokens === "number" &&
+      Number.isFinite(entry.totalTokens) &&
+      entry.totalTokens >= 0
+    ) {
+      return entry.totalTokens;
+    }
+    const input = typeof entry.inputTokens === "number" ? entry.inputTokens : 0;
+    const output = typeof entry.outputTokens === "number" ? entry.outputTokens : 0;
+    const total = input + output;
+    return total > 0 ? total : undefined;
+  } catch {
+    // Guard against unexpected property access errors (e.g., Proxy objects)
+    return undefined;
   }
-  const input = typeof entry.inputTokens === "number" ? entry.inputTokens : 0;
-  const output = typeof entry.outputTokens === "number" ? entry.outputTokens : 0;
-  const total = input + output;
-  return total > 0 ? total : undefined;
 }
 
 export function resolveIoTokens(entry?: TokenUsageLike) {
-  if (!entry || typeof entry !== "object") {
+  if (!entry || entry === null || typeof entry !== "object") {
     return undefined;
   }
-  const input =
-    typeof entry.inputTokens === "number" && Number.isFinite(entry.inputTokens)
-      ? entry.inputTokens
-      : 0;
-  const output =
-    typeof entry.outputTokens === "number" && Number.isFinite(entry.outputTokens)
-      ? entry.outputTokens
-      : 0;
-  const total = input + output;
-  if (total <= 0) {
+  try {
+    const input =
+      typeof entry.inputTokens === "number" && Number.isFinite(entry.inputTokens)
+        ? entry.inputTokens
+        : 0;
+    const output =
+      typeof entry.outputTokens === "number" && Number.isFinite(entry.outputTokens)
+        ? entry.outputTokens
+        : 0;
+    const total = input + output;
+    if (total <= 0) {
+      return undefined;
+    }
+    return { input, output, total };
+  } catch {
+    // Guard against unexpected property access errors
     return undefined;
   }
-  return { input, output, total };
 }
 
 export function formatTokenUsageDisplay(entry?: TokenUsageLike) {
-  const io = resolveIoTokens(entry);
-  const promptCache = resolveTotalTokens(entry);
-  const parts: string[] = [];
-  if (io) {
-    const input = formatTokenShort(io.input) ?? "0";
-    const output = formatTokenShort(io.output) ?? "0";
-    parts.push(`tokens ${formatTokenShort(io.total)} (in ${input} / out ${output})`);
-  } else if (typeof promptCache === "number" && promptCache > 0) {
-    parts.push(`tokens ${formatTokenShort(promptCache)} prompt/cache`);
+  try {
+    const io = resolveIoTokens(entry);
+    const promptCache = resolveTotalTokens(entry);
+    const parts: string[] = [];
+    if (io) {
+      const input = formatTokenShort(io.input) ?? "0";
+      const output = formatTokenShort(io.output) ?? "0";
+      parts.push(`tokens ${formatTokenShort(io.total)} (in ${input} / out ${output})`);
+    } else if (typeof promptCache === "number" && promptCache > 0) {
+      parts.push(`tokens ${formatTokenShort(promptCache)} prompt/cache`);
+    }
+    if (typeof promptCache === "number" && io && promptCache > io.total) {
+      parts.push(`prompt/cache ${formatTokenShort(promptCache)}`);
+    }
+    return parts.join(", ");
+  } catch {
+    // Final guard: if anything fails, return empty string (no usage info)
+    return "";
   }
-  if (typeof promptCache === "number" && io && promptCache > io.total) {
-    parts.push(`prompt/cache ${formatTokenShort(promptCache)}`);
-  }
-  return parts.join(", ");
 }
