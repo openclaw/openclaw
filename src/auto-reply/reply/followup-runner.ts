@@ -210,6 +210,7 @@ export function createFollowupRunner(params: {
               timeoutMs: queued.run.timeoutMs,
               runId,
               allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+              hasRemainingModelFallbackCandidates: runOptions?.hasRemainingModelFallbackCandidates,
               blockReplyBreak: queued.run.blockReplyBreak,
               bootstrapPromptWarningSignaturesSeen,
               bootstrapPromptWarningSignature:

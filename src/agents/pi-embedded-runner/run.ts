@@ -1300,6 +1300,7 @@ export async function runEmbeddedPiAgent(
               model: modelId,
               profileId: failedPromptProfileId,
               fallbackConfigured,
+              hasRemainingModelFallbackCandidates: params.hasRemainingModelFallbackCandidates,
               aborted,
             });
             if (
@@ -1335,6 +1336,7 @@ export async function runEmbeddedPiAgent(
                 model: modelId,
                 profileId: lastProfileId,
                 status,
+                nonTerminal: params.hasRemainingModelFallbackCandidates === true,
               });
             }
             if (promptFailoverFailure || promptFailoverReason) {
@@ -1376,6 +1378,7 @@ export async function runEmbeddedPiAgent(
             model: activeErrorContext.model,
             profileId: failedAssistantProfileId,
             fallbackConfigured,
+            hasRemainingModelFallbackCandidates: params.hasRemainingModelFallbackCandidates,
             timedOut,
             aborted,
           });
@@ -1476,6 +1479,7 @@ export async function runEmbeddedPiAgent(
                 model: activeErrorContext.model,
                 profileId: lastProfileId,
                 status,
+                nonTerminal: params.hasRemainingModelFallbackCandidates === true,
               });
             }
             logAssistantFailoverDecision("surface_error");

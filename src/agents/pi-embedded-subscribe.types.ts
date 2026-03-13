@@ -36,6 +36,8 @@ export type SubscribeEmbeddedPiSessionParams = {
   sessionId?: string;
   /** Agent identity for hook context — resolved from session config in attempt.ts. */
   agentId?: string;
+  /** True when assistant-side failover is expected to hand off to outer model fallback. */
+  hasRemainingModelFallbackCandidates?: boolean;
 };
 
 export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";

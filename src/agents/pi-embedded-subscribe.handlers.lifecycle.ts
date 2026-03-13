@@ -50,24 +50,39 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     const safeRunId = sanitizeForConsole(ctx.params.runId) ?? "-";
     const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
     const safeProvider = sanitizeForConsole(lastAssistant.provider) ?? "unknown";
-    ctx.log.warn("embedded run agent end", {
+    const handledByOuterFallback =
+      ctx.params.hasRemainingModelFallbackCandidates === true && failoverReason !== null;
+    const lifecycleMeta = {
       event: "embedded_run_agent_end",
-      tags: ["error_handling", "lifecycle", "agent_end", "assistant_error"],
+      tags: [
+        "error_handling",
+        "lifecycle",
+        "agent_end",
+        "assistant_error",
+        ...(handledByOuterFallback ? ["handled_failover"] : []),
+      ],
       runId: ctx.params.runId,
       isError: true,
+      nonTerminal: handledByOuterFallback,
       error: safeErrorText,
       failoverReason,
       model: lastAssistant.model,
       provider: lastAssistant.provider,
       ...observedError,
       consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true model=${safeModel} provider=${safeProvider} error=${safeErrorText}`,
-    });
+    };
+    if (handledByOuterFallback) {
+      ctx.log.debug("embedded run agent end", lifecycleMeta);
+    } else {
+      ctx.log.warn("embedded run agent end", lifecycleMeta);
+    }
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "lifecycle",
       data: {
         phase: "error",
         error: safeErrorText,
+        nonTerminal: handledByOuterFallback,
         endedAt: Date.now(),
       },
     });
@@ -76,6 +91,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       data: {
         phase: "error",
         error: safeErrorText,
+        nonTerminal: handledByOuterFallback,
       },
     });
   } else {

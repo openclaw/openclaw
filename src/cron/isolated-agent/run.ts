@@ -632,6 +632,7 @@ export async function runCronIsolatedAgentTurn(params: {
             requireExplicitMessageTarget: toolPolicy.requireExplicitMessageTarget,
             disableMessageTool: toolPolicy.disableMessageTool,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+            hasRemainingModelFallbackCandidates: runOptions?.hasRemainingModelFallbackCandidates,
             abortSignal,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,

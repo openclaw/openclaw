@@ -175,6 +175,7 @@ export function buildEmbeddedRunBaseParams(params: {
   runId: string;
   authProfile: ReturnType<typeof resolveProviderScopedAuthProfile>;
   allowTransientCooldownProbe?: boolean;
+  hasRemainingModelFallbackCandidates?: boolean;
 }) {
   return {
     sessionFile: params.run.sessionFile,
@@ -197,6 +198,7 @@ export function buildEmbeddedRunBaseParams(params: {
     timeoutMs: params.run.timeoutMs,
     runId: params.runId,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+    hasRemainingModelFallbackCandidates: params.hasRemainingModelFallbackCandidates,
   };
 }
 

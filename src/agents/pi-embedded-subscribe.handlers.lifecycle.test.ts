@@ -9,7 +9,10 @@ vi.mock("../infra/agent-events.js", () => ({
 
 function createContext(
   lastAssistant: unknown,
-  overrides?: { onAgentEvent?: (event: unknown) => void },
+  overrides?: {
+    onAgentEvent?: (event: unknown) => void;
+    hasRemainingModelFallbackCandidates?: boolean;
+  },
 ): EmbeddedPiSubscribeContext {
   return {
     params: {
@@ -17,6 +20,7 @@ function createContext(
       config: {},
       sessionKey: "agent:main:main",
       onAgentEvent: overrides?.onAgentEvent,
+      hasRemainingModelFallbackCandidates: overrides?.hasRemainingModelFallbackCandidates,
     },
     state: {
       lastAssistant: lastAssistant as EmbeddedPiSubscribeContext["state"]["lastAssistant"],
@@ -66,6 +70,7 @@ describe("handleAgentEnd", () => {
       data: {
         phase: "error",
         error: "connection refused",
+        nonTerminal: false,
       },
     });
   });
@@ -93,6 +98,44 @@ describe("handleAgentEnd", () => {
       providerErrorType: "overloaded_error",
       consoleMessage:
         "embedded run agent end: runId=run-1 isError=true model=claude-test provider=anthropic error=The AI service is temporarily overloaded. Please try again in a moment.",
+    });
+  });
+
+  it("downlevels recoverable assistant failover handoff to debug", () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "error",
+        provider: "anthropic",
+        model: "claude-test",
+        errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+        content: [{ type: "text", text: "" }],
+      },
+      {
+        onAgentEvent,
+        hasRemainingModelFallbackCandidates: true,
+      },
+    );
+
+    handleAgentEnd(ctx);
+
+    expect(ctx.log.warn).not.toHaveBeenCalled();
+    expect(ctx.log.debug).toHaveBeenCalledWith(
+      "embedded run agent end",
+      expect.objectContaining({
+        event: "embedded_run_agent_end",
+        nonTerminal: true,
+        failoverReason: "overloaded",
+      }),
+    );
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        error: "The AI service is temporarily overloaded. Please try again in a moment.",
+        nonTerminal: true,
+      },
     });
   });
 
@@ -145,6 +188,7 @@ describe("handleAgentEnd", () => {
       data: {
         phase: "error",
         error: "x-api-key: ***",
+        nonTerminal: false,
       },
     });
   });

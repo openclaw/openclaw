@@ -495,6 +495,7 @@ export async function runMemoryFlushIfNeeded(params: {
           runId: flushRunId,
           authProfile,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+          hasRemainingModelFallbackCandidates: runOptions?.hasRemainingModelFallbackCandidates,
         });
         const result = await runEmbeddedPiAgent({
           ...embeddedContext,

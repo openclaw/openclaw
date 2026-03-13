@@ -47,6 +47,16 @@ type LaneState = {
   generation: number;
 };
 
+function isNonTerminalFailoverHandoff(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  return (
+    (err as { name?: unknown }).name === "FailoverError" &&
+    (err as { nonTerminal?: unknown }).nonTerminal === true
+  );
+}
+
 /**
  * Keep queue runtime state on globalThis so every bundled entry/chunk shares
  * the same lanes, counters, and draining flag in production builds.
@@ -131,9 +141,14 @@ function drainLane(lane: string) {
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
             if (!isProbeLane) {
-              diag.error(
-                `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
-              );
+              const errorLine = `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`;
+              if (isNonTerminalFailoverHandoff(err)) {
+                diag.debug(
+                  `lane task failover handoff: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
+                );
+              } else {
+                diag.error(errorLine);
+              }
             }
             if (completedCurrentGeneration) {
               pump();

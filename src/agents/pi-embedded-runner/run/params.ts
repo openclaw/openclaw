@@ -125,4 +125,9 @@ export type RunEmbeddedPiAgentParams = {
    * where transient service pressure is often model-scoped.
    */
   allowTransientCooldownProbe?: boolean;
+  /**
+   * True when the outer model-fallback loop still has another candidate after
+   * this run attempt, so intermediate failover handoff should stay non-terminal.
+   */
+  hasRemainingModelFallbackCandidates?: boolean;
 };

@@ -36,6 +36,7 @@ const log = createSubsystemLogger("model-fallback");
 
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
+  hasRemainingModelFallbackCandidates?: boolean;
 };
 
 type ModelFallbackRunFn<T> = (
@@ -634,6 +635,7 @@ export async function runWithModelFallback<T>(params: {
     const candidateIndex = candidateRunOrder[orderIndex];
     const candidate = candidates[candidateIndex];
     const isPrimary = candidateIndex === 0;
+    const hasRemainingModelFallbackCandidates = orderIndex < candidateRunOrder.length - 1;
     const requestedModel =
       params.provider === candidate.provider && params.model === candidate.model;
     let runOptions: ModelFallbackRunOptions | undefined;
@@ -767,7 +769,10 @@ export async function runWithModelFallback<T>(params: {
       run: params.run,
       ...candidate,
       attempts,
-      options: runOptions,
+      options: {
+        ...runOptions,
+        hasRemainingModelFallbackCandidates,
+      },
     });
     if ("success" in attemptRun) {
       if (candidateIndex > 0 || attempts.length > 0 || attemptedDuringCooldown) {

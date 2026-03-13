@@ -15,6 +15,7 @@ export class FailoverError extends Error {
   readonly profileId?: string;
   readonly status?: number;
   readonly code?: string;
+  readonly nonTerminal: boolean;
 
   constructor(
     message: string,
@@ -25,6 +26,7 @@ export class FailoverError extends Error {
       profileId?: string;
       status?: number;
       code?: string;
+      nonTerminal?: boolean;
       cause?: unknown;
     },
   ) {
@@ -36,11 +38,16 @@ export class FailoverError extends Error {
     this.profileId = params.profileId;
     this.status = params.status;
     this.code = params.code;
+    this.nonTerminal = params.nonTerminal === true;
   }
 }
 
 export function isFailoverError(err: unknown): err is FailoverError {
   return err instanceof FailoverError;
+}
+
+export function isNonTerminalFailoverError(err: unknown): err is FailoverError {
+  return err instanceof FailoverError && err.nonTerminal;
 }
 
 export function resolveFailoverStatus(reason: FailoverReason): number | undefined {

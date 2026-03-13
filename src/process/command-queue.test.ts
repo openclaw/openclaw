@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../test/helpers/import-fresh.js";
+import { FailoverError } from "../agents/failover-error.js";
 
 const diagnosticMocks = vi.hoisted(() => ({
   logLaneEnqueue: vi.fn(),
@@ -136,6 +137,42 @@ describe("command queue", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("downlevels recoverable failover handoff without lane-task error noise", async () => {
+    await expect(
+      enqueueCommand(async () => {
+        throw new FailoverError("HTTP 429", {
+          reason: "rate_limit",
+          nonTerminal: true,
+        });
+      }),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      nonTerminal: true,
+    });
+
+    expect(diagnosticMocks.diag.error).not.toHaveBeenCalled();
+    expect(diagnosticMocks.diag.debug).toHaveBeenCalledWith(
+      expect.stringContaining("lane task failover handoff:"),
+    );
+  });
+
+  it("keeps final failover errors at lane-task error severity", async () => {
+    await expect(
+      enqueueCommand(async () => {
+        throw new FailoverError("HTTP 503", {
+          reason: "overloaded",
+        });
+      }),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      nonTerminal: false,
+    });
+
+    expect(diagnosticMocks.diag.error).toHaveBeenCalledWith(
+      expect.stringContaining("lane task error:"),
+    );
   });
 
   it("getActiveTaskCount returns count of currently executing tasks", async () => {

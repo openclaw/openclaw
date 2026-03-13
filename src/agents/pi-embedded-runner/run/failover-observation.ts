@@ -18,6 +18,7 @@ export type FailoverDecisionLoggerInput = {
   model: string;
   profileId?: string;
   fallbackConfigured: boolean;
+  hasRemainingModelFallbackCandidates?: boolean;
   timedOut?: boolean;
   aborted?: boolean;
   status?: number;
@@ -52,7 +53,9 @@ export function createFailoverDecisionLogger(
   const reasonText = normalizedBase.failoverReason ?? "none";
   return (decision, extra) => {
     const observedError = buildApiErrorObservationFields(normalizedBase.rawError);
-    const level = decision === "surface_error" ? "warn" : "info";
+    const handledByOuterFallback =
+      decision === "fallback_model" && normalizedBase.hasRemainingModelFallbackCandidates === true;
+    const level = decision === "surface_error" ? "warn" : handledByOuterFallback ? "debug" : "info";
     log[level]("embedded run failover decision", {
       event: "embedded_run_failover_decision",
       tags: ["error_handling", "failover", normalizedBase.stage, decision],
@@ -65,6 +68,8 @@ export function createFailoverDecisionLogger(
       model: normalizedBase.model,
       profileId: safeProfileId,
       fallbackConfigured: normalizedBase.fallbackConfigured,
+      nonTerminal: handledByOuterFallback,
+      hasRemainingModelFallbackCandidates: normalizedBase.hasRemainingModelFallbackCandidates,
       timedOut: normalizedBase.timedOut,
       aborted: normalizedBase.aborted,
       status: extra?.status,

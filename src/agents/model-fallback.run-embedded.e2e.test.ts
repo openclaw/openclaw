@@ -9,6 +9,15 @@ import { runWithModelFallback } from "./model-fallback.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
+const diagnosticMocks = vi.hoisted(() => ({
+  logLaneEnqueue: vi.fn(),
+  logLaneDequeue: vi.fn(),
+  diag: {
+    debug: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
 const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
   computeBackoffMock: vi.fn(
     (
@@ -31,6 +40,12 @@ vi.mock("../infra/backoff.js", () => ({
   sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => sleepWithAbortMock(ms, abortSignal),
 }));
 
+vi.mock("../logging/diagnostic.js", () => ({
+  logLaneEnqueue: diagnosticMocks.logLaneEnqueue,
+  logLaneDequeue: diagnosticMocks.logLaneDequeue,
+  diagnosticLogger: diagnosticMocks.diag,
+}));
+
 vi.mock("./models-config.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("./models-config.js")>();
   return {
@@ -49,6 +64,11 @@ beforeEach(() => {
   runEmbeddedAttemptMock.mockReset();
   computeBackoffMock.mockClear();
   sleepWithAbortMock.mockClear();
+  diagnosticMocks.logLaneEnqueue.mockClear();
+  diagnosticMocks.logLaneDequeue.mockClear();
+  diagnosticMocks.diag.debug.mockClear();
+  diagnosticMocks.diag.warn.mockClear();
+  diagnosticMocks.diag.error.mockClear();
 });
 
 const baseUsage = {
@@ -328,6 +348,11 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       expectOpenAiThenGroqAttemptOrder();
       expect(computeBackoffMock).toHaveBeenCalledTimes(1);
       expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+      expect(
+        diagnosticMocks.diag.error.mock.calls.find((call) =>
+          String(call[0] ?? "").includes("lane task error:"),
+        ),
+      ).toBeUndefined();
     });
   });
 
@@ -365,6 +390,11 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
       expect(computeBackoffMock).toHaveBeenCalledTimes(2);
       expect(sleepWithAbortMock).toHaveBeenCalledTimes(2);
+      expect(
+        diagnosticMocks.diag.error.mock.calls.filter((call) =>
+          String(call[0] ?? "").includes("lane task error:"),
+        ),
+      ).toHaveLength(1);
     });
   });
 
