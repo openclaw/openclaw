@@ -340,10 +340,9 @@ export function buildAssistantMessage(
 ): AssistantMessage {
   const content: (TextContent | ToolCall)[] = [];
 
-  // Ollama-native reasoning models may emit their answer in `thinking` or
-  // `reasoning` with an empty `content`. Fall back so replies are not dropped.
-  const text =
-    response.message.content || response.message.thinking || response.message.reasoning || "";
+  // Only use content field - thinking/reasoning are internal model processes
+  // that should not be exposed to users
+  const text = response.message.content || "";
   if (text) {
     content.push({ type: "text", text });
   }
