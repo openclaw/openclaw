@@ -236,7 +236,8 @@
   }
 
   .topnav-shell__actions {
-    width: 100%;
+    min-width: 0;
+    flex: 1 1 auto;
     justify-content: space-between;
   }
 
@@ -254,6 +255,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
     width: 38px;
     height: 38px;
     padding: 0;

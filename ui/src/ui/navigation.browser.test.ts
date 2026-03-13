@@ -204,6 +204,30 @@ describe("control UI routing", () => {
     expect(getComputedStyle(content).width).not.toBe("auto");
   });
 
+  it("keeps the mobile topbar nav toggle visible beside the search row", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
+
+    const shell = app.querySelector<HTMLElement>(".topnav-shell");
+    const toggle = app.querySelector<HTMLElement>(".topbar-nav-toggle");
+    const actions = app.querySelector<HTMLElement>(".topnav-shell__actions");
+    expect(shell).not.toBeNull();
+    expect(toggle).not.toBeNull();
+    expect(actions).not.toBeNull();
+    if (!shell || !toggle || !actions) {
+      return;
+    }
+
+    const shellWidth = parseFloat(getComputedStyle(shell).width);
+    const toggleWidth = parseFloat(getComputedStyle(toggle).width);
+    const actionsWidth = parseFloat(getComputedStyle(actions).width);
+
+    expect(toggleWidth).toBeGreaterThan(0);
+    expect(actionsWidth).toBeLessThan(shellWidth);
+  });
+
   it("opens the mobile sidenav as a drawer from the topbar toggle", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
