@@ -1516,7 +1516,7 @@ export async function writeConfigFile(
     let projectionBase = runtimeConfigSourceSnapshot!;
     try {
       const latestSnapshot = await io.readConfigFileSnapshot();
-      if (latestSnapshot.valid) {
+      if (latestSnapshot.valid && latestSnapshot.exists) {
         // Prefer the latest on-disk source so write-back doesn't drop keys that were
         // added after the active runtime snapshot was created.
         projectionBase = latestSnapshot.resolved;
