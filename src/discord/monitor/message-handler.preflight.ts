@@ -445,8 +445,7 @@ export async function preflightDiscordMessage(
     !isDirectMessage &&
     ((message.mentionedUsers?.length ?? 0) > 0 ||
       (message.mentionedRoles?.length ?? 0) > 0 ||
-      (message.mentionedEveryone && (!author.bot || sender.isPluralKit)) ||
-      explicitlyMentionedViaText),
+      (message.mentionedEveryone && (!author.bot || sender.isPluralKit))),
   );
   const hasUserOrRoleMention = Boolean(
     !isDirectMessage &&
