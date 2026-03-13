@@ -70,6 +70,9 @@ importers:
       '@mariozechner/pi-tui':
         specifier: 0.57.1
         version: 0.57.1
+      '@microsoft/agents-hosting':
+        specifier: ^1.3.1
+        version: 1.3.1
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
