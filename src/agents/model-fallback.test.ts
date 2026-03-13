@@ -1151,7 +1151,7 @@ describe("runWithModelFallback", () => {
       return { store, dir: tmpDir };
     }
 
-    it("attempts same-provider fallbacks during rate limit cooldown", async () => {
+    it("prefers healthy cross-provider fallbacks during rate limit cooldown", async () => {
       const { dir } = await makeAuthStoreWithCooldown("anthropic", "rate_limit");
       const cfg = makeCfg({
         agents: {
@@ -1164,7 +1164,7 @@ describe("runWithModelFallback", () => {
         },
       });
 
-      const run = vi.fn().mockResolvedValueOnce("sonnet success"); // Fallback succeeds
+      const run = vi.fn().mockResolvedValueOnce("groq success");
 
       const result = await runWithModelFallback({
         cfg,
@@ -1174,14 +1174,12 @@ describe("runWithModelFallback", () => {
         agentDir: dir,
       });
 
-      expect(result.result).toBe("sonnet success");
-      expect(run).toHaveBeenCalledTimes(1); // Primary skipped, fallback attempted
-      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
-        allowTransientCooldownProbe: true,
-      });
+      expect(result.result).toBe("groq success");
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(run).toHaveBeenNthCalledWith(1, "groq", "llama-3.3-70b-versatile");
     });
 
-    it("attempts same-provider fallbacks during overloaded cooldown", async () => {
+    it("prefers healthy cross-provider fallbacks during overloaded cooldown", async () => {
       const { dir } = await makeAuthStoreWithCooldown("anthropic", "overloaded");
       const cfg = makeCfg({
         agents: {
@@ -1194,7 +1192,7 @@ describe("runWithModelFallback", () => {
         },
       });
 
-      const run = vi.fn().mockResolvedValueOnce("sonnet success");
+      const run = vi.fn().mockResolvedValueOnce("groq success");
 
       const result = await runWithModelFallback({
         cfg,
@@ -1204,11 +1202,9 @@ describe("runWithModelFallback", () => {
         agentDir: dir,
       });
 
-      expect(result.result).toBe("sonnet success");
+      expect(result.result).toBe("groq success");
       expect(run).toHaveBeenCalledTimes(1);
-      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
-        allowTransientCooldownProbe: true,
-      });
+      expect(run).toHaveBeenNthCalledWith(1, "groq", "llama-3.3-70b-versatile");
     });
 
     it("skips same-provider models on auth cooldown but still tries no-profile fallback providers", async () => {
@@ -1267,7 +1263,7 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenNthCalledWith(1, "groq", "llama-3.3-70b-versatile");
     });
 
-    it("tries cross-provider fallbacks when same provider has rate limit", async () => {
+    it("tries cross-provider fallbacks before same-provider probes when the current provider is rate limited", async () => {
       // Anthropic in rate limit cooldown, Groq available
       const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
       const store: AuthProfileStore = {
@@ -1298,10 +1294,7 @@ describe("runWithModelFallback", () => {
         },
       });
 
-      const run = vi
-        .fn()
-        .mockRejectedValueOnce(new Error("Still rate limited")) // Sonnet still fails
-        .mockResolvedValueOnce("groq success"); // Groq works
+      const run = vi.fn().mockResolvedValueOnce("groq success");
 
       const result = await runWithModelFallback({
         cfg,
@@ -1312,14 +1305,11 @@ describe("runWithModelFallback", () => {
       });
 
       expect(result.result).toBe("groq success");
-      expect(run).toHaveBeenCalledTimes(2);
-      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
-        allowTransientCooldownProbe: true,
-      }); // Rate limit allows attempt
-      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile"); // Cross-provider works
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(run).toHaveBeenNthCalledWith(1, "groq", "llama-3.3-70b-versatile");
     });
 
-    it("limits cooldown probes to one per provider before moving to cross-provider fallback", async () => {
+    it("uses one same-provider cooldown probe only after cross-provider fallbacks fail", async () => {
       const { dir } = await makeAuthStoreWithCooldown("anthropic", "rate_limit");
       const cfg = makeCfg({
         agents: {
@@ -1338,25 +1328,24 @@ describe("runWithModelFallback", () => {
 
       const run = vi
         .fn()
-        .mockRejectedValueOnce(new Error("Still rate limited")) // First same-provider probe fails
-        .mockResolvedValueOnce("groq success"); // Next provider succeeds
+        .mockRejectedValueOnce(new Error("Groq is unavailable"))
+        .mockRejectedValueOnce(new Error("Still rate limited"));
 
-      const result = await runWithModelFallback({
-        cfg,
-        provider: "anthropic",
-        model: "claude-opus-4-6",
-        run,
-        agentDir: dir,
-      });
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          run,
+          agentDir: dir,
+        }),
+      ).rejects.toThrow("All models failed");
 
-      expect(result.result).toBe("groq success");
-      // Primary is skipped, first same-provider fallback is probed, second same-provider fallback
-      // is skipped (probe already attempted), then cross-provider fallback runs.
       expect(run).toHaveBeenCalledTimes(2);
-      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
+      expect(run).toHaveBeenNthCalledWith(1, "groq", "llama-3.3-70b-versatile");
+      expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
       });
-      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
     });
 
     it("does not consume transient probe slot when first same-provider probe fails with model_not_found", async () => {
@@ -1366,11 +1355,7 @@ describe("runWithModelFallback", () => {
           defaults: {
             model: {
               primary: "anthropic/claude-opus-4-6",
-              fallbacks: [
-                "anthropic/claude-sonnet-4-5",
-                "anthropic/claude-haiku-3-5",
-                "groq/llama-3.3-70b-versatile",
-              ],
+              fallbacks: ["anthropic/claude-sonnet-4-5", "anthropic/claude-haiku-3-5"],
             },
           },
         },

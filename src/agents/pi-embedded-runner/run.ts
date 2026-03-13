@@ -688,8 +688,8 @@ export async function runEmbeddedPiAgent(
           if (inCooldown) {
             if (allowTransientCooldownProbe && !didTransientCooldownProbe) {
               didTransientCooldownProbe = true;
-              log.warn(
-                `probing cooldowned auth profile for ${provider}/${modelId} due to ${unavailableReason ?? "transient"} unavailability`,
+              log.info(
+                `trying one cooldowned auth profile for ${provider}/${modelId} before model fallback (${unavailableReason ?? "transient"})`,
               );
             } else {
               profileIndex += 1;

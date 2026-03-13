@@ -277,6 +277,13 @@ function expectOpenAiThenGroqAttemptOrder(params?: { expectOpenAiAuthProfileId?:
   expect(secondCall?.provider).toBe("groq");
 }
 
+function expectGroqOnlyAttemptOrder() {
+  expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+  const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as { provider?: string } | undefined;
+  expect(firstCall).toBeDefined();
+  expect(firstCall?.provider).toBe("groq");
+}
+
 function mockAllProvidersOverloaded() {
   runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
     const attemptParams = params as { provider: string; modelId: string; authProfileId?: string };
@@ -361,7 +368,7 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
     });
   });
 
-  it("probes a provider already in overloaded cooldown before falling back", async () => {
+  it("skips an overloaded cooldowned provider when a healthy cross-provider fallback exists", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       const now = Date.now();
       await writeAuthStore(agentDir, {
@@ -382,11 +389,11 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       });
 
       expect(result.provider).toBe("groq");
-      expectOpenAiThenGroqAttemptOrder({ expectOpenAiAuthProfileId: "openai:p1" });
+      expectGroqOnlyAttemptOrder();
     });
   });
 
-  it("persists overloaded cooldown across turns while still allowing one probe and fallback", async () => {
+  it("persists overloaded cooldown across turns while skipping directly to fallback", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
       mockPrimaryOverloadedThenFallbackSuccess();
@@ -414,13 +421,13 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       });
 
       expect(secondResult.provider).toBe("groq");
-      expectOpenAiThenGroqAttemptOrder({ expectOpenAiAuthProfileId: "openai:p1" });
+      expectGroqOnlyAttemptOrder();
 
       const usageStats = await readUsageStats(agentDir);
       expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
-      expect(usageStats["openai:p1"]?.failureCounts).toMatchObject({ overloaded: 2 });
-      expect(computeBackoffMock).toHaveBeenCalledTimes(1);
-      expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+      expect(usageStats["openai:p1"]?.failureCounts).toMatchObject({ overloaded: 1 });
+      expect(computeBackoffMock).not.toHaveBeenCalled();
+      expect(sleepWithAbortMock).not.toHaveBeenCalled();
     });
   });
 

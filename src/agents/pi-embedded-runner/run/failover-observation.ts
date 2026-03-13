@@ -52,7 +52,8 @@ export function createFailoverDecisionLogger(
   const reasonText = normalizedBase.failoverReason ?? "none";
   return (decision, extra) => {
     const observedError = buildApiErrorObservationFields(normalizedBase.rawError);
-    log.warn("embedded run failover decision", {
+    const level = decision === "surface_error" ? "warn" : "info";
+    log[level]("embedded run failover decision", {
       event: "embedded_run_failover_decision",
       tags: ["error_handling", "failover", normalizedBase.stage, decision],
       runId: normalizedBase.runId,

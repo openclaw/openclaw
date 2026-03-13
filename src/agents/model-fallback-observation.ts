@@ -6,6 +6,20 @@ import type { FailoverReason } from "./pi-embedded-helpers.js";
 
 const decisionLog = createSubsystemLogger("model-fallback").child("decision");
 
+function resolveDecisionLogLevel(params: {
+  decision:
+    | "skip_candidate"
+    | "probe_cooldown_candidate"
+    | "candidate_failed"
+    | "candidate_succeeded";
+  nextCandidate?: ModelCandidate;
+}): "info" | "warn" {
+  if (params.decision === "candidate_failed" && !params.nextCandidate) {
+    return "warn";
+  }
+  return "info";
+}
+
 function buildErrorObservationFields(error?: string): {
   errorPreview?: string;
   errorHash?: string;
@@ -56,7 +70,11 @@ export function logModelFallbackDecision(params: {
     : "none";
   const reasonText = params.reason ?? "unknown";
   const observedError = buildErrorObservationFields(params.error);
-  decisionLog.warn("model fallback decision", {
+  const level = resolveDecisionLogLevel({
+    decision: params.decision,
+    nextCandidate: params.nextCandidate,
+  });
+  decisionLog[level]("model fallback decision", {
     event: "model_fallback_decision",
     tags: ["error_handling", "model_fallback", params.decision],
     runId: params.runId,

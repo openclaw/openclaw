@@ -375,15 +375,23 @@ function markProbeAttempt(now: number, throttleKey: string): void {
   enforceProbeStateCap();
 }
 
+function isTransientCooldownReason(reason: FailoverReason | null | undefined): boolean {
+  return reason === "rate_limit" || reason === "overloaded";
+}
+
 function shouldProbePrimaryDuringCooldown(params: {
   isPrimary: boolean;
   hasFallbackCandidates: boolean;
+  preferCrossProviderFallback: boolean;
   now: number;
   throttleKey: string;
-  authStore: ReturnType<typeof ensureAuthProfileStore>;
-  profileIds: string[];
+  soonestCooldownExpiry: number | null;
 }): boolean {
   if (!params.isPrimary || !params.hasFallbackCandidates) {
+    return false;
+  }
+
+  if (params.preferCrossProviderFallback) {
     return false;
   }
 
@@ -391,7 +399,7 @@ function shouldProbePrimaryDuringCooldown(params: {
     return false;
   }
 
-  const soonest = getSoonestCooldownExpiry(params.authStore, params.profileIds);
+  const soonest = params.soonestCooldownExpiry;
   if (soonest === null || !Number.isFinite(soonest)) {
     return true;
   }
@@ -413,6 +421,88 @@ export const _probeThrottleInternals = {
   markProbeAttempt,
 } as const;
 
+type ProviderAvailabilitySnapshot = {
+  profileIds: string[];
+  allProfilesInCooldown: boolean;
+  isRunnableNow: boolean;
+  unavailableReason: FailoverReason | null;
+  soonestCooldownExpiry: number | null;
+};
+
+function createProviderAvailabilityResolver(params: {
+  cfg: OpenClawConfig | undefined;
+  authStore: ReturnType<typeof ensureAuthProfileStore>;
+}): (provider: string) => ProviderAvailabilitySnapshot {
+  const cache = new Map<string, ProviderAvailabilitySnapshot>();
+  return (provider: string) => {
+    const cached = cache.get(provider);
+    if (cached) {
+      return cached;
+    }
+
+    const profileIds = resolveAuthProfileOrder({
+      cfg: params.cfg,
+      store: params.authStore,
+      provider,
+    });
+    const hasAvailableProfile = profileIds.some((id) => !isProfileInCooldown(params.authStore, id));
+    const allProfilesInCooldown = profileIds.length > 0 && !hasAvailableProfile;
+    const snapshot: ProviderAvailabilitySnapshot = {
+      profileIds,
+      allProfilesInCooldown,
+      isRunnableNow: profileIds.length === 0 || hasAvailableProfile,
+      unavailableReason: allProfilesInCooldown
+        ? (resolveProfilesUnavailableReason({
+            store: params.authStore,
+            profileIds,
+          }) ?? "unknown")
+        : null,
+      soonestCooldownExpiry: allProfilesInCooldown
+        ? getSoonestCooldownExpiry(params.authStore, profileIds)
+        : null,
+    };
+    cache.set(provider, snapshot);
+    return snapshot;
+  };
+}
+
+function resolveCandidateRunOrder(params: {
+  candidates: ModelCandidate[];
+  requestedProvider: string;
+  resolveProviderAvailability: (provider: string) => ProviderAvailabilitySnapshot;
+}): number[] {
+  const defaultOrder = params.candidates.map((_, index) => index);
+  if (defaultOrder.length <= 1) {
+    return defaultOrder;
+  }
+
+  const requestedProviderAvailability = params.resolveProviderAvailability(
+    params.requestedProvider,
+  );
+  if (
+    !requestedProviderAvailability.allProfilesInCooldown ||
+    !isTransientCooldownReason(requestedProviderAvailability.unavailableReason)
+  ) {
+    return defaultOrder;
+  }
+
+  const crossProviderIndexes = defaultOrder.slice(1).filter((index) => {
+    return params.candidates[index]?.provider !== params.requestedProvider;
+  });
+  const hasRunnableCrossProviderFallback = crossProviderIndexes.some((index) => {
+    const candidate = params.candidates[index];
+    return candidate ? params.resolveProviderAvailability(candidate.provider).isRunnableNow : false;
+  });
+  if (!hasRunnableCrossProviderFallback) {
+    return defaultOrder;
+  }
+
+  const sameProviderIndexes = defaultOrder.slice(1).filter((index) => {
+    return params.candidates[index]?.provider === params.requestedProvider;
+  });
+  return [0, ...crossProviderIndexes, ...sameProviderIndexes];
+}
+
 type CooldownDecision =
   | {
       type: "skip";
@@ -430,26 +520,25 @@ function resolveCooldownDecision(params: {
   isPrimary: boolean;
   requestedModel: boolean;
   hasFallbackCandidates: boolean;
+  hasRunnableCrossProviderFallback: boolean;
   now: number;
   probeThrottleKey: string;
-  authStore: ReturnType<typeof ensureAuthProfileStore>;
-  profileIds: string[];
+  unavailableReason: FailoverReason | null;
+  soonestCooldownExpiry: number | null;
 }): CooldownDecision {
+  const inferredReason = params.unavailableReason ?? "unknown";
+  const preferCrossProviderFallback =
+    params.isPrimary &&
+    isTransientCooldownReason(inferredReason) &&
+    params.hasRunnableCrossProviderFallback;
   const shouldProbe = shouldProbePrimaryDuringCooldown({
     isPrimary: params.isPrimary,
     hasFallbackCandidates: params.hasFallbackCandidates,
+    preferCrossProviderFallback,
     now: params.now,
     throttleKey: params.probeThrottleKey,
-    authStore: params.authStore,
-    profileIds: params.profileIds,
+    soonestCooldownExpiry: params.soonestCooldownExpiry,
   });
-
-  const inferredReason =
-    resolveProfilesUnavailableReason({
-      store: params.authStore,
-      profileIds: params.profileIds,
-      now: params.now,
-    }) ?? "unknown";
   const isPersistentAuthIssue = inferredReason === "auth" || inferredReason === "auth_permanent";
   if (isPersistentAuthIssue) {
     return {
@@ -525,38 +614,59 @@ export async function runWithModelFallback<T>(params: {
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
   const cooldownProbeUsedProviders = new Set<string>();
+  const resolveProviderAvailability = authStore
+    ? createProviderAvailabilityResolver({
+        cfg: params.cfg,
+        authStore,
+      })
+    : null;
+  const candidateRunOrder = resolveProviderAvailability
+    ? resolveCandidateRunOrder({
+        candidates,
+        requestedProvider: params.provider,
+        resolveProviderAvailability,
+      })
+    : candidates.map((_, index) => index);
 
   const hasFallbackCandidates = candidates.length > 1;
 
-  for (let i = 0; i < candidates.length; i += 1) {
-    const candidate = candidates[i];
-    const isPrimary = i === 0;
+  for (let orderIndex = 0; orderIndex < candidateRunOrder.length; orderIndex += 1) {
+    const candidateIndex = candidateRunOrder[orderIndex];
+    const candidate = candidates[candidateIndex];
+    const isPrimary = candidateIndex === 0;
     const requestedModel =
       params.provider === candidate.provider && params.model === candidate.model;
     let runOptions: ModelFallbackRunOptions | undefined;
     let attemptedDuringCooldown = false;
     let transientProbeProviderForAttempt: string | null = null;
-    if (authStore) {
-      const profileIds = resolveAuthProfileOrder({
-        cfg: params.cfg,
-        store: authStore,
-        provider: candidate.provider,
-      });
-      const isAnyProfileAvailable = profileIds.some((id) => !isProfileInCooldown(authStore, id));
+    let shouldConsumeTransientProbeSlotOnFailure = false;
+    if (authStore && resolveProviderAvailability) {
+      const providerAvailability = resolveProviderAvailability(candidate.provider);
+      const profileIds = providerAvailability.profileIds;
 
-      if (profileIds.length > 0 && !isAnyProfileAvailable) {
+      if (providerAvailability.allProfilesInCooldown) {
         // All profiles for this provider are in cooldown.
         const now = Date.now();
         const probeThrottleKey = resolveProbeThrottleKey(candidate.provider, params.agentDir);
+        const hasRunnableCrossProviderFallback = candidateRunOrder
+          .slice(orderIndex + 1)
+          .some((nextCandidateIndex) => {
+            const nextCandidate = candidates[nextCandidateIndex];
+            return nextCandidate
+              ? nextCandidate.provider !== candidate.provider &&
+                  resolveProviderAvailability(nextCandidate.provider).isRunnableNow
+              : false;
+          });
         const decision = resolveCooldownDecision({
           candidate,
           isPrimary,
           requestedModel,
           hasFallbackCandidates,
+          hasRunnableCrossProviderFallback,
           now,
           probeThrottleKey,
-          authStore,
-          profileIds,
+          unavailableReason: providerAvailability.unavailableReason,
+          soonestCooldownExpiry: providerAvailability.soonestCooldownExpiry,
         });
 
         if (decision.type === "skip") {
@@ -572,11 +682,11 @@ export async function runWithModelFallback<T>(params: {
             requestedProvider: params.provider,
             requestedModel: params.model,
             candidate,
-            attempt: i + 1,
+            attempt: orderIndex + 1,
             total: candidates.length,
             reason: decision.reason,
             error: decision.error,
-            nextCandidate: candidates[i + 1],
+            nextCandidate: candidates[candidateRunOrder[orderIndex + 1] ?? -1],
             isPrimary,
             requestedModelMatched: requestedModel,
             fallbackConfigured: hasFallbackCandidates,
@@ -615,11 +725,11 @@ export async function runWithModelFallback<T>(params: {
               requestedProvider: params.provider,
               requestedModel: params.model,
               candidate,
-              attempt: i + 1,
+              attempt: orderIndex + 1,
               total: candidates.length,
               reason: decision.reason,
               error,
-              nextCandidate: candidates[i + 1],
+              nextCandidate: candidates[candidateRunOrder[orderIndex + 1] ?? -1],
               isPrimary,
               requestedModelMatched: requestedModel,
               fallbackConfigured: hasFallbackCandidates,
@@ -630,6 +740,7 @@ export async function runWithModelFallback<T>(params: {
           runOptions = { allowTransientCooldownProbe: true };
           if (isTransientCooldownReason) {
             transientProbeProviderForAttempt = candidate.provider;
+            shouldConsumeTransientProbeSlotOnFailure = !isPrimary;
           }
         }
         attemptedDuringCooldown = true;
@@ -639,10 +750,10 @@ export async function runWithModelFallback<T>(params: {
           requestedProvider: params.provider,
           requestedModel: params.model,
           candidate,
-          attempt: i + 1,
+          attempt: orderIndex + 1,
           total: candidates.length,
           reason: decision.reason,
-          nextCandidate: candidates[i + 1],
+          nextCandidate: candidates[candidateRunOrder[orderIndex + 1] ?? -1],
           isPrimary,
           requestedModelMatched: requestedModel,
           fallbackConfigured: hasFallbackCandidates,
@@ -659,14 +770,14 @@ export async function runWithModelFallback<T>(params: {
       options: runOptions,
     });
     if ("success" in attemptRun) {
-      if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
+      if (candidateIndex > 0 || attempts.length > 0 || attemptedDuringCooldown) {
         logModelFallbackDecision({
           decision: "candidate_succeeded",
           runId: params.runId,
           requestedProvider: params.provider,
           requestedModel: params.model,
           candidate,
-          attempt: i + 1,
+          attempt: orderIndex + 1,
           total: candidates.length,
           previousAttempts: attempts,
           isPrimary,
@@ -675,7 +786,7 @@ export async function runWithModelFallback<T>(params: {
         });
       }
       const notFoundAttempt =
-        i > 0 ? attempts.find((a) => a.reason === "model_not_found") : undefined;
+        candidateIndex > 0 ? attempts.find((a) => a.reason === "model_not_found") : undefined;
       if (notFoundAttempt) {
         log.warn(
           `Model "${sanitizeForLog(notFoundAttempt.provider)}/${sanitizeForLog(notFoundAttempt.model)}" not found. Fell back to "${sanitizeForLog(candidate.provider)}/${sanitizeForLog(candidate.model)}".`,
@@ -688,6 +799,7 @@ export async function runWithModelFallback<T>(params: {
       if (transientProbeProviderForAttempt) {
         const probeFailureReason = describeFailoverError(err).reason;
         const shouldPreserveTransientProbeSlot =
+          !shouldConsumeTransientProbeSlotOnFailure ||
           probeFailureReason === "model_not_found" ||
           probeFailureReason === "format" ||
           probeFailureReason === "auth" ||
@@ -715,7 +827,7 @@ export async function runWithModelFallback<T>(params: {
       // there are remaining candidates.  Only abort/context-overflow errors
       // (handled above) are truly non-retryable.
       const isKnownFailover = isFailoverError(normalized);
-      if (!isKnownFailover && i === candidates.length - 1) {
+      if (!isKnownFailover && orderIndex === candidateRunOrder.length - 1) {
         throw err;
       }
 
@@ -735,13 +847,13 @@ export async function runWithModelFallback<T>(params: {
         requestedProvider: params.provider,
         requestedModel: params.model,
         candidate,
-        attempt: i + 1,
+        attempt: orderIndex + 1,
         total: candidates.length,
         reason: described.reason,
         status: described.status,
         code: described.code,
         error: described.message,
-        nextCandidate: candidates[i + 1],
+        nextCandidate: candidates[candidateRunOrder[orderIndex + 1] ?? -1],
         isPrimary,
         requestedModelMatched: requestedModel,
         fallbackConfigured: hasFallbackCandidates,
@@ -750,7 +862,7 @@ export async function runWithModelFallback<T>(params: {
         provider: candidate.provider,
         model: candidate.model,
         error: isKnownFailover ? normalized : err,
-        attempt: i + 1,
+        attempt: orderIndex + 1,
         total: candidates.length,
       });
     }

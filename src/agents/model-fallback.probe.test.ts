@@ -31,6 +31,19 @@ const mockedResolveProfilesUnavailableReason = vi.mocked(resolveProfilesUnavaila
 const mockedResolveAuthProfileOrder = vi.mocked(resolveAuthProfileOrder);
 
 const makeCfg = makeModelFallbackCfg;
+function makeSameProviderProbeCfg(): OpenClawConfig {
+  return makeCfg({
+    agents: {
+      defaults: {
+        model: {
+          primary: "openai/gpt-4.1-mini",
+          fallbacks: ["openai/gpt-4.1"],
+        },
+      },
+    },
+  } as Partial<OpenClawConfig>);
+}
+
 let unregisterLogTransport: (() => void) | undefined;
 
 function expectFallbackUsed(
@@ -61,23 +74,14 @@ function expectPrimaryProbeSuccess(
   });
 }
 
-async function expectProbeFailureFallsBack({
+async function expectPrimaryProbeFailureFallsBackToSameProvider({
   reason,
   probeError,
 }: {
   reason: "rate_limit" | "overloaded";
   probeError: Error & { status: number };
 }) {
-  const cfg = makeCfg({
-    agents: {
-      defaults: {
-        model: {
-          primary: "openai/gpt-4.1-mini",
-          fallbacks: ["anthropic/claude-haiku-3-5", "google/gemini-2-flash"],
-        },
-      },
-    },
-  } as Partial<OpenClawConfig>);
+  const cfg = makeSameProviderProbeCfg();
 
   mockedIsProfileInCooldown.mockReturnValue(true);
   mockedGetSoonestCooldownExpiry.mockReturnValue(1_700_000_000_000 + 30 * 1000);
@@ -97,7 +101,7 @@ async function expectProbeFailureFallsBack({
   expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini", {
     allowTransientCooldownProbe: true,
   });
-  expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
+  expect(run).toHaveBeenNthCalledWith(2, "openai", "gpt-4.1", {
     allowTransientCooldownProbe: true,
   });
 }
@@ -190,9 +194,23 @@ describe("runWithModelFallback – probe logic", () => {
     expect(result.attempts[0]?.reason).toBe("billing");
   });
 
-  it("probes primary model when within 2-min margin of cooldown expiry", async () => {
+  it("prefers healthy cross-provider fallback over primary probe within the cooldown margin", async () => {
     const cfg = makeCfg();
     // Cooldown expires in 1 minute — within 2-min probe margin
+    const expiresIn1Min = NOW + 60 * 1000;
+    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn1Min);
+
+    const run = vi.fn().mockResolvedValue("fallback-ok");
+
+    const result = await runPrimaryCandidate(cfg, run);
+    expect(result.result).toBe("fallback-ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
+    expect(result.attempts[0]?.reason).toBe("rate_limit");
+  });
+
+  it("probes primary model within the cooldown margin when no healthy cross-provider fallback exists", async () => {
+    const cfg = makeSameProviderProbeCfg();
     const expiresIn1Min = NOW + 60 * 1000;
     mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn1Min);
 
@@ -203,7 +221,7 @@ describe("runWithModelFallback – probe logic", () => {
   });
 
   it("logs primary metadata on probe success and failure fallback decisions", async () => {
-    const cfg = makeCfg();
+    const cfg = makeSameProviderProbeCfg();
     const records: Array<Record<string, unknown>> = [];
     mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 60 * 1000);
     setLoggerOverride({
@@ -234,18 +252,13 @@ describe("runWithModelFallback – probe logic", () => {
       },
     } as Partial<OpenClawConfig>);
     mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 60 * 1000);
-    const fallbackRun = vi
-      .fn()
-      .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
-      .mockResolvedValueOnce("fallback-ok");
+    const fallbackRun = vi.fn().mockResolvedValueOnce("fallback-ok");
 
     const fallbackResult = await runPrimaryCandidate(fallbackCfg, fallbackRun);
 
     expect(fallbackResult.result).toBe("fallback-ok");
-    expect(fallbackRun).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini", {
-      allowTransientCooldownProbe: true,
-    });
-    expect(fallbackRun).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5");
+    expect(fallbackRun).toHaveBeenCalledTimes(1);
+    expect(fallbackRun).toHaveBeenNthCalledWith(1, "anthropic", "claude-haiku-3-5");
 
     const decisionPayloads = records
       .filter(
@@ -275,11 +288,12 @@ describe("runWithModelFallback – probe logic", () => {
         }),
         expect.objectContaining({
           event: "model_fallback_decision",
-          decision: "candidate_failed",
+          decision: "skip_candidate",
           candidateProvider: "openai",
           candidateModel: "gpt-4.1-mini",
           isPrimary: true,
           requestedModelMatched: true,
+          reason: "rate_limit",
           nextCandidateProvider: "anthropic",
           nextCandidateModel: "claude-haiku-3-5",
         }),
@@ -295,8 +309,8 @@ describe("runWithModelFallback – probe logic", () => {
     );
   });
 
-  it("probes primary model when cooldown already expired", async () => {
-    const cfg = makeCfg();
+  it("probes primary model when cooldown already expired and no healthy cross-provider fallback exists", async () => {
+    const cfg = makeSameProviderProbeCfg();
     // Cooldown expired 5 min ago
     const expiredAlready = NOW - 5 * 60 * 1000;
     mockedGetSoonestCooldownExpiry.mockReturnValue(expiredAlready);
@@ -307,15 +321,15 @@ describe("runWithModelFallback – probe logic", () => {
     expectPrimaryProbeSuccess(result, run, "recovered");
   });
 
-  it("attempts non-primary fallbacks during rate-limit cooldown after primary probe failure", async () => {
-    await expectProbeFailureFallsBack({
+  it("attempts same-provider fallback during rate-limit cooldown after primary probe failure", async () => {
+    await expectPrimaryProbeFailureFallsBackToSameProvider({
       reason: "rate_limit",
       probeError: Object.assign(new Error("rate limited"), { status: 429 }),
     });
   });
 
-  it("attempts non-primary fallbacks during overloaded cooldown after primary probe failure", async () => {
-    await expectProbeFailureFallsBack({
+  it("attempts same-provider fallback during overloaded cooldown after primary probe failure", async () => {
+    await expectPrimaryProbeFailureFallsBackToSameProvider({
       reason: "overloaded",
       probeError: Object.assign(new Error("service overloaded"), { status: 503 }),
     });
@@ -338,8 +352,8 @@ describe("runWithModelFallback – probe logic", () => {
     expectFallbackUsed(result, run);
   });
 
-  it("allows probe when 30s have passed since last probe", async () => {
-    const cfg = makeCfg();
+  it("allows probe when 30s have passed since last probe and no healthy cross-provider fallback exists", async () => {
+    const cfg = makeSameProviderProbeCfg();
     const almostExpired = NOW + 30 * 1000;
     mockedGetSoonestCooldownExpiry.mockReturnValue(almostExpired);
 
@@ -382,8 +396,8 @@ describe("runWithModelFallback – probe logic", () => {
     expect(_probeThrottleInternals.lastProbeAttempt.has("key-0")).toBe(true);
   });
 
-  it("handles non-finite soonest safely (treats as probe-worthy)", async () => {
-    const cfg = makeCfg();
+  it("handles non-finite soonest safely (treats as probe-worthy without a healthy cross-provider fallback)", async () => {
+    const cfg = makeSameProviderProbeCfg();
 
     // Return Infinity — should be treated as "probe" per the guard
     mockedGetSoonestCooldownExpiry.mockReturnValue(Infinity);
@@ -394,8 +408,8 @@ describe("runWithModelFallback – probe logic", () => {
     expectPrimaryProbeSuccess(result, run, "ok-infinity");
   });
 
-  it("handles NaN soonest safely (treats as probe-worthy)", async () => {
-    const cfg = makeCfg();
+  it("handles NaN soonest safely (treats as probe-worthy without a healthy cross-provider fallback)", async () => {
+    const cfg = makeSameProviderProbeCfg();
 
     mockedGetSoonestCooldownExpiry.mockReturnValue(NaN);
 
@@ -405,8 +419,8 @@ describe("runWithModelFallback – probe logic", () => {
     expectPrimaryProbeSuccess(result, run, "ok-nan");
   });
 
-  it("handles null soonest safely (treats as probe-worthy)", async () => {
-    const cfg = makeCfg();
+  it("handles null soonest safely (treats as probe-worthy without a healthy cross-provider fallback)", async () => {
+    const cfg = makeSameProviderProbeCfg();
 
     mockedGetSoonestCooldownExpiry.mockReturnValue(null);
 
@@ -447,7 +461,7 @@ describe("runWithModelFallback – probe logic", () => {
   });
 
   it("scopes probe throttling by agentDir to avoid cross-agent suppression", async () => {
-    const cfg = makeCfg();
+    const cfg = makeSameProviderProbeCfg();
     const almostExpired = NOW + 30 * 1000;
     mockedGetSoonestCooldownExpiry.mockReturnValue(almostExpired);
 
@@ -515,7 +529,6 @@ describe("runWithModelFallback – probe logic", () => {
 
   it("probes billing-cooldowned primary with fallbacks when near cooldown expiry", async () => {
     const cfg = makeCfg();
-    // Cooldown expires in 1 minute — within 2-min probe margin
     const expiresIn1Min = NOW + 60 * 1000;
     mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn1Min);
     mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
