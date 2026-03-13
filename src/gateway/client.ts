@@ -95,7 +95,7 @@ export type GatewayClientOptions = {
   commands?: string[];
   permissions?: Record<string, boolean>;
   pathEnv?: string;
-  deviceIdentity?: DeviceIdentity;
+  deviceIdentity?: DeviceIdentity | null;
   minProtocol?: number;
   maxProtocol?: number;
   tlsFingerprint?: string;
@@ -138,7 +138,10 @@ export class GatewayClient {
   constructor(opts: GatewayClientOptions) {
     this.opts = {
       ...opts,
-      deviceIdentity: opts.deviceIdentity ?? loadOrCreateDeviceIdentity(),
+      deviceIdentity:
+        opts.deviceIdentity === null
+          ? undefined
+          : (opts.deviceIdentity ?? loadOrCreateDeviceIdentity()),
     };
   }
 
