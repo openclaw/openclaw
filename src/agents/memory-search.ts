@@ -5,6 +5,10 @@ import { resolveStateDir } from "../config/paths.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
+import {
+  normalizeMemoryMultimodalSettings,
+  type MemoryMultimodalSettings,
+} from "../memory/multimodal.js";
 
 export type ResolvedMemorySearchConfig = {
   enabled: boolean;
@@ -29,6 +33,7 @@ export type ResolvedMemorySearchConfig = {
   fallback: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
   model: string;
   outputDimensionality?: number;
+  multimodal: MemoryMultimodalSettings;
   local: {
     modelPath?: string;
     modelCacheDir?: string;
@@ -204,6 +209,11 @@ function mergeConfig(
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
     modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
   };
+  const multimodal = normalizeMemoryMultimodalSettings({
+    enabled: overrides?.multimodal?.enabled ?? defaults?.multimodal?.enabled,
+    modalities: overrides?.multimodal?.modalities ?? defaults?.multimodal?.modalities,
+    maxFileBytes: overrides?.multimodal?.maxFileBytes ?? defaults?.multimodal?.maxFileBytes,
+  });
   const sources = normalizeSources(overrides?.sources ?? defaults?.sources, sessionMemory);
   const rawPaths = [...(defaults?.extraPaths ?? []), ...(overrides?.extraPaths ?? [])]
     .map((value) => value.trim())
@@ -324,6 +334,7 @@ function mergeConfig(
     fallback,
     model,
     outputDimensionality,
+    multimodal,
     local,
     store,
     chunking: { tokens: Math.max(1, chunking.tokens), overlap },
