@@ -7,9 +7,6 @@ const { detectChangedScope, listChangedPaths } =
   (await import("../../scripts/ci-changed-scope.mjs")) as unknown as {
     detectChangedScope: (paths: string[]) => {
       runNode: boolean;
-      runMacos: boolean;
-      runAndroid: boolean;
-      runWindows: boolean;
       runSkillsPython: boolean;
     };
     listChangedPaths: (base: string, head?: string) => string[];
@@ -30,9 +27,6 @@ describe("detectChangedScope", () => {
   it("fails safe when no paths are provided", () => {
     expect(detectChangedScope([])).toEqual({
       runNode: true,
-      runMacos: true,
-      runAndroid: true,
-      runWindows: true,
       runSkillsPython: true,
     });
   });
@@ -40,9 +34,6 @@ describe("detectChangedScope", () => {
   it("keeps all lanes off for docs-only changes", () => {
     expect(detectChangedScope(["docs/ci.md", "README.md"])).toEqual({
       runNode: false,
-      runMacos: false,
-      runAndroid: false,
-      runWindows: false,
       runSkillsPython: false,
     });
   });
@@ -50,66 +41,18 @@ describe("detectChangedScope", () => {
   it("enables node lane for node-relevant files", () => {
     expect(detectChangedScope(["src/plugins/runtime/index.ts"])).toEqual({
       runNode: true,
-      runMacos: false,
-      runAndroid: false,
-      runWindows: true,
       runSkillsPython: false,
     });
-  });
-
-  it("keeps node lane off for native-only changes", () => {
-    expect(detectChangedScope(["apps/macos/Sources/Foo.swift"])).toEqual({
-      runNode: false,
-      runMacos: true,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-    });
-    expect(detectChangedScope(["apps/shared/OpenClawKit/Sources/Foo.swift"])).toEqual({
-      runNode: false,
-      runMacos: true,
-      runAndroid: true,
-      runWindows: false,
-      runSkillsPython: false,
-    });
-  });
-
-  it("does not force macOS for generated protocol model-only changes", () => {
-    expect(detectChangedScope(["apps/macos/Sources/OpenClawProtocol/GatewayModels.swift"])).toEqual(
-      {
-        runNode: false,
-        runMacos: false,
-        runAndroid: false,
-        runWindows: false,
-        runSkillsPython: false,
-      },
-    );
   });
 
   it("enables node lane for non-native non-doc files by fallback", () => {
     expect(detectChangedScope(["README.md"])).toEqual({
       runNode: false,
-      runMacos: false,
-      runAndroid: false,
-      runWindows: false,
       runSkillsPython: false,
     });
 
     expect(detectChangedScope(["assets/icon.png"])).toEqual({
       runNode: true,
-      runMacos: false,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-    });
-  });
-
-  it("keeps windows lane off for non-runtime GitHub metadata files", () => {
-    expect(detectChangedScope([".github/labeler.yml"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runAndroid: false,
-      runWindows: false,
       runSkillsPython: false,
     });
   });
@@ -117,9 +60,6 @@ describe("detectChangedScope", () => {
   it("runs Python skill tests when skills change", () => {
     expect(detectChangedScope(["skills/openai-image-gen/scripts/test_gen.py"])).toEqual({
       runNode: true,
-      runMacos: false,
-      runAndroid: false,
-      runWindows: false,
       runSkillsPython: true,
     });
   });

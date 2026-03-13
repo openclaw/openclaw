@@ -15,8 +15,17 @@ optional:
   - pg_conflicts
   - db_topology
 rewards_provider_critical:
+  # Always required for rewards/provider incidents.
+  - db_row_provenance
   - provider_api_check
   - artifact_check
   - code_path_check
-rewards_provider_optional:
+rewards_provider_same_token_critical:
+  # Only required when one reward token appears on both supply and borrow.
+  - provider_side_mismatch
+  - code_path_reconciled
+rewards_provider_optional: # intentionally empty
+rewards_provider_reversal_critical:
+  # Only required when fresh evidence disproves an earlier theory or PR.
+  # This can stack with same-token requirements on the same incident.
   - disproved_theory_recorded

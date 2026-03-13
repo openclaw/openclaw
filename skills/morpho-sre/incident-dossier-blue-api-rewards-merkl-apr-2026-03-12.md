@@ -34,4 +34,6 @@
 - treat prior APY incidents as priors only
 - do not name DB pressure as the root cause without checking the provider
 - do not name stale-row cleanup as root cause until the live DB row/provenance fact matches the theory
+- if the live reward row already carries both `supplyApr` and `borrowApr` for the same reward token, assume a local composition/applicability bug until the active code path disproves it
+- for same-token both-sides anomalies, inspect `_fetchMerklSingleRates()` applicability and the final merged reward row before proposing cleanup-only fixes
 - do not open blacklist/config PRs until the live failing path is proven to consume them

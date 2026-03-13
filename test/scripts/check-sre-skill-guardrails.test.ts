@@ -14,6 +14,7 @@ const VALID_SKILL = `
 - do not send progress-only replies such as \`On it\`, \`Found it\`, or \`Let me verify\`
 - Before claiming repo/tool access is unavailable, run one live probe (\`gh repo view <owner/repo>\` or the target helper in dry-run mode) and quote the exact error.
 - If a human questions the proposed fix or PR in-thread, re-open RCA with fresh live evidence; do not repeat the old theory or go silent.
+- If current code or live evidence disproves an earlier theory, say \`Disproved theory:\` before proposing the replacement cause or PR.
 - RBAC-aware fallback:
   - if \`pods/exec forbidden\` appears, stop retrying \`kubectl exec\`
 - Before broad repo/code reads, load at least one retrieval surface relevant to the incident:
@@ -23,6 +24,7 @@ const VALID_SKILL = `
 ## Rewards / Provider Incidents
 - before naming a stale-row/write-path cause or opening a PR, include one live DB row/provenance fact for the affected reward entity
 - the reply must also name one exact consuming repo/path fact for the active code path
+- if the same reward token appears on both supply and borrow for one market, first quote the live reward row/provenance
 
 ## Single-Vault API / GraphQL Data Incidents
 - compare against one healthy control vault on the same chain

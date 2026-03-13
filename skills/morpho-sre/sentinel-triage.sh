@@ -334,7 +334,7 @@ sanitize_signal_line() {
   fi
   printf '%s\n' "$raw" \
     | jq -Rr '
-        gsub("(?i)(authorization:[[:space:]]*bearer[[:space:]]+)[A-Za-z0-9._=-]+"; "\\1<redacted>")
+        gsub("(?i)(authorization:[[:space:]]*bearer[[:space:]]+)[A-Za-z0-9._/+=-]+"; "\\1<redacted>")
         | gsub("(?i)(xox[baprs]-)[A-Za-z0-9-]+"; "\\1<redacted>")
         | gsub("(?i)(xapp-[0-9]+-)[A-Za-z0-9-]+"; "\\1<redacted>")
         | gsub("(?i)(gh[pousr]_[A-Za-z0-9_]+)"; "<redacted-gh-token>")
@@ -351,6 +351,20 @@ sanitize_signal_line() {
         | gsub("[[:space:]]+"; " ")
         | .[0:220]
       '
+}
+
+rewards_provider_should_collect_if_available() {
+  local combined="${1:-}"
+  if [[ "${HAS_LIB_REWARDS_PROVIDER_EVIDENCE:-0}" -eq 1 ]] && rewards_provider_should_collect "$combined"; then
+    return 0
+  fi
+  return 1
+}
+
+collect_phase2_rewards_provider_context_if_available() {
+  if [[ "${HAS_LIB_REWARDS_PROVIDER_EVIDENCE:-0}" -eq 1 ]]; then
+    collect_phase2_rewards_provider_context
+  fi
 }
 
 extract_image_tag() {
@@ -1621,6 +1635,7 @@ HAS_LIB_SERVICE_OVERLAY=0
 HAS_LIB_INCIDENT_MEMORY=0
 HAS_LIB_INCIDENT_DOSSIER=0
 HAS_LIB_EVIDENCE_ROW=0
+HAS_LIB_REWARDS_PROVIDER_EVIDENCE=0
 HAS_LIB_TIMELINE=0
 HAS_LIB_SERVICE_CONTEXT=0
 HAS_LIB_OVERLAY_SUGGESTIONS=0
@@ -1644,6 +1659,7 @@ source_optional_lib "lib-service-overlay" HAS_LIB_SERVICE_OVERLAY
 source_optional_lib "lib-incident-memory" HAS_LIB_INCIDENT_MEMORY
 source_optional_lib "lib-incident-dossier" HAS_LIB_INCIDENT_DOSSIER
 source_optional_lib "lib-evidence-row" HAS_LIB_EVIDENCE_ROW
+source_optional_lib "lib-rewards-provider-evidence" HAS_LIB_REWARDS_PROVIDER_EVIDENCE
 source_optional_lib "lib-evidence-gaps" HAS_LIB_EVIDENCE_GAPS
 source_optional_lib "lib-hypothesis-recollect" HAS_LIB_HYPOTHESIS_RECOLLECT
 source_optional_lib "lib-timeline" HAS_LIB_TIMELINE
@@ -1902,16 +1918,6 @@ collect_phase2_drift_and_lineage() {
   fi
 }
 
-rewards_provider_should_collect() {
-  local combined="${1:-}"
-  case "$combined" in
-    *merkl*|*v4/opportunities/campaigns*|*yearly_supply_tokens*|*campaigns.morpho.org*|*campaign\ tvl*|*reward\ apr*|*rewards\ apr*|*supply\ apr*|*borrow\ apr*|*supplyapr*|*borrowapr*|*reward\ program*|*rewards\ program*)
-      return 0
-      ;;
-  esac
-  return 1
-}
-
 db_evidence_should_collect() {
   [[ "${DB_EVIDENCE_ENABLED:-1}" == "1" ]] || return 1
   local combined
@@ -1926,7 +1932,7 @@ db_evidence_should_collect() {
     } | tr '[:upper:]' '[:lower:]'
   )"
   [[ -n "$combined" ]] || return 1
-  if rewards_provider_should_collect "$combined"; then
+  if rewards_provider_should_collect_if_available "$combined"; then
     return 0
   fi
   case "$combined" in
@@ -1939,7 +1945,7 @@ db_evidence_should_collect() {
 
 db_evidence_target_guess() {
   local combined="${1:-}"
-  if rewards_provider_should_collect "$combined"; then
+  if rewards_provider_should_collect_if_available "$combined"; then
     printf 'blue_api\n'
     return 0
   fi
@@ -2054,93 +2060,6 @@ collect_phase2_db_evidence() {
   fi
 }
 
-collect_phase2_rewards_provider_context() {
-  rewards_provider_mode=0
-  provider_api_check=0
-  artifact_check=0
-  code_path_check=0
-  disproved_theory_recorded=0
-  rewards_provider_context_note=""
-  provider_api_evidence_output=""
-  artifact_evidence_output=""
-  code_path_evidence_output=""
-  disproved_theory_evidence_output=""
-
-  local raw_combined combined
-  local provider_api_evidence_output_local artifact_evidence_output_local
-  local code_path_evidence_output_local disproved_theory_evidence_output_local
-  raw_combined="$(
-    {
-      printf '%s\n' "${BETTERSTACK_CONTEXT:-}"
-      printf '%s\n' "${alert_rows:-}"
-      printf '%s\n' "${event_rows:-}"
-      printf '%s\n' "${log_signal_rows:-}"
-      printf '%s\n' "${repo_map_rows:-}"
-      printf '%s\n' "${revision_rows:-}"
-      printf '%s\n' "${ci_rows:-}"
-      printf '%s\n' "${changes_in_window_summary:-}"
-    }
-  )"
-  combined="$(printf '%s' "$raw_combined" | tr '[:upper:]' '[:lower:]')"
-
-  rewards_provider_should_collect "$combined" || return 0
-  rewards_provider_mode=1
-
-  provider_api_evidence_output_local="$(printf '%s' "${provider_api_evidence_input:-}" | awk 'NF > 0 { print }')"
-  artifact_evidence_output_local="$(printf '%s' "${artifact_evidence_input:-}" | awk 'NF > 0 { print }')"
-  code_path_evidence_output_local="$(printf '%s' "${code_path_evidence_input:-}" | awk 'NF > 0 { print }')"
-  disproved_theory_evidence_output_local="$(printf '%s' "${disproved_theory_evidence_input:-}" | awk 'NF > 0 { print }')"
-
-  if [[ -z "$provider_api_evidence_output_local" ]]; then
-    provider_api_evidence_output_local="$(
-      printf '%s\n' "$raw_combined" \
-        | grep -Eom1 '(GET /v4/opportunities/campaigns[^[:space:]]*|https?://[^[:space:]]*api\.merkl[^[:space:]]*|campaigns\.morpho\.org[^[:space:]]*)' \
-        || true
-    )"
-  fi
-
-  if [[ -z "$artifact_evidence_output_local" ]]; then
-    if [[ -n "${changes_in_window_summary:-}" ]] && printf '%s\n' "${changes_in_window_summary:-}" | grep -Eiq '(artifact|snapshot|dump|cache|workflow)'; then
-      artifact_evidence_output_local="$(sanitize_signal_line "$changes_in_window_summary")"
-    elif [[ -n "${ci_rows:-}" ]]; then
-      artifact_evidence_output_local="$(sanitize_signal_line "$(printf '%s\n' "$ci_rows" | awk 'NF > 0 { print; exit }')")"
-    fi
-  fi
-
-  if [[ -z "$code_path_evidence_output_local" ]]; then
-    code_path_evidence_output_local="$(
-      printf '%s\n' "$raw_combined" \
-        | grep -Eom1 '([A-Za-z0-9._-]+/)+[A-Za-z0-9._-]+\.(ts|tsx|js|jsx|sql|ya?ml|json|sh)(:[0-9]+)?' \
-        || true
-    )"
-  fi
-
-  if [[ -n "$provider_api_evidence_output_local" ]]; then
-    provider_api_check=1
-  fi
-
-  if [[ -n "$artifact_evidence_output_local" ]]; then
-    artifact_check=1
-  fi
-
-  if [[ -n "$code_path_evidence_output_local" ]]; then
-    code_path_check=1
-  fi
-
-  if [[ -n "$disproved_theory_evidence_output_local" ]]; then
-    disproved_theory_recorded=1
-  fi
-
-  provider_api_evidence_output="$provider_api_evidence_output_local"
-  artifact_evidence_output="$artifact_evidence_output_local"
-  code_path_evidence_output="$code_path_evidence_output_local"
-  disproved_theory_evidence_output="$disproved_theory_evidence_output_local"
-
-  if [[ "$provider_api_check" -eq 0 || "$artifact_check" -eq 0 || "$code_path_check" -eq 0 ]]; then
-    rewards_provider_context_note="explicit or raw provider/artifact/code-path evidence outputs are still incomplete; rewards/provider gate remains closed until those live facts are recorded"
-  fi
-}
-
 build_phase3_gap_input_file() {
   local target_file="$1"
   cat >"$target_file" <<EOF
@@ -2167,10 +2086,15 @@ pg_statements=${pg_statements:-0}
 pg_conflicts=${pg_conflicts:-0}
 db_topology=${db_topology:-0}
 rewards_provider_mode=${rewards_provider_mode:-0}
+db_row_provenance=${db_row_provenance:-0}
 provider_api_check=${provider_api_check:-0}
+provider_side_mismatch=${provider_side_mismatch:-0}
 artifact_check=${artifact_check:-0}
 code_path_check=${code_path_check:-0}
+code_path_reconciled=${code_path_reconciled:-0}
 disproved_theory_recorded=${disproved_theory_recorded:-0}
+disproved_theory_expected=${disproved_theory_expected:-0}
+same_token_both_sides_expected=${same_token_both_sides_expected:-0}
 EOF
 }
 
@@ -2972,7 +2896,7 @@ incident_fingerprint_source="$(
 incident_fingerprint="$(printf '%s\n' "$incident_fingerprint_source" | cksum | awk '{print $1}')"
 collect_change_window_context
 collect_phase2_drift_and_lineage
-collect_phase2_rewards_provider_context
+collect_phase2_rewards_provider_context_if_available
 
 should_alert="no"
 gate_reason="healthy"
@@ -3516,7 +3440,7 @@ if [[ "$incident" -eq 1 && "$HAS_LIB_RCA_LLM" -eq 1 ]] && declare -F run_step_11
   if [[ -z "$recollect_category" || "$recollect_category" == "null" || "$recollect_category" == "unknown" ]]; then
     recollect_category="${step11_dedup_category:-unknown}"
   fi
-  collect_phase2_rewards_provider_context
+  collect_phase2_rewards_provider_context_if_available
   if [[ "$recollect_category" != "unknown" ]]; then
     run_phase3_recollection_loop "$recollect_category" "$evidence_bundle"
   fi
@@ -3752,10 +3676,15 @@ printf 'pg_statements_signal\t%s\n' "$pg_statements"
 printf 'pg_conflicts_signal\t%s\n' "$pg_conflicts"
 printf 'db_topology_signal\t%s\n' "$db_topology"
 printf 'rewards_provider_mode\t%s\n' "${rewards_provider_mode:-0}"
+printf 'db_row_provenance\t%s\n' "${db_row_provenance:-0}"
 printf 'provider_api_check\t%s\n' "${provider_api_check:-0}"
+printf 'provider_side_mismatch\t%s\n' "${provider_side_mismatch:-0}"
 printf 'artifact_check\t%s\n' "${artifact_check:-0}"
 printf 'code_path_check\t%s\n' "${code_path_check:-0}"
+printf 'code_path_reconciled\t%s\n' "${code_path_reconciled:-0}"
 printf 'disproved_theory_recorded\t%s\n' "${disproved_theory_recorded:-0}"
+printf 'disproved_theory_expected\t%s\n' "${disproved_theory_expected:-0}"
+printf 'same_token_both_sides_expected\t%s\n' "${same_token_both_sides_expected:-0}"
 printf 'linear_memory_matches\t%s\n' "$linear_memory_rows_count"
 printf 'resolved_image_revisions\t%s\n' "$revision_resolved_count"
 printf 'suspect_prs\t%s\n' "$suspect_pr_count"
@@ -3857,21 +3786,35 @@ fi
 
 section "rewards_provider_context"
 printf 'mode\t%s\n' "${rewards_provider_mode:-0}"
+printf 'db_row_provenance\t%s\n' "${db_row_provenance:-0}"
 printf 'provider_api_check\t%s\n' "${provider_api_check:-0}"
+printf 'provider_side_mismatch\t%s\n' "${provider_side_mismatch:-0}"
 printf 'artifact_check\t%s\n' "${artifact_check:-0}"
 printf 'code_path_check\t%s\n' "${code_path_check:-0}"
+printf 'code_path_reconciled\t%s\n' "${code_path_reconciled:-0}"
 printf 'disproved_theory_recorded\t%s\n' "${disproved_theory_recorded:-0}"
+printf 'disproved_theory_expected\t%s\n' "${disproved_theory_expected:-0}"
+printf 'same_token_both_sides_expected\t%s\n' "${same_token_both_sides_expected:-0}"
 if [[ -n "${rewards_provider_context_note:-}" ]]; then
   printf 'note\t%s\n' "$rewards_provider_context_note"
 fi
+if [[ -n "${db_row_provenance_evidence_output:-}" ]]; then
+  printf 'db_row_provenance_evidence_output\t%s\n' "$db_row_provenance_evidence_output"
+fi
 if [[ -n "${provider_api_evidence_output:-}" ]]; then
   printf 'provider_api_evidence_output\t%s\n' "$provider_api_evidence_output"
+fi
+if [[ -n "${provider_side_mismatch_evidence_output:-}" ]]; then
+  printf 'provider_side_mismatch_evidence_output\t%s\n' "$provider_side_mismatch_evidence_output"
 fi
 if [[ -n "${artifact_evidence_output:-}" ]]; then
   printf 'artifact_evidence_output\t%s\n' "$artifact_evidence_output"
 fi
 if [[ -n "${code_path_evidence_output:-}" ]]; then
   printf 'code_path_evidence_output\t%s\n' "$code_path_evidence_output"
+fi
+if [[ -n "${code_path_reconciled_evidence_output:-}" ]]; then
+  printf 'code_path_reconciled_evidence_output\t%s\n' "$code_path_reconciled_evidence_output"
 fi
 if [[ -n "${disproved_theory_evidence_output:-}" ]]; then
   printf 'disproved_theory_evidence_output\t%s\n' "$disproved_theory_evidence_output"

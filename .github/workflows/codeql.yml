@@ -24,22 +24,16 @@ jobs:
             runs_on: ubuntu-latest
             needs_node: true
             needs_python: false
-            needs_manual_build: false
-            needs_autobuild: false
             config_file: ./.github/codeql/codeql-javascript-typescript.yml
           - language: actions
             runs_on: ubuntu-latest
             needs_node: false
             needs_python: false
-            needs_manual_build: false
-            needs_autobuild: false
             config_file: ""
           - language: python
             runs_on: ubuntu-latest
             needs_node: false
             needs_python: true
-            needs_manual_build: false
-            needs_autobuild: false
             config_file: ""
     steps:
       - name: Checkout
@@ -66,10 +60,6 @@ jobs:
           languages: ${{ matrix.language }}
           queries: security-and-quality
           config-file: ${{ matrix.config_file || '' }}
-
-      - name: Autobuild
-        if: matrix.needs_autobuild
-        uses: github/codeql-action/autobuild@v4
 
       - name: Analyze
         uses: github/codeql-action/analyze@v4

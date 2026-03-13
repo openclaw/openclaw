@@ -101,6 +101,11 @@ const REQUIRED_RULES: Array<{ id: string; re: RegExp; message: string }> = [
     message: "missing re-open RCA guidance when humans challenge the fix",
   },
   {
+    id: "disproved-theory-contract",
+    re: /Disproved theory:/,
+    message: "missing disproved-theory handoff when evidence contradicts prior RCA",
+  },
+  {
     id: "rewards-db-provenance-gate",
     re: /before naming a stale-row\/write-path cause or opening a PR, include one live DB row\/provenance fact/i,
     message: "missing rewards/provider DB provenance gate before stale-row PRs",
@@ -109,6 +114,11 @@ const REQUIRED_RULES: Array<{ id: string; re: RegExp; message: string }> = [
     id: "rewards-code-path-gate",
     re: /exact consuming (repo\/path|code-path)( fact)?/i,
     message: "missing rewards/provider exact consuming code-path gate before stale-row PRs",
+  },
+  {
+    id: "rewards-same-token-both-sides",
+    re: /same reward token appears on both supply and borrow/i,
+    message: "missing same-token both-sides rewards/provider guidance",
   },
   {
     id: "single-vault-workflow",

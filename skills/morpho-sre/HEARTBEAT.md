@@ -88,8 +88,10 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
 - Do not send progress-only thread replies like `On it`, `Found it`, or `Let me verify`; wait for net-new evidence, mitigation, validation, or a PR URL.
 - Before claiming repo/tool access is unavailable, run one live probe (`gh repo view <owner/repo>` or the target helper in dry-run mode) and quote the exact error.
 - For rewards/provider incidents, do not name a stale-row/write-path cause or open a PR without one live DB row/provenance fact and one exact consuming code-path fact.
+- For rewards/provider incidents where the same reward token appears on both supply and borrow, prove the provider-side truth for that token, quote the live reward row/provenance, and reconcile `_fetchMerklSingleRates()` / the merged reward row before stale-row theories or PRs.
 - Until dedicated collectors exist, satisfy those rewards/provider gates only from explicit live probe outputs; if those outputs are absent, keep the gate closed and say so.
 - If a human questions the proposed fix or PR, re-open RCA with fresh evidence instead of repeating the prior theory.
+- If current code, query output, or live evidence disproves an earlier theory, say `Disproved theory:` before the replacement cause or PR.
 - If a user ask is vague:
   - do not answer with refusal-only language.
   - infer most likely intent from current thread incident context and latest triage output.

@@ -43,6 +43,7 @@ jobs:
       - name: Set up Docker Builder
         uses: docker/setup-buildx-action@v3
 
+      # Keep smoke builds driver-agnostic on the standard Docker build action.
       - name: Build root Dockerfile smoke image
         uses: docker/build-push-action@v6
         with:

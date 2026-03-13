@@ -41,6 +41,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - Do not send progress-only thread replies like `On it`, `Found it`, or `Let me verify`; wait for net-new evidence, mitigation, validation, or a PR URL.
 - Before claiming repo/tool access is unavailable, run one live probe (`gh repo view <owner/repo>` or the target helper in dry-run mode) and quote the exact error.
 - If a human questions the proposed fix or PR in-thread, re-open RCA with fresh live evidence; do not repeat the old theory or go silent.
+- If current code, query output, or live evidence disproves an earlier theory, say `Disproved theory:` and replace it before proposing a new cause or PR.
 - Exact artifact replay:
   - if user provides an exact query, event ID, trace ID, address, or says the prior answer is wrong, replay that exact artifact before reusing any prior theory
   - isolate the minimal failing field set before expanding the query or naming a cause
@@ -223,6 +224,11 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - before naming a stale-row/write-path cause or opening a PR, include one live DB row/provenance fact for the affected reward entity
   - the reply must also name the exact consuming repo/path that would change the active code path
   - until dedicated collectors exist, these rewards/provider evidence gates are satisfied only from explicit live probe outputs; if those outputs are absent, keep the gate closed and say so
+- Same-token both-sides anomaly:
+  - if the same reward token appears on both supply and borrow for one market, first quote the live reward row/provenance
+  - then prove the provider-side truth for that token/campaign
+  - then inspect `_fetchMerklSingleRates()` applicability and the final merged reward row before stale-row cleanup theories or PRs
+  - keep unrelated dbt/job failures under `*Also watching:*` unless they explain the bad reward row
 - Required answer shape:
   - `primary trigger`
   - `local amplifier`

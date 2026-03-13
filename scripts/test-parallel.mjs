@@ -90,6 +90,10 @@ const unitIsolatedFilesRaw = [
   "src/imessage/monitor.shutdown.unhandled-rejection.test.ts",
   // Mutates process.cwd() and mocks core module loaders; isolate from the shared fast lane.
   "src/infra/git-commit.test.ts",
+  // Node 22 vmForks leaks QR/pairing mocks across this cluster; keep them on isolated forks.
+  "src/cli/qr-dashboard.integration.test.ts",
+  "src/cli/qr-cli.test.ts",
+  "src/pairing/setup-code.test.ts",
 ];
 const unitIsolatedFiles = unitIsolatedFilesRaw.filter((file) => fs.existsSync(file));
 

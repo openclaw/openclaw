@@ -22,7 +22,7 @@ printf '%s\n' "$collectors" | rg '^collect_phase2_drift_and_lineage$' >/dev/null
 db_collectors="$(hypothesis_recollect_collectors "$db_gap_json")"
 printf '%s\n' "$db_collectors" | rg '^collect_phase2_db_evidence$' >/dev/null
 
-rewards_gap_json='{"missing_critical":["provider_api_check","artifact_check","code_path_check","disproved_theory_recorded"],"missing_optional":[]}'
+rewards_gap_json='{"missing_critical":["db_row_provenance","provider_api_check","provider_side_mismatch","artifact_check","code_path_check","code_path_reconciled","disproved_theory_recorded"],"missing_optional":[]}'
 rewards_collectors="$(hypothesis_recollect_collectors "$rewards_gap_json")"
 test -z "$rewards_collectors"
 ! hypothesis_recollect_should_run 55 "$rewards_gap_json" 0 1000

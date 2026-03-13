@@ -1,7 +1,6 @@
 export type ChangedScope = {
   runNode: boolean;
-  runMacos: boolean;
-  runAndroid: boolean;
+  runSkillsPython: boolean;
 };
 
 export function detectChangedScope(changedPaths: string[]): ChangedScope;

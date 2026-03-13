@@ -267,6 +267,8 @@ jobs:
   skills-python:
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true' || needs.changed-scope.outputs.run_skills_python == 'true')
+    # Linux-only on the default GitHub runner is sufficient here: the lane only
+    # lint/tests skill scripts and runs lightweight workflow/dependency audits.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -287,6 +289,7 @@ jobs:
         with:
           install-bun: "false"
           install-deps: "false"
+          use-sticky-disk: "false"
 
       - name: Setup Python
         uses: actions/setup-python@v5

@@ -64,7 +64,10 @@ _evidence_gap_lookup_value() {
 evidence_gaps_assess() {
   local category="${1:-unknown}"
   local source_file="${2:-/dev/stdin}"
-  local manifest_file critical_keys optional_keys rewards_provider_keys rewards_provider_optional_keys rewards_provider_mode
+  local manifest_file critical_keys optional_keys
+  local rewards_provider_keys rewards_provider_optional_keys
+  local rewards_provider_same_token_keys rewards_provider_reversal_keys
+  local rewards_provider_mode rewards_provider_same_token_required rewards_provider_reversal_required
   local total_keys=0 present_keys=0 missing_critical_count=0 missing_optional_count=0
   local confidence_penalty=0 key value
   local missing_critical_json missing_optional_json completeness_percent
@@ -90,6 +93,22 @@ evidence_gaps_assess() {
       printf '%s\n%s\n' "$optional_keys" "$rewards_provider_optional_keys" \
         | awk 'NF > 0 && !seen[$0]++ { print }'
     )"
+    rewards_provider_same_token_required="$(_evidence_gap_lookup_value "$source_file" "same_token_both_sides_expected")"
+    if _evidence_gap_value_present "${rewards_provider_same_token_required:-}"; then
+      rewards_provider_same_token_keys="$(_evidence_gap_section_keys "$manifest_file" rewards_provider_same_token_critical)"
+      critical_keys="$(
+        printf '%s\n%s\n' "$critical_keys" "$rewards_provider_same_token_keys" \
+          | awk 'NF > 0 && !seen[$0]++ { print }'
+      )"
+    fi
+    rewards_provider_reversal_required="$(_evidence_gap_lookup_value "$source_file" "disproved_theory_expected")"
+    if _evidence_gap_value_present "${rewards_provider_reversal_required:-}"; then
+      rewards_provider_reversal_keys="$(_evidence_gap_section_keys "$manifest_file" rewards_provider_reversal_critical)"
+      critical_keys="$(
+        printf '%s\n%s\n' "$critical_keys" "$rewards_provider_reversal_keys" \
+          | awk 'NF > 0 && !seen[$0]++ { print }'
+      )"
+    fi
   fi
 
   while IFS= read -r key; do

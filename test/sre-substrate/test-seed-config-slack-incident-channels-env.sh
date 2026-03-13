@@ -43,5 +43,8 @@ jq -e '
   .channels.slack.channels["#ops-war-room"].incidentRootOnly == true and
   .channels.slack.channels["#ops-war-room"].incidentIgnoreResolved == true and
   .channels.slack.channels["#ops-war-room"].allowImplicitMention == false and
+  .channels.slack.channels["#ops-war-room"].systemPrompt == .channels.slack.channels["#api-war-room"].systemPrompt and
+  (.channels.slack.channels["#ops-war-room"].systemPrompt | contains("_fetchMerklSingleRates()")) and
+  (.channels.slack.channels["#ops-war-room"].systemPrompt | contains("merged reward row")) and
   .channels.slack.channels["#platform-monitoring"] == null
 ' "$STATE_DIR/openclaw.json" >/dev/null
