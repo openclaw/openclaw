@@ -275,16 +275,16 @@ describe("loginGeminiCliOAuth", () => {
     });
   }
 
-  async function runRemoteLoginWithCapturedAuthUrl(
-    loginGeminiCliOAuth: (options: {
-      isRemote: boolean;
-      openUrl: () => Promise<void>;
-      log: (msg: string) => void;
-      note: () => Promise<void>;
-      prompt: () => Promise<string>;
-      progress: { update: () => void; stop: () => void };
-    }) => Promise<{ projectId: string }>,
-  ) {
+  type LoginGeminiCliOAuthFn = (options: {
+    isRemote: boolean;
+    openUrl: () => Promise<void>;
+    log: (msg: string) => void;
+    note: () => Promise<void>;
+    prompt: () => Promise<string>;
+    progress: { update: () => void; stop: () => void };
+  }) => Promise<{ projectId: string }>;
+
+  async function runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth: LoginGeminiCliOAuthFn) {
     let authUrl = "";
     const result = await loginGeminiCliOAuth({
       isRemote: true,
@@ -306,14 +306,7 @@ describe("loginGeminiCliOAuth", () => {
   }
 
   async function runRemoteLoginExpectingProjectId(
-    loginGeminiCliOAuth: (options: {
-      isRemote: boolean;
-      openUrl: () => Promise<void>;
-      log: (msg: string) => void;
-      note: () => Promise<void>;
-      prompt: () => Promise<string>;
-      progress: { update: () => void; stop: () => void };
-    }) => Promise<{ projectId: string }>,
+    loginGeminiCliOAuth: LoginGeminiCliOAuthFn,
     projectId: string,
   ) {
     const { result } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
