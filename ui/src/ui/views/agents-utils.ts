@@ -573,16 +573,30 @@ export function buildModelOptions(
   current?: string | null,
 ) {
   const options = resolveConfiguredModels(configForm);
-  const hasCurrent = current ? options.some((option) => option.value === current) : false;
-  if (current && !hasCurrent) {
-    options.unshift({ value: current, label: `Current (${current})` });
+  // Get default primary model from config if available
+  const cfg = configForm as ConfigSnapshot | null;
+  const defaultPrimary = cfg?.agents?.defaults?.model
+    ? resolveModelPrimary(cfg.agents.defaults.model)
+    : null;
+
+  // Set current to default primary if not provided
+  const effectiveCurrent = current || defaultPrimary;
+
+  const hasCurrent = effectiveCurrent
+    ? options.some((option) => option.value === effectiveCurrent)
+    : false;
+  if (effectiveCurrent && !hasCurrent) {
+    options.unshift({ value: effectiveCurrent, label: `Default (${effectiveCurrent})` });
   }
   if (options.length === 0) {
     return html`
       <option value="" disabled>No configured models</option>
     `;
   }
-  return options.map((option) => html`<option value=${option.value}>${option.label}</option>`);
+  return options.map(
+    (option) =>
+      html`<option value=${option.value} ?selected=${option.value === effectiveCurrent}>${option.label}</option>`,
+  );
 }
 
 type CompiledPattern =
