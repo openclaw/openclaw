@@ -162,13 +162,27 @@ validate_named_volume() {
 
 validate_mount_spec() {
   local mount="$1"
+
   if contains_disallowed_chars "$mount"; then
     fail "OPENCLAW_EXTRA_MOUNTS entries cannot contain control characters."
   fi
-  # Keep mount specs strict to avoid YAML structure injection.
+
+  # Keep mount specs strict enough to avoid YAML structure injection, but allow
+  # whitespace inside paths.
+  #
+  # On Windows, host paths frequently contain spaces (e.g. 'C:\\Users\\John Doe').
+  # Docker/Compose supports these as bind mount sources when the compose YAML and
+  # env substitution remain intact.
+  #
   # Expected format: source:target[:options]
-  if [[ ! "$mount" =~ ^[^[:space:],:]+:[^[:space:],:]+(:[^[:space:],:]+)?$ ]]; then
-    fail "Invalid mount format '$mount'. Expected source:target[:options] without spaces."
+  # - We reject commas because they can change YAML structure in inline forms.
+  # - We only require at least one ':' separator; Docker Compose will do the
+  #   authoritative parsing (including Windows drive letters).
+  if [[ "$mount" == *","* ]]; then
+    fail "Invalid mount format '$mount'. Commas are not allowed in mount specs."
+  fi
+  if [[ "$mount" != *":"* || "$mount" == ":"* || "$mount" == *":" ]]; then
+    fail "Invalid mount format '$mount'. Expected source:target[:options]."
   fi
 }
 

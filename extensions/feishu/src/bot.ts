@@ -311,9 +311,13 @@ function parseInteractiveCardContent(parsed: unknown): string {
     return "[Interactive Card]";
   }
 
+  // Feishu interactive cards exist in multiple schemas:
+  // - Schema 1: { header, elements }
+  // - Schema 2: { header?, body: { elements } }
   const card = parsed as {
     header?: { title?: { content?: unknown } };
     elements?: unknown;
+    body?: { elements?: unknown };
   };
 
   const texts: string[] = [];
@@ -323,8 +327,14 @@ function parseInteractiveCardContent(parsed: unknown): string {
     texts.push(headerTitle.trim());
   }
 
-  if (Array.isArray(card.elements)) {
-    for (const element of card.elements) {
+  const elements = Array.isArray(card.elements)
+    ? card.elements
+    : Array.isArray(card.body?.elements)
+      ? card.body?.elements
+      : null;
+
+  if (elements) {
+    for (const element of elements) {
       if (!element || typeof element !== "object") continue;
       const item = element as {
         tag?: string;

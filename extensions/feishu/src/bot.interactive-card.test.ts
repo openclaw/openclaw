@@ -31,6 +31,23 @@ describe("parseFeishuMessageEvent – interactive cards", () => {
     expect(ctx.contentType).toBe("interactive");
   });
 
+  it("extracts readable text from schema 2.0 (body.elements) cards", () => {
+    const ctx = parseFeishuMessageEvent(
+      makeInteractiveEvent({
+        header: { title: { content: "Header" } },
+        body: {
+          elements: [
+            { tag: "markdown", content: "hello markdown" },
+            { tag: "div", text: { content: "hello div" } },
+          ],
+        },
+      }) as any,
+    );
+
+    expect(ctx.content).toBe("Header\nhello markdown\nhello div");
+    expect(ctx.contentType).toBe("interactive");
+  });
+
   it("falls back to placeholder when card is malformed", () => {
     const ctx = parseFeishuMessageEvent(makeInteractiveEvent("not-an-object") as any);
     expect(ctx.content).toBe("[Interactive Card]");
