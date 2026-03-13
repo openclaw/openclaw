@@ -89,6 +89,18 @@ function isDiscordThreadType(type: ChannelType | undefined): boolean {
   );
 }
 
+function resolveTrimmedDiscordMessageChannelId(params: {
+  message: DiscordMessageEvent["message"];
+  messageChannelId?: string;
+}) {
+  return (
+    params.messageChannelId ||
+    resolveDiscordMessageChannelId({
+      message: params.message,
+    })
+  ).trim();
+}
+
 export function resolveDiscordThreadChannel(params: {
   isGuildMessage: boolean;
   message: DiscordMessageEvent["message"];
@@ -301,7 +313,7 @@ export type DiscordAutoThreadReplyPlan = DiscordReplyDeliveryPlan & {
   autoThreadContext: DiscordAutoThreadContext | null;
 };
 
-export async function resolveDiscordAutoThreadReplyPlan(params: {
+type MaybeCreateDiscordAutoThreadParams = {
   client: Client;
   message: DiscordMessageEvent["message"];
   messageChannelId?: string;
@@ -311,16 +323,16 @@ export async function resolveDiscordAutoThreadReplyPlan(params: {
   channelType?: ChannelType;
   baseText: string;
   combinedBody: string;
-  replyToMode: ReplyToMode;
-  agentId: string;
-  channel: string;
-}): Promise<DiscordAutoThreadReplyPlan> {
-  const messageChannelId = (
-    params.messageChannelId ||
-    resolveDiscordMessageChannelId({
-      message: params.message,
-    })
-  ).trim();
+};
+
+export async function resolveDiscordAutoThreadReplyPlan(
+  params: MaybeCreateDiscordAutoThreadParams & {
+    replyToMode: ReplyToMode;
+    agentId: string;
+    channel: string;
+  },
+): Promise<DiscordAutoThreadReplyPlan> {
+  const messageChannelId = resolveTrimmedDiscordMessageChannelId(params);
   // Prefer the resolved thread channel ID when available so replies stay in-thread.
   const targetChannelId = params.threadChannel?.id ?? (messageChannelId || "unknown");
   const originalReplyTarget = `channel:${targetChannelId}`;
@@ -353,17 +365,9 @@ export async function resolveDiscordAutoThreadReplyPlan(params: {
   return { ...deliveryPlan, createdThreadId, autoThreadContext };
 }
 
-export async function maybeCreateDiscordAutoThread(params: {
-  client: Client;
-  message: DiscordMessageEvent["message"];
-  messageChannelId?: string;
-  isGuildMessage: boolean;
-  channelConfig?: DiscordChannelConfigResolved | null;
-  threadChannel?: DiscordThreadChannel | null;
-  channelType?: ChannelType;
-  baseText: string;
-  combinedBody: string;
-}): Promise<string | undefined> {
+export async function maybeCreateDiscordAutoThread(
+  params: MaybeCreateDiscordAutoThreadParams,
+): Promise<string | undefined> {
   if (!params.isGuildMessage) {
     return undefined;
   }
@@ -383,12 +387,7 @@ export async function maybeCreateDiscordAutoThread(params: {
     return undefined;
   }
 
-  const messageChannelId = (
-    params.messageChannelId ||
-    resolveDiscordMessageChannelId({
-      message: params.message,
-    })
-  ).trim();
+  const messageChannelId = resolveTrimmedDiscordMessageChannelId(params);
   if (!messageChannelId) {
     return undefined;
   }
