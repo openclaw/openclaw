@@ -71,6 +71,8 @@ type TelegramSendOpts = {
   messageThreadId?: number;
   /** Inline keyboard buttons (reply markup). */
   buttons?: TelegramInlineButtons;
+  /** Send image as document to avoid Telegram compression. Defaults to false. */
+  forceDocument?: boolean;
 };
 
 type TelegramSendResult = {
@@ -826,7 +828,7 @@ export async function sendMessageTelegram(
             ) as Promise<TelegramMessageLike>,
         };
       }
-      if (kind === "image") {
+      if (kind === "image" && !opts.forceDocument) {
         return {
           label: "photo",
           sender: (effectiveParams: Record<string, unknown> | undefined) =>
