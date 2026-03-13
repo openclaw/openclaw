@@ -661,9 +661,7 @@ export async function deliverToAdditionalTargets(
       results.push({ channel: target.channel, to: target.to, delivered: true });
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      logWarn(
-        `[additional-delivery] delivery to ${target.channel}:${target.to} failed: ${errMsg}`,
-      );
+      logWarn(`[additional-delivery] delivery to ${target.channel}:${target.to} failed: ${errMsg}`);
       results.push({
         channel: target.channel,
         to: target.to,
