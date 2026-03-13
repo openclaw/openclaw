@@ -24,4 +24,36 @@ export function applySessionStoreMigrations(store: Record<string, SessionEntry>)
       delete rec.room;
     }
   }
+
+  // Migrate legacy `:dm:` store keys → `:direct:` (all channels).
+  migrateLegacyDmStoreKeys(store);
+}
+
+function migrateLegacyDmStoreKeys(store: Record<string, SessionEntry>): void {
+  for (const key of Object.keys(store)) {
+    if (!key.toLowerCase().includes(":dm:")) {
+      continue;
+    }
+    // Replace :dm: (case-insensitive) with :direct: and lowercase the entire key.
+    const newKey = key.toLowerCase().replace(/:dm:/g, ":direct:");
+    if (newKey === key) {
+      continue;
+    }
+    const oldEntry = store[key];
+    const existingEntry = store[newKey];
+    if (!oldEntry) {
+      continue;
+    }
+    if (existingEntry) {
+      // Both keys exist — keep the most recently updated entry.
+      const oldTime = oldEntry.updatedAt ?? 0;
+      const newTime = existingEntry.updatedAt ?? 0;
+      if (oldTime > newTime) {
+        store[newKey] = oldEntry;
+      }
+    } else {
+      store[newKey] = oldEntry;
+    }
+    delete store[key];
+  }
 }

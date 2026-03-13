@@ -44,7 +44,8 @@ function resolveExplicitSessionKeyNormalizer(
 }
 
 export function normalizeExplicitSessionKey(sessionKey: string, ctx: MsgContext): string {
-  const normalized = sessionKey.trim().toLowerCase();
+  // Pre-pass: migrate legacy `:dm:` → `:direct:` for all channels.
+  const normalized = sessionKey.trim().toLowerCase().replace(/:dm:/g, ":direct:");
   const normalize = resolveExplicitSessionKeyNormalizer(normalized, ctx);
   return normalize ? normalize(normalized, ctx) : normalized;
 }

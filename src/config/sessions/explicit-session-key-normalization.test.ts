@@ -52,7 +52,7 @@ describe("normalizeExplicitSessionKey", () => {
     ).toBe("agent:fina:discord:direct:123456");
   });
 
-  it("lowercases and passes through unknown providers unchanged", () => {
+  it("migrates legacy :dm: to :direct: for all channels", () => {
     expect(
       normalizeExplicitSessionKey(
         "Agent:Fina:Slack:DM:ABC",
@@ -61,6 +61,42 @@ describe("normalizeExplicitSessionKey", () => {
           From: "slack:U123",
         }),
       ),
-    ).toBe("agent:fina:slack:dm:abc");
+    ).toBe("agent:fina:slack:direct:abc");
+  });
+
+  it("migrates whatsapp :dm: keys to :direct:", () => {
+    expect(
+      normalizeExplicitSessionKey(
+        "agent:main:whatsapp:dm:+61419009073",
+        makeCtx({
+          Surface: "whatsapp",
+          From: "+61419009073",
+        }),
+      ),
+    ).toBe("agent:main:whatsapp:direct:+61419009073");
+  });
+
+  it("migrates telegram :dm: keys to :direct:", () => {
+    expect(
+      normalizeExplicitSessionKey(
+        "telegram:dm:123456",
+        makeCtx({
+          Surface: "telegram",
+          From: "telegram:123456",
+        }),
+      ),
+    ).toBe("telegram:direct:123456");
+  });
+
+  it("preserves :thread: suffix during :dm: migration", () => {
+    expect(
+      normalizeExplicitSessionKey(
+        "agent:main:slack:dm:C0123ABC:thread:1234567890.123",
+        makeCtx({
+          Surface: "slack",
+          From: "slack:U123",
+        }),
+      ),
+    ).toBe("agent:main:slack:direct:c0123abc:thread:1234567890.123");
   });
 });
