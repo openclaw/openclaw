@@ -142,7 +142,7 @@
   border-color: var(--border-strong);
 }
 
-/* Short inline output */
+/* Short inline output - capped height to avoid very long cards near threshold */
 .chat-tool-card__inline {
   font-size: 11px;
   color: var(--text);
@@ -152,6 +152,8 @@
   border-radius: var(--radius-sm);
   white-space: pre-wrap;
   word-break: break-word;
+  max-height: 12em;
+  overflow-y: auto;
 }
 
 /* Reading Indicator */
