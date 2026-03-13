@@ -58,6 +58,30 @@ describe("checkBrowserOrigin", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts exact chrome-extension origins", () => {
+    const result = checkBrowserOrigin({
+      origin: "chrome-extension://abcdefghijklmnop",
+      allowedOrigins: ["chrome-extension://abcdefghijklmnop"],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts chrome-extension wildcard allowedOrigins", () => {
+    const result = checkBrowserOrigin({
+      origin: "chrome-extension://abcdefghijklmnop",
+      allowedOrigins: ["chrome-extension://*"],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects non-extension origins for chrome-extension wildcard", () => {
+    const result = checkBrowserOrigin({
+      origin: "https://control.example.com",
+      allowedOrigins: ["chrome-extension://*"],
+    });
+    expect(result.ok).toBe(false);
+  });
+
   it("rejects missing origin", () => {
     const result = checkBrowserOrigin({
       requestHost: "gateway.example.com:18789",
