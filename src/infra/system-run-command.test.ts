@@ -54,6 +54,8 @@ describe("system run command helpers", () => {
   test("extractShellCommandFromArgv supports fish and pwsh wrappers", () => {
     expect(extractShellCommandFromArgv(["fish", "-c", "echo hi"])).toBe("echo hi");
     expect(extractShellCommandFromArgv(["pwsh", "-Command", "Get-Date"])).toBe("Get-Date");
+    expect(extractShellCommandFromArgv(["pwsh", "-File", "script.ps1"])).toBe("script.ps1");
+    expect(extractShellCommandFromArgv(["powershell", "-f", "script.ps1"])).toBe("script.ps1");
     expect(extractShellCommandFromArgv(["pwsh", "-EncodedCommand", "ZQBjAGgAbwA="])).toBe(
       "ZQBjAGgAbwA=",
     );
