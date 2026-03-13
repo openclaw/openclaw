@@ -87,8 +87,11 @@ const APPROVE_CALLBACK_DATA_RE =
   /^\/approve(?:@[^\s]+)?\s+[A-Za-z0-9][A-Za-z0-9._:-]*\s+(allow-once|allow-always|deny)\b/i;
 
 function isMediaSizeLimitError(err: unknown): boolean {
+  if (err instanceof MediaFetchError && err.code === "max_bytes") {
+    return true;
+  }
   const errMsg = String(err);
-  return errMsg.includes("exceeds") && errMsg.includes("MB limit");
+  return errMsg.includes("exceeds") && (errMsg.includes("MB limit") || errMsg.includes("maxBytes"));
 }
 
 function isRecoverableMediaGroupError(err: unknown): boolean {
