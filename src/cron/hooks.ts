@@ -35,6 +35,7 @@ export function loadHookEntries(
   hookPoint: CronLifecycleHookPoint,
   cronConfig: CronConfig | undefined,
   job: CronJob,
+  workflow = "cron",
 ): ResolvedEntry[] {
   const skipGlobal = job.hooks?.skipGlobal?.includes(hookPoint) ?? false;
 
@@ -44,7 +45,7 @@ export function loadHookEntries(
     const raw = cronConfig?.hooks?.[hookPoint];
     if (raw) {
       for (const entry of raw) {
-        if (matchesFilter(entry, job)) {
+        if (matchesFilter(entry, job, workflow)) {
           globalEntries.push({ ...entry, priority: entry.priority ?? DEFAULT_PRIORITY });
         }
       }
@@ -91,19 +92,19 @@ export async function runCronHooks(
         continue;
       }
 
-      const result = await Promise.race([hookFn(ctx), rejectAfterTimeout(HOOK_TIMEOUT_MS)]);
+      const timeout = createTimeout(HOOK_TIMEOUT_MS);
+      let result: unknown;
+      try {
+        result = await Promise.race([hookFn(ctx), timeout.promise]);
+      } finally {
+        timeout.clear();
+      }
 
       // Only beforeRun hooks can abort execution.
-      if (
-        hookPoint === "beforeRun" &&
-        result != null &&
-        typeof result === "object" &&
-        "abort" in result &&
-        (result as { abort: boolean }).abort
-      ) {
+      if (hookPoint === "beforeRun" && isAbortResult(result)) {
         const reason =
-          typeof (result as { reason?: string }).reason === "string"
-            ? (result as { reason: string }).reason
+          "reason" in result && typeof result.reason === "string"
+            ? result.reason
             : "aborted by hook";
         ctx.log.info(
           { hookPoint, script: entry.script, reason },
@@ -122,18 +123,30 @@ export async function runCronHooks(
   return { aborted: false };
 }
 
-function matchesFilter(entry: CronHookEntry, job: CronJob): boolean {
+function isAbortResult(value: unknown): value is { abort: boolean; reason?: string } {
+  return (
+    value != null &&
+    typeof value === "object" &&
+    "abort" in value &&
+    Boolean((value as { abort: unknown }).abort)
+  );
+}
+
+function matchesFilter(entry: CronHookEntry, job: CronJob, workflow: string): boolean {
   const f = entry.filter;
   if (!f) {
     return true;
   }
+  if (f.workflow && f.workflow.length > 0 && !f.workflow.includes(workflow)) {
+    return false;
+  }
   if (f.jobId && f.jobId.length > 0 && !f.jobId.includes(job.id)) {
     return false;
   }
-  if (f.agentId && f.agentId.length > 0 && job.agentId && !f.agentId.includes(job.agentId)) {
+  // When filter.agentId is set, jobs without an agentId do not match.
+  if (f.agentId && f.agentId.length > 0 && (!job.agentId || !f.agentId.includes(job.agentId))) {
     return false;
   }
-  // workflow filter is checked by the caller (not per-job, per-invocation).
   return true;
 }
 
@@ -143,8 +156,10 @@ async function loadHookModule(scriptPath: string): Promise<unknown> {
   return mod.default ?? mod;
 }
 
-function rejectAfterTimeout(ms: number): Promise<never> {
-  return new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error(`cron hook timed out after ${ms}ms`)), ms);
+function createTimeout(ms: number): { promise: Promise<never>; clear: () => void } {
+  let id: ReturnType<typeof setTimeout>;
+  const promise = new Promise<never>((_, reject) => {
+    id = setTimeout(() => reject(new Error(`cron hook timed out after ${ms}ms`)), ms);
   });
+  return { promise, clear: () => clearTimeout(id) };
 }
