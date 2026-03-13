@@ -169,6 +169,7 @@ describe("createDiscordGatewayPlugin", () => {
   it("uses proxy fetch for gateway metadata lookup before registering", async () => {
     const runtime = createRuntime();
     undiciFetchMock.mockResolvedValue({
+      ok: true,
       json: async () => ({ url: "wss://gateway.discord.gg" }),
     } as Response);
     const plugin = createDiscordGatewayPlugin({
@@ -193,5 +194,71 @@ describe("createDiscordGatewayPlugin", () => {
       }),
     );
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws a descriptive error when Discord API returns a non-OK status", async () => {
+    const runtime = createRuntime();
+    undiciFetchMock.mockResolvedValue({
+      ok: false,
+      status: 503,
+      text: async () =>
+        "upstream connect error or disconnect/reset before headers. reset reason: overflow",
+    } as Response);
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: { proxy: "http://proxy.test:8080" },
+      runtime,
+    });
+
+    await expect(
+      (
+        plugin as unknown as {
+          registerClient: (client: { options: { token: string } }) => Promise<void>;
+        }
+      ).registerClient({ options: { token: "token-503" } }),
+    ).rejects.toThrow(/Discord API \/gateway\/bot failed \(503\)/);
+  });
+
+  it("does not crash on non-JSON error body from Discord", async () => {
+    const runtime = createRuntime();
+    undiciFetchMock.mockResolvedValue({
+      ok: false,
+      status: 502,
+      text: async () => "<html><body>Bad Gateway</body></html>",
+    } as Response);
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: { proxy: "http://proxy.test:8080" },
+      runtime,
+    });
+
+    await expect(
+      (
+        plugin as unknown as {
+          registerClient: (client: { options: { token: string } }) => Promise<void>;
+        }
+      ).registerClient({ options: { token: "token-502" } }),
+    ).rejects.toThrow(/Failed to get gateway information from Discord/);
+  });
+
+  it("handles text() rejection gracefully on error responses", async () => {
+    const runtime = createRuntime();
+    undiciFetchMock.mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async () => {
+        throw new Error("body stream already consumed");
+      },
+    } as Response);
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: { proxy: "http://proxy.test:8080" },
+      runtime,
+    });
+
+    await expect(
+      (
+        plugin as unknown as {
+          registerClient: (client: { options: { token: string } }) => Promise<void>;
+        }
+      ).registerClient({ options: { token: "token-500" } }),
+    ).rejects.toThrow(/Discord API \/gateway\/bot failed \(500\): empty response/);
   });
 });
