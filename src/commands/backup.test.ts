@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../runtime.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import {
   buildBackupArchiveRoot,
@@ -41,23 +42,21 @@ describe("backup commands", () => {
     await tempHome.restore();
   });
 
-  async function withInvalidWorkspaceBackupConfig<T>(
-    fn: (runtime: {
-      log: ReturnType<typeof vi.fn>;
-      error: ReturnType<typeof vi.fn>;
-      exit: ReturnType<typeof vi.fn>;
-    }) => Promise<T>,
-  ) {
+  function createRuntime(): RuntimeEnv {
+    return {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    } satisfies RuntimeEnv;
+  }
+
+  async function withInvalidWorkspaceBackupConfig<T>(fn: (runtime: RuntimeEnv) => Promise<T>) {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const configPath = path.join(tempHome.home, "custom-config.json");
     process.env.OPENCLAW_CONFIG_PATH = configPath;
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
     await fs.writeFile(configPath, '{"agents": { defaults: { workspace: ', "utf8");
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntime();
 
     try {
       return await fn(runtime);
@@ -141,11 +140,7 @@ describe("backup commands", () => {
       await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
       await fs.writeFile(path.join(externalWorkspace, "SOUL.md"), "# external\n", "utf8");
 
-      const runtime = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      };
+      const runtime = createRuntime();
 
       const nowMs = Date.UTC(2026, 2, 9, 0, 0, 0);
       const result = await backupCreateCommand(runtime, {
@@ -214,11 +209,7 @@ describe("backup commands", () => {
       await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
       await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
 
-      const runtime = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      };
+      const runtime = createRuntime();
 
       const result = await backupCreateCommand(runtime, {
         output: archiveDir,
@@ -239,11 +230,7 @@ describe("backup commands", () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
 
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntime();
 
     await expect(
       backupCreateCommand(runtime, {
@@ -264,11 +251,7 @@ describe("backup commands", () => {
       await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
       await fs.symlink(stateDir, symlinkPath);
 
-      const runtime = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      };
+      const runtime = createRuntime();
 
       await expect(
         backupCreateCommand(runtime, {
@@ -288,11 +271,7 @@ describe("backup commands", () => {
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
     process.chdir(workspaceDir);
 
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntime();
 
     const nowMs = Date.UTC(2026, 2, 9, 1, 2, 3);
     const result = await backupCreateCommand(runtime, { nowMs });
@@ -319,11 +298,7 @@ describe("backup commands", () => {
       await fs.symlink(workspaceDir, workspaceLink);
       process.chdir(workspaceLink);
 
-      const runtime = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      };
+      const runtime = createRuntime();
 
       const nowMs = Date.UTC(2026, 2, 9, 1, 3, 4);
       const result = await backupCreateCommand(runtime, { nowMs });
@@ -343,11 +318,7 @@ describe("backup commands", () => {
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
     await fs.writeFile(existingArchive, "already here", "utf8");
 
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntime();
 
     const result = await backupCreateCommand(runtime, {
       output: existingArchive,
@@ -388,11 +359,7 @@ describe("backup commands", () => {
     await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
     await fs.writeFile(path.join(stateDir, "credentials", "oauth.json"), "{}", "utf8");
 
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntime();
 
     const result = await backupCreateCommand(runtime, {
       dryRun: true,
@@ -410,11 +377,7 @@ describe("backup commands", () => {
     process.env.OPENCLAW_CONFIG_PATH = configPath;
     await fs.writeFile(configPath, '{"agents": { defaults: { workspace: ', "utf8");
 
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntime();
 
     try {
       const result = await backupCreateCommand(runtime, {

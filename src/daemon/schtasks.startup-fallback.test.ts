@@ -43,24 +43,6 @@ function resolveStartupEntryPath(env: Record<string, string>) {
   );
 }
 
-<<<<<<< HEAD
-async function withWindowsEnv(
-  run: (params: { tmpDir: string; env: Record<string, string> }) => Promise<void>,
-) {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-win-startup-"));
-  const env = {
-    USERPROFILE: tmpDir,
-    APPDATA: path.join(tmpDir, "AppData", "Roaming"),
-    OPENCLAW_PROFILE: "default",
-    OPENCLAW_GATEWAY_PORT: "18789",
-  };
-  try {
-    await run({ tmpDir, env });
-  } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true });
-  }
-}
-
 async function writeGatewayScript(env: Record<string, string>, port = 18789) {
   const scriptPath = resolveTaskScriptPath(env);
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
@@ -75,27 +57,6 @@ async function writeGatewayScript(env: Record<string, string>, port = 18789) {
     "utf8",
   );
 }
-
-||||||| parent of 8fb2c3f894 (refactor: share windows daemon test fixtures)
-async function withWindowsEnv(
-  run: (params: { tmpDir: string; env: Record<string, string> }) => Promise<void>,
-) {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-win-startup-"));
-  const env = {
-    USERPROFILE: tmpDir,
-    APPDATA: path.join(tmpDir, "AppData", "Roaming"),
-    OPENCLAW_PROFILE: "default",
-    OPENCLAW_GATEWAY_PORT: "18789",
-  };
-  try {
-    await run({ tmpDir, env });
-  } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true });
-  }
-}
-
-=======
->>>>>>> 8fb2c3f894 (refactor: share windows daemon test fixtures)
 beforeEach(() => {
   resetSchtasksBaseMocks();
   spawn.mockClear();
@@ -232,7 +193,7 @@ describe("Windows startup fallback", () => {
   });
 
   it("kills the Startup fallback runtime even when the CLI env omits the gateway port", async () => {
-    await withWindowsEnv(async ({ env }) => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       schtasksResponses.push({ code: 0, stdout: "", stderr: "" });
       await writeGatewayScript(env);
       await fs.mkdir(path.dirname(resolveStartupEntryPath(env)), { recursive: true });
