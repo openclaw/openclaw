@@ -94,6 +94,35 @@ describe("isProfileInCooldown", () => {
     expect(isProfileInCooldown(store, "anthropic:default")).toBe(true);
   });
 
+  it("does not block a different model when the cooldown came from a rate limit on another model", () => {
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "rate_limit",
+        cooldownModel: "claude-opus-4-6",
+      },
+    });
+    expect(isProfileInCooldown(store, "anthropic:default", undefined, "claude-sonnet-4-6")).toBe(
+      false,
+    );
+    expect(isProfileInCooldown(store, "anthropic:default", undefined, "claude-opus-4-6")).toBe(
+      true,
+    );
+  });
+
+  it("still blocks a different model for non-rate-limit cooldowns", () => {
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "overloaded",
+        cooldownModel: "claude-opus-4-6",
+      },
+    });
+    expect(isProfileInCooldown(store, "anthropic:default", undefined, "claude-sonnet-4-6")).toBe(
+      true,
+    );
+  });
+
   it("returns false when cooldownUntil has passed", () => {
     const store = makeStore({
       "anthropic:default": { cooldownUntil: Date.now() - 1_000 },
@@ -538,7 +567,8 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
   async function markFailureAt(params: {
     store: ReturnType<typeof makeStore>;
     now: number;
-    reason: "rate_limit" | "billing" | "auth_permanent";
+    reason: "rate_limit" | "billing" | "auth_permanent" | "overloaded";
+    modelId?: string;
   }): Promise<void> {
     vi.useFakeTimers();
     vi.setSystemTime(params.now);
@@ -547,6 +577,7 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
         store: params.store,
         profileId: "anthropic:default",
         reason: params.reason,
+        modelId: params.modelId,
       });
     } finally {
       vi.useRealTimers();
@@ -607,6 +638,31 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
       expect(testCase.readUntil(stats)).toBe(existingUntil);
     });
   }
+
+  it("keeps rate-limit cooldown metadata unchanged while the active window is still in effect", async () => {
+    const now = 1_000_000;
+    const existingStats: WindowStats = {
+      cooldownUntil: now + 50 * 60 * 1000,
+      cooldownReason: "rate_limit",
+      cooldownModel: "claude-opus-4-6",
+      errorCount: 3,
+      failureCounts: { rate_limit: 3 },
+      lastFailureAt: now - 10 * 60 * 1000,
+    };
+    const store = makeStore({ "anthropic:default": existingStats });
+
+    await markFailureAt({
+      store,
+      now,
+      reason: "overloaded",
+      modelId: "claude-sonnet-4-6",
+    });
+
+    const stats = store.usageStats?.["anthropic:default"];
+    expect(stats?.cooldownUntil).toBe(existingStats.cooldownUntil);
+    expect(stats?.cooldownReason).toBe("rate_limit");
+    expect(stats?.cooldownModel).toBe("claude-opus-4-6");
+  });
 
   // When a cooldown/disabled window expires, the error count resets to prevent
   // stale counters from escalating the next cooldown (the root cause of

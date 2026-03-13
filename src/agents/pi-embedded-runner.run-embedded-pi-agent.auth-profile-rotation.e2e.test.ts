@@ -218,6 +218,8 @@ const writeAuthStore = async (
       {
         lastUsed?: number;
         cooldownUntil?: number;
+        cooldownReason?: AuthProfileFailureReason;
+        cooldownModel?: string;
         disabledUntil?: number;
         disabledReason?: AuthProfileFailureReason;
         failureCounts?: Partial<Record<AuthProfileFailureReason, number>>;
@@ -332,6 +334,8 @@ async function readUsageStats(agentDir: string) {
       {
         lastUsed?: number;
         cooldownUntil?: number;
+        cooldownReason?: AuthProfileFailureReason;
+        cooldownModel?: string;
         disabledUntil?: number;
         disabledReason?: AuthProfileFailureReason;
       }
@@ -1119,6 +1123,43 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         allowTransientCooldownProbe: true,
         timeoutMs: 5_000,
         runId: "run:billing-cooldown-probe-no-fallbacks",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      expect(result.payloads?.[0]?.text ?? "").toContain("ok");
+    });
+  });
+
+  it("does not block a locked profile when its rate-limit cooldown came from a different model", async () => {
+    await withTimedAgentWorkspace(async ({ agentDir, workspaceDir, now }) => {
+      await writeAuthStore(agentDir, {
+        usageStats: {
+          "openai:p1": {
+            lastUsed: 1,
+            cooldownUntil: now + 60 * 60 * 1000,
+            cooldownReason: "rate_limit",
+            cooldownModel: "mock-2",
+          },
+          "openai:p2": { lastUsed: 2 },
+        },
+      });
+
+      mockSingleSuccessfulAttempt();
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:model-specific-cooldown-lock",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "openai:p1",
+        authProfileIdSource: "user",
+        timeoutMs: 5_000,
+        runId: "run:model-specific-cooldown-lock",
       });
 
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);

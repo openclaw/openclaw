@@ -1211,6 +1211,50 @@ describe("runWithModelFallback", () => {
       });
     });
 
+    it("does not skip a provider when the stored rate-limit cooldown is for a different model", async () => {
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+      const store: AuthProfileStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "anthropic:default": { type: "api_key", provider: "anthropic", key: "test-key" },
+          "groq:default": { type: "api_key", provider: "groq", key: "test-key" },
+        },
+        usageStats: {
+          "anthropic:default": {
+            cooldownUntil: Date.now() + 300000,
+            cooldownReason: "rate_limit",
+            cooldownModel: "claude-opus-4-6",
+          },
+        },
+      };
+      saveAuthProfileStore(store, tmpDir);
+
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-sonnet-4-5",
+              fallbacks: ["groq/llama-3.3-70b-versatile"],
+            },
+          },
+        },
+      });
+
+      const run = vi.fn().mockResolvedValueOnce("sonnet success");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+        run,
+        agentDir: tmpDir,
+      });
+
+      expect(result.result).toBe("sonnet success");
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5");
+    });
+
     it("skips same-provider models on auth cooldown but still tries no-profile fallback providers", async () => {
       const { dir } = await makeAuthStoreWithCooldown("anthropic", "auth");
       const cfg = makeCfg({
