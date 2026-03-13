@@ -1,2209 +1,306 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>OpenFinClaw — Overview</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
-    <style>
-      /*__SHARED_CSS__*/
-    </style>
-    <style>
-      /*__PAGE_CSS__*/
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenFinClaw — Overview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<style>/*__SHARED_CSS__*/</style>
+<style>/*__PAGE_CSS__*/</style>
+</head>
+<body>
+<script>var pageData = /*__PAGE_DATA__*/ {};</script>
 
-      /* ── Onboarding Overlay ── */
-      .onboard-overlay {
-        position: fixed;
-        inset: 0;
-        z-index: 10000;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-      .onboard-backdrop {
-        position: absolute;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.7);
-        backdrop-filter: blur(4px);
-      }
-      .onboard-card {
-        position: relative;
-        background: var(--surface, #12141c);
-        border: 1px solid var(--border, #1e2230);
-        border-radius: 16px;
-        padding: 32px 36px 24px;
-        max-width: 480px;
-        width: 90%;
-        box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
-        animation: onboard-in 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-      }
-      @keyframes onboard-in {
-        from {
-          opacity: 0;
-          transform: translateY(24px) scale(0.96);
-        }
-        to {
-          opacity: 1;
-          transform: translateY(0) scale(1);
-        }
-      }
-      .onboard-progress {
-        height: 3px;
-        background: var(--border);
-        border-radius: 2px;
-        margin-bottom: 24px;
-        overflow: hidden;
-      }
-      .onboard-progress__fill {
-        height: 100%;
-        background: linear-gradient(90deg, var(--accent, #6366f1), #a78bfa);
-        border-radius: 2px;
-        transition: width 0.4s cubic-bezier(0.22, 1, 0.36, 1);
-      }
-      .onboard-icon {
-        font-size: 40px;
-        margin-bottom: 12px;
-      }
-      .onboard-title {
-        font-size: 20px;
-        font-weight: 600;
-        color: var(--text-hi, #f1f3f5);
-        margin-bottom: 8px;
-      }
-      .onboard-desc {
-        font-size: 13px;
-        color: var(--text, #a0a4b0);
-        line-height: 1.6;
-        margin-bottom: 16px;
-      }
-      .onboard-features {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        margin-bottom: 8px;
-      }
-      .onboard-feature {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 12px;
-        color: var(--text);
-      }
-      .onboard-feature__dot {
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        flex-shrink: 0;
-      }
-      .onboard-hint {
-        font-size: 11px;
-        color: var(--text-dim, #6b7280);
-        background: rgba(99, 102, 241, 0.06);
-        border: 1px solid rgba(99, 102, 241, 0.12);
-        border-radius: 6px;
-        padding: 8px 12px;
-      }
-      .onboard-actions {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-top: 24px;
-        padding-top: 16px;
-        border-top: 1px solid var(--border);
-      }
-      .onboard-dots {
-        display: flex;
-        gap: 6px;
-      }
-      .onboard-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background: var(--border);
-        transition: all 0.3s;
-        cursor: pointer;
-      }
-      .onboard-dot.active {
-        background: var(--accent, #6366f1);
-        transform: scale(1.25);
-      }
-      .onboard-btn {
-        padding: 6px 16px;
-        border-radius: 6px;
-        font-size: 12px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.15s;
-        border: none;
-      }
-      .onboard-btn--skip {
-        color: var(--text-dim, #6b7280);
-        background: none;
-      }
-      .onboard-btn--skip:hover {
-        color: var(--text);
-      }
-      .onboard-btn--back {
-        color: var(--text);
-        background: var(--card, #1a1d2e);
-        border: 1px solid var(--border);
-      }
-      .onboard-btn--next {
-        color: #fff;
-        background: var(--accent, #6366f1);
-      }
-      .onboard-btn--next:hover {
-        filter: brightness(1.1);
-      }
-      .onboard-nav {
-        display: flex;
-        gap: 8px;
-      }
+<!-- Risk Halo + Scanline -->
+<div class="risk-halo" id="riskHalo"></div>
+<div class="scanline"></div>
 
-      /* ── Macro Context Card ── */
-      .macro-ctx {
-        margin-bottom: 12px;
-      }
-      .macro-grid {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 10px;
-      }
-      .macro-item {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-        padding: 8px;
-        background: rgba(0, 0, 0, 0.15);
-        border-radius: 6px;
-      }
-      .macro-item__label {
-        font-size: 10px;
-        color: var(--text-dim);
-        text-transform: uppercase;
-        letter-spacing: 0.3px;
-      }
-      .macro-item__val {
-        font-size: 16px;
-        font-weight: 600;
-        color: var(--text-hi);
-      }
-      .macro-item__bar {
-        height: 3px;
-        background: var(--border);
-        border-radius: 2px;
-        overflow: hidden;
-      }
-      .macro-item__bar-fill {
-        height: 100%;
-        border-radius: 2px;
-        background: linear-gradient(90deg, var(--loss), var(--warn), var(--gain));
-        transition: width 0.5s;
-      }
-    </style>
-  </head>
-  <body>
-    <script>
-      if (new URLSearchParams(location.search).get("embedded") === "1")
-        document.body.classList.add("embedded");
-    </script>
-    <script>
-      var pageData = /*__PAGE_DATA__*/ {};
-    </script>
+<!-- Top Bar -->
+<header class="topbar">
+  <span class="topbar__logo">OPENFINCLAW</span>
+  <div class="topbar__sep"></div>
+  <nav class="topbar__nav">
+    <a class="topbar__tab topbar__tab--active" href="overview">Overview</a>
+    <a class="topbar__tab" href="strategy">Strategy</a>
+    <a class="topbar__tab" href="trader">Trader</a>
+    <a class="topbar__tab" href="setting">Setting</a>
+  </nav>
+  <div class="topbar__spacer"></div>
+  <div class="topbar__dots">
+    <span><span class="topbar__dot topbar__dot--g" id="dotGw"></span>Gateway</span>
+    <span><span class="topbar__dot topbar__dot--g" id="dotHb"></span>Heartbeat</span>
+    <span><span class="topbar__dot topbar__dot--y" id="dotPaper"></span>Paper</span>
+  </div>
+  <div class="topbar__sep"></div>
+  <span class="topbar__risk" id="riskLabel">NORMAL</span>
+  <span class="topbar__clock num" id="clock">--:--</span>
+  <button class="topbar__estop" id="btnEstop">E-STOP</button>
+</header>
 
-    <!-- GETTING STARTED (shown when empty state detected) -->
-    <div class="getting-started" id="gettingStarted" style="display: none">
-      <div class="getting-started__header">
-        <h2 class="getting-started__title">Welcome to OpenFinClaw</h2>
-        <p class="getting-started__desc">
-          Get started in 3 steps to unlock your financial AI dashboard.
-        </p>
+<!-- Main Layout: Soul + Data -->
+<div class="layout">
+  <!-- SOUL PANEL -->
+  <aside class="soul soul--desktop" id="soulDesktop">
+    <div class="soul__header">
+      <div class="soul__top">
+        <div class="lobster">
+          <div class="lobster__glow"></div>
+          <span class="lobster__face" id="lobsterFace">&#x1F99E;</span>
+          <span class="lobster__mood" id="lobsterMood">&#x1F60A;</span>
+        </div>
+        <div class="soul__identity">
+          <div class="soul__name">&#x91D1;&#x878D;&#x9F99;&#x867E; <span class="heartbeat"></span></div>
+          <div class="soul__last" id="lastAction">&#x6700;&#x8FD1;&#x64CD;&#x4F5C;: --</div>
+        </div>
       </div>
-      <div class="getting-started__steps">
-        <a
-          class="getting-started__card"
-          href="/plugins/findoo-trader/dashboard/setting"
-          data-step="1"
-        >
-          <span class="getting-started__num">1</span>
-          <div class="getting-started__info">
-            <span class="getting-started__card-title">Connect Exchange</span>
-            <span class="getting-started__card-desc"
-              >Link your exchange API keys to start receiving live data.</span
-            >
-          </div>
-          <span class="getting-started__arrow">&#8250;</span>
-        </a>
-        <a
-          class="getting-started__card"
-          href="/plugins/findoo-trader/dashboard/strategy"
-          data-step="2"
-        >
-          <span class="getting-started__num">2</span>
-          <div class="getting-started__info">
-            <span class="getting-started__card-title">Create Strategy</span>
-            <span class="getting-started__card-desc"
-              >Design or pick a strategy and let the AI optimize it.</span
-            >
-          </div>
-          <span class="getting-started__arrow">&#8250;</span>
-        </a>
-        <a
-          class="getting-started__card"
-          href="/plugins/findoo-trader/dashboard/trader"
-          data-step="3"
-        >
-          <span class="getting-started__num">3</span>
-          <div class="getting-started__info">
-            <span class="getting-started__card-title">Start Trading</span>
-            <span class="getting-started__card-desc"
-              >Paper trade first, then promote to live when ready.</span
-            >
-          </div>
-          <span class="getting-started__arrow">&#8250;</span>
-        </a>
+      <div>
+        <span class="soul__equity num" id="soulEq">$0</span>
+        <span class="soul__pnl num" id="soulPnl">--</span>
       </div>
-      <button
-        class="getting-started__skip"
-        onclick="document.getElementById('gettingStarted').style.display = 'none'"
-      >
-        Skip &mdash; I'll explore on my own
-      </button>
+      <div class="soul__badges">
+        <span class="sbadge sbadge--regime" id="regimeBadge">--</span>
+        <span class="sbadge sbadge--matrix" id="matrixBadge">
+          <span class="sbadge__dots" id="matrixDots"></span>
+          <span id="matrixText">0&middot;0&middot;0</span>
+        </span>
+        <span class="sbadge sbadge--risk"><span class="rdot" id="riskDot"></span><span id="riskText">--</span></span>
+      </div>
+    </div>
+    <!-- Feed Timeline -->
+    <div class="soul__feed" id="soulFeed">
+      <div class="soul__sep">&#x4ECA;&#x65E5;&#x52A8;&#x6001;</div>
+    </div>
+  </aside>
+
+  <!-- DATA PANEL -->
+  <main class="data">
+    <!-- 4 Metric Cards -->
+    <div class="metrics" id="metricsRow">
+      <div class="metric-card"><div class="metric-card__label">&#x603B;&#x6743;&#x76CA;</div><div class="metric-card__value num" id="metricEq">$0</div><div class="metric-card__sub num" id="metricEqSub">--</div></div>
+      <div class="metric-card"><div class="metric-card__label">&#x4ECA;&#x65E5; P&amp;L</div><div class="metric-card__value num" id="metricPnl">$0</div><div class="metric-card__sub num" id="metricPnlSub">--</div></div>
+      <div class="metric-card"><div class="metric-card__label">&#x6D3B;&#x8DC3;&#x7B56;&#x7565;</div><div class="metric-card__value num" id="metricStrat">0</div><div class="metric-card__sub" id="metricStratSub">--</div></div>
+      <div class="metric-card"><div class="metric-card__label">Sharpe</div><div class="metric-card__value num" id="metricSharpe">--</div><div class="metric-card__sub" id="metricSharpeSub">--</div></div>
     </div>
 
-    <!-- QUICK START (shown when no strategies exist) -->
-    <div class="quick-start" id="quickStart" style="display: none">
-      <div class="quick-start__header">
-        <h2 class="quick-start__title">Quick Start</h2>
-        <p class="quick-start__desc">
-          Choose a trading style. The AI agent will deploy matching strategies and risk settings
-          automatically.
-        </p>
+    <!-- Equity Chart + Strategy Matrix -->
+    <div class="row2">
+      <div class="section">
+        <div class="section__head"><span class="section__title">&#x6743;&#x76CA;&#x66F2;&#x7EBF;</span><span class="section__badge num" id="eqBadge">--</span></div>
+        <div class="section__body"><div class="chart-wrap" id="eqChart"></div></div>
       </div>
-      <div class="quick-start__cards">
-        <button class="quick-start__card" onclick="OV.quickStart('conservative')">
-          <span class="quick-start__icon">&#128737;</span>
-          <span class="quick-start__name">Conservative</span>
-          <span class="quick-start__sub">Low-volatility mean reversion</span>
-          <span class="quick-start__hint">Target 8-15% APY</span>
-        </button>
-        <button
-          class="quick-start__card quick-start__card--primary"
-          onclick="OV.quickStart('balanced')"
-        >
-          <span class="quick-start__icon">&#9878;</span>
-          <span class="quick-start__name">Balanced</span>
-          <span class="quick-start__sub">Trend + mean reversion mix</span>
-          <span class="quick-start__hint">Target 15-30% APY</span>
-        </button>
-        <button class="quick-start__card" onclick="OV.quickStart('aggressive')">
-          <span class="quick-start__icon">&#128640;</span>
-          <span class="quick-start__name">Aggressive</span>
-          <span class="quick-start__sub">Momentum strategies</span>
-          <span class="quick-start__hint">Target 30%+ APY</span>
-        </button>
+      <div class="section">
+        <div class="section__head"><span class="section__title">&#x7B56;&#x7565;&#x77E9;&#x9635;</span></div>
+        <div class="section__body" id="stratMatrix"></div>
       </div>
     </div>
 
-    <!-- RISK HALO -->
-    <div class="risk-halo" id="riskHalo"></div>
-
-    <!-- ═══════════════════════════════════════════════════════════════
-     TOP BAR
-     ═══════════════════════════════════════════════════════════════ -->
-    <header class="topbar">
-      <span class="topbar__logo">OPENFINCLAW</span>
-      <div class="topbar__sep"></div>
-      <div class="topbar__eq">
-        <span class="topbar__eq-val num" id="eqVal">--</span>
-        <span class="topbar__eq-chg num" id="eqChg"></span>
+    <!-- Positions + Orders -->
+    <div class="row2">
+      <div class="section">
+        <div class="section__head"><span class="section__title">&#x6D3B;&#x8DC3;&#x6301;&#x4ED3;</span><span class="section__badge num" id="posBadge">0</span></div>
+        <div class="section__body"><table><thead><tr><th>&#x6807;&#x7684;</th><th>&#x65B9;&#x5411;</th><th>&#x6570;&#x91CF;</th><th>P&amp;L</th></tr></thead><tbody id="posTable"></tbody></table></div>
       </div>
-      <div class="topbar__sep"></div>
-      <nav class="topbar__nav">
-        <a class="topbar__nav-item active" href="/plugins/findoo-trader/dashboard/overview"
-          >Overview</a
-        >
-        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/strategy">Strategy</a>
-        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/trader">Trader</a>
-        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/flow">Flow</a>
-        <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/setting">Setting</a>
-      </nav>
-      <div class="topbar__fill"></div>
-      <div class="topbar__agents" id="agentDots"></div>
-      <div class="topbar__sep"></div>
-      <span class="topbar__risk" id="riskBadge">--</span>
-      <div class="topbar__sse" id="sseDots" title="SSE connections">
-        <span class="sse-dot" id="sseTrade" title="Trading"></span>
-        <span class="sse-dot" id="sseFund" title="Fund"></span>
-        <span class="sse-dot" id="sseEvents" title="Events"></span>
-      </div>
-      <span class="topbar__clock num" id="clock">--:--</span>
-      <button class="btn-estop" id="estopBtn">&#9632; STOP</button>
-    </header>
-
-    <!-- ═══════════════════════════════════════════════════════════════
-     3-COLUMN LAYOUT
-     ═══════════════════════════════════════════════════════════════ -->
-    <div class="layout">
-      <!-- ─── LEFT COLUMN ─── -->
-      <aside class="col-l">
-        <!-- Equity Mini -->
-        <div class="eq-mini fade-up d1">
-          <div class="eq-mini__val num" id="eqMiniVal">--</div>
-          <div class="eq-mini__chg num" id="eqMiniChg"></div>
-        </div>
-
-        <!-- Stat Pills -->
-        <div class="col-l__section fade-up d2">
-          <div class="stat-pills" id="statPills">
-            <div class="stat-pill">
-              <div class="stat-pill__v num" id="spPositions">0</div>
-              <div class="stat-pill__l">Positions</div>
-              <div class="stat-pill__sub num" id="spPnl">--</div>
-            </div>
-            <div class="stat-pill">
-              <div class="stat-pill__v num" id="spStrategies">0</div>
-              <div class="stat-pill__l">Strategies</div>
-              <div class="stat-pill__sub dim num" id="spBestSharpe">--</div>
-            </div>
-            <div class="stat-pill">
-              <div class="stat-pill__v num" id="spWinRate">--</div>
-              <div class="stat-pill__l">Win Rate</div>
-              <div class="stat-pill__sub dim" id="spWinHint"></div>
-            </div>
-            <div class="stat-pill">
-              <div class="stat-pill__v num" id="spAvgSharpe">--</div>
-              <div class="stat-pill__l">Avg Sharpe</div>
-              <div class="stat-pill__sub dim" id="spSharpeHint"></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Risk Badge -->
-        <div class="col-l__section fade-up d3">
-          <div class="col-l__title">Risk Status</div>
-          <div class="risk-badge" id="riskStatus">
-            <span class="risk-badge__dot" id="riskDot"></span>
-            <span class="risk-badge__label" id="riskLabel">NORMAL</span>
-          </div>
-        </div>
-
-        <!-- Config Status -->
-        <div class="col-l__section fade-up d4">
-          <div class="col-l__title">Config Status</div>
-          <div class="cfg-status">
-            <div class="cfg-row">
-              <span class="cfg-row__label">Trading</span>
-              <span class="cfg-row__val" id="cfgTrading">--</span>
-            </div>
-            <div class="cfg-row">
-              <span class="cfg-row__label">Exchanges</span>
-              <span class="cfg-row__val num" id="cfgExchanges">--</span>
-            </div>
-            <div class="cfg-row">
-              <span class="cfg-row__label">Plugins</span>
-              <span class="cfg-row__val num" id="cfgPlugins">--</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Multi-Market Status -->
-        <div class="col-l__section fade-up d5">
-          <div class="col-l__title">Multi-Market Status</div>
-          <div class="market-status-list" id="marketStatusList">
-            <div class="market-status-row" data-market="crypto">
-              <span
-                class="market-status-row__dot market-status-row__dot--online"
-                id="mktDotCrypto"
-              ></span>
-              <span class="market-status-row__name">Crypto</span>
-              <span class="market-status-row__state" id="mktStateCrypto">Online</span>
-              <span class="market-status-row__latency num" id="mktLatCrypto">--</span>
-            </div>
-            <div class="market-status-row" data-market="us">
-              <span class="market-status-row__dot" id="mktDotUs"></span>
-              <span class="market-status-row__name">US Stock</span>
-              <span class="market-status-row__state" id="mktStateUs">--</span>
-              <span class="market-status-row__latency num" id="mktLatUs">--</span>
-            </div>
-            <div class="market-status-row" data-market="hk">
-              <span class="market-status-row__dot" id="mktDotHk"></span>
-              <span class="market-status-row__name">HK Stock</span>
-              <span class="market-status-row__state" id="mktStateHk">--</span>
-              <span class="market-status-row__latency num" id="mktLatHk">--</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Quick Actions -->
-        <div class="col-l__section fade-up d6">
-          <div class="qa-grid">
-            <button class="qa-btn qa-btn--primary" onclick="OV.openSlide('order')">
-              Place Order
-            </button>
-            <button class="qa-btn" onclick="OV.openSlide('alert')">Set Alert</button>
-          </div>
-        </div>
-
-        <!-- Quick Links -->
-        <div class="col-l__section fade-up d7">
-          <div class="col-l__title">Quick Links</div>
-          <div class="quick-links">
-            <a class="quick-link" href="/plugins/findoo-trader/dashboard/strategy">
-              <span class="quick-link__arrow">&rarr;</span>
-              <span>Strategy Arena</span>
-            </a>
-            <a class="quick-link" href="/plugins/findoo-trader/dashboard/trader">
-              <span class="quick-link__arrow">&rarr;</span>
-              <span>Trader Desk</span>
-            </a>
-            <a class="quick-link" href="/plugins/findoo-trader/dashboard/setting">
-              <span class="quick-link__arrow">&rarr;</span>
-              <span>Settings</span>
-            </a>
-          </div>
-        </div>
-      </aside>
-
-      <!-- ─── CENTER COLUMN ─── -->
-      <main class="col-c">
-        <!-- Row 1: Equity Curve Chart -->
-        <div class="panel-card fade-up d2">
-          <div class="panel-card__head">
-            <div class="panel-card__title">
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                style="width: 12px; height: 12px; opacity: 0.5"
-              >
-                <path d="M3 3v18h18" />
-                <path d="M7 16l4-8 4 4 5-10" />
-              </svg>
-              Equity Curve
-            </div>
-            <div class="period-pills">
-              <button class="period-pill" data-period="7d">7D</button>
-              <button class="period-pill active" data-period="30d">30D</button>
-              <button class="period-pill" data-period="ytd">YTD</button>
-            </div>
-          </div>
-          <div class="chart-wrap" id="equityChartWrap" style="height: 140px">
-            <canvas id="equityChart"></canvas>
-          </div>
-          <div class="chart-stats" id="chartStats">
-            <span class="chart-stat">Return: <span class="num" id="csReturn">--</span></span>
-            <span class="chart-stat">MaxDD: <span class="num" id="csDd">--</span></span>
-            <span class="chart-stat">Sharpe: <span class="num" id="csSharpe">--</span></span>
-          </div>
-        </div>
-
-        <!-- Row 2: Capital Allocation (Doughnut + Pipeline) -->
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px">
-          <!-- Capital Allocation: Horizontal Bar Chart -->
-          <div class="panel-card fade-up d3">
-            <div class="panel-card__head" style="margin-bottom: 4px">
-              <div class="panel-card__title">Capital Allocation</div>
-            </div>
-            <div class="alloc-bars" id="allocBars">
-              <div
-                style="font-size: 10px; color: var(--text-dim); text-align: center; padding: 12px 0"
-              >
-                No allocation data
-              </div>
-            </div>
-          </div>
-
-          <!-- Pipeline -->
-          <div class="panel-card fade-up d4">
-            <div class="panel-card__head" style="margin-bottom: 4px">
-              <div class="panel-card__title">Strategy Pipeline</div>
-            </div>
-            <div class="pipeline" id="pipelineMini">
-              <div class="pipe-stage pipe-stage--l0">
-                <div class="pipe-stage__label" style="color: var(--l0)">L0</div>
-                <div class="pipe-stage__count" id="pipeL0">0</div>
-                <div class="pipe-stage__name">Incubate</div>
-              </div>
-              <div class="pipe-stage pipe-stage--l1">
-                <div class="pipe-stage__label" style="color: var(--l1)">L1</div>
-                <div class="pipe-stage__count" id="pipeL1">0</div>
-                <div class="pipe-stage__name">Backtest</div>
-              </div>
-              <div class="pipe-stage pipe-stage--l2">
-                <div class="pipe-stage__label" style="color: var(--l2)">L2</div>
-                <div class="pipe-stage__count" id="pipeL2">0</div>
-                <div class="pipe-stage__name">Paper</div>
-              </div>
-              <div class="pipe-stage pipe-stage--l3">
-                <div class="pipe-stage__label" style="color: var(--l3)">L3</div>
-                <div class="pipe-stage__count" id="pipeL3">0</div>
-                <div class="pipe-stage__name">Live</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Alpha Factory Funnel -->
-        <div class="panel-card fade-up d5" id="alphaFactoryCard">
-          <div class="panel-card__head">
-            <div class="panel-card__title">Alpha Factory</div>
-            <span class="card__badge num" id="afStatus">--</span>
-          </div>
-          <div class="pipeline" id="alphaFactoryFunnel" style="justify-content: space-between">
-            <div class="pipe-stage">
-              <div class="pipe-stage__label" style="color: var(--accent)">Screened</div>
-              <div class="pipe-stage__count" id="afScreened">0</div>
-              <div class="pipe-stage__name">passed</div>
-            </div>
-            <div class="pipe-stage">
-              <div class="pipe-stage__label" style="color: var(--warning, #f59e0b)">Failed</div>
-              <div class="pipe-stage__count" id="afScreenFailed">0</div>
-              <div class="pipe-stage__name">screening</div>
-            </div>
-            <div class="pipe-stage">
-              <div class="pipe-stage__label" style="color: var(--l2)">Validated</div>
-              <div class="pipe-stage__count" id="afValidated">0</div>
-              <div class="pipe-stage__name">passed</div>
-            </div>
-            <div class="pipe-stage">
-              <div class="pipe-stage__label" style="color: var(--danger, #ef4444)">GC</div>
-              <div class="pipe-stage__count" id="afGcKilled">0</div>
-              <div class="pipe-stage__name">killed</div>
-            </div>
-            <div class="pipe-stage">
-              <div class="pipe-stage__label" style="color: var(--l3)">Evolved</div>
-              <div class="pipe-stage__count" id="afEvolution">0</div>
-              <div class="pipe-stage__name">cycles</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Row 3: Daily Brief -->
-        <div class="panel-card fade-up d5 daily-brief-card" id="dailyBriefCard">
-          <div class="panel-card__head">
-            <div class="panel-card__title daily-brief-card__title">
-              <span class="daily-brief-card__icon">&#x1F916;</span>
-              Daily Brief
-            </div>
-            <span class="daily-brief-card__time num" id="briefTimestamp">--</span>
-          </div>
-          <div class="daily-brief-card__body" id="briefBody">
-            No brief available &mdash; Agent will generate one during next heartbeat.
-          </div>
-        </div>
-
-        <!-- Row 3b: Macro Context -->
-        <div class="card panel-card fade-up d5 macro-ctx" id="macroCtx">
-          <div class="panel-card__head">
-            <div class="panel-card__title">Macro Context</div>
-            <span class="card__badge num" id="macroRegime">--</span>
-          </div>
-          <div class="macro-grid">
-            <div class="macro-item">
-              <span class="macro-item__label">Fear & Greed</span>
-              <span class="macro-item__val num" id="macroFearGreed">--</span>
-              <div class="macro-item__bar">
-                <div class="macro-item__bar-fill" id="macroFgBar" style="width: 50%"></div>
-              </div>
-            </div>
-            <div class="macro-item">
-              <span class="macro-item__label">BTC Dominance</span>
-              <span class="macro-item__val num" id="macroBtcDom">--</span>
-            </div>
-            <div class="macro-item">
-              <span class="macro-item__label">DXY Index</span>
-              <span class="macro-item__val num" id="macroDxy">--</span>
-            </div>
-            <div class="macro-item">
-              <span class="macro-item__label">VIX</span>
-              <span class="macro-item__val num" id="macroVix">--</span>
-            </div>
-            <div class="macro-item">
-              <span class="macro-item__label">ETH/BTC Ratio</span>
-              <span class="macro-item__val num" id="macroEthBtc">--</span>
-            </div>
-            <div class="macro-item">
-              <span class="macro-item__label">Total Crypto MCap</span>
-              <span class="macro-item__val num" id="macroMcap">--</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Row 4: Top Strategies Leaderboard -->
-        <div
-          class="panel-card fade-up d5"
-          style="flex: 1; display: flex; flex-direction: column; min-height: 0"
-        >
-          <div class="panel-card__head">
-            <div class="panel-card__title">Top Strategies</div>
-            <span style="font-size: 9px; color: var(--text-dim)" id="topStratCount"></span>
-          </div>
-          <div style="flex: 1; overflow-y: auto; margin: 0 -12px; padding: 0 12px">
-            <table class="fin-table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Strategy</th>
-                  <th>Level</th>
-                  <th>Fitness</th>
-                  <th style="text-align: right">Return</th>
-                  <th style="text-align: right">Action</th>
-                </tr>
-              </thead>
-              <tbody id="topStrategiesBody"></tbody>
-            </table>
-          </div>
-        </div>
-
-        <!-- Row 4: Active Alerts -->
-        <div class="panel-card fade-up d6">
-          <div class="panel-card__head">
-            <div class="panel-card__title">Active Alerts</div>
-            <span class="num" style="font-size: 9px; color: var(--text-dim)" id="alertCount"></span>
-          </div>
-          <div id="alertsList"></div>
-        </div>
-      </main>
-
-      <!-- ─── RIGHT COLUMN ─── -->
-      <aside class="col-r">
-        <div class="col-r__head">
-          <div class="col-r__title">Agent Activity</div>
-          <div class="feed-chips" id="feedFilters">
-            <button class="fchip active" data-f="all">All</button>
-            <button class="fchip" data-f="decisions">Decisions</button>
-            <button class="fchip" data-f="trades">Trades</button>
-            <button class="fchip" data-f="evolution">Evolution</button>
-            <button class="fchip" data-f="alerts">Alerts</button>
-          </div>
-        </div>
-        <div class="col-r__feed" id="feedList"></div>
-      </aside>
-    </div>
-
-    <!-- ═══════════════════════════════════════════════════════════════
-     BOTTOM BAR
-     ═══════════════════════════════════════════════════════════════ -->
-    <footer class="botbar">
-      <div class="botbar__avatar"></div>
-      <div class="botbar__msg" id="botMsg">Loading Overview...</div>
-      <div class="botbar__sse" id="botSse"></div>
-      <button class="btn-ask" id="askAiBtn" onclick="toggleAiPanel()">Ask AI &#9656;</button>
-    </footer>
-
-    <!-- ═══════════════════════════════════════════════════════════════
-     AI PANEL
-     ═══════════════════════════════════════════════════════════════ -->
-    <button class="ai-fab" id="aiFab" onclick="toggleAiPanel()">Ask FinClaw</button>
-    <aside class="ai-panel" id="aiPanel">
-      <div class="ai-panel__head">
-        <span>FinClaw AI</span>
-        <button onclick="toggleAiPanel()">&times;</button>
-      </div>
-      <div class="ai-panel__messages" id="aiMessages"></div>
-      <div class="ai-panel__input">
-        <input
-          type="text"
-          id="aiInput"
-          placeholder="Ask FinClaw..."
-          onkeydown="if (event.key === 'Enter') sendAiMessage();"
-        />
-        <button onclick="sendAiMessage()">&rarr;</button>
-      </div>
-    </aside>
-
-    <!-- ═══════════════════════════════════════════════════════════════
-     SLIDE-OVER: ORDER
-     ═══════════════════════════════════════════════════════════════ -->
-    <div class="slideover-backdrop" id="slideOrder">
-      <div class="slideover">
-        <div class="slideover__head">
-          <span class="slideover__title">Place Order</span>
-          <button class="slideover__close" onclick="OV.closeSlide('order')">&times;</button>
-        </div>
-        <div class="slideover__body">
-          <div
-            style="
-              font-size: 10px;
-              color: var(--text-dim);
-              background: var(--bg);
-              padding: 6px 8px;
-              border-radius: var(--r-sm);
-              margin-bottom: 12px;
-              border-left: 2px solid var(--info);
-            "
-          >
-            Tip: You can also ask AI to place orders via chat.
-          </div>
-          <div class="fg">
-            <span class="fg__label">Direction</span>
-            <div class="bs-toggle">
-              <button class="bs-toggle__btn active-buy" id="buyBtn" onclick="OV.setSide('buy')">
-                BUY
-              </button>
-              <button class="bs-toggle__btn" id="sellBtn" onclick="OV.setSide('sell')">SELL</button>
-            </div>
-          </div>
-          <div class="fg">
-            <div class="fg__row">
-              <div>
-                <span class="fg__label">Symbol</span
-                ><select id="orderSymbol" style="width: 100%"></select>
-              </div>
-              <div>
-                <span class="fg__label">Type</span
-                ><select id="orderType" style="width: 100%">
-                  <option>Market</option>
-                  <option>Limit</option>
-                  <option>Stop-Limit</option>
-                </select>
-              </div>
-            </div>
-          </div>
-          <div class="fg">
-            <div class="fg__row">
-              <div>
-                <span class="fg__label">Amount</span
-                ><input type="text" id="orderAmount" value="0.01" style="width: 100%" />
-              </div>
-              <div>
-                <span class="fg__label">Price</span
-                ><input
-                  type="text"
-                  id="orderPrice"
-                  value="Market"
-                  disabled
-                  style="width: 100%; opacity: 0.5"
-                />
-              </div>
-            </div>
-          </div>
-          <div class="fg">
-            <div class="fg__row">
-              <div>
-                <span class="fg__label">Stop Loss</span
-                ><input type="text" id="orderSl" style="width: 100%" />
-              </div>
-              <div>
-                <span class="fg__label">Take Profit</span
-                ><input type="text" id="orderTp" style="width: 100%" />
-              </div>
-            </div>
-          </div>
-          <div class="risk-assess" id="riskAssess">
-            <div class="risk-assess__title">Risk Assessment</div>
-            <div id="riskRows"></div>
-          </div>
-          <button class="submit-btn" onclick="OV.submitOrder()">Submit Order</button>
-        </div>
+      <div class="section">
+        <div class="section__head"><span class="section__title">&#x8FD1;&#x671F;&#x8BA2;&#x5355;</span><span class="section__badge num" id="ordBadge">0</span></div>
+        <div class="section__body"><table><thead><tr><th>&#x65F6;&#x95F4;</th><th>&#x6807;&#x7684;</th><th>&#x65B9;&#x5411;</th><th>&#x72B6;&#x6001;</th></tr></thead><tbody id="ordTable"></tbody></table></div>
       </div>
     </div>
+  </main>
+</div>
 
-    <!-- ═══════════════════════════════════════════════════════════════
-     SLIDE-OVER: SET ALERT
-     ═══════════════════════════════════════════════════════════════ -->
-    <div class="slideover-backdrop" id="slideAlert">
-      <div class="slideover">
-        <div class="slideover__head">
-          <span class="slideover__title">Set Alert</span>
-          <button class="slideover__close" onclick="OV.closeSlide('alert')">&times;</button>
-        </div>
-        <div class="slideover__body">
-          <form
-            id="alertForm"
-            class="alert-form"
-            onsubmit="
-              event.preventDefault();
-              OV.submitAlert();
-            "
-          >
-            <div class="fg">
-              <label class="fg__label">Alert Kind</label>
-              <select name="alertKind" style="width: 100%">
-                <option value="price_above">Price Above</option>
-                <option value="price_below">Price Below</option>
-                <option value="pnl_threshold">PnL Threshold</option>
-              </select>
-            </div>
-            <div class="fg">
-              <label class="fg__label">Symbol</label>
-              <input name="alertSymbol" placeholder="BTC/USDT" style="width: 100%" />
-            </div>
-            <div class="fg">
-              <div class="fg__row">
-                <div>
-                  <label class="fg__label">Price</label>
-                  <input
-                    name="alertPrice"
-                    type="number"
-                    step="any"
-                    placeholder="70000"
-                    style="width: 100%"
-                  />
-                </div>
-                <div>
-                  <label class="fg__label">Threshold ($)</label>
-                  <input
-                    name="alertThreshold"
-                    type="number"
-                    step="any"
-                    placeholder="500"
-                    style="width: 100%"
-                  />
-                </div>
-              </div>
-            </div>
-            <div class="fg">
-              <label class="fg__label">Direction (PnL only)</label>
-              <select name="alertDirection" style="width: 100%">
-                <option value="loss">Loss</option>
-                <option value="gain">Gain</option>
-              </select>
-            </div>
-            <div class="fg">
-              <label class="fg__label">Message</label>
-              <input name="alertMsg" placeholder="Optional note" style="width: 100%" />
-            </div>
-            <button type="submit" class="submit-btn">Create Alert</button>
-          </form>
-        </div>
-      </div>
-    </div>
+<!-- Bottom Bar -->
+<footer class="botbar">
+  <div class="botbar__left">
+    <span><span class="botbar__dot botbar__dot--g" id="sseDot"></span>SSE <span id="sseStatus">--</span></span>
+    <span>Heartbeat: <span id="hbAge">--</span></span>
+  </div>
+  <div class="botbar__right"><span id="version">v2026.3.13</span></div>
+</footer>
 
-    <!-- ═══════════════════════════════════════════════════════════════
-     MODAL: EMERGENCY STOP
-     ═══════════════════════════════════════════════════════════════ -->
-    <div class="modal-bg" id="estopModal">
-      <div class="modal-box">
-        <div class="modal-box__icon">&#9632;</div>
-        <div class="modal-box__title">Emergency Stop</div>
-        <div class="modal-box__desc">
-          This will immediately:<br />
-          &#8226; Cancel all open orders<br />
-          &#8226; Pause all active strategies<br />
-          &#8226; Freeze trading across all exchanges<br /><br />
-          <strong style="color: var(--text-hi)">Are you sure?</strong>
-        </div>
-        <div class="modal-box__actions">
-          <button class="modal-btn modal-btn--cancel" onclick="OV.closeEstop()">Cancel</button>
-          <button class="modal-btn modal-btn--danger" onclick="OV.confirmEstop()">
-            CONFIRM STOP
-          </button>
-        </div>
-      </div>
-    </div>
+<!-- Mobile FAB -->
+<button class="soul-fab" id="soulFab" onclick="openSoulOverlay()">&#x1F99E;<div class="soul-fab__pulse"></div></button>
+<div class="soul-overlay" id="soulOverlay">
+  <button class="soul-overlay__close" onclick="closeSoulOverlay()">&#x2715;</button>
+  <aside class="soul" id="soulMobile"></aside>
+</div>
 
-    <!-- ═══════════════════════════════════════════════════════════════
-     ONBOARDING OVERLAY (5-step guide for first-time users)
-     ═══════════════════════════════════════════════════════════════ -->
-    <div class="onboard-overlay" id="onboardOverlay" style="display: none">
-      <div class="onboard-backdrop"></div>
-      <div class="onboard-card">
-        <div class="onboard-progress">
-          <div class="onboard-progress__fill" id="onboardProgress"></div>
-        </div>
-        <div class="onboard-step" data-step="1">
-          <div class="onboard-icon">&#x1F680;</div>
-          <h2 class="onboard-title">Welcome to OpenFinClaw</h2>
-          <p class="onboard-desc">
-            Your AI-powered quantitative trading platform. One agent, one fund &mdash; fully
-            autonomous strategy discovery, evolution, and risk management.
-          </p>
-          <div class="onboard-features">
-            <div class="onboard-feature">
-              <span class="onboard-feature__dot" style="background: var(--gain)"></span>Agent-driven
-              strategy lifecycle (L0&#8594;L3)
-            </div>
-            <div class="onboard-feature">
-              <span class="onboard-feature__dot" style="background: var(--info)"></span>Multi-market
-              support (Crypto, US, HK)
-            </div>
-            <div class="onboard-feature">
-              <span class="onboard-feature__dot" style="background: var(--accent, #6366f1)"></span
-              >Real-time risk control &amp; monitoring
-            </div>
-          </div>
-        </div>
-        <div class="onboard-step" data-step="2" style="display: none">
-          <div class="onboard-icon">&#x1F517;</div>
-          <h2 class="onboard-title">Connect Your Exchange</h2>
-          <p class="onboard-desc">
-            Link your exchange API keys to start receiving live market data. Supported: Binance,
-            Bybit, OKX, Bitget, Gate.io, HTX.
-          </p>
-          <div class="onboard-hint">Testnet mode available for risk-free testing.</div>
-        </div>
-        <div class="onboard-step" data-step="3" style="display: none">
-          <div class="onboard-icon">&#x1F6E1;&#xFE0F;</div>
-          <h2 class="onboard-title">Configure Risk Control</h2>
-          <p class="onboard-desc">
-            Set your risk tolerance with one click. Choose a preset (Conservative / Balanced /
-            Aggressive) or fine-tune individual limits.
-          </p>
-          <div class="onboard-hint">
-            Max auto-trade, daily loss limit, position sizing &mdash; all configurable.
-          </div>
-        </div>
-        <div class="onboard-step" data-step="4" style="display: none">
-          <div class="onboard-icon">&#x1F4CA;</div>
-          <h2 class="onboard-title">Choose a Strategy</h2>
-          <p class="onboard-desc">
-            Pick a trading style and the AI agent will deploy matching strategies. Watch them evolve
-            through the L0&#8594;L1&#8594;L2&#8594;L3 pipeline.
-          </p>
-          <div class="onboard-hint">Paper trading first, live only after proven performance.</div>
-        </div>
-        <div class="onboard-step" data-step="5" style="display: none">
-          <div class="onboard-icon">&#x2728;</div>
-          <h2 class="onboard-title">You're All Set!</h2>
-          <p class="onboard-desc">
-            Your dashboard is ready. The AI agent will start discovering and optimizing strategies
-            on each heartbeat cycle.
-          </p>
-          <div class="onboard-hint">
-            Check the Overview for real-time metrics, Strategy for pipeline progress, and Trader for
-            live execution.
-          </div>
-        </div>
-        <div class="onboard-actions">
-          <button class="onboard-btn onboard-btn--skip" id="onboardSkip" onclick="OB.skip()">
-            Skip
-          </button>
-          <div class="onboard-dots" id="onboardDots"></div>
-          <div class="onboard-nav">
-            <button
-              class="onboard-btn onboard-btn--back"
-              id="onboardBack"
-              onclick="OB.prev()"
-              style="display: none"
-            >
-              Back
-            </button>
-            <button class="onboard-btn onboard-btn--next" id="onboardNext" onclick="OB.next()">
-              Next
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+<!-- Toast -->
+<div class="toast" id="toast"></div>
 
-    <!-- ═══════════════════════════════════════════════════════════════
-     JAVASCRIPT — Data-driven Overview Dashboard
-     ═══════════════════════════════════════════════════════════════ -->
-    <script>
-      (function () {
-        "use strict";
+<script>
+(function(){
+  var d = pageData || {};
+  var trading = d.trading || {};
+  var summary = trading.summary || {};
+  var events = (d.events || {}).events || [];
+  var pendingCount = (d.events || {}).pendingCount || 0;
+  var pipeline = d.pipeline || {};
+  var topStrategies = d.topStrategies || [];
+  var positions = trading.positions || [];
+  var orders = trading.orders || [];
+  var snapshots = trading.snapshots || [];
 
-        // ── Helpers ──
-        function $(id) {
-          return document.getElementById(id);
-        }
-        function fmt(n, d) {
-          if (n == null) return "--";
-          return Number(n).toLocaleString("en-US", {
-            minimumFractionDigits: d || 0,
-            maximumFractionDigits: d || 0,
-          });
-        }
-        function fmtUsd(n) {
-          if (n == null) return "--";
-          var v = Number(n);
-          return (v >= 0 ? "+" : "") + ("$" + fmt(Math.abs(v), 2));
-        }
-        function fmtPct(n) {
-          if (n == null) return "--";
-          var v = Number(n);
-          return (v >= 0 ? "+" : "") + v.toFixed(2) + "%";
-        }
-        function pnlClass(n) {
-          return Number(n) >= 0 ? "gain" : "loss";
-        }
-        function timeAgo(ts) {
-          if (!ts) return "";
-          var diff = Date.now() - new Date(ts).getTime();
-          var m = Math.floor(diff / 60000);
-          if (m < 1) return "just now";
-          if (m < 60) return m + "m ago";
-          var h = Math.floor(m / 60);
-          if (h < 24) return h + "h ago";
-          return Math.floor(h / 24) + "d ago";
-        }
-        function esc(s) {
-          var d = document.createElement("div");
-          d.textContent = s || "";
-          return d.innerHTML;
-        }
+  function $(id){ return document.getElementById(id); }
+  function fmt(n){ return typeof n==='number' ? (n>=0?'+':'')+n.toFixed(2)+'%' : '--'; }
+  function fmtUsd(n){ return typeof n==='number' ? '$'+n.toLocaleString(undefined,{maximumFractionDigits:0}) : '$0'; }
+  function timeStr(ts){ var d=new Date(ts); return (d.getHours()+'').padStart(2,'0')+':'+(d.getMinutes()+'').padStart(2,'0'); }
 
-        // ── Clock ──
-        function tick() {
-          var n = new Date();
-          $("clock").textContent =
-            String(n.getHours()).padStart(2, "0") + ":" + String(n.getMinutes()).padStart(2, "0");
-        }
-        tick();
-        setInterval(tick, 10000);
+  // ── Metrics ──
+  $('metricEq').textContent = fmtUsd(summary.totalEquity);
+  $('soulEq').textContent = fmtUsd(summary.totalEquity);
+  var pnl = summary.dailyPnl || 0;
+  var pnlPct = summary.dailyPnlPct || 0;
+  $('metricPnl').textContent = fmtUsd(pnl);
+  $('metricPnlSub').textContent = fmt(pnlPct);
+  $('metricPnlSub').className = 'metric-card__sub num ' + (pnl>=0?'metric-card__sub--g':'metric-card__sub--r');
+  $('soulPnl').textContent = (pnl>=0?'+':'') + fmtUsd(pnl) + ' (' + fmt(pnlPct) + ')';
+  $('soulPnl').className = 'soul__pnl num ' + (pnl>=0?'soul__pnl--up':'soul__pnl--down');
+  $('metricEqSub').textContent = fmt(pnlPct);
+  $('metricEqSub').className = 'metric-card__sub num ' + (pnl>=0?'metric-card__sub--g':'metric-card__sub--r');
+  $('metricStrat').textContent = (pipeline.total || 0);
+  $('metricStratSub').textContent = 'L3:' + (pipeline.l3||0) + ' L2:' + (pipeline.l2||0);
+  var sharpe = summary.avgSharpe;
+  $('metricSharpe').textContent = sharpe!=null ? sharpe.toFixed(2) : '--';
+  $('metricSharpeSub').textContent = summary.winRate!=null ? 'Win ' + (summary.winRate*100).toFixed(0) + '%' : '--';
 
-        // ── State ──
-        var state = {
-          trading: pageData.trading || {},
-          events: pageData.events || {},
-          alerts: pageData.alerts || [],
-          risk: pageData.risk || {},
-          fund: pageData.fund || {},
-          config: pageData.config || {},
-          topStrategies: pageData.topStrategies || [],
-          alphaFactory: pageData.alphaFactory || null,
-          feedFilter: "all",
-        };
+  // ── Strategy Matrix ──
+  var levels = [
+    { label: 'L3 \u5B9E\u76D8', color: 'var(--l3)', items: topStrategies.filter(function(s){return s.level==='L3_LIVE'}) },
+    { label: 'L2 \u6A21\u62DF', color: 'var(--l2)', items: topStrategies.filter(function(s){return s.level==='L2_PAPER'}) },
+    { label: 'L1 \u56DE\u6D4B', color: 'var(--l1)', items: topStrategies.filter(function(s){return s.level==='L1_BACKTEST'}) },
+    { label: 'L0 \u5B75\u5316', color: 'var(--l0)', items: topStrategies.filter(function(s){return s.level==='L0_INCUBATE'}) },
+  ];
+  var matrixHtml = '';
+  levels.forEach(function(lv){
+    matrixHtml += '<div class="strat-level"><div class="strat-level__label" style="color:'+lv.color+'">'+lv.label+'</div><div class="strat-level__bar">';
+    if(lv.items.length===0) matrixHtml += '<span style="font-size:10px;color:var(--text-muted)">\u2014</span>';
+    lv.items.forEach(function(s){ matrixHtml += '<span class="strat-pill" data-level="'+s.level.split('_')[0]+'">'+s.name+'</span>'; });
+    matrixHtml += '</div></div>';
+  });
+  $('stratMatrix').innerHTML = matrixHtml;
+  $('matrixText').textContent = (pipeline.l3||0)+'\xB7'+(pipeline.l2||0)+'\xB7'+((pipeline.l1||0)+(pipeline.l0||0));
 
-        // ── Equity Chart (Chart.js) ──
-        var equityChart = null;
-        function initEquityChart() {
-          var ctx = $("equityChart");
-          if (!ctx || typeof Chart === "undefined") return;
-          equityChart = new Chart(ctx, {
-            type: "line",
-            data: {
-              labels: [],
-              datasets: [
-                {
-                  data: [],
-                  borderColor: "#22c55e",
-                  backgroundColor: "rgba(34,197,94,0.08)",
-                  borderWidth: 1.5,
-                  fill: true,
-                  pointRadius: 0,
-                  tension: 0.3,
-                },
-              ],
-            },
-            options: {
-              responsive: true,
-              maintainAspectRatio: false,
-              plugins: { legend: { display: false }, tooltip: { mode: "index", intersect: false } },
-              scales: {
-                x: { display: false },
-                y: { display: false },
-              },
-              interaction: { mode: "nearest", axis: "x", intersect: false },
-              animation: { duration: 500 },
-            },
-          });
-        }
+  // ── Positions Table ──
+  var posHtml = '';
+  positions.slice(0,8).forEach(function(p){
+    var pnlVal = p.unrealizedPnl || p.pnl || 0;
+    posHtml += '<tr><td>'+(p.symbol||'--')+'</td><td>'+(p.side||'--')+'</td><td class="num">'+(p.amount||p.qty||'--')+'</td><td class="num '+(pnlVal>=0?'g':'r')+'">'+fmtUsd(pnlVal)+'</td></tr>';
+  });
+  $('posTable').innerHTML = posHtml || '<tr><td colspan="4" style="color:var(--text-muted);text-align:center">\u6682\u65E0\u6301\u4ED3</td></tr>';
+  $('posBadge').textContent = positions.length;
 
-        function updateEquityChart(snapshots) {
-          if (!equityChart || !snapshots || !snapshots.length) return;
-          var labels = snapshots.map(function (s) {
-            return s.timestamp ? new Date(s.timestamp).toLocaleDateString() : "";
-          });
-          var data = snapshots.map(function (s) {
-            return s.equity || s.totalEquity || 0;
-          });
-          // Determine line color based on trend
-          var first = data[0] || 0;
-          var last = data[data.length - 1] || 0;
-          var color = last >= first ? "#22c55e" : "#ef4444";
-          equityChart.data.labels = labels;
-          equityChart.data.datasets[0].data = data;
-          equityChart.data.datasets[0].borderColor = color;
-          equityChart.data.datasets[0].backgroundColor =
-            last >= first ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)";
-          equityChart.update("none");
-        }
+  // ── Orders Table ──
+  var ordHtml = '';
+  orders.slice(0,8).forEach(function(o){
+    ordHtml += '<tr><td class="num">'+timeStr(o.createdAt||o.timestamp||Date.now())+'</td><td>'+(o.symbol||'--')+'</td><td>'+(o.side||'--')+'</td><td><span class="tag tag--'+(o.status==='filled'?'filled':'open')+'">'+(o.status||'--')+'</span></td></tr>';
+  });
+  $('ordTable').innerHTML = ordHtml || '<tr><td colspan="4" style="color:var(--text-muted);text-align:center">\u6682\u65E0\u8BA2\u5355</td></tr>';
+  $('ordBadge').textContent = orders.length;
 
-        // ── Capital Allocation: Horizontal Bar Chart ──
-        var allocBarColors = [
-          "linear-gradient(90deg, #3b82f6, #6366f1)",
-          "linear-gradient(90deg, #a855f7, #c084fc)",
-          "linear-gradient(90deg, #f59e0b, #fbbf24)",
-          "linear-gradient(90deg, #22c55e, #4ade80)",
-          "linear-gradient(90deg, #ec4899, #f472b6)",
-          "linear-gradient(90deg, #06b6d4, #22d3ee)",
-          "linear-gradient(90deg, #f97316, #fb923c)",
-          "linear-gradient(90deg, #6b7280, #9ca3af)",
-        ];
-        function updateAllocChart(allocations) {
-          var el = $("allocBars");
-          if (!el) return;
-          var items =
-            (allocations && allocations.byStrategy) || (allocations && allocations.byAsset) || [];
-          if (!items.length) {
-            el.innerHTML =
-              '<div style="font-size:10px;color:var(--text-dim);text-align:center;padding:12px 0">No allocation data</div>';
-            return;
+  // ── Equity Chart (SVG polyline) ──
+  if(snapshots.length > 1){
+    var vals = snapshots.map(function(s){return s.equity || 0;});
+    var min = Math.min.apply(null,vals), max = Math.max.apply(null,vals);
+    var range = max-min || 1;
+    var w = 400, h = 140, pad = 4;
+    var pts = vals.map(function(v,i){ return ((i/(vals.length-1))*(w-pad*2)+pad)+','+(h-pad-((v-min)/range)*(h-pad*2)); }).join(' ');
+    $('eqChart').innerHTML = '<svg viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none" style="width:100%;height:160px"><defs><linearGradient id="eqG" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--gain)" stop-opacity="0.15"/><stop offset="100%" stop-color="var(--gain)" stop-opacity="0"/></linearGradient></defs><polygon points="'+pad+','+h+' '+pts+' '+(w-pad)+','+h+'" fill="url(#eqG)"/><polyline points="'+pts+'" fill="none" stroke="var(--gain)" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+    var ret = ((vals[vals.length-1]-vals[0])/vals[0]*100);
+    $('eqBadge').textContent = (ret>=0?'+':'')+ret.toFixed(1)+'%';
+    $('eqBadge').style.color = ret>=0?'var(--gain)':'var(--loss)';
+    $('eqBadge').style.background = ret>=0?'var(--gain-dim)':'var(--loss-dim)';
+  }
+
+  // ── Feed Cards ──
+  var feedTypeMap = {
+    trade_executed:'buy', trade_pending:'appr', alert_triggered:'risk',
+    strategy_promoted:'evo', strategy_killed:'risk', order_filled:'buy',
+    order_cancelled:'risk', emergency_stop:'risk', system:'brief'
+  };
+  var feedIconMap = { buy:'\uD83D\uDFE2', appr:'\u26A1', risk:'\uD83D\uDD34', evo:'\uD83E\uDDEC', brief:'\uD83D\uDCCB', sleep:'\uD83D\uDE34' };
+  function renderFeedCard(evt){
+    var ft = evt.feedType || feedTypeMap[evt.type] || 'brief';
+    var icon = feedIconMap[ft] || '\uD83D\uDCCB';
+    var html = '<article class="fc fc--'+ft+'">';
+    html += '<div class="fc__head"><span class="fc__icon">'+icon+'</span><span class="fc__type">'+evt.title+'</span><span class="fc__time num">'+timeStr(evt.timestamp)+'</span></div>';
+    if(evt.detail) html += '<div class="fc__detail">'+evt.detail+'</div>';
+    if(evt.chips && evt.chips.length){
+      html += '<div class="fc__metrics">';
+      evt.chips.forEach(function(c){ html += '<span class="fm'+(c.color?' fm--'+c.color:'')+'">'+c.label+': '+c.value+'</span>'; });
+      html += '</div>';
+    }
+    if(evt.narration) html += '<div class="fc__narration">\uD83E\uDD9E '+evt.narration+'</div>';
+    if(evt.status==='pending'){
+      html += '<div class="fc__actions" id="actions-'+evt.id+'"><button class="fc__btn fc__btn--ok" onclick="doApprove(\''+evt.id+'\')">\u2705 \u6279\u51C6</button><button class="fc__btn fc__btn--no" onclick="doReject(\''+evt.id+'\')">\u6682\u4E0D</button></div>';
+    }
+    html += '</article>';
+    return html;
+  }
+  var feedEl = $('soulFeed');
+  events.slice(0,20).forEach(function(evt){ feedEl.insertAdjacentHTML('beforeend', renderFeedCard(evt)); });
+
+  // ── Clock ──
+  function tickClock(){ var n=new Date(); $('clock').textContent=(n.getHours()+'').padStart(2,'0')+':'+(n.getMinutes()+'').padStart(2,'0'); }
+  tickClock(); setInterval(tickClock, 30000);
+
+  // ── Mood rotation ──
+  var moods=['\uD83D\uDE0A','\uD83E\uDD29','\uD83E\uDD14','\u26A1','\uD83D\uDE0A'], mi=0;
+  setInterval(function(){ mi=(mi+1)%moods.length; $('lobsterMood').textContent=moods[mi]; }, 7000);
+
+  // ── SSE ──
+  function connectSSE(){
+    try {
+      var es = new EventSource('/api/v1/finance/events/stream');
+      es.onopen = function(){ $('sseDot').className='botbar__dot botbar__dot--g'; $('sseStatus').textContent='Connected'; };
+      es.onmessage = function(e){
+        try {
+          var msg = JSON.parse(e.data);
+          if(msg.type==='new_event' && msg.event){
+            feedEl.children[1] ? feedEl.children[1].insertAdjacentHTML('afterend', renderFeedCard(msg.event)) : feedEl.insertAdjacentHTML('beforeend', renderFeedCard(msg.event));
           }
-          var html = "";
-          items.forEach(function (a, i) {
-            var name = a.name || a.strategy || a.label || "Unknown";
-            var pct = a.pct || a.percentage || a.weight || 0;
-            var val = a.value || a.amount || "";
-            var valStr = val ? "$" + fmt(val, 0) : pct.toFixed(1) + "%";
-            var bg = allocBarColors[i % allocBarColors.length];
-            if (/cash|reserve/i.test(name)) bg = allocBarColors[allocBarColors.length - 1];
-            // Show percentage label inside the bar fill when wide enough
-            var barLabel = pct >= 8 ? '<span class="bar-label">' + pct.toFixed(0) + "%</span>" : "";
-            html +=
-              '<div class="alloc-bar-row">' +
-              '<span class="alloc-bar-row__name">' +
-              esc(name) +
-              "</span>" +
-              '<div class="alloc-bar-row__track">' +
-              '<div class="alloc-bar-row__fill" style="width:' +
-              Math.min(pct, 100) +
-              "%;background:" +
-              bg +
-              '">' +
-              barLabel +
-              "</div>" +
-              "</div>" +
-              '<span class="alloc-bar-row__val num">' +
-              valStr +
-              "</span>" +
-              "</div>";
-          });
-          el.innerHTML = html;
-        }
+        } catch(ex){}
+      };
+      es.onerror = function(){ $('sseDot').className='botbar__dot botbar__dot--y'; $('sseStatus').textContent='Reconnecting...'; };
+    } catch(ex){ $('sseStatus').textContent='Unavailable'; }
+  }
+  connectSSE();
 
-        // ── Render: Top bar equity ──
-        function renderTopEquity(summary) {
-          if (!summary) return;
-          var eq = summary.totalEquity || summary.equity || 0;
-          var chg = summary.dailyPnl || summary.dayPnl || 0;
-          var pct = summary.dailyPnlPct || (eq > 0 ? (chg / eq) * 100 : 0);
-          $("eqVal").textContent = "$" + fmt(eq, 2);
-          var chgEl = $("eqChg");
-          chgEl.textContent = fmtUsd(chg) + " (" + fmtPct(pct) + ")";
-          chgEl.className = "topbar__eq-chg num " + pnlClass(chg);
+  // ── E-STOP ──
+  $('btnEstop').onclick = function(){
+    if(!confirm('\u26D4 \u7D27\u6025\u505C\u6B62\uFF1A\u6682\u505C\u6240\u6709\u4EA4\u6613\u6D3B\u52A8\uFF1F')) return;
+    fetch('/api/v1/finance/emergency-stop', {method:'POST'}).then(function(r){ return r.json(); }).then(function(){
+      showToast('\u26D4 \u7D27\u6025\u505C\u6B62\u5DF2\u6267\u884C');
+    }).catch(function(){ showToast('\u26D4 \u7D27\u6025\u505C\u6B62\u8BF7\u6C42\u5931\u8D25'); });
+  };
 
-          $("eqMiniVal").innerHTML =
-            "$" +
-            fmt(Math.floor(eq)) +
-            '<span style="font-size:14px;opacity:.5">.' +
-            String(Math.round((eq % 1) * 100)).padStart(2, "0") +
-            "</span>";
-          var miniChg = $("eqMiniChg");
-          miniChg.textContent = fmtUsd(chg) + " today (" + fmtPct(pct) + ")";
-          miniChg.className = "eq-mini__chg num " + pnlClass(chg);
-        }
+  // ── Approve/Reject ──
+  window.doApprove = function(id){
+    fetch('/api/v1/finance/events/approve', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id:id})})
+    .then(function(r){ return r.json(); })
+    .then(function(){
+      var el = $('actions-'+id);
+      if(el) el.innerHTML = '<div style="color:var(--gain);font-size:11px">\u2705 \u5DF2\u6279\u51C6</div>';
+      showToast('\u2705 \u5DF2\u6279\u51C6');
+    });
+  };
+  window.doReject = function(id){
+    fetch('/api/v1/finance/events/reject', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id:id})})
+    .then(function(r){ return r.json(); })
+    .then(function(){
+      var el = $('actions-'+id);
+      if(el) el.innerHTML = '<div style="color:var(--text-dim);font-size:11px">\u5DF2\u62D2\u7EDD</div>';
+    });
+  };
 
-        // ── Render: Agent dots ──
-        function renderAgentDots(plugins) {
-          var el = $("agentDots");
-          if (!plugins || !plugins.length) {
-            el.innerHTML = "";
-            return;
-          }
-          var groups = { Monitor: [], Strategy: [], Risk: [] };
-          (plugins || []).forEach(function (p) {
-            if (/monitor|alert|data-bus/i.test(p.id)) groups.Monitor.push(p);
-            else if (/strategy|paper|fund/i.test(p.id)) groups.Strategy.push(p);
-            else if (/risk|core/i.test(p.id)) groups.Risk.push(p);
-          });
-          var html = "";
-          ["Monitor", "Strategy", "Risk"].forEach(function (g) {
-            var active = groups[g].some(function (p) {
-              return p.enabled !== false;
-            });
-            var cls = active ? "adot--" + g.toLowerCase().substring(0, 3) : "adot--idle";
-            html += '<div class="adot ' + cls + '"><span class="adot__pip"></span>' + g + "</div>";
-          });
-          el.innerHTML = html;
-        }
+  // ── Toast ──
+  window.showToast = function(msg){ var t=$('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(function(){t.classList.remove('show');},3000); };
 
-        // ── Render: Risk badge (topbar) ──
-        function renderRiskBadge(risk, fund) {
-          var el = $("riskBadge");
-          var level = (fund && fund.riskLevel) || "NORMAL";
-          el.textContent = level.toUpperCase();
-          el.className = "topbar__risk";
-          if (/high|critical|danger/i.test(level)) el.classList.add("topbar__risk--danger");
-          else if (/medium|elevated|warning/i.test(level))
-            el.classList.add("topbar__risk--warning");
-        }
-
-        // ── Render: Risk status (left column) ──
-        function renderRiskStatus(risk, fund) {
-          var level = (fund && fund.riskLevel) || "NORMAL";
-          var dot = $("riskDot");
-          var label = $("riskLabel");
-          label.textContent = level.toUpperCase();
-          dot.className = "risk-badge__dot";
-          if (/high|critical|danger/i.test(level)) dot.classList.add("risk-badge__dot--danger");
-          else if (/medium|elevated|warning/i.test(level))
-            dot.classList.add("risk-badge__dot--warning");
-          else dot.classList.add("risk-badge__dot--normal");
-
-          // Risk halo
-          var halo = $("riskHalo");
-          halo.className = "risk-halo";
-          if (/high|critical|danger/i.test(level)) halo.classList.add("risk-halo--danger");
-          else if (/medium|elevated|warning/i.test(level)) halo.classList.add("risk-halo--warning");
-        }
-
-        // ── Render: Stat pills ──
-        function renderStatPills(trading) {
-          var positions = trading.positions || [];
-          var strategies = trading.strategies || [];
-          var totalPnl = positions.reduce(function (s, p) {
-            return s + (p.unrealizedPnl || p.pnl || 0);
-          }, 0);
-          var bestSharpe = strategies.reduce(function (best, s) {
-            return Math.max(best, s.sharpe || 0);
-          }, 0);
-          var avgSharpe = 0;
-          var avgWin = 0;
-          if (strategies.length > 0) {
-            var totalSharpe = strategies.reduce(function (s, st) {
-              return s + (st.sharpe || 0);
-            }, 0);
-            avgSharpe = totalSharpe / strategies.length;
-            var totalWin = strategies.reduce(function (s, st) {
-              return s + (st.winRate || 0);
-            }, 0);
-            avgWin = totalWin / strategies.length;
-          }
-
-          $("spPositions").textContent = positions.length;
-          var pnlEl = $("spPnl");
-          pnlEl.textContent = fmtUsd(totalPnl);
-          pnlEl.className = "stat-pill__sub num " + pnlClass(totalPnl);
-
-          $("spStrategies").textContent = strategies.length;
-          $("spBestSharpe").textContent = bestSharpe > 0 ? "Best " + bestSharpe.toFixed(2) : "--";
-
-          $("spWinRate").textContent = avgWin > 0 ? avgWin.toFixed(1) + "%" : "--";
-          $("spWinHint").textContent = strategies.length > 0 ? "across " + strategies.length : "";
-
-          $("spAvgSharpe").textContent = avgSharpe > 0 ? avgSharpe.toFixed(2) : "--";
-          $("spSharpeHint").textContent = avgSharpe >= 1 ? "Good" : avgSharpe >= 0.5 ? "Fair" : "";
-        }
-
-        // ── Render: Config status ──
-        function renderConfigStatus(config) {
-          if (!config) return;
-          var tradingEl = $("cfgTrading");
-          var exchEl = $("cfgExchanges");
-          var pluginEl = $("cfgPlugins");
-          if (tradingEl) {
-            var enabled = config.trading && config.trading.enabled;
-            tradingEl.innerHTML = enabled
-              ? '<span class="gain">&#10003; Enabled</span>'
-              : '<span class="loss">&#10007; Disabled</span>';
-          }
-          if (exchEl) exchEl.textContent = (config.exchanges || []).length + " connected";
-          if (pluginEl && config.plugins)
-            pluginEl.textContent = config.plugins.enabled + "/" + config.plugins.total + " active";
-        }
-
-        // ── Render: Chart stats (colored semantic values) ──
-        function renderChartStats(trading) {
-          var strategies = trading.strategies || [];
-          var snapshots = trading.snapshots || [];
-          // Aggregate return from snapshots
-          if (snapshots.length >= 2) {
-            var first = snapshots[0].equity || snapshots[0].totalEquity || 0;
-            var last =
-              snapshots[snapshots.length - 1].equity ||
-              snapshots[snapshots.length - 1].totalEquity ||
-              0;
-            var ret = first > 0 ? ((last - first) / first) * 100 : 0;
-            var retEl = $("csReturn");
-            retEl.textContent = fmtPct(ret);
-            retEl.className = "num " + pnlClass(ret);
-          }
-          // Best strategy Sharpe / MaxDD
-          if (strategies.length > 0) {
-            var maxSharpe = strategies.reduce(function (b, s) {
-              return Math.max(b, s.sharpe || 0);
-            }, 0);
-            var maxDD = strategies.reduce(function (b, s) {
-              return Math.min(b, s.maxDrawdown || 0);
-            }, 0);
-            var sharpeEl = $("csSharpe");
-            sharpeEl.textContent = maxSharpe.toFixed(2);
-            sharpeEl.className =
-              "num " + (maxSharpe >= 1.0 ? "gain" : maxSharpe >= 0.5 ? "" : "loss");
-            var ddEl = $("csDd");
-            ddEl.textContent = fmtPct(maxDD);
-            ddEl.className = "num " + (maxDD > -0.1 ? "gain" : "loss");
-          }
-        }
-
-        // ── Render: Pipeline ──
-        function renderPipeline(strategies) {
-          var l0 = 0,
-            l1 = 0,
-            l2 = 0,
-            l3 = 0;
-          (strategies || []).forEach(function (s) {
-            var lvl = s.level != null ? s.level : "";
-            if (lvl === "L0_INCUBATE" || lvl === 0) l0++;
-            else if (lvl === "L1_BACKTEST" || lvl === 1) l1++;
-            else if (lvl === "L2_PAPER" || lvl === 2) l2++;
-            else if (lvl === "L3_LIVE" || lvl === 3) l3++;
-          });
-          $("pipeL0").textContent = l0;
-          $("pipeL1").textContent = l1;
-          $("pipeL2").textContent = l2;
-          $("pipeL3").textContent = l3;
-        }
-
-        // ── Render: Top Strategies ──
-        function renderTopStrategies(topStrategies) {
-          var body = $("topStrategiesBody");
-          if (!topStrategies || !topStrategies.length) {
-            body.innerHTML =
-              '<tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:16px;font-size:10px">No strategies yet</td></tr>';
-            $("topStratCount").textContent = "";
-            return;
-          }
-          $("topStratCount").textContent = topStrategies.length + " shown";
-          var levelCls = { L0_INCUBATE: "l0", L1_BACKTEST: "l1", L2_PAPER: "l2", L3_LIVE: "l3" };
-          var levelLabels = { L0_INCUBATE: "L0", L1_BACKTEST: "L1", L2_PAPER: "L2", L3_LIVE: "L3" };
-
-          var html = "";
-          topStrategies.forEach(function (s, i) {
-            var fit = s.fitness || 0;
-            var fitPct = Math.min(fit * 100, 100);
-            var fitColor = fit >= 0.7 ? "var(--gain)" : fit >= 0.4 ? "var(--l2)" : "var(--l1)";
-            var ret = s.totalReturn || 0;
-            html +=
-              "<tr>" +
-              '<td class="num" style="color:var(--text-dim)">' +
-              (i + 1) +
-              "</td>" +
-              '<td style="color:var(--text-hi);font-weight:600">' +
-              esc(s.name) +
-              "</td>" +
-              '<td><span class="level-badge level-badge--' +
-              (levelCls[s.level] || "l0") +
-              '">' +
-              (levelLabels[s.level] || s.level) +
-              "</span></td>" +
-              '<td><div style="display:flex;align-items:center;gap:6px">' +
-              '<div style="width:50px;height:5px;background:var(--bg);border-radius:2px;overflow:hidden">' +
-              '<div style="width:' +
-              fitPct +
-              "%;height:100%;background:" +
-              fitColor +
-              ';border-radius:2px;transition:width .8s ease"></div></div>' +
-              '<span class="num" style="font-size:9px;font-weight:700">' +
-              fit.toFixed(2) +
-              "</span></div></td>" +
-              '<td class="num ' +
-              pnlClass(ret) +
-              '" style="text-align:right;font-weight:600">' +
-              fmtPct(ret) +
-              "</td>" +
-              '<td style="text-align:right"><a href="/plugins/findoo-trader/dashboard/strategy" ' +
-              'style="font-size:10px;color:var(--text-dim);text-decoration:none">View &#x2192;</a></td>' +
-              "</tr>";
-          });
-          body.innerHTML = html;
-        }
-
-        // ── Render: Active Alerts ──
-        function renderAlerts(alerts) {
-          var el = $("alertsList");
-          if (!alerts || !alerts.length) {
-            el.innerHTML =
-              '<div style="font-size:10px;color:var(--text-dim);padding:8px 0">No active alerts</div>';
-            $("alertCount").textContent = "";
-            return;
-          }
-          $("alertCount").textContent = alerts.length + " active";
-          var html = "";
-          alerts.slice(0, 8).forEach(function (a) {
-            var triggered = a.triggered ? " alert-row--triggered" : "";
-            html +=
-              '<div class="alert-row' +
-              triggered +
-              '"><span class="alert-pip"></span><span class="num">' +
-              esc(a.description || a.label || a.symbol + " " + a.condition) +
-              "</span>" +
-              (a.triggered
-                ? '<span class="loss" style="font-size:9px;margin-left:auto">TRIGGERED</span>'
-                : "") +
-              "</div>";
-          });
-          el.innerHTML = html;
-        }
-
-        // ── Render: Agent Activity Feed (Agent-Era categorized feed) ──
-        function eventCategory(e) {
-          var t = (e.type || e.category || "").toLowerCase();
-          if (/approv|decision|promot|gate/i.test(t)) return "decisions";
-          if (/trade|order|execut|close|fill/i.test(t)) return "trades";
-          if (/evol|mutat|gene|cross|decay|extinct/i.test(t)) return "evolution";
-          if (/alert|warn|risk|breach/i.test(t)) return "alerts";
-          if (/heartbeat|system|brief|discovery/i.test(t)) return "system";
-          return "trades";
-        }
-        function eventTypeLabel(e) {
-          var t = (e.type || "").toLowerCase();
-          if (/approv/i.test(t)) return { label: "APPROVAL", cls: "approval" };
-          if (/promot/i.test(t)) return { label: "PROMOTION", cls: "promotion" };
-          if (/execut|auto/i.test(t)) return { label: "AUTO-EXEC", cls: "executed" };
-          if (/evol|mutat/i.test(t)) return { label: "EVOLUTION", cls: "evolution" };
-          if (/cross/i.test(t)) return { label: "CROSSOVER", cls: "crossover" };
-          if (/decay/i.test(t)) return { label: "DECAY", cls: "decay" };
-          if (/extinct/i.test(t)) return { label: "EXTINCTION", cls: "extinction" };
-          if (/alert/i.test(t)) return { label: "ALERT", cls: "alert" };
-          if (/close/i.test(t)) return { label: "CLOSED", cls: "trade" };
-          if (/trade|order/i.test(t)) return { label: "TRADE", cls: "trade" };
-          if (/heartbeat/i.test(t)) return { label: "HEARTBEAT", cls: "system" };
-          if (/system|brief/i.test(t)) return { label: "SYSTEM", cls: "system" };
-          return { label: t.toUpperCase() || "EVENT", cls: "trade" };
-        }
-
-        function renderFeed(events, filter) {
-          var el = $("feedList");
-          if (!events || !events.length) {
-            el.innerHTML =
-              '<div style="text-align:center;color:var(--text-dim);padding:20px;font-size:10px">' +
-              '<div style="font-size:16px;margin-bottom:6px;opacity:.4">&#x1F916;</div>' +
-              "No agent activity yet</div>";
-            return;
-          }
-          var html = "";
-          var count = 0;
-          events.forEach(function (e) {
-            var cat = eventCategory(e);
-            if (filter !== "all" && cat !== filter) return;
-            if (count >= 50) return;
-            count++;
-            var tl = eventTypeLabel(e);
-            var pending = e.status === "pending" || e.needsApproval;
-
-            html +=
-              '<div class="event-card event-card--' +
-              tl.cls +
-              '" data-cat="' +
-              cat +
-              '" data-id="' +
-              esc(e.id || "") +
-              '">' +
-              '<div class="event-card__top">' +
-              '<span class="event-card__type event-card__type--' +
-              tl.cls +
-              '">' +
-              tl.label +
-              "</span>" +
-              '<span class="event-card__time">' +
-              timeAgo(e.timestamp || e.createdAt) +
-              "</span>" +
-              "</div>" +
-              '<div class="event-card__title">' +
-              esc(e.title || e.summary || e.message || "") +
-              "</div>";
-
-            if (e.description || e.detail) {
-              html += '<div class="event-card__desc">' + esc(e.description || e.detail) + "</div>";
-            }
-            if (pending) {
-              html +=
-                '<div class="event-card__actions">' +
-                '<button class="event-card__btn event-card__btn--approve" data-event-id="' +
-                esc(e.id) +
-                '" data-event-approve="true">Approve &#9656;</button>' +
-                '<button class="event-card__btn event-card__btn--reject" data-event-id="' +
-                esc(e.id) +
-                '" data-event-approve="false">Reject</button>' +
-                "</div>";
-            }
-            html += "</div>";
-          });
-          el.innerHTML = html;
-        }
-
-        // ── Render: Alpha Factory ──
-        function renderAlphaFactory(af) {
-          if (!af) return;
-          var s = function (id, v) {
-            var el = $(id);
-            if (el) el.textContent = v;
-          };
-          s("afStatus", af.running ? "Running" : "Stopped");
-          s("afScreened", af.screeningPassed || 0);
-          s("afScreenFailed", af.screeningFailed || 0);
-          s("afValidated", af.validationPassed || 0);
-          s("afGcKilled", af.gcKilled || 0);
-          s("afEvolution", af.evolutionCycles || 0);
-        }
-
-        // ── Master render ──
-        function renderAll() {
-          var t = state.trading || {};
-          var summary = t.summary || {};
-          renderTopEquity(summary);
-          renderAgentDots(
-            (state.config && state.config.plugins && state.config.plugins.entries) || t.plugins,
-          );
-          renderRiskBadge(state.risk, state.fund);
-          renderRiskStatus(state.risk, state.fund);
-          renderStatPills(t);
-          renderConfigStatus(state.config);
-          renderTopStrategies(state.topStrategies || []);
-          renderAlerts(state.alerts);
-          renderPipeline(t.strategies);
-          renderChartStats(t);
-          renderFeed((state.events.events || []).slice().reverse(), state.feedFilter);
-          updateEquityChart(t.snapshots);
-          updateAllocChart(t.allocations || (state.fund && state.fund.allocations));
-          renderMarketStatus(t);
-          renderMacro(t.macro);
-          renderDailyBrief(state.events);
-          renderAlphaFactory(state.alphaFactory);
-          checkEmptyState(t, state.config);
-        }
-
-        // ── Empty-state detection: show Getting Started panel + Quick Start + Onboarding ──
-        function checkEmptyState(trading, config) {
-          var exchanges = (config && config.exchanges) || [];
-          var strategies = (trading && trading.strategies) || [];
-          var positions = (trading && trading.positions) || [];
-          var summary = (trading && trading.summary) || {};
-          var eq = summary.totalEquity || summary.equity || 0;
-          var isEmpty =
-            exchanges.length === 0 && strategies.length === 0 && positions.length === 0 && eq === 0;
-          var el = $("gettingStarted");
-          if (el) el.style.display = isEmpty ? "" : "none";
-
-          // Show Quick Start only when no strategies exist yet
-          var qs = $("quickStart");
-          if (qs) qs.style.display = strategies.length === 0 ? "" : "none";
-
-          // Onboarding overlay: show on first visit when no exchanges configured
-          var onboarded = false;
-          try {
-            onboarded = localStorage.getItem("ofc_onboarded") === "1";
-          } catch (e) {
-            /* noop */
-          }
-          if (!onboarded && exchanges.length === 0) {
-            OB.show();
-          }
-        }
-
-        // ── Propagate ?embedded=1 to internal dashboard links ──
-        (function () {
-          if (!document.body.classList.contains("embedded")) return;
-          document.querySelectorAll('a[href*="/dashboard/"]').forEach(function (a) {
-            var href = a.getAttribute("href");
-            if (href && href.indexOf("embedded") === -1) {
-              a.setAttribute("href", href + (href.indexOf("?") === -1 ? "?" : "&") + "embedded=1");
-            }
-          });
-        })();
-
-        // ── SSE Connection Manager ──
-        var sseStreams = {};
-        function connectSSE(name, url, onMessage, interval) {
-          var dotEl = $("sse" + name.charAt(0).toUpperCase() + name.slice(1));
-          var retryDelay = 2000;
-          var maxRetry = 30000;
-          var failures = 0;
-          var maxFailures = 3;
-
-          function connect() {
-            if (typeof EventSource === "undefined") {
-              startPolling();
-              return;
-            }
-            var es = new EventSource(url);
-            sseStreams[name] = es;
-
-            es.onopen = function () {
-              retryDelay = 2000;
-              failures = 0;
-              if (dotEl) dotEl.className = "sse-dot connected";
-            };
-            es.onmessage = function (ev) {
-              try {
-                var data = JSON.parse(ev.data);
-                onMessage(data);
-              } catch (e) {
-                console.warn("SSE parse error (" + name + "):", e);
-              }
-            };
-            es.onerror = function () {
-              es.close();
-              failures++;
-              if (dotEl) dotEl.className = "sse-dot error";
-              if (failures >= maxFailures) {
-                console.warn(
-                  "SSE " + name + " failed " + failures + " times, falling back to polling",
-                );
-                startPolling();
-                return;
-              }
-              setTimeout(connect, retryDelay);
-              retryDelay = Math.min(retryDelay * 2, maxRetry);
-            };
-          }
-
-          function startPolling() {
-            var pollUrl = url.replace("/stream", "");
-            // Fix: /api/v1/fund/stream → /api/v1/fund has no route; use /api/v1/fund/status
-            if (pollUrl === "/api/v1/fund") pollUrl = "/api/v1/fund/status";
-            if (dotEl) dotEl.className = "sse-dot";
-            fetch(pollUrl)
-              .then(function (r) {
-                return r.json();
-              })
-              .then(function (d) {
-                onMessage(d);
-                if (dotEl) dotEl.className = "sse-dot connected";
-              })
-              .catch(function () {
-                if (dotEl) dotEl.className = "sse-dot error";
-              });
-            setInterval(function () {
-              fetch(pollUrl)
-                .then(function (r) {
-                  return r.json();
-                })
-                .then(function (d) {
-                  onMessage(d);
-                  if (dotEl) dotEl.className = "sse-dot connected";
-                })
-                .catch(function () {
-                  if (dotEl) dotEl.className = "sse-dot error";
-                });
-            }, interval || 10000);
-          }
-
-          connect();
-        }
-
-        // ── SSE Handlers ──
-        function onTradingData(data) {
-          state.trading = data;
-          if (data.topStrategies) state.topStrategies = data.topStrategies;
-          renderTopEquity(data.summary || {});
-          renderStatPills(data);
-          renderTopStrategies(state.topStrategies || []);
-          renderPipeline(data.strategies);
-          renderChartStats(data);
-          updateEquityChart(data.snapshots);
-          updateAllocChart(data.allocations);
-          renderMarketStatus(data);
-          renderMacro(data.macro);
-        }
-
-        function onFundData(data) {
-          state.fund = data;
-          renderRiskBadge(state.risk, data);
-          renderRiskStatus(state.risk, data);
-          updateAllocChart(data.allocations || (state.trading && state.trading.allocations));
-        }
-
-        function onEventsData(data) {
-          if (data.type === "new_event" && data.event) {
-            state.events.events = state.events.events || [];
-            state.events.events.push(data.event);
-            state.events.pendingCount =
-              data.pendingCount != null ? data.pendingCount : state.events.pendingCount;
-          } else if (data.events) {
-            state.events = data;
-          }
-          renderFeed((state.events.events || []).slice().reverse(), state.feedFilter);
-          renderDailyBrief(state.events);
-        }
-
-        // ── Initialize SSE connections ──
-        function initSSE() {
-          connectSSE("trade", "/api/v1/finance/trading/stream", onTradingData, 10000);
-          connectSSE("fund", "/api/v1/fund/stream", onFundData, 10000);
-          connectSSE("events", "/api/v1/finance/events/stream", onEventsData, 5000);
-        }
-
-        // ── POST API helper ──
-        function postApi(url, body) {
-          return fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body || {}),
-          }).then(function (r) {
-            if (!r.ok) throw new Error("HTTP " + r.status);
-            return r.json();
-          });
-        }
-
-        // ── Public API (OV namespace) ──
-        window.OV = {
-          openSlide: function (id) {
-            var el = $("slide" + id.charAt(0).toUpperCase() + id.slice(1));
-            if (el) el.classList.add("open");
-          },
-          closeSlide: function (id) {
-            var el = $("slide" + id.charAt(0).toUpperCase() + id.slice(1));
-            if (el) el.classList.remove("open");
-          },
-          closeEstop: function () {
-            $("estopModal").classList.remove("open");
-          },
-          confirmEstop: function () {
-            OV.closeEstop();
-            postApi("/api/v1/finance/emergency-stop", {})
-              .then(function () {
-                $("riskHalo").className = "risk-halo risk-halo--danger";
-                var rb = $("riskBadge");
-                rb.textContent = "STOPPED";
-                rb.className = "topbar__risk topbar__risk--danger";
-                $("botMsg").innerHTML =
-                  '<em style="color:var(--loss)">EMERGENCY STOP activated. All trading frozen.</em>';
-              })
-              .catch(function (e) {
-                $("botMsg").textContent = "Emergency stop failed: " + e.message;
-              });
-          },
-          quickStart: function (preset) {
-            var btns = document.querySelectorAll(".quick-start__card");
-            btns.forEach(function (b) {
-              b.disabled = true;
-            });
-            postApi("/api/v1/finance/strategy-packs/quick-start", { preset: preset })
-              .then(function (r) {
-                var count = (r.deployed || []).length;
-                toast(count + " strategies deployed (" + preset + ")", "success");
-                $("quickStart").style.display = "none";
-              })
-              .catch(function (e) {
-                toast("Quick start failed: " + e.message, "error");
-                btns.forEach(function (b) {
-                  b.disabled = false;
-                });
-              });
-          },
-          setSide: function (side) {
-            $("buyBtn").className = "bs-toggle__btn" + (side === "buy" ? " active-buy" : "");
-            $("sellBtn").className = "bs-toggle__btn" + (side === "sell" ? " active-sell" : "");
-          },
-          submitOrder: function () {
-            var side = $("buyBtn").classList.contains("active-buy") ? "buy" : "sell";
-            var symbol = $("orderSymbol").value;
-            var type = $("orderType").value.toLowerCase();
-            var amount = parseFloat($("orderAmount").value);
-            var price =
-              type === "market"
-                ? undefined
-                : parseFloat($("orderPrice").value.replace(/[^0-9.]/g, ""));
-            var sl = $("orderSl").value
-              ? parseFloat($("orderSl").value.replace(/[^0-9.]/g, ""))
-              : undefined;
-            var tp = $("orderTp").value
-              ? parseFloat($("orderTp").value.replace(/[^0-9.]/g, ""))
-              : undefined;
-
-            postApi("/api/v1/finance/orders", {
-              side: side,
-              symbol: symbol,
-              type: type,
-              amount: amount,
-              price: price,
-              stopLoss: sl,
-              takeProfit: tp,
-            })
-              .then(function () {
-                OV.closeSlide("order");
-                $("botMsg").innerHTML =
-                  "<em>" + side.toUpperCase() + " " + amount + " " + symbol + " submitted</em>";
-              })
-              .catch(function (e) {
-                $("botMsg").textContent = "Order failed: " + e.message;
-              });
-          },
-          submitAlert: function () {
-            var form = document.getElementById("alertForm");
-            var kind = form.querySelector("[name=alertKind]").value;
-            var symbol = form.querySelector("[name=alertSymbol]").value;
-            var price = form.querySelector("[name=alertPrice]").value;
-            var threshold = form.querySelector("[name=alertThreshold]").value;
-            var direction = form.querySelector("[name=alertDirection]").value;
-            var msg = form.querySelector("[name=alertMsg]").value.trim();
-
-            postApi("/api/v1/finance/alerts/create", {
-              kind: kind,
-              symbol: symbol,
-              price: price ? parseFloat(price) : undefined,
-              threshold: threshold ? parseFloat(threshold) : undefined,
-              direction: direction,
-              message: msg || undefined,
-            })
-              .then(function () {
-                OV.closeSlide("alert");
-                $("botMsg").innerHTML =
-                  "<em>Alert created: " + esc(kind) + " on " + esc(symbol) + "</em>";
-              })
-              .catch(function (e) {
-                $("botMsg").textContent = "Alert creation failed: " + e.message;
-              });
-          },
-          approveEvent: function (id, approved) {
-            postApi("/api/v1/finance/events/approve", { eventId: id, approved: approved })
-              .then(function () {
-                var card = document.querySelector('.event-card[data-id="' + id + '"]');
-                if (card) card.style.display = "none";
-                $("botMsg").innerHTML =
-                  "<em>Event " + (approved ? "approved" : "rejected") + "</em>";
-              })
-              .catch(function (e) {
-                $("botMsg").textContent = "Approval failed: " + e.message;
-              });
-          },
-        };
-
-        // ── AI Panel ──
-        window.toggleAiPanel = function () {
-          var panel = $("aiPanel");
-          var fab = $("aiFab");
-          panel.classList.toggle("open");
-          fab.classList.toggle("hidden");
-          document.body.classList.toggle("ai-open");
-          if (panel.classList.contains("open")) {
-            $("aiInput").focus();
-          }
-        };
-
-        window.sendAiMessage = function () {
-          var input = $("aiInput");
-          var msg = input.value.trim();
-          if (!msg) return;
-          appendAiMsg(msg, "user");
-          input.value = "";
-          fetch("/api/v1/finance/ai/chat", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              message: msg,
-              context: {
-                page: "overview",
-                equity:
-                  state.trading && state.trading.summary
-                    ? state.trading.summary.totalEquity
-                    : undefined,
-              },
-            }),
-          })
-            .then(function (r) {
-              return r.json();
-            })
-            .then(function (d) {
-              appendAiMsg(d.reply || d.message || "No response", "bot");
-            })
-            .catch(function (e) {
-              appendAiMsg("Error: " + e.message, "bot");
-            });
-        };
-
-        function appendAiMsg(text, role) {
-          var el = $("aiMessages");
-          var div = document.createElement("div");
-          div.className = "ai-msg ai-msg--" + role;
-          div.innerHTML =
-            '<div class="ai-msg__bubble">' +
-            esc(text) +
-            "</div>" +
-            '<div class="ai-msg__time">' +
-            new Date().toLocaleTimeString() +
-            "</div>";
-          el.appendChild(div);
-          el.scrollTop = el.scrollHeight;
-        }
-
-        // ── Filter chips (feed) ──
-        document.querySelectorAll("#feedFilters .fchip").forEach(function (c) {
-          c.addEventListener("click", function () {
-            document.querySelectorAll("#feedFilters .fchip").forEach(function (x) {
-              x.classList.remove("active");
-            });
-            c.classList.add("active");
-            state.feedFilter = c.dataset.f;
-            renderFeed((state.events.events || []).slice().reverse(), state.feedFilter);
-          });
-        });
-
-        // ── Period pills ──
-        document.querySelectorAll(".period-pill").forEach(function (p) {
-          p.addEventListener("click", function () {
-            document.querySelectorAll(".period-pill").forEach(function (x) {
-              x.classList.remove("active");
-            });
-            p.classList.add("active");
-          });
-        });
-
-        // ── Delegated click handlers for data-* attributes ──
-        document.addEventListener("click", function (e) {
-          var evtBtn = e.target.closest("[data-event-approve]");
-          if (evtBtn) {
-            OV.approveEvent(evtBtn.dataset.eventId, evtBtn.dataset.eventApprove === "true");
-            return;
-          }
-        });
-
-        // ── Slide-over backdrop close ──
-        document.querySelectorAll(".slideover-backdrop").forEach(function (bg) {
-          bg.addEventListener("click", function (e) {
-            if (e.target === bg) bg.classList.remove("open");
-          });
-        });
-
-        // ── Emergency stop button ──
-        $("estopBtn").addEventListener("click", function () {
-          $("estopModal").classList.add("open");
-        });
-
-        // ── Populate order symbol select from positions ──
-        function populateOrderSymbols() {
-          var sel = $("orderSymbol");
-          var symbols = new Set();
-          (state.trading.positions || []).forEach(function (p) {
-            if (p.symbol) symbols.add(p.symbol);
-          });
-          ["BTC/USDT", "ETH/USDT", "SOL/USDT"].forEach(function (s) {
-            symbols.add(s);
-          });
-          sel.innerHTML = "";
-          symbols.forEach(function (s) {
-            var opt = document.createElement("option");
-            opt.value = s;
-            opt.textContent = s;
-            sel.appendChild(opt);
-          });
-        }
-
-        // ── Order type toggle ──
-        $("orderType").addEventListener("change", function () {
-          var isMarket = this.value === "Market";
-          $("orderPrice").disabled = isMarket;
-          $("orderPrice").style.opacity = isMarket ? ".5" : "1";
-          $("orderPrice").value = isMarket ? "Market" : "";
-        });
-
-        // ── Render: Macro Context ──
-        function renderMacro(macro) {
-          if (!macro) return;
-          var fg = $("macroFearGreed");
-          if (fg && macro.fearGreedIndex != null) {
-            fg.textContent = macro.fearGreedIndex;
-            fg.className =
-              "macro-item__val num " +
-              (macro.fearGreedIndex > 50 ? "gain" : macro.fearGreedIndex < 30 ? "loss" : "");
-            var bar = $("macroFgBar");
-            if (bar) bar.style.width = macro.fearGreedIndex + "%";
-          }
-          var dom = $("macroBtcDom");
-          if (dom && macro.btcDominance != null)
-            dom.textContent = macro.btcDominance.toFixed(1) + "%";
-          var dxy = $("macroDxy");
-          if (dxy && macro.dxyIndex != null) dxy.textContent = macro.dxyIndex.toFixed(1);
-          var vix = $("macroVix");
-          if (vix && macro.vix != null) vix.textContent = macro.vix.toFixed(1);
-          var ethbtc = $("macroEthBtc");
-          if (ethbtc && macro.ethBtcRatio != null)
-            ethbtc.textContent = macro.ethBtcRatio.toFixed(4);
-          var mcap = $("macroMcap");
-          if (mcap && macro.totalCryptoMcap != null)
-            mcap.textContent = "$" + (macro.totalCryptoMcap / 1e12).toFixed(2) + "T";
-          var regime = $("macroRegime");
-          if (regime && macro.regime) {
-            regime.textContent = macro.regime;
-            regime.className =
-              "card__badge num " +
-              (macro.regime === "RISK_ON" ? "gain" : macro.regime === "RISK_OFF" ? "loss" : "");
-          }
-        }
-
-        // ── Render: Multi-Market Status ──
-        var EXCHANGE_MARKET_MAP = {
-          binance: "crypto",
-          okx: "crypto",
-          bybit: "crypto",
-          huobi: "crypto",
-          kucoin: "crypto",
-          coinbase: "crypto",
-          kraken: "crypto",
-          bitget: "crypto",
-          gateio: "crypto",
-          mexc: "crypto",
-          alpaca: "us",
-          ibkr: "us",
-          tdameritrade: "us",
-          schwab: "us",
-          robinhood: "us",
-          futu: "hk",
-          tiger: "hk",
-          longbridge: "hk",
-        };
-        function classifyExchange(name) {
-          var key = (name || "").toLowerCase().replace(/[^a-z]/g, "");
-          return EXCHANGE_MARKET_MAP[key] || "crypto";
-        }
-        function renderMarketStatus(data) {
-          var exchanges =
-            (data && data.exchanges) ||
-            (data && data.liveTrading && data.liveTrading.exchanges) ||
-            [];
-          var markets = { crypto: [], us: [], hk: [] };
-          exchanges.forEach(function (ex) {
-            var mkt = classifyExchange(ex.name || ex.id || "");
-            markets[mkt].push(ex);
-          });
-          ["crypto", "us", "hk"].forEach(function (mkt) {
-            var suffix = mkt === "crypto" ? "Crypto" : mkt === "us" ? "Us" : "Hk";
-            var dotEl = $("mktDot" + suffix);
-            var stateEl = $("mktState" + suffix);
-            var latEl = $("mktLat" + suffix);
-            var exList = markets[mkt];
-            if (exList.length === 0) {
-              dotEl.className = "market-status-row__dot";
-              stateEl.textContent = "No exchange";
-              stateEl.className = "market-status-row__state";
-              latEl.textContent = "--";
-              return;
-            }
-            var anyOnline = exList.some(function (e) {
-              return e.connected || e.status === "connected" || e.status === "online" || e.online;
-            });
-            var avgLat = 0;
-            var latCount = 0;
-            exList.forEach(function (e) {
-              if (e.latency != null || e.pingMs != null) {
-                avgLat += e.latency || e.pingMs || 0;
-                latCount++;
-              }
-            });
-            dotEl.className =
-              "market-status-row__dot market-status-row__dot--" +
-              (anyOnline ? "online" : "offline");
-            stateEl.textContent = anyOnline ? "Online" : "Offline";
-            stateEl.className = "market-status-row__state " + (anyOnline ? "gain" : "loss");
-            latEl.textContent = latCount > 0 ? Math.round(avgLat / latCount) + "ms" : "--";
-          });
-        }
-
-        // ── Render: Daily Brief ──
-        function renderDailyBrief(events) {
-          var evts = (events && events.events) || [];
-          var brief = null;
-          // Search from newest to oldest for a daily_brief event
-          for (var i = evts.length - 1; i >= 0; i--) {
-            var t = (evts[i].type || "").toLowerCase();
-            if (/daily.brief|daily_brief|brief/i.test(t)) {
-              brief = evts[i];
-              break;
-            }
-          }
-          var bodyEl = $("briefBody");
-          var timeEl = $("briefTimestamp");
-          if (!bodyEl) return;
-          if (brief) {
-            bodyEl.innerHTML = esc(
-              brief.summary || brief.message || brief.description || "Brief generated.",
-            );
-            timeEl.textContent = brief.timestamp ? timeAgo(brief.timestamp) : "Today";
-          } else {
-            bodyEl.innerHTML =
-              "No brief available &mdash; Agent will generate one during next heartbeat.";
-            timeEl.textContent = "--";
-          }
-        }
-
-        // ── Onboarding (5-step overlay) ──
-        window.OB = (function () {
-          var totalSteps = 5;
-          var current = 1;
-
-          function show() {
-            var overlay = $("onboardOverlay");
-            if (!overlay) return;
-            overlay.style.display = "";
-            renderDots();
-            goTo(1);
-          }
-
-          function hide() {
-            var overlay = $("onboardOverlay");
-            if (overlay) overlay.style.display = "none";
-          }
-
-          function complete() {
-            try {
-              localStorage.setItem("ofc_onboarded", "1");
-            } catch (e) {
-              /* noop */
-            }
-            hide();
-          }
-
-          function goTo(step) {
-            current = step;
-            var steps = document.querySelectorAll(".onboard-step");
-            steps.forEach(function (s) {
-              s.style.display = parseInt(s.getAttribute("data-step")) === current ? "" : "none";
-            });
-            var fill = $("onboardProgress");
-            if (fill) fill.style.width = (current / totalSteps) * 100 + "%";
-            document.querySelectorAll(".onboard-dot").forEach(function (d, i) {
-              d.classList.toggle("active", i + 1 === current);
-            });
-            var back = $("onboardBack");
-            var next = $("onboardNext");
-            if (back) back.style.display = current === 1 ? "none" : "";
-            if (next) next.textContent = current === totalSteps ? "Get Started" : "Next";
-          }
-
-          function renderDots() {
-            var container = $("onboardDots");
-            if (!container) return;
-            var html = "";
-            for (var i = 1; i <= totalSteps; i++) {
-              html +=
-                '<div class="onboard-dot' +
-                (i === 1 ? " active" : "") +
-                '" onclick="OB.goTo(' +
-                i +
-                ')"></div>';
-            }
-            container.innerHTML = html;
-          }
-
-          return {
-            show: show,
-            skip: function () {
-              complete();
-            },
-            next: function () {
-              if (current >= totalSteps) {
-                complete();
-                return;
-              }
-              goTo(current + 1);
-            },
-            prev: function () {
-              if (current > 1) goTo(current - 1);
-            },
-            goTo: goTo,
-          };
-        })();
-
-        // ── Boot ──
-        renderAll();
-        populateOrderSymbols();
-        initEquityChart();
-        initSSE();
-        $("botMsg").innerHTML = "Overview online. <em>" + new Date().toLocaleString() + "</em>";
-      })();
-    </script>
-  </body>
+  // ── Mobile overlay ──
+  window.openSoulOverlay = function(){ $('soulMobile').innerHTML=$('soulDesktop').innerHTML; $('soulOverlay').classList.add('open'); };
+  window.closeSoulOverlay = function(){ $('soulOverlay').classList.remove('open'); };
+})();
+</script>
+</body>
 </html>
