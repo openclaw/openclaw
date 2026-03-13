@@ -59,12 +59,14 @@ function isSilentExecFailureFallbackEligible(params: {
   suppressSilentExecFailureFallback?: boolean;
   verboseLevel?: VerboseLevel;
   didSendViaMessagingTool?: boolean;
+  didSendDeterministicApprovalPrompt?: boolean;
 }): boolean {
   if (
     params.payloadCount > 0 ||
     params.suppressToolErrorWarnings ||
     params.suppressSilentExecFailureFallback ||
-    params.didSendViaMessagingTool
+    params.didSendViaMessagingTool ||
+    params.didSendDeterministicApprovalPrompt
   ) {
     return false;
   }
@@ -376,6 +378,7 @@ export function buildEmbeddedRunPayloads(params: {
       suppressSilentExecFailureFallback: params.suppressSilentExecFailureFallback,
       verboseLevel: params.verboseLevel,
       didSendViaMessagingTool: params.didSendViaMessagingTool,
+      didSendDeterministicApprovalPrompt: params.didSendDeterministicApprovalPrompt,
     })
   ) {
     return [

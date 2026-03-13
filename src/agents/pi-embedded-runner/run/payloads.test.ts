@@ -116,4 +116,14 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
     expect(payloads).toHaveLength(0);
   });
+
+  it("does not add the silent exec fallback when a deterministic exec approval prompt was already delivered", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "exec", error: "approval required" },
+      didSendDeterministicApprovalPrompt: true,
+      verboseLevel: "off",
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
 });
