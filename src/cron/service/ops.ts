@@ -1,4 +1,8 @@
-import { enqueueCommandInLane } from "../../process/command-queue.js";
+import {
+  CommandLaneClearedError,
+  enqueueCommandInLane,
+  GatewayDrainingError,
+} from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import { normalizeCronCreateDeliveryInput } from "./initial-delivery.js";
@@ -358,7 +362,7 @@ type PreparedManualRun =
 
 type ManualRunDisposition =
   | Extract<PreparedManualRun, { ran: false }>
-  | { ok: true; runnable: true };
+  | { ok: true; runnable: true; sessionTarget: CronJob["sessionTarget"] };
 
 type ManualRunPreflightResult =
   | { ok: false }
@@ -409,7 +413,7 @@ async function inspectManualRunDisposition(
   if ("reason" in result) {
     return result;
   }
-  return { ok: true, runnable: true } as const;
+  return { ok: true, runnable: true, sessionTarget: result.job.sessionTarget } as const;
 }
 
 async function prepareManualRun(
@@ -452,21 +456,14 @@ async function prepareManualRun(
   });
 }
 
-async function finishPreparedManualRun(
+async function finalizePreparedManualRun(
   state: CronServiceState,
   prepared: Extract<PreparedManualRun, { ran: true }>,
-  mode?: "due" | "force",
+  mode: "due" | "force" | undefined,
+  coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>,
 ): Promise<void> {
-  const executionJob = prepared.executionJob;
   const startedAt = prepared.startedAt;
   const jobId = prepared.jobId;
-
-  let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
-  try {
-    coreResult = await executeJobCoreWithTimeout(state, executionJob);
-  } catch (err) {
-    coreResult = { status: "error", error: String(err) };
-  }
   const endedAt = state.deps.nowMs();
 
   await locked(state, async () => {
@@ -539,6 +536,141 @@ async function finishPreparedManualRun(
   });
 }
 
+async function finishPreparedManualRun(
+  state: CronServiceState,
+  prepared: Extract<PreparedManualRun, { ran: true }>,
+  mode?: "due" | "force",
+  opts?: { isolatedExecutionLane?: string },
+): Promise<void> {
+  const executionJob = prepared.executionJob;
+
+  let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
+  try {
+    coreResult = await executeJobCoreWithTimeout(state, executionJob, {
+      isolatedLane:
+        executionJob.sessionTarget === "isolated" ? opts?.isolatedExecutionLane : undefined,
+    });
+  } catch (err) {
+    coreResult = { status: "error", error: String(err) };
+  }
+  await finalizePreparedManualRun(state, prepared, mode, coreResult);
+}
+
+function createQueuedManualRunLaneOpts(state: CronServiceState, id: string, runId: string) {
+  return {
+    warnAfterMs: 5_000,
+    onWait: (waitMs: number, queuedAhead: number) => {
+      state.deps.log.warn(
+        { jobId: id, runId, waitMs, queuedAhead },
+        "cron: queued manual run waiting for an execution slot",
+      );
+    },
+  } as const;
+}
+
+function isAdmissionError(err: unknown): boolean {
+  return err instanceof GatewayDrainingError || err instanceof CommandLaneClearedError;
+}
+
+function parseStartedAtFromRunId(runId: string): number | undefined {
+  const parts = runId.split(":");
+  if (parts.length >= 3) {
+    const ts = Number.parseInt(parts[parts.length - 2] ?? "", 10);
+    return Number.isNaN(ts) ? undefined : ts;
+  }
+  return undefined;
+}
+
+async function surfaceManualRunEnqueueFailure(
+  state: CronServiceState,
+  id: string,
+  runId: string,
+  err: unknown,
+): Promise<void> {
+  const endedAt = state.deps.nowMs();
+  const startedAt = parseStartedAtFromRunId(runId) ?? endedAt;
+  const errMessage =
+    err instanceof GatewayDrainingError ? "gateway draining; manual run not executed" : String(err);
+
+  await locked(state, async () => {
+    await ensureLoaded(state, { skipRecompute: true });
+    const job = state.store?.jobs.find((entry) => entry.id === id);
+    if (!job) {
+      return;
+    }
+    if (typeof job.state.runningAtMs === "number") {
+      // A different execution (for example scheduler-driven) may have started
+      // while this manual enqueue was waiting. Do not clobber active run state.
+      return;
+    }
+
+    job.state.runningAtMs = undefined;
+    job.state.lastRunStatus = "error";
+    job.state.lastStatus = "error";
+    job.state.lastError = errMessage;
+    job.state.lastErrorReason = undefined;
+    job.state.lastDeliveryStatus = "not-delivered";
+    job.state.lastDeliveryError = errMessage;
+    job.updatedAtMs = endedAt;
+
+    emit(state, {
+      jobId: job.id,
+      action: "finished",
+      status: "error",
+      error: errMessage,
+      runAtMs: startedAt,
+      durationMs: 0,
+      nextRunAtMs: job.state.nextRunAtMs,
+      deliveryStatus: job.state.lastDeliveryStatus,
+      deliveryError: job.state.lastDeliveryError,
+    });
+
+    recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+    await persist(state);
+    armTimer(state);
+  });
+}
+function queueManualRunExecution(
+  state: CronServiceState,
+  id: string,
+  runId: string,
+  mode: "due" | "force" | undefined,
+  opts?: { isolatedExecutionLane?: string },
+): void {
+  const laneOpts = createQueuedManualRunLaneOpts(state, id, runId);
+  void enqueueCommandInLane(
+    CommandLane.Cron,
+    async () => {
+      const prepared = await prepareManualRun(state, id, mode);
+      if (!prepared.ok || !prepared.ran) {
+        if (prepared.ok && "ran" in prepared && !prepared.ran) {
+          state.deps.log.info(
+            { jobId: id, runId, reason: prepared.reason },
+            "cron: queued manual run skipped before execution",
+          );
+        }
+        return prepared;
+      }
+      await finishPreparedManualRun(state, prepared, mode, opts);
+      return { ok: true, ran: true } as const;
+    },
+    laneOpts,
+  ).catch((err) => {
+    state.deps.log.error(
+      { jobId: id, runId, err: String(err) },
+      "cron: queued manual run background execution failed",
+    );
+    if (isAdmissionError(err)) {
+      void surfaceManualRunEnqueueFailure(state, id, runId, err).catch((surfErr) => {
+        state.deps.log.error(
+          { jobId: id, runId, surfErr: String(surfErr) },
+          "cron: failed to surface manual run enqueue failure",
+        );
+      });
+    }
+  });
+}
+
 export async function run(state: CronServiceState, id: string, mode?: "due" | "force") {
   const prepared = await prepareManualRun(state, id, mode);
   if (!prepared.ok || !prepared.ran) {
@@ -555,32 +687,38 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
   }
 
   const runId = `manual:${id}:${state.deps.nowMs()}:${nextManualRunId++}`;
+  const manualDispatchLane = CommandLane.CronDispatch;
+  const dispatchLaneOpts = createQueuedManualRunLaneOpts(state, id, runId);
   void enqueueCommandInLane(
-    CommandLane.Cron,
+    manualDispatchLane,
     async () => {
-      const result = await run(state, id, mode);
-      if (result.ok && "ran" in result && !result.ran) {
-        state.deps.log.info(
-          { jobId: id, runId, reason: result.reason },
-          "cron: queued manual run skipped before execution",
-        );
+      if (disposition.sessionTarget === "isolated") {
+        // Hold the cron execution slot for the whole isolated run so CLI-based
+        // providers cannot overlap other cron work, but route the embedded
+        // agent's internal global queue through cron-dispatch to avoid the
+        // original self-deadlock when it re-enters a lane during execution.
+        queueManualRunExecution(state, id, runId, mode, {
+          isolatedExecutionLane: CommandLane.CronDispatch,
+        });
+        return { ok: true, enqueued: true, runId } as const;
       }
-      return result;
+      queueManualRunExecution(state, id, runId, mode);
+      return { ok: true, enqueued: true, runId } as const;
     },
-    {
-      warnAfterMs: 5_000,
-      onWait: (waitMs, queuedAhead) => {
-        state.deps.log.warn(
-          { jobId: id, runId, waitMs, queuedAhead },
-          "cron: queued manual run waiting for an execution slot",
-        );
-      },
-    },
+    dispatchLaneOpts,
   ).catch((err) => {
     state.deps.log.error(
       { jobId: id, runId, err: String(err) },
       "cron: queued manual run background execution failed",
     );
+    if (isAdmissionError(err)) {
+      void surfaceManualRunEnqueueFailure(state, id, runId, err).catch((surfErr) => {
+        state.deps.log.error(
+          { jobId: id, runId, surfErr: String(surfErr) },
+          "cron: failed to surface manual run enqueue failure",
+        );
+      });
+    }
   });
   return { ok: true, enqueued: true, runId } as const;
 }
