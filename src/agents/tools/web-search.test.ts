@@ -26,6 +26,8 @@ const {
   mapBraveLlmContextResults,
   resolveTavilyApiKey,
   resolveTavilySearchDepth,
+  isRetriableSearchError,
+  classifySearchError,
 } = __testing;
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
@@ -500,5 +502,80 @@ describe("web_search tavily config resolution", () => {
   it("defaults searchDepth to basic", () => {
     expect(resolveTavilySearchDepth({})).toBe("basic");
     expect(resolveTavilySearchDepth(undefined)).toBe("basic");
+  });
+});
+
+describe("isRetriableSearchError", () => {
+  it("returns true for rate limit (429)", () => {
+    expect(isRetriableSearchError(new Error("Brave API error (429): rate limited"))).toBe(true);
+  });
+
+  it("returns true for quota exceeded (402)", () => {
+    expect(isRetriableSearchError(new Error("Tavily API error (402): payment required"))).toBe(
+      true,
+    );
+  });
+
+  it("returns true for timeout (408)", () => {
+    expect(isRetriableSearchError(new Error("Gemini API error (408): timeout"))).toBe(true);
+  });
+
+  it("returns true for server errors (502, 503, 504)", () => {
+    expect(isRetriableSearchError(new Error("Brave API error (502): bad gateway"))).toBe(true);
+    expect(isRetriableSearchError(new Error("Brave API error (503): unavailable"))).toBe(true);
+    expect(isRetriableSearchError(new Error("Brave API error (504): gateway timeout"))).toBe(true);
+  });
+
+  it("returns false for auth errors (401, 403)", () => {
+    expect(isRetriableSearchError(new Error("Brave API error (401): unauthorized"))).toBe(false);
+    expect(isRetriableSearchError(new Error("Brave API error (403): forbidden"))).toBe(false);
+  });
+
+  it("returns false for client errors (400)", () => {
+    expect(isRetriableSearchError(new Error("Brave API error (400): bad request"))).toBe(false);
+  });
+
+  it("returns true for timeout messages without HTTP status", () => {
+    expect(isRetriableSearchError(new Error("Request timeout"))).toBe(true);
+  });
+
+  it("returns true for quota messages without HTTP status", () => {
+    expect(isRetriableSearchError(new Error("API quota exceeded limit"))).toBe(true);
+  });
+
+  it("returns false for non-Error values", () => {
+    expect(isRetriableSearchError("string error")).toBe(false);
+    expect(isRetriableSearchError(null)).toBe(false);
+    expect(isRetriableSearchError(undefined)).toBe(false);
+  });
+});
+
+describe("classifySearchError", () => {
+  it("classifies rate limit errors", () => {
+    expect(classifySearchError(new Error("Brave API error (429): rate limited"))).toBe(
+      "rate_limit",
+    );
+  });
+
+  it("classifies quota errors", () => {
+    expect(classifySearchError(new Error("Tavily API error (402): payment required"))).toBe(
+      "quota_exceeded",
+    );
+  });
+
+  it("classifies timeout errors from HTTP status", () => {
+    expect(classifySearchError(new Error("Gemini API error (408): timeout"))).toBe("timeout");
+  });
+
+  it("classifies timeout errors from message", () => {
+    expect(classifySearchError(new Error("Request timeout"))).toBe("timeout");
+  });
+
+  it("classifies other HTTP errors", () => {
+    expect(classifySearchError(new Error("Brave API error (503): unavailable"))).toBe("http_503");
+  });
+
+  it("returns unknown for non-Error values", () => {
+    expect(classifySearchError("not an error")).toBe("unknown");
   });
 });
