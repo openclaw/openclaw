@@ -102,12 +102,23 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// ── Primary: AGENTS.md header (injected last — highest stable prefix) ──
-const agentsMdPattern = new RegExp(`^## ${escapeRegExp(workspaceDir)}/AGENTS\\.md$`, "m");
-const agentsMdMatch = agentsMdPattern.exec(prompt);
+// ── Workspace file boundary detection ──────────────────────────────────────
+//
+// Files are ordered from most-stable (SOUL.md) to most-dynamic (MEMORY.md).
+// We find the first "most-dynamic" file that actually appears in the prompt
+// and use that as the stable-prefix boundary.
+//
+// Priority (most dynamic first):
+//   1. MEMORY.md  — changes daily when present
+//   2. AGENTS.md  — changes when workspace protocol/guidelines update
+//   3. First workspace file header  — fallback when neither is present
 
-// ── Fallback: first workspace file header ──
+const memoryMdPattern = new RegExp(`^## ${escapeRegExp(workspaceDir)}/(MEMORY|memory)\\.md$`, "m");
+const agentsMdPattern = new RegExp(`^## ${escapeRegExp(workspaceDir)}/AGENTS\\.md$`, "m");
 const firstFilePattern = new RegExp(`^## ${escapeRegExp(workspaceDir)}/`, "m");
+
+const memoryMdMatch = memoryMdPattern.exec(prompt);
+const agentsMdMatch = agentsMdPattern.exec(prompt);
 const firstFileMatch = firstFilePattern.exec(prompt);
 
 // ── Legacy guards (timestamps etc.) ──
@@ -121,13 +132,17 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// Use AGENTS.md as primary boundary (it's the most frequently updated file,
-// injected last — everything before it is stable even when AGENTS.md changes).
-// Fall back to first workspace file header if AGENTS.md isn't loaded.
+// Use the most-dynamic workspace file as the boundary.
+// Everything before it remains in the stable KV-cache prefix.
 let stableChars = totalChars;
 let hitLabel = "none";
 
-if (agentsMdMatch) {
+if (memoryMdMatch) {
+  // MEMORY.md changes daily — everything before it (including AGENTS.md) stays cached
+  stableChars = memoryMdMatch.index;
+  hitLabel = "memory-md-header";
+} else if (agentsMdMatch) {
+  // AGENTS.md is the most frequently updated standard file
   stableChars = agentsMdMatch.index;
   hitLabel = "agents-md-header";
 } else if (firstFileMatch) {
