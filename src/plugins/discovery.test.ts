@@ -151,15 +151,17 @@ describe("discoverOpenClawPlugins", () => {
     const globalExt = path.join(stateDir, "extensions");
     fs.mkdirSync(globalExt, { recursive: true });
 
-    // Create a skill with nested node_modules (mimics real-world scenario from #43813)
+    // Create a real skill
     const skillDir = path.join(globalExt, "memory-lancedb-pro");
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(path.join(skillDir, "index.ts"), "export default function () {}", "utf-8");
 
-    // These directories should NOT be scanned (would cause FD exhaustion)
+    // Place ignored directories as DIRECT siblings of the real skill inside globalExt.
+    // Without the fix, discoverInDirectory would scan into these and find fake-plugin.
+    // With the fix, shouldIgnoreScannedDirectory returns true and skips them.
     const ignoredDirs = ["node_modules", ".git", "dist", ".venv", "browser_data", ".cache"];
     for (const dirName of ignoredDirs) {
-      const nestedDir = path.join(skillDir, dirName, "deeply", "nested", "fake-plugin");
+      const nestedDir = path.join(globalExt, dirName, "fake-plugin");
       fs.mkdirSync(nestedDir, { recursive: true });
       fs.writeFileSync(path.join(nestedDir, "index.ts"), "export default function () {}", "utf-8");
     }
@@ -171,7 +173,6 @@ describe("discoverOpenClawPlugins", () => {
     expect(ids).toContain("memory-lancedb-pro");
     // Should NOT find any fake plugins inside ignored directories
     expect(ids).not.toContain("fake-plugin");
-    expect(ids.filter((id) => id === "fake-plugin")).toHaveLength(0);
   });
 
   it("loads package extension packs", async () => {
