@@ -144,9 +144,7 @@ export async function discoverModelScopeModels(apiKey: string): Promise<ModelDef
 
   const trimmedKey = apiKey?.trim();
   try {
-    const headers: HeadersInit = {
-      "Content-Type": "application/json",
-    };
+    const headers: Record<string, string> = {};
 
     if (trimmedKey) {
       headers["Authorization"] = `Bearer ${trimmedKey}`;
