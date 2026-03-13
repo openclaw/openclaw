@@ -5,10 +5,15 @@ import path from "node:path";
 import { getPairingAdapter } from "../channels/plugins/pairing.js";
 import type { ChannelId, ChannelPairingAdapter } from "../channels/plugins/types.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
+import { fireAndForgetHook } from "../hooks/fire-and-forget.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { withFileLock as withPathLock } from "../infra/file-lock.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "../plugin-sdk/json-store.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+
+const pairingLog = createSubsystemLogger("pairing-store");
 
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -791,6 +796,24 @@ export async function upsertChannelPairingRequest(params: {
         version: 1,
         requests: [...reqs, next],
       } satisfies PairingStore);
+
+      // Fire pairing:request hook for new requests (fire-and-forget, never blocks).
+      fireAndForgetHook(
+        triggerInternalHook(
+          createInternalHookEvent("pairing", "request", "", {
+            channelId: String(params.channel),
+            requesterId: id,
+            code,
+            accountId: normalizedAccountId,
+            meta: meta ? { ...meta } : undefined,
+          }),
+        ),
+        "upsertChannelPairingRequest: pairing:request hook failed",
+        (message) => {
+          pairingLog.warn(message);
+        },
+      );
+
       return { code, created: true };
     },
   );
