@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -6,7 +6,17 @@ import ts from "typescript";
 const baseTestSuffixes = [".test.ts", ".test-utils.ts", ".test-harness.ts", ".e2e-harness.ts"];
 
 export function resolveRepoRoot(importMetaUrl) {
-  return path.resolve(path.dirname(fileURLToPath(importMetaUrl)), "..", "..");
+  let current = path.dirname(fileURLToPath(importMetaUrl));
+  while (true) {
+    if (existsSync(path.join(current, "package.json"))) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      throw new Error(`Could not resolve repo root from ${importMetaUrl}`);
+    }
+    current = parent;
+  }
 }
 
 export function resolveSourceRoots(repoRoot, relativeRoots) {
