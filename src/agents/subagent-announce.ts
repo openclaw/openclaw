@@ -782,9 +782,12 @@ async function sendSubagentAnnounceDirectly(params: {
       typeof effectiveDirectOrigin?.to === "string" ? effectiveDirectOrigin.to.trim() : "";
     const hasDeliverableDirectTarget =
       !params.requesterIsSubagent && Boolean(directChannel) && Boolean(directTo);
-    const shouldDeliverExternally =
-      !params.requesterIsSubagent &&
-      (!params.expectsCompletionMessage || hasDeliverableDirectTarget);
+
+    // Only attempt an external send when we have a concrete target. Cron sessions
+    // may run with delivery.channel="last" before any recipient exists (or with
+    // missing origin metadata), and in that case we must keep the announce
+    // internal/fallback-safe (avoid throwing "Action send requires a target").
+    const shouldDeliverExternally = hasDeliverableDirectTarget;
 
     const threadId =
       effectiveDirectOrigin?.threadId != null && effectiveDirectOrigin.threadId !== ""
