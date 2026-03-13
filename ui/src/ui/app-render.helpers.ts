@@ -673,9 +673,8 @@ function resolveSessionScopedOptionLabel(
     return rest?.trim() || key;
   }
   // Priority: label > displayName > key
-  const label = typeof row.label === "string" && row.label.trim().length > 0
-    ? row.label.trim()
-    : null;
+  const label =
+    typeof row.label === "string" && row.label.trim().length > 0 ? row.label.trim() : null;
   if (label) {
     return label;
   }
