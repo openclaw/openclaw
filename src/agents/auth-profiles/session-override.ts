@@ -85,12 +85,28 @@ export async function resolveSessionAuthProfileOverride(params: {
     return undefined;
   }
 
-  const pickFirstAvailable = () =>
-    order.find((profileId) => !isProfileInCooldown(store, profileId)) ?? order[0];
+  const providerKey = normalizeProviderId(provider);
+
+  /**
+   * Prefer the last successful profile to avoid repeatedly retrying
+   * a known-bad first entry when order[0] has hit quota/rate limits.
+   */
+  const pickPreferredAvailableProfile = () => {
+    const lastGoodProfile = store.lastGood?.[providerKey];
+    if (
+      lastGoodProfile &&
+      order.includes(lastGoodProfile) &&
+      !isProfileInCooldown(store, lastGoodProfile)
+    ) {
+      return lastGoodProfile;
+    }
+    return order.find((profileId) => !isProfileInCooldown(store, profileId)) ?? order[0];
+  };
+
   const pickNextAvailable = (active: string) => {
     const startIndex = order.indexOf(active);
     if (startIndex < 0) {
-      return pickFirstAvailable();
+      return pickPreferredAvailableProfile();
     }
     for (let offset = 1; offset <= order.length; offset += 1) {
       const candidate = order[(startIndex + offset) % order.length];
@@ -120,11 +136,11 @@ export async function resolveSessionAuthProfileOverride(params: {
 
   let next = current;
   if (isNewSession) {
-    next = current ? pickNextAvailable(current) : pickFirstAvailable();
+    next = current ? pickNextAvailable(current) : pickPreferredAvailableProfile();
   } else if (current && compactionCount > storedCompaction) {
     next = pickNextAvailable(current);
   } else if (!current || isProfileInCooldown(store, current)) {
-    next = pickFirstAvailable();
+    next = pickPreferredAvailableProfile();
   }
 
   if (!next) {
