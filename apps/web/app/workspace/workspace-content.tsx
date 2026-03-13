@@ -1831,9 +1831,6 @@ function WorkspacePageInner() {
 
   // Whether to show the main ChatPanel (no file/content selected)
   const showMainChat = !activePath || content.kind === "none";
-  const showDesktopMainChatSidebar = !isMobile && showMainChat && chatSidebarOpen;
-  const showDesktopFileChatSidebar =
-    !isMobile && !showMainChat && fileContext && showChatSidebar && !rightSidebarCollapsed;
 
   return (
     // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
@@ -1894,66 +1891,68 @@ function WorkspacePageInner() {
           />
         )
       ) : (
-        <>
-          {!leftSidebarCollapsed && (
           <div
-            className="flex shrink-0 flex-col relative"
-            style={{ width: leftSidebarWidth, minWidth: leftSidebarWidth }}
+            className="flex shrink-0 flex-col relative overflow-hidden"
+            style={{
+              width: leftSidebarCollapsed ? 0 : leftSidebarWidth,
+              minWidth: leftSidebarCollapsed ? 0 : leftSidebarWidth,
+              transition: "width 200ms ease, min-width 200ms ease",
+            }}
           >
-            <ResizeHandle
-              mode="left"
-              containerRef={layoutRef}
-              min={LEFT_SIDEBAR_MIN}
-              max={LEFT_SIDEBAR_MAX}
-              onResize={setLeftSidebarWidth}
-            />
-            <WorkspaceSidebar
-              tree={enhancedTree}
-              activePath={activePath}
-              onSelect={handleNodeSelect}
-              onRefresh={refreshTree}
-              orgName={context?.organization?.name}
-              loading={treeLoading}
-              browseDir={browseDir}
-              parentDir={effectiveParentDir}
-              onNavigateUp={handleNavigateUp}
-              onGoHome={handleGoHome}
-              onFileSearchSelect={handleFileSearchSelect}
-              workspaceRoot={workspaceRoot}
-              onGoToChat={handleGoToChat}
-              onExternalDrop={handleSidebarExternalDrop}
-              showHidden={showHidden}
-              onToggleHidden={() => setShowHidden((v) => !v)}
-              width={leftSidebarWidth}
-              onCollapse={() => setLeftSidebarCollapsed(true)}
-              activeWorkspace={workspaceName}
-              onWorkspaceChanged={handleWorkspaceChanged}
-              chatSessions={sessions}
-              activeChatSessionId={activeSessionId}
-              activeChatSessionTitle={activeSessionTitle}
-              chatStreamingSessionIds={streamingSessionIds}
-              chatSubagents={subagents}
-              chatActiveSubagentKey={activeSubagentKey}
-              chatSessionsLoading={sessionsLoading}
-              onSelectChatSession={(sessionId) => {
-                setActiveSessionId(sessionId);
-                setActiveSubagentKey(null);
-                void chatRef.current?.loadSession(sessionId);
-              }}
-              onNewChatSession={() => {
-                setActiveSessionId(null);
-                setActiveSubagentKey(null);
-                void chatRef.current?.newSession();
-              }}
-              onSelectChatSubagent={handleSelectSubagent}
-              onDeleteChatSession={handleDeleteSession}
-              onRenameChatSession={handleRenameSession}
-              activeTab={sidebarTab}
-              onTabChange={setSidebarTab}
-            />
+            <div className="flex flex-col h-full relative" style={{ width: leftSidebarWidth, minWidth: leftSidebarWidth }}>
+              <ResizeHandle
+                mode="left"
+                containerRef={layoutRef}
+                min={LEFT_SIDEBAR_MIN}
+                max={LEFT_SIDEBAR_MAX}
+                onResize={setLeftSidebarWidth}
+              />
+              <WorkspaceSidebar
+                tree={enhancedTree}
+                activePath={activePath}
+                onSelect={handleNodeSelect}
+                onRefresh={refreshTree}
+                orgName={context?.organization?.name}
+                loading={treeLoading}
+                browseDir={browseDir}
+                parentDir={effectiveParentDir}
+                onNavigateUp={handleNavigateUp}
+                onGoHome={handleGoHome}
+                onFileSearchSelect={handleFileSearchSelect}
+                workspaceRoot={workspaceRoot}
+                onGoToChat={handleGoToChat}
+                onExternalDrop={handleSidebarExternalDrop}
+                showHidden={showHidden}
+                onToggleHidden={() => setShowHidden((v) => !v)}
+                width={leftSidebarWidth}
+                onCollapse={() => setLeftSidebarCollapsed(true)}
+                activeWorkspace={workspaceName}
+                onWorkspaceChanged={handleWorkspaceChanged}
+                chatSessions={sessions}
+                activeChatSessionId={activeSessionId}
+                activeChatSessionTitle={activeSessionTitle}
+                chatStreamingSessionIds={streamingSessionIds}
+                chatSubagents={subagents}
+                chatActiveSubagentKey={activeSubagentKey}
+                chatSessionsLoading={sessionsLoading}
+                onSelectChatSession={(sessionId) => {
+                  setActiveSessionId(sessionId);
+                  setActiveSubagentKey(null);
+                  void chatRef.current?.loadSession(sessionId);
+                }}
+                onNewChatSession={() => {
+                  setActiveSessionId(null);
+                  setActiveSubagentKey(null);
+                  void chatRef.current?.newSession();
+                }}
+                onSelectChatSubagent={handleSelectSubagent}
+                onDeleteChatSession={handleDeleteSession}
+                onRenameChatSession={handleRenameSession}
+                activeTab={sidebarTab}
+                onTabChange={setSidebarTab}
+              />
+            </div>
           </div>
-          )}
-        </>
       )}
 
 
@@ -2212,73 +2211,79 @@ function WorkspacePageInner() {
             </div>
           </div>
 
-          {showDesktopMainChatSidebar && (
+          {!isMobile && showMainChat && (
             <aside
-              className="flex-shrink-0 min-h-0 border-l flex flex-col relative"
+              className="flex-shrink-0 min-h-0 border-l flex flex-col relative overflow-hidden"
               style={{
-                width: chatSidebarWidth,
-                borderColor: "var(--color-border)",
+                width: chatSidebarOpen ? chatSidebarWidth : 0,
+                borderColor: chatSidebarOpen ? "var(--color-border)" : "transparent",
                 background: "var(--color-bg)",
+                transition: "width 200ms ease",
               }}
             >
-              <ResizeHandle
-                mode="right"
-                containerRef={layoutRef}
-                min={CHAT_SIDEBAR_MIN}
-                max={CHAT_SIDEBAR_MAX}
-                onResize={setChatSidebarWidth}
-              />
-              <ChatSessionsSidebar
-                sessions={sessions}
-                activeSessionId={activeSessionId}
-                activeSessionTitle={activeSessionTitle}
-                streamingSessionIds={streamingSessionIds}
-                subagents={subagents}
-                activeSubagentKey={activeSubagentKey}
-                loading={sessionsLoading}
-                onSelectSession={(sessionId) => {
-                  setActiveSessionId(sessionId);
-                  setActiveSubagentKey(null);
-                  void chatRef.current?.loadSession(sessionId);
-                }}
-                onNewSession={() => {
-                  setActiveSessionId(null);
-                  setActiveSubagentKey(null);
-                  void chatRef.current?.newSession();
-                }}
-                onSelectSubagent={handleSelectSubagent}
-                onDeleteSession={handleDeleteSession}
-                onRenameSession={handleRenameSession}
-                embedded
-              />
+              <div className="flex flex-col h-full relative" style={{ width: chatSidebarWidth, minWidth: chatSidebarWidth }}>
+                <ResizeHandle
+                  mode="right"
+                  containerRef={layoutRef}
+                  min={CHAT_SIDEBAR_MIN}
+                  max={CHAT_SIDEBAR_MAX}
+                  onResize={setChatSidebarWidth}
+                />
+                <ChatSessionsSidebar
+                  sessions={sessions}
+                  activeSessionId={activeSessionId}
+                  activeSessionTitle={activeSessionTitle}
+                  streamingSessionIds={streamingSessionIds}
+                  subagents={subagents}
+                  activeSubagentKey={activeSubagentKey}
+                  loading={sessionsLoading}
+                  onSelectSession={(sessionId) => {
+                    setActiveSessionId(sessionId);
+                    setActiveSubagentKey(null);
+                    void chatRef.current?.loadSession(sessionId);
+                  }}
+                  onNewSession={() => {
+                    setActiveSessionId(null);
+                    setActiveSubagentKey(null);
+                    void chatRef.current?.newSession();
+                  }}
+                  onSelectSubagent={handleSelectSubagent}
+                  onDeleteSession={handleDeleteSession}
+                  onRenameSession={handleRenameSession}
+                  embedded
+                />
+              </div>
             </aside>
           )}
 
-          {showDesktopFileChatSidebar && (
+          {!isMobile && !showMainChat && fileContext && (
             <aside
-              className="flex-shrink-0 min-h-0 border-l flex flex-col relative"
+              className="flex-shrink-0 min-h-0 border-l flex flex-col relative overflow-hidden"
               style={{
-                width: rightSidebarWidth,
-                borderColor: "var(--color-border)",
+                width: showChatSidebar && !rightSidebarCollapsed ? rightSidebarWidth : 0,
+                borderColor: showChatSidebar && !rightSidebarCollapsed ? "var(--color-border)" : "transparent",
                 background: "var(--color-bg)",
+                transition: "width 200ms ease",
               }}
             >
-              <ResizeHandle
-                mode="right"
-                containerRef={layoutRef}
-                min={RIGHT_SIDEBAR_MIN}
-                max={RIGHT_SIDEBAR_MAX}
-                onResize={setRightSidebarWidth}
-              />
-              <ChatPanel
-                ref={compactChatRef}
-                compact
-                fileContext={fileContext}
-                initialSessionId={fileChatSessionId ?? undefined}
-                onFileChanged={handleFileChanged}
-                onFilePathClick={handleFilePathClickFromChat}
-                onActiveSessionChange={setFileChatSessionId}
-              />
+              <div className="flex flex-col h-full relative" style={{ width: rightSidebarWidth, minWidth: rightSidebarWidth }}>
+                <ResizeHandle
+                  mode="right"
+                  containerRef={layoutRef}
+                  min={RIGHT_SIDEBAR_MIN}
+                  max={RIGHT_SIDEBAR_MAX}
+                  onResize={setRightSidebarWidth}
+                />
+                <ChatPanel
+                  ref={compactChatRef}
+                  compact
+                  fileContext={fileContext}
+                  initialSessionId={fileChatSessionId ?? undefined}
+                  onFileChanged={handleFileChanged}
+                  onFilePathClick={handleFilePathClickFromChat}
+                  onActiveSessionChange={setFileChatSessionId}
+                />
+              </div>
             </aside>
           )}
         </div>
@@ -3343,84 +3348,40 @@ function ObjectView({
   ], [data.fields]);
 
   return (
-    <div className="p-6">
-      {/* Object header */}
-      <div className="mb-4">
+    <div className="flex flex-col h-full">
+      {/* Object header — compact single bar */}
+      <div
+        className="px-5 py-2.5 flex items-center gap-3 flex-shrink-0"
+        style={{ borderBottom: "1px solid var(--color-border)" }}
+      >
         <h1
-          className="font-instrument text-3xl tracking-tight capitalize"
+          className="text-sm font-semibold capitalize"
           style={{ color: "var(--color-text)" }}
         >
           {data.object.name}
         </h1>
         {data.object.description && (
-          <p
-            className="text-sm mt-1"
+          <span
+            className="text-xs"
             style={{ color: "var(--color-text-muted)" }}
           >
             {data.object.description}
-          </p>
+          </span>
         )}
-        <div className="flex items-center gap-3 mt-3 flex-wrap">
-          <span
-            className="text-xs px-2 py-1 rounded-full"
-            style={{
-              background: "var(--color-surface)",
-              color: "var(--color-text-muted)",
-              border: "1px solid var(--color-border)",
-            }}
-          >
-            {totalCount} entries
-          </span>
-          <span
-            className="text-xs px-2 py-1 rounded-full"
-            style={{
-              background: "var(--color-surface)",
-              color: "var(--color-text-muted)",
-              border: "1px solid var(--color-border)",
-            }}
-          >
-            {data.fields.length} fields
-          </span>
-
-          {hasRelationFields && (
-            <span
-              className="text-xs px-2 py-1 rounded-full"
-              style={{
-                background: "var(--color-chip-document)",
-                color: "var(--color-chip-document-text)",
-                border: "1px solid var(--color-border)",
-              }}
-            >
-              {data.fields.filter((f) => f.type === "relation").length} relation{data.fields.filter((f) => f.type === "relation").length !== 1 ? "s" : ""}
-            </span>
-          )}
-          {hasReverseRelations && (
-            <span
-              className="text-xs px-2 py-1 rounded-full"
-              style={{
-                background: "var(--color-chip-database)",
-                color: "var(--color-chip-database-text)",
-                border: "1px solid var(--color-border)",
-              }}
-            >
-              {data.reverseRelations!.filter((rr) => Object.keys(rr.entries).length > 0).length} linked from
-            </span>
-          )}
-        </div>
-
+        <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+          {totalCount} {totalCount === 1 ? "entry" : "entries"} · {data.fields.length} fields
+        </span>
+        <div className="flex-1" />
         {displayFieldCandidates.length > 0 && (
-          <div className="flex items-center gap-2 mt-3">
-            <span
-              className="text-xs"
-              style={{ color: "var(--color-text-muted)" }}
-            >
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
               Display field:
             </span>
             <select
               value={data.effectiveDisplayField ?? ""}
               onChange={(e) => handleDisplayFieldChange(e.target.value)}
               disabled={updatingDisplayField}
-              className="text-xs px-2 py-1 rounded-md outline-none transition-colors cursor-pointer"
+              className="text-[11px] px-1.5 py-0.5 rounded outline-none cursor-pointer"
               style={{
                 background: "var(--color-surface)",
                 color: "var(--color-text)",
@@ -3440,136 +3401,143 @@ function ObjectView({
                 style={{ borderColor: "var(--color-text-muted)" }}
               />
             )}
-            <span
-              className="text-[10px]"
-              style={{ color: "var(--color-text-muted)", opacity: 0.6 }}
-            >
-              Used when other objects link here
-            </span>
           </div>
         )}
       </div>
 
-      {/* View switcher + Filter bar */}
+      {/* View switcher + Filter bar — single row */}
       <div
-        className="mb-4 py-3 px-4 rounded-lg border"
-        style={{
-          borderColor: "var(--color-border)",
-          background: "var(--color-surface)",
-        }}
+        className="px-5 py-1.5 flex items-center gap-4 flex-shrink-0"
+        style={{ borderBottom: "1px solid var(--color-border)" }}
       >
-        <div className="flex items-center justify-between gap-3 mb-2">
-          <ViewTypeSwitcher value={currentViewType} onChange={handleViewTypeChange} />
-          <ViewSettingsPopover
-            viewType={currentViewType}
-            settings={effectiveSettings}
-            fields={fieldsWithTimestamps}
-            onSettingsChange={handleViewSettingsChange}
+        <ViewTypeSwitcher value={currentViewType} onChange={handleViewTypeChange} />
+        <div
+          className="w-px h-4 flex-shrink-0"
+          style={{ background: "var(--color-border)" }}
+        />
+        <div className="flex-1 min-w-0">
+          <ObjectFilterBar
+            fields={data.fields}
+            filters={filters}
+            onFiltersChange={handleFiltersChange}
+            savedViews={savedViews}
+            activeViewName={activeViewName}
+            onSaveView={handleSaveView}
+            onLoadView={handleLoadView}
+            onDeleteView={handleDeleteView}
+            onSetActiveView={handleSetActiveView}
+            members={filterBarMembers}
           />
         </div>
-        <ObjectFilterBar
-          fields={data.fields}
-          filters={filters}
-          onFiltersChange={handleFiltersChange}
-          savedViews={savedViews}
-          activeViewName={activeViewName}
-          onSaveView={handleSaveView}
-          onLoadView={handleLoadView}
-          onDeleteView={handleDeleteView}
-          onSetActiveView={handleSetActiveView}
-          members={filterBarMembers}
+        <ViewSettingsPopover
+          viewType={currentViewType}
+          settings={effectiveSettings}
+          fields={fieldsWithTimestamps}
+          onSettingsChange={handleViewSettingsChange}
         />
       </div>
 
-      {/* View renderer */}
-      {currentViewType === "kanban" && (
-        <ObjectKanban
-          objectName={data.object.name}
-          fields={data.fields}
-          entries={filteredEntries}
-          statuses={data.statuses}
-          members={members}
-          relationLabels={data.relationLabels}
-          onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
-          onRefresh={handleRefresh}
-        />
-      )}
-      {currentViewType === "table" && (
-        <ObjectTable
-          objectName={data.object.name}
-          fields={data.fields}
-          entries={filteredEntries}
-          members={members}
-          relationLabels={data.relationLabels}
-          reverseRelations={data.reverseRelations}
-          onNavigateToObject={onNavigateToObject}
-          onNavigateToEntry={onOpenEntry}
-          onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
-          onRefresh={handleRefresh}
-          columnVisibility={columnVisibility}
-          onColumnVisibilityChanged={handleColumnVisibilityChanged}
-          serverPagination={{
-            totalCount,
-            page: serverPage,
-            pageSize: serverPageSize,
-            onPageChange: handlePageChange,
-            onPageSizeChange: handlePageSizeChange,
-          }}
-          onServerSearch={handleServerSearch}
-        />
-      )}
-      {currentViewType === "calendar" && (
-        <ObjectCalendar
-          objectName={data.object.name}
-          fields={data.fields}
-          entries={filteredEntries}
-          dateField={effectiveSettings.calendarDateField ?? ""}
-          endDateField={effectiveSettings.calendarEndDateField}
-          mode={effectiveSettings.calendarMode ?? "month"}
-          onModeChange={(mode) => handleViewSettingsChange({ ...effectiveSettings, calendarMode: mode })}
-          members={members}
-          onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
-          onEntryDateChange={handleCalendarDateChange}
-        />
-      )}
-      {currentViewType === "timeline" && (
-        <ObjectTimeline
-          objectName={data.object.name}
-          fields={data.fields}
-          entries={filteredEntries}
-          startDateField={effectiveSettings.timelineStartField ?? ""}
-          endDateField={effectiveSettings.timelineEndField}
-          groupField={effectiveSettings.timelineGroupField}
-          zoom={effectiveSettings.timelineZoom ?? "week"}
-          onZoomChange={(zoom) => handleViewSettingsChange({ ...effectiveSettings, timelineZoom: zoom })}
-          members={members}
-          onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
-          onEntryDateChange={handleTimelineDateChange}
-        />
-      )}
-      {currentViewType === "gallery" && (
-        <ObjectGallery
-          objectName={data.object.name}
-          fields={data.fields}
-          entries={filteredEntries}
-          titleField={effectiveSettings.galleryTitleField}
-          coverField={effectiveSettings.galleryCoverField}
-          members={members}
-          relationLabels={data.relationLabels}
-          onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
-        />
-      )}
-      {currentViewType === "list" && (
-        <ObjectList
-          objectName={data.object.name}
-          fields={data.fields}
-          entries={filteredEntries}
-          titleField={effectiveSettings.listTitleField}
-          subtitleField={effectiveSettings.listSubtitleField}
-          members={members}
-          onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
-        />
-      )}
+      {/* View renderer — full-width, no padding */}
+      <div className="flex-1 min-h-0 overflow-hidden">
+        {currentViewType === "kanban" && (
+          <div className="h-full overflow-auto px-6 py-4">
+            <ObjectKanban
+              objectName={data.object.name}
+              fields={data.fields}
+              entries={filteredEntries}
+              statuses={data.statuses}
+              members={members}
+              relationLabels={data.relationLabels}
+              onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
+              onRefresh={handleRefresh}
+            />
+          </div>
+        )}
+        {currentViewType === "table" && (
+          <ObjectTable
+            objectName={data.object.name}
+            fields={data.fields}
+            entries={filteredEntries}
+            members={members}
+            relationLabels={data.relationLabels}
+            reverseRelations={data.reverseRelations}
+            onNavigateToObject={onNavigateToObject}
+            onNavigateToEntry={onOpenEntry}
+            onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
+            onRefresh={handleRefresh}
+            columnVisibility={columnVisibility}
+            onColumnVisibilityChanged={handleColumnVisibilityChanged}
+            serverPagination={{
+              totalCount,
+              page: serverPage,
+              pageSize: serverPageSize,
+              onPageChange: handlePageChange,
+              onPageSizeChange: handlePageSizeChange,
+            }}
+            onServerSearch={handleServerSearch}
+          />
+        )}
+        {currentViewType === "calendar" && (
+          <div className="h-full overflow-auto px-6 py-4">
+            <ObjectCalendar
+              objectName={data.object.name}
+              fields={data.fields}
+              entries={filteredEntries}
+              dateField={effectiveSettings.calendarDateField ?? ""}
+              endDateField={effectiveSettings.calendarEndDateField}
+              mode={effectiveSettings.calendarMode ?? "month"}
+              onModeChange={(mode) => handleViewSettingsChange({ ...effectiveSettings, calendarMode: mode })}
+              members={members}
+              onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
+              onEntryDateChange={handleCalendarDateChange}
+            />
+          </div>
+        )}
+        {currentViewType === "timeline" && (
+          <div className="h-full overflow-auto px-6 py-4">
+            <ObjectTimeline
+              objectName={data.object.name}
+              fields={data.fields}
+              entries={filteredEntries}
+              startDateField={effectiveSettings.timelineStartField ?? ""}
+              endDateField={effectiveSettings.timelineEndField}
+              groupField={effectiveSettings.timelineGroupField}
+              zoom={effectiveSettings.timelineZoom ?? "week"}
+              onZoomChange={(zoom) => handleViewSettingsChange({ ...effectiveSettings, timelineZoom: zoom })}
+              members={members}
+              onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
+              onEntryDateChange={handleTimelineDateChange}
+            />
+          </div>
+        )}
+        {currentViewType === "gallery" && (
+          <div className="h-full overflow-auto px-6 py-4">
+            <ObjectGallery
+              objectName={data.object.name}
+              fields={data.fields}
+              entries={filteredEntries}
+              titleField={effectiveSettings.galleryTitleField}
+              coverField={effectiveSettings.galleryCoverField}
+              members={members}
+              relationLabels={data.relationLabels}
+              onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
+            />
+          </div>
+        )}
+        {currentViewType === "list" && (
+          <div className="h-full overflow-auto px-6 py-4">
+            <ObjectList
+              objectName={data.object.name}
+              fields={data.fields}
+              entries={filteredEntries}
+              titleField={effectiveSettings.listTitleField}
+              subtitleField={effectiveSettings.listSubtitleField}
+              members={members}
+              onEntryClick={onOpenEntry ? (entryId) => onOpenEntry(data.object.name, entryId) : undefined}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
