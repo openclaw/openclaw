@@ -465,7 +465,6 @@ export function buildStatusMessage(args: StatusArgs): string {
     typeof entry?.totalTokens === "number" && entry?.totalTokensFresh !== false
       ? entry.totalTokens
       : undefined;
-  let totalTokensFresh = typeof totalTokens === "number";
 
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
@@ -479,9 +478,8 @@ export function buildStatusMessage(args: StatusArgs): string {
     );
     if (logUsage) {
       const candidate = logUsage.promptTokens || logUsage.total;
-      if (!totalTokens || !totalTokensFresh || totalTokens === 0 || candidate > totalTokens) {
+      if (!totalTokens || totalTokens === 0 || candidate > totalTokens) {
         totalTokens = candidate;
-        totalTokensFresh = true;
       }
       if (!entry?.model && logUsage.model) {
         const slashIndex = logUsage.model.indexOf("/");
