@@ -2,47 +2,35 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveTelegramTransport } from "../telegram/fetch.js";
 import { fetchRemoteMedia } from "./fetch.js";
 
-const undiciFetch = vi.hoisted(() => vi.fn());
-const AgentCtor = vi.hoisted(() =>
-  vi.fn(function MockAgent(
-    this: { options?: Record<string, unknown> },
-    options?: Record<string, unknown>,
-  ) {
-    this.options = options;
-  }),
-);
-const EnvHttpProxyAgentCtor = vi.hoisted(() =>
-  vi.fn(function MockEnvHttpProxyAgent(
-    this: { options?: Record<string, unknown> },
-    options?: Record<string, unknown>,
-  ) {
-    this.options = options;
-  }),
-);
-const ProxyAgentCtor = vi.hoisted(() =>
-  vi.fn(function MockProxyAgent(
-    this: { options?: Record<string, unknown> | string },
-    options?: Record<string, unknown> | string,
-  ) {
-    this.options = options;
-  }),
-);
+const undiciMocks = vi.hoisted(() => {
+  const createDispatcherCtor = <T extends Record<string, unknown> | string>() =>
+    vi.fn(function MockDispatcher(this: { options?: T }, options?: T) {
+      this.options = options;
+    });
+
+  return {
+    fetch: vi.fn(),
+    agentCtor: createDispatcherCtor<Record<string, unknown>>(),
+    envHttpProxyAgentCtor: createDispatcherCtor<Record<string, unknown>>(),
+    proxyAgentCtor: createDispatcherCtor<Record<string, unknown> | string>(),
+  };
+});
 
 vi.mock("undici", () => ({
-  Agent: AgentCtor,
-  EnvHttpProxyAgent: EnvHttpProxyAgentCtor,
-  ProxyAgent: ProxyAgentCtor,
-  fetch: undiciFetch,
+  Agent: undiciMocks.agentCtor,
+  EnvHttpProxyAgent: undiciMocks.envHttpProxyAgentCtor,
+  ProxyAgent: undiciMocks.proxyAgentCtor,
+  fetch: undiciMocks.fetch,
 }));
 
 describe("fetchRemoteMedia telegram network policy", () => {
   type LookupFn = NonNullable<Parameters<typeof fetchRemoteMedia>[0]["lookupFn"]>;
 
   afterEach(() => {
-    undiciFetch.mockReset();
-    AgentCtor.mockClear();
-    EnvHttpProxyAgentCtor.mockClear();
-    ProxyAgentCtor.mockClear();
+    undiciMocks.fetch.mockReset();
+    undiciMocks.agentCtor.mockClear();
+    undiciMocks.envHttpProxyAgentCtor.mockClear();
+    undiciMocks.proxyAgentCtor.mockClear();
     vi.unstubAllEnvs();
   });
 
@@ -50,7 +38,7 @@ describe("fetchRemoteMedia telegram network policy", () => {
     const lookupFn = vi.fn(async () => [
       { address: "149.154.167.220", family: 4 },
     ]) as unknown as LookupFn;
-    undiciFetch.mockResolvedValueOnce(
+    undiciMocks.fetch.mockResolvedValueOnce(
       new Response(new Uint8Array([0xff, 0xd8, 0xff, 0x00]), {
         status: 200,
         headers: { "content-type": "image/jpeg" },
@@ -76,7 +64,7 @@ describe("fetchRemoteMedia telegram network policy", () => {
       },
     });
 
-    const init = undiciFetch.mock.calls[0]?.[1] as
+    const init = undiciMocks.fetch.mock.calls[0]?.[1] as
       | (RequestInit & {
           dispatcher?: {
             options?: {
@@ -100,7 +88,7 @@ describe("fetchRemoteMedia telegram network policy", () => {
     const lookupFn = vi.fn(async () => [
       { address: "149.154.167.220", family: 4 },
     ]) as unknown as LookupFn;
-    undiciFetch.mockResolvedValueOnce(
+    undiciMocks.fetch.mockResolvedValueOnce(
       new Response(new Uint8Array([0x25, 0x50, 0x44, 0x46]), {
         status: 200,
         headers: { "content-type": "application/pdf" },
@@ -126,7 +114,7 @@ describe("fetchRemoteMedia telegram network policy", () => {
       },
     });
 
-    const init = undiciFetch.mock.calls[0]?.[1] as
+    const init = undiciMocks.fetch.mock.calls[0]?.[1] as
       | (RequestInit & {
           dispatcher?: {
             options?: {
@@ -137,6 +125,6 @@ describe("fetchRemoteMedia telegram network policy", () => {
       | undefined;
 
     expect(init?.dispatcher?.options?.uri).toBe("http://127.0.0.1:7890");
-    expect(ProxyAgentCtor).toHaveBeenCalled();
+    expect(undiciMocks.proxyAgentCtor).toHaveBeenCalled();
   });
 });
