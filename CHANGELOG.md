@@ -49,6 +49,7 @@ Docs: https://docs.openclaw.ai
 - Dashboard/chat UI: restore the `chat-new-messages` class on the New messages scroll pill so the button uses its existing compact styling instead of rendering as a full-screen SVG overlay. (#44856) Thanks @Astro-Han.
 - Windows/gateway status: reuse the installed service command environment when reading runtime status, so startup-fallback gateways keep reporting the configured port and running state in `gateway status --json` instead of falling back to `gateway port unknown`.
 - Security/device pairing: make bootstrap setup codes single-use so pending device pairing requests cannot be silently replayed and widened to admin before approval. Thanks @tdjackey.
+- Gateway/CLI handshake: restore a 10s pre-auth WebSocket handshake timeout so `openclaw logs --follow` and other loopback CLI RPC commands no longer false-fail on slower hosts after the 3.12 hardening reduction. (#45127)
 
 ## 2026.3.12
 
