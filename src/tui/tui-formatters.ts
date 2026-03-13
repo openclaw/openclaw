@@ -347,9 +347,9 @@ export function isCommandMessage(message: unknown): boolean {
 
 export function formatTokens(total?: number | null, context?: number | null) {
   if (total == null && context == null) {
-    return "tokens ?";
+    return "tokens 0";
   }
-  const totalLabel = total == null ? "?" : formatTokenCount(total);
+  const totalLabel = total == null ? "0" : formatTokenCount(total);
   if (context == null) {
     return `tokens ${totalLabel}`;
   }

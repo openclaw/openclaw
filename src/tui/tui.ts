@@ -349,6 +349,7 @@ export async function runTui(opts: TuiOptions) {
   const autoMessage = opts.message?.trim();
   let autoMessageSent = false;
   let sessionInfo: SessionInfo = {};
+  let liveUsageUpdatedAt = 0;
   let lastCtrlCAt = 0;
   let exitRequested = false;
   let activityStatus = "idle";
@@ -406,6 +407,9 @@ export async function runTui(opts: TuiOptions) {
     },
     set activeChatRunId(value) {
       activeChatRunId = value;
+      if (value) {
+        liveUsageUpdatedAt = 0;
+      }
     },
     get historyLoaded() {
       return historyLoaded;
@@ -418,6 +422,12 @@ export async function runTui(opts: TuiOptions) {
     },
     set sessionInfo(value) {
       sessionInfo = value;
+    },
+    get liveUsageUpdatedAt() {
+      return liveUsageUpdatedAt;
+    },
+    set liveUsageUpdatedAt(value) {
+      liveUsageUpdatedAt = value;
     },
     get initialSessionApplied() {
       return initialSessionApplied;
@@ -815,6 +825,29 @@ export async function runTui(opts: TuiOptions) {
     isLocalRunId,
     forgetLocalRunId,
     clearLocalRunIds,
+    onUsageUpdate: (data) => {
+      let updated = false;
+      if (typeof data.totalTokens === "number") {
+        sessionInfo.totalTokens = data.totalTokens;
+        updated = true;
+      }
+      if (typeof data.contextTokens === "number") {
+        sessionInfo.contextTokens = data.contextTokens;
+        updated = true;
+      }
+      if (typeof data.inputTokens === "number") {
+        sessionInfo.inputTokens = data.inputTokens;
+        updated = true;
+      }
+      if (typeof data.outputTokens === "number") {
+        sessionInfo.outputTokens = data.outputTokens;
+        updated = true;
+      }
+      if (updated) {
+        liveUsageUpdatedAt = Date.now();
+        updateFooter();
+      }
+    },
   });
 
   const requestExit = () => {

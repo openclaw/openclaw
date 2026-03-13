@@ -282,6 +282,25 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       usage.total ??
       (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
     usageTotals.total += usageTotal;
+
+    // Emit a live usage event so the TUI footer updates after each LLM response.
+    // This must fire before agent_end / lifecycle "end" so the TUI receives it
+    // while the run is still active.
+    const derivedPrompt = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+    // Only use prompt-derived tokens for totalTokens (context window size).
+    // usage.total includes output tokens, which would inflate the display.
+    const promptTokens = derivedPrompt > 0 ? derivedPrompt : undefined;
+    emitAgentEvent({
+      runId: params.runId,
+      stream: "usage",
+      data: {
+        // Prompt tokens for this single LLM call — used as a context-window-size proxy.
+        totalTokens: promptTokens,
+        // Cumulative run totals for billing/display purposes.
+        inputTokens: usageTotals.input,
+        outputTokens: usageTotals.output,
+      },
+    });
   };
   const getUsageTotals = () => {
     const hasUsage =

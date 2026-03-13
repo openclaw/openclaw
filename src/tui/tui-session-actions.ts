@@ -177,14 +177,19 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.responseUsage !== undefined) {
       next.responseUsage = entry.responseUsage;
     }
-    if (entry?.inputTokens !== undefined) {
-      next.inputTokens = entry.inputTokens;
-    }
-    if (entry?.outputTokens !== undefined) {
-      next.outputTokens = entry.outputTokens;
-    }
-    if (entry?.totalTokens !== undefined) {
-      next.totalTokens = entry.totalTokens;
+    // Skip overwriting token data when a live usage event was received recently,
+    // since the server may not have persisted the latest usage yet.
+    const hasRecentLiveUsage = Date.now() - state.liveUsageUpdatedAt < 5_000;
+    if (!hasRecentLiveUsage) {
+      if (entry?.inputTokens !== undefined) {
+        next.inputTokens = entry.inputTokens;
+      }
+      if (entry?.outputTokens !== undefined) {
+        next.outputTokens = entry.outputTokens;
+      }
+      if (entry?.totalTokens !== undefined) {
+        next.totalTokens = entry.totalTokens;
+      }
     }
     if (entry?.contextTokens !== undefined || defaults?.contextTokens !== undefined) {
       next.contextTokens =
@@ -362,6 +367,7 @@ export function createSessionActions(context: SessionActionContext) {
     state.currentSessionKey = nextKey;
     state.activeChatRunId = null;
     state.currentSessionId = null;
+    state.liveUsageUpdatedAt = 0;
     // Session keys can move backwards in updatedAt ordering; drop previous session freshness
     // so refresh data for the newly selected session isn't rejected as stale.
     state.sessionInfo.updatedAt = null;

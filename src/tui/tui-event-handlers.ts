@@ -30,6 +30,7 @@ type EventHandlerContext = {
   isLocalRunId?: (runId: string) => boolean;
   forgetLocalRunId?: (runId: string) => void;
   clearLocalRunIds?: () => void;
+  onUsageUpdate?: (data: Record<string, unknown>) => void;
 };
 
 export function createEventHandlers(context: EventHandlerContext) {
@@ -43,6 +44,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     isLocalRunId,
     forgetLocalRunId,
     clearLocalRunIds,
+    onUsageUpdate,
   } = context;
   const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
@@ -101,6 +103,19 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
   };
 
+  // Schedule a follow-up refresh after the live-usage freshness guard
+  // expires so authoritative persisted data replaces live values.
+  const scheduleDelayedRefresh = () => {
+    if (Date.now() - state.liveUsageUpdatedAt < 5_000) {
+      const sessionKey = state.currentSessionKey;
+      setTimeout(() => {
+        if (state.currentSessionKey === sessionKey) {
+          void refreshSessionInfo?.();
+        }
+      }, 6_000);
+    }
+  };
+
   const finalizeRun = (params: {
     runId: string;
     wasActiveRun: boolean;
@@ -112,6 +127,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       setActivityStatus(params.status);
     }
     void refreshSessionInfo?.();
+    if (params.wasActiveRun) {
+      scheduleDelayedRefresh();
+    }
   };
 
   const terminateRun = (params: {
@@ -126,6 +144,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       setActivityStatus(params.status);
     }
     void refreshSessionInfo?.();
+    if (params.wasActiveRun) {
+      scheduleDelayedRefresh();
+    }
   };
 
   const hasConcurrentActiveRun = (runId: string) => {
@@ -315,6 +336,13 @@ export function createEventHandlers(context: EventHandlerContext) {
         }
       }
       tui.requestRender();
+      return;
+    }
+    if (evt.stream === "usage") {
+      if (isActiveRun && onUsageUpdate) {
+        onUsageUpdate(evt.data ?? {});
+        tui.requestRender();
+      }
       return;
     }
     if (evt.stream === "lifecycle") {
