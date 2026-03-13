@@ -147,7 +147,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
             id: "minimax",
             name: "MiniMax",
             configured: Boolean(resolveTtsApiKey(config, "minimax")),
-            models: ["speech-02-hd", "speech-02-turbo"],
+            models: ["speech-2.8-hd", "speech-2.8-turbo", "speech-2.6-hd", "speech-2.6-turbo"],
           },
           {
             id: "edge",

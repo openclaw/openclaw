@@ -34,9 +34,11 @@ import {
   edgeTTS,
   elevenLabsTTS,
   inferEdgeExtension,
+  inferMiniMaxExtension,
   isValidOpenAIModel,
   isValidOpenAIVoice,
   isValidVoiceId,
+  MINIMAX_EMOTIONS,
   minimaxTTS,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
@@ -46,6 +48,7 @@ import {
   scheduleCleanup,
   summarizeText,
 } from "./tts-core.js";
+export { MINIMAX_EMOTIONS } from "./tts-core.js";
 export { OPENAI_TTS_MODELS, OPENAI_TTS_VOICES } from "./tts-core.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -130,6 +133,9 @@ export type ResolvedTtsConfig = {
     voice: string;
     speed?: number;
     vol?: number;
+    pitch?: number;
+    emotion?: (typeof MINIMAX_EMOTIONS)[number];
+    outputFormat: string;
     sampleRate?: number;
   };
   edge: {
@@ -189,6 +195,7 @@ export type TtsDirectiveOverrides = {
   minimax?: {
     voice?: string;
     model?: string;
+    emotion?: (typeof MINIMAX_EMOTIONS)[number];
   };
 };
 
@@ -334,6 +341,9 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       voice: raw.minimax?.voice?.trim() || DEFAULT_MINIMAX_VOICE,
       speed: raw.minimax?.speed,
       vol: raw.minimax?.vol,
+      pitch: raw.minimax?.pitch,
+      emotion: raw.minimax?.emotion,
+      outputFormat: raw.minimax?.outputFormat ?? "mp3",
       sampleRate: raw.minimax?.sampleRate,
     },
     edge: {
@@ -723,6 +733,7 @@ export async function textToSpeech(params: {
       } else if (provider === "minimax") {
         const minimaxVoiceOverride = params.overrides?.minimax?.voice;
         const minimaxModelOverride = params.overrides?.minimax?.model;
+        const minimaxEmotionOverride = params.overrides?.minimax?.emotion;
         audioBuffer = await minimaxTTS({
           text: params.text,
           apiKey,
@@ -730,6 +741,9 @@ export async function textToSpeech(params: {
           voice: minimaxVoiceOverride ?? config.minimax.voice,
           speed: config.minimax.speed,
           vol: config.minimax.vol,
+          pitch: config.minimax.pitch,
+          emotion: minimaxEmotionOverride ?? config.minimax.emotion,
+          outputFormat: config.minimax.outputFormat,
           sampleRate: config.minimax.sampleRate,
           timeoutMs: config.timeoutMs,
         });
@@ -754,7 +768,12 @@ export async function textToSpeech(params: {
       const tempRoot = resolvePreferredOpenClawTmpDir();
       mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
       const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
-      const audioPath = path.join(tempDir, `voice-${Date.now()}${output.extension}`);
+      // MiniMax format is configurable; derive extension from it rather than output.extension.
+      const extension =
+        provider === "minimax"
+          ? inferMiniMaxExtension(config.minimax.outputFormat)
+          : output.extension;
+      const audioPath = path.join(tempDir, `voice-${Date.now()}${extension}`);
       writeFileSync(audioPath, audioBuffer);
       scheduleCleanup(tempDir);
 
@@ -767,9 +786,10 @@ export async function textToSpeech(params: {
           provider === "openai"
             ? output.openai
             : provider === "minimax"
-              ? "mp3"
+              ? config.minimax.outputFormat
               : output.elevenlabs,
-        voiceCompatible: output.voiceCompatible,
+        // MiniMax does not support opus; voice-bubble channels fall back to mp3.
+        voiceCompatible: provider === "minimax" ? false : output.voiceCompatible,
       };
     } catch (err) {
       errors.push(formatTtsProviderError(provider, err));

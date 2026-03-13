@@ -310,6 +310,40 @@ describe("tts", () => {
       expect(result.overrides.provider).toBe("edge");
     });
 
+    it("accepts minimax as provider override", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "Hello [[tts:provider=minimax]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("minimax");
+    });
+
+    it("sets minimax voice via minimax_voice directive", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowVoice: true });
+      const input = "[[tts:minimax_voice=female-shaonv]] Hello";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.minimax?.voice).toBe("female-shaonv");
+      expect(result.cleanedText.trim()).toBe("Hello");
+    });
+
+    it("sets minimax emotion via minimax_emotion directive", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowVoiceSettings: true });
+      const input = "[[tts:minimax_emotion=happy]] Hello";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.minimax?.emotion).toBe("happy");
+    });
+
+    it("rejects invalid minimax emotion", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowVoiceSettings: true });
+      const input = "[[tts:minimax_emotion=robot]] Hello";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.minimax?.emotion).toBeUndefined();
+      expect(result.warnings).toContain('invalid MiniMax emotion "robot"');
+    });
+
     it("rejects provider override by default while keeping voice overrides enabled", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
       const input = "Hello [[tts:provider=edge voice=alloy]] world";

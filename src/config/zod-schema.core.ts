@@ -415,7 +415,22 @@ export const TtsConfigSchema = z
         model: z.string().optional(),
         voice: z.string().optional(),
         speed: z.number().min(0.5).max(2).optional(),
-        vol: z.number().min(0.5).max(2).optional(),
+        vol: z.number().positive().max(10).optional(),
+        pitch: z.number().int().min(-12).max(12).optional(),
+        emotion: z
+          .enum([
+            "happy",
+            "sad",
+            "angry",
+            "fearful",
+            "disgusted",
+            "surprised",
+            "calm",
+            "fluent",
+            "whisper",
+          ])
+          .optional(),
+        outputFormat: z.enum(["mp3", "pcm", "flac", "wav"]).optional(),
         sampleRate: z.number().int().optional(),
       })
       .strict()
