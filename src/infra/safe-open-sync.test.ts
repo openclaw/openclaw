@@ -14,7 +14,36 @@ async function withTempDir<T>(prefix: string, run: (dir: string) => Promise<T>):
   }
 }
 
+function mockStat(params: {
+  isFile?: boolean;
+  isDirectory?: boolean;
+  nlink?: number;
+  size?: number;
+  dev?: number;
+  ino?: number;
+}): fs.Stats {
+  return {
+    isFile: () => params.isFile ?? false,
+    isDirectory: () => params.isDirectory ?? false,
+    isSymbolicLink: () => false,
+    nlink: params.nlink ?? 1,
+    size: params.size ?? 0,
+    dev: params.dev ?? 1,
+    ino: params.ino ?? 1,
+  } as unknown as fs.Stats;
+}
+
 describe("openVerifiedFileSync", () => {
+  it("returns a path error for missing files", async () => {
+    await withTempDir("openclaw-safe-open-", async (root) => {
+      const opened = openVerifiedFileSync({ filePath: path.join(root, "missing.txt") });
+      expect(opened.ok).toBe(false);
+      if (!opened.ok) {
+        expect(opened.reason).toBe("path");
+      }
+    });
+  });
+
   it("rejects directories by default", async () => {
     await withTempDir("openclaw-safe-open-", async (root) => {
       const targetDir = path.join(root, "nested");
@@ -45,5 +74,92 @@ describe("openVerifiedFileSync", () => {
       expect(opened.stat.isDirectory()).toBe(true);
       fs.closeSync(opened.fd);
     });
+  });
+
+  it("rejects symlink paths when rejectPathSymlink is enabled", async () => {
+    await withTempDir("openclaw-safe-open-", async (root) => {
+      const targetFile = path.join(root, "target.txt");
+      const linkFile = path.join(root, "link.txt");
+      await fsp.writeFile(targetFile, "hello");
+      await fsp.symlink(targetFile, linkFile);
+
+      const opened = openVerifiedFileSync({
+        filePath: linkFile,
+        rejectPathSymlink: true,
+      });
+      expect(opened.ok).toBe(false);
+      if (!opened.ok) {
+        expect(opened.reason).toBe("validation");
+      }
+    });
+  });
+
+  it("rejects files larger than maxBytes", async () => {
+    await withTempDir("openclaw-safe-open-", async (root) => {
+      const filePath = path.join(root, "payload.txt");
+      await fsp.writeFile(filePath, "hello");
+
+      const opened = openVerifiedFileSync({
+        filePath,
+        maxBytes: 4,
+      });
+      expect(opened.ok).toBe(false);
+      if (!opened.ok) {
+        expect(opened.reason).toBe("validation");
+      }
+    });
+  });
+
+  it("rejects post-open validation mismatches and closes the fd", () => {
+    const closeSync = (fd: number) => {
+      closed.push(fd);
+    };
+    const closed: number[] = [];
+    const ioFs = {
+      constants: fs.constants,
+      lstatSync: (filePath: string) =>
+        filePath === "/real/file.txt"
+          ? mockStat({ isFile: true, size: 1, dev: 1, ino: 1 })
+          : mockStat({ isFile: false }),
+      realpathSync: () => "/real/file.txt",
+      openSync: () => 42,
+      fstatSync: () => mockStat({ isFile: true, size: 1, dev: 2, ino: 1 }),
+      closeSync,
+    };
+
+    const opened = openVerifiedFileSync({
+      filePath: "/input/file.txt",
+      ioFs,
+    });
+    expect(opened.ok).toBe(false);
+    if (!opened.ok) {
+      expect(opened.reason).toBe("validation");
+    }
+    expect(closed).toEqual([42]);
+  });
+
+  it("reports non-path filesystem failures as io errors", () => {
+    const ioFs = {
+      constants: fs.constants,
+      lstatSync: () => {
+        const err = new Error("permission denied") as NodeJS.ErrnoException;
+        err.code = "EACCES";
+        throw err;
+      },
+      realpathSync: () => "/real/file.txt",
+      openSync: () => 42,
+      fstatSync: () => mockStat({ isFile: true }),
+      closeSync: () => {},
+    };
+
+    const opened = openVerifiedFileSync({
+      filePath: "/input/file.txt",
+      rejectPathSymlink: true,
+      ioFs,
+    });
+    expect(opened.ok).toBe(false);
+    if (!opened.ok) {
+      expect(opened.reason).toBe("io");
+    }
   });
 });
