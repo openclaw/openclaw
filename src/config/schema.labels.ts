@@ -332,11 +332,11 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.multimodal": "Multimodal Memory Search",
   "agents.defaults.memorySearch.multimodal.enabled": "Enable Multimodal Memory Search",
   "agents.defaults.memorySearch.multimodal.modalities": "Multimodal Memory Modalities",
-  "agents.defaults.memorySearch.multimodal.maxFileBytes":
-    "Multimodal Memory Max File Size (bytes)",
+  "agents.defaults.memorySearch.multimodal.maxFileBytes": "Multimodal Memory Max File Size (bytes)",
   "agents.defaults.memorySearch.experimental.sessionMemory":
     "Memory Search Session Index (Experimental)",
   "agents.defaults.memorySearch.provider": "Memory Search Provider",
+  "agents.defaults.memorySearch.outputDimensionality": "Memory Search Output Dimensionality",
   "agents.defaults.memorySearch.remote.baseUrl": "Remote Embedding Base URL",
   "agents.defaults.memorySearch.remote.apiKey": "Remote Embedding API Key",
   "agents.defaults.memorySearch.remote.headers": "Remote Embedding Headers",
