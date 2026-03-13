@@ -1,6 +1,6 @@
-- Move extraSystemPrompt (Group Chat Context) and reactionGuidance to AFTER workspace files — prevents them from breaking the stable cache prefix when group chat membership/config changes. No benchmark impact (they're not set in the benchmark workspace), but real-world improvement for group chat users.
 - Cross-session mtime-gated bootstrap cache: track file mtimes between sessions, only re-read files that actually changed. Reduces build time, doesn't change stable_chars metric.
 - Skills hash-gated regeneration: cache the skills prompt by content hash of all SKILL.md files; only regenerate when a skill file changes. Performance improvement.
 - Separate AGENTS.md into base (stable global protocol) + project overlay (frequent per-project notes injected last). Needs user-facing design. Would push AGENTS.md base into stable prefix.
-- For workspaces with MEMORY.md: confirm that MEMORY.md is loaded after AGENTS.md (it is, via resolveMemoryBootstrapEntries). In those workspaces, stable_chars = chars before MEMORY.md = includes AGENTS.md content. Already handled by benchmark priority ordering.
+- MEMORY.md scenario: if workspace has daily notes at root, AGENTS.md enters stable prefix too. Benchmark could model this with a mock MEMORY.md. Need to verify MEMORY.md loads after AGENTS.md (confirmed it does via resolveMemoryBootstrapEntries).
 - Remove per-file object allocation in trimBootstrapContent for non-truncated files (return original string reference) — micro-optimization, no metric impact.
+- Investigate whether userTimezone can be placed after AGENTS.md without hurting stable_chars: currently moving it to dynamic tail decreases stable_chars by 44 (AGENTS.md moves closer). Not beneficial unless combined with other changes.
