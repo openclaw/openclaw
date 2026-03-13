@@ -57,21 +57,20 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   // chunks that break strict parsers expecting choices[0]. Additionally, the
   // `strict` boolean inside tools validation is rejected by several providers
   // causing tool calls to be ignored. For non-native openai-completions endpoints,
-  // force these compat flags off.
+  // default these compat flags off unless explicitly opted in.
   const compat = model.compat ?? undefined;
   // When baseUrl is empty the pi-ai library defaults to api.openai.com, so
-  // note: explicit true values are intentionally overriden for non-native
-  // endpoints for supportsDeveloperRole and supportsUsageInStreaming out of safety,
-  // but supportsStrictMode explicitly allows an escape hatch since some vanity urls
-  // are true native proxies.
+  // leave compat unchanged and let default native behavior apply.
   const needsForce = baseUrl ? !isOpenAINativeEndpoint(baseUrl) : false;
   if (!needsForce) {
     return model;
   }
+  const forcedDeveloperRole = compat?.supportsDeveloperRole === true;
+  const forcedUsageStreaming = compat?.supportsUsageInStreaming === true;
   const targetStrictMode = compat?.supportsStrictMode ?? false;
   if (
-    compat?.supportsDeveloperRole === false &&
-    compat?.supportsUsageInStreaming === false &&
+    compat?.supportsDeveloperRole === (forcedDeveloperRole || false) &&
+    compat?.supportsUsageInStreaming === (forcedUsageStreaming || false) &&
     compat?.supportsStrictMode === targetStrictMode
   ) {
     return model;
@@ -83,8 +82,8 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
     compat: compat
       ? {
           ...compat,
-          supportsDeveloperRole: false,
-          supportsUsageInStreaming: false,
+          supportsDeveloperRole: forcedDeveloperRole || false,
+          supportsUsageInStreaming: forcedUsageStreaming || false,
           supportsStrictMode: targetStrictMode,
         }
       : {
