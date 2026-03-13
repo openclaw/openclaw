@@ -326,5 +326,5 @@ We suppressed the manual `Target.attachedToTarget` broadcast in `onReplaced`. `a
 **Build Certification: INDUSTRIAL-GOLD (Certified Transactional Identity Migration)**
 
 ---
-`https://github.com/openclaw/openclaw/pull/45235`
-e)**
+https://github.com/openclaw/openclaw/pull/45235
+

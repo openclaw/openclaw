@@ -282,6 +282,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
     DEFAULT_EXTENSION_COMMAND_RECONNECT_WAIT_MS,
   );
   let currentLockTab = !!opts.lockTab;
+  let currentActivationEpoch = 0;
   console.log(
     `[browser/extension-relay] Relay starting on ${info.host}:${info.port} (lockTab=${currentLockTab})`,
   );
@@ -635,7 +636,16 @@ export async function ensureChromeExtensionRelayServer(opts: {
           req.on("end", () => {
             try {
               const data = JSON.parse(body);
+              const epoch = (typeof data.activationEpoch === "number" && Number.isFinite(data.activationEpoch)) ? data.activationEpoch : 0;
+              
+              if (epoch < currentActivationEpoch) {
+                console.log(`[browser/extension-relay] Ignoring stale lock update (epoch ${epoch} < ${currentActivationEpoch})`);
+                res.writeHead(200, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ ok: true, lockTab: currentLockTab, activationEpoch: currentActivationEpoch }));
+                return;
+              }
               if (typeof data.lockTab === "boolean") {
+                currentActivationEpoch = epoch;
                 currentLockTab = data.lockTab;
                 const rawTabId = data.tabId;
                 let tabIdHint = "";
@@ -681,7 +691,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
         }
 
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ connected: extensionConnected(), lockTab: currentLockTab }));
+        res.end(JSON.stringify({ connected: extensionConnected(), lockTab: currentLockTab, activationEpoch: currentActivationEpoch }));
         return;
       }
 

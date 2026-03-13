@@ -60,7 +60,19 @@ let activationEpoch = 0
 const tabAncestry = new Map() // childTabId -> parentTabId
 /** @type {Set<number>} */
 const pendingSwaps = new Set()
-/** @type {Map<number, Array<{method:string, params:any, id:number}>>} */
+/** @type {Set<number>} */
+const activeReattachLoops = new Set()
+/** @type {Set<number>} */
+const reattachRerunRequested = new Set()
+/** @type {Set<number>} */
+const activeDrainers = new Set()
+/** @type {Set<number>} */
+const drainRerunRequested = new Set()
+
+/** @type {symbol} */
+const BUFFERED_RESPONSE_SENTINEL = Symbol('BUFFERED_RESPONSE_SENTINEL')
+
+/** @type {Map<number, Array<{method:string, params:any, id:number, resolve?:Function, reject?:Function, timerId?:number, targetTabId?:number}>>} */
 const commandBuffers = new Map() // tabId -> list of pending commands during navigation
 /** @type {string|null} */
 let activeSocketGuid = null // GUID for the current active WebSocket session
@@ -458,15 +470,6 @@ async function setLockOnRelay(locked, tabId = null, tabMode = null, epoch = null
     console.warn('[OpenClaw] Refusing lock without an attached tab ID')
     return null
   }
-  
-  // If we are locking a tab, kill any background re-attach loops for OTHER tabs
-  // to prevent them from stealing the lock back if they finish re-attaching later.
-  if (locked && tabId) {
-    const numericId = (typeof tabId === 'string') ? tabBySession.get(tabId) : tabId
-    for (const tid of reattachingTabs.keys()) {
-      if (tid !== numericId) reattachingTabs.delete(tid)
-    }
-  }
 
   console.log(`[OpenClaw] setLockOnRelay(locked=${locked}, tabId=${tabId}, tabMode=${tabMode}, epoch=${epoch || activationEpoch})`)
   try {
@@ -489,6 +492,18 @@ async function setLockOnRelay(locked, tabId = null, tabMode = null, epoch = null
       relayIsLocked = !!data.lockTab
       
       if (relayIsLocked) {
+        // Only preempt competing reattach loops after the relay confirmed the lock.
+        const numericId = (typeof tabId === 'string') ? tabBySession.get(tabId) : tabId
+        if (numericId !== undefined) {
+          const currentEpoch = epoch || activationEpoch
+          for (const [tid, info] of reattachingTabs.entries()) {
+            // Only preempt if the other tab's reattach cycle is strictly older than this lock epoch.
+            // This prevents rapid activation races from dropping valid reattach state.
+            if (tid !== numericId && (info.reattachEpoch || 0) < currentEpoch) {
+              void detachTab(tid, 'lock_preempted', 'Lock acquired by another newer tab', { silent: true }).catch(() => {})
+            }
+          }
+        }
         // Resolve session ID string (cb-tab-X) back to numeric tabId for badges
         lockedTabId = (typeof tabId === 'string') ? (tabBySession.get(tabId) || null) : tabId
       } else if (lockedTabId === (typeof tabId === 'string' ? tabBySession.get(tabId) : tabId) || tabId === null) {
@@ -501,6 +516,23 @@ async function setLockOnRelay(locked, tabId = null, tabMode = null, epoch = null
     return null
   } catch (err) {
     console.warn('[OpenClaw] setLockOnRelay failed:', err)
+    
+    // Recovery path: if the request failed or timed out, refresh status to ensure local sync
+    const port = await getRelayPort().catch(() => null)
+    if (port) {
+      try {
+        const resp = await fetch(`http://127.0.0.1:${port}/extension/status`, { signal: AbortSignal.timeout(2000) })
+        if (resp.ok) {
+          const data = await resp.json().catch(() => ({}))
+          relayIsLocked = !!data.lockTab
+          if (relayIsLocked) {
+             lockedTabId = (typeof tabId === 'string') ? (tabBySession.get(tabId) || null) : tabId
+          } else if (lockedTabId === (typeof tabId === 'string' ? tabBySession.get(tabId) : tabId)) {
+             lockedTabId = null
+          }
+        }
+      } catch { /* ignore */ }
+    }
     return null
   }
 }
@@ -523,6 +555,7 @@ function onRelayClosed(reason) {
   for (const [tabId, buffer] of commandBuffers.entries()) {
     commandBuffers.delete(tabId)
     for (const cmd of buffer) {
+      if (cmd.timerId) clearTimeout(cmd.timerId)
       if (cmd.reject) cmd.reject(new Error('Relay disconnected while navigating'))
     }
   }
@@ -781,8 +814,10 @@ async function onRelayMessage(text) {
   if (msg && typeof msg.id === 'number' && msg.method === 'forwardCDPCommand') {
     try {
       const result = await handleForwardCdpCommand(msg)
+      if (result === BUFFERED_RESPONSE_SENTINEL) return // Response already sent via drainer
       sendToRelay({ id: msg.id, result }, { silent: true })
     } catch (err) {
+      if (err === BUFFERED_RESPONSE_SENTINEL) return // Response already sent via drainer
       sendToRelay({ id: msg.id, error: err instanceof Error ? err.message : String(err) }, { silent: true })
     }
   }
@@ -837,12 +872,6 @@ async function attachTab(tabId, opts = {}) {
     attachOrder,
   })
 
-  // Keep the reattach marker until attach succeeds so retry loops survive
-  // transient attach failures during navigation.
-  if (reattachInfo) {
-    reattachingTabs.delete(tabId)
-  }
-  
   if (targetId) targetToTab.set(targetId, tabId)
   tabBySession.set(sessionId, tabId)
   
@@ -875,21 +904,81 @@ async function attachTab(tabId, opts = {}) {
   updateAllBadges() // Syncs badges and titles correctly for new state
   await persistState()
 
-  // Flush any buffered commands for this tab
-  const buffer = commandBuffers.get(tabId) || []
-  if (buffer.length > 0) {
-    commandBuffers.delete(tabId)
-    // Stagger flushes to avoid protocol burst congestion
-    for (const cmd of buffer) {
-      void handleForwardCdpCommand(cmd).then(
-        res => sendToRelay({ id: cmd.id, result: res }, { silent: true }),
-        err => sendToRelay({ id: cmd.id, error: err instanceof Error ? err.message : String(err) }, { silent: true })
-      )
-      await sleep(2)
-    }
+  // Flush any buffered commands for this tab.
+  // We use a drain-until-dry pattern to capture any commands that arrive
+  // during the replay loop itself.
+  await drainCommandBuffers(tabId)
+
+  // Mark reattachment as fully recovered only after the backlog is drained.
+  // Deferring this until here prevents new commands from overtaking replayed ones.
+  if (reattachInfo) {
+    reattachingTabs.delete(tabId)
   }
 
   return { sessionId, targetId }
+}
+
+async function drainCommandBuffers(tabId) {
+  if (activeDrainers.has(tabId)) {
+    drainRerunRequested.add(tabId)
+    return
+  }
+  activeDrainers.add(tabId)
+  drainRerunRequested.delete(tabId)
+  
+  try {
+    // Use a sequential drain to preserve execution order
+    while (true) {
+      const buffer = commandBuffers.get(tabId) || []
+      if (buffer.length === 0) {
+        if (drainRerunRequested.has(tabId)) {
+          drainRerunRequested.delete(tabId)
+          continue
+        }
+        break
+      }
+      
+      // Atomically move the buffer to local scope to prevent double-processing
+      commandBuffers.delete(tabId)
+      
+      for (const cmd of buffer) {
+        if (cmd.timerId) clearTimeout(cmd.timerId)
+        try {
+          // Preserve the original intended tabId to avoid cross-tab leaks during replay
+          const targetTabId = cmd.targetTabId || tabId
+
+          // Enforce a local hard deadline (30s) for each replayed command to prevent
+          // a single hung renderer from permanently HoL-blocking the tab's recovery.
+          let timeoutId
+          const timeoutPromise = new Promise((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error('Replay hard deadline exceeded')), 30000)
+          })
+
+          const res = await Promise.race([
+            handleForwardCdpCommand(cmd, { isReplay: true, targetTabId }),
+            timeoutPromise
+          ]).finally(() => clearTimeout(timeoutId))
+
+          // Authorization: the drain loop now owns the protocol response for all replayed items.
+          // This ensures responses are emitted even across SW restarts or if the original 
+          // stack is stale, while the SENTINEL avoids duplicates in the active caller.
+          sendToRelay({ id: cmd.id, result: res }, { silent: true })
+          if (typeof cmd.resolve === 'function') cmd.resolve(BUFFERED_RESPONSE_SENTINEL)
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          sendToRelay({ id: cmd.id, error: msg }, { silent: true })
+          if (typeof cmd.reject === 'function') cmd.reject(BUFFERED_RESPONSE_SENTINEL)
+        }
+      }
+    }
+  } finally {
+    const rerun = drainRerunRequested.has(tabId)
+    activeDrainers.delete(tabId)
+    drainRerunRequested.delete(tabId)
+    if (rerun && (tabs.has(tabId) || reattachingTabs.has(tabId))) {
+      void drainCommandBuffers(tabId)
+    }
+  }
 }
 
 async function detachTab(tabId, reason, displayError, opts = {}) {
@@ -963,6 +1052,7 @@ async function detachTab(tabId, reason, displayError, opts = {}) {
 
   // 5. Buffer Rejection (using snapshot)
   for (const cmd of buffer) {
+    if (cmd.timerId) clearTimeout(cmd.timerId)
     if (cmd.reject) cmd.reject(new Error(displayError || 'Target detached'))
   }
 
@@ -1088,29 +1178,27 @@ function isDescendantOf(tabId, ancestorId) {
   return false
 }
 
-async function handleForwardCdpCommand(msg) {
+async function handleForwardCdpCommand(msg, opts = {}) {
   const method = String(msg?.params?.method || '').trim()
   const params = msg?.params?.params || undefined
   const sessionId = typeof msg?.params?.sessionId === 'string' ? msg.params.sessionId : undefined
 
   const bySession = sessionId ? getTabBySessionId(sessionId) : null
   const targetId = typeof params?.targetId === 'string' ? params.targetId : undefined
-  let tabId = bySession?.tabId || (targetId ? getTabByTargetId(targetId) : null)
+  let tabId = opts.targetTabId || bySession?.tabId || (targetId ? getTabByTargetId(targetId) : null)
 
   if (extensionIsDisabled) {
     throw new Error('Extension is globally disabled. Commands from relay refused.')
   }
 
   // If tab is currently navigating or in sync transition, buffer the command
-  if (tabId && (reattachingTabs.has(tabId) || pendingSwaps.has(tabId))) {
+  if (tabId && !opts.isReplay && (reattachingTabs.has(tabId) || pendingSwaps.has(tabId))) {
     console.log(`[OpenClaw] Buffering command ${method} for navigating tab ${tabId}`)
     if (!commandBuffers.has(tabId)) commandBuffers.set(tabId, [])
     const buffer = commandBuffers.get(tabId)
     if (buffer.length < 50) {
       return new Promise((resolve, reject) => {
-        buffer.push({ ...msg, resolve, reject })
-        // If it takes too long, reject
-        setTimeout(() => {
+        const timerId = setTimeout(() => {
           const currentBuffer = commandBuffers.get(tabId)
           if (currentBuffer) {
             const idx = currentBuffer.findIndex(c => c.id === msg.id)
@@ -1120,6 +1208,7 @@ async function handleForwardCdpCommand(msg) {
             }
           }
         }, 5000)
+        buffer.push({ ...msg, resolve, reject, timerId, targetTabId: tabId })
       })
     } else {
       throw new Error('Target is navigating (buffer full)')
@@ -1314,6 +1403,7 @@ async function onDebuggerDetach(source, reason) {
       sessionId: oldSessionId, 
       attachOrder: oldAttachOrder, 
       targetId: oldTargetId,
+      reattachEpoch: activationEpoch,
       attempts: 0 
     })
     tabs.delete(tabId)
@@ -1330,8 +1420,16 @@ async function onDebuggerDetach(source, reason) {
 }
 
 async function runReattachLoop(tabId) {
-  // Staggered exponential backoff: 200ms, 500ms, 1s, 2s, 4s (~7.7s total)
-  const delays = [200, 500, 1000, 2000, 4000]
+  if (activeReattachLoops.has(tabId)) {
+    reattachRerunRequested.add(tabId)
+    return
+  }
+  activeReattachLoops.add(tabId)
+  reattachRerunRequested.delete(tabId)
+  
+  try {
+    // Staggered exponential backoff: 200ms, 500ms, 1s, 2s, 4s (~7.7s total)
+    const delays = [200, 500, 1000, 2000, 4000]
   
   for (let attempt = 0; attempt < delays.length; attempt++) {
     await sleep(delays[attempt])
@@ -1352,6 +1450,15 @@ async function runReattachLoop(tabId) {
 
   // Final failure
   void detachTab(tabId, 'reattach_failed', 'Target navigation failed to recover attachment')
+} finally {
+  const rerun = reattachRerunRequested.has(tabId)
+  activeReattachLoops.delete(tabId)
+  reattachRerunRequested.delete(tabId)
+  if (rerun) {
+    console.log(`[OpenClaw] Rerun requested for tab ${tabId} while reattach loop was active. Triggering one final pass.`)
+    void runReattachLoop(tabId)
+  }
+}
 }
 
 // Tab lifecycle listeners — clean up stale entries.
@@ -1383,7 +1490,7 @@ chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => void whenReady(
               method: 'Target.detachedFromTarget',
               params: { sessionId: sid, reason: 'parent_replaced' },
             },
-          })
+          }, { silent: true })
         } catch {}
         childSessionToTab.delete(sid)
       }
@@ -1396,6 +1503,7 @@ chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => void whenReady(
         sessionId: existing.sessionId,
         attachOrder: existing.attachOrder,
         targetId: existing.targetId,
+        reattachEpoch: currentEpoch,
         attempts: 0
       })
 
@@ -1426,6 +1534,10 @@ chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => void whenReady(
       const oldBuffer = commandBuffers.get(removedTabId)
       if (oldBuffer) {
         commandBuffers.delete(removedTabId)
+        // Mark migrated commands to target the new tabId to avoid cross-tab execution
+        for (const cmd of oldBuffer) {
+          cmd.targetTabId = addedTabId
+        }
         const currentBuffer = commandBuffers.get(addedTabId) || []
         commandBuffers.set(addedTabId, [...oldBuffer, ...currentBuffer])
       }
@@ -1463,8 +1575,15 @@ chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => void whenReady(
 
   } finally {
     // 10. Close the transition window. 
-    // Now handleForwardCdpCommand will stop buffering for addedTabId (if reattach succeeded)
+    // Now handleForwardCdpCommand will stop buffering for addedTabId
     pendingSwaps.delete(addedTabId)
+    
+    // Safety Drain: Capture any commands that arrived after the attachTab loop
+    // but before pendingSwaps was cleared. Only occurs if the tab is connected.
+    if (tabs.has(addedTabId)) {
+      void drainCommandBuffers(addedTabId)
+    }
+    
     updateAllBadges()
   }
 }))
