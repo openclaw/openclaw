@@ -103,17 +103,17 @@ async function runMessageCase(input: MessageCase = {}): Promise<void> {
 describe("registerSlackMessageEvents", () => {
   const cases: Array<{ name: string; input: MessageCase; calls: number }> = [
     {
-      name: "enqueues message_changed system events when dmPolicy is open",
+      name: "ignores message_changed system events when dmPolicy is open",
       input: { overrides: { dmPolicy: "open" }, event: makeChangedEvent() },
-      calls: 1,
+      calls: 0,
     },
     {
-      name: "blocks message_changed system events when dmPolicy is disabled",
+      name: "ignores message_changed system events regardless of dmPolicy (disabled)",
       input: { overrides: { dmPolicy: "disabled" }, event: makeChangedEvent() },
       calls: 0,
     },
     {
-      name: "blocks message_changed system events for unauthorized senders in allowlist mode",
+      name: "ignores message_changed system events regardless of dmPolicy (allowlist)",
       input: {
         overrides: { dmPolicy: "allowlist", allowFrom: ["U2"] },
         event: makeChangedEvent({ user: "U1" }),
@@ -121,12 +121,11 @@ describe("registerSlackMessageEvents", () => {
       calls: 0,
     },
     {
-      name: "blocks message_deleted system events for users outside channel users allowlist",
+      name: "ignores message_deleted system events regardless of channel auth config",
       input: {
         overrides: {
           dmPolicy: "open",
           channelType: "channel",
-          channelUsers: ["U_OWNER"],
         },
         event: makeDeletedEvent({ channel: "C1", user: "U_ATTACKER" }),
       },
@@ -205,7 +204,7 @@ describe("registerSlackMessageEvents", () => {
     expect(messageQueueMock).not.toHaveBeenCalled();
   });
 
-  it("applies subtype system-event handling for channel messages", async () => {
+  it("ignores message_changed subtype events for channel messages", async () => {
     messageQueueMock.mockClear();
     messageAllowMock.mockReset().mockResolvedValue([]);
     const { handler, handleSlackMessage } = createMessageHandlers({
@@ -226,7 +225,7 @@ describe("registerSlackMessageEvents", () => {
     });
 
     expect(handleSlackMessage).not.toHaveBeenCalled();
-    expect(messageQueueMock).toHaveBeenCalledTimes(1);
+    expect(messageQueueMock).not.toHaveBeenCalled();
   });
 
   it("skips app_mention events for DM channel ids even with contradictory channel_type", async () => {
