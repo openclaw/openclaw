@@ -2,3 +2,5 @@
 {"run":1,"commit":"80e6701","metric":0,"metrics":{},"status":"crash","description":"Baseline ./autoresearch.sh before changes — build failed","timestamp":1773385381435,"segment":0}
 {"run":2,"commit":"80e6701","metric":0,"metrics":{},"status":"crash","description":"Baseline ./autoresearch.sh after enabling pnpm — build failed in canvas:a2ui:bundle","timestamp":1773385432101,"segment":0}
 {"run":3,"commit":"b37ce64","metric":0,"metrics":{},"status":"keep","description":"Baseline ./autoresearch.sh — benchmark fell back to 0 because dist/agents/pi-embedded-helpers/bootstrap.js is missing","timestamp":1773385530884,"segment":0}
+{"run":4,"commit":"95c82b4","metric":25199,"metrics":{},"status":"keep","description":"Idea #1: move Current Date & Time/runtime block after stable content (system_prompt_stable_chars=25199, total_chars=25518)","timestamp":1773385688915,"segment":0}
+{"type":"config","name":"Optimize OpenClaw full bootstrap prompt KV cache hit rate (workspace + skills)","metricName":"system_prompt_stable_chars","metricUnit":"","bestDirection":"higher"}
