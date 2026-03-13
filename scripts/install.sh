@@ -2196,7 +2196,7 @@ refresh_gateway_service_if_loaded() {
         return 0
     fi
 
-    run_quiet_step "Probing gateway service" "$claw" gateway status --probe --deep || true
+    run_quiet_step "Probing gateway service" "$claw" gateway status --deep || true
 }
 
 # Main installation flow
