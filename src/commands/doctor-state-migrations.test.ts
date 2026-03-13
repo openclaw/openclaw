@@ -26,6 +26,21 @@ async function makeRootWithEmptyCfg() {
   return { root, cfg };
 }
 
+function writeLegacyTelegramAllowFromStore(oauthDir: string) {
+  fs.writeFileSync(
+    path.join(oauthDir, "telegram-allowFrom.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        allowFrom: ["123456"],
+      },
+      null,
+      2,
+    ) + "\n",
+    "utf-8",
+  );
+}
+
 afterEach(async () => {
   resetAutoMigrateLegacyStateForTest();
   resetAutoMigrateLegacyStateDirForTest();
@@ -278,18 +293,7 @@ describe("doctor legacy state migrations", () => {
   it("migrates legacy Telegram pairing allowFrom store to account-scoped default file", async () => {
     const { root, cfg } = await makeRootWithEmptyCfg();
     const oauthDir = ensureCredentialsDir(root);
-    fs.writeFileSync(
-      path.join(oauthDir, "telegram-allowFrom.json"),
-      JSON.stringify(
-        {
-          version: 1,
-          allowFrom: ["123456"],
-        },
-        null,
-        2,
-      ) + "\n",
-      "utf-8",
-    );
+    writeLegacyTelegramAllowFromStore(oauthDir);
 
     const detected = await detectLegacyStateMigrations({
       cfg,
@@ -324,18 +328,7 @@ describe("doctor legacy state migrations", () => {
       },
     };
     const oauthDir = ensureCredentialsDir(root);
-    fs.writeFileSync(
-      path.join(oauthDir, "telegram-allowFrom.json"),
-      JSON.stringify(
-        {
-          version: 1,
-          allowFrom: ["123456"],
-        },
-        null,
-        2,
-      ) + "\n",
-      "utf-8",
-    );
+    writeLegacyTelegramAllowFromStore(oauthDir);
 
     const detected = await detectLegacyStateMigrations({
       cfg,
