@@ -1,4 +1,10 @@
 import crypto from "node:crypto";
+import { loadConfig } from "../config/config.js";
+import {
+  hasConfiguredExecApprovalDmRoute,
+  type ExecApprovalInitiatingSurfaceState,
+  resolveExecApprovalInitiatingSurfaceState,
+} from "../infra/exec-approval-surface.js";
 import {
   maxAsk,
   minSecurity,
@@ -6,7 +12,10 @@ import {
   type ExecAsk,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
-import { resolveRegisteredExecApprovalDecision } from "./bash-tools.exec-approval-request.js";
+import {
+  type ExecApprovalRegistration,
+  resolveRegisteredExecApprovalDecision,
+} from "./bash-tools.exec-approval-request.js";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
 
 type ResolvedExecApprovals = ReturnType<typeof resolveExecApprovals>;
@@ -26,6 +35,22 @@ export type ExecApprovalPendingState = {
 
 export type ExecApprovalRequestState = ExecApprovalPendingState & {
   noticeSeconds: number;
+};
+
+export type ExecApprovalUnavailableReason =
+  | "no-approval-route"
+  | "initiating-platform-disabled"
+  | "initiating-platform-unsupported";
+
+export type RegisteredExecApprovalRequestContext = {
+  approvalId: string;
+  approvalSlug: string;
+  warningText: string;
+  expiresAtMs: number;
+  preResolvedDecision: string | null | undefined;
+  initiatingSurface: ExecApprovalInitiatingSurfaceState;
+  sentApproverDms: boolean;
+  unavailableReason: ExecApprovalUnavailableReason | null;
 };
 
 export function createExecApprovalPendingState(params: {
@@ -157,4 +182,78 @@ export async function resolveApprovalDecisionOrUndefined(params: {
     params.onFailure();
     return undefined;
   }
+}
+
+export function resolveExecApprovalUnavailableState(params: {
+  turnSourceChannel?: string;
+  turnSourceAccountId?: string;
+  preResolvedDecision: string | null | undefined;
+}): {
+  initiatingSurface: ExecApprovalInitiatingSurfaceState;
+  sentApproverDms: boolean;
+  unavailableReason: ExecApprovalUnavailableReason | null;
+} {
+  const initiatingSurface = resolveExecApprovalInitiatingSurfaceState({
+    channel: params.turnSourceChannel,
+    accountId: params.turnSourceAccountId,
+  });
+  const sentApproverDms =
+    (initiatingSurface.kind === "disabled" || initiatingSurface.kind === "unsupported") &&
+    hasConfiguredExecApprovalDmRoute(loadConfig());
+  const unavailableReason =
+    params.preResolvedDecision === null
+      ? "no-approval-route"
+      : initiatingSurface.kind === "disabled"
+        ? "initiating-platform-disabled"
+        : initiatingSurface.kind === "unsupported"
+          ? "initiating-platform-unsupported"
+          : null;
+  return {
+    initiatingSurface,
+    sentApproverDms,
+    unavailableReason,
+  };
+}
+
+export async function createAndRegisterDefaultExecApprovalRequest(params: {
+  warnings: string[];
+  approvalRunningNoticeMs: number;
+  createApprovalSlug: (approvalId: string) => string;
+  turnSourceChannel?: string;
+  turnSourceAccountId?: string;
+  register: (approvalId: string) => Promise<ExecApprovalRegistration>;
+}): Promise<RegisteredExecApprovalRequestContext> {
+  const {
+    approvalId,
+    approvalSlug,
+    warningText,
+    expiresAtMs: defaultExpiresAtMs,
+    preResolvedDecision: defaultPreResolvedDecision,
+  } = createDefaultExecApprovalRequestContext({
+    warnings: params.warnings,
+    approvalRunningNoticeMs: params.approvalRunningNoticeMs,
+    createApprovalSlug: params.createApprovalSlug,
+  });
+  const registration = await params.register(approvalId);
+  const preResolvedDecision = registration.finalDecision;
+  const { initiatingSurface, sentApproverDms, unavailableReason } =
+    resolveExecApprovalUnavailableState({
+      turnSourceChannel: params.turnSourceChannel,
+      turnSourceAccountId: params.turnSourceAccountId,
+      preResolvedDecision,
+    });
+
+  return {
+    approvalId,
+    approvalSlug,
+    warningText,
+    expiresAtMs: registration.expiresAtMs ?? defaultExpiresAtMs,
+    preResolvedDecision:
+      registration.finalDecision === undefined
+        ? defaultPreResolvedDecision
+        : registration.finalDecision,
+    initiatingSurface,
+    sentApproverDms,
+    unavailableReason,
+  };
 }
