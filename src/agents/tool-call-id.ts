@@ -243,6 +243,16 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
   const latestAssistantIndex = options?.preserveLatestAssistantMessage
     ? findLatestAssistantMessageIndex(messages)
     : -1;
+  const preservedLatestAssistantToolCallIds =
+    latestAssistantIndex >= 0 &&
+    messages[latestAssistantIndex] &&
+    (messages[latestAssistantIndex] as { role?: unknown }).role === "assistant"
+      ? new Set(
+          extractToolCallsFromAssistant(
+            messages[latestAssistantIndex] as Extract<AgentMessage, { role: "assistant" }>,
+          ).map((toolCall) => toolCall.id),
+        )
+      : new Set<string>();
   const out = messages.map((msg, index) => {
     if (!msg || typeof msg !== "object") {
       return msg;
@@ -262,8 +272,13 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
       return next;
     }
     if (role === "toolResult") {
+      const toolResult = msg as Extract<AgentMessage, { role: "toolResult" }>;
+      const rawToolResultId = extractToolResultId(toolResult);
+      if (rawToolResultId && preservedLatestAssistantToolCallIds.has(rawToolResultId)) {
+        return msg;
+      }
       const next = rewriteToolResultIds({
-        message: msg as Extract<AgentMessage, { role: "toolResult" }>,
+        message: toolResult,
         resolve,
       });
       if (next !== msg) {

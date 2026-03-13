@@ -63,6 +63,65 @@ describe("replay-protection transcript pipeline", () => {
     );
   });
 
+  it("keeps tool_result ids aligned with the replay-protected latest assistant tool calls", async () => {
+    const latestAssistant = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "reasoning", thinkingSignature: "sig" },
+        {
+          type: "toolCall",
+          id: "toolu_01SXMu62t9tRFYEty5r2QfzL",
+          name: "memory_search",
+          arguments: { query: "vercel demo" },
+        },
+        {
+          type: "toolCall",
+          id: "toolu_017QcAHHUHw1TtWnVcb6zhR6",
+          name: "memory_search",
+          arguments: { query: "northstar pipeline" },
+        },
+      ],
+      stopReason: "toolUse",
+    };
+    const messages = castAgentMessages([
+      { role: "user", content: "hello" },
+      latestAssistant,
+      {
+        role: "toolResult",
+        toolCallId: "toolu_01SXMu62t9tRFYEty5r2QfzL",
+        toolName: "memory_search",
+        content: [{ type: "text", text: "[]" }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "toolu_017QcAHHUHw1TtWnVcb6zhR6",
+        toolName: "memory_search",
+        content: [{ type: "text", text: "[]" }],
+      },
+    ]);
+
+    const sanitized = await sanitizeSessionHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(JSON.stringify(getLatestAssistant(sanitized)?.content)).toBe(
+      JSON.stringify(latestAssistant.content),
+    );
+    expect(
+      sanitized
+        .filter(
+          (message): message is Extract<AgentMessage, { role: "toolResult" }> =>
+            message.role === "toolResult",
+        )
+        .map((message) => message.toolCallId),
+    ).toEqual(["toolu_01SXMu62t9tRFYEty5r2QfzL", "toolu_017QcAHHUHw1TtWnVcb6zhR6"]);
+  });
+
   it("preserves latest non-thinking content for github-copilot while still dropping thinking blocks", async () => {
     const latestAssistant = {
       role: "assistant",

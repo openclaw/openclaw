@@ -178,6 +178,51 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
         )?.id,
       ).toBe("call|latest:1");
     });
+
+    it("preserves tool result ids that belong to the preserved latest assistant turn", () => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call|older:1", name: "read", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call|older:1",
+          toolName: "read",
+          content: [{ type: "text", text: "older ok" }],
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "internal", thinkingSignature: "sig" },
+            {
+              type: "toolCall",
+              id: "toolu_01SXMu62t9tRFYEty5r2QfzL",
+              name: "memory_search",
+              arguments: {},
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "toolu_01SXMu62t9tRFYEty5r2QfzL",
+          toolName: "memory_search",
+          content: [{ type: "text", text: "latest ok" }],
+        },
+      ]);
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict", {
+        preserveLatestAssistantMessage: true,
+      });
+
+      expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(
+        "callolder1",
+      );
+      expect(out[2]).toBe(input[2]);
+      expect((out[3] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(
+        "toolu_01SXMu62t9tRFYEty5r2QfzL",
+      );
+    });
   });
 
   describe("strict mode (alphanumeric only)", () => {
