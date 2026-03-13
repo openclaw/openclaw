@@ -641,18 +641,25 @@ export async function ensureChromeExtensionRelayServer(opts: {
                 let tabIdHint = "";
                 if (rawTabId !== undefined && rawTabId !== null) {
                   if (typeof rawTabId === "string" && rawTabId.trim()) {
-                    tabIdHint = ` (preferred tab: ${rawTabId.trim()})`;
+                    tabIdHint = ` (tab: ${rawTabId.trim()})`;
                   } else {
-                    // Log whatever we got so issues are visible in future debugging
-                    tabIdHint = ` (preferred tab: [unexpected type=${typeof rawTabId} value=${JSON.stringify(rawTabId)}])`;
+                    tabIdHint = ` (tab: [unexpected type=${typeof rawTabId} value=${JSON.stringify(rawTabId)}])`;
                   }
                 }
-                // Human-readable mode: LOCK = locked to one tab, TRACKING = follows active tab, UNLOCK = reset
-                const mode = currentLockTab
-                  ? "LOCK"
-                  : tabIdHint
-                    ? "TRACKING"
-                    : "UNLOCK";
+                // Use explicit tabMode when provided, otherwise infer from lockTab + tabId
+                const explicitMode = typeof data.tabMode === "string" ? data.tabMode : null;
+                let mode: string;
+                if (explicitMode === "lock_forbidden") {
+                  mode = "LOCK_FORBIDDEN";
+                } else if (explicitMode === "tracking") {
+                  mode = "TRACKING";
+                } else if (currentLockTab) {
+                  mode = "LOCK";
+                } else if (tabIdHint) {
+                  mode = "TRACKING";
+                } else {
+                  mode = "UNLOCK";
+                }
                 console.log(
                   `[browser/extension-relay] Relay on ${info.port} mode: ${mode}${tabIdHint}`,
                 );

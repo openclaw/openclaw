@@ -354,23 +354,25 @@ async function ensureRelayConnection() {
  * @param {boolean} locked
  * @returns {Promise<{ok:boolean, lockTab:boolean}|null>}
  */
-async function setLockOnRelay(locked, tabId = null) {
-  if (locked && !tabId) {
+async function setLockOnRelay(locked, tabId = null, tabMode = null) {
+  if (locked && !tabId && tabMode !== 'lock_forbidden') {
     console.warn('[OpenClaw] Refusing lock without an attached tab ID')
     return null
   }
-  console.log(`[OpenClaw] setLockOnRelay(locked=${locked}, tabId=${tabId})`)
+  console.log(`[OpenClaw] setLockOnRelay(locked=${locked}, tabId=${tabId}, tabMode=${tabMode})`)
   try {
     const port = await getRelayPort()
     const gatewayToken = await getGatewayToken()
     const relayToken = await deriveRelayToken(gatewayToken, port)
+    const body = { lockTab: locked, tabId }
+    if (tabMode) body.tabMode = tabMode
     const resp = await fetch(`http://127.0.0.1:${port}/extension/status`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
         'x-openclaw-relay-token': relayToken,
       },
-      body: JSON.stringify({ lockTab: locked, tabId }),
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(3000),
     })
     if (resp.ok) {
@@ -1209,12 +1211,15 @@ chrome.tabs.onActivated.addListener(({ tabId }) => void whenReady(async () => {
   if (!relayIsLocked) {
     if (tab && tab.state === 'connected') {
       lockedTabId = tabId
-      // Sync the session ID so the gateway logs show the focused tab
-      void setLockOnRelay(false, tab.sessionId || null).catch(() => {})
-    } else {
-      // Tab switch to an unattached tab — log it but don't update preferred tab
-      void setLockOnRelay(false, null).catch(() => {})
+      // TRACKING: switched to an attached tab — tell relay which tab is now preferred
+      void setLockOnRelay(false, tab.sessionId || null, 'tracking').catch(() => {})
     }
+    // Unattached tab switch while in TRACKING mode: no relay call needed (no state change)
+  } else {
+    // LOCK mode: tab switch is blocked — tell relay so it can log the FORBIDDEN state
+    const lockedTab = lockedTabId ? tabs.get(lockedTabId) : null
+    const lockedSessionId = lockedTab?.sessionId || null
+    void setLockOnRelay(true, lockedSessionId, 'lock_forbidden').catch(() => {})
   }
   updateAllBadges() // Ensure the newly activated tab has the correct badge set if local overriding applies
   await syncAllOverlays()
@@ -1321,8 +1326,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
       } catch {}
 
-        // Resolve to session ID string (e.g. "cb-tab-1") for meaningful gateway logs
-        const activeSessionId = activeTabId ? (tabs.get(activeTabId)?.sessionId || null) : null
+      // Resolve to session ID string (e.g. "cb-tab-1") for meaningful gateway logs
+      const activeSessionId = activeTabId ? (tabs.get(activeTabId)?.sessionId || null) : null
       const result = await setLockOnRelay(!!locked, activeSessionId)
       if (result) {
         updateAllBadges()
