@@ -66,4 +66,6 @@ export type EmbeddedRunAttemptResult = {
   clientToolCall?: { name: string; params: Record<string, unknown> };
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
+  /** Set when the escalate tool was invoked during this attempt. */
+  escalationRequested?: { reason: string };
 };

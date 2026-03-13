@@ -11,6 +11,8 @@ export type AgentModelConfig =
       primary?: string;
       /** Per-agent model fallbacks (provider/model). */
       fallbacks?: string[];
+      /** Escalation model (provider/model) for self-escalation. */
+      escalation?: string;
     };
 
 export type AgentSandboxConfig = {

@@ -16,10 +16,7 @@ export type AgentModelEntryConfig = {
   streaming?: boolean;
 };
 
-export type AgentModelListConfig = {
-  primary?: string;
-  fallbacks?: string[];
-};
+export type AgentModelListConfig = Exclude<AgentModelConfig, string>;
 
 export type AgentContextPruningConfig = {
   mode?: "off" | "cache-ttl";

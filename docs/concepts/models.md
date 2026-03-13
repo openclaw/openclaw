@@ -28,6 +28,25 @@ Related:
 - `agents.defaults.imageModel` is used **only when** the primary model can’t accept images.
 - Per-agent defaults can override `agents.defaults.model` via `agents.list[].model` plus bindings (see [/concepts/multi-agent](/concepts/multi-agent)).
 
+## Self-escalation
+
+When running a lightweight primary model (e.g. Haiku or Sonnet), you can configure a more capable escalation model. The lighter model receives an `escalate` tool and can hand off complex tasks mid-turn:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "bedrock/claude-haiku-4-5",
+        "escalation": "bedrock/claude-opus-4-6"
+      }
+    }
+  }
+}
+```
+
+When the model calls `escalate`, the current turn completes and is automatically re-run on the escalation model. The escalation model does not receive the `escalate` tool (preventing loops). Per-agent escalation overrides are supported via `agents.list[].model.escalation`.
+
 ## Quick model policy
 
 - Set your primary to the strongest latest-generation model available to you.

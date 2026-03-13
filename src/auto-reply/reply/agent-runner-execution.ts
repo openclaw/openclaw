@@ -15,6 +15,7 @@ import {
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { resolveEscalationModel } from "../../agents/tools/escalate-tool.js";
 import {
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
@@ -23,6 +24,7 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isMarkdownCapableMessageChannel,
@@ -49,6 +51,8 @@ import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import type { TypingSignaler } from "./typing-mode.js";
+
+const log = createSubsystemLogger("agent-runner");
 
 export type RuntimeFallbackAttempt = {
   provider: string;
@@ -141,6 +145,9 @@ export async function runAgentTurnWithFallback(params: {
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let didResetAfterCompactionFailure = false;
   let didRetryTransientHttpError = false;
+  let didEscalate = false;
+  let escalationProviderOverride: string | undefined;
+  let escalationModelOverride: string | undefined;
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
   );
@@ -202,6 +209,9 @@ export async function runAgentTurnWithFallback(params: {
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
         runId,
+        ...(escalationProviderOverride && escalationModelOverride
+          ? { provider: escalationProviderOverride, model: escalationModelOverride }
+          : {}),
         run: (provider, model, runOptions) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
@@ -514,6 +524,25 @@ export async function runAgentTurnWithFallback(params: {
               text: "⚠️ Message ordering conflict. I've reset the conversation - please try again.",
             },
           };
+        }
+      }
+
+      // Self-escalation: if the model called the escalate tool, re-run on the escalation model.
+      if (!didEscalate && runResult?.meta?.escalationRequested) {
+        const escalation = runResult.meta.escalationRequested;
+        const resolved = resolveEscalationModel(
+          params.followupRun.run.config,
+          params.followupRun.run.agentId,
+        );
+        if (resolved) {
+          didEscalate = true;
+          escalationProviderOverride = resolved.provider;
+          escalationModelOverride = resolved.model;
+          log.info(
+            `Self-escalation triggered: reason="${escalation.reason}" → ${resolved.provider}/${resolved.model}`,
+          );
+          didNotifyAgentRunStart = false;
+          continue;
         }
       }
 
