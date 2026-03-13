@@ -55,6 +55,35 @@ describe("resolveCliSpawnInvocation", () => {
     expect(invocation.windowsHide).toBe(true);
   });
 
+  it("resolves unquoted cmd shim entrypoints without shell fallback", async () => {
+    const binDir = path.join(tempDir, "plain-cmd-bin");
+    const packageDir = path.join(tempDir, "node_modules", "qmd");
+    const scriptPath = path.join(packageDir, "dist", "cli.js");
+    await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.writeFile(
+      path.join(binDir, "qmd.cmd"),
+      "@echo off\r\n%~dp0\\..\\node_modules\\qmd\\dist\\cli.js %*\r\n",
+      "utf8",
+    );
+    await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");
+
+    process.env.PATH = `${binDir};${originalPath ?? ""}`;
+    process.env.PATHEXT = ".CMD;.EXE";
+
+    const invocation = resolveCliSpawnInvocation({
+      command: "qmd",
+      args: ["query", "hello"],
+      env: process.env,
+      packageName: "qmd",
+    });
+
+    expect(invocation.command).toBe(process.execPath);
+    expect(invocation.argv).toEqual([scriptPath, "query", "hello"]);
+    expect(invocation.shell).not.toBe(true);
+    expect(invocation.windowsHide).toBe(true);
+  });
+
   it("fails closed when a Windows cmd shim cannot be resolved without shell execution", async () => {
     const binDir = path.join(tempDir, "bad-bin");
     await fs.mkdir(binDir, { recursive: true });

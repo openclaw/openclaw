@@ -99,19 +99,34 @@ function resolveEntrypointFromCmdShim(wrapperPath: string): string | null {
   try {
     const content = readFileSync(wrapperPath, "utf8");
     const candidates: string[] = [];
-    for (const match of content.matchAll(/"([^"\r\n]*)"/g)) {
-      const token = match[1] ?? "";
-      const relMatch = token.match(/%~?dp0%?\s*[\\/]*(.*)$/i);
-      const relative = relMatch?.[1]?.trim();
+
+    const pushResolvedRelative = (relativeRaw: string | undefined): void => {
+      const relative = relativeRaw
+        ?.replace(/\s+%\*\s*$/i, "")
+        ?.replace(/\s+%[0-9*].*$/i, "")
+        ?.replace(/^"|"$/g, "")
+        ?.trim();
       if (!relative) {
-        continue;
+        return;
       }
       const normalizedRelative = relative.replace(/[\\/]+/g, path.sep).replace(/^[\\/]+/, "");
       const candidate = path.resolve(path.dirname(wrapperPath), normalizedRelative);
       if (isFilePath(candidate)) {
         candidates.push(candidate);
       }
+    };
+
+    for (const match of content.matchAll(/"([^"\r\n]*)"/g)) {
+      const token = match[1] ?? "";
+      const relMatch = token.match(/%~?dp0%?\s*[\\/]*(.*)$/i);
+      pushResolvedRelative(relMatch?.[1]);
     }
+
+    for (const line of content.split(/\r?\n/)) {
+      const relMatch = line.match(/%~?dp0%?\s*[\\/]*([^\r\n]+)$/i);
+      pushResolvedRelative(relMatch?.[1]);
+    }
+
     const nonNode = candidates.find((candidate) => {
       const base = path.basename(candidate).toLowerCase();
       return base !== "node.exe" && base !== "node";

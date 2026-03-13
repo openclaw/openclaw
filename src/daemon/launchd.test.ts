@@ -12,6 +12,7 @@ import {
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
 } from "./launchd.js";
+import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 
 const state = vi.hoisted(() => ({
   launchctlCalls: [] as string[][],
@@ -61,6 +62,11 @@ vi.mock("./exec-file.js", () => ({
     }
     return { stdout: "", stderr: "", code: 0 };
   }),
+}));
+
+vi.mock("./restart-helper.js", () => ({
+  prepareRestartScript: vi.fn(async () => "/tmp/openclaw-restart-test.sh"),
+  runRestartScript: vi.fn(async () => undefined),
 }));
 
 vi.mock("./launchd-restart-handoff.js", () => ({
@@ -140,6 +146,8 @@ beforeEach(() => {
     pid: 7331,
   });
   vi.clearAllMocks();
+  vi.mocked(prepareRestartScript).mockResolvedValue("/tmp/openclaw-restart-test.sh");
+  vi.mocked(runRestartScript).mockResolvedValue(undefined);
 });
 
 describe("launchd runtime parsing", () => {
@@ -334,7 +342,7 @@ describe("launchd install", () => {
     expect(state.fileModes.get(plistPath)).toBe(0o644);
   });
 
-  it("restarts LaunchAgent with kickstart and no bootout", async () => {
+  it("prefers a detached restart helper so launchd restart survives the current process tree", async () => {
     const env = createDefaultLaunchdEnv();
     const result = await restartLaunchAgent({
       env,
@@ -344,7 +352,66 @@ describe("launchd install", () => {
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
     const label = "ai.openclaw.gateway";
     const serviceId = `${domain}/${label}`;
+    expect(result).toEqual({ outcome: "scheduled" });
+    expect(prepareRestartScript).toHaveBeenCalledWith(env);
+    expect(runRestartScript).toHaveBeenCalledWith("/tmp/openclaw-restart-test.sh");
+    expect(state.launchctlCalls).toEqual([]);
+    expect(state.launchctlCalls.some((call) => call.includes(serviceId))).toBe(false);
+  });
+
+  it("does not rely on OPENCLAW_SERVICE_MARKER when launchd hints still indicate a managed runtime", async () => {
+    const env = createDefaultLaunchdEnv();
+    const originalMarker = process.env.OPENCLAW_SERVICE_MARKER;
+    const originalXpcService = process.env.XPC_SERVICE_NAME;
+    const originalLaunchdLabel = process.env.OPENCLAW_LAUNCHD_LABEL;
+
+    try {
+      // Simulate a launchd-managed child where the custom marker was stripped
+      // but native launchd hints still point at the gateway service.
+      delete process.env.OPENCLAW_SERVICE_MARKER;
+      process.env.XPC_SERVICE_NAME = "ai.openclaw.gateway";
+      process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+
+      await restartLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+      });
+
+      expect(prepareRestartScript).toHaveBeenCalledWith(env);
+      expect(runRestartScript).toHaveBeenCalledWith("/tmp/openclaw-restart-test.sh");
+      expect(state.launchctlCalls).toEqual([]);
+    } finally {
+      if (originalMarker === undefined) {
+        delete process.env.OPENCLAW_SERVICE_MARKER;
+      } else {
+        process.env.OPENCLAW_SERVICE_MARKER = originalMarker;
+      }
+      if (originalXpcService === undefined) {
+        delete process.env.XPC_SERVICE_NAME;
+      } else {
+        process.env.XPC_SERVICE_NAME = originalXpcService;
+      }
+      if (originalLaunchdLabel === undefined) {
+        delete process.env.OPENCLAW_LAUNCHD_LABEL;
+      } else {
+        process.env.OPENCLAW_LAUNCHD_LABEL = originalLaunchdLabel;
+      }
+    }
+  });
+
+  it("restarts LaunchAgent with kickstart and no bootout when no detached helper is available", async () => {
+    const env = createDefaultLaunchdEnv();
+    vi.mocked(prepareRestartScript).mockResolvedValueOnce(null);
+    const result = await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const label = "ai.openclaw.gateway";
+    const serviceId = `${domain}/${label}`;
     expect(result).toEqual({ outcome: "completed" });
+    expect(runRestartScript).not.toHaveBeenCalled();
     expect(state.launchctlCalls).toContainEqual(["kickstart", "-k", serviceId]);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);
@@ -352,6 +419,7 @@ describe("launchd install", () => {
 
   it("falls back to bootstrap when kickstart cannot find the service", async () => {
     const env = createDefaultLaunchdEnv();
+    vi.mocked(prepareRestartScript).mockResolvedValueOnce(null);
     state.kickstartError = "Could not find service";
     state.kickstartFailuresRemaining = 1;
 
@@ -375,6 +443,7 @@ describe("launchd install", () => {
     );
 
     expect(result).toEqual({ outcome: "completed" });
+    expect(runRestartScript).not.toHaveBeenCalled();
     expect(kickstartCalls).toHaveLength(2);
     expect(enableIndex).toBeGreaterThanOrEqual(0);
     expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
@@ -383,6 +452,7 @@ describe("launchd install", () => {
 
   it("surfaces the original kickstart failure when the service is still loaded", async () => {
     const env = createDefaultLaunchdEnv();
+    vi.mocked(prepareRestartScript).mockResolvedValueOnce(null);
     state.kickstartError = "Input/output error";
     state.kickstartFailuresRemaining = 1;
 
@@ -399,6 +469,7 @@ describe("launchd install", () => {
 
   it("hands restart off to a detached helper when invoked from the current LaunchAgent", async () => {
     const env = createDefaultLaunchdEnv();
+    vi.mocked(prepareRestartScript).mockResolvedValueOnce(null);
     launchdRestartHandoffState.isCurrentProcessLaunchdServiceLabel.mockReturnValue(true);
 
     const result = await restartLaunchAgent({
@@ -412,6 +483,7 @@ describe("launchd install", () => {
       mode: "kickstart",
       waitForPid: process.pid,
     });
+    expect(runRestartScript).not.toHaveBeenCalled();
     expect(state.launchctlCalls).toEqual([]);
   });
 
