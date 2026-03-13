@@ -22,14 +22,17 @@ type ActiveRun = {
 const SENTENCE_REGEX = /[^.!?\n]+[.!?\n]+|[^.!?\n]+$/g;
 
 function buildGatewayWsUrl(req: IncomingMessage): string {
-  const host = String(req.headers.host ?? "127.0.0.1:18789").trim();
   const proto =
     String(req.headers["x-forwarded-proto"] ?? "")
       .toLowerCase()
       .includes("https") || (req.socket as { encrypted?: boolean }).encrypted === true
       ? "wss"
       : "ws";
-  return `${proto}://${host}`;
+
+  // Fallback to loopback to prevent SSRF via Host header injection.
+  // When running behind a proxy, the proxy should set OPENCLAW_VOICE_CONNECT_UPSTREAM_WS
+  // or use a host that resolves correctly to the gateway.
+  return `${proto}://127.0.0.1:18789`;
 }
 
 function sendJson(ws: WebSocket, payload: unknown): void {
@@ -181,20 +184,23 @@ async function handleVoiceConnectConnection(
   gateway.start();
 
   const cancelActiveRun = async (reason: string) => {
-    if (!activeRun) {
+    const run = activeRun;
+    if (!run) {
       return;
     }
-    activeRun.cancelled = true;
+    run.cancelled = true;
+    activeRun = null; // clear before first await
+
     sendJson(ws, {
       type: "run_cancelled",
       reason,
-      runId: activeRun.runId,
-      sessionKey: activeRun.sessionKey,
+      runId: run.runId,
+      sessionKey: run.sessionKey,
     });
     // Best effort: /stop triggers abortChatRunsForSessionKey in chat handler.
     try {
       await gateway.request("chat.send", {
-        sessionKey: activeRun.sessionKey,
+        sessionKey: run.sessionKey,
         message: "/stop",
         deliver: false,
         idempotencyKey: randomUUID(),
@@ -202,8 +208,7 @@ async function handleVoiceConnectConnection(
     } catch {
       // no-op best effort
     }
-    activeRun = null;
-    sendJson(ws, { type: "pipeline_done" });
+    sendJson(ws, { type: "pipeline_done", runId: run.runId, sessionKey: run.sessionKey });
   };
 
   const submitUserText = async (text: string) => {

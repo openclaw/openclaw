@@ -835,6 +835,25 @@ export function attachGatewayUpgradeHandler(opts: {
       {
         const url = new URL(req.url ?? "/", "http://localhost");
         if (url.pathname === VOICE_CONNECT_WS_PATH) {
+          const configSnapshot = loadConfig();
+          const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+          const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+
+          const authResult = await authorizeCanvasRequest({
+            req,
+            auth: resolvedAuth,
+            trustedProxies,
+            allowRealIpFallback,
+            clients,
+            rateLimiter,
+          });
+
+          if (!authResult.ok) {
+            writeUpgradeAuthFailure(socket, authResult);
+            socket.destroy();
+            return;
+          }
+
           voiceConnectWss.handleUpgrade(req, socket, head, (ws) => {
             voiceConnectWss.emit("connection", ws, req);
           });
