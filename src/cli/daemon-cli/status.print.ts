@@ -108,6 +108,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   if (status.config) {
     const cliCfg = `${shortenHomePath(status.config.cli.path)}${status.config.cli.exists ? "" : " (missing)"}${status.config.cli.valid ? "" : " (invalid)"}`;
     defaultRuntime.log(`${label("Config (cli):")} ${infoText(cliCfg)}`);
+    defaultRuntime.log(
+      `${label("State dir (cli):")} ${infoText(shortenHomePath(status.config.cli.stateDir))}`,
+    );
     if (!status.config.cli.valid && status.config.cli.issues?.length) {
       for (const issue of status.config.cli.issues.slice(0, 5)) {
         defaultRuntime.error(
@@ -118,6 +121,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     if (status.config.daemon) {
       const daemonCfg = `${shortenHomePath(status.config.daemon.path)}${status.config.daemon.exists ? "" : " (missing)"}${status.config.daemon.valid ? "" : " (invalid)"}`;
       defaultRuntime.log(`${label("Config (service):")} ${infoText(daemonCfg)}`);
+      defaultRuntime.log(
+        `${label("State dir (service):")} ${infoText(shortenHomePath(status.config.daemon.stateDir))}`,
+      );
       if (!status.config.daemon.valid && status.config.daemon.issues?.length) {
         for (const issue of status.config.daemon.issues.slice(0, 5)) {
           defaultRuntime.error(
@@ -135,6 +141,35 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       defaultRuntime.error(
         errorText(
           `Fix: rerun \`${formatCliCommand("openclaw gateway install --force")}\` from the same --profile / OPENCLAW_STATE_DIR you expect.`,
+        ),
+      );
+    }
+    if (status.config.stateDirMismatch) {
+      defaultRuntime.error(
+        errorText(
+          "Root cause: CLI and service are using different state directories (likely wrapper/service drift).",
+        ),
+      );
+    }
+    if (status.config.serviceUsesTestStateDir) {
+      defaultRuntime.error(
+        errorText(
+          "Gateway service is using a ~/.openclaw-tests/* state dir instead of the primary runtime state.",
+        ),
+      );
+    }
+    spacer();
+  }
+
+  if (status.version) {
+    defaultRuntime.log(`${label("Version (cli):")} ${infoText(status.version.cli)}`);
+    if (status.version.service) {
+      defaultRuntime.log(`${label("Version (service):")} ${infoText(status.version.service)}`);
+    }
+    if (status.version.mismatch) {
+      defaultRuntime.error(
+        errorText(
+          "Root cause: service version does not match the current CLI/runtime. Reinstall the gateway service to realign it.",
         ),
       );
     }

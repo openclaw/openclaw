@@ -15,6 +15,7 @@ import { CONFIG_PATH, migrateLegacyConfig, readConfigFileSnapshot } from "../con
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { repairPluginConfigNoise } from "../config/plugin-repair.js";
 import { parseToolsBySenderTypedKey } from "../config/types.tools.js";
 import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
 import {
@@ -1752,6 +1753,27 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       cfg = autoEnable.config;
     } else {
       fixHints.push(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply these changes.`);
+    }
+  }
+
+  const pluginRepair = repairPluginConfigNoise(candidate);
+  if (pluginRepair.changes.length > 0) {
+    candidate = pluginRepair.config;
+    pendingChanges = true;
+    if (shouldRepair) {
+      cfg = pluginRepair.config;
+      note(pluginRepair.changes.join("\n"), "Doctor changes");
+    } else {
+      note(
+        [
+          ...pluginRepair.changes,
+          `- Run "${formatCliCommand("openclaw doctor --fix")}" to remove stale plugin config.`,
+        ].join("\n"),
+        "Doctor warnings",
+      );
+      fixHints.push(
+        `Run "${formatCliCommand("openclaw doctor --fix")}" to remove stale plugin config.`,
+      );
     }
   }
 

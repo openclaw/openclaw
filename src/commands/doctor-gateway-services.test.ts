@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   resolveGatewayAuthTokenForService: vi.fn(),
   resolveGatewayPort: vi.fn(() => 18789),
   resolveIsNixMode: vi.fn(() => false),
+  resolveStateDir: vi.fn((env: NodeJS.ProcessEnv) => env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw"),
   findExtraGatewayServices: vi.fn().mockResolvedValue([]),
   renderGatewayServiceCleanupHints: vi.fn().mockReturnValue([]),
   uninstallLegacySystemdUnits: vi.fn().mockResolvedValue([]),
@@ -36,6 +37,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../config/paths.js", () => ({
   resolveGatewayPort: mocks.resolveGatewayPort,
   resolveIsNixMode: mocks.resolveIsNixMode,
+  resolveStateDir: mocks.resolveStateDir,
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -480,6 +482,47 @@ describe("maybeRepairGatewayServiceConfig", () => {
             config: cfg,
           }),
         );
+      },
+    );
+  });
+
+  it("treats test-state and version drift as repair-worthy service config", async () => {
+    await withEnvAsync(
+      {
+        HOME: "/Users/tester",
+        OPENCLAW_STATE_DIR: "/Users/tester/.openclaw",
+        OPENCLAW_CONFIG_PATH: "/Users/tester/.openclaw/openclaw.json",
+      },
+      async () => {
+        mocks.readCommand.mockResolvedValue({
+          programArguments: gatewayProgramArguments,
+          environment: {
+            HOME: "/Users/tester",
+            OPENCLAW_STATE_DIR: "/Users/tester/.openclaw-tests/2026.3.2-state",
+            OPENCLAW_CONFIG_PATH: "/Users/tester/.openclaw-tests/2026.3.2-state/openclaw.json",
+            OPENCLAW_SERVICE_VERSION: "2026.3.8",
+          },
+        });
+        mocks.auditGatewayServiceConfig.mockResolvedValue({
+          ok: true,
+          issues: [],
+        });
+        mocks.buildGatewayInstallPlan.mockResolvedValue({
+          programArguments: gatewayProgramArguments,
+          workingDirectory: "/tmp",
+          environment: {},
+        });
+        mocks.install.mockResolvedValue(undefined);
+
+        await runRepair({ gateway: {} });
+
+        expect(mocks.install).toHaveBeenCalledTimes(1);
+        const configNotes = mocks.note.mock.calls
+          .filter((call) => call[1] === "Gateway service config")
+          .map((call) => String(call[0]))
+          .join("\n");
+        expect(configNotes).toContain("test-state directory");
+        expect(configNotes).toContain("2026.3.8");
       },
     );
   });

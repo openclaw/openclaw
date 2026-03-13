@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { writeConfigFile, type OpenClawConfig } from "../config/config.js";
-import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
+import { resolveGatewayPort, resolveIsNixMode, resolveStateDir } from "../config/paths.js";
+import { detectOpenClawTestStateDir } from "../config/state-dir-classify.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import {
   findExtraGatewayServices,
@@ -22,6 +23,7 @@ import { resolveGatewayService } from "../daemon/service.js";
 import { uninstallLegacySystemdUnits } from "../daemon/systemd.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
+import { resolveRuntimeServiceVersion } from "../version.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
@@ -289,6 +291,44 @@ export async function maybeRepairGatewayServiceConfig(
       code: SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
       message: "Gateway service entrypoint does not match the current install.",
       detail: `${currentEntrypoint} -> ${expectedEntrypoint}`,
+      level: "recommended",
+    });
+  }
+
+  const serviceEnv = command.environment ?? {};
+  const serviceStateDir = resolveStateDir(serviceEnv as NodeJS.ProcessEnv, () => {
+    const home = serviceEnv.HOME?.trim();
+    return home || os.homedir();
+  });
+  const cliStateDir = resolveStateDir(process.env, os.homedir);
+  if (path.resolve(serviceStateDir) !== path.resolve(cliStateDir)) {
+    audit.issues.push({
+      code: "gateway-state-dir-mismatch",
+      message: "Gateway service state dir does not match the current CLI environment.",
+      detail: `${serviceStateDir} -> ${cliStateDir}`,
+      level: "recommended",
+    });
+  }
+
+  const testStateDir = detectOpenClawTestStateDir(serviceStateDir, {
+    homedir: serviceEnv.HOME?.trim() || os.homedir(),
+  });
+  if (testStateDir) {
+    audit.issues.push({
+      code: "gateway-state-dir-test-profile",
+      message: "Gateway service is running from a test-state directory.",
+      detail: testStateDir.path,
+      level: "recommended",
+    });
+  }
+
+  const cliVersion = resolveRuntimeServiceVersion(process.env);
+  const serviceVersion = serviceEnv.OPENCLAW_SERVICE_VERSION?.trim();
+  if (serviceVersion && serviceVersion !== cliVersion) {
+    audit.issues.push({
+      code: "gateway-version-mismatch",
+      message: "Gateway service version does not match the current CLI/runtime.",
+      detail: `${serviceVersion} -> ${cliVersion}`,
       level: "recommended",
     });
   }

@@ -326,4 +326,28 @@ describe("gatherDaemonStatus", () => {
     expect(callGatewayStatusProbe).not.toHaveBeenCalled();
     expect(status.rpc).toBeUndefined();
   });
+
+  it("reports service state-dir and version drift", async () => {
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      environment: {
+        HOME: "/Users/tester",
+        OPENCLAW_STATE_DIR: "/Users/tester/.openclaw-tests/2026.3.2-state",
+        OPENCLAW_CONFIG_PATH: "/Users/tester/.openclaw-tests/2026.3.2-state/openclaw.json",
+        OPENCLAW_SERVICE_VERSION: "2026.3.8",
+      },
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(status.config?.stateDirMismatch).toBe(true);
+    expect(status.config?.serviceUsesTestStateDir).toBe(true);
+    expect(status.config?.daemon?.stateDir).toBe("/Users/tester/.openclaw-tests/2026.3.2-state");
+    expect(status.version?.service).toBe("2026.3.8");
+    expect(status.version?.mismatch).toBe(true);
+  });
 });

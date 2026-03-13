@@ -139,6 +139,16 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");
   });
 
+  it("warns when state dir points at a test-state root", async () => {
+    process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw-tests", "2026.3.2-state");
+    fs.mkdirSync(process.env.OPENCLAW_STATE_DIR, { recursive: true, mode: 0o700 });
+
+    const text = await runStateIntegrityText({});
+
+    expect(text).toContain("State directory is under a test-state root");
+    expect(text).toContain(".openclaw");
+  });
+
   it("detects orphan transcripts and offers archival remediation", async () => {
     const cfg: OpenClawConfig = {};
     setupSessionState(cfg, process.env, process.env.HOME ?? "");
