@@ -2,7 +2,7 @@ import { GrammyError } from "grammy";
 import { logVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { retryAsync } from "../../infra/retry.js";
-import { fetchRemoteMedia } from "../../media/fetch.js";
+import { MediaFetchError, fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import type { TelegramTransport } from "../fetch.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
@@ -118,6 +118,36 @@ function resolveOptionalTelegramTransport(transport?: TelegramTransport): Telegr
 /** Default idle timeout for Telegram media downloads (30 seconds). */
 const TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 
+function resolveIpv4FallbackDispatcherPolicy(
+  policy: TelegramTransport["pinnedDispatcherPolicy"],
+): TelegramTransport["pinnedDispatcherPolicy"] | undefined {
+  if (!policy) {
+    return undefined;
+  }
+  if (policy.mode === "direct") {
+    return {
+      mode: "direct",
+      connect: {
+        ...(policy.connect ?? {}),
+        family: 4,
+        autoSelectFamily: false,
+      },
+    };
+  }
+  if (policy.mode === "env-proxy") {
+    return {
+      mode: "env-proxy",
+      connect: {
+        ...(policy.connect ?? {}),
+        family: 4,
+        autoSelectFamily: false,
+      },
+      ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
+    };
+  }
+  return undefined;
+}
+
 async function downloadAndSaveTelegramFile(params: {
   filePath: string;
   token: string;
@@ -126,15 +156,42 @@ async function downloadAndSaveTelegramFile(params: {
   telegramFileName?: string;
 }) {
   const url = `https://api.telegram.org/file/bot${params.token}/${params.filePath}`;
-  const fetched = await fetchRemoteMedia({
+  const baseOptions = {
     url,
     fetchImpl: params.transport.sourceFetch,
-    dispatcherPolicy: params.transport.pinnedDispatcherPolicy,
     filePathHint: params.filePath,
     maxBytes: params.maxBytes,
     readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
     ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
-  });
+  } as const;
+
+  let fetched;
+  try {
+    fetched = await fetchRemoteMedia({
+      ...baseOptions,
+      dispatcherPolicy: params.transport.pinnedDispatcherPolicy,
+    });
+  } catch (err) {
+    const fallbackPolicy = resolveIpv4FallbackDispatcherPolicy(
+      params.transport.pinnedDispatcherPolicy,
+    );
+    if (
+      !(err instanceof MediaFetchError) ||
+      err.code !== "fetch_failed" ||
+      !fallbackPolicy
+    ) {
+      throw err;
+    }
+    logVerbose(
+      warn(
+        "telegram: media download failed; retrying with IPv4-only dispatcher for api.telegram.org",
+      ),
+    );
+    fetched = await fetchRemoteMedia({
+      ...baseOptions,
+      dispatcherPolicy: fallbackPolicy,
+    });
+  }
   const originalName = params.telegramFileName ?? fetched.fileName ?? params.filePath;
   return saveMediaBuffer(
     fetched.buffer,
