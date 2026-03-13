@@ -115,41 +115,50 @@ async function fetchProviderUsageSummary(opts: UsageSummaryOptions = {}): Promis
 export async function loadProviderUsageSummary(
   opts: UsageSummaryOptions = {},
 ): Promise<UsageSummary> {
-  const now = Date.now();
-  if (
-    usageCache.summary &&
-    usageCache.updatedAt &&
-    now - usageCache.updatedAt < USAGE_CACHE_TTL_MS
-  ) {
-    return usageCache.summary;
-  }
+  // Skip cache when caller overrides auth or fetch (tests, one-off calls).
+  const useCache = !opts.auth && !opts.fetch;
 
-  if (usageCache.inFlight) {
-    if (usageCache.summary) {
+  if (useCache) {
+    const now = Date.now();
+    if (
+      usageCache.summary &&
+      usageCache.updatedAt &&
+      now - usageCache.updatedAt < USAGE_CACHE_TTL_MS
+    ) {
       return usageCache.summary;
     }
-    return await usageCache.inFlight;
+
+    if (usageCache.inFlight) {
+      if (usageCache.summary) {
+        return usageCache.summary;
+      }
+      return await usageCache.inFlight;
+    }
   }
 
   const inFlight = fetchProviderUsageSummary(opts)
     .then((summary) => {
-      usageCache.summary = summary;
-      usageCache.updatedAt = Date.now();
+      if (useCache) {
+        usageCache.summary = summary;
+        usageCache.updatedAt = Date.now();
+      }
       usageCache.inFlight = undefined;
       return summary;
     })
     .catch((err) => {
       usageCache.inFlight = undefined;
-      if (usageCache.summary) {
+      if (useCache && usageCache.summary) {
         return usageCache.summary;
       }
       throw err;
     });
 
-  usageCache.inFlight = inFlight;
+  if (useCache) {
+    usageCache.inFlight = inFlight;
 
-  if (usageCache.summary) {
-    return usageCache.summary;
+    if (usageCache.summary) {
+      return usageCache.summary;
+    }
   }
   return await inFlight;
 }
