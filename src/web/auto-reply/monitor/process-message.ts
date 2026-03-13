@@ -10,7 +10,7 @@ import {
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../../auto-reply/reply/provider-dispatcher.js";
 import { normalizeReplyPayloadDirectives } from "../../../auto-reply/reply/reply-delivery.js";
-import type { ReplyPayload } from "../../../auto-reply/types.js";
+import type { BlockReplyContext, ReplyPayload } from "../../../auto-reply/types.js";
 import { toLocationContext } from "../../../channels/location.js";
 import { createReplyPrefixOptions } from "../../../channels/reply-prefix.js";
 import { resolveInboundSessionEnvelopeContext } from "../../../channels/session-envelope.js";
@@ -398,7 +398,13 @@ export async function processMessage(params: {
   const sendWhatsAppPayload = async (
     payload: ReplyPayload,
     kind: "commentary" | "final",
+    context?: BlockReplyContext,
   ): Promise<void> => {
+    if (context?.abortSignal?.aborted) {
+      throw context.abortSignal.reason instanceof Error
+        ? context.abortSignal.reason
+        : new Error(String(context.abortSignal.reason ?? "aborted"));
+    }
     const normalized = normalizeReplyPayloadDirectives({
       payload,
       trimLeadingWhitespace: true,
@@ -419,6 +425,8 @@ export async function processMessage(params: {
       chunkMode,
       replyLogger: params.replyLogger,
       connectionId: params.connectionId,
+      abortSignal: context?.abortSignal,
+      timeoutMs: context?.timeoutMs,
       skipLog: false,
       tableMode,
     });
@@ -495,8 +503,8 @@ export async function processMessage(params: {
       disableBlockStreaming: true,
       onCommentaryReply:
         commentaryDelivery === "live"
-          ? async (payload) => {
-              await sendWhatsAppPayload(payload, "commentary");
+          ? async (payload, context) => {
+              await sendWhatsAppPayload(payload, "commentary", context);
             }
           : undefined,
       onModelSelected,

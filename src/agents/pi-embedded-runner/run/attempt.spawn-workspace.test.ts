@@ -229,6 +229,7 @@ function createSubscriptionMock() {
     unsubscribe: () => {},
     deliveredCommentarySegmentIds: () => [] as string[],
     waitForCommentaryDelivery: async () => {},
+    abortCommentaryDelivery: () => {},
     waitForCompactionRetry: async () => {},
     getMessagingToolSentTexts: () => [] as string[],
     getMessagingToolSentMediaUrls: () => [] as string[],

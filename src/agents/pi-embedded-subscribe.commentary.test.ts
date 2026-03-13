@@ -14,6 +14,16 @@ function buildAssistantMessage(params: {
   };
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("subscribeEmbeddedPiSession commentary delivery", () => {
   it("emits live commentary once after the segment stops being terminal", async () => {
     const onCommentaryReply = vi.fn();
@@ -76,9 +86,12 @@ describe("subscribeEmbeddedPiSession commentary delivery", () => {
 
     await subscription.waitForCommentaryDelivery();
     expect(onCommentaryReply).toHaveBeenCalledTimes(1);
-    expect(onCommentaryReply).toHaveBeenCalledWith({
-      text: "Step 2/3: running lint.",
-    });
+    expect(onCommentaryReply).toHaveBeenCalledWith(
+      {
+        text: "Step 2/3: running lint.",
+      },
+      expect.objectContaining({ timeoutMs: undefined }),
+    );
 
     emit({
       type: "message_update",
@@ -191,9 +204,12 @@ describe("subscribeEmbeddedPiSession commentary delivery", () => {
     await subscription.waitForCommentaryDelivery();
 
     expect(onCommentaryReply).toHaveBeenCalledTimes(1);
-    expect(onCommentaryReply).toHaveBeenCalledWith({
-      text: "Checking the repo state now.",
-    });
+    expect(onCommentaryReply).toHaveBeenCalledWith(
+      {
+        text: "Checking the repo state now.",
+      },
+      expect.objectContaining({ timeoutMs: undefined }),
+    );
     expect(subscription.assistantOutputs).toEqual([
       {
         segmentId: "sig-tool",
@@ -295,5 +311,249 @@ describe("subscribeEmbeddedPiSession commentary delivery", () => {
       subscription.assistantOutputs[1]?.segmentId,
     );
     expect(onCommentaryReply).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps unsigned fallback ids stable across late updates after message_end", async () => {
+    const onCommentaryReply = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      onCommentaryReply,
+    });
+
+    const assistantMessage = buildAssistantMessage({
+      stopReason: "toolUse",
+      content: [
+        {
+          type: "text",
+          text: "Still working...",
+          phase: "commentary",
+        },
+        {
+          type: "toolCall",
+          toolCallId: "call-1",
+          toolName: "exec",
+          args: "{}",
+        },
+      ],
+    });
+
+    emit({ type: "message_start", message: assistantMessage });
+    emit({ type: "message_end", message: assistantMessage });
+    emit({
+      type: "message_update",
+      message: assistantMessage,
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "",
+      },
+    });
+
+    await subscription.waitForCommentaryDelivery();
+
+    expect(onCommentaryReply).toHaveBeenCalledTimes(1);
+    expect(subscription.assistantOutputs).toEqual([
+      {
+        segmentId: "assistant:stream-0:segment:0",
+        text: "Still working...",
+        phase: "commentary",
+      },
+    ]);
+    expect(subscription.deliveredCommentarySegmentIds()).toEqual(["assistant:stream-0:segment:0"]);
+  });
+
+  it("does not duplicate unsigned outputs on repeated message_end events", async () => {
+    const onCommentaryReply = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      onCommentaryReply,
+    });
+
+    const assistantMessage = buildAssistantMessage({
+      stopReason: "toolUse",
+      content: [
+        {
+          type: "text",
+          text: "Still working...",
+          phase: "commentary",
+        },
+        {
+          type: "toolCall",
+          toolCallId: "call-1",
+          toolName: "exec",
+          args: "{}",
+        },
+      ],
+    });
+
+    emit({ type: "message_start", message: assistantMessage });
+    emit({ type: "message_end", message: assistantMessage });
+    emit({ type: "message_end", message: assistantMessage });
+
+    await subscription.waitForCommentaryDelivery();
+
+    expect(onCommentaryReply).toHaveBeenCalledTimes(1);
+    expect(subscription.assistantOutputs).toHaveLength(1);
+    expect(subscription.assistantOutputs[0]?.segmentId).toBe("assistant:stream-0:segment:0");
+  });
+
+  it("drops stale commentary bookkeeping across compaction retries for the same segment", async () => {
+    const firstDelivery = createDeferred<void>();
+    const onCommentaryReply = vi
+      .fn()
+      .mockImplementationOnce((_payload, context?: { abortSignal?: AbortSignal }) => {
+        if (context?.abortSignal) {
+          context.abortSignal.addEventListener(
+            "abort",
+            () => {
+              firstDelivery.reject(context.abortSignal?.reason ?? new Error("aborted"));
+            },
+            { once: true },
+          );
+        }
+        return firstDelivery.promise;
+      })
+      .mockResolvedValueOnce(undefined);
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      onCommentaryReply,
+    });
+
+    emit({
+      type: "message_update",
+      message: buildAssistantMessage({
+        id: "assistant-1",
+        content: [
+          {
+            type: "text",
+            text: "Step 2/3: running lint.",
+            textSignature: JSON.stringify({ id: "sig-stream", phase: "commentary" }),
+          },
+          {
+            type: "toolCall",
+            toolCallId: "call-1",
+            toolName: "exec",
+            args: "{}",
+          },
+        ],
+      }),
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "",
+      },
+    });
+
+    await Promise.resolve();
+    emit({ type: "auto_compaction_end", willRetry: true });
+    emit({
+      type: "message_update",
+      message: buildAssistantMessage({
+        id: "assistant-1",
+        content: [
+          {
+            type: "text",
+            text: "Step 2/3: running lint.",
+            textSignature: JSON.stringify({ id: "sig-stream", phase: "commentary" }),
+          },
+          {
+            type: "toolCall",
+            toolCallId: "call-2",
+            toolName: "exec",
+            args: "{}",
+          },
+        ],
+      }),
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "",
+      },
+    });
+
+    await subscription.waitForCommentaryDelivery();
+    await Promise.resolve();
+
+    expect(onCommentaryReply).toHaveBeenCalledTimes(2);
+    expect(subscription.deliveredCommentarySegmentIds()).toEqual(["sig-stream"]);
+  });
+
+  it("lets retry commentary bypass a stale queued send from before compaction", async () => {
+    const firstDelivery = createDeferred<void>();
+    let secondCallStarted = false;
+    const onCommentaryReply = vi
+      .fn()
+      .mockImplementationOnce((_payload, context?: { abortSignal?: AbortSignal }) => {
+        if (context?.abortSignal) {
+          context.abortSignal.addEventListener(
+            "abort",
+            () => {
+              firstDelivery.reject(context.abortSignal?.reason ?? new Error("aborted"));
+            },
+            { once: true },
+          );
+        }
+        return firstDelivery.promise;
+      })
+      .mockImplementationOnce(async () => {
+        secondCallStarted = true;
+      });
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      onCommentaryReply,
+    });
+
+    emit({
+      type: "message_update",
+      message: buildAssistantMessage({
+        id: "assistant-1",
+        content: [
+          {
+            type: "text",
+            text: "Step 2/3: running lint.",
+            textSignature: JSON.stringify({ id: "sig-old", phase: "commentary" }),
+          },
+          {
+            type: "toolCall",
+            toolCallId: "call-1",
+            toolName: "exec",
+            args: "{}",
+          },
+        ],
+      }),
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "",
+      },
+    });
+
+    await Promise.resolve();
+    emit({ type: "auto_compaction_end", willRetry: true });
+    emit({
+      type: "message_update",
+      message: buildAssistantMessage({
+        id: "assistant-1",
+        content: [
+          {
+            type: "text",
+            text: "Step 3/3: checking files.",
+            textSignature: JSON.stringify({ id: "sig-new", phase: "commentary" }),
+          },
+          {
+            type: "toolCall",
+            toolCallId: "call-2",
+            toolName: "exec",
+            args: "{}",
+          },
+        ],
+      }),
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "",
+      },
+    });
+
+    await subscription.waitForCommentaryDelivery();
+    await Promise.resolve();
+
+    expect(secondCallStarted).toBe(true);
+    expect(subscription.deliveredCommentarySegmentIds()).toEqual(["sig-new"]);
   });
 });

@@ -74,6 +74,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     seenLiveCommentarySegmentIds: new Set(),
     pendingCommentarySegmentIds: new Set(),
     deliveredCommentarySegmentIds: new Set(),
+    commentaryGeneration: 0,
+    commentaryAbortControllers: new Set(),
     assistantOutputIdState: createAssistantOutputIdState(),
     compactionInFlight: false,
     pendingCompactionRetry: 0,
@@ -617,8 +619,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.successfulCronAdds = 0;
     state.pendingMessagingMediaUrls.clear();
     state.deterministicApprovalPromptSent = false;
+    abortCommentaryDelivery(createCommentaryAbortError("Commentary delivery aborted on retry"));
     state.seenLiveCommentarySegmentIds.clear();
-    state.pendingCommentarySegmentIds.clear();
     state.deliveredCommentarySegmentIds.clear();
     resetAssistantMessageState(0);
   };
@@ -630,6 +632,26 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
   const resolveCurrentAssistantFallbackMessageId = () =>
     resolveAssistantFallbackMessageId(state.assistantOutputIdState);
+  const createCommentaryAbortError = (message: string, reason?: unknown): Error => {
+    if (reason instanceof Error) {
+      reason.name = "AbortError";
+      return reason;
+    }
+    const error = new Error(message);
+    error.name = "AbortError";
+    return error;
+  };
+  const abortCommentaryDelivery = (reason?: unknown) => {
+    state.commentaryGeneration += 1;
+    for (const controller of state.commentaryAbortControllers) {
+      controller.abort(
+        createCommentaryAbortError("Commentary delivery aborted", reason ?? undefined),
+      );
+    }
+    state.commentaryAbortControllers.clear();
+    state.pendingCommentarySegmentIds.clear();
+    commentaryDeliveryQueue = Promise.resolve();
+  };
   const queueCommentaryDelivery = (segment: AssistantOutputEntry) => {
     if (!params.onCommentaryReply) {
       return;
@@ -640,17 +662,38 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     ) {
       return;
     }
+    const generation = state.commentaryGeneration;
+    const abortController = new AbortController();
     state.pendingCommentarySegmentIds.add(segment.segmentId);
+    state.commentaryAbortControllers.add(abortController);
     commentaryDeliveryQueue = commentaryDeliveryQueue
       .then(async () => {
-        await params.onCommentaryReply?.({ text: segment.text });
+        if (generation !== state.commentaryGeneration || abortController.signal.aborted) {
+          return;
+        }
+        await params.onCommentaryReply?.(
+          { text: segment.text },
+          {
+            abortSignal: abortController.signal,
+            timeoutMs: params.blockReplyTimeoutMs,
+          },
+        );
+        if (generation !== state.commentaryGeneration || abortController.signal.aborted) {
+          return;
+        }
         state.deliveredCommentarySegmentIds.add(segment.segmentId);
       })
       .catch((err) => {
+        if (abortController.signal.aborted || generation !== state.commentaryGeneration) {
+          return;
+        }
         log.warn(`commentary reply callback failed: ${String(err)}`);
       })
       .finally(() => {
-        state.pendingCommentarySegmentIds.delete(segment.segmentId);
+        state.commentaryAbortControllers.delete(abortController);
+        if (generation === state.commentaryGeneration) {
+          state.pendingCommentarySegmentIds.delete(segment.segmentId);
+        }
       });
   };
   const waitForCommentaryDelivery = () => commentaryDeliveryQueue;
@@ -688,6 +731,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     resolveCurrentAssistantFallbackMessageId,
     queueCommentaryDelivery,
     waitForCommentaryDelivery,
+    abortCommentaryDelivery,
   };
 
   const sessionUnsubscribe = params.session.subscribe(createEmbeddedPiSessionEventHandler(ctx));
@@ -722,6 +766,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
         log.warn(`unsubscribe: compaction abort failed runId=${params.runId} err=${String(err)}`);
       }
     }
+    abortCommentaryDelivery(
+      createCommentaryAbortError("Commentary delivery aborted on unsubscribe"),
+    );
     sessionUnsubscribe();
   };
 
@@ -746,6 +793,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getCompactionCount: () => compactionCount,
     deliveredCommentarySegmentIds: () => Array.from(state.deliveredCommentarySegmentIds),
     waitForCommentaryDelivery,
+    abortCommentaryDelivery,
     waitForCompactionRetry: () => {
       // Reject after unsubscribe so callers treat it as cancellation, not success
       if (state.unsubscribed) {

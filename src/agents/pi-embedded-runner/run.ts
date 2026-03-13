@@ -906,6 +906,7 @@ export async function runEmbeddedPiAgent(
             onAssistantMessageStart: params.onAssistantMessageStart,
             onBlockReply: params.onBlockReply,
             onBlockReplyFlush: params.onBlockReplyFlush,
+            blockReplyTimeoutMs: params.blockReplyTimeoutMs,
             blockReplyBreak: params.blockReplyBreak,
             blockReplyChunking: params.blockReplyChunking,
             onReasoningStream: params.onReasoningStream,

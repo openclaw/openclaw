@@ -1512,6 +1512,50 @@ export async function runEmbeddedAttempt(
           );
         });
       };
+      const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
+      const commentaryDeliveryTimeoutMs = Math.max(1, params.blockReplyTimeoutMs ?? 15_000);
+      const waitForCommentaryDeliveryBounded = async (
+        waitForCommentaryDelivery: () => Promise<void>,
+        abortCommentaryDelivery: (reason?: unknown) => void,
+      ) => {
+        if (!params.onCommentaryReply) {
+          return;
+        }
+        let timer: NodeJS.Timeout | undefined;
+        const timeoutError = new Error(
+          `commentary delivery timed out after ${commentaryDeliveryTimeoutMs}ms`,
+        );
+        timeoutError.name = "AbortError";
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(timeoutError), commentaryDeliveryTimeoutMs);
+        });
+        try {
+          await abortable(Promise.race([waitForCommentaryDelivery(), timeoutPromise]));
+        } catch (err) {
+          abortCommentaryDelivery(err);
+          if (err === timeoutError) {
+            if (!isProbeSession) {
+              log.warn(
+                `commentary delivery wait timed out: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${commentaryDeliveryTimeoutMs}`,
+              );
+            }
+            return;
+          }
+          if (isRunnerAbortError(err)) {
+            if (!isProbeSession) {
+              log.debug(
+                `commentary delivery wait aborted: runId=${params.runId} sessionId=${params.sessionId}`,
+              );
+            }
+            return;
+          }
+          throw err;
+        } finally {
+          if (timer) {
+            clearTimeout(timer);
+          }
+        }
+      };
 
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
@@ -1527,6 +1571,7 @@ export async function runEmbeddedAttempt(
         onReasoningEnd: params.onReasoningEnd,
         onBlockReply: params.onBlockReply,
         onBlockReplyFlush: params.onBlockReplyFlush,
+        blockReplyTimeoutMs: params.blockReplyTimeoutMs,
         blockReplyBreak: params.blockReplyBreak,
         blockReplyChunking: params.blockReplyChunking,
         onPartialReply: params.onPartialReply,
@@ -1547,6 +1592,7 @@ export async function runEmbeddedAttempt(
         unsubscribe,
         deliveredCommentarySegmentIds,
         waitForCommentaryDelivery,
+        abortCommentaryDelivery,
         waitForCompactionRetry,
         isCompactionInFlight,
         getMessagingToolSentTexts,
@@ -1570,7 +1616,6 @@ export async function runEmbeddedAttempt(
       setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
-      const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
       const abortTimer = setTimeout(
         () => {
           if (!isProbeSession) {
@@ -1893,7 +1938,7 @@ export async function runEmbeddedAttempt(
         }
         messagesSnapshot = snapshotSelection.messagesSnapshot;
         sessionIdUsed = snapshotSelection.sessionIdUsed;
-        await waitForCommentaryDelivery();
+        await waitForCommentaryDeliveryBounded(waitForCommentaryDelivery, abortCommentaryDelivery);
 
         if (promptError && promptErrorSource === "prompt" && !compactionOccurredThisAttempt) {
           try {

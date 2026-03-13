@@ -217,6 +217,7 @@ function createSubscriptionMock() {
     unsubscribe: () => {},
     deliveredCommentarySegmentIds: () => [] as string[],
     waitForCommentaryDelivery: async () => {},
+    abortCommentaryDelivery: () => {},
     waitForCompactionRetry: async () => {},
     getMessagingToolSentTexts: () => [] as string[],
     getMessagingToolSentMediaUrls: () => [] as string[],
@@ -330,5 +331,159 @@ describe("runEmbeddedAttempt live commentary forwarding", () => {
         onCommentaryReply,
       }),
     );
+  });
+
+  it("bounds the final commentary delivery wait and aborts stalled commentary sends", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commentary-timeout-"));
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commentary-timeout-agent-"));
+    tempPaths.push(workspaceDir, agentDir);
+
+    hoisted.resolveSandboxContextMock.mockResolvedValue(
+      createPiToolsSandboxContext({
+        workspaceDir,
+        fsBridge: createHostSandboxFsBridge(workspaceDir),
+        tools: { allow: [], deny: [] },
+        sessionKey: "agent:main:main",
+      }),
+    );
+
+    hoisted.createAgentSessionMock.mockImplementation(async () => {
+      const session: MutableSession = {
+        sessionId: "embedded-session",
+        messages: [],
+        isCompacting: false,
+        isStreaming: false,
+        agent: {
+          replaceMessages: (messages: unknown[]) => {
+            session.messages = [...messages];
+          },
+        },
+        prompt: async () => {},
+        abort: async () => {},
+        dispose: () => {},
+        steer: async () => {},
+      };
+
+      return { session };
+    });
+
+    const abortCommentaryDelivery = vi.fn();
+    hoisted.subscribeEmbeddedPiSessionMock.mockImplementation(() => ({
+      ...createSubscriptionMock(),
+      waitForCommentaryDelivery: () => new Promise<void>(() => {}),
+      abortCommentaryDelivery,
+    }));
+
+    const model = {
+      api: "openai-completions",
+      provider: "openai",
+      compat: {},
+      contextWindow: 8192,
+      input: ["text"],
+    } as unknown as Model<Api>;
+
+    const result = await runEmbeddedAttempt({
+      sessionId: "embedded-session",
+      sessionKey: "agent:main:main",
+      sessionFile: path.join(workspaceDir, "session.jsonl"),
+      workspaceDir,
+      agentDir,
+      config: {},
+      prompt: "wait for commentary timeout",
+      timeoutMs: 10_000,
+      blockReplyTimeoutMs: 1,
+      runId: "run-commentary-timeout",
+      provider: "openai",
+      modelId: "gpt-test",
+      model,
+      authStorage: {} as AuthStorage,
+      modelRegistry: {} as ModelRegistry,
+      thinkLevel: "off",
+      senderIsOwner: true,
+      disableMessageTool: true,
+      onCommentaryReply: vi.fn(),
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(abortCommentaryDelivery).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts commentary delivery promptly when the run abort signal fires", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commentary-abort-"));
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commentary-abort-agent-"));
+    tempPaths.push(workspaceDir, agentDir);
+
+    hoisted.resolveSandboxContextMock.mockResolvedValue(
+      createPiToolsSandboxContext({
+        workspaceDir,
+        fsBridge: createHostSandboxFsBridge(workspaceDir),
+        tools: { allow: [], deny: [] },
+        sessionKey: "agent:main:main",
+      }),
+    );
+
+    hoisted.createAgentSessionMock.mockImplementation(async () => {
+      const session: MutableSession = {
+        sessionId: "embedded-session",
+        messages: [],
+        isCompacting: false,
+        isStreaming: false,
+        agent: {
+          replaceMessages: (messages: unknown[]) => {
+            session.messages = [...messages];
+          },
+        },
+        prompt: async () => {},
+        abort: async () => {},
+        dispose: () => {},
+        steer: async () => {},
+      };
+
+      return { session };
+    });
+
+    const abortCommentaryDelivery = vi.fn();
+    const abortController = new AbortController();
+    hoisted.subscribeEmbeddedPiSessionMock.mockImplementation(() => ({
+      ...createSubscriptionMock(),
+      waitForCommentaryDelivery: () => {
+        abortController.abort(new Error("user abort"));
+        return new Promise<void>(() => {});
+      },
+      abortCommentaryDelivery,
+    }));
+
+    const model = {
+      api: "openai-completions",
+      provider: "openai",
+      compat: {},
+      contextWindow: 8192,
+      input: ["text"],
+    } as unknown as Model<Api>;
+
+    const result = await runEmbeddedAttempt({
+      sessionId: "embedded-session",
+      sessionKey: "agent:main:main",
+      sessionFile: path.join(workspaceDir, "session.jsonl"),
+      workspaceDir,
+      agentDir,
+      config: {},
+      prompt: "wait for commentary abort",
+      timeoutMs: 10_000,
+      runId: "run-commentary-abort",
+      provider: "openai",
+      modelId: "gpt-test",
+      model,
+      authStorage: {} as AuthStorage,
+      modelRegistry: {} as ModelRegistry,
+      thinkLevel: "off",
+      senderIsOwner: true,
+      disableMessageTool: true,
+      abortSignal: abortController.signal,
+      onCommentaryReply: vi.fn(),
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(abortCommentaryDelivery).toHaveBeenCalledTimes(1);
   });
 });

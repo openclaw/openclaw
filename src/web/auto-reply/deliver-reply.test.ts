@@ -149,6 +149,62 @@ describe("deliverWebReply", () => {
     },
   );
 
+  it("stops sending later text chunks after commentary delivery is aborted", async () => {
+    const msg = makeMsg();
+    const abortController = new AbortController();
+    (sleep as unknown as { mockClear: () => void }).mockClear();
+    (
+      msg.reply as unknown as { mockImplementationOnce: (fn: () => Promise<void>) => void }
+    ).mockImplementationOnce(async () => {
+      const abortError = new Error("commentary aborted");
+      abortError.name = "AbortError";
+      abortController.abort(abortError);
+    });
+
+    await expect(
+      deliverWebReply({
+        replyResult: { text: "aaaaaa" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 3,
+        replyLogger,
+        abortSignal: abortController.signal,
+        skipLog: true,
+      }),
+    ).rejects.toThrow("commentary aborted");
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops retry backoff once commentary delivery is aborted", async () => {
+    const msg = makeMsg();
+    const abortController = new AbortController();
+    (sleep as unknown as { mockClear: () => void }).mockClear();
+    (
+      msg.reply as unknown as { mockImplementationOnce: (fn: () => Promise<void>) => void }
+    ).mockImplementationOnce(async () => {
+      const abortError = new Error("commentary aborted");
+      abortError.name = "AbortError";
+      abortController.abort(abortError);
+      throw new Error("connection closed");
+    });
+
+    await expect(
+      deliverWebReply({
+        replyResult: { text: "hi" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        abortSignal: abortController.signal,
+        skipLog: true,
+      }),
+    ).rejects.toThrow("connection closed");
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
   it("sends image media with caption and then remaining text", async () => {
     const msg = makeMsg();
     const mediaLocalRoots = ["/tmp/workspace-work"];

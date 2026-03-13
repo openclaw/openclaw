@@ -419,6 +419,7 @@ export async function runAgentTurnWithFallback(params: {
                     directlySentBlockKeys,
                   })
                 : undefined,
+              blockReplyTimeoutMs: params.opts?.blockReplyTimeoutMs,
               onBlockReplyFlush:
                 params.blockStreamingEnabled && blockReplyPipeline
                   ? async () => {

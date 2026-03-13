@@ -3,10 +3,7 @@ import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
-import {
-  extractAssistantOutputCandidates,
-  resetAssistantOutputMessageState,
-} from "./assistant-output.js";
+import { extractAssistantOutputCandidates } from "./assistant-output.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -475,8 +472,6 @@ export function handleMessageEnd(
       ctx.queueCommentaryDelivery(finalizedSegment);
     }
   }
-  resetAssistantOutputMessageState(ctx.state.assistantOutputIdState);
-
   ctx.state.deltaBuffer = "";
   ctx.state.blockBuffer = "";
   ctx.blockChunker?.reset();

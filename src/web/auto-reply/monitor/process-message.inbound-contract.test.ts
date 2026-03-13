@@ -191,7 +191,10 @@ describe("web processMessage inbound contract", () => {
 
     // oxlint-disable-next-line typescript/no-explicit-any
     const onCommentaryReply = (capturedDispatchParams as any)?.replyOptions?.onCommentaryReply as
-      | ((payload: { text?: string }) => Promise<void>)
+      | ((
+          payload: { text?: string },
+          context?: { abortSignal?: AbortSignal; timeoutMs?: number },
+        ) => Promise<void>)
       | undefined;
 
     expect(onCommentaryReply).toBeTypeOf("function");
@@ -221,7 +224,10 @@ describe("web processMessage inbound contract", () => {
 
     // oxlint-disable-next-line typescript/no-explicit-any
     const onCommentaryReply = (capturedDispatchParams as any)?.replyOptions?.onCommentaryReply as
-      | ((payload: { text?: string }) => Promise<void>)
+      | ((
+          payload: { text?: string },
+          context?: { abortSignal?: AbortSignal; timeoutMs?: number },
+        ) => Promise<void>)
       | undefined;
     expect(onCommentaryReply).toBeTypeOf("function");
 
@@ -379,7 +385,10 @@ describe("web processMessage inbound contract", () => {
 
     // oxlint-disable-next-line typescript/no-explicit-any
     const onCommentaryReply = (capturedDispatchParams as any)?.replyOptions?.onCommentaryReply as
-      | ((payload: { text?: string }) => Promise<void>)
+      | ((
+          payload: { text?: string },
+          context?: { abortSignal?: AbortSignal; timeoutMs?: number },
+        ) => Promise<void>)
       | undefined;
     expect(onCommentaryReply).toBeTypeOf("function");
 
@@ -398,6 +407,66 @@ describe("web processMessage inbound contract", () => {
         combinedBody: "echo",
       }),
     );
+  });
+
+  it("passes commentary timeout and abort context into WhatsApp delivery", async () => {
+    await processMessage(createWhatsAppDirectStreamingArgs({ commentaryDelivery: "live" }));
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const onCommentaryReply = (capturedDispatchParams as any)?.replyOptions?.onCommentaryReply as
+      | ((
+          payload: { text?: string },
+          context?: { abortSignal?: AbortSignal; timeoutMs?: number },
+        ) => Promise<void>)
+      | undefined;
+    expect(onCommentaryReply).toBeTypeOf("function");
+
+    const abortController = new AbortController();
+    await onCommentaryReply?.(
+      { text: "Checking the repo state now." },
+      { abortSignal: abortController.signal, timeoutMs: 1234 },
+    );
+
+    expect(deliverWebReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        abortSignal: abortController.signal,
+        timeoutMs: 1234,
+      }),
+    );
+  });
+
+  it("does not remember commentary as delivered when the send is already aborted", async () => {
+    const rememberSentText = vi.fn();
+    await processMessage(
+      createWhatsAppDirectStreamingArgs({
+        commentaryDelivery: "live",
+        rememberSentText,
+      }),
+    );
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const onCommentaryReply = (capturedDispatchParams as any)?.replyOptions?.onCommentaryReply as
+      | ((
+          payload: { text?: string },
+          context?: { abortSignal?: AbortSignal; timeoutMs?: number },
+        ) => Promise<void>)
+      | undefined;
+    expect(onCommentaryReply).toBeTypeOf("function");
+
+    const abortController = new AbortController();
+    const abortError = new Error("commentary aborted");
+    abortError.name = "AbortError";
+    abortController.abort(abortError);
+
+    await expect(
+      onCommentaryReply?.(
+        { text: "Checking the repo state now." },
+        { abortSignal: abortController.signal },
+      ),
+    ).rejects.toThrow("commentary aborted");
+
+    expect(deliverWebReplyMock).not.toHaveBeenCalled();
+    expect(rememberSentText).not.toHaveBeenCalled();
   });
 
   it("keeps live WhatsApp commentary disabled by default", async () => {
