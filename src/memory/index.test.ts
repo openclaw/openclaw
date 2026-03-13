@@ -66,6 +66,9 @@ vi.mock("./embeddings.js", () => {
                     if (input.text.toLowerCase().includes("reject.pdf")) {
                       throw new Error("400 pdf page limit exceeded");
                     }
+                    if (input.text.toLowerCase().includes("limitpages.pdf")) {
+                      throw new Error("400 max 500 pages");
+                    }
                     if (input.text.toLowerCase().includes("generic400.pdf")) {
                       throw new Error("400 bad request");
                     }
@@ -74,6 +77,9 @@ vi.mock("./embeddings.js", () => {
                     }
                     if (input.text.toLowerCase().includes("durationerr.mp4")) {
                       throw new Error("deadline exceeded, request duration: 30.5s");
+                    }
+                    if (input.text.toLowerCase().includes("limitbytes.mp4")) {
+                      throw new Error("400 maximum 5242880 bytes");
                     }
                     if (input.text.toLowerCase().includes("outage.mp4")) {
                       throw new Error("503 upstream unavailable");
@@ -433,6 +439,56 @@ describe("memory index", () => {
     const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
 
     await expect(manager.sync({ reason: "test" })).rejects.toThrow(/400 bad request/);
+
+    await manager.close?.();
+  });
+
+  it("skips numeric page-limit validation errors without aborting sync", async () => {
+    const mediaDir = path.join(workspaceDir, "media-page-limit");
+    await fs.mkdir(mediaDir, { recursive: true });
+    await fs.writeFile(path.join(mediaDir, "limitpages.pdf"), Buffer.from("%PDF-1.4"));
+    await fs.writeFile(path.join(mediaDir, "diagram.png"), Buffer.from("png"));
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, `index-page-limit-${randomUUID()}.sqlite`),
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      extraPaths: [mediaDir],
+      multimodal: { enabled: true, modalities: ["image", "pdf"] },
+    });
+    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    await manager.sync({ reason: "test" });
+
+    const pdfResults = await manager.search("pdf");
+    expect(pdfResults.some((result) => result.path.endsWith("limitpages.pdf"))).toBe(false);
+
+    const imageResults = await manager.search("image");
+    expect(imageResults.some((result) => result.path.endsWith("diagram.png"))).toBe(true);
+
+    await manager.close?.();
+  });
+
+  it("skips numeric byte-limit validation errors without aborting sync", async () => {
+    const mediaDir = path.join(workspaceDir, "media-byte-limit");
+    await fs.mkdir(mediaDir, { recursive: true });
+    await fs.writeFile(path.join(mediaDir, "limitbytes.mp4"), Buffer.from("mp4"));
+    await fs.writeFile(path.join(mediaDir, "diagram.png"), Buffer.from("png"));
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, `index-byte-limit-${randomUUID()}.sqlite`),
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      extraPaths: [mediaDir],
+      multimodal: { enabled: true, modalities: ["image", "video"] },
+    });
+    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    await manager.sync({ reason: "test" });
+
+    const videoResults = await manager.search("video");
+    expect(videoResults.some((result) => result.path.endsWith("limitbytes.mp4"))).toBe(false);
+
+    const imageResults = await manager.search("image");
+    expect(imageResults.some((result) => result.path.endsWith("diagram.png"))).toBe(true);
 
     await manager.close?.();
   });

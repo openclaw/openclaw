@@ -796,20 +796,20 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   private isStructuredInputTooLargeError(message: string): boolean {
-    return /(413|payload too large|request too large|input too large|too many tokens|input limit|request size)/i.test(
+    return /(payload too large|request too large|input too large|too many tokens|input limit|request size|max(?:imum)?\D+\d[\d,]*\D+bytes|\d[\d,]*\D+bytes\D+max|limit\D+\d[\d,]*\D+bytes)/i.test(
       message,
     );
   }
 
   private isMultimodalProviderValidationError(message: string): boolean {
-    return /(page limit|too many pages|mime type|unsupported (file|media|mime|codec|format)|invalid (mime|codec|format|duration|media|file)|media type|file type|(audio|video).*(codec|too long|duration)|(codec|too long|duration).*(audio|video))/i.test(
+    return /(page limit|too many pages|mime type|unsupported (file|media|mime|codec|format)|invalid (mime|codec|format|duration|media|file)|media type|file type|(audio|video).*(codec|too long|duration)|(codec|too long|duration).*(audio|video)|max(?:imum)?\D+\d[\d,]*\D+pages|\d[\d,]*\D+pages\D+max|limit\D+\d[\d,]*\D+pages)/i.test(
       message,
     );
   }
 
   private isSkippableMultimodalInputError(message: string): boolean {
     if (
-      /(401|403|429|quota|rate[_ ]limit|too many requests|5\d\d|timed? out|timeout|deadline|network|econn|enotfound|service unavailable|unavailable)/i.test(
+      /(quota|rate[_ ]limit|too many requests|timed? out|timeout|deadline(?: exceeded)?|network|econn|enotfound|service unavailable|upstream unavailable|bad gateway|gateway timeout|internal server error|server error|backend down)/i.test(
         message,
       )
     ) {
