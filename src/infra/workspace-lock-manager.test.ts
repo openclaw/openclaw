@@ -392,7 +392,7 @@ describe("workspace lock manager", () => {
     await lockB.release();
   });
 
-  it("canonicalizes unresolved suffix casing for missing-file lock targets", async () => {
+  it("preserves case-sensitive distinct missing-file lock targets", async () => {
     const dir = await makeCaseDir();
     const targetUpper = path.join(dir, "New", "State.JSON");
     const targetLower = path.join(dir, "new", "state.json");
@@ -404,23 +404,16 @@ describe("workspace lock manager", () => {
       ttlMs: 5_000,
     });
 
-    await expect(
-      acquireWorkspaceLock(targetLower, {
-        kind: "file",
-        timeoutMs: 25,
-        pollIntervalMs: 5,
-        ttlMs: 5_000,
-      }),
-    ).rejects.toThrow(/workspace lock timeout/);
-
-    await lockA.release();
-
     const lockB = await acquireWorkspaceLock(targetLower, {
       kind: "file",
       timeoutMs: 100,
       pollIntervalMs: 5,
       ttlMs: 5_000,
     });
+
+    expect(lockA.lockPath).not.toBe(lockB.lockPath);
+
+    await lockA.release();
     await lockB.release();
   });
 
@@ -457,6 +450,42 @@ describe("workspace lock manager", () => {
     });
 
     expect(firstPath).toBe(lockB.lockPath);
+    await lockB.release();
+  });
+
+  it("keeps mixed-case lock identity stable after materialization", async () => {
+    const dir = await makeCaseDir();
+    const target = path.join(dir, "New", "State.JSON");
+
+    const lockA = await acquireWorkspaceLock(target, {
+      kind: "file",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 5_000,
+    });
+    const firstPath = lockA.lockPath;
+
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, "payload", "utf8");
+
+    await expect(
+      acquireWorkspaceLock(target, {
+        kind: "file",
+        timeoutMs: 25,
+        pollIntervalMs: 5,
+        ttlMs: 5_000,
+      }),
+    ).rejects.toThrow(/workspace lock timeout/);
+
+    await lockA.release();
+
+    const lockB = await acquireWorkspaceLock(target, {
+      kind: "file",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 5_000,
+    });
+    expect(lockB.lockPath).toBe(firstPath);
     await lockB.release();
   });
 
