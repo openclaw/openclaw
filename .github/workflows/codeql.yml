@@ -96,7 +96,7 @@ jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true'
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.result != 'failure'
     runs-on: ${{ matrix.runs_on }}
     strategy:
       fail-fast: false
