@@ -100,29 +100,6 @@ describe("runDaemonRestart health checks", () => {
   let runDaemonRestart: (opts?: { json?: boolean }) => Promise<boolean>;
   let runDaemonStop: (opts?: { json?: boolean }) => Promise<void>;
 
-  function mockUnmanagedRestart({
-    runPostRestartCheck = false,
-  }: {
-    runPostRestartCheck?: boolean;
-  } = {}) {
-    runServiceRestart.mockImplementation(
-      async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
-        await params.onNotLoaded?.();
-        if (runPostRestartCheck) {
-          await params.postRestartCheck?.({
-            json: Boolean(params.opts?.json),
-            stdout: process.stdout,
-            warnings: [],
-            fail: (message: string) => {
-              throw new Error(message);
-            },
-          });
-        }
-        return true;
-      },
-    );
-  }
-
   beforeAll(async () => {
     ({ runDaemonRestart, runDaemonStop } = await import("./lifecycle.js"));
   });
@@ -258,7 +235,20 @@ describe("runDaemonRestart health checks", () => {
 
   it("signals a single unmanaged gateway process on restart", async () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
-    mockUnmanagedRestart({ runPostRestartCheck: true });
+    runServiceRestart.mockImplementation(
+      async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
+        await params.onNotLoaded?.();
+        await params.postRestartCheck?.({
+          json: Boolean(params.opts?.json),
+          stdout: process.stdout,
+          warnings: [],
+          fail: (message: string) => {
+            throw new Error(message);
+          },
+        });
+        return true;
+      },
+    );
 
     await runDaemonRestart({ json: true });
 
@@ -273,7 +263,12 @@ describe("runDaemonRestart health checks", () => {
 
   it("fails unmanaged restart when multiple gateway listeners are present", async () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200, 4300]);
-    mockUnmanagedRestart();
+    runServiceRestart.mockImplementation(
+      async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
+        await params.onNotLoaded?.();
+        return true;
+      },
+    );
 
     await expect(runDaemonRestart({ json: true })).rejects.toThrow(
       "multiple gateway processes are listening on port 18789",
@@ -287,7 +282,12 @@ describe("runDaemonRestart health checks", () => {
       configSnapshot: { commands: { restart: false } },
     });
     isRestartEnabled.mockReturnValue(false);
-    mockUnmanagedRestart();
+    runServiceRestart.mockImplementation(
+      async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
+        await params.onNotLoaded?.();
+        return true;
+      },
+    );
 
     await expect(runDaemonRestart({ json: true })).rejects.toThrow(
       "Gateway restart is disabled in the running gateway config",
