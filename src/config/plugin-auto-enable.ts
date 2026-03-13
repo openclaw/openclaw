@@ -383,6 +383,20 @@ function isPluginExplicitlyDisabled(cfg: OpenClawConfig, pluginId: string): bool
       return true;
     }
   }
+  // Also check channels.* for extension-based channels (e.g. feishu)
+  // that are not in the built-in registry but configured under channels.*
+  if (!builtInChannelId) {
+    const channels = cfg.channels as Record<string, unknown> | undefined;
+    const channelConfig = channels?.[pluginId];
+    if (
+      channelConfig &&
+      typeof channelConfig === "object" &&
+      !Array.isArray(channelConfig) &&
+      (channelConfig as { enabled?: unknown }).enabled === false
+    ) {
+      return true;
+    }
+  }
   const entry = cfg.plugins?.entries?.[pluginId];
   return entry?.enabled === false;
 }
