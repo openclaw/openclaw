@@ -40,6 +40,26 @@ import { estimateBase64Size, resolveVideoMaxBase64Bytes } from "./video.js";
 
 export type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 
+function sanitizeProviderHeaders(
+  headers: Record<string, unknown> | undefined,
+): Record<string, string> | undefined {
+  if (!headers) {
+    return undefined;
+  }
+  const next: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    // Intentionally preserve marker-shaped values here. This path handles
+    // explicit config/runtime provider headers, where literal values may
+    // legitimately match marker patterns; discovered models.json entries are
+    // sanitized separately in the model registry path.
+    next[key] = value;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
 function trimOutput(text: string, maxChars?: number): string {
   const trimmed = text.trim();
   if (!maxChars || trimmed.length <= maxChars) {
@@ -352,9 +372,9 @@ async function resolveProviderExecutionContext(params: {
   });
   const baseUrl = params.entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
   const mergedHeaders = {
-    ...providerConfig?.headers,
-    ...params.config?.headers,
-    ...params.entry.headers,
+    ...sanitizeProviderHeaders(providerConfig?.headers as Record<string, unknown> | undefined),
+    ...sanitizeProviderHeaders(params.config?.headers as Record<string, unknown> | undefined),
+    ...sanitizeProviderHeaders(params.entry.headers as Record<string, unknown> | undefined),
   };
   const headers = Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
   return { apiKeys, baseUrl, headers };

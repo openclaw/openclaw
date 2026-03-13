@@ -278,8 +278,8 @@ export const ToolsWebSearchSchema = z
     perplexity: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),
-        // Legacy Sonar/OpenRouter fields — kept for backward compatibility
-        // so existing configs don't fail validation. Ignored at runtime.
+        // Legacy Sonar/OpenRouter compatibility fields.
+        // Setting either opts Perplexity back into the chat-completions path.
         baseUrl: z.string().optional(),
         model: z.string().optional(),
       })
@@ -308,6 +308,12 @@ export const ToolsWebSearchSchema = z
       })
       .strict()
       .optional(),
+    brave: z
+      .object({
+        mode: z.union([z.literal("web"), z.literal("llm-context")]).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
@@ -321,6 +327,18 @@ export const ToolsWebFetchSchema = z
     cacheTtlMinutes: z.number().nonnegative().optional(),
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
+    readability: z.boolean().optional(),
+    firecrawl: z
+      .object({
+        enabled: z.boolean().optional(),
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
+        onlyMainContent: z.boolean().optional(),
+        maxAgeMs: z.number().int().nonnegative().optional(),
+        timeoutSeconds: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
@@ -547,6 +565,16 @@ export const MemorySearchSchema = z
     enabled: z.boolean().optional(),
     sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
     extraPaths: z.array(z.string()).optional(),
+    multimodal: z
+      .object({
+        enabled: z.boolean().optional(),
+        modalities: z
+          .array(z.union([z.literal("image"), z.literal("audio"), z.literal("all")]))
+          .optional(),
+        maxFileBytes: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     experimental: z
       .object({
         sessionMemory: z.boolean().optional(),
@@ -593,6 +621,7 @@ export const MemorySearchSchema = z
       ])
       .optional(),
     model: z.string().optional(),
+    outputDimensionality: z.number().int().positive().optional(),
     local: z
       .object({
         modelPath: z.string().optional(),
@@ -632,6 +661,7 @@ export const MemorySearchSchema = z
           .object({
             deltaBytes: z.number().int().nonnegative().optional(),
             deltaMessages: z.number().int().nonnegative().optional(),
+            postCompactionForce: z.boolean().optional(),
           })
           .strict()
           .optional(),
@@ -739,6 +769,7 @@ export const AgentEntrySchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    params: z.record(z.string(), z.unknown()).optional(),
     tools: AgentToolsSchema,
     runtime: AgentRuntimeSchema,
   })

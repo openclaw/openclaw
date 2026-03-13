@@ -27,7 +27,7 @@ const execDockerRawUnavailable: NonNullable<SecurityAuditOptions["execDockerRawF
 };
 
 function stubChannelPlugin(params: {
-  id: "discord" | "slack" | "telegram";
+  id: "discord" | "slack" | "telegram" | "zalouser";
   label: string;
   resolveAccount: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
   inspectAccount?: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
@@ -106,6 +106,27 @@ const telegramPlugin = stubChannelPlugin({
     const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
     const base = cfg.channels?.telegram ?? {};
     const account = cfg.channels?.telegram?.accounts?.[resolvedAccountId] ?? {};
+    return { config: { ...base, ...account } };
+  },
+});
+
+const zalouserPlugin = stubChannelPlugin({
+  id: "zalouser",
+  label: "Zalo Personal",
+  listAccountIds: (cfg) => {
+    const channel = (cfg.channels as Record<string, unknown> | undefined)?.zalouser as
+      | { accounts?: Record<string, unknown> }
+      | undefined;
+    const ids = Object.keys(channel?.accounts ?? {});
+    return ids.length > 0 ? ids : ["default"];
+  },
+  resolveAccount: (cfg, accountId) => {
+    const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
+    const channel = (cfg.channels as Record<string, unknown> | undefined)?.zalouser as
+      | { accounts?: Record<string, unknown> }
+      | undefined;
+    const base = (channel ?? {}) as Record<string, unknown>;
+    const account = channel?.accounts?.[resolvedAccountId] ?? {};
     return { config: { ...base, ...account } };
   },
 });
@@ -1490,7 +1511,7 @@ description: test skill
       channels: {
         feishu: {
           appId: "cli_test",
-          appSecret: "secret_test",
+          appSecret: "secret_test", // pragma: allowlist secret
         },
       },
     };
@@ -1522,7 +1543,7 @@ description: test skill
       channels: {
         feishu: {
           appId: "cli_test",
-          appSecret: "secret_test",
+          appSecret: "secret_test", // pragma: allowlist secret
           tools: { doc: false },
         },
       },
@@ -1966,8 +1987,8 @@ description: test skill
               mode: "http",
               botTokenSource: "config",
               botTokenStatus: "configured_unavailable",
-              signingSecretSource: "config",
-              signingSecretStatus: "configured_unavailable",
+              signingSecretSource: "config", // pragma: allowlist secret
+              signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
               config: channel,
             };
           }
@@ -1978,8 +1999,8 @@ description: test skill
             mode: "http",
             botTokenSource: "config",
             botTokenStatus: "available",
-            signingSecretSource: "config",
-            signingSecretStatus: "available",
+            signingSecretSource: "config", // pragma: allowlist secret
+            signingSecretStatus: "available", // pragma: allowlist secret
             config: channel,
           };
         },
@@ -2042,8 +2063,8 @@ description: test skill
               mode: "http",
               botTokenSource: "config",
               botTokenStatus: "configured_unavailable",
-              signingSecretSource: "config",
-              signingSecretStatus: "configured_unavailable",
+              signingSecretSource: "config", // pragma: allowlist secret
+              signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
               config: channel,
             };
           }
@@ -2054,8 +2075,8 @@ description: test skill
             mode: "http",
             botTokenSource: "config",
             botTokenStatus: "available",
-            signingSecretSource: "config",
-            signingSecretStatus: "missing",
+            signingSecretSource: "config", // pragma: allowlist secret
+            signingSecretStatus: "missing", // pragma: allowlist secret
             config: channel,
           };
         },
@@ -2321,6 +2342,75 @@ description: test skill
       );
       expect(finding).toBeDefined();
       expect(finding?.detail).toContain("channels.discord.accounts.beta.allowFrom:Alice#1234");
+    });
+  });
+
+  it("warns when Zalouser group routing contains mutable group entries", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          zalouser: {
+            enabled: true,
+            groups: {
+              "Ops Room": { allow: true },
+              "group:g-123": { allow: true },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [zalouserPlugin],
+      });
+
+      const finding = res.findings.find(
+        (entry) => entry.checkId === "channels.zalouser.groups.mutable_entries",
+      );
+      expect(finding).toBeDefined();
+      expect(finding?.severity).toBe("warn");
+      expect(finding?.detail).toContain("channels.zalouser.groups:Ops Room");
+      expect(finding?.detail).not.toContain("group:g-123");
+    });
+  });
+
+  it("marks Zalouser mutable group routing as break-glass when dangerous matching is enabled", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          zalouser: {
+            enabled: true,
+            dangerouslyAllowNameMatching: true,
+            groups: {
+              "Ops Room": { allow: true },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [zalouserPlugin],
+      });
+
+      const finding = res.findings.find(
+        (entry) => entry.checkId === "channels.zalouser.groups.mutable_entries",
+      );
+      expect(finding).toBeDefined();
+      expect(finding?.severity).toBe("info");
+      expect(finding?.detail).toContain("out-of-scope");
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.zalouser.allowFrom.dangerous_name_matching_enabled",
+            severity: "info",
+          }),
+        ]),
+      );
     });
   });
 
@@ -2654,6 +2744,52 @@ description: test skill
     const res = await audit(cfg);
 
     expectFinding(res, "hooks.default_session_key_unset", "warn");
+  });
+
+  it("scores unrestricted hooks.allowedAgentIds by gateway exposure", async () => {
+    const baseHooks = {
+      enabled: true,
+      token: "shared-gateway-token-1234567890",
+      defaultSessionKey: "hook:ingress",
+    } satisfies NonNullable<OpenClawConfig["hooks"]>;
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expectedSeverity: "warn" | "critical";
+    }> = [
+      {
+        name: "local exposure",
+        cfg: { hooks: baseHooks },
+        expectedSeverity: "warn",
+      },
+      {
+        name: "remote exposure",
+        cfg: { gateway: { bind: "lan" }, hooks: baseHooks },
+        expectedSeverity: "critical",
+      },
+    ];
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        expect(
+          hasFinding(res, "hooks.allowed_agent_ids_unrestricted", testCase.expectedSeverity),
+          testCase.name,
+        ).toBe(true);
+      }),
+    );
+  });
+
+  it("treats wildcard hooks.allowedAgentIds as unrestricted routing", async () => {
+    const res = await audit({
+      hooks: {
+        enabled: true,
+        token: "shared-gateway-token-1234567890",
+        defaultSessionKey: "hook:ingress",
+        allowedAgentIds: ["*"],
+      },
+    });
+
+    expectFinding(res, "hooks.allowed_agent_ids_unrestricted", "warn");
   });
 
   it("scores hooks request sessionKey override by gateway exposure", async () => {

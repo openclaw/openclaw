@@ -165,12 +165,13 @@ Common tags:
 
 The main Docker image currently uses:
 
-- `node:22-bookworm`
+- `node:24-bookworm`
 
-The docker image now publishes OCI base-image annotations (sha256 is an example):
+The docker image now publishes OCI base-image annotations (sha256 is an example,
+and points at the pinned multi-arch manifest list for that tag):
 
-- `org.opencontainers.image.base.name=docker.io/library/node:22-bookworm`
-- `org.opencontainers.image.base.digest=sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935`
+- `org.opencontainers.image.base.name=docker.io/library/node:24-bookworm`
+- `org.opencontainers.image.base.digest=sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b`
 - `org.opencontainers.image.source=https://github.com/openclaw/openclaw`
 - `org.opencontainers.image.url=https://openclaw.ai`
 - `org.opencontainers.image.documentation=https://docs.openclaw.ai/install/docker`
@@ -407,7 +408,7 @@ To speed up rebuilds, order your Dockerfile so dependency layers are cached.
 This avoids re-running `pnpm install` unless lockfiles change:
 
 ```dockerfile
-FROM node:22-bookworm
+FROM node:24-bookworm
 
 # Install Bun (required for build scripts)
 RUN curl -fsSL https://bun.sh/install | bash
@@ -534,6 +535,12 @@ docker compose run --rm openclaw-cli devices list --url ws://127.0.0.1:18789
 - Gateway bind defaults to `lan` for container use (`OPENCLAW_GATEWAY_BIND`).
 - Dockerfile CMD uses `--allow-unconfigured`; mounted config with `gateway.mode` not `local` will still start. Override CMD to enforce the guard.
 - The gateway container is the source of truth for sessions (`~/.openclaw/agents/<agentId>/sessions/`).
+
+### Storage model
+
+- **Persistent host data:** Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw` and `OPENCLAW_WORKSPACE_DIR` to `/home/node/.openclaw/workspace`, so those paths survive container replacement.
+- **Ephemeral sandbox tmpfs:** when `agents.defaults.sandbox` is enabled, the sandbox containers use `tmpfs` for `/tmp`, `/var/tmp`, and `/run`. Those mounts are separate from the top-level Compose stack and disappear with the sandbox container.
+- **Disk growth hotspots:** watch `media/`, `agents/<agentId>/sessions/sessions.json`, transcript JSONL files, `cron/runs/*.jsonl`, and rolling file logs under `/tmp/openclaw/` (or your configured `logging.file`). If you also run the macOS app outside Docker, its service logs are separate again: `~/.openclaw/logs/gateway.log`, `~/.openclaw/logs/gateway.err.log`, and `/tmp/openclaw/openclaw-gateway.log`.
 
 ## Agent Sandbox (host gateway + Docker tools)
 

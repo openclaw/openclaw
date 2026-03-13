@@ -1,0 +1,134 @@
+name: CodeQL
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            runs_on: blacksmith-16vcpu-ubuntu-2404
+            needs_node: true
+            needs_python: false
+            needs_java: false
+            needs_swift_tools: false
+            needs_manual_build: false
+            needs_autobuild: false
+            config_file: ./.github/codeql/codeql-javascript-typescript.yml
+          - language: actions
+            runs_on: blacksmith-16vcpu-ubuntu-2404
+            needs_node: false
+            needs_python: false
+            needs_java: false
+            needs_swift_tools: false
+            needs_manual_build: false
+            needs_autobuild: false
+            config_file: ""
+          - language: python
+            runs_on: blacksmith-16vcpu-ubuntu-2404
+            needs_node: false
+            needs_python: true
+            needs_java: false
+            needs_swift_tools: false
+            needs_manual_build: false
+            needs_autobuild: false
+            config_file: ""
+          - language: java-kotlin
+            runs_on: blacksmith-16vcpu-ubuntu-2404
+            needs_node: false
+            needs_python: false
+            needs_java: true
+            needs_swift_tools: false
+            needs_manual_build: true
+            needs_autobuild: false
+            config_file: ""
+          - language: swift
+            runs_on: macos-latest
+            needs_node: false
+            needs_python: false
+            needs_java: false
+            needs_swift_tools: true
+            needs_manual_build: true
+            needs_autobuild: false
+            config_file: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        if: matrix.needs_node
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "true"
+
+      - name: Setup Python
+        if: matrix.needs_python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Java
+        if: matrix.needs_java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Swift build tools
+        if: matrix.needs_swift_tools
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.1.app
+          xcodebuild -version
+          brew install xcodegen swiftlint swiftformat
+          swift --version
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+          config-file: ${{ matrix.config_file || '' }}
+
+      - name: Autobuild
+        if: matrix.needs_autobuild
+        uses: github/codeql-action/autobuild@v4
+
+      - name: Build Android for CodeQL
+        if: matrix.language == 'java-kotlin'
+        working-directory: apps/android
+        run: ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Build Swift for CodeQL
+        if: matrix.language == 'swift'
+        run: |
+          set -euo pipefail
+          swift build --package-path apps/macos --configuration release
+          cd apps/ios
+          xcodegen generate
+          xcodebuild build \
+            -project OpenClaw.xcodeproj \
+            -scheme OpenClaw \
+            -destination "generic/platform=iOS Simulator" \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"
