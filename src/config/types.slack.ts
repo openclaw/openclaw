@@ -68,6 +68,11 @@ export type SlackSlashCommandConfig = {
   sessionPrefix?: string;
   /** Reply ephemerally (default: true). */
   ephemeral?: boolean;
+  /**
+   * When true, slash command can be invoked without text and will use recent
+   * channel history as context (default: false).
+   */
+  contextAware?: boolean;
 };
 
 export type SlackThreadConfig = {

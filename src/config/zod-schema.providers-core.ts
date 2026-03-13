@@ -879,6 +879,7 @@ export const SlackAccountSchema = z
         name: z.string().optional(),
         sessionPrefix: z.string().optional(),
         ephemeral: z.boolean().optional(),
+        contextAware: z.boolean().optional(),
       })
       .strict()
       .optional(),

@@ -25,6 +25,7 @@ export function resolveSlackSlashCommandConfig(
     name,
     sessionPrefix: raw?.sessionPrefix?.trim() || "slack:slash",
     ephemeral: raw?.ephemeral !== false,
+    contextAware: raw?.contextAware === true,
   };
 }
 

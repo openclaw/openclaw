@@ -315,7 +315,9 @@ export async function registerSlackMonitorSlashCommands(params: {
         );
         return;
       }
-      if (!prompt.trim()) {
+      // When contextAware is enabled, empty prompts are allowed - we'll fetch channel history
+      const isContextAwareMode = slashCommand.contextAware && !prompt.trim();
+      if (!prompt.trim() && !slashCommand.contextAware) {
         await ack({
           text: "Message required.",
           response_type: "ephemeral",
@@ -555,9 +557,45 @@ export async function registerSlackMonitorSlashCommands(params: {
         targetSessionKey: route.sessionKey,
         lowercaseSessionKey: true,
       });
+
+      // Context-aware mode: fetch recent channel history when no prompt provided
+      let effectivePrompt = prompt;
+      let contextHistory: string | undefined;
+      if (isContextAwareMode && isRoomish) {
+        try {
+          const historyResponse = await ctx.app.client.conversations.history({
+            token: ctx.botToken,
+            channel: command.channel_id,
+            limit: 10,
+          });
+          const messages = historyResponse.messages ?? [];
+          if (messages.length > 0) {
+            // Build context from recent messages (oldest first)
+            const recentContext = messages
+              .reverse()
+              .map((msg) => {
+                const msgUser = msg.user ?? "unknown";
+                const msgText = msg.text ?? "";
+                return `[${msgUser}]: ${msgText}`;
+              })
+              .join("\n");
+            contextHistory = recentContext;
+            effectivePrompt = `[Respond to the recent conversation in this channel]\n\nRecent messages:\n${recentContext}`;
+          } else {
+            effectivePrompt = "[No recent messages to respond to]";
+          }
+        } catch (err) {
+          runtime.error?.(danger(`slack slash: failed to fetch channel history: ${String(err)}`));
+          effectivePrompt = "[Respond to the recent conversation in this channel]";
+        }
+      } else if (isContextAwareMode && !isRoomish) {
+        // Context-aware in DMs - just use a simple prompt
+        effectivePrompt = "[Continue the conversation]";
+      }
+
       const ctxPayload = finalizeInboundContext({
-        Body: prompt,
-        BodyForAgent: prompt,
+        Body: effectivePrompt,
+        BodyForAgent: effectivePrompt,
         RawBody: prompt,
         CommandBody: prompt,
         CommandArgs: commandArgs,
