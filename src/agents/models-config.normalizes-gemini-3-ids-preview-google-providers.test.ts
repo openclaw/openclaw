@@ -28,6 +28,16 @@ describe("models-config", () => {
                   maxTokens: 65536,
                 },
                 {
+                  id: "gemini-3.1-pro",
+                  name: "Gemini 3.1 Pro",
+                  api: "google-generative-ai",
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1048576,
+                  maxTokens: 65536,
+                },
+                {
                   id: "gemini-3-flash",
                   name: "Gemini 3 Flash",
                   api: "google-generative-ai",
@@ -49,7 +59,11 @@ describe("models-config", () => {
         providers: Record<string, { models: Array<{ id: string }> }>;
       }>();
       const ids = parsed.providers.google?.models?.map((model) => model.id);
-      expect(ids).toEqual(["gemini-3-pro-preview", "gemini-3-flash-preview"]);
+      expect(ids).toEqual([
+        "gemini-3-pro-preview",
+        "gemini-3.1-pro-preview",
+        "gemini-3-flash-preview",
+      ]);
     });
   });
 
