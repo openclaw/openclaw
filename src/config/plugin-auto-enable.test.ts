@@ -342,6 +342,22 @@ describe("applyPluginAutoEnable", () => {
     expect(result.config.plugins?.entries?.acpx?.enabled).toBeUndefined();
   });
 
+  it("auto-enables acp-remote when ACP is configured for the remote backend", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        acp: {
+          enabled: true,
+          backend: "acp-remote",
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.["acp-remote"]?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.acpx?.enabled).toBeUndefined();
+    expect(result.changes.join("\n")).toContain("ACP runtime configured, enabled automatically.");
+  });
+
   it("skips when plugins are globally disabled", () => {
     const result = applyPluginAutoEnable({
       config: {

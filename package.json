@@ -84,6 +84,10 @@
       "types": "./dist/plugin-sdk/acpx.d.ts",
       "default": "./dist/plugin-sdk/acpx.js"
     },
+    "./plugin-sdk/acp": {
+      "types": "./dist/plugin-sdk/acp.d.ts",
+      "default": "./dist/plugin-sdk/acp.js"
+    },
     "./plugin-sdk/bluebubbles": {
       "types": "./dist/plugin-sdk/bluebubbles.d.ts",
       "default": "./dist/plugin-sdk/bluebubbles.js"

@@ -266,14 +266,7 @@ export function mergeRuntimeOptions(params: {
 }
 
 export function resolveRuntimeOptionsFromMeta(meta: SessionAcpMeta): AcpSessionRuntimeOptions {
-  const normalized = normalizeRuntimeOptions(meta.runtimeOptions);
-  if (normalized.cwd || !meta.cwd) {
-    return normalized;
-  }
-  return normalizeRuntimeOptions({
-    ...normalized,
-    cwd: meta.cwd,
-  });
+  return normalizeRuntimeOptions(meta.runtimeOptions);
 }
 
 export function runtimeOptionsEqual(

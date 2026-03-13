@@ -1,0 +1,67 @@
+{
+  "id": "acp-remote",
+  "name": "ACP Remote Runtime",
+  "description": "ACP runtime backend that connects OpenClaw to a remote ACP gateway over Streamable HTTP.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "url": {
+        "type": "string"
+      },
+      "defaultCwd": {
+        "type": "string"
+      },
+      "headers": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      },
+      "timeoutSeconds": {
+        "type": "number",
+        "minimum": 0.001
+      },
+      "retryDelayMs": {
+        "type": "number",
+        "minimum": 0
+      },
+      "protocolVersion": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 65535
+      }
+    },
+    "required": ["url"]
+  },
+  "uiHints": {
+    "url": {
+      "label": "Gateway URL",
+      "help": "HTTP endpoint that accepts ACP JSON-RPC requests over Streamable HTTP and returns JSON or SSE responses."
+    },
+    "defaultCwd": {
+      "label": "Default Working Directory",
+      "help": "Optional absolute path to use on the remote host when callers omit cwd. If unset, the remote gateway uses its own default working directory."
+    },
+    "headers": {
+      "label": "HTTP Headers",
+      "help": "Optional static headers to include on each gateway request, for example Authorization.",
+      "advanced": true
+    },
+    "timeoutSeconds": {
+      "label": "Request Timeout Seconds",
+      "help": "Timeout applied to initialize, session setup, control, and prompt requests.",
+      "advanced": true
+    },
+    "retryDelayMs": {
+      "label": "Prompt Retry Delay Ms",
+      "help": "Delay before reissuing a dropped prompt request with the same OpenClaw request id.",
+      "advanced": true
+    },
+    "protocolVersion": {
+      "label": "ACP Protocol Version",
+      "help": "ACP protocol version to negotiate with the remote gateway.",
+      "advanced": true
+    }
+  }
+}

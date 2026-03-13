@@ -54,10 +54,16 @@ function createRuntime(): {
   setConfigOption: ReturnType<typeof vi.fn>;
 } {
   const ensureSession = vi.fn(
-    async (input: { sessionKey: string; agent: string; mode: "persistent" | "oneshot" }) => ({
+    async (input: {
+      sessionKey: string;
+      agent: string;
+      mode: "persistent" | "oneshot";
+      cwd?: string;
+    }) => ({
       sessionKey: input.sessionKey,
       backend: "acpx",
       runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
+      cwd: input.cwd,
     }),
   );
   const runTurn = vi.fn(async function* () {
@@ -381,6 +387,139 @@ describe("AcpSessionManager", () => {
     });
 
     expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps learned cwd out of explicit runtime input across initialize and restart", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.ensureSession.mockImplementation(
+      async (input: {
+        sessionKey: string;
+        agent: string;
+        mode: "persistent" | "oneshot";
+        cwd?: string;
+      }) => ({
+        sessionKey: input.sessionKey,
+        backend: "acpx",
+        runtimeSessionName: `${input.sessionKey}:${input.mode}:${runtimeState.ensureSession.mock.calls.length}`,
+        cwd: input.cwd ?? "/srv/remote-session",
+      }),
+    );
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+
+    let storedMeta: SessionAcpMeta | undefined;
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+      if (!storedMeta) {
+        return null;
+      }
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: storedMeta,
+      };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        sessionKey: string;
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const entry = storedMeta
+        ? {
+            sessionId: "session-1",
+            updatedAt: Date.now(),
+            acp: storedMeta,
+          }
+        : undefined;
+      const next = params.mutate(storedMeta, entry);
+      if (!next) {
+        storedMeta = undefined;
+        return null;
+      }
+      storedMeta = next;
+      return {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        acp: next,
+      };
+    });
+
+    const managerA = new AcpSessionManager();
+    const initialized = await managerA.initializeSession({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    expect(initialized.meta.cwd).toBe("/srv/remote-session");
+    expect(initialized.meta.runtimeOptions?.cwd).toBeUndefined();
+    expect(runtimeState.ensureSession).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        sessionKey: "agent:codex:acp:session-1",
+        cwd: undefined,
+      }),
+    );
+
+    const managerB = new AcpSessionManager();
+    await managerB.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "after restart",
+      mode: "prompt",
+      requestId: "r2",
+    });
+
+    expect(storedMeta?.cwd).toBe("/srv/remote-session");
+    expect(storedMeta?.runtimeOptions?.cwd).toBeUndefined();
+    expect(runtimeState.ensureSession).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        sessionKey: "agent:codex:acp:session-1",
+        cwd: undefined,
+      }),
+    );
+  });
+
+  it("replays explicit cwd on restart", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-explicit",
+      storeSessionKey: "agent:codex:acp:session-explicit",
+      acp: {
+        ...readySessionMeta(),
+        cwd: "/workspace/explicit",
+        runtimeOptions: {
+          cwd: "/workspace/explicit",
+        },
+      },
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-explicit",
+      text: "resume explicit cwd",
+      mode: "prompt",
+      requestId: "r-explicit",
+    });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:codex:acp:session-explicit",
+        cwd: "/workspace/explicit",
+      }),
+    );
   });
 
   it("enforces acp.maxConcurrentSessions when opening new runtime handles", async () => {
@@ -1254,7 +1393,7 @@ describe("AcpSessionManager", () => {
     hoisted.requireAcpRuntimeBackendMock.mockImplementation(() => {
       throw new AcpRuntimeError(
         "ACP_BACKEND_MISSING",
-        "ACP runtime backend is not configured. Install and enable the acpx runtime plugin.",
+        "ACP runtime backend is not configured. Install and enable an ACP runtime plugin.",
       );
     });
 
@@ -1282,7 +1421,7 @@ describe("AcpSessionManager", () => {
     hoisted.requireAcpRuntimeBackendMock.mockImplementation(() => {
       throw new AcpRuntimeError(
         "ACP_BACKEND_MISSING",
-        "ACP runtime backend is not configured. Install and enable the acpx runtime plugin.",
+        "ACP runtime backend is not configured. Install and enable an ACP runtime plugin.",
       );
     });
     hoisted.upsertAcpSessionMetaMock.mockRejectedValueOnce(new Error("disk locked"));

@@ -18,6 +18,7 @@ const entrypoints = [
   "whatsapp",
   "line",
   "msteams",
+  "acp",
   "acpx",
   "bluebubbles",
   "copilot-proxy",
