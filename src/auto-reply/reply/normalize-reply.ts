@@ -25,6 +25,37 @@ export type NormalizeReplyOptions = {
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
 
+function isNoReplyActionValue(value: unknown): boolean {
+  return typeof value === "string" && value.trim().toUpperCase() === SILENT_REPLY_TOKEN;
+}
+
+function parseNoReplyActionJsonText(text: string | undefined): boolean {
+  const trimmed = text?.trim();
+  if (!trimmed || !trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    return isNoReplyActionValue(parsed.action);
+  } catch {
+    return false;
+  }
+}
+
+function containsNoReplyAction(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => containsNoReplyAction(entry));
+  }
+  const record = value as Record<string, unknown>;
+  if (isNoReplyActionValue(record.action)) {
+    return true;
+  }
+  return Object.values(record).some((entry) => containsNoReplyAction(entry));
+}
+
 export function normalizeReplyPayload(
   payload: ReplyPayload,
   opts: NormalizeReplyOptions = {},
@@ -33,8 +64,21 @@ export function normalizeReplyPayload(
   const hasChannelData = Boolean(
     payload.channelData && Object.keys(payload.channelData).length > 0,
   );
+  const hasNoReplyActionChannelData = containsNoReplyAction(payload.channelData);
+  const textIsNoReplyActionJson = parseNoReplyActionJsonText(payload.text);
   const trimmed = payload.text?.trim() ?? "";
-  if (!trimmed && !hasMedia && !hasChannelData) {
+  const hasEffectiveChannelData = hasChannelData && !hasNoReplyActionChannelData;
+
+  if ((textIsNoReplyActionJson || hasNoReplyActionChannelData) && !hasMedia && !trimmed) {
+    opts.onSkip?.("silent");
+    return null;
+  }
+  if (textIsNoReplyActionJson && !hasMedia && !hasEffectiveChannelData) {
+    opts.onSkip?.("silent");
+    return null;
+  }
+
+  if (!trimmed && !hasMedia && !hasEffectiveChannelData) {
     opts.onSkip?.("empty");
     return null;
   }
@@ -42,7 +86,7 @@ export function normalizeReplyPayload(
   const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
   let text = payload.text ?? undefined;
   if (text && isSilentReplyText(text, silentToken)) {
-    if (!hasMedia && !hasChannelData) {
+    if (!hasMedia && !hasEffectiveChannelData) {
       opts.onSkip?.("silent");
       return null;
     }
@@ -53,7 +97,7 @@ export function normalizeReplyPayload(
   // silent just like the exact-match path above.  (#30916, #30955)
   if (text && text.includes(silentToken) && !isSilentReplyText(text, silentToken)) {
     text = stripSilentToken(text, silentToken);
-    if (!text && !hasMedia && !hasChannelData) {
+    if (!text && !hasMedia && !hasEffectiveChannelData) {
       opts.onSkip?.("silent");
       return null;
     }
@@ -69,7 +113,7 @@ export function normalizeReplyPayload(
     if (stripped.didStrip) {
       opts.onHeartbeatStrip?.();
     }
-    if (stripped.shouldSkip && !hasMedia && !hasChannelData) {
+    if (stripped.shouldSkip && !hasMedia && !hasEffectiveChannelData) {
       opts.onSkip?.("heartbeat");
       return null;
     }
@@ -79,7 +123,7 @@ export function normalizeReplyPayload(
   if (text) {
     text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
   }
-  if (!text?.trim() && !hasMedia && !hasChannelData) {
+  if (!text?.trim() && !hasMedia && !hasEffectiveChannelData) {
     opts.onSkip?.("empty");
     return null;
   }
