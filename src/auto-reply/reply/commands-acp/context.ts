@@ -1,5 +1,6 @@
 import {
   buildTelegramTopicConversationId,
+  normalizeConversationText,
   parseTelegramChatIdFromTarget,
 } from "../../../acp/conversation-id.js";
 import { DISCORD_THREAD_BINDING_CHANNEL } from "../../../channels/thread-bindings-policy.js";
@@ -8,33 +9,25 @@ import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import type { HandleCommandsParams } from "../commands-types.js";
 import { resolveTelegramConversationId } from "../telegram-context.js";
 
-function normalizeString(value: unknown): string {
-  if (typeof value === "string") {
-    return value.trim();
-  }
-  if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
-    return `${value}`.trim();
-  }
-  return "";
-}
-
 export function resolveAcpCommandChannel(params: HandleCommandsParams): string {
   const raw =
     params.ctx.OriginatingChannel ??
     params.command.channel ??
     params.ctx.Surface ??
     params.ctx.Provider;
-  return normalizeString(raw).toLowerCase();
+  return normalizeConversationText(raw).toLowerCase();
 }
 
 export function resolveAcpCommandAccountId(params: HandleCommandsParams): string {
-  const accountId = normalizeString(params.ctx.AccountId);
+  const accountId = normalizeConversationText(params.ctx.AccountId);
   return accountId || "default";
 }
 
 export function resolveAcpCommandThreadId(params: HandleCommandsParams): string | undefined {
   const threadId =
-    params.ctx.MessageThreadId != null ? normalizeString(String(params.ctx.MessageThreadId)) : "";
+    params.ctx.MessageThreadId != null
+      ? normalizeConversationText(String(params.ctx.MessageThreadId))
+      : "";
   return threadId || undefined;
 }
 
@@ -72,7 +65,7 @@ export function resolveAcpCommandConversationId(params: HandleCommandsParams): s
 }
 
 function parseDiscordParentChannelFromSessionKey(raw: unknown): string | undefined {
-  const sessionKey = normalizeString(raw);
+  const sessionKey = normalizeConversationText(raw);
   if (!sessionKey) {
     return undefined;
   }
@@ -85,7 +78,7 @@ function parseDiscordParentChannelFromSessionKey(raw: unknown): string | undefin
 }
 
 function parseDiscordParentChannelFromContext(raw: unknown): string | undefined {
-  const parentId = normalizeString(raw);
+  const parentId = normalizeConversationText(raw);
   if (!parentId) {
     return undefined;
   }
