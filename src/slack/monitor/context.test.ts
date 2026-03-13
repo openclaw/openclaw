@@ -41,6 +41,7 @@ function createTestContext() {
       sessionPrefix: "slack:slash",
     },
     textLimit: 4000,
+    ackReactionTiming: "received",
     typingReaction: "",
     ackReactionScope: "group-mentions",
     mediaMaxBytes: 20 * 1024 * 1024,

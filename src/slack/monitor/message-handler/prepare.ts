@@ -556,7 +556,10 @@ export async function prepareSlackMessage(params: {
 
   const ackReactionMessageTs = message.ts;
   const ackReactionPromise =
-    shouldAckReaction() && ackReactionMessageTs && ackReactionValue
+    ctx.ackReactionTiming === "received" &&
+    shouldAckReaction() &&
+    ackReactionMessageTs &&
+    ackReactionValue
       ? reactSlackMessage(message.channel, ackReactionMessageTs, ackReactionValue, {
           token: ctx.botToken,
           client: ctx.app.client,

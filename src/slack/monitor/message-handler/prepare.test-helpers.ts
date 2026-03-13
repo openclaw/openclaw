@@ -45,6 +45,7 @@ export function createInboundSlackTestContext(params: {
       ephemeral: true,
     },
     textLimit: 4000,
+    ackReactionTiming: "received",
     ackReactionScope: "group-mentions",
     typingReaction: "",
     mediaMaxBytes: 1024,

@@ -1476,6 +1476,8 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.suppressToolErrors":
     "When true, suppress ⚠️ tool-error warnings from being shown to the user. The agent already sees errors in context and can retry. Default: false.",
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
+  "messages.ackReactionTiming":
+    'When to send ack reactions. "received" reacts as soon as the inbound message is accepted; "run-start" waits until the agent emits real run activity. Default: "received".',
   "messages.ackReactionScope":
     'When to send ack reactions ("group-mentions", "group-all", "direct", "all", "off", "none"). "off"/"none" disables ack reactions entirely.',
   "messages.statusReactions":

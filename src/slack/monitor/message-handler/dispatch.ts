@@ -223,6 +223,32 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let streamSession: SlackStreamSession | null = null;
   let streamFailed = false;
   let usedReplyThreadTs: string | undefined;
+  let ackReactionPromise = prepared.ackReactionPromise;
+
+  const ensureAckReactionStarted = async (): Promise<void> => {
+    if (ackReactionPromise) {
+      return;
+    }
+    if (ctx.ackReactionTiming !== "run-start") {
+      return;
+    }
+    const ackMessageTs = prepared.ackReactionMessageTs?.trim();
+    const ackReactionValue = prepared.ackReactionValue.trim();
+    if (!ackMessageTs || !ackReactionValue) {
+      return;
+    }
+    ackReactionPromise = reactSlackMessage(message.channel, ackMessageTs, ackReactionValue, {
+      token: ctx.botToken,
+      client: ctx.app.client,
+    }).then(
+      () => true,
+      (err) => {
+        logVerbose(`slack react failed for channel ${message.channel}: ${String(err)}`);
+        return false;
+      },
+    );
+    await ackReactionPromise;
+  };
 
   const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
     const replyThreadTs = forcedThreadTs ?? replyPlan.nextThreadTs();
@@ -440,6 +466,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         : typeof account.config.blockStreaming === "boolean"
           ? !account.config.blockStreaming
           : undefined,
+      onAgentRunStart: () => {
+        void ensureAckReactionStarted();
+      },
       onModelSelected,
       onPartialReply: useStreaming
         ? undefined
@@ -499,7 +528,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   removeAckReactionAfterReply({
     removeAfterReply: ctx.removeAckAfterReply,
-    ackReactionPromise: prepared.ackReactionPromise,
+    ackReactionPromise,
     ackReactionValue: prepared.ackReactionValue,
     remove: () =>
       removeSlackReaction(

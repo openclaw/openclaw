@@ -570,6 +570,32 @@ describe("slack prepareSlackMessage inbound contract", () => {
     // MessageThreadId should be set for the reply
     expect(prepared!.ctxPayload.MessageThreadId).toBe("500.000");
   });
+
+  it("defers ack reactions when ackReactionTiming is run-start", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+        messages: {
+          ackReaction: "eyes",
+          ackReactionTiming: "run-start",
+          ackReactionScope: "direct",
+        },
+      } as OpenClawConfig,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ ackReaction: "eyes" }),
+      createSlackMessage({ ts: "700.000" }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ackReactionValue).toBe("eyes");
+    expect(prepared!.ackReactionMessageTs).toBe("700.000");
+    expect(prepared!.ackReactionPromise).toBeNull();
+  });
 });
 
 describe("prepareSlackMessage sender prefix", () => {
@@ -616,6 +642,7 @@ describe("prepareSlackMessage sender prefix", () => {
       threadInheritParent: false,
       slashCommand: params.slashCommand,
       textLimit: 2000,
+      ackReactionTiming: "received",
       ackReactionScope: "off",
       mediaMaxBytes: 1000,
       removeAckAfterReply: false,

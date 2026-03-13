@@ -83,6 +83,8 @@ export type StatusReactionsConfig = {
   timing?: StatusReactionsTimingConfig;
 };
 
+export type AckReactionTiming = "received" | "run-start";
+
 export type MessagesConfig = {
   /** @deprecated Use `whatsapp.messagePrefix` (WhatsApp-only inbound prefix). */
   messagePrefix?: string;
@@ -112,6 +114,8 @@ export type MessagesConfig = {
   inbound?: InboundDebounceConfig;
   /** Emoji reaction used to acknowledge inbound messages (empty disables). */
   ackReaction?: string;
+  /** When to send ack reactions. Default: "received". */
+  ackReactionTiming?: AckReactionTiming;
   /** When to send ack reactions. Default: "group-mentions". */
   ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
   /** Remove ack reaction after reply is sent (default: false). */

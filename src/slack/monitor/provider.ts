@@ -180,6 +180,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const threadInheritParent = slackCfg.thread?.inheritParent ?? false;
   const slashCommand = resolveSlackSlashCommandConfig(opts.slashCommand ?? slackCfg.slashCommand);
   const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId);
+  const ackReactionTiming = cfg.messages?.ackReactionTiming ?? "received";
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const typingReaction = slackCfg.typingReaction?.trim() ?? "";
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
@@ -279,6 +280,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     threadInheritParent,
     slashCommand,
     textLimit,
+    ackReactionTiming,
     ackReactionScope,
     typingReaction,
     mediaMaxBytes,
