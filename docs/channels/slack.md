@@ -169,15 +169,15 @@ For actions/directory reads, user token can be preferred when configured. For wr
     - `allowlist`
     - `disabled`
 
-    Channel allowlist lives under `channels.slack.channels`.
+    Channel allowlist lives under `channels.slack.channels` and should use stable channel IDs.
 
     Runtime note: if `channels.slack` is completely missing (env-only setup), runtime falls back to `groupPolicy="allowlist"` and logs a warning (even if `channels.defaults.groupPolicy` is set).
 
     Name/ID resolution:
 
     - channel allowlist entries and DM allowlist entries are resolved at startup when token access allows
-    - unresolved entries are kept as configured
-    - inbound authorization matching is ID-first by default; direct username/slug matching requires `channels.slack.dangerouslyAllowNameMatching: true`
+    - unresolved channel-name entries are kept as configured but ignored for routing by default
+    - inbound authorization and channel routing are ID-first by default; direct username/slug matching requires `channels.slack.dangerouslyAllowNameMatching: true`
 
   </Tab>
 
@@ -190,7 +190,7 @@ For actions/directory reads, user token can be preferred when configured. For wr
     - mention regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
     - implicit reply-to-bot thread behavior
 
-    Per-channel controls (`channels.slack.channels.<id|name>`):
+    Per-channel controls (`channels.slack.channels.<id>`; names only via startup resolution or `dangerouslyAllowNameMatching`):
 
     - `requireMention`
     - `users` (allowlist)
