@@ -25,6 +25,7 @@ import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
+import { isTestEnvironment } from "../utils/test-env.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -55,7 +56,7 @@ function resolveSessionKeyFromBody(body: ToolsInvokeBody): string | undefined {
 }
 
 function resolveMemoryToolDisableReasons(cfg: ReturnType<typeof loadConfig>): string[] {
-  if (!process.env.VITEST) {
+  if (!isTestEnvironment()) {
     return [];
   }
   const reasons: string[] = [];
@@ -181,7 +182,7 @@ export async function handleToolsInvokeHttpRequest(
     return true;
   }
 
-  if (process.env.VITEST && MEMORY_TOOL_NAMES.has(toolName)) {
+  if (isTestEnvironment() && MEMORY_TOOL_NAMES.has(toolName)) {
     const reasons = resolveMemoryToolDisableReasons(cfg);
     if (reasons.length > 0) {
       const suffix = reasons.length > 0 ? ` (${reasons.join(", ")})` : "";
