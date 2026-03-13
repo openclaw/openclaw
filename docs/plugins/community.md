@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **TweetClaw** — Post tweets, reply, like, retweet, follow, DM & more from your chat. Full X/Twitter automation powered by Xquik.
+  npm: `@xquik/tweetclaw`
+  repo: `https://github.com/Xquik-dev/tweetclaw`
+  install: `openclaw plugins install @xquik/tweetclaw`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
