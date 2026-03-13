@@ -159,7 +159,7 @@ function mergeAcpVisibleChunk(base: string, chunk: string): { text: string; delt
   if (!base) {
     return { text: chunk, delta: chunk };
   }
-  if (chunk.startsWith(base) && chunk.length > base.length) {
+  if (chunk.startsWith(base)) {
     return {
       text: chunk,
       delta: chunk.slice(base.length),

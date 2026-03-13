@@ -623,6 +623,11 @@ describe("tryDispatchAcpReply", () => {
         });
         await onEvent({
           type: "text_delta",
+          text: "alpha beta",
+          tag: "agent_message_chunk",
+        });
+        await onEvent({
+          type: "text_delta",
           text: " gamma",
           stream: "output",
           tag: "agent_message_chunk",
@@ -665,6 +670,16 @@ describe("tryDispatchAcpReply", () => {
         data: expect.objectContaining({
           text: "alpha beta",
           delta: " beta",
+          tag: "agent_message_chunk",
+          source: "acp",
+        }),
+      }),
+      expect.objectContaining({
+        runId: "run-acp-output-streams",
+        stream: "assistant",
+        data: expect.objectContaining({
+          text: "alpha beta",
+          delta: "",
           tag: "agent_message_chunk",
           source: "acp",
         }),
