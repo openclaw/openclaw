@@ -516,6 +516,22 @@ describe("ws connect policy", () => {
       }),
     ).toBe(false);
 
+    // bootstrap-token should also count as a trusted backend authOk method so
+    // first-time paired sessions can still use internal inter_session delivery.
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams(
+          GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          GATEWAY_CLIENT_MODES.BACKEND,
+        ),
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
+        authOk: true,
+        authMethod: "bootstrap-token",
+      }),
+    ).toBe(true);
+
     // Remote backend client (gateway.mode=remote) with valid shared-secret auth is trusted.
     expect(
       shouldSkipBackendSelfPairing({
