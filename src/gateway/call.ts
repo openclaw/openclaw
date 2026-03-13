@@ -705,14 +705,17 @@ async function resolveGatewayTlsFingerprint(params: {
   url: string;
 }): Promise<string | undefined> {
   const { opts, context, url } = params;
+  const bindMode = context.config.gateway?.bind ?? "loopback";
   const useLocalTls =
-    context.config.gateway?.tls?.enabled === true &&
+    (context.config.gateway?.tls?.enabled === true || bindMode === "netbird") &&
     !context.urlOverrideSource &&
     !context.remoteUrl &&
     url.startsWith("wss://");
-  const tlsRuntime = useLocalTls
-    ? await loadGatewayTlsRuntime(context.config.gateway?.tls)
-    : undefined;
+  const effectiveTlsCfg =
+    useLocalTls && bindMode === "netbird" && context.config.gateway?.tls?.enabled !== true
+      ? { ...context.config.gateway?.tls, enabled: true as const, autoGenerate: true }
+      : context.config.gateway?.tls;
+  const tlsRuntime = useLocalTls ? await loadGatewayTlsRuntime(effectiveTlsCfg) : undefined;
   const overrideTlsFingerprint = trimToUndefined(opts.tlsFingerprint);
   const remoteTlsFingerprint =
     // Env overrides may still inherit configured remote TLS pinning for private cert deployments.

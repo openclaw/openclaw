@@ -476,7 +476,7 @@ export function resolveControlUiLinks(params: {
       return tailnetIPv4 ?? "127.0.0.1";
     }
     if (bind === "netbird" && netbirdIPv4) {
-      return netbirdIPv4 ?? "127.0.0.1";
+      return netbirdIPv4;
     }
     if (bind === "lan") {
       return pickPrimaryLanIPv4() ?? "127.0.0.1";
