@@ -28,14 +28,7 @@ export function expectSingleNpmInstallIgnoreScriptsCall(params: {
     throw new Error("expected npm install call");
   }
   const [argv, opts] = first;
-  expect(argv).toEqual([
-    "npm",
-    "install",
-    "--omit=dev",
-    "--omit=peer",
-    "--silent",
-    "--ignore-scripts",
-  ]);
+  expect(argv).toEqual(["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"]);
   expect(opts?.cwd).toBeTruthy();
   const cwd = String(opts?.cwd);
   const expectedTargetDir = params.expectedTargetDir;

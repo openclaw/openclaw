@@ -678,7 +678,7 @@ describe("handleLineWebhookEvents", () => {
   it("skips group messages by default when requireMention is not configured", async () => {
     const processMessage = vi.fn();
     const event = createTestMessageEvent({
-      message: { id: "m-default-skip", type: "text", text: "hi there" },
+      message: { id: "m-default-skip", type: "text", text: "hi there", quoteToken: "q-default" },
       source: { type: "group", groupId: "group-default", userId: "user-default" },
       webhookEventId: "evt-default-skip",
     });
@@ -702,7 +702,7 @@ describe("handleLineWebhookEvents", () => {
       import("../auto-reply/reply/history.js").HistoryEntry[]
     >();
     const event = createTestMessageEvent({
-      message: { id: "m-hist-1", type: "text", text: "hello history" },
+      message: { id: "m-hist-1", type: "text", text: "hello history", quoteToken: "q-hist-1" },
       timestamp: 1700000000000,
       source: { type: "group", groupId: "group-hist-1", userId: "user-hist" },
       webhookEventId: "evt-hist-1",
@@ -730,7 +730,7 @@ describe("handleLineWebhookEvents", () => {
   it("skips group messages without mention when requireMention is set", async () => {
     const processMessage = vi.fn();
     const event = createTestMessageEvent({
-      message: { id: "m-mention-1", type: "text", text: "hi there" },
+      message: { id: "m-mention-1", type: "text", text: "hi there", quoteToken: "q-mention-1" },
       source: { type: "group", groupId: "group-mention", userId: "user-mention" },
       webhookEventId: "evt-mention-1",
     });
@@ -808,7 +808,7 @@ describe("handleLineWebhookEvents", () => {
   it("does not apply requireMention gating to DM messages", async () => {
     const processMessage = vi.fn();
     const event = createTestMessageEvent({
-      message: { id: "m-mention-dm", type: "text", text: "hi" },
+      message: { id: "m-mention-dm", type: "text", text: "hi", quoteToken: "q-mention-dm" },
       source: { type: "user", userId: "user-dm" },
       webhookEventId: "evt-mention-dm",
     });
@@ -830,7 +830,12 @@ describe("handleLineWebhookEvents", () => {
     const processMessage = vi.fn();
     // Image message -- LINE only carries mention metadata on text messages.
     const event = createTestMessageEvent({
-      message: { id: "m-mention-img", type: "image", contentProvider: { type: "line" } },
+      message: {
+        id: "m-mention-img",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-mention-img",
+      },
       source: { type: "group", groupId: "group-1", userId: "user-img" },
       webhookEventId: "evt-mention-img",
     });

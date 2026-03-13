@@ -192,7 +192,7 @@ describe("format-datetime", () => {
           formatToParts: () => {
             throw new Error("boom");
           },
-        } as Intl.DateTimeFormat;
+        } as unknown as Intl.DateTimeFormat;
       }
 
       vi.spyOn(Intl, "DateTimeFormat").mockImplementation(
