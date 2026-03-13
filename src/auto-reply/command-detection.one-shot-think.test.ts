@@ -69,6 +69,7 @@ describe("isOneShotThinkMessage", () => {
 
   it("rejects directive-only tails after the think level", () => {
     expect(isOneShotThinkMessage("/think high /status")).toBe(false);
+    expect(isOneShotThinkMessage("/think high /fast on")).toBe(false);
     expect(isOneShotThinkMessage("/think high /exec host=sandbox")).toBe(false);
     expect(isOneShotThinkMessage("/think high /queue interrupt")).toBe(false);
   });
@@ -105,6 +106,7 @@ describe("hasControlCommand with one-shot think", () => {
 
   it("returns true for /think <level> followed by directive-only tails", () => {
     expect(hasControlCommand("/think high /status")).toBe(true);
+    expect(hasControlCommand("/think high /fast on")).toBe(true);
     expect(hasControlCommand("/think high /exec host=sandbox")).toBe(true);
     expect(hasControlCommand("/think high /queue interrupt")).toBe(true);
   });

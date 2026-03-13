@@ -35,6 +35,7 @@ function isDirectiveOnlyTail(text: string, cfg?: OpenClawConfig): boolean {
   }
   return (
     parsed.hasThinkDirective ||
+    parsed.hasFastDirective ||
     parsed.hasVerboseDirective ||
     parsed.hasReasoningDirective ||
     parsed.hasElevatedDirective ||
