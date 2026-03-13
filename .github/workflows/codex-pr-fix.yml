@@ -1,0 +1,381 @@
+name: Codex PR Fix
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to process"
+        required: true
+        type: string
+      instruction:
+        description: "Optional extra instruction for Codex"
+        required: false
+        type: string
+
+concurrency:
+  group: codex-pr-fix-${{ github.event.issue.number || inputs.pr_number || github.run_id }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  codex-pr-fix:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '/codex-fix'))
+    runs-on: ubuntu-latest
+    permissions:
+      checks: read
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Resolve PR context and gate execution
+        id: guard
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PR_NUMBER_INPUT: ${{ inputs.pr_number }}
+          INSTRUCTION_INPUT: ${{ inputs.instruction }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const isWorkflowDispatch = context.eventName === "workflow_dispatch";
+            const prNumber = isWorkflowDispatch
+              ? Number(process.env.PR_NUMBER_INPUT || "")
+              : Number(context.payload.issue?.number || "");
+            if (!Number.isFinite(prNumber) || prNumber <= 0) {
+              core.setFailed("Unable to resolve pull request number.");
+              return;
+            }
+
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+
+            const actor = isWorkflowDispatch ? context.actor : context.payload.comment.user.login;
+            const source = isWorkflowDispatch ? "workflow_dispatch" : "issue_comment";
+            const triggerBody = isWorkflowDispatch
+              ? process.env.INSTRUCTION_INPUT || ""
+              : context.payload.comment.body || "";
+            const extraInstruction = isWorkflowDispatch
+              ? (process.env.INSTRUCTION_INPUT || "").trim()
+              : triggerBody.replace(/^\/codex-fix\b/i, "").trim();
+
+            const permResp = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              username: actor,
+            });
+            const allowed = ["admin", "maintain", "write"].includes(permResp.data.permission);
+            const sameRepo = pr.data.head.repo.full_name === `${context.repo.owner}/${context.repo.repo}`;
+
+            const reject = async (message) => {
+              if (!isWorkflowDispatch) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  body: message,
+                });
+              } else {
+                core.setFailed(message);
+              }
+              core.setOutput("should-run", "false");
+            };
+
+            if (!allowed) {
+              await reject(`@${actor} is not allowed to run /codex-fix. Maintainer-level write access is required.`);
+              return;
+            }
+
+            if (!sameRepo) {
+              await reject(
+                "This automation currently only supports PR branches that live in the same repository as the workflow. Fork PRs should be fixed locally and pushed manually.",
+              );
+              return;
+            }
+
+            core.setOutput("should-run", "true");
+            core.setOutput("pr-number", String(prNumber));
+            core.setOutput("pr-url", pr.data.html_url);
+            core.setOutput("head-ref", pr.data.head.ref);
+            core.setOutput("head-sha", pr.data.head.sha);
+            core.setOutput("base-ref", pr.data.base.ref);
+            core.setOutput("base-sha", pr.data.base.sha);
+            core.setOutput("actor", actor);
+            core.setOutput("source", source);
+            core.setOutput("extra-instruction", extraInstruction);
+            core.setOutput("trigger-url", isWorkflowDispatch ? "" : context.payload.comment.html_url || "");
+
+      - name: Checkout PR head
+        if: steps.guard.outputs.should-run == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.guard.outputs.head-ref }}
+          fetch-depth: 0
+          submodules: false
+
+      - name: Fetch base branch
+        if: steps.guard.outputs.should-run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "${{ steps.guard.outputs.base-ref }}" --depth=1
+
+      - name: Setup Node environment
+        if: steps.guard.outputs.should-run == 'true'
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Configure git author
+        if: steps.guard.outputs.should-run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Collect PR context
+        if: steps.guard.outputs.should-run == 'true'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PR_NUMBER: ${{ steps.guard.outputs.pr-number }}
+          EXTRA_INSTRUCTION: ${{ steps.guard.outputs.extra-instruction }}
+          TRIGGER_SOURCE: ${{ steps.guard.outputs.source }}
+          TRIGGER_ACTOR: ${{ steps.guard.outputs.actor }}
+          TRIGGER_URL: ${{ steps.guard.outputs.trigger-url }}
+          TRIGGER_BODY: ${{ (github.event_name == 'workflow_dispatch' && inputs.instruction) || (github.event_name == 'issue_comment' && github.event.comment.body) || '' }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require("fs");
+            const path = require("path");
+
+            const prNumber = Number(process.env.PR_NUMBER);
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const prResp = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: prNumber,
+            });
+
+            const changedFiles = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number: prNumber,
+              per_page: 100,
+            });
+
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner,
+              repo,
+              pull_number: prNumber,
+              per_page: 100,
+            });
+
+            const reviewComments = await github.paginate(github.rest.pulls.listReviewComments, {
+              owner,
+              repo,
+              pull_number: prNumber,
+              per_page: 100,
+            });
+
+            const issueComments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: prNumber,
+              per_page: 100,
+            });
+
+            let checkRuns = [];
+            try {
+              checkRuns = await github.paginate(github.rest.checks.listForRef, {
+                owner,
+                repo,
+                ref: prResp.data.head.sha,
+                per_page: 100,
+              });
+            } catch (error) {
+              core.warning(`Unable to list check runs: ${error.message}`);
+            }
+
+            let combinedStatus = null;
+            try {
+              const statusResp = await github.rest.repos.getCombinedStatusForRef({
+                owner,
+                repo,
+                ref: prResp.data.head.sha,
+              });
+              combinedStatus = statusResp.data;
+            } catch (error) {
+              core.warning(`Unable to read combined status: ${error.message}`);
+            }
+
+            const failingChecks = [
+              ...checkRuns
+                .filter((run) => run.conclusion === "failure" || run.conclusion === "timed_out" || run.conclusion === "cancelled")
+                .map((run) => ({
+                  name: run.name,
+                  status: run.status,
+                  conclusion: run.conclusion,
+                  detailsUrl: run.details_url,
+                })),
+              ...(combinedStatus?.statuses || [])
+                .filter((status) => status.state === "failure" || status.state === "error")
+                .map((status) => ({
+                  name: status.context,
+                  status: status.state,
+                  conclusion: status.description,
+                  detailsUrl: status.target_url,
+                })),
+            ];
+
+            const payload = {
+              repository: `${owner}/${repo}`,
+              pr: {
+                number: prResp.data.number,
+                title: prResp.data.title,
+                url: prResp.data.html_url,
+                baseRef: prResp.data.base.ref,
+                baseSha: prResp.data.base.sha,
+                headRef: prResp.data.head.ref,
+                headSha: prResp.data.head.sha,
+                author: prResp.data.user?.login || "",
+                body: prResp.data.body || "",
+              },
+              trigger: {
+                source: process.env.TRIGGER_SOURCE || "",
+                actor: process.env.TRIGGER_ACTOR || "",
+                url: process.env.TRIGGER_URL || "",
+                body: process.env.TRIGGER_BODY || "",
+                extraInstruction: process.env.EXTRA_INSTRUCTION || "",
+              },
+              changedFiles: changedFiles.map((file) => ({
+                filename: file.filename,
+                status: file.status,
+                additions: file.additions,
+                deletions: file.deletions,
+                changes: file.changes,
+              })),
+              failingChecks,
+              reviews: reviews.map((review) => ({
+                id: review.id,
+                user: review.user?.login || "",
+                state: review.state,
+                submittedAt: review.submitted_at,
+                body: review.body || "",
+              })),
+              reviewComments: reviewComments.map((comment) => ({
+                id: comment.id,
+                user: comment.user?.login || "",
+                path: comment.path,
+                line: comment.line,
+                side: comment.side,
+                body: comment.body || "",
+                htmlUrl: comment.html_url,
+              })),
+              issueComments: issueComments.map((comment) => ({
+                id: comment.id,
+                user: comment.user?.login || "",
+                createdAt: comment.created_at,
+                body: comment.body || "",
+                htmlUrl: comment.html_url,
+              })),
+            };
+
+            fs.mkdirSync(path.join(".github", "tmp"), { recursive: true });
+            fs.writeFileSync(
+              path.join(".github", "tmp", "codex-pr-context.json"),
+              JSON.stringify(payload, null, 2),
+            );
+
+      - name: Build Codex prompt
+        if: steps.guard.outputs.should-run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node .github/scripts/build-codex-pr-fix-prompt.mjs \
+            --template .github/instructions/codex-pr-fix.md \
+            --context .github/tmp/codex-pr-context.json \
+            --output .github/tmp/codex-pr-fix.prompt.md
+
+      - name: Run Codex
+        if: steps.guard.outputs.should-run == 'true'
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          model: ${{ vars.CODEX_MODEL || 'gpt-5.2-codex' }}
+          prompt-file: .github/tmp/codex-pr-fix.prompt.md
+
+      - name: Commit and push changes
+        id: pushfix
+        if: steps.guard.outputs.should-run == 'true' && success()
+        shell: bash
+        env:
+          PR_NUMBER: ${{ steps.guard.outputs.pr-number }}
+          PR_HEAD_REF: ${{ steps.guard.outputs.head-ref }}
+        run: bash .github/scripts/codex-pr-fix-push.sh
+
+      - name: Comment result
+        if: steps.guard.outputs.should-run == 'true' && success()
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PR_NUMBER: ${{ steps.guard.outputs.pr-number }}
+          CHANGED: ${{ steps.pushfix.outputs.changed }}
+          COMMIT_SHA: ${{ steps.pushfix.outputs.commit_sha }}
+          CHANGED_FILES: ${{ steps.pushfix.outputs.changed_files }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = Number(process.env.PR_NUMBER);
+            const changed = process.env.CHANGED === "true";
+            const commitSha = process.env.COMMIT_SHA || "";
+            const files = (process.env.CHANGED_FILES || "")
+              .split("\n")
+              .map((line) => line.trim())
+              .filter(Boolean)
+              .slice(0, 20);
+
+            const body = changed
+              ? [
+                  "Codex pushed an automated follow-up fix for this PR.",
+                  "",
+                  `Commit: \`${commitSha.slice(0, 12)}\``,
+                  "",
+                  "Changed files:",
+                  ...files.map((file) => `- \`${file}\``),
+                ].join("\n")
+              : [
+                  "Codex reviewed the current PR feedback and did not produce any code changes.",
+                  "",
+                  "If you want another pass, leave a more specific `/codex-fix ...` instruction.",
+                ].join("\n");
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body,
+            });
+
+      - name: Comment failure
+        if: steps.guard.outputs.should-run == 'true' && failure()
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PR_NUMBER: ${{ steps.guard.outputs.pr-number }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body:
+                "The `/codex-fix` automation failed before it could push a result. Please inspect the workflow run logs and retry once the failure is understood.",
+            });
