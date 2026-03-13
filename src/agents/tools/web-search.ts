@@ -2440,6 +2440,9 @@ export function createWebSearchTool(options?: {
 
       // Fast path: no fallback configured — existing behavior
       if (chain.length <= 1) {
+        if (!apiKey) {
+          return jsonResult(missingSearchKeyPayload(provider));
+        }
         const result = await runWebSearch({
           query,
           count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
