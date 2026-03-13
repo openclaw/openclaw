@@ -99,6 +99,7 @@ export type BrowserActResponse = {
   targetId: string;
   url?: string;
   result?: unknown;
+  results?: Array<{ ok: boolean; error?: string }>;
 };
 
 export type BrowserDownloadPayload = {
