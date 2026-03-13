@@ -169,6 +169,7 @@ function createChatEphemeralState(): ChatEphemeralState {
 }
 
 const vs = createChatEphemeralState();
+let latestChatAttachments: ChatAttachment[] = [];
 
 /**
  * Reset chat view ephemeral state when navigating away.
@@ -301,7 +302,6 @@ function addFilesAsAttachments(files: File[], props: ChatProps) {
   if (!props.onAttachmentsChange || files.length === 0) {
     return;
   }
-  let nextAttachments = [...(props.attachments ?? [])];
   for (const file of files) {
     if (!file.type.startsWith("image/")) {
       continue;
@@ -314,7 +314,8 @@ function addFilesAsAttachments(files: File[], props: ChatProps) {
         dataUrl,
         mimeType: file.type,
       };
-      nextAttachments = [...nextAttachments, newAttachment];
+      const nextAttachments = [...latestChatAttachments, newAttachment];
+      latestChatAttachments = nextAttachments;
       props.onAttachmentsChange?.(nextAttachments);
     });
     reader.readAsDataURL(file);
@@ -807,6 +808,7 @@ function renderSlashMenu(
 }
 
 export function renderChat(props: ChatProps) {
+  latestChatAttachments = props.attachments ?? [];
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
