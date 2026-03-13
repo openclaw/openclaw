@@ -832,7 +832,8 @@
   justify-content: space-between;
   gap: 16px;
   padding: 4px 8px;
-  overflow: visible; /* allow tooltips to escape bounds */
+  overflow-x: clip;
+  overflow-y: visible; /* allow tooltips to escape bounds */
   transform-origin: top center;
   transition:
     opacity var(--shell-focus-duration) var(--shell-focus-ease),
