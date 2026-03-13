@@ -31,7 +31,7 @@ import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import * as skillScanner from "../security/skill-scanner.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
-import { RESERVED_CHANNEL_IDS } from "../utils/message-channel.js";
+import { isReservedChannelId } from "../utils/message-channel.js";
 import {
   loadPluginManifest,
   resolvePackageExtensionEntries,
@@ -86,6 +86,8 @@ function safeFileName(input: string): string {
   return safeDirName(input);
 }
 
+// Reserved plugin ids are checked through message-channel.ts so plugin install
+// and runtime registration share one immutable source of truth.
 function encodePluginInstallDirName(pluginId: string): string {
   const trimmed = pluginId.trim();
   if (!trimmed.includes("/")) {
@@ -115,12 +117,12 @@ function validatePluginId(pluginId: string): string | null {
     if (trimmed.startsWith("@")) {
       return "invalid plugin name: scoped ids must use @scope/name format";
     }
-    if (RESERVED_CHANNEL_IDS.has(trimmed.toLowerCase())) {
+    if (isReservedChannelId(trimmed)) {
       return `invalid plugin name: "${pluginId}" is a reserved internal channel id`;
     }
     return null;
   }
-  if (RESERVED_CHANNEL_IDS.has(unscopedPackageName(trimmed).toLowerCase())) {
+  if (isReservedChannelId(unscopedPackageName(trimmed))) {
     return `invalid plugin name: "${pluginId}" is a reserved internal channel id`;
   }
   if (segments.length !== 2) {

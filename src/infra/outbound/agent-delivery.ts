@@ -4,8 +4,8 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { normalizeAccountId } from "../../utils/account-id.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
-  RESERVED_CHANNEL_IDS,
   isDeliverableMessageChannel,
+  isReservedChannelId,
   isGatewayMessageChannel,
   normalizeMessageChannel,
   type GatewayMessageChannel,
@@ -94,7 +94,7 @@ export function resolveAgentDeliveryPlan(params: {
     // before reaching this planner.
     if (
       requestedChannel &&
-      RESERVED_CHANNEL_IDS.has(requestedChannel.toLowerCase()) &&
+      isReservedChannelId(requestedChannel) &&
       requestedChannel !== INTERNAL_MESSAGE_CHANNEL
     ) {
       return INTERNAL_MESSAGE_CHANNEL;
