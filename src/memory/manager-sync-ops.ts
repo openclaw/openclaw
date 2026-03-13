@@ -30,17 +30,14 @@ import {
   buildFileEntry,
   ensureDir,
   hashText,
+  isMemoryPath,
   listMemoryFiles,
   normalizeExtraMemoryPaths,
   runWithConcurrency,
 } from "./internal.js";
 import { type MemoryFileEntry } from "./internal.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
-import {
-  buildCaseInsensitiveExtensionGlob,
-  classifyMemoryMultimodalPath,
-  getMemoryMultimodalExtensions,
-} from "./multimodal.js";
+import { classifyMemoryMultimodalPath } from "./multimodal.js";
 import type { SessionFileEntry } from "./session-files.js";
 import {
   buildSessionEntry,
@@ -84,6 +81,14 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   "venv",
   ".tox",
   "__pycache__",
+  "dist",
+  "build",
+  ".cache",
+  "target",
+  ".next",
+  ".nuxt",
+  "coverage",
+  ".turbo",
 ]);
 
 const log = createSubsystemLogger("memory");
@@ -378,43 +383,24 @@ export abstract class MemoryManagerSyncOps {
     if (!this.sources.has("memory") || !this.settings.sync.watch || this.watcher) {
       return;
     }
-    const watchPaths = new Set<string>([
-      path.join(this.workspaceDir, "MEMORY.md"),
-      path.join(this.workspaceDir, "memory.md"),
-      path.join(this.workspaceDir, "memory", "**", "*.md"),
-    ]);
-    const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths);
-    for (const entry of additionalPaths) {
+
+    // Watch project root and extra paths directly (non-glob) to ensure
+    // subdirectories created later (like memory/) are captured by chokidar.
+    const watchRoots = new Set<string>([this.workspaceDir]);
+    const normalizedExtraPaths = normalizeExtraMemoryPaths(
+      this.workspaceDir,
+      this.settings.extraPaths,
+    );
+    for (const entry of normalizedExtraPaths) {
       try {
         const stat = fsSync.lstatSync(entry);
-        if (stat.isSymbolicLink()) {
-          continue;
+        if (!stat.isSymbolicLink()) {
+          watchRoots.add(entry);
         }
-        if (stat.isDirectory()) {
-          watchPaths.add(path.join(entry, "**", "*.md"));
-          if (this.settings.multimodal.enabled) {
-            for (const modality of this.settings.multimodal.modalities) {
-              for (const extension of getMemoryMultimodalExtensions(modality)) {
-                watchPaths.add(
-                  path.join(entry, "**", buildCaseInsensitiveExtensionGlob(extension)),
-                );
-              }
-            }
-          }
-          continue;
-        }
-        if (
-          stat.isFile() &&
-          (entry.toLowerCase().endsWith(".md") ||
-            classifyMemoryMultimodalPath(entry, this.settings.multimodal) !== null)
-        ) {
-          watchPaths.add(entry);
-        }
-      } catch {
-        // Skip missing/unreadable additional paths.
-      }
+      } catch {}
     }
-    this.watcher = chokidar.watch(Array.from(watchPaths), {
+
+    this.watcher = chokidar.watch(Array.from(watchRoots), {
       ignoreInitial: true,
       ignored: (watchPath) => shouldIgnoreMemoryWatchPath(String(watchPath)),
       awaitWriteFinish: {
@@ -422,10 +408,36 @@ export abstract class MemoryManagerSyncOps {
         pollInterval: 100,
       },
     });
-    const markDirty = () => {
-      this.dirty = true;
-      this.scheduleWatchSync();
+
+    const markDirty = (p: string) => {
+      const absPath = path.resolve(p);
+
+      // 1. Check if it's a relevant file in the workspace
+      const relWorkspace = path.relative(this.workspaceDir, absPath);
+      if (!relWorkspace.startsWith("..") && !path.isAbsolute(relWorkspace)) {
+        if (isMemoryPath(relWorkspace)) {
+          this.dirty = true;
+          this.scheduleWatchSync();
+          return;
+        }
+      }
+
+      // 2. Check if it's a markdown or multimodal file in extra paths
+      for (const extraRoot of normalizedExtraPaths) {
+        const relExtra = path.relative(extraRoot, absPath);
+        if (!relExtra.startsWith("..") && !path.isAbsolute(relExtra)) {
+          if (
+            absPath.toLowerCase().endsWith(".md") ||
+            classifyMemoryMultimodalPath(absPath, this.settings.multimodal) !== null
+          ) {
+            this.dirty = true;
+            this.scheduleWatchSync();
+            return;
+          }
+        }
+      }
     };
+
     this.watcher.on("add", markDirty);
     this.watcher.on("change", markDirty);
     this.watcher.on("unlink", markDirty);

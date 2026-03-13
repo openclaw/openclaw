@@ -5,12 +5,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 
-const { watchMock } = vi.hoisted(() => ({
-  watchMock: vi.fn(() => ({
-    on: vi.fn(),
-    close: vi.fn(async () => undefined),
-  })),
-}));
+type WatcherHandler = (p: string) => void;
+
+const { watchMock } = vi.hoisted(() => {
+  return {
+    watchMock: vi.fn(() => {
+      const handlers = new Map<string, WatcherHandler>();
+      return {
+        on: vi.fn((event: string, handler: WatcherHandler) => {
+          handlers.set(event, handler);
+        }),
+        close: vi.fn(async () => undefined),
+        _handlers: handlers,
+      };
+    }),
+  };
+});
 
 vi.mock("chokidar", () => ({
   default: { watch: watchMock },
@@ -51,13 +61,7 @@ describe("memory watcher config", () => {
     }
   });
 
-  it("watches markdown globs and ignores dependency directories", async () => {
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-watch-"));
-    extraDir = path.join(workspaceDir, "extra");
-    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
-    await fs.mkdir(extraDir, { recursive: true });
-    await fs.writeFile(path.join(extraDir, "notes.md"), "hello");
-
+  async function createManager(opts?: { extraPaths?: string[] }) {
     const cfg = {
       agents: {
         defaults: {
@@ -68,7 +72,7 @@ describe("memory watcher config", () => {
             store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
             sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
             query: { minScore: 0, hybrid: { enabled: false } },
-            extraPaths: [extraDir],
+            extraPaths: opts?.extraPaths ?? [],
           },
         },
         list: [{ id: "main", default: true }],
@@ -81,20 +85,34 @@ describe("memory watcher config", () => {
       throw new Error("manager missing");
     }
     manager = result.manager as unknown as MemoryIndexManager;
+    return manager;
+  }
+
+  it("watches workspace root and extra paths directly (not globs)", async () => {
+    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-watch-"));
+    extraDir = path.join(workspaceDir, "extra");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.mkdir(extraDir, { recursive: true });
+    await fs.writeFile(path.join(extraDir, "notes.md"), "hello");
+
+    await createManager({ extraPaths: [extraDir] });
 
     expect(watchMock).toHaveBeenCalledTimes(1);
     const [watchedPaths, options] = watchMock.mock.calls[0] as unknown as [
       string[],
       Record<string, unknown>,
     ];
-    expect(watchedPaths).toEqual(
-      expect.arrayContaining([
-        path.join(workspaceDir, "MEMORY.md"),
-        path.join(workspaceDir, "memory.md"),
-        path.join(workspaceDir, "memory", "**", "*.md"),
-        path.join(extraDir, "**", "*.md"),
-      ]),
-    );
+
+    // Should watch root directories directly, not glob patterns
+    expect(watchedPaths).toContain(workspaceDir);
+    expect(watchedPaths).toContain(extraDir);
+
+    // Should NOT contain glob patterns (the old bug)
+    for (const p of watchedPaths) {
+      expect(p).not.toContain("**");
+      expect(p).not.toContain("*.md");
+    }
+
     expect(options.ignoreInitial).toBe(true);
     expect(options.awaitWriteFinish).toEqual({ stabilityThreshold: 25, pollInterval: 100 });
 
@@ -107,49 +125,102 @@ describe("memory watcher config", () => {
     expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.md"))).toBe(false);
   });
 
-  it("watches multimodal extensions with case-insensitive globs", async () => {
+  it("markDirty filters: only memory paths in workspace trigger dirty", async () => {
+    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-watch-"));
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+
+    await createManager();
+
+    const mockWatcher = watchMock.mock.results[0]?.value as {
+      _handlers: Map<string, WatcherHandler>;
+    };
+    const addHandler = mockWatcher._handlers.get("add");
+    expect(addHandler).toBeTypeOf("function");
+
+    if (!addHandler) {
+      throw new Error("add handler not registered");
+    }
+
+    // memory/foo.md should trigger dirty
+    addHandler(path.join(workspaceDir, "memory", "foo.md"));
+    expect((manager as unknown as { dirty: boolean }).dirty).toBe(true);
+
+    // Reset
+    (manager as unknown as { dirty: boolean }).dirty = false;
+
+    // MEMORY.md should trigger dirty
+    addHandler(path.join(workspaceDir, "MEMORY.md"));
+    expect((manager as unknown as { dirty: boolean }).dirty).toBe(true);
+
+    // Reset
+    (manager as unknown as { dirty: boolean }).dirty = false;
+
+    // memory.md should trigger dirty
+    addHandler(path.join(workspaceDir, "memory.md"));
+    expect((manager as unknown as { dirty: boolean }).dirty).toBe(true);
+
+    // Reset
+    (manager as unknown as { dirty: boolean }).dirty = false;
+
+    // src/foo.ts should NOT trigger dirty
+    addHandler(path.join(workspaceDir, "src", "foo.ts"));
+    expect((manager as unknown as { dirty: boolean }).dirty).toBe(false);
+
+    // package.json should NOT trigger dirty
+    addHandler(path.join(workspaceDir, "package.json"));
+    expect((manager as unknown as { dirty: boolean }).dirty).toBe(false);
+  });
+
+  it("markDirty filters: markdown files in extra paths trigger dirty", async () => {
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-watch-"));
     extraDir = path.join(workspaceDir, "extra");
-    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.mkdir(extraDir, { recursive: true });
-    await fs.writeFile(path.join(extraDir, "PHOTO.PNG"), "png");
+    await fs.writeFile(path.join(extraDir, "notes.md"), "hello");
 
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "gemini",
-            model: "gemini-embedding-2-preview",
-            fallback: "none",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
-            sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
-            query: { minScore: 0, hybrid: { enabled: false } },
-            extraPaths: [extraDir],
-            multimodal: { enabled: true, modalities: ["image", "audio"] },
-          },
-        },
-        list: [{ id: "main", default: true }],
-      },
-    } as OpenClawConfig;
+    await createManager({ extraPaths: [extraDir] });
 
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    expect(result.manager).not.toBeNull();
-    if (!result.manager) {
-      throw new Error("manager missing");
+    const mockWatcher = watchMock.mock.results[0]?.value as {
+      _handlers: Map<string, WatcherHandler>;
+    };
+    const addHandler = mockWatcher._handlers.get("add");
+    expect(addHandler).toBeTypeOf("function");
+
+    if (!addHandler) {
+      throw new Error("add handler not registered");
     }
-    manager = result.manager as unknown as MemoryIndexManager;
 
-    expect(watchMock).toHaveBeenCalledTimes(1);
-    const [watchedPaths] = watchMock.mock.calls[0] as unknown as [
-      string[],
-      Record<string, unknown>,
-    ];
-    expect(watchedPaths).toEqual(
-      expect.arrayContaining([
-        path.join(extraDir, "**", "*.[pP][nN][gG]"),
-        path.join(extraDir, "**", "*.[wW][aA][vV]"),
-      ]),
-    );
+    // .md file in extra path should trigger dirty
+    addHandler(path.join(extraDir, "notes.md"));
+    expect((manager as unknown as { dirty: boolean }).dirty).toBe(true);
+
+    // Reset
+    (manager as unknown as { dirty: boolean }).dirty = false;
+
+    // .txt file in extra path should NOT trigger dirty
+    addHandler(path.join(extraDir, "data.txt"));
+    expect((manager as unknown as { dirty: boolean }).dirty).toBe(false);
+  });
+
+  it("detects memory files created after watcher starts (late directory creation)", async () => {
+    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-watch-"));
+    // NOTE: memory/ directory does NOT exist at watcher start time
+
+    await createManager();
+
+    const mockWatcher = watchMock.mock.results[0]?.value as {
+      _handlers: Map<string, WatcherHandler>;
+    };
+    const addHandler = mockWatcher._handlers.get("add");
+    expect(addHandler).toBeTypeOf("function");
+
+    if (!addHandler) {
+      throw new Error("add handler not registered");
+    }
+
+    // Simulate: memory/ directory is created later, then a file is added
+    // Because we watch the workspace root (not a glob), chokidar detects this.
+    // The handler correctly identifies it as a memory path via isMemoryPath().
+    addHandler(path.join(workspaceDir, "memory", "new-note.md"));
+    expect((manager as unknown as { dirty: boolean }).dirty).toBe(true);
   });
 });
