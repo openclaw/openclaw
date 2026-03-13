@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { quoteCmdScriptArg } from "./cmd-argv.js";
 
 const schtasksResponses = vi.hoisted(
   () => [] as Array<{ code: number; stdout: string; stderr: string }>,
@@ -10,7 +11,8 @@ const schtasksResponses = vi.hoisted(
 const schtasksCalls = vi.hoisted(() => [] as string[][]);
 const inspectPortUsage = vi.hoisted(() => vi.fn());
 const killProcessTree = vi.hoisted(() => vi.fn());
-const runCommandWithTimeout = vi.hoisted(() => vi.fn());
+const childUnref = vi.hoisted(() => vi.fn());
+const spawn = vi.hoisted(() => vi.fn(() => ({ unref: childUnref })));
 
 vi.mock("./schtasks-exec.js", () => ({
   execSchtasks: async (argv: string[]) => {
@@ -27,8 +29,8 @@ vi.mock("../process/kill-tree.js", () => ({
   killProcessTree: (...args: unknown[]) => killProcessTree(...args),
 }));
 
-vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeout(...args),
+vi.mock("node:child_process", () => ({
+  spawn: (...args: unknown[]) => spawn(...args),
 }));
 
 const {
@@ -73,15 +75,8 @@ beforeEach(() => {
   schtasksCalls.length = 0;
   inspectPortUsage.mockReset();
   killProcessTree.mockReset();
-  runCommandWithTimeout.mockReset();
-  runCommandWithTimeout.mockResolvedValue({
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-  });
+  spawn.mockClear();
+  childUnref.mockClear();
 });
 
 afterEach(() => {
@@ -114,11 +109,37 @@ describe("Windows startup fallback", () => {
       expect(result.scriptPath).toBe(resolveTaskScriptPath(env));
       expect(startupScript).toContain('start "" /min cmd.exe /d /c');
       expect(startupScript).toContain("gateway.cmd");
-      expect(runCommandWithTimeout).toHaveBeenCalledWith(
-        ["cmd.exe", "/d", "/s", "/c", startupEntryPath],
-        expect.objectContaining({ timeoutMs: 3000, windowsVerbatimArguments: true }),
+      expect(spawn).toHaveBeenCalledWith(
+        "cmd.exe",
+        ["/d", "/s", "/c", quoteCmdScriptArg(resolveTaskScriptPath(env))],
+        expect.objectContaining({ detached: true, stdio: "ignore", windowsHide: true }),
       );
+      expect(childUnref).toHaveBeenCalled();
       expect(printed).toContain("Installed Windows login item");
+    });
+  });
+
+  it("falls back to a Startup-folder launcher when schtasks create hangs", async () => {
+    await withWindowsEnv(async ({ env }) => {
+      schtasksResponses.push(
+        { code: 0, stdout: "", stderr: "" },
+        { code: 124, stdout: "", stderr: "schtasks timed out after 15000ms" },
+      );
+
+      const stdout = new PassThrough();
+      await installScheduledTask({
+        env,
+        stdout,
+        programArguments: ["node", "gateway.js", "--port", "18789"],
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      });
+
+      await expect(fs.access(resolveStartupEntryPath(env))).resolves.toBeUndefined();
+      expect(spawn).toHaveBeenCalledWith(
+        "cmd.exe",
+        ["/d", "/s", "/c", quoteCmdScriptArg(resolveTaskScriptPath(env))],
+        expect.objectContaining({ detached: true, stdio: "ignore", windowsHide: true }),
+      );
     });
   });
 
@@ -179,7 +200,11 @@ describe("Windows startup fallback", () => {
         outcome: "completed",
       });
       expect(killProcessTree).toHaveBeenCalledWith(5151, { graceMs: 300 });
-      expect(runCommandWithTimeout).toHaveBeenCalled();
+      expect(spawn).toHaveBeenCalledWith(
+        "cmd.exe",
+        ["/d", "/s", "/c", quoteCmdScriptArg(resolveTaskScriptPath(env))],
+        expect.objectContaining({ detached: true, stdio: "ignore", windowsHide: true }),
+      );
     });
   });
 });

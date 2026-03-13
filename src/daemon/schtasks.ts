@@ -1,7 +1,7 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { inspectPortUsage } from "../infra/ports.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
@@ -28,6 +28,15 @@ function resolveTaskName(env: GatewayServiceEnv): string {
     return override;
   }
   return resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
+}
+
+function shouldFallbackToStartupEntry(params: { code: number; detail: string }): boolean {
+  return (
+    /access is denied/i.test(params.detail) ||
+    params.code === 124 ||
+    /schtasks timed out/i.test(params.detail) ||
+    /schtasks produced no output/i.test(params.detail)
+  );
 }
 
 export function resolveTaskScriptPath(env: GatewayServiceEnv): string {
@@ -284,12 +293,13 @@ async function isRegisteredScheduledTask(env: GatewayServiceEnv): Promise<boolea
   return res.code === 0;
 }
 
-async function launchStartupEntry(env: GatewayServiceEnv): Promise<void> {
-  const startupEntryPath = resolveStartupEntryPath(env);
-  await runCommandWithTimeout(["cmd.exe", "/d", "/s", "/c", startupEntryPath], {
-    timeoutMs: 3000,
-    windowsVerbatimArguments: true,
+function launchFallbackTaskScript(scriptPath: string): void {
+  const child = spawn("cmd.exe", ["/d", "/s", "/c", quoteCmdScriptArg(scriptPath)], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
   });
+  child.unref();
 }
 
 function resolveConfiguredGatewayPort(env: GatewayServiceEnv): number | null {
@@ -346,7 +356,7 @@ async function restartStartupEntry(
   if (typeof runtime.pid === "number" && runtime.pid > 0) {
     killProcessTree(runtime.pid, { graceMs: 300 });
   }
-  await launchStartupEntry(env);
+  launchFallbackTaskScript(resolveTaskScriptPath(env));
   stdout.write(`${formatLine("Restarted Windows login item", resolveTaskName(env))}\n`);
   return { outcome: "completed" };
 }
@@ -394,12 +404,12 @@ export async function installScheduledTask({
   }
   if (create.code !== 0) {
     const detail = create.stderr || create.stdout;
-    if (/access is denied/i.test(detail)) {
+    if (shouldFallbackToStartupEntry({ code: create.code, detail })) {
       const startupEntryPath = resolveStartupEntryPath(env);
       await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
       const launcher = buildStartupLauncherScript({ description: taskDescription, scriptPath });
       await fs.writeFile(startupEntryPath, launcher, "utf8");
-      await launchStartupEntry(env);
+      launchFallbackTaskScript(scriptPath);
       writeFormattedLines(
         stdout,
         [
