@@ -62,7 +62,7 @@ export function applyConfiguredContextWindows(params: {
   if (!providers || typeof providers !== "object") {
     return;
   }
-  for (const [providerId, provider] of Object.entries(providers)) {
+  for (const provider of Object.values(providers)) {
     if (!Array.isArray(provider?.models)) {
       continue;
     }
@@ -73,18 +73,13 @@ export function applyConfiguredContextWindows(params: {
       if (!modelId || !contextWindow || contextWindow <= 0) {
         continue;
       }
-      // Store with provider-qualified key (e.g. "rdsec/claude-4.6-sonnet") so
-      // models that share the same id across providers but differ in context
-      // window are resolved correctly via lookupContextTokens.
-      // Use normalizeProviderId so the key format matches resolveContextTokensForModel
-      // which also normalizes before constructing the qualified lookup key.
-      if (providerId) {
-        params.cache.set(`${normalizeProviderId(providerId)}/${modelId}`, contextWindow);
-      }
-      // Also store by bare model id as a fallback for callers that only have
-      // the model name. When multiple providers define the same id the last
-      // one wins, but a provider-qualified lookup above will always take
-      // precedence when provider info is available.
+      // Only write the bare model id. The provider-qualified key space is
+      // reserved for raw discovery entries (e.g. "google-gemini-cli/gemini-3.1-pro-preview")
+      // and must not be polluted by synthetic config writes that could corrupt
+      // slash-containing model IDs (e.g. OpenRouter's "anthropic/claude-opus-4-6").
+      // Callers with provider info use resolveContextTokensForModel which scans
+      // cfg.models.providers directly and never relies on this cache for the
+      // qualified lookup.
       params.cache.set(modelId, contextWindow);
     }
   }
