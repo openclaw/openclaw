@@ -39,9 +39,16 @@ async function renameWithRetry(src: string, dest: string): Promise<void> {
         continue;
       }
       // Windows doesn't reliably support atomic replace via rename when dest exists.
+      // Use atomic write-to-temp-then-rename pattern to preserve atomicity.
       if (code === "EPERM" || code === "EEXIST") {
-        await fs.copyFile(src, dest);
-        await fs.unlink(src).catch(() => {});
+        const tmpDest = `${dest}.${randomUUID()}.tmp`;
+        try {
+          await fs.copyFile(src, tmpDest);
+          await fs.rename(tmpDest, dest);
+        } finally {
+          await fs.unlink(tmpDest).catch(() => {});
+          await fs.unlink(src).catch(() => {});
+        }
         return;
       }
       throw err;
