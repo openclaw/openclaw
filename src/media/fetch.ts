@@ -15,8 +15,8 @@ export type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
 export class MediaFetchError extends Error {
   readonly code: MediaFetchErrorCode;
 
-  constructor(code: MediaFetchErrorCode, message: string) {
-    super(message);
+  constructor(code: MediaFetchErrorCode, message: string, options?: { cause?: unknown }) {
+    super(message, options);
     this.code = code;
     this.name = "MediaFetchError";
   }
@@ -36,6 +36,8 @@ type FetchMediaOptions = {
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
   dispatcherPolicy?: PinnedDispatcherPolicy;
+  fallbackDispatcherPolicy?: PinnedDispatcherPolicy;
+  shouldRetryFetchError?: (error: unknown) => boolean;
 };
 
 function stripQuotes(value: string): string {
@@ -94,13 +96,15 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     ssrfPolicy,
     lookupFn,
     dispatcherPolicy,
+    fallbackDispatcherPolicy,
+    shouldRetryFetchError,
   } = options;
 
   let res: Response;
   let finalUrl = url;
   let release: (() => Promise<void>) | null = null;
-  try {
-    const result = await fetchWithSsrFGuard(
+  const runGuardedFetch = async (policy?: PinnedDispatcherPolicy) =>
+    await fetchWithSsrFGuard(
       withStrictGuardedFetchMode({
         url,
         fetchImpl,
@@ -108,14 +112,31 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
         maxRedirects,
         policy: ssrfPolicy,
         lookupFn,
-        dispatcherPolicy,
+        dispatcherPolicy: policy,
       }),
     );
+  try {
+    let result;
+    try {
+      result = await runGuardedFetch(dispatcherPolicy);
+    } catch (err) {
+      if (
+        fallbackDispatcherPolicy &&
+        typeof shouldRetryFetchError === "function" &&
+        shouldRetryFetchError(err)
+      ) {
+        result = await runGuardedFetch(fallbackDispatcherPolicy);
+      } else {
+        throw err;
+      }
+    }
     res = result.response;
     finalUrl = result.finalUrl;
     release = result.release;
   } catch (err) {
-    throw new MediaFetchError("fetch_failed", `Failed to fetch media from ${url}: ${String(err)}`);
+    throw new MediaFetchError("fetch_failed", `Failed to fetch media from ${url}: ${String(err)}`, {
+      cause: err,
+    });
   }
 
   try {
@@ -167,6 +188,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
       throw new MediaFetchError(
         "fetch_failed",
         `Failed to fetch media from ${res.url || url}: ${String(err)}`,
+        { cause: err },
       );
     }
     let fileNameFromUrl: string | undefined;
