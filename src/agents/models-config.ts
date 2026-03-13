@@ -39,7 +39,32 @@ async function ensureModelsFileMode(pathname: string): Promise<void> {
 async function writeModelsFileAtomic(targetPath: string, contents: string): Promise<void> {
   const tempPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
   await fs.writeFile(tempPath, contents, { mode: 0o600 });
-  await fs.rename(tempPath, targetPath);
+  // On Windows, fs.rename() fails with EPERM when the target file is being
+  // read by another process (unlike POSIX where rename is atomic even during
+  // concurrent reads).  Retry with exponential backoff to handle this.
+  const MAX_RETRIES = 5;
+  const BASE_DELAY_MS = 50;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      await fs.rename(tempPath, targetPath);
+      return;
+    } catch (err) {
+      lastErr = err;
+      const code = (err as NodeJS.ErrnoException)?.code;
+      // Only retry on Windows file-locking errors (EPERM, EACCES, EBUSY).
+      if (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY") {
+        break;
+      }
+      if (attempt < MAX_RETRIES) {
+        const delay = BASE_DELAY_MS * 2 ** attempt;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+  // Clean up the orphaned temp file before throwing.
+  await fs.unlink(tempPath).catch(() => {});
+  throw lastErr;
 }
 
 function resolveModelsConfigInput(config?: OpenClawConfig): {
