@@ -26,6 +26,7 @@ import { logVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
+import { ensureVoiceFormat } from "../media/ensure-voice-format.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   DEFAULT_OPENAI_BASE_URL,
@@ -941,11 +942,29 @@ export async function maybeApplyTtsToPayload(params: {
     };
 
     const channelId = resolveChannelId(params.channel);
-    const shouldVoice =
-      channelId !== null && VOICE_BUBBLE_CHANNELS.has(channelId) && result.voiceCompatible === true;
+    const needsVoiceBubble = channelId !== null && VOICE_BUBBLE_CHANNELS.has(channelId);
+
+    let audioPath = result.audioPath;
+    let voiceCompatible = result.voiceCompatible === true;
+
+    // If the channel expects a voice bubble but the provider produced a non-opus
+    // format (e.g. MiniMax/Edge → mp3), transcode to OGG/Opus in the channel
+    // adaptation layer so the upstream TTS providers stay format-agnostic.
+    if (needsVoiceBubble && !voiceCompatible) {
+      try {
+        const converted = await ensureVoiceFormat(audioPath);
+        audioPath = converted.path;
+        voiceCompatible = true;
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        logVerbose(`TTS: voice format conversion failed, sending as regular audio: ${errMsg}`);
+      }
+    }
+
+    const shouldVoice = needsVoiceBubble && voiceCompatible;
     const finalPayload = {
       ...nextPayload,
-      mediaUrl: result.audioPath,
+      mediaUrl: audioPath,
       audioAsVoice: shouldVoice || params.payload.audioAsVoice,
     };
     return finalPayload;
