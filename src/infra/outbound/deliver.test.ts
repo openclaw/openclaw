@@ -869,11 +869,15 @@ describe("deliverOutboundPayloads", () => {
         sessionKey: "agent:main:main",
         text: "caption",
         mediaUrls: ["https://example.com/files/report.pdf?sig=1"],
+        idempotencyKey: "idem-deliver-1",
       },
     });
 
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "report.pdf" }),
+      expect.objectContaining({
+        text: "report.pdf",
+        idempotencyKey: "idem-deliver-1",
+      }),
     );
   });
 
