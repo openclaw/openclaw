@@ -45,7 +45,7 @@ Use this format when adding entries:
 
 ## Listed plugins
 
-- **TweetClaw** — Post tweets, reply, like, retweet, follow, DM & more from your chat. Full X/Twitter automation powered by Xquik.
+- **TweetClaw** — Post tweets, reply, like, retweet, follow, DM & more from your chat.
   npm: `@xquik/tweetclaw`
   repo: `https://github.com/Xquik-dev/tweetclaw`
   install: `openclaw plugins install @xquik/tweetclaw`
