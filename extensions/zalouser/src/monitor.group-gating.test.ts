@@ -9,6 +9,7 @@ import {
   sendTypingZalouserMock,
 } from "./monitor.send-mocks.js";
 import { setZalouserRuntime } from "./runtime.js";
+import { createZalouserRuntimeEnv } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
 
 function createAccount(): ResolvedZalouserAccount {
@@ -39,15 +40,7 @@ function createConfig(): OpenClawConfig {
   };
 }
 
-function createRuntimeEnv(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: ((code: number): never => {
-      throw new Error(`exit ${code}`);
-    }) as RuntimeEnv["exit"],
-  };
-}
+const createRuntimeEnv = () => createZalouserRuntimeEnv();
 
 function installRuntime(params: {
   commandAuthorized?: boolean;
@@ -269,7 +262,7 @@ describe("zalouser monitor group mention gating", () => {
       message: params.message,
       account: params.account ?? createAccount(),
       config: createConfig(),
-      runtime: createRuntimeEnv(),
+      runtime: createZalouserRuntimeEnv(),
       historyState: params.historyState,
     });
   }
