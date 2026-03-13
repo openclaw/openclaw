@@ -380,7 +380,7 @@ export function wrapToolMutationLock(
         containerWorkdir: options?.containerWorkdir,
         bindMounts: options?.bindMounts,
       });
-      const lockKey = path.resolve(root, resolvedPath);
+      const lockKey = await canonicalizeMutationLockKey(path.resolve(root, resolvedPath));
       const previous = workspaceMutationLocks.get(lockKey) ?? Promise.resolve();
       let release: (() => void) | undefined;
       const current = new Promise<void>((resolve) => {
@@ -410,6 +410,29 @@ export function wrapToolMutationLock(
     },
   };
 }
+async function canonicalizeMutationLockKey(targetPath: string): Promise<string> {
+  const resolved = path.resolve(targetPath);
+  const suffix: string[] = [];
+  let cursor = resolved;
+
+  while (true) {
+    try {
+      const canonical = await fs.realpath(cursor);
+      if (suffix.length === 0) {
+        return canonical;
+      }
+      return path.join(canonical, ...suffix.toReversed());
+    } catch {
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        return resolved;
+      }
+      suffix.push(path.basename(cursor).toLowerCase());
+      cursor = parent;
+    }
+  }
+}
+
 export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
   return wrapToolWorkspaceRootGuardWithOptions(tool, root);
 }

@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import { wrapToolMutationLock } from "./pi-tools.read.js";
@@ -280,5 +283,57 @@ describe("wrapToolMutationLock", () => {
       "start:/var/shared/shared.txt",
       "end:/var/shared/shared.txt",
     ]);
+  });
+
+  it("canonicalizes symlink aliases for missing-file mutation lock keys", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mutation-lock-"));
+    const workspaceRoot = path.join(tempRoot, "workspace");
+    const realDir = path.join(workspaceRoot, "real");
+    const aliasDir = path.join(workspaceRoot, "alias");
+    await fs.mkdir(realDir, { recursive: true });
+    await fs.symlink(realDir, aliasDir, "dir");
+
+    const firstPath = path.join(realDir, "Missing.TXT");
+    const secondPath = path.join(aliasDir, "missing.txt");
+
+    const gate = deferred();
+    const events: string[] = [];
+
+    const base: AnyAgentTool = {
+      name: "write",
+      label: "write",
+      description: "test write",
+      parameters: {},
+      execute: async (_toolCallId, params) => {
+        const record = params as Record<string, unknown>;
+        const filePath = typeof record.path === "string" ? record.path : "";
+        events.push(`start:${filePath}`);
+        if (filePath === firstPath) {
+          await gate.promise;
+        }
+        events.push(`end:${filePath}`);
+        return textResult(filePath);
+      },
+    };
+
+    const wrapped = wrapToolMutationLock(base, workspaceRoot);
+    const p1 = wrapped.execute("call-1", { path: firstPath, content: "one" });
+    const p2 = wrapped.execute("call-2", { path: secondPath, content: "two" });
+
+    await waitUntil(() => {
+      expect(events).toEqual([`start:${firstPath}`]);
+    });
+
+    gate.resolve();
+    await Promise.all([p1, p2]);
+
+    expect(events).toEqual([
+      `start:${firstPath}`,
+      `end:${firstPath}`,
+      `start:${secondPath}`,
+      `end:${secondPath}`,
+    ]);
+
+    await fs.rm(tempRoot, { recursive: true, force: true });
   });
 });
