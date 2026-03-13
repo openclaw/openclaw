@@ -417,9 +417,10 @@ describe("web_search minimax credential resolution", () => {
           resolveMinimaxRuntimeCredentials({
             cfg: {} as import("../../config/config.js").OpenClawConfig,
           }),
-        ).resolves.toEqual({
+        ).resolves.toMatchObject({
           apiKey: "profile-oauth-token",
           apiHost: "https://api.minimax.io",
+          candidates: [{ apiKey: "profile-oauth-token", apiHost: "https://api.minimax.io" }],
         });
       },
     );

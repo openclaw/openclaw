@@ -7,7 +7,7 @@ import { normalizeResolvedSecretInputString } from "../../config/types.secrets.j
 import { logVerbose } from "../../globals.js";
 import { createResolverContext } from "../../secrets/runtime-shared.js";
 import {
-  resolveMinimaxApiKeyFromAuthProfiles,
+  resolveMinimaxApiKeysFromAuthProfiles,
   type RuntimeWebSearchMetadata,
 } from "../../secrets/runtime-web-tools.js";
 import { wrapWebContent } from "../../security/external-content.js";
@@ -1014,16 +1014,22 @@ async function resolveMinimaxRuntimeCredentials(params: {
   cfg?: OpenClawConfig;
   minimax?: MinimaxConfig;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
-}): Promise<{ apiKey?: string; apiHost?: string }> {
+}): Promise<{
+  apiKey?: string;
+  apiHost?: string;
+  candidates?: Array<{ apiKey: string; apiHost: string }>;
+}> {
   const apiKey = resolveMinimaxApiKey(params.minimax);
   if (apiKey) {
+    const apiHost = resolveMinimaxApiHost({
+      cfg: params.cfg,
+      minimax: params.minimax,
+      runtimeApiHost: params.runtimeWebSearch?.minimaxApiHost,
+    });
     return {
       apiKey,
-      apiHost: resolveMinimaxApiHost({
-        cfg: params.cfg,
-        minimax: params.minimax,
-        runtimeApiHost: params.runtimeWebSearch?.minimaxApiHost,
-      }),
+      apiHost,
+      candidates: [{ apiKey, apiHost }],
     };
   }
 
@@ -1032,24 +1038,30 @@ async function resolveMinimaxRuntimeCredentials(params: {
     return {};
   }
 
-  const authProfileMatch = await resolveMinimaxApiKeyFromAuthProfiles({
+  const authProfileMatches = await resolveMinimaxApiKeysFromAuthProfiles({
     sourceConfig: cfg,
     context: createResolverContext({
       sourceConfig: cfg,
       env: process.env,
     }),
   });
-  if (!authProfileMatch) {
+  if (authProfileMatches.length === 0) {
     return {};
   }
 
-  return {
-    apiKey: authProfileMatch.apiKey,
+  const candidates = authProfileMatches.map((match) => ({
+    apiKey: match.apiKey,
     apiHost: resolveMinimaxApiHost({
       cfg,
       minimax: params.minimax,
-      runtimeApiHost: params.runtimeWebSearch?.minimaxApiHost ?? authProfileMatch.apiHost,
+      runtimeApiHost: params.runtimeWebSearch?.minimaxApiHost ?? match.apiHost,
     }),
+  }));
+
+  return {
+    apiKey: candidates[0]?.apiKey,
+    apiHost: candidates[0]?.apiHost,
+    candidates,
   };
 }
 
@@ -2380,6 +2392,40 @@ export function createWebSearchTool(options?: {
       });
       let minimaxVerified = false;
 
+      const tryVerifiedMinimaxCandidate = async (): Promise<
+        { ok: true; apiKey: string; apiHost: string } | { ok: false; reason: string }
+      > => {
+        const candidates =
+          minimaxRuntime?.candidates && minimaxRuntime.candidates.length > 0
+            ? minimaxRuntime.candidates
+            : minimaxRuntime?.apiKey
+              ? [
+                  {
+                    apiKey: minimaxRuntime.apiKey,
+                    apiHost: minimaxRuntime.apiHost ?? minimaxApiHost,
+                  },
+                ]
+              : [];
+        let lastReason = "MiniMax search endpoint verification failed.";
+        for (const candidate of candidates) {
+          const candidateHost = resolveMinimaxApiHost({
+            cfg: options?.config,
+            minimax: minimaxConfig,
+            runtimeApiHost: candidate.apiHost ?? options?.runtimeWebSearch?.minimaxApiHost,
+          });
+          const verify = await verifyMinimaxSearchAccess({
+            apiKey: candidate.apiKey,
+            apiHost: candidateHost,
+            timeoutSeconds,
+          });
+          if (verify.ok) {
+            return { ok: true, apiKey: candidate.apiKey, apiHost: candidateHost };
+          }
+          lastReason = verify.reason;
+        }
+        return { ok: false, reason: lastReason };
+      };
+
       const resolveFallbackAfterMinimax = (): {
         provider: "gemini" | "grok" | "kimi" | "perplexity";
         apiKey: string;
@@ -2422,24 +2468,16 @@ export function createWebSearchTool(options?: {
               runtimeWebSearch: options?.runtimeWebSearch,
             }));
           if (minimaxRuntime?.apiKey) {
-            minimaxApiHost = resolveMinimaxApiHost({
-              cfg: options?.config,
-              minimax: minimaxConfig,
-              runtimeApiHost: minimaxRuntime.apiHost ?? options?.runtimeWebSearch?.minimaxApiHost,
-            });
-            const verify = await verifyMinimaxSearchAccess({
-              apiKey: minimaxRuntime.apiKey,
-              apiHost: minimaxApiHost,
-              timeoutSeconds,
-            });
-            if (!verify.ok) {
-              minimaxVerifyReason = verify.reason;
+            const verified = await tryVerifiedMinimaxCandidate();
+            if (!verified.ok) {
+              minimaxVerifyReason = verified.reason;
             } else {
               logVerbose(
                 'web_search: provider "brave" missing key; auto-falling back to "minimax" credentials',
               );
               effectiveProvider = "minimax";
-              effectiveApiKey = minimaxRuntime.apiKey;
+              effectiveApiKey = verified.apiKey;
+              minimaxApiHost = verified.apiHost;
               minimaxVerified = true;
             }
           }
@@ -2475,14 +2513,10 @@ export function createWebSearchTool(options?: {
       }
 
       if (effectiveProvider === "minimax" && !minimaxVerified) {
-        const verify = await verifyMinimaxSearchAccess({
-          apiKey: effectiveApiKey,
-          apiHost: minimaxApiHost,
-          timeoutSeconds,
-        });
-        if (!verify.ok) {
+        const verified = await tryVerifiedMinimaxCandidate();
+        if (!verified.ok) {
           return jsonResult(
-            minimaxUnavailablePayload(verify.reason, {
+            minimaxUnavailablePayload(verified.reason, {
               includeSubscriptionHint: hasMinimaxOauthCredential({
                 minimax: minimaxConfig,
                 minimaxRuntime,
@@ -2490,6 +2524,8 @@ export function createWebSearchTool(options?: {
             }),
           );
         }
+        effectiveApiKey = verified.apiKey;
+        minimaxApiHost = verified.apiHost;
       }
 
       const supportsStructuredPerplexityFilters =

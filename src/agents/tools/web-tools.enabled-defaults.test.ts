@@ -1,6 +1,7 @@
 import { EnvHttpProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import * as authProfiles from "../auth-profiles.js";
 import { __testing as webSearchTesting } from "./web-search.js";
 import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
 
@@ -1021,6 +1022,65 @@ describe("web_search minimax provider", () => {
     );
     expect(apiKeyResult?.details).toMatchObject({ error: "minimax_search_unavailable" });
     expect(apiKeyMessage).not.toContain("Coding Plan subscription/entitlement");
+  });
+
+  it("tries the next MiniMax auth profile when the first entitlement probe fails", async () => {
+    vi.stubEnv("MINIMAX_API_KEY", "");
+    vi.stubEnv("MINIMAX_OAUTH_TOKEN", "");
+    vi.spyOn(authProfiles, "loadAuthProfileStoreForSecretsRuntime").mockReturnValue({
+      version: 1,
+      profiles: {
+        "minimax:first": {
+          type: "token",
+          provider: "minimax",
+          token: "first-token", // pragma: allowlist secret
+        },
+        "minimax:second": {
+          type: "token",
+          provider: "minimax",
+          token: "second-token", // pragma: allowlist secret
+        },
+      },
+      order: {},
+      usageStats: {},
+    } as unknown as ReturnType<typeof authProfiles.loadAuthProfileStoreForSecretsRuntime>);
+    vi.spyOn(authProfiles, "resolveAuthProfileOrder").mockImplementation(({ provider }) =>
+      provider === "minimax" ? ["minimax:first", "minimax:second"] : [],
+    );
+
+    const mockFetch = vi.fn(async (_input?: unknown, init?: unknown) => {
+      const request = init as RequestInit | undefined;
+      const headers = request?.headers as Record<string, string> | undefined;
+      const auth = headers?.Authorization ?? "";
+      if (auth.includes("first-token")) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              base_resp: { status_code: 401, status_msg: "forbidden" },
+              organic: [],
+            }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            base_resp: { status_code: 0, status_msg: "ok" },
+            organic: [{ title: "MiniMax", link: "https://example.com", snippet: "snippet" }],
+          }),
+      } as Response);
+    });
+    global.fetch = withFetchPreconnect(mockFetch);
+
+    const tool = createMinimaxSearchTool();
+    const result = await tool?.execute?.("call-1", { query: "probe profile fallback" });
+
+    expect(mockFetch.mock.calls.length).toBe(3);
+    const thirdRequest = mockFetch.mock.calls[2]?.[1] as RequestInit | undefined;
+    const thirdHeaders = thirdRequest?.headers as Record<string, string> | undefined;
+    expect(thirdHeaders?.Authorization).toBe("Bearer second-token");
+    expect((result?.details as { provider?: string } | undefined)?.provider).toBe("minimax");
   });
 });
 

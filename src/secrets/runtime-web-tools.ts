@@ -428,14 +428,30 @@ export async function resolveMinimaxApiKeyFromAuthProfiles(params: {
 }): Promise<
   { apiKey: string; profileProvider: MinimaxAuthProfileProvider; apiHost: string } | undefined
 > {
+  const matches = await resolveMinimaxApiKeysFromAuthProfiles(params);
+  return matches[0];
+}
+
+export async function resolveMinimaxApiKeysFromAuthProfiles(params: {
+  sourceConfig: OpenClawConfig;
+  context: ResolverContext;
+  loadAuthStore?: AuthStoreLoader;
+}): Promise<
+  Array<{ apiKey: string; profileProvider: MinimaxAuthProfileProvider; apiHost: string }>
+> {
   const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
   let store: AuthProfileStore;
   try {
     store = loadAuthStore(params.context.env.OPENCLAW_AGENT_DIR);
   } catch {
-    return undefined;
+    return [];
   }
 
+  const matches: Array<{
+    apiKey: string;
+    profileProvider: MinimaxAuthProfileProvider;
+    apiHost: string;
+  }> = [];
   const visited = new Set<string>();
   for (const provider of MINIMAX_AUTH_PROFILE_PROVIDERS) {
     const profileIds = resolveAuthProfileOrder({
@@ -456,14 +472,14 @@ export async function resolveMinimaxApiKeyFromAuthProfiles(params: {
           context: params.context,
         });
         if (value) {
-          return {
+          matches.push({
             apiKey: value,
             profileProvider: provider,
             apiHost: resolveMinimaxApiHostFromProfile({
               sourceConfig: params.sourceConfig,
               profileProvider: provider,
             }),
-          };
+          });
         }
       } catch {
         // Ignore profile-specific failures and continue probing next profile.
@@ -471,7 +487,7 @@ export async function resolveMinimaxApiKeyFromAuthProfiles(params: {
     }
   }
 
-  return undefined;
+  return matches;
 }
 
 async function resolveProfileSecretValueReadOnly(params: {
