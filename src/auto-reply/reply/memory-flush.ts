@@ -60,9 +60,10 @@ function formatDateStampInTimezone(nowMs: number, timezone: string): string {
 export function resolveMemoryFlushRelativePathForRun(params: {
   cfg?: OpenClawConfig;
   nowMs?: number;
+  agentId?: string;
 }): string {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const { userTimezone } = resolveCronStyleNow(params.cfg ?? {}, nowMs);
+  const { userTimezone } = resolveCronStyleNow(params.cfg ?? {}, nowMs, params.agentId);
   const dateStamp = formatDateStampInTimezone(nowMs, userTimezone);
   return `memory/${dateStamp}.md`;
 }
