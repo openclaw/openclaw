@@ -76,6 +76,11 @@ export function createProfileAvailability({
   const persistenceLog = createSubsystemLogger("browser").child("session-persistence");
 
   const startSessionPersistence = () => {
+    const resolved = state().resolved;
+    if (!resolved.sessionPersistenceEnabled) {
+      return;
+    }
+
     const profileState = getProfileState();
     // Stop any existing periodic save before starting a new one.
     profileState.stopPeriodicSave?.();
@@ -90,6 +95,7 @@ export function createProfileAvailability({
       },
       resolveOpenClawUserDataDir(profile.name),
       persistenceLog,
+      resolved.sessionPersistenceIntervalMs,
     );
     profileState.stopPeriodicSave = stopSave;
   };

@@ -98,9 +98,11 @@ export async function restoreBrowserState(
     (c) => c.session || c.expires === -1 || c.expires === 0 || c.expires > now,
   );
 
-  if (validCookies.length > 0) {
-    await setCookiesViaCdp(cdpWsUrl, validCookies);
+  if (validCookies.length === 0) {
+    return null; // all cookies expired — nothing useful to restore
   }
+
+  await setCookiesViaCdp(cdpWsUrl, validCookies);
 
   return { cookieCount: validCookies.length, savedAt: state.savedAt };
 }
@@ -124,7 +126,12 @@ export function startPeriodicSave(
   log: SessionPersistenceLog,
   intervalMs = DEFAULT_SESSION_PERSISTENCE_INTERVAL_MS,
 ): () => void {
+  let saving = false;
   const timer = setInterval(async () => {
+    if (saving) {
+      return;
+    }
+    saving = true;
     try {
       const wsUrl = await getCdpWsUrl();
       if (!wsUrl) {
@@ -136,6 +143,8 @@ export function startPeriodicSave(
       }
     } catch (err) {
       log.warn(`cookie periodic save failed: ${String(err)}`);
+    } finally {
+      saving = false;
     }
   }, intervalMs);
 
