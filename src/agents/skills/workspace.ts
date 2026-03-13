@@ -162,11 +162,18 @@ function listChildDirectories(dir: string): string[] {
       }
       if (entry.isSymbolicLink()) {
         try {
-          if (fs.statSync(fullPath).isDirectory()) {
+          // R4: résoudre le realpath du symlink et vérifier qu'il reste dans dir
+          // pour éviter qu'un lien symbolique ne permette de sortir de la racine.
+          const realTarget = fs.realpathSync(fullPath);
+          const resolvedDir = fs.realpathSync(dir);
+          if (
+            fs.statSync(realTarget).isDirectory() &&
+            (realTarget === resolvedDir || realTarget.startsWith(resolvedDir + path.sep))
+          ) {
             dirs.push(entry.name);
           }
         } catch {
-          // ignore broken symlinks
+          // ignore broken symlinks or paths outside root
         }
       }
     }
