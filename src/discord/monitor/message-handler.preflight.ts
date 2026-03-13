@@ -405,7 +405,10 @@ export async function preflightDiscordMessage(
   }
   const mentionRegexes = buildMentionRegexes(params.cfg, effectiveRoute.agentId);
   const explicitlyMentioned = Boolean(
-    botId && message.mentionedUsers?.some((user: User) => user.id === botId),
+    botId &&
+    (message.mentionedUsers?.some((user: User) => user.id === botId) ||
+      message.content?.includes(`<@${botId}>`) ||
+      message.content?.includes(`<@!${botId}>`)),
   );
   const hasAnyMention = Boolean(
     !isDirectMessage &&
