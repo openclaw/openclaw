@@ -49,7 +49,7 @@ describe("buildNotificationText", () => {
       code: "ABCD1234",
       meta: { name: "Alice" },
     });
-    expect(text).toBe("Pairing request: Alice (+14155551234) via whatsapp — code ABCD1234");
+    expect(text).toBe("Pairing request: Alice (+14155551234) via whatsapp - code ABCD1234");
   });
 
   it("formats with displayName from meta", () => {
@@ -59,7 +59,7 @@ describe("buildNotificationText", () => {
       code: "XYZ789",
       meta: { displayName: "Bob" },
     });
-    expect(text).toBe("Pairing request: Bob (123456) via telegram — code XYZ789");
+    expect(text).toBe("Pairing request: Bob (123456) via telegram - code XYZ789");
   });
 
   it("falls back to 'unknown' when no name in meta", () => {
@@ -68,7 +68,7 @@ describe("buildNotificationText", () => {
       channelId: "imessage",
       code: "CODE1234",
     });
-    expect(text).toBe("Pairing request: unknown (+14155551234) via imessage — code CODE1234");
+    expect(text).toBe("Pairing request: unknown (+14155551234) via imessage - code CODE1234");
   });
 
   it("sanitizes injection attempts in name", () => {

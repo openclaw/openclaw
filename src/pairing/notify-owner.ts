@@ -33,13 +33,15 @@ function buildNotificationText(params: {
   const contact = sanitizeField(params.requesterId, 64);
   const channel = sanitizeField(params.channelId, 32);
   const code = sanitizeField(params.code, 16);
-  return `Pairing request: ${name} (${contact}) via ${channel} — code ${code}`;
+  return `Pairing request: ${name} (${contact}) via ${channel} - code ${code}`;
 }
 
 /** Truncate and strip control characters from untrusted input. */
 function sanitizeField(value: string, maxLength: number): string {
   // Strip C0/C1 control chars and zero-width/bidi chars that could be used for injection.
+  // oxlint-disable-next-line no-control-regex -- intentional: sanitizing untrusted input
   // eslint-disable-next-line no-control-regex -- intentional: sanitizing untrusted input
+  // oxlint-disable-next-line no-control-regex -- intentional: sanitizing untrusted input
   const cleaned = value.replace(
     /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u2028-\u202F\uFEFF]/g,
     "",
@@ -124,7 +126,7 @@ async function sendNotification(params: {
     case "matrix":
     case "msteams":
       log.error(
-        `pairing-notify: channel "${channel}" is not yet supported — notification not sent`,
+        `pairing-notify: channel "${channel}" is not yet supported - notification not sent`,
       );
       break;
     default:
