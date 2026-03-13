@@ -146,6 +146,8 @@ type TtsUserPrefs = {
     provider?: TtsProvider;
     maxLength?: number;
     summarize?: boolean;
+    /** Persisted voice per provider, keyed by provider ID (e.g. "elevenlabs", "openai"). */
+    voices?: Record<string, string>;
   };
 };
 
@@ -183,6 +185,8 @@ export type TtsDirectiveParseResult = {
   hasDirective: boolean;
   overrides: TtsDirectiveOverrides;
   warnings: string[];
+  /** When true, the active voice override should be written to persistent prefs. */
+  persist: boolean;
 };
 
 export type TtsResult = {
@@ -492,6 +496,31 @@ export function setSummarizationEnabled(prefsPath: string, enabled: boolean): vo
   });
 }
 
+/**
+ * Returns the persisted voice for a given provider, or undefined if not set.
+ * The provider key is the provider ID string (e.g. "elevenlabs", "openai", "minimax").
+ */
+export function getTtsVoice(prefsPath: string, provider: string): string | undefined {
+  const prefs = readPrefs(prefsPath);
+  return prefs.tts?.voices?.[provider] || undefined;
+}
+
+/**
+ * Persists a voice selection for a given provider to the user prefs file.
+ * Pass an empty string to clear the persisted voice for that provider.
+ */
+export function setTtsVoice(prefsPath: string, provider: string, voice: string): void {
+  updatePrefs(prefsPath, (prefs) => {
+    const voices = { ...prefs.tts?.voices };
+    if (voice.trim()) {
+      voices[provider] = voice.trim();
+    } else {
+      delete voices[provider];
+    }
+    prefs.tts = { ...prefs.tts, voices };
+  });
+}
+
 export function getLastTtsAttempt(): TtsStatusEntry | undefined {
   return lastTtsAttempt;
 }
@@ -550,6 +579,24 @@ function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
     return `${provider}: request timed out`;
   }
   return `${provider}: ${error.message}`;
+}
+
+/**
+ * Extracts the voice override value relevant for `provider` from a directive overrides object.
+ * Used to determine which voice to persist when `persist=true` is set in a directive.
+ * When new providers are added, extend this function with their respective overrides key.
+ */
+function resolveVoiceOverrideForPersist(
+  overrides: TtsDirectiveOverrides,
+  provider: string,
+): string | undefined {
+  if (provider === "elevenlabs") {
+    return overrides.elevenlabs?.voiceId;
+  }
+  if (provider === "openai") {
+    return overrides.openai?.voice;
+  }
+  return undefined;
 }
 
 function buildTtsFailureResult(errors: string[]): { success: false; error: string } {
@@ -679,7 +726,8 @@ export async function textToSpeech(params: {
           text: params.text,
           apiKey,
           baseUrl: config.elevenlabs.baseUrl,
-          voiceId: voiceIdOverride ?? config.elevenlabs.voiceId,
+          voiceId:
+            voiceIdOverride ?? getTtsVoice(prefsPath, "elevenlabs") ?? config.elevenlabs.voiceId,
           modelId: modelIdOverride ?? config.elevenlabs.modelId,
           outputFormat: output.elevenlabs,
           seed: seedOverride ?? config.elevenlabs.seed,
@@ -696,7 +744,7 @@ export async function textToSpeech(params: {
           apiKey,
           baseUrl: config.openai.baseUrl,
           model: openaiModelOverride ?? config.openai.model,
-          voice: openaiVoiceOverride ?? config.openai.voice,
+          voice: openaiVoiceOverride ?? getTtsVoice(prefsPath, "openai") ?? config.openai.voice,
           speed: config.openai.speed,
           instructions: config.openai.instructions,
           responseFormat: output.openai,
@@ -930,6 +978,15 @@ export async function maybeApplyTtsToPayload(params: {
     overrides: directives.overrides,
   });
 
+  // Persist voice when the directive included persist=true and TTS succeeded.
+  if (directives.persist && result.success && result.provider) {
+    const voice = resolveVoiceOverrideForPersist(directives.overrides, result.provider);
+    if (voice) {
+      setTtsVoice(prefsPath, result.provider, voice);
+      logVerbose(`TTS: persisted voice for provider "${result.provider}": ${voice}`);
+    }
+  }
+
   if (result.success && result.audioPath) {
     lastTtsAttempt = {
       timestamp: Date.now(),
@@ -976,4 +1033,7 @@ export const _test = {
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  getTtsVoice,
+  setTtsVoice,
+  resolveVoiceOverrideForPersist,
 };
