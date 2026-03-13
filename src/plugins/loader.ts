@@ -47,7 +47,6 @@ export type PluginLoadOptions = {
   runtimeOptions?: CreatePluginRuntimeOptions;
   cache?: boolean;
   mode?: "full" | "validate";
-  activate?: boolean;
 };
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 32;
@@ -517,7 +516,6 @@ function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): voi
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   const env = options.env ?? process.env;
-  const shouldActivate = options.activate !== false;
   // Test env: default-disable plugins unless explicitly configured.
   // This keeps unit/gateway suites fast and avoids loading heavyweight plugin deps by accident.
   const cfg = applyTestPluginDefaults(options.config ?? {}, env);
@@ -534,9 +532,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     const cached = getCachedPluginRegistry(cacheKey);
     if (cached) {
-      if (shouldActivate) {
-        activatePluginRegistry(cached, cacheKey);
-      }
+      activatePluginRegistry(cached, cacheKey);
       return cached;
     }
   }
@@ -896,9 +892,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     setCachedPluginRegistry(cacheKey, registry);
   }
-  if (shouldActivate) {
-    activatePluginRegistry(registry, cacheKey);
-  }
+  activatePluginRegistry(registry, cacheKey);
   return registry;
 }
 

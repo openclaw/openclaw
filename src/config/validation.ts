@@ -6,7 +6,6 @@ import {
   resolveEffectiveEnableState,
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
@@ -342,7 +341,6 @@ function validateConfigObjectWithPluginsBase(
         return id ? [[id, plugin] as const] : [];
       }),
   );
-  let discoveredChannelPlugins: typeof activeChannelPlugins | null = null;
 
   const resolvePluginConfigIssuePath = (pluginId: string, errorPath: string): string => {
     const base = `plugins.entries.${pluginId}.config`;
@@ -407,38 +405,6 @@ function validateConfigObjectWithPluginsBase(
   };
 
   const builtInChannelIds = new Set<string>(CHANNEL_IDS);
-  const ensureDiscoveredChannelPlugins = () => {
-    if (discoveredChannelPlugins) {
-      return discoveredChannelPlugins;
-    }
-    discoveredChannelPlugins = new Map<
-      string,
-      typeof activeChannelPlugins extends Map<string, infer V> ? V : never
-    >();
-    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-    const registry = loadOpenClawPlugins({
-      config,
-      workspaceDir: workspaceDir ?? undefined,
-      env: opts.env,
-      cache: false,
-      activate: false,
-    });
-    for (const entry of registry.channels) {
-      const id = typeof entry.plugin?.id === "string" ? entry.plugin.id.trim() : "";
-      if (!id || discoveredChannelPlugins.has(id)) {
-        continue;
-      }
-      discoveredChannelPlugins.set(id, entry.plugin);
-    }
-    return discoveredChannelPlugins;
-  };
-  const resolveChannelPlugin = (channelId: string) => {
-    const active = activeChannelPlugins.get(channelId);
-    if (active) {
-      return active;
-    }
-    return ensureDiscoveredChannelPlugins().get(channelId);
-  };
   const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...CHANNEL_IDS]);
   for (const channelId of activeChannelPlugins.keys()) {
     allowedChannels.add(channelId);
@@ -456,9 +422,6 @@ function validateConfigObjectWithPluginsBase(
           for (const channelId of record.channels) {
             allowedChannels.add(channelId);
           }
-        }
-        if (resolveChannelPlugin(trimmed)) {
-          allowedChannels.add(trimmed);
         }
       }
       if (!allowedChannels.has(trimmed)) {
@@ -504,10 +467,6 @@ function validateConfigObjectWithPluginsBase(
           }
         }
       }
-      const discoveredPlugin = resolveChannelPlugin(trimmed);
-      if (discoveredPlugin?.id) {
-        heartbeatChannelIds.add(String(discoveredPlugin.id).toLowerCase());
-      }
     }
     if (heartbeatChannelIds.has(normalized)) {
       return;
@@ -535,14 +494,14 @@ function validateConfigObjectWithPluginsBase(
       ) {
         continue;
       }
-      const configSchema = resolveChannelPlugin(channelId)?.configSchema;
+      const configSchema = activeChannelPlugins.get(channelId)?.configSchema;
       if (!configSchema) {
         continue;
       }
       if (typeof configSchema.safeParse === "function") {
         const parsed = configSchema.safeParse(channelConfig);
         if (parsed.success) {
-          channels[channelId] = parsed.data ?? channelConfig;
+          channels[channelId] = parsed.data;
           continue;
         }
         for (const issue of parsed.error.issues) {

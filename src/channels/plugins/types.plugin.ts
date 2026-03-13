@@ -46,7 +46,7 @@ export type ChannelConfigSchema = {
   safeParse?: (
     value: unknown,
   ) =>
-    | { success: true; data?: unknown }
+    | { success: true; data: unknown }
     | { success: false; error: { issues: Array<{ path: Array<PropertyKey>; message: string }> } };
 };
 
