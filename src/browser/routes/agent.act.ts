@@ -114,6 +114,54 @@ const SELECTOR_ALLOWED_KINDS: ReadonlySet<string> = new Set([
   "type",
   "wait",
 ]);
+const MAX_BATCH_ACTIONS = 100;
+const MAX_BATCH_CLICK_DELAY_MS = 5_000;
+const MAX_BATCH_WAIT_TIME_MS = 30_000;
+
+function normalizeBoundedNonNegativeMs(
+  value: unknown,
+  fieldName: string,
+  maxMs: number,
+): number | undefined {
+  const ms = toNumber(value);
+  if (ms === undefined) {
+    return undefined;
+  }
+  if (ms < 0) {
+    throw new Error(`${fieldName} must be >= 0`);
+  }
+  const normalized = Math.floor(ms);
+  if (normalized > maxMs) {
+    throw new Error(`${fieldName} exceeds maximum of ${maxMs}ms`);
+  }
+  return normalized;
+}
+
+function countBatchActions(actions: BrowserActRequest[]): number {
+  let count = 0;
+  for (const action of actions) {
+    count += 1;
+    if (action.kind === "batch") {
+      count += countBatchActions(action.actions);
+    }
+  }
+  return count;
+}
+
+function validateBatchTargetIds(actions: BrowserActRequest[], targetId: string): string | null {
+  for (const action of actions) {
+    if (action.targetId && action.targetId !== targetId) {
+      return "batched action targetId must match request targetId";
+    }
+    if (action.kind === "batch") {
+      const nestedError = validateBatchTargetIds(action.actions, targetId);
+      if (nestedError) {
+        return nestedError;
+      }
+    }
+  }
+  return null;
+}
 
 function normalizeBatchAction(value: unknown): BrowserActRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -143,7 +191,11 @@ function normalizeBatchAction(value: unknown): BrowserActRequest {
         throw new Error(parsedModifiers.error);
       }
       const doubleClick = toBoolean(raw.doubleClick);
-      const delayMs = toNumber(raw.delayMs);
+      const delayMs = normalizeBoundedNonNegativeMs(
+        raw.delayMs,
+        "click delayMs",
+        MAX_BATCH_CLICK_DELAY_MS,
+      );
       const timeoutMs = toNumber(raw.timeoutMs);
       const targetId = toStringOrEmpty(raw.targetId) || undefined;
       return {
@@ -299,7 +351,11 @@ function normalizeBatchAction(value: unknown): BrowserActRequest {
         loadStateRaw === "networkidle"
           ? loadStateRaw
           : undefined;
-      const timeMs = toNumber(raw.timeMs);
+      const timeMs = normalizeBoundedNonNegativeMs(
+        raw.timeMs,
+        "wait timeMs",
+        MAX_BATCH_WAIT_TIME_MS,
+      );
       const text = toStringOrEmpty(raw.text) || undefined;
       const textGone = toStringOrEmpty(raw.textGone) || undefined;
       const selector = toStringOrEmpty(raw.selector) || undefined;
@@ -352,6 +408,9 @@ function normalizeBatchAction(value: unknown): BrowserActRequest {
       const actions = Array.isArray(raw.actions) ? raw.actions.map(normalizeBatchAction) : [];
       if (!actions.length) {
         throw new Error("batch requires actions");
+      }
+      if (countBatchActions(actions) > MAX_BATCH_ACTIONS) {
+        throw new Error(`batch exceeds maximum of ${MAX_BATCH_ACTIONS} actions`);
       }
       const targetId = toStringOrEmpty(raw.targetId) || undefined;
       const stopOnError = toBoolean(raw.stopOnError);
@@ -983,6 +1042,10 @@ export function registerBrowserAgentActRoutes(
             }
             if (!actions.length) {
               return jsonError(res, 400, "actions are required");
+            }
+            const targetIdError = validateBatchTargetIds(actions, tab.targetId);
+            if (targetIdError) {
+              return jsonError(res, 403, targetIdError);
             }
             const stopOnError = toBoolean(body.stopOnError) ?? true;
             const result = await pw.batchViaPlaywright({
