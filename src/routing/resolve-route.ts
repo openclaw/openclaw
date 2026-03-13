@@ -88,6 +88,10 @@ function normalizeId(value: unknown): string {
   return "";
 }
 
+function normalizePeerId(value: unknown): string {
+  return normalizeId(value).toLowerCase();
+}
+
 export function buildAgentSessionKey(params: {
   agentId: string;
   channel: string;
@@ -105,7 +109,7 @@ export function buildAgentSessionKey(params: {
     channel,
     accountId: params.accountId,
     peerKind: peer?.kind ?? "direct",
-    peerId: peer ? normalizeId(peer.id) || "unknown" : null,
+    peerId: peer ? normalizePeerId(peer.id) || "unknown" : null,
     dmScope: params.dmScope,
     identityLinks: params.identityLinks,
   });
@@ -477,7 +481,7 @@ function normalizePeerConstraint(
     return { state: "none" };
   }
   const kind = normalizeChatType(peer.kind);
-  const id = normalizeId(peer.id);
+  const id = normalizePeerId(peer.id);
   if (!kind || !id) {
     return { state: "invalid" };
   }
@@ -617,7 +621,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const peer = input.peer
     ? {
         kind: normalizeChatType(input.peer.kind) ?? input.peer.kind,
-        id: normalizeId(input.peer.id),
+        id: normalizePeerId(input.peer.id),
       }
     : null;
   const guildId = normalizeId(input.guildId);
@@ -630,7 +634,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const parentPeer = input.parentPeer
     ? {
         kind: normalizeChatType(input.parentPeer.kind) ?? input.parentPeer.kind,
-        id: normalizeId(input.parentPeer.id),
+        id: normalizePeerId(input.parentPeer.id),
       }
     : null;
 
