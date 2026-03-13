@@ -12,6 +12,27 @@ describe("buildInboundMediaNote", () => {
     expect(note).toBe("[media attached: /tmp/a.png (image/png) | /tmp/a.png]");
   });
 
+  it("includes attachment dimensions when available", () => {
+    const note = buildInboundMediaNote({
+      MediaPath: "/tmp/photo.jpg",
+      MediaType: "image/jpeg",
+      MediaDimension: { width: 4000, height: 3000 },
+    });
+    expect(note).toBe("[media attached: /tmp/photo.jpg (image/jpeg, 4000x3000)]");
+  });
+
+  it("includes attachment captions when available", () => {
+    const note = buildInboundMediaNote({
+      MediaPath: "/tmp/photo.jpg",
+      MediaType: "image/jpeg",
+      MediaDimension: { width: 4000, height: 3000 },
+      MediaCaption: "sunset over the bay",
+    });
+    expect(note).toBe(
+      '[media attached: /tmp/photo.jpg (image/jpeg, 4000x3000, "sunset over the bay")]',
+    );
+  });
+
   it("formats multiple MediaPaths as numbered media notes", () => {
     const note = buildInboundMediaNote({
       MediaPaths: ["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"],

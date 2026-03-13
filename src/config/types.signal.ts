@@ -1,4 +1,5 @@
 import type { CommonChannelMessagingConfig } from "./types.channel-messaging-common.js";
+import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
@@ -34,6 +35,14 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
   actions?: {
     /** Enable/disable sending reactions via message tool (default: true). */
     reactions?: boolean;
+    /** Enable/disable unsending messages via message tool (default: true). */
+    unsend?: boolean;
+    /** Enable/disable creating polls via message tool (default: true). */
+    poll?: boolean;
+    /** Enable/disable voting on polls via message tool (default: true). */
+    pollVote?: boolean;
+    /** Enable/disable closing polls via message tool (default: true). */
+    pollTerminate?: boolean;
   };
   /**
    * Controls agent reaction behavior:
@@ -43,6 +52,14 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
    * - "extensive": Agent can react liberally
    */
   reactionLevel?: SignalReactionLevel;
+  /** Heartbeat visibility settings for this channel. */
+  heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
+  /** Extract link preview metadata into UntrustedContext (default: true). */
+  injectLinkPreviews?: boolean;
+  /** Apply Signal text styles (bold/italic/monospace/strikethrough/spoiler) to message text (default: true). */
+  preserveTextStyles?: boolean;
 };
 
 export type SignalConfig = {

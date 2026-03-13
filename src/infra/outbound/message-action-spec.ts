@@ -8,6 +8,7 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     broadcast: "none",
     poll: "to",
     "poll-vote": "to",
+    "poll-terminate": "to",
     react: "to",
     reactions: "to",
     read: "to",
