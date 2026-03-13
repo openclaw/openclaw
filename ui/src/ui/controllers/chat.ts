@@ -41,6 +41,7 @@ export type ChatState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   chatPendingMessages: Array<{ text: string; mode: "steered" | "queued" }>;
+  chatSeenRunIds: Set<string>;
   lastError: string | null;
 };
 
@@ -83,6 +84,8 @@ export async function loadChatHistory(state: ChatState) {
     state.chatThinkingLevel = res.thinkingLevel ?? null;
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.
+    // Also clear seen run IDs to allow final messages to be re-added on reconnect.
+    state.chatSeenRunIds = new Set();
     maybeResetToolStream(state);
     state.chatStream = null;
     state.chatStreamStartedAt = null;
