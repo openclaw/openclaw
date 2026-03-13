@@ -23,7 +23,7 @@ enum TalkModeGatewayConfigParser {
         defaultSilenceTimeoutMs: Int,
         envVoice: String?,
         sagVoice: String?,
-        envApiKey: String?
+        envApiKey: String?,
     )
         -> TalkModeGatewayConfigState
     {
@@ -83,7 +83,7 @@ enum TalkModeGatewayConfigParser {
         defaultSilenceTimeoutMs: Int,
         envVoice: String?,
         sagVoice: String?,
-        envApiKey: String?
+        envApiKey: String?,
     )
         -> TalkModeGatewayConfigState
     {
