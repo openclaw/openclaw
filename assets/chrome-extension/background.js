@@ -824,6 +824,12 @@ async function attachTab(tabId, opts = {}) {
     throw new Error('Target.getTargetInfo returned no targetId')
   }
   
+  // Reconcile Target ID shifts during navigation/swaps
+  const oldTargetId = reattachInfo?.targetId || tabs.get(tabId)?.targetId
+  if (oldTargetId && oldTargetId !== targetId) {
+    targetToTab.delete(oldTargetId)
+  }
+
   tabs.set(tabId, {
     state: 'connected',
     sessionId,
@@ -1362,7 +1368,12 @@ chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => void whenReady(
   pendingSwaps.add(addedTabId)
 
   try {
-    // 2. Child Session Zombie Cleanup: Notify relay of subframe death before purging mappings
+    // 2. Snapshots for Migration
+    const meta = tabs.get(removedTabId)
+    const reattachInfo = reattachingTabs.get(removedTabId)
+    const existing = meta || reattachInfo
+
+    // 3. Child Session Zombie Cleanup: Notify relay and purge mappings
     for (const [sid, tid] of childSessionToTab.entries()) {
       if (tid === removedTabId) {
         try {
@@ -1378,113 +1389,83 @@ chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => void whenReady(
       }
     }
 
-    // 3. Migrate Lock identity
-    const meta = tabs.get(removedTabId)
-    const reattachInfo = reattachingTabs.get(removedTabId)
-    const sessionToLock = meta?.sessionId || reattachInfo?.sessionId
+    if (existing) {
+      // 4. Atomic Identity Switchboard Move
+      // Logical identity moves synchronously; physical attachment follows asynchronously.
+      reattachingTabs.set(addedTabId, {
+        sessionId: existing.sessionId,
+        attachOrder: existing.attachOrder,
+        targetId: existing.targetId,
+        attempts: 0
+      })
 
-    if (lockedTabId === removedTabId) {
-      lockedTabId = addedTabId
-      if (sessionToLock) {
-        void setLockOnRelay(true, sessionToLock, null, currentEpoch).catch(() => {})
-      }
-    }
-    
-    // 4. Migrate Routing Maps
-    if (meta) {
-      if (meta.sessionId) tabBySession.set(meta.sessionId, addedTabId)
-      if (meta.targetId) targetToTab.set(meta.targetId, addedTabId)
+      // Immediate purge of stale ID entries
       tabs.delete(removedTabId)
-      tabs.set(addedTabId, meta)
-    }
-
-    // 5. Migrate Navigation State (reattachingTabs & commandBuffers)
-    if (reattachInfo) {
       reattachingTabs.delete(removedTabId)
-      reattachingTabs.set(addedTabId, reattachInfo)
-      if (reattachInfo.targetId) targetToTab.set(reattachInfo.targetId, addedTabId)
-      void runReattachLoop(addedTabId)
-    }
 
-    // 6. Migrate Command Buffers
-    const bufferEntries = commandBuffers.get(removedTabId)
-    if (bufferEntries) {
-      commandBuffers.delete(removedTabId)
-      commandBuffers.set(addedTabId, bufferEntries)
-    }
+      // Migrate Routing Maps
+      if (existing.sessionId) tabBySession.set(existing.sessionId, addedTabId)
+      if (existing.targetId) targetToTab.set(existing.targetId, addedTabId)
 
-    // 7. Migrate Ancestry Tree with Origin-Check Safety
-    try {
-      const tabInfo = await chrome.tabs.get(addedTabId)
-      const isRestricted = tabInfo.url && (tabInfo.url.startsWith('chrome://') || tabInfo.url.startsWith('chrome-extension://'))
-      
+      // Migrate Lock identity
+      if (lockedTabId === removedTabId) {
+        lockedTabId = addedTabId
+      }
+
+      // 5. Synchronous Ancestry Migration
+      // No await before this block to ensure lock continuity for descendants
       for (const [cid, pid] of tabAncestry.entries()) {
-        if (pid === removedTabId) {
-          if (isRestricted) tabAncestry.delete(cid)
-          else tabAncestry.set(cid, addedTabId)
-        }
+        if (pid === removedTabId) tabAncestry.set(cid, addedTabId)
         if (cid === removedTabId) {
           tabAncestry.delete(cid)
-          if (!isRestricted) tabAncestry.set(addedTabId, pid)
+          tabAncestry.set(addedTabId, pid)
         }
       }
-    } catch {
-      // If we can't origin-check, be safe and drop ancestry for the removed identity
+
+      // 6. Migrate Command Buffers (Conjoin instead of overwrite)
+      const oldBuffer = commandBuffers.get(removedTabId)
+      if (oldBuffer) {
+        commandBuffers.delete(removedTabId)
+        const currentBuffer = commandBuffers.get(addedTabId) || []
+        commandBuffers.set(addedTabId, [...oldBuffer, ...currentBuffer])
+      }
+
+      // Release control back to event loop to allow persistence before async work
+      void persistState()
+
+      // 7. Restart physical re-attachment cycle
+      // runReattachLoop handles physical debugger.attach and buffer flushing
+      void runReattachLoop(addedTabId)
+    } else {
+      // We don't track this tab, but help it die gracefully
       tabAncestry.delete(removedTabId)
     }
 
-    // 8. Identity Refresh: Sync and handle drift with Fallback attachment
+    // 8. Origin Check Safety (Async)
+    // Prune restricted pages from tracking/ancestry after logical move
     try {
-      const info = /** @type {any} */ (await chrome.debugger.sendCommand({ tabId: addedTabId }, 'Target.getTargetInfo'))
-      const freshTargetId = info?.targetInfo?.targetId
-      if (freshTargetId && freshTargetId !== meta?.targetId) {
-        console.log(`[OpenClaw] Identity Sync: Target ID shifted from ${meta?.targetId} to ${freshTargetId}`)
-        if (meta) meta.targetId = freshTargetId
-        targetToTab.set(freshTargetId, addedTabId)
-        
-        // Broadcast new identity to client immediately
-        if (meta?.sessionId) {
-          void sendToRelay({
-            method: 'forwardCDPEvent',
-            params: {
-              method: 'Target.attachedToTarget',
-              params: {
-                sessionId: meta.sessionId,
-                targetInfo: { ...info.targetInfo, attached: true },
-                waitingForDebugger: false,
-              },
-            },
-          })
-        }
+      const tabInfo = await chrome.tabs.get(addedTabId)
+      if (tabInfo.url && (tabInfo.url.startsWith('chrome://') || tabInfo.url.startsWith('chrome-extension://'))) {
+        tabAncestry.delete(addedTabId)
+        void detachTab(addedTabId, 'restricted_url')
       }
-    } catch (err) {
-      console.warn('[OpenClaw] Identity Sync Failed - Triggering Emergency Re-attach:', err instanceof Error ? err.message : String(err))
-      await detachTab(addedTabId, 'sync_failed', 'Identity synchronization failed') // Force a healthy reconnect
-      return
+    } catch {
+      // Restricted/Missing — safe fallback
+      tabAncestry.delete(addedTabId)
     }
 
-    // 9. Authoritative Status Sync (Epoch Synchronization)
-    const activeMeta = tabs.get(addedTabId)
-    const currentSessionId = activeMeta?.sessionId || null
-    void setLockOnRelay(relayIsLocked, currentSessionId, relayIsLocked ? null : 'tracking', currentEpoch).catch(() => {})
-
-    // 10. Final Buffer Flush: Close the sync window and release commands
-    const buffer = commandBuffers.get(addedTabId) || []
-    if (buffer.length > 0) {
-      commandBuffers.delete(addedTabId)
-      for (const cmd of buffer) {
-        void handleForwardCdpCommand(cmd).then(
-          res => sendToRelay({ id: cmd.id, result: res }, { silent: true }),
-          err => sendToRelay({ id: cmd.id, error: err instanceof Error ? err.message : String(err) }, { silent: true })
-        )
-        await sleep(2)
-      }
+    // 9. Authoritative Status Sync: Update relay while reattaching
+    if (reattachingTabs.has(addedTabId)) {
+      const info = reattachingTabs.get(addedTabId)
+      // Broadcast 'null' (navigating) state to relay while reattaching
+      void setLockOnRelay(relayIsLocked, info.sessionId, null, currentEpoch).catch(() => {})
     }
 
   } finally {
+    // 10. Close the transition window. 
+    // Now handleForwardCdpCommand will stop buffering for addedTabId (if reattach succeeded)
     pendingSwaps.delete(addedTabId)
     updateAllBadges()
-    void persistState()
   }
 }))
 
