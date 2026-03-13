@@ -16,16 +16,17 @@ export const TalkConfigParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-const TalkProviderConfigSchema = Type.Object(
-  {
-    voiceId: Type.Optional(Type.String()),
-    voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
-    modelId: Type.Optional(Type.String()),
-    outputFormat: Type.Optional(Type.String()),
-    apiKey: Type.Optional(SecretInputSchema),
-  },
-  { additionalProperties: true },
-);
+const talkProviderFieldSchemas = {
+  voiceId: Type.Optional(Type.String()),
+  voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
+  modelId: Type.Optional(Type.String()),
+  outputFormat: Type.Optional(Type.String()),
+  apiKey: Type.Optional(SecretInputSchema),
+};
+
+const TalkProviderConfigSchema = Type.Object(talkProviderFieldSchemas, {
+  additionalProperties: true,
+});
 
 const ResolvedTalkConfigSchema = Type.Object(
   {
@@ -37,11 +38,7 @@ const ResolvedTalkConfigSchema = Type.Object(
 
 const LegacyTalkConfigSchema = Type.Object(
   {
-    voiceId: Type.Optional(Type.String()),
-    voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
-    modelId: Type.Optional(Type.String()),
-    outputFormat: Type.Optional(Type.String()),
-    apiKey: Type.Optional(SecretInputSchema),
+    ...talkProviderFieldSchemas,
     interruptOnSpeech: Type.Optional(Type.Boolean()),
     silenceTimeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
   },
@@ -53,11 +50,7 @@ const NormalizedTalkConfigSchema = Type.Object(
     provider: Type.Optional(Type.String()),
     providers: Type.Optional(Type.Record(Type.String(), TalkProviderConfigSchema)),
     resolved: ResolvedTalkConfigSchema,
-    voiceId: Type.Optional(Type.String()),
-    voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
-    modelId: Type.Optional(Type.String()),
-    outputFormat: Type.Optional(Type.String()),
-    apiKey: Type.Optional(SecretInputSchema),
+    ...talkProviderFieldSchemas,
     interruptOnSpeech: Type.Optional(Type.Boolean()),
     silenceTimeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
   },

@@ -1502,6 +1502,10 @@ export async function runEmbeddedAttempt(
           runId: params.runId,
           agentDir,
           workspaceDir: effectiveWorkspace,
+          // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
+          // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
+          spawnWorkspaceDir:
+            sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? resolvedWorkspace : undefined,
           config: params.config,
           abortSignal: runAbortController.signal,
           modelProvider: params.model.provider,
@@ -1737,6 +1741,7 @@ export async function runEmbeddedAttempt(
         try {
           await params.contextEngine.bootstrap({
             sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
             sessionFile: params.sessionFile,
           });
         } catch (bootstrapErr) {
@@ -1925,7 +1930,10 @@ export async function runEmbeddedAttempt(
         params.config,
         params.provider,
         params.modelId,
-        params.streamParams,
+        {
+          ...params.streamParams,
+          fastMode: params.fastMode,
+        },
         params.thinkLevel,
         sessionAgentId,
       );
@@ -1939,9 +1947,10 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = cacheTrace.wrapStreamFn(activeSession.agent.streamFn);
       }
 
-      // Copilot/Claude can reject persisted `thinking` blocks (e.g. thinkingSignature:"reasoning_text")
-      // on *any* follow-up provider call (including tool continuations). Wrap the stream function
-      // so every outbound request sees sanitized messages.
+      // Anthropic Claude endpoints can reject replayed `thinking` blocks
+      // (e.g. thinkingSignature:"reasoning_text") on any follow-up provider
+      // call, including tool continuations. Wrap the stream function so every
+      // outbound request sees sanitized messages.
       if (transcriptPolicy.dropThinkingBlocks) {
         const inner = activeSession.agent.streamFn;
         activeSession.agent.streamFn = (model, context, options) => {
@@ -2089,6 +2098,7 @@ export async function runEmbeddedAttempt(
           try {
             const assembled = await params.contextEngine.assemble({
               sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
               messages: activeSession.messages,
               tokenBudget: params.contextTokenBudget,
             });
@@ -2536,14 +2546,19 @@ export async function runEmbeddedAttempt(
           }
         }
 
+        // Check if ANY compaction occurred during the entire attempt (prompt + retry).
+        // Using a cumulative count (> 0) instead of a delta check avoids missing
+        // compactions that complete during activeSession.prompt() before the delta
+        // baseline is sampled.
         const compactionOccurredThisAttempt = getCompactionCount() > 0;
-
         // Append cache-TTL timestamp AFTER prompt + compaction retry completes.
         // Previously this was before the prompt, which caused a custom entry to be
         // inserted between compaction and the next prompt — breaking the
         // prepareCompaction() guard that checks the last entry type, leading to
         // double-compaction. See: https://github.com/openclaw/openclaw/issues/9282
         // Skip when timed out during compaction — session state may be inconsistent.
+        // Also skip when compaction ran this attempt — appending a custom entry
+        // after compaction would break the guard again. See: #28491
         if (!timedOutDuringCompaction && !compactionOccurredThisAttempt) {
           const shouldTrackCacheTtl =
             params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
@@ -2604,6 +2619,7 @@ export async function runEmbeddedAttempt(
             try {
               await params.contextEngine.afterTurn({
                 sessionId: sessionIdUsed,
+                sessionKey: params.sessionKey,
                 sessionFile: params.sessionFile,
                 messages: messagesSnapshot,
                 prePromptMessageCount,
@@ -2621,6 +2637,7 @@ export async function runEmbeddedAttempt(
                 try {
                   await params.contextEngine.ingestBatch({
                     sessionId: sessionIdUsed,
+                    sessionKey: params.sessionKey,
                     messages: newMessages,
                   });
                 } catch (ingestErr) {
@@ -2631,6 +2648,7 @@ export async function runEmbeddedAttempt(
                   try {
                     await params.contextEngine.ingest({
                       sessionId: sessionIdUsed,
+                      sessionKey: params.sessionKey,
                       message: msg,
                     });
                   } catch (ingestErr) {
