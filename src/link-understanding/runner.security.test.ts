@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import type { LookupFn } from "../infra/net/ssrf.js";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { runLinkUnderstanding } from "./runner.js";
 
 function createLookupFn(address: string, family = 4): LookupFn {
@@ -15,7 +15,7 @@ function minimalCtx() {
   };
 }
 
-function cfgWithCliEntry(message: string) {
+function cfgWithCliEntry(): OpenClawConfig {
   return {
     tools: {
       links: {
@@ -23,7 +23,7 @@ function cfgWithCliEntry(message: string) {
         models: [{ command: "echo", args: ["{{LinkUrl}}"] }],
       },
     },
-  } as any;
+  } as OpenClawConfig;
 }
 
 describe("CWE-918: SSRF bypass via DNS rebinding at usage stage", () => {
@@ -31,7 +31,7 @@ describe("CWE-918: SSRF bypass via DNS rebinding at usage stage", () => {
     // Simulates DNS rebinding: hostname passes literal check in detect.ts
     // but resolves to 127.0.0.1 when the CLI tool actually fetches it.
     const lookupFn = createLookupFn("127.0.0.1");
-    const cfg = cfgWithCliEntry("https://rebind.attacker.com/steal");
+    const cfg = cfgWithCliEntry();
     const result = await runLinkUnderstanding({
       cfg,
       ctx: { ...minimalCtx(), Body: "check https://rebind.attacker.com/steal" },
@@ -43,7 +43,7 @@ describe("CWE-918: SSRF bypass via DNS rebinding at usage stage", () => {
 
   it("should block URL resolving to cloud metadata IP (169.254.169.254)", async () => {
     const lookupFn = createLookupFn("169.254.169.254");
-    const cfg = cfgWithCliEntry("https://rebind.attacker.com/metadata");
+    const cfg = cfgWithCliEntry();
     const result = await runLinkUnderstanding({
       cfg,
       ctx: { ...minimalCtx(), Body: "check https://rebind.attacker.com/metadata" },
@@ -55,7 +55,7 @@ describe("CWE-918: SSRF bypass via DNS rebinding at usage stage", () => {
   it("should block URL resolving to private network (10.x, 172.16.x, 192.168.x)", async () => {
     for (const ip of ["10.0.0.1", "172.16.0.1", "192.168.1.1"]) {
       const lookupFn = createLookupFn(ip);
-      const cfg = cfgWithCliEntry("https://rebind.attacker.com/internal");
+      const cfg = cfgWithCliEntry();
       const result = await runLinkUnderstanding({
         cfg,
         ctx: { ...minimalCtx(), Body: "check https://rebind.attacker.com/internal" },
@@ -67,7 +67,7 @@ describe("CWE-918: SSRF bypass via DNS rebinding at usage stage", () => {
 
   it("should block URL resolving to IPv6 loopback (::1)", async () => {
     const lookupFn = createLookupFn("::1", 6);
-    const cfg = cfgWithCliEntry("https://rebind.attacker.com/v6");
+    const cfg = cfgWithCliEntry();
     const result = await runLinkUnderstanding({
       cfg,
       ctx: { ...minimalCtx(), Body: "check https://rebind.attacker.com/v6" },
@@ -81,7 +81,7 @@ describe("CWE-918: SSRF bypass via DNS rebinding at usage stage", () => {
     // runExec will still fail (echo is not a real link tool), but the SSRF
     // guard itself should not throw.
     const lookupFn = createLookupFn("93.184.216.34");
-    const cfg = cfgWithCliEntry("https://example.com/page");
+    const cfg = cfgWithCliEntry();
     const result = await runLinkUnderstanding({
       cfg,
       ctx: { ...minimalCtx(), Body: "check https://example.com/page" },
@@ -95,7 +95,7 @@ describe("CWE-918: SSRF bypass via DNS rebinding at usage stage", () => {
     // Use a non-blocked TLD so the URL passes detection-stage literal checks,
     // then rebinds to 127.0.0.1 at usage time.
     const lookupFn = createLookupFn("127.0.0.1");
-    const cfg = cfgWithCliEntry("https://evil-rebind.example.com/secret");
+    const cfg = cfgWithCliEntry();
     const result = await runLinkUnderstanding({
       cfg,
       ctx: { ...minimalCtx(), Body: "visit https://evil-rebind.example.com/secret" },
