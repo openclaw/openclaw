@@ -498,21 +498,20 @@ async function resolveMemoryBootstrapEntries(
 export async function loadWorkspaceBootstrapFiles(dir: string): Promise<WorkspaceBootstrapFile[]> {
   const resolvedDir = resolveUserPath(dir);
 
+  // Injection order is optimised for Anthropic KV-cache hit rate:
+  //   stable files first (rarely edited) → frequently-edited files last.
+  // Because the KV cache reuses everything before the first changed character,
+  // placing AGENTS.md (the most commonly updated workspace file) last means
+  // SOUL.md, USER.md, IDENTITY.md, TOOLS.md remain in the cached prefix even
+  // when AGENTS.md is updated between sessions.
   const entries: Array<{
     name: WorkspaceBootstrapFileName;
     filePath: string;
   }> = [
-    {
-      name: DEFAULT_AGENTS_FILENAME,
-      filePath: path.join(resolvedDir, DEFAULT_AGENTS_FILENAME),
-    },
+    // Rarely-changing identity & persona files — stay in KV-cache prefix
     {
       name: DEFAULT_SOUL_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_SOUL_FILENAME),
-    },
-    {
-      name: DEFAULT_TOOLS_FILENAME,
-      filePath: path.join(resolvedDir, DEFAULT_TOOLS_FILENAME),
     },
     {
       name: DEFAULT_IDENTITY_FILENAME,
@@ -522,6 +521,11 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
       name: DEFAULT_USER_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_USER_FILENAME),
     },
+    // Occasionally-updated tool notes and heartbeat config
+    {
+      name: DEFAULT_TOOLS_FILENAME,
+      filePath: path.join(resolvedDir, DEFAULT_TOOLS_FILENAME),
+    },
     {
       name: DEFAULT_HEARTBEAT_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_HEARTBEAT_FILENAME),
@@ -529,6 +533,13 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
     {
       name: DEFAULT_BOOTSTRAP_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME),
+    },
+    // AGENTS.md last: most frequently edited (session protocol, workspace guidelines).
+    // Placing it last minimises cache invalidation scope — only content from here
+    // onward is re-computed when AGENTS.md changes.
+    {
+      name: DEFAULT_AGENTS_FILENAME,
+      filePath: path.join(resolvedDir, DEFAULT_AGENTS_FILENAME),
     },
   ];
 

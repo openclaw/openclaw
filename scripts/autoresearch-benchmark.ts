@@ -90,28 +90,29 @@ const totalChars = prompt.length;
 
 // ── Dynamic boundary detection ──────────────────────────────────────────────
 //
-// The KV-cache boundary is the first injected workspace file header.
-// Workspace files are injected as:   ## /path/to/workspace/FILENAME.md
-// Everything before that line is identical across sessions (stable).
-// Everything from that line onward changes as the user edits their workspace.
+// AGENTS.md is the most frequently-edited workspace file (session protocol,
+// workspace guidelines). We inject it LAST among workspace files so that
+// SOUL.md, USER.md, IDENTITY.md, TOOLS.md etc. remain in the Anthropic
+// KV-cached prefix even when AGENTS.md changes between sessions.
 //
-// Fallback: if no workspace files are present (edge case), use the model= line.
+// stable_chars = chars before the AGENTS.md header (primary boundary).
+// Fallback: first workspace file header if AGENTS.md not present.
 
-// Build patterns in priority order (first match wins)
-const dynamicPatterns: { label: string; pattern: RegExp }[] = [
-  // First injected workspace file header  (e.g. `## /home/user/.openclaw/workspace/AGENTS.md`)
-  {
-    label: "workspace-file-header",
-    pattern: new RegExp(`^## ${escapeRegExp(workspaceDir)}/`, "m"),
-  },
-  // Also catch any absolute path that looks like a workspace file (portable fallback)
-  {
-    label: "workspace-file-header-abs",
-    pattern: /^## \/[^\n]+\.md$/m,
-  },
-  // ISO timestamps (session timestamps injected dynamically)
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// ── Primary: AGENTS.md header (injected last — highest stable prefix) ──
+const agentsMdPattern = new RegExp(`^## ${escapeRegExp(workspaceDir)}/AGENTS\\.md$`, "m");
+const agentsMdMatch = agentsMdPattern.exec(prompt);
+
+// ── Fallback: first workspace file header ──
+const firstFilePattern = new RegExp(`^## ${escapeRegExp(workspaceDir)}/`, "m");
+const firstFileMatch = firstFilePattern.exec(prompt);
+
+// ── Legacy guards (timestamps etc.) ──
+const legacyPatterns: { label: string; pattern: RegExp }[] = [
   { label: "iso-timestamp", pattern: /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/ },
-  // Explicit dynamic section headers (legacy guard)
   { label: "current-date-header", pattern: /## Current Date & Time/ },
   { label: "current-time", pattern: /Current time:/ },
 ];
@@ -120,9 +121,22 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// Use AGENTS.md as primary boundary (it's the most frequently updated file,
+// injected last — everything before it is stable even when AGENTS.md changes).
+// Fall back to first workspace file header if AGENTS.md isn't loaded.
 let stableChars = totalChars;
 let hitLabel = "none";
-for (const { label, pattern } of dynamicPatterns) {
+
+if (agentsMdMatch) {
+  stableChars = agentsMdMatch.index;
+  hitLabel = "agents-md-header";
+} else if (firstFileMatch) {
+  stableChars = firstFileMatch.index;
+  hitLabel = "workspace-file-header-fallback";
+}
+
+// Apply legacy guards (timestamps etc.) — these can only LOWER the stable prefix
+for (const { label, pattern } of legacyPatterns) {
   const match = pattern.exec(prompt);
   if (match && match.index < stableChars) {
     stableChars = match.index;
