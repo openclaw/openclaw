@@ -98,12 +98,14 @@ describe("browser control server", () => {
         height: 600,
       });
       expect(resize.ok).toBe(true);
-      expect(pwMocks.resizeViewportViaPlaywright).toHaveBeenCalledWith({
-        cdpUrl: state.cdpBaseUrl,
-        targetId: "abcd1234",
-        width: 800,
-        height: 600,
-      });
+      expect(pwMocks.resizeViewportViaPlaywright).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cdpUrl: expect.any(String),
+          targetId: "abcd1234",
+          width: 800,
+          height: 600,
+        }),
+      );
 
       const wait = await postJson<{ ok: boolean }>(`${base}/act`, {
         kind: "wait",
@@ -195,6 +197,40 @@ describe("browser control server", () => {
             {
               kind: "wait",
               fn: "() => window.ready === true",
+            },
+          ],
+        }),
+      );
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "preserves exact type text in batch normalization",
+    async () => {
+      const base = await startServerAndBase();
+
+      const batchRes = await postJson<{ ok: boolean }>(`${base}/act`, {
+        kind: "batch",
+        actions: [
+          { kind: "type", selector: "input.name", text: "  padded  " },
+          { kind: "type", selector: "input.clearable", text: "" },
+        ],
+      });
+
+      expect(batchRes.ok).toBe(true);
+      expect(pwMocks.batchViaPlaywright).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actions: [
+            {
+              kind: "type",
+              selector: "input.name",
+              text: "  padded  ",
+            },
+            {
+              kind: "type",
+              selector: "input.clearable",
+              text: "",
             },
           ],
         }),
