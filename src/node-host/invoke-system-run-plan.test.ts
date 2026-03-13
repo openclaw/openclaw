@@ -43,6 +43,14 @@ type RuntimeFixture = {
   binNames?: string[];
 };
 
+type UnsafeRuntimeInvocationCase = {
+  name: string;
+  binName: string;
+  tmpPrefix: string;
+  command: string[];
+  setup?: (tmp: string) => void;
+};
+
 function createScriptOperandFixture(tmp: string, fixture?: RuntimeFixture): ScriptOperandFixture {
   if (fixture) {
     return {
@@ -153,6 +161,101 @@ function withScriptOperandPlanFixture<T>(
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
+
+const DENIED_RUNTIME_APPROVAL = {
+  ok: false,
+  message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+} as const;
+
+function expectRuntimeApprovalDenied(command: string[], cwd: string) {
+  const prepared = buildSystemRunApprovalPlan({ command, cwd });
+  expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+}
+
+const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
+  {
+    name: "rejects bun package script names that do not bind a concrete file",
+    binName: "bun",
+    tmpPrefix: "openclaw-bun-package-script-",
+    command: ["bun", "run", "dev"],
+  },
+  {
+    name: "rejects deno eval invocations that do not bind a concrete file",
+    binName: "deno",
+    tmpPrefix: "openclaw-deno-eval-",
+    command: ["deno", "eval", "console.log('SAFE')"],
+  },
+  {
+    name: "rejects tsx eval invocations that do not bind a concrete file",
+    binName: "tsx",
+    tmpPrefix: "openclaw-tsx-eval-",
+    command: ["tsx", "--eval", "console.log('SAFE')"],
+  },
+  {
+    name: "rejects node inline import operands that cannot be bound to one stable file",
+    binName: "node",
+    tmpPrefix: "openclaw-node-import-inline-",
+    command: ["node", "--import=./preload.mjs", "./main.mjs"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "main.mjs"), 'console.log("SAFE")\n');
+      fs.writeFileSync(path.join(tmp, "preload.mjs"), 'console.log("SAFE")\n');
+    },
+  },
+  {
+    name: "rejects ruby require preloads that approval cannot bind completely",
+    binName: "ruby",
+    tmpPrefix: "openclaw-ruby-require-",
+    command: ["ruby", "-r", "attacker", "./safe.rb"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "safe.rb"), 'puts "SAFE"\n');
+    },
+  },
+  {
+    name: "rejects ruby load-path flags that can redirect module resolution after approval",
+    binName: "ruby",
+    tmpPrefix: "openclaw-ruby-load-path-",
+    command: ["ruby", "-I.", "./safe.rb"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "safe.rb"), 'puts "SAFE"\n');
+    },
+  },
+  {
+    name: "rejects perl module preloads that approval cannot bind completely",
+    binName: "perl",
+    tmpPrefix: "openclaw-perl-module-preload-",
+    command: ["perl", "-MPreload", "./safe.pl"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "safe.pl"), 'print "SAFE\\n";\n');
+    },
+  },
+  {
+    name: "rejects perl load-path flags that can redirect module resolution after approval",
+    binName: "perl",
+    tmpPrefix: "openclaw-perl-load-path-",
+    command: ["perl", "-Ilib", "./safe.pl"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "safe.pl"), 'print "SAFE\\n";\n');
+    },
+  },
+  {
+    name: "rejects perl combined preload and load-path flags",
+    binName: "perl",
+    tmpPrefix: "openclaw-perl-preload-load-path-",
+    command: ["perl", "-Ilib", "-MPreload", "./safe.pl"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "safe.pl"), 'print "SAFE\\n";\n');
+    },
+  },
+  {
+    name: "rejects shell payloads that hide mutable interpreter scripts",
+    binName: "node",
+    tmpPrefix: "openclaw-inline-shell-node-",
+    command: ["sh", "-lc", "node ./run.js"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "run.js"), 'console.log("SAFE")\n');
+    },
+  },
+];
 
 describe("hardenApprovedExecutionPaths", () => {
   const cases: HardeningCase[] = [
@@ -493,233 +596,22 @@ describe("hardenApprovedExecutionPaths", () => {
     );
   });
 
-  it("rejects bun package script names that do not bind a concrete file", () => {
-    withFakeRuntimeBin({
-      binName: "bun",
-      run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bun-package-script-"));
-        try {
-          const prepared = buildSystemRunApprovalPlan({
-            command: ["bun", "run", "dev"],
-            cwd: tmp,
-          });
-          expect(prepared).toEqual({
-            ok: false,
-            message:
-              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-          });
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
-      },
+  for (const testCase of unsafeRuntimeInvocationCases) {
+    it(testCase.name, () => {
+      withFakeRuntimeBin({
+        binName: testCase.binName,
+        run: () => {
+          const tmp = fs.mkdtempSync(path.join(os.tmpdir(), testCase.tmpPrefix));
+          try {
+            testCase.setup?.(tmp);
+            expectRuntimeApprovalDenied(testCase.command, tmp);
+          } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+          }
+        },
+      });
     });
-  });
-
-  it("rejects deno eval invocations that do not bind a concrete file", () => {
-    withFakeRuntimeBin({
-      binName: "deno",
-      run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-deno-eval-"));
-        try {
-          const prepared = buildSystemRunApprovalPlan({
-            command: ["deno", "eval", "console.log('SAFE')"],
-            cwd: tmp,
-          });
-          expect(prepared).toEqual({
-            ok: false,
-            message:
-              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-          });
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
-      },
-    });
-  });
-
-  it("rejects tsx eval invocations that do not bind a concrete file", () => {
-    withFakeRuntimeBin({
-      binName: "tsx",
-      run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tsx-eval-"));
-        try {
-          const prepared = buildSystemRunApprovalPlan({
-            command: ["tsx", "--eval", "console.log('SAFE')"],
-            cwd: tmp,
-          });
-          expect(prepared).toEqual({
-            ok: false,
-            message:
-              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-          });
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
-      },
-    });
-  });
-
-  it("rejects node inline import operands that cannot be bound to one stable file", () => {
-    withFakeRuntimeBin({
-      binName: "node",
-      run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-import-inline-"));
-        try {
-          fs.writeFileSync(path.join(tmp, "main.mjs"), 'console.log("SAFE")\n');
-          fs.writeFileSync(path.join(tmp, "preload.mjs"), 'console.log("SAFE")\n');
-          const prepared = buildSystemRunApprovalPlan({
-            command: ["node", "--import=./preload.mjs", "./main.mjs"],
-            cwd: tmp,
-          });
-          expect(prepared).toEqual({
-            ok: false,
-            message:
-              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-          });
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
-      },
-    });
-  });
-
-  it("rejects ruby require preloads that approval cannot bind completely", () => {
-    withFakeRuntimeBin({
-      binName: "ruby",
-      run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ruby-require-"));
-        try {
-          fs.writeFileSync(path.join(tmp, "safe.rb"), 'puts "SAFE"\n');
-          const prepared = buildSystemRunApprovalPlan({
-            command: ["ruby", "-r", "attacker", "./safe.rb"],
-            cwd: tmp,
-          });
-          expect(prepared).toEqual({
-            ok: false,
-            message:
-              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-          });
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
-      },
-    });
-  });
-
-  it("rejects ruby load-path flags that can redirect module resolution after approval", () => {
-    withFakeRuntimeBin({
-      binName: "ruby",
-      run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ruby-load-path-"));
-        try {
-          fs.writeFileSync(path.join(tmp, "safe.rb"), 'puts "SAFE"\n');
-          const prepared = buildSystemRunApprovalPlan({
-            command: ["ruby", "-I.", "./safe.rb"],
-            cwd: tmp,
-          });
-          expect(prepared).toEqual({
-            ok: false,
-            message:
-              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-          });
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
-      },
-    });
-  });
-
-  it("rejects perl module preloads that approval cannot bind completely", () => {
-    withFakeRuntimeBin({
-      binName: "perl",
-      run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-perl-module-preload-"));
-        try {
-          fs.writeFileSync(path.join(tmp, "safe.pl"), 'print "SAFE\\n";\n');
-          const prepared = buildSystemRunApprovalPlan({
-            command: ["perl", "-MPreload", "./safe.pl"],
-            cwd: tmp,
-          });
-          expect(prepared).toEqual({
-            ok: false,
-            message:
-              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-          });
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
-      },
-    });
-  });
-
-  it("rejects perl load-path flags that can redirect module resolution after approval", () => {
-    withFakeRuntimeBin({
-      binName: "perl",
-      run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-perl-load-path-"));
-        try {
-          fs.writeFileSync(path.join(tmp, "safe.pl"), 'print "SAFE\\n";\n');
-          const prepared = buildSystemRunApprovalPlan({
-            command: ["perl", "-Ilib", "./safe.pl"],
-            cwd: tmp,
-          });
-          expect(prepared).toEqual({
-            ok: false,
-            message:
-              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-          });
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
-      },
-    });
-  });
-
-  it("rejects perl combined preload and load-path flags", () => {
-    withFakeRuntimeBin({
-      binName: "perl",
-      run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-perl-preload-load-path-"));
-        try {
-          fs.writeFileSync(path.join(tmp, "safe.pl"), 'print "SAFE\\n";\n');
-          const prepared = buildSystemRunApprovalPlan({
-            command: ["perl", "-Ilib", "-MPreload", "./safe.pl"],
-            cwd: tmp,
-          });
-          expect(prepared).toEqual({
-            ok: false,
-            message:
-              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-          });
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
-      },
-    });
-  });
-
-  it("rejects shell payloads that hide mutable interpreter scripts", () => {
-    withFakeRuntimeBin({
-      binName: "node",
-      run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-inline-shell-node-"));
-        try {
-          fs.writeFileSync(path.join(tmp, "run.js"), 'console.log("SAFE")\n');
-          const prepared = buildSystemRunApprovalPlan({
-            command: ["sh", "-lc", "node ./run.js"],
-            cwd: tmp,
-          });
-          expect(prepared).toEqual({
-            ok: false,
-            message:
-              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-          });
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
-      },
-    });
-  });
+  }
 
   it("captures the real shell script operand after value-taking shell flags", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-option-value-"));
