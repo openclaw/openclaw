@@ -43,25 +43,28 @@ describe("assertNoHardlinkedFinalPath", () => {
     });
   });
 
-  it("rejects hardlinked files and shortens home-relative paths in the error", async () => {
-    await withTempDir({ prefix: "openclaw-hardlink-guards-" }, async (root) => {
-      const source = path.join(root, "source.txt");
-      const linked = path.join(root, "linked.txt");
-      await fs.writeFile(source, "hello", "utf8");
-      await fs.link(source, linked);
-      const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(root);
+  it.runIf(process.platform !== "win32")(
+    "rejects hardlinked files and shortens home-relative paths in the error",
+    async () => {
+      await withTempDir({ prefix: "openclaw-hardlink-guards-" }, async (root) => {
+        const source = path.join(root, "source.txt");
+        const linked = path.join(root, "linked.txt");
+        await fs.writeFile(source, "hello", "utf8");
+        await fs.link(source, linked);
+        const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(root);
 
-      try {
-        await expect(
-          assertNoHardlinkedFinalPath({
-            filePath: linked,
-            root,
-            boundaryLabel: "workspace",
-          }),
-        ).rejects.toThrow("Hardlinked path is not allowed under workspace (~): ~/linked.txt");
-      } finally {
-        homedirSpy.mockRestore();
-      }
-    });
-  });
+        try {
+          await expect(
+            assertNoHardlinkedFinalPath({
+              filePath: linked,
+              root,
+              boundaryLabel: "workspace",
+            }),
+          ).rejects.toThrow("Hardlinked path is not allowed under workspace (~): ~/linked.txt");
+        } finally {
+          homedirSpy.mockRestore();
+        }
+      });
+    },
+  );
 });
