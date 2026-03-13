@@ -177,6 +177,25 @@ describe("buildInlineProviderModels", () => {
     });
   });
 
+  it("normalizes bare Google API hosts for custom Google Generative AI providers", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      "google-paid ": {
+        baseUrl: "https://generativelanguage.googleapis.com",
+        api: "google-generative-ai",
+        models: [makeModel("gemini-2.5-pro")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      provider: "google-paid",
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    });
+  });
+
   it("merges provider-level headers into inline models", () => {
     const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       proxy: {
@@ -282,6 +301,54 @@ describe("resolveModel", () => {
     expect(result.model?.baseUrl).toBe("http://localhost:9000");
     expect(result.model?.provider).toBe("custom");
     expect(result.model?.id).toBe("missing-model");
+  });
+
+  it("normalizes Google fallback baseUrls for custom providers", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "google-paid": {
+            baseUrl: "https://generativelanguage.googleapis.com",
+            api: "google-generative-ai",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModelForTest("google-paid", "missing-model", "/tmp/agent", cfg);
+
+    expect(result.model?.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+  });
+
+  it("normalizes configured Google override baseUrls when provider api is omitted", () => {
+    mockDiscoveredModel({
+      provider: "google",
+      modelId: "gemini-2.5-pro",
+      templateModel: {
+        ...makeModel("gemini-2.5-pro"),
+        provider: "google",
+        api: "google-generative-ai",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com",
+            models: [{ id: "gemini-2.5-pro", name: "gemini-2.5-pro" }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModelForTest("google", "gemini-2.5-pro", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.api).toBe("google-generative-ai");
+    expect(result.model?.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
   });
 
   it("includes provider headers in provider fallback model", () => {
