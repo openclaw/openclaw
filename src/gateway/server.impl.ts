@@ -22,7 +22,10 @@ import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { activatePluginSessionStoreAdapter } from "../config/sessions/store.js";
+import {
+  activatePluginSessionStoreAdapter,
+  clearPluginSessionStoreAdapter,
+} from "../config/sessions/store.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
@@ -479,7 +482,9 @@ export async function startGatewayServer(
         baseMethods,
       });
 
-  // Plugin session store adapter: activate if a plugin registered one.
+  // Plugin session store adapter: clear stale state from any prior lifecycle,
+  // then activate if a plugin registered one for this startup.
+  clearPluginSessionStoreAdapter();
   const pluginStoreAdapter = getPluginSessionStoreAdapter();
   if (cfgAtStart.session?.storeAdapter === "plugin") {
     if (!pluginStoreAdapter) {

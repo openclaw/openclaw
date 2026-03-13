@@ -69,6 +69,30 @@ export function clearPluginSessionStoreAdapter(): void {
   pluginAdapterConfig = null;
 }
 
+async function syncPluginAdapter(
+  storePath: string,
+  store: Record<string, SessionEntry>,
+): Promise<void> {
+  if (!pluginAdapterConfig || storePath !== pluginAdapterConfig.storePath) {
+    return;
+  }
+  try {
+    const adapter = pluginAdapterConfig.adapter;
+    const adapterKeys = new Set(adapter.list());
+    const storeKeys = new Set(Object.keys(store));
+
+    const deletes = [...adapterKeys].filter((k) => !storeKeys.has(k)).map((k) => adapter.delete(k));
+    const saves = Object.entries(store).map(([key, entry]) => adapter.save(key, entry));
+    const results = await Promise.allSettled([...saves, ...deletes]);
+    const failed = results.filter((r) => r.status === "rejected");
+    if (failed.length > 0) {
+      log.warn(`plugin adapter sync: ${failed.length}/${results.length} operation(s) failed`);
+    }
+  } catch (err) {
+    log.warn("plugin adapter sync failed", { error: err });
+  }
+}
+
 // ============================================================================
 // Session Store Cache with TTL Support
 // ============================================================================
@@ -502,6 +526,7 @@ async function saveSessionStoreUnlocked(
   const json = JSON.stringify(store, null, 2);
   if (getSerializedSessionStore(storePath) === json) {
     updateSessionStoreWriteCaches({ storePath, store, serialized: json });
+    await syncPluginAdapter(storePath, store);
     return;
   }
 
@@ -510,6 +535,7 @@ async function saveSessionStoreUnlocked(
     for (let i = 0; i < 5; i++) {
       try {
         await writeSessionStoreAtomic({ storePath, store, serialized: json });
+        await syncPluginAdapter(storePath, store);
         return;
       } catch (err) {
         const code = getErrorCode(err);
@@ -551,25 +577,7 @@ async function saveSessionStoreUnlocked(
     throw err;
   }
 
-  if (pluginAdapterConfig && storePath === pluginAdapterConfig.storePath) {
-    try {
-      const adapter = pluginAdapterConfig.adapter;
-      const adapterKeys = new Set(adapter.list());
-      const storeKeys = new Set(Object.keys(store));
-
-      const deletes = [...adapterKeys]
-        .filter((k) => !storeKeys.has(k))
-        .map((k) => adapter.delete(k));
-      const saves = Object.entries(store).map(([key, entry]) => adapter.save(key, entry));
-      const results = await Promise.allSettled([...saves, ...deletes]);
-      const failed = results.filter((r) => r.status === "rejected");
-      if (failed.length > 0) {
-        log.warn(`plugin adapter sync: ${failed.length}/${results.length} operation(s) failed`);
-      }
-    } catch (err) {
-      log.warn("plugin adapter sync failed", { error: err });
-    }
-  }
+  await syncPluginAdapter(storePath, store);
 }
 
 export async function saveSessionStore(
