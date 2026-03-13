@@ -53,6 +53,16 @@ export type {
   SessionUsageTimeSeries,
 } from "./session-cost-usage.types.js";
 
+const SESSION_TRANSCRIPT_FILE_RE = /\.jsonl(?:\.(?:reset|deleted)\..+)?$/;
+
+const isSessionTranscriptFilename = (name: string): boolean =>
+  SESSION_TRANSCRIPT_FILE_RE.test(name);
+
+const deriveSessionIdFromFilename = (name: string): string => {
+  const match = name.match(/^(.*?\.jsonl)(?:\.(?:reset|deleted)\..+)?$/);
+  return match ? match[1].slice(0, -6) : name.replace(/\.jsonl$/, "");
+};
+
 const emptyTotals = (): CostUsageTotals => ({
   input: 0,
   output: 0,
@@ -318,7 +328,7 @@ export async function loadCostUsageSummary(params?: {
   const files = (
     await Promise.all(
       entries
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+        .filter((entry) => entry.isFile() && isSessionTranscriptFilename(entry.name))
         .map(async (entry) => {
           const filePath = path.join(sessionsDir, entry.name);
           const stats = await fs.promises.stat(filePath).catch(() => null);
@@ -393,7 +403,7 @@ export async function discoverAllSessions(params?: {
   const discovered: DiscoveredSession[] = [];
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+    if (!entry.isFile() || !isSessionTranscriptFilename(entry.name)) {
       continue;
     }
 
@@ -409,8 +419,8 @@ export async function discoverAllSessions(params?: {
     }
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
 
-    // Extract session ID from filename (remove .jsonl)
-    const sessionId = entry.name.slice(0, -6);
+    // Extract session ID from filename, preserving base session id for archived reset/deleted transcripts.
+    const sessionId = deriveSessionIdFromFilename(entry.name);
 
     // Try to read first user message for label extraction
     let firstUserMessage: string | undefined;
