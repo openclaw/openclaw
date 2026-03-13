@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   resolveDefaultConfigCandidates,
   resolveConfigPathCandidate,
@@ -9,6 +9,7 @@ import {
   resolveOAuthDir,
   resolveOAuthPath,
   resolveStateDir,
+  applyGatewayRuntimePortEnvOverride,
 } from "./paths.js";
 
 describe("oauth paths", () => {
@@ -148,5 +149,113 @@ describe("state + config path candidates", () => {
       const resolved = resolveConfigPath(env, overrideDir, () => root);
       expect(resolved).toBe(path.join(overrideDir, "openclaw.json"));
     });
+  });
+});
+
+describe("applyGatewayRuntimePortEnvOverride", () => {
+  let fixtureRoot = "";
+
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-port-override-"));
+  });
+
+  afterAll(async () => {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+  it("sets env var when lock file has valid port and PID is alive", async () => {
+    const configDir = path.join(fixtureRoot, "case-valid");
+    await fs.mkdir(configDir, { recursive: true });
+    const configPath = path.join(configDir, "openclaw.json");
+    await fs.writeFile(configPath, "{}", "utf8");
+
+    // Mock isPidAlive to return true
+    const isPidAliveSpy = vi
+      .spyOn(await import("../shared/pid-alive.js"), "isPidAlive")
+      .mockReturnValue(true);
+
+    // Create a mock lock file with port
+    const { resolveGatewayLockDir } = await import("./paths.js");
+    const { createHash } = await import("node:crypto");
+    const lockDir = resolveGatewayLockDir();
+    await fs.mkdir(lockDir, { recursive: true });
+    const hash = createHash("sha256").update(configPath).digest("hex").slice(0, 8);
+    const lockPath = path.join(lockDir, `gateway.${hash}.lock`);
+    const payload = {
+      pid: 12345,
+      createdAt: new Date().toISOString(),
+      configPath,
+      port: 48789,
+    };
+    await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
+
+    const env: NodeJS.ProcessEnv = {
+      OPENCLAW_STATE_DIR: configDir,
+      OPENCLAW_CONFIG_PATH: configPath,
+    };
+
+    await applyGatewayRuntimePortEnvOverride(env);
+
+    expect(env.OPENCLAW_GATEWAY_PORT).toBe("48789");
+
+    isPidAliveSpy.mockRestore();
+    await fs.rm(lockPath, { force: true });
+  });
+
+  it("does not set env var when PID is not alive", async () => {
+    const configDir = path.join(fixtureRoot, "case-dead-pid");
+    await fs.mkdir(configDir, { recursive: true });
+    const configPath = path.join(configDir, "openclaw.json");
+    await fs.writeFile(configPath, "{}", "utf8");
+
+    // Mock isPidAlive to return false
+    const isPidAliveSpy = vi
+      .spyOn(await import("../shared/pid-alive.js"), "isPidAlive")
+      .mockReturnValue(false);
+
+    // Create a mock lock file with port
+    const { resolveGatewayLockDir } = await import("./paths.js");
+    const { createHash } = await import("node:crypto");
+    const lockDir = resolveGatewayLockDir();
+    await fs.mkdir(lockDir, { recursive: true });
+    const hash = createHash("sha256").update(configPath).digest("hex").slice(0, 8);
+    const lockPath = path.join(lockDir, `gateway.${hash}.lock`);
+    const payload = {
+      pid: 12345,
+      createdAt: new Date().toISOString(),
+      configPath,
+      port: 48789,
+    };
+    await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
+
+    const env: NodeJS.ProcessEnv = {
+      OPENCLAW_STATE_DIR: configDir,
+      OPENCLAW_CONFIG_PATH: configPath,
+    };
+
+    await applyGatewayRuntimePortEnvOverride(env);
+
+    expect(env.OPENCLAW_GATEWAY_PORT).toBeUndefined();
+
+    isPidAliveSpy.mockRestore();
+    await fs.rm(lockPath, { force: true });
+  });
+
+  it("skips when env var is already set", async () => {
+    const configDir = path.join(fixtureRoot, "case-env-set");
+    await fs.mkdir(configDir, { recursive: true });
+    const configPath = path.join(configDir, "openclaw.json");
+    await fs.writeFile(configPath, "{}", "utf8");
+
+    const env: NodeJS.ProcessEnv = {
+      OPENCLAW_STATE_DIR: configDir,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_GATEWAY_PORT: "99999",
+    };
+
+    await applyGatewayRuntimePortEnvOverride(env);
+
+    // Should remain unchanged
+    expect(env.OPENCLAW_GATEWAY_PORT).toBe("99999");
   });
 });

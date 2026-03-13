@@ -74,12 +74,18 @@ function makeProcStat(pid: number, startTime: number) {
   return `${pid} (node) ${fields.join(" ")}`;
 }
 
-function createLockPayload(params: { configPath: string; startTime: number; createdAt?: string }) {
+function createLockPayload(params: {
+  configPath: string;
+  startTime: number;
+  createdAt?: string;
+  port?: number;
+}) {
   return {
     pid: process.pid,
     createdAt: params.createdAt ?? new Date().toISOString(),
     configPath: params.configPath,
     startTime: params.startTime,
+    ...(params.port != null && { port: params.port }),
   };
 }
 
@@ -95,13 +101,14 @@ function mockProcStatRead(params: { onProcRead: () => string }) {
 
 async function writeLockFile(
   env: NodeJS.ProcessEnv,
-  params: { startTime: number; createdAt?: string } = { startTime: 111 },
+  params: { startTime: number; createdAt?: string; port?: number } = { startTime: 111 },
 ) {
   const { lockPath, configPath } = resolveLockPath(env);
   const payload = createLockPayload({
     configPath,
     startTime: params.startTime,
     createdAt: params.createdAt,
+    port: params.port,
   });
   await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
   return { lockPath, configPath };
@@ -127,13 +134,6 @@ function createPortProbeConnectionSpy(result: "connect" | "refused") {
       socket.emit("error", Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" }));
     });
     return socket;
-  });
-}
-
-async function writeRecentLockFile(env: NodeJS.ProcessEnv, startTime = 111) {
-  await writeLockFile(env, {
-    startTime,
-    createdAt: new Date().toISOString(),
   });
 }
 
@@ -233,28 +233,42 @@ describe("gateway lock", () => {
     statSpy.mockRestore();
   });
 
-  it("treats lock as stale when owner pid is alive but configured port is free", async () => {
+  it("treats lock as stale when owner pid is alive but lock holder's port is free", async () => {
     vi.useRealTimers();
     const env = await makeEnv();
-    await writeRecentLockFile(env);
+    // Write lock file with port 18789 (the existing gateway's port)
+    await writeLockFile(env, {
+      startTime: 111,
+      createdAt: new Date().toISOString(),
+      port: 18789,
+    });
+    // Mock port 18789 as free (connection refused)
     const connectSpy = createPortProbeConnectionSpy("refused");
 
+    // New gateway trying to start on a different port (48789) should still
+    // detect that the existing gateway on port 18789 is dead
     const lock = await acquireForTest(env, {
       timeoutMs: 80,
       pollIntervalMs: 5,
       staleMs: 10_000,
       platform: "darwin",
-      port: 18789,
+      port: 48789,
     });
     expect(lock).not.toBeNull();
     await lock?.release();
     connectSpy.mockRestore();
   });
 
-  it("keeps lock when configured port is busy and owner pid is alive", async () => {
+  it("keeps lock when lock holder's port is busy and owner pid is alive", async () => {
     vi.useRealTimers();
     const env = await makeEnv();
-    await writeRecentLockFile(env);
+    // Write lock file with port 18789 (the existing gateway's port)
+    await writeLockFile(env, {
+      startTime: 111,
+      createdAt: new Date().toISOString(),
+      port: 18789,
+    });
+    // Mock port 18789 as busy (connection succeeds)
     const connectSpy = createPortProbeConnectionSpy("connect");
     try {
       const pending = acquireForTest(env, {
@@ -262,7 +276,7 @@ describe("gateway lock", () => {
         pollIntervalMs: 2,
         staleMs: 10_000,
         platform: "darwin",
-        port: 18789,
+        port: 48789,
       });
       await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
     } finally {

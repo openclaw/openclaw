@@ -17,6 +17,7 @@ type LockPayload = {
   createdAt: string;
   configPath: string;
   startTime?: number;
+  port?: number;
 };
 
 export type GatewayLockHandle = {
@@ -150,11 +151,13 @@ async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
       return null;
     }
     const startTime = typeof parsed.startTime === "number" ? parsed.startTime : undefined;
+    const port = typeof parsed.port === "number" ? parsed.port : undefined;
     return {
       pid: parsed.pid,
       createdAt: parsed.createdAt,
       configPath: parsed.configPath,
       startTime,
+      port,
     };
   } catch {
     return null;
@@ -205,6 +208,9 @@ export async function acquireGatewayLock(
       if (typeof startTime === "number" && Number.isFinite(startTime)) {
         payload.startTime = startTime;
       }
+      if (typeof port === "number" && Number.isFinite(port) && port > 0) {
+        payload.port = port;
+      }
       await handle.writeFile(JSON.stringify(payload), "utf8");
       return {
         lockPath,
@@ -222,8 +228,10 @@ export async function acquireGatewayLock(
 
       lastPayload = await readLockPayload(lockPath);
       const ownerPid = lastPayload?.pid;
+      // Use the existing lock holder's port for liveness check, not the new gateway's port
+      const ownerPort = lastPayload?.port;
       const ownerStatus = ownerPid
-        ? await resolveGatewayOwnerStatus(ownerPid, lastPayload, platform, port)
+        ? await resolveGatewayOwnerStatus(ownerPid, lastPayload, platform, ownerPort)
         : "unknown";
       if (ownerStatus === "dead" && ownerPid) {
         await fs.rm(lockPath, { force: true });
@@ -259,4 +267,15 @@ export async function acquireGatewayLock(
 
   const owner = lastPayload?.pid ? ` (pid ${lastPayload.pid})` : "";
   throw new GatewayLockError(`gateway already running${owner}; lock timeout after ${timeoutMs}ms`);
+}
+
+/**
+ * Reads the gateway lock payload for the current config path.
+ * Returns null if no lock file exists or the payload is invalid.
+ */
+export async function readGatewayLockPayload(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<LockPayload | null> {
+  const { lockPath } = resolveGatewayLockPath(env);
+  return await readLockPayload(lockPath);
 }

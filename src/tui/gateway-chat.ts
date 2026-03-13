@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { loadConfig } from "../config/config.js";
+import { applyGatewayRuntimePortEnvOverride } from "../config/paths.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
 import {
@@ -270,6 +271,9 @@ export class GatewayChatClient {
 export async function resolveGatewayConnection(
   opts: GatewayConnectionOptions,
 ): Promise<ResolvedGatewayConnection> {
+  // Apply active Gateway runtime port override from lock file before resolving connection.
+  await applyGatewayRuntimePortEnvOverride();
+
   const config = loadConfig();
   const env = process.env;
   const gatewayAuthMode = config.gateway?.auth?.mode;

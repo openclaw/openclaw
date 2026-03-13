@@ -282,3 +282,37 @@ export function resolveGatewayPort(
   }
   return DEFAULT_GATEWAY_PORT;
 }
+
+/**
+ * Applies the active Gateway runtime port override from the lock file.
+ *
+ * When the Gateway is started on a custom port (e.g., via --port flag),
+ * it writes the port to its lock file. This function reads that port
+ * and sets OPENCLAW_GATEWAY_PORT in the environment if:
+ * 1. A valid lock file exists with a port
+ * 2. The recorded PID is still alive (prevents using stale locks)
+ * 3. The env var is not already set
+ *
+ * This allows the TUI and other out-of-process clients to discover
+ * the running Gateway's actual port.
+ */
+export async function applyGatewayRuntimePortEnvOverride(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  // Skip if already set
+  if (env.OPENCLAW_GATEWAY_PORT?.trim()) {
+    return;
+  }
+
+  // Dynamic import to avoid circular dependency
+  const { readGatewayLockPayload } = await import("../infra/gateway-lock.js");
+  const { isPidAlive } = await import("../shared/pid-alive.js");
+  const payload = await readGatewayLockPayload(env);
+
+  // Verify the PID is still alive before using the port
+  if (payload?.pid && payload.port && Number.isFinite(payload.port) && payload.port > 0) {
+    if (isPidAlive(payload.pid)) {
+      env.OPENCLAW_GATEWAY_PORT = String(payload.port);
+    }
+  }
+}
