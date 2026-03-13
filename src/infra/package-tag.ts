@@ -10,7 +10,8 @@ export function normalizePackageTagInput(
   for (const packageName of packageNames) {
     const prefix = `${packageName}@`;
     if (trimmed.startsWith(prefix)) {
-      return trimmed.slice(prefix.length);
+      const tag = trimmed.slice(prefix.length).trim();
+      return tag ? tag : null;
     }
   }
 
