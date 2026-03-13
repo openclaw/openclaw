@@ -1,6 +1,7 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { danger } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
+import { requestHeartbeatNow } from "../../../infra/heartbeat-wake.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackReactionEvent } from "../types.js";
 import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
@@ -45,6 +46,7 @@ export function registerSlackReactionEvents(params: {
         sessionKey: ingressContext.sessionKey,
         contextKey: `slack:reaction:${action}:${item.channel}:${item.ts}:${event.user}:${emojiLabel}`,
       });
+      requestHeartbeatNow({ reason: "slack-reaction", sessionKey: ingressContext.sessionKey });
     } catch (err) {
       ctx.runtime.error?.(danger(`slack reaction handler failed: ${String(err)}`));
     }

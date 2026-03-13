@@ -8,6 +8,10 @@ import {
 const reactionQueueMock = vi.fn();
 const reactionAllowMock = vi.fn();
 
+vi.mock("../../../infra/heartbeat-wake.js", () => ({
+  requestHeartbeatNow: vi.fn(),
+}));
+
 vi.mock("../../../infra/system-events.js", () => {
   return {
     enqueueSystemEvent: (...args: unknown[]) => reactionQueueMock(...args),

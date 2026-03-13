@@ -1,6 +1,7 @@
 import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
+import { requestHeartbeatNow } from "../../../infra/heartbeat-wake.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
@@ -563,6 +564,7 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
         sessionKey,
         contextKey,
       });
+      requestHeartbeatNow({ reason: "slack-interaction", sessionKey });
 
       const originalBlocks = typedBody.message?.blocks;
       if (!Array.isArray(originalBlocks) || !channelId || !messageTs) {
