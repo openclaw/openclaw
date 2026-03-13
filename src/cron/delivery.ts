@@ -8,7 +8,13 @@ import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { getChildLogger } from "../logging.js";
 import { resolveDeliveryTarget } from "./isolated-agent/delivery-target.js";
-import type { CronDelivery, CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
+import type {
+  CronDelivery,
+  CronDeliveryMode,
+  CronDeliveryTarget,
+  CronJob,
+  CronMessageChannel,
+} from "./types.js";
 
 export type CronDeliveryPlan = {
   mode: CronDeliveryMode;
@@ -18,6 +24,8 @@ export type CronDeliveryPlan = {
   accountId?: string;
   source: "delivery" | "payload";
   requested: boolean;
+  /** Additional delivery targets resolved from delivery.additionalTargets. */
+  additionalTargets?: CronDeliveryTarget[];
 };
 
 function normalizeChannel(value: unknown): CronMessageChannel | undefined {
@@ -45,6 +53,29 @@ function normalizeAccountId(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function normalizeAdditionalTargets(
+  raw: unknown,
+): CronDeliveryTarget[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return undefined;
+  }
+  const targets: CronDeliveryTarget[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const rec = entry as Record<string, unknown>;
+    const channel = normalizeChannel(rec.channel);
+    const to = normalizeTo(rec.to);
+    if (!channel || !to) {
+      continue;
+    }
+    const accountId = normalizeAccountId(rec.accountId);
+    targets.push({ channel, to, ...(accountId ? { accountId } : {}) });
+  }
+  return targets.length > 0 ? targets : undefined;
 }
 
 export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
@@ -75,6 +106,10 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   const deliveryAccountId = normalizeAccountId(
     (delivery as { accountId?: unknown } | undefined)?.accountId,
   );
+  const additionalTargets = hasDelivery
+    ? normalizeAdditionalTargets(delivery.additionalTargets)
+    : undefined;
+
   if (hasDelivery) {
     const resolvedMode = mode ?? "announce";
     return {
@@ -84,6 +119,7 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
       accountId: deliveryAccountId,
       source: "delivery",
       requested: resolvedMode === "announce",
+      additionalTargets,
     };
   }
 

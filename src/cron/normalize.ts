@@ -163,6 +163,23 @@ function coercePayload(payload: UnknownRecord) {
   return next;
 }
 
+function coerceAdditionalTarget(entry: UnknownRecord): UnknownRecord | null {
+  const channel =
+    typeof entry.channel === "string" ? entry.channel.trim().toLowerCase() : "";
+  const to = typeof entry.to === "string" ? entry.to.trim() : "";
+  if (!channel || !to) {
+    return null;
+  }
+  const result: UnknownRecord = { channel, to };
+  if (typeof entry.accountId === "string") {
+    const trimmed = entry.accountId.trim();
+    if (trimmed) {
+      result.accountId = trimmed;
+    }
+  }
+  return result;
+}
+
 function coerceDelivery(delivery: UnknownRecord) {
   const next: UnknownRecord = { ...delivery };
   if (typeof delivery.mode === "string") {
@@ -202,6 +219,24 @@ function coerceDelivery(delivery: UnknownRecord) {
     }
   } else if ("accountId" in next && typeof next.accountId !== "string") {
     delete next.accountId;
+  }
+  if (Array.isArray(delivery.additionalTargets)) {
+    const coerced: UnknownRecord[] = [];
+    for (const raw of delivery.additionalTargets) {
+      if (isRecord(raw)) {
+        const target = coerceAdditionalTarget(raw);
+        if (target) {
+          coerced.push(target);
+        }
+      }
+    }
+    if (coerced.length > 0) {
+      next.additionalTargets = coerced;
+    } else {
+      delete next.additionalTargets;
+    }
+  } else if ("additionalTargets" in next) {
+    delete next.additionalTargets;
   }
   return next;
 }

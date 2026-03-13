@@ -20,6 +20,12 @@ export type CronMessageChannel = ChannelId | "last";
 
 export type CronDeliveryMode = "none" | "announce" | "webhook";
 
+export type CronDeliveryTarget = {
+  channel: CronMessageChannel;
+  to: string;
+  accountId?: string;
+};
+
 export type CronDelivery = {
   mode: CronDeliveryMode;
   channel?: CronMessageChannel;
@@ -29,6 +35,8 @@ export type CronDelivery = {
   bestEffort?: boolean;
   /** Separate destination for failure notifications. */
   failureDestination?: CronFailureDestination;
+  /** Additional delivery targets. The same payloads are sent to each target after the primary delivery. */
+  additionalTargets?: CronDeliveryTarget[];
 };
 
 export type CronFailureDestination = {

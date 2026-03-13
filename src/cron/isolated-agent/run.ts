@@ -58,6 +58,7 @@ import {
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import {
+  deliverToAdditionalTargets,
   dispatchCronDelivery,
   matchesMessagingToolDeliveryTarget,
   resolveCronDeliveryBestEffort,
@@ -432,12 +433,13 @@ export async function runCronIsolatedAgentTurn(params: {
   });
 
   const agentPayload = params.job.payload.kind === "agentTurn" ? params.job.payload : null;
-  const { deliveryRequested, resolvedDelivery, toolPolicy } = await resolveCronDeliveryContext({
-    cfg: cfgWithAgentDefaults,
-    job: params.job,
-    agentId,
-    deliveryContract,
-  });
+  const { deliveryPlan, deliveryRequested, resolvedDelivery, toolPolicy } =
+    await resolveCronDeliveryContext({
+      cfg: cfgWithAgentDefaults,
+      job: params.job,
+      agentId,
+      deliveryContract,
+    });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now);
   const base = `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
@@ -863,12 +865,32 @@ export async function runCronIsolatedAgentTurn(params: {
     abortReason,
     withRunSession,
   });
+  // Fan out to additional delivery targets (best-effort, independent of primary).
+  const additionalTargets = deliveryPlan.additionalTargets;
+  const finalPayloads = deliveryResult.deliveryPayloads ?? deliveryPayloads;
+  const fanOutAdditional = async () => {
+    if (!additionalTargets || additionalTargets.length === 0 || finalPayloads.length === 0) {
+      return;
+    }
+    await deliverToAdditionalTargets({
+      cfg: cfgWithAgentDefaults,
+      deps: params.deps,
+      agentId,
+      agentSessionKey,
+      targets: additionalTargets,
+      payloads: finalPayloads,
+      bestEffort: deliveryBestEffort,
+      abortSignal,
+    });
+  };
+
   if (deliveryResult.result) {
     const resultWithDeliveryMeta: RunCronAgentTurnResult = {
       ...deliveryResult.result,
       deliveryAttempted:
         deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
     };
+    await fanOutAdditional();
     if (!hasFatalErrorPayload || deliveryResult.result.status !== "ok") {
       return resultWithDeliveryMeta;
     }
@@ -882,5 +904,6 @@ export async function runCronIsolatedAgentTurn(params: {
   summary = deliveryResult.summary;
   outputText = deliveryResult.outputText;
 
+  await fanOutAdditional();
   return resolveRunOutcome({ delivered, deliveryAttempted });
 }
