@@ -1,14 +1,16 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 const {
   previewCortexContext,
+  getCortexStatus,
   getCortexModeOverride,
   listCortexMemoryConflicts,
   ingestCortexMemoryFromText,
   syncCortexCodingContext,
 } = vi.hoisted(() => ({
   previewCortexContext: vi.fn(),
+  getCortexStatus: vi.fn(),
   getCortexModeOverride: vi.fn(),
   listCortexMemoryConflicts: vi.fn(),
   ingestCortexMemoryFromText: vi.fn(),
@@ -17,6 +19,7 @@ const {
 
 vi.mock("../memory/cortex.js", () => ({
   previewCortexContext,
+  getCortexStatus,
   listCortexMemoryConflicts,
   ingestCortexMemoryFromText,
   syncCortexCodingContext,
@@ -36,6 +39,15 @@ import {
   resolveAgentCortexPromptContext,
   resolveCortexChannelTarget,
 } from "./cortex.js";
+
+beforeEach(() => {
+  getCortexStatus.mockResolvedValue({
+    available: true,
+    workspaceDir: "/tmp/openclaw-workspace",
+    graphPath: "/tmp/openclaw-workspace/.cortex/context.json",
+    graphExists: true,
+  });
+});
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -157,12 +169,14 @@ describe("resolveAgentCortexPromptContext", () => {
     expect(result).toEqual({
       context: "## Cortex Context\n- Shipping",
     });
-    expect(previewCortexContext).toHaveBeenCalledWith({
-      workspaceDir: "/tmp/openclaw-workspace",
-      graphPath: undefined,
-      policy: "technical",
-      maxChars: 1500,
-    });
+    expect(previewCortexContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/openclaw-workspace",
+        graphPath: undefined,
+        policy: "technical",
+        maxChars: 1500,
+      }),
+    );
   });
 
   it("prefers stored session/channel mode overrides", async () => {
@@ -210,12 +224,14 @@ describe("resolveAgentCortexPromptContext", () => {
       sessionId: "session-1",
       channelId: "slack",
     });
-    expect(previewCortexContext).toHaveBeenCalledWith({
-      workspaceDir: "/tmp/openclaw-workspace",
-      graphPath: undefined,
-      policy: "minimal",
-      maxChars: 1500,
-    });
+    expect(previewCortexContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/openclaw-workspace",
+        graphPath: undefined,
+        policy: "minimal",
+        maxChars: 1500,
+      }),
+    );
   });
 
   it("returns an error without throwing when Cortex preview fails", async () => {
@@ -293,6 +309,47 @@ describe("resolveAgentCortexConflictNotice", () => {
     expect(second).toBeNull();
   });
 
+  it("applies cooldown even when no Cortex conflicts are found", async () => {
+    listCortexMemoryConflicts.mockResolvedValueOnce([]);
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cortex: {
+            enabled: true,
+          },
+        },
+        list: [{ id: "main" }],
+      },
+    };
+
+    const first = await resolveAgentCortexConflictNotice({
+      cfg,
+      agentId: "main",
+      workspaceDir: "/tmp/openclaw-workspace",
+      sessionId: "session-1",
+      channelId: "channel-1",
+      now: 1_000,
+      cooldownMs: 10_000,
+    });
+
+    expect(first).toBeNull();
+    expect(listCortexMemoryConflicts).toHaveBeenCalledTimes(1);
+
+    const second = await resolveAgentCortexConflictNotice({
+      cfg,
+      agentId: "main",
+      workspaceDir: "/tmp/openclaw-workspace",
+      sessionId: "session-1",
+      channelId: "channel-1",
+      now: 5_000,
+      cooldownMs: 10_000,
+    });
+
+    expect(second).toBeNull();
+    expect(listCortexMemoryConflicts).toHaveBeenCalledTimes(1);
+  });
+
   it("returns null when Cortex is disabled", async () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -342,18 +399,20 @@ describe("ingestAgentCortexMemoryCandidate", () => {
 
     expect(result.captured).toBe(true);
     expect(result.reason).toBe("high-signal memory candidate");
-    expect(ingestCortexMemoryFromText).toHaveBeenCalledWith({
-      workspaceDir: "/tmp/openclaw-workspace",
-      graphPath: undefined,
-      event: {
-        actor: "user",
-        text: "I prefer concise answers and I am focused on fundraising this quarter.",
-        agentId: "main",
-        sessionId: "session-1",
-        channelId: "channel-1",
-        provider: undefined,
-      },
-    });
+    expect(ingestCortexMemoryFromText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/openclaw-workspace",
+        graphPath: undefined,
+        event: {
+          actor: "user",
+          text: "I prefer concise answers and I am focused on fundraising this quarter.",
+          agentId: "main",
+          sessionId: "session-1",
+          channelId: "channel-1",
+          provider: undefined,
+        },
+      }),
+    );
     expect(
       getAgentCortexMemoryCaptureStatus({
         agentId: "main",
@@ -405,12 +464,14 @@ describe("ingestAgentCortexMemoryCandidate", () => {
       syncedCodingContext: true,
       syncPlatforms: ["cursor"],
     });
-    expect(syncCortexCodingContext).toHaveBeenCalledWith({
-      workspaceDir: "/tmp/openclaw-workspace",
-      graphPath: undefined,
-      policy: "technical",
-      platforms: ["cursor"],
-    });
+    expect(syncCortexCodingContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/openclaw-workspace",
+        graphPath: undefined,
+        policy: "technical",
+        platforms: ["cursor"],
+      }),
+    );
   });
 
   it("does not auto-sync generic technical chatter from messaging providers", async () => {
