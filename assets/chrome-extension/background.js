@@ -289,7 +289,8 @@ async function ensureRelayConnection() {
         const data = await resp.json().catch(() => ({}))
         relayIsLocked = !!data.lockTab
         if (relayIsLocked && !lockedTabId) {
-          lockedTabId = Array.from(tabs.keys())[0] || null
+          const [active] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => [])
+          lockedTabId = (active?.id && tabs.has(active.id)) ? active.id : (Array.from(tabs.keys())[0] || null)
         }
         console.log('[OpenClaw] Fetched relay status. lockTab:', relayIsLocked)
       } else {
@@ -910,15 +911,25 @@ async function handleForwardCdpCommand(msg) {
 
   const bySession = sessionId ? getTabBySessionId(sessionId) : null
   const targetId = typeof params?.targetId === 'string' ? params.targetId : undefined
-  const tabId =
-    bySession?.tabId ||
-    (targetId ? getTabByTargetId(targetId) : null) ||
-    (() => {
+  let tabId = bySession?.tabId || (targetId ? getTabByTargetId(targetId) : null)
+  if (!tabId) {
+    const [active] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => [])
+    if (active?.id && tabs.has(active.id) && tabs.get(active.id).state === 'connected') {
+      tabId = active.id
+    }
+  }
+  if (!tabId) {
+    if (lockedTabId && tabs.has(lockedTabId) && tabs.get(lockedTabId).state === 'connected') {
+      tabId = lockedTabId
+    } else {
       for (const [id, tab] of tabs.entries()) {
-        if (tab.state === 'connected') return id
+        if (tab.state === 'connected') {
+          tabId = id
+          break
+        }
       }
-      return null
-    })()
+    }
+  }
 
   if (extensionIsDisabled) {
     throw new Error('Extension is globally disabled. Commands from relay refused.')
@@ -1193,6 +1204,9 @@ chrome.webNavigation.onCompleted.addListener(({ tabId, frameId }) => void whenRe
 // When user switches tabs:
 // Sync all overlays globally. The broadcast logic handles showing/hiding on correct tabs.
 chrome.tabs.onActivated.addListener(({ tabId }) => void whenReady(async () => {
+  if (!relayIsLocked && tabs.has(tabId) && tabs.get(tabId).state === 'connected') {
+    lockedTabId = tabId
+  }
   updateAllBadges() // Ensure the newly activated tab has the correct badge set if local overriding applies
   await syncAllOverlays()
 }))
