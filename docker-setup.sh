@@ -150,9 +150,7 @@ validate_mount_path_value() {
   if contains_disallowed_chars "$value"; then
     fail "$label contains unsupported control characters."
   fi
-  if [[ "$value" =~ [[:space:]] ]]; then
-    fail "$label cannot contain whitespace."
-  fi
+  # Whitespace is allowed in paths; Docker Compose and YAML handle quoted paths correctly.
 }
 
 validate_named_volume() {
