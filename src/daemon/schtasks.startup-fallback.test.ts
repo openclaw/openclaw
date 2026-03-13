@@ -57,6 +57,30 @@ async function writeGatewayScript(env: Record<string, string>, port = 18789) {
     "utf8",
   );
 }
+async function writeStartupFallbackEntry(env: Record<string, string>) {
+  const startupEntryPath = resolveStartupEntryPath(env);
+  await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
+  await fs.writeFile(startupEntryPath, "@echo off\r\n", "utf8");
+  return startupEntryPath;
+}
+
+function expectStartupFallbackSpawn(env: Record<string, string>) {
+  expect(spawn).toHaveBeenCalledWith(
+    "cmd.exe",
+    ["/d", "/s", "/c", quoteCmdScriptArg(resolveTaskScriptPath(env))],
+    expect.objectContaining({ detached: true, stdio: "ignore", windowsHide: true }),
+  );
+}
+
+function addStartupFallbackMissingResponses(
+  extraResponses: Array<{ code: number; stdout: string; stderr: string }> = [],
+) {
+  schtasksResponses.push(
+    { code: 0, stdout: "", stderr: "" },
+    { code: 1, stdout: "", stderr: "not found" },
+    ...extraResponses,
+  );
+}
 beforeEach(() => {
   resetSchtasksBaseMocks();
   spawn.mockClear();
@@ -119,22 +143,14 @@ describe("Windows startup fallback", () => {
       });
 
       await expect(fs.access(resolveStartupEntryPath(env))).resolves.toBeUndefined();
-      expect(spawn).toHaveBeenCalledWith(
-        "cmd.exe",
-        ["/d", "/s", "/c", quoteCmdScriptArg(resolveTaskScriptPath(env))],
-        expect.objectContaining({ detached: true, stdio: "ignore", windowsHide: true }),
-      );
+      expectStartupFallbackSpawn(env);
     });
   });
 
   it("treats an installed Startup-folder launcher as loaded", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-      schtasksResponses.push(
-        { code: 0, stdout: "", stderr: "" },
-        { code: 1, stdout: "", stderr: "not found" },
-      );
-      await fs.mkdir(path.dirname(resolveStartupEntryPath(env)), { recursive: true });
-      await fs.writeFile(resolveStartupEntryPath(env), "@echo off\r\n", "utf8");
+      addStartupFallbackMissingResponses();
+      await writeStartupFallbackEntry(env);
 
       await expect(isScheduledTaskInstalled({ env })).resolves.toBe(true);
     });
@@ -142,12 +158,8 @@ describe("Windows startup fallback", () => {
 
   it("reports runtime from the gateway listener when using the Startup fallback", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-      schtasksResponses.push(
-        { code: 0, stdout: "", stderr: "" },
-        { code: 1, stdout: "", stderr: "not found" },
-      );
-      await fs.mkdir(path.dirname(resolveStartupEntryPath(env)), { recursive: true });
-      await fs.writeFile(resolveStartupEntryPath(env), "@echo off\r\n", "utf8");
+      addStartupFallbackMissingResponses();
+      await writeStartupFallbackEntry(env);
       inspectPortUsage.mockResolvedValue({
         port: 18789,
         status: "busy",
@@ -164,14 +176,11 @@ describe("Windows startup fallback", () => {
 
   it("restarts the Startup fallback by killing the current pid and relaunching the entry", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-      schtasksResponses.push(
+      addStartupFallbackMissingResponses([
         { code: 0, stdout: "", stderr: "" },
         { code: 1, stdout: "", stderr: "not found" },
-        { code: 0, stdout: "", stderr: "" },
-        { code: 1, stdout: "", stderr: "not found" },
-      );
-      await fs.mkdir(path.dirname(resolveStartupEntryPath(env)), { recursive: true });
-      await fs.writeFile(resolveStartupEntryPath(env), "@echo off\r\n", "utf8");
+      ]);
+      await writeStartupFallbackEntry(env);
       inspectPortUsage.mockResolvedValue({
         port: 18789,
         status: "busy",
@@ -184,11 +193,7 @@ describe("Windows startup fallback", () => {
         outcome: "completed",
       });
       expect(killProcessTree).toHaveBeenCalledWith(5151, { graceMs: 300 });
-      expect(spawn).toHaveBeenCalledWith(
-        "cmd.exe",
-        ["/d", "/s", "/c", quoteCmdScriptArg(resolveTaskScriptPath(env))],
-        expect.objectContaining({ detached: true, stdio: "ignore", windowsHide: true }),
-      );
+      expectStartupFallbackSpawn(env);
     });
   });
 
@@ -196,8 +201,7 @@ describe("Windows startup fallback", () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       schtasksResponses.push({ code: 0, stdout: "", stderr: "" });
       await writeGatewayScript(env);
-      await fs.mkdir(path.dirname(resolveStartupEntryPath(env)), { recursive: true });
-      await fs.writeFile(resolveStartupEntryPath(env), "@echo off\r\n", "utf8");
+      await writeStartupFallbackEntry(env);
       inspectPortUsage
         .mockResolvedValueOnce({
           port: 18789,
