@@ -848,6 +848,35 @@ type ToolCallArgumentRepair = {
   trailingSuffix: string;
 };
 
+function tryParseToolCallArgumentsFromConcatenatedJsonSegments(
+  raw: string,
+): Record<string, unknown> | undefined {
+  let remainder = raw.trim();
+  let segmentCount = 0;
+  let latestObject: Record<string, unknown> | undefined;
+  while (remainder.length > 0) {
+    const firstJsonChar = remainder.search(/[{[]/);
+    if (firstJsonChar !== 0) {
+      return undefined;
+    }
+    const jsonPrefix = extractBalancedJsonPrefix(remainder);
+    if (!jsonPrefix) {
+      return undefined;
+    }
+    try {
+      const parsed = JSON.parse(jsonPrefix) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        latestObject = parsed as Record<string, unknown>;
+      }
+      segmentCount += 1;
+      remainder = remainder.slice(jsonPrefix.length).trim();
+    } catch {
+      return undefined;
+    }
+  }
+  return segmentCount >= 2 ? latestObject : undefined;
+}
+
 function tryParseMalformedToolCallArguments(raw: string): ToolCallArgumentRepair | undefined {
   if (!raw.trim()) {
     return undefined;
@@ -856,6 +885,10 @@ function tryParseMalformedToolCallArguments(raw: string): ToolCallArgumentRepair
     JSON.parse(raw);
     return undefined;
   } catch {
+    const concatenatedArgs = tryParseToolCallArgumentsFromConcatenatedJsonSegments(raw);
+    if (concatenatedArgs) {
+      return { args: concatenatedArgs, trailingSuffix: "" };
+    }
     const jsonPrefix = extractBalancedJsonPrefix(raw);
     if (!jsonPrefix) {
       return undefined;
@@ -877,6 +910,46 @@ function tryParseMalformedToolCallArguments(raw: string): ToolCallArgumentRepair
       return undefined;
     }
   }
+}
+
+function tryParseToolCallArgumentsFromRaw(raw: string): Record<string, unknown> | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    const concatenated = tryParseToolCallArgumentsFromConcatenatedJsonSegments(trimmed);
+    if (concatenated) {
+      return concatenated;
+    }
+    return tryParseMalformedToolCallArguments(trimmed)?.args;
+  }
+}
+
+function resolveToolCallArgumentsCandidate(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value === "string") {
+    return tryParseToolCallArgumentsFromRaw(value);
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const args = value as Record<string, unknown>;
+  const keys = Object.keys(args);
+  if (typeof args.partialJson === "string") {
+    const parsed = tryParseToolCallArgumentsFromRaw(args.partialJson);
+    if (parsed) {
+      return parsed;
+    }
+    if (keys.length === 1) {
+      return undefined;
+    }
+  }
+  return keys.length > 0 ? args : undefined;
 }
 
 function repairToolCallArgumentsInMessage(
@@ -919,6 +992,28 @@ function clearToolCallArgumentsInMessage(message: unknown, contentIndex: number)
     return;
   }
   typedBlock.arguments = {};
+}
+
+function extractToolCallArgumentsFromMessage(
+  message: unknown,
+  contentIndex: number,
+): Record<string, unknown> | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const block = content[contentIndex];
+  if (!block || typeof block !== "object") {
+    return undefined;
+  }
+  const typedBlock = block as { type?: unknown; arguments?: unknown };
+  if (!isToolCallBlockType(typedBlock.type)) {
+    return undefined;
+  }
+  return resolveToolCallArgumentsCandidate(typedBlock.arguments);
 }
 
 function repairMalformedToolCallArgumentsInMessage(
@@ -1007,13 +1102,37 @@ function wrapStreamRepairMalformedToolCallArguments(
                   clearToolCallArgumentsInMessage(event.message, event.contentIndex);
                 }
               }
+
+              const recoveredArgs =
+                extractToolCallArgumentsFromMessage(event.partial, event.contentIndex) ??
+                extractToolCallArgumentsFromMessage(event.message, event.contentIndex);
+              if (recoveredArgs) {
+                repairedArgsByIndex.set(event.contentIndex, recoveredArgs);
+                repairToolCallArgumentsInMessage(event.partial, event.contentIndex, recoveredArgs);
+                repairToolCallArgumentsInMessage(event.message, event.contentIndex, recoveredArgs);
+              }
             }
             if (
               typeof event.contentIndex === "number" &&
               Number.isInteger(event.contentIndex) &&
               event.type === "toolcall_end"
             ) {
-              const repairedArgs = repairedArgsByIndex.get(event.contentIndex);
+              let repairedArgs = repairedArgsByIndex.get(event.contentIndex);
+              if (!repairedArgs) {
+                const toolCallArguments =
+                  event.toolCall && typeof event.toolCall === "object"
+                    ? resolveToolCallArgumentsCandidate(
+                        (event.toolCall as { arguments?: unknown }).arguments,
+                      )
+                    : undefined;
+                repairedArgs =
+                  toolCallArguments ??
+                  extractToolCallArgumentsFromMessage(event.partial, event.contentIndex) ??
+                  extractToolCallArgumentsFromMessage(event.message, event.contentIndex);
+                if (repairedArgs) {
+                  repairedArgsByIndex.set(event.contentIndex, repairedArgs);
+                }
+              }
               if (repairedArgs) {
                 if (event.toolCall && typeof event.toolCall === "object") {
                   (event.toolCall as { arguments?: unknown }).arguments = repairedArgs;
@@ -1053,7 +1172,8 @@ export function wrapStreamFnRepairMalformedToolCallArguments(baseFn: StreamFn): 
 }
 
 function shouldRepairMalformedAnthropicToolCallArguments(provider?: string): boolean {
-  return normalizeProviderId(provider ?? "") === "kimi-coding";
+  const normalizedProvider = normalizeProviderId(provider ?? "");
+  return normalizedProvider === "kimi-coding" || normalizedProvider === "anthropic";
 }
 
 // ---------------------------------------------------------------------------

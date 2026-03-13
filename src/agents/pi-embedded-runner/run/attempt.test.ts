@@ -801,6 +801,50 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     expect(partialToolCall.arguments).toEqual({});
   });
 
+  it("repairs concatenated JSON tool-call deltas by using the latest valid object", async () => {
+    const partialToolCall = { type: "toolCall", name: "web_fetch", arguments: {} };
+    const streamedToolCall = { type: "toolCall", name: "web_fetch", arguments: {} };
+    const finalToolCall = { type: "toolCall", name: "web_fetch", arguments: {} };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: "{}",
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: '{"search_query":[{"q":"openclaw"}]}',
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: streamedToolCall,
+            partial: partialMessage,
+          },
+        ],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialToolCall.arguments).toEqual({ search_query: [{ q: "openclaw" }] });
+    expect(streamedToolCall.arguments).toEqual({ search_query: [{ q: "openclaw" }] });
+    expect(finalToolCall.arguments).toEqual({ search_query: [{ q: "openclaw" }] });
+    expect(result).toBe(finalMessage);
+  });
+
   it("does not repair tool arguments when trailing junk exceeds the Kimi-specific allowance", async () => {
     const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
     const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
@@ -832,6 +876,44 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
 
     expect(partialToolCall.arguments).toEqual({});
     expect(streamedToolCall.arguments).toEqual({});
+  });
+
+  it("extracts arguments from partialJson metadata on toolcall_end", async () => {
+    const partialToolCall = {
+      type: "toolCall",
+      name: "web_fetch",
+      arguments: {
+        partialJson: '{"search_query":[{"q":"openclaw issue 44204"}]}',
+      },
+    };
+    const streamedToolCall = { type: "toolCall", name: "web_fetch", arguments: {} };
+    const finalToolCall = { type: "toolCall", name: "web_fetch", arguments: {} };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: streamedToolCall,
+            partial: partialMessage,
+          },
+        ],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialToolCall.arguments).toEqual({ search_query: [{ q: "openclaw issue 44204" }] });
+    expect(streamedToolCall.arguments).toEqual({ search_query: [{ q: "openclaw issue 44204" }] });
+    expect(finalToolCall.arguments).toEqual({ search_query: [{ q: "openclaw issue 44204" }] });
+    expect(result).toBe(finalMessage);
   });
 
   it("clears a cached repair when later deltas make the trailing suffix invalid", async () => {

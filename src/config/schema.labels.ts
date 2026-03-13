@@ -69,6 +69,7 @@ export const FIELD_LABELS: Record<string, string> = {
   gateway: "Gateway",
   "gateway.port": "Gateway Port",
   "gateway.mode": "Gateway Mode",
+  "gateway.push": "Gateway Push",
   "gateway.bind": "Gateway Bind Mode",
   "gateway.customBindHost": "Gateway Custom Bind Host",
   "gateway.controlUi": "Control UI",
