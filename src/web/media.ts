@@ -34,6 +34,10 @@ type WebMediaOptions = {
   readFile?: (filePath: string) => Promise<Buffer>;
 };
 
+function basenameAcrossSeparators(filePath: string): string {
+  return path.win32.basename(path.posix.basename(filePath));
+}
+
 function resolveWebMediaOptions(params: {
   maxBytesOrOptions?: number | WebMediaOptions;
   options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" };
@@ -386,7 +390,7 @@ async function loadWebMediaInternal(
   }
   const mime = await detectMime({ buffer: data, filePath: mediaUrl });
   const kind = kindFromMime(mime);
-  let fileName = path.basename(mediaUrl) || undefined;
+  let fileName = basenameAcrossSeparators(mediaUrl) || undefined;
   if (fileName && !path.extname(fileName) && mime) {
     const ext = extensionForMime(mime);
     if (ext) {

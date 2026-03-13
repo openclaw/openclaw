@@ -154,6 +154,16 @@ describe("web media loading", () => {
     }
   });
 
+  it("normalizes Windows path separators for sandbox-validated local paths", async () => {
+    const result = await loadWebMediaRaw("C:\\private\\voice-note.m4a", {
+      maxBytes: 1024 * 1024,
+      sandboxValidated: true,
+      readFile: async () => Buffer.from("ok"),
+    });
+
+    expect(result.fileName).toBe("voice-note.m4a");
+  });
+
   it("compresses large local images under the provided cap", async () => {
     const { buffer, file } = await createLargeTestJpeg();
 
