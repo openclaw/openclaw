@@ -187,7 +187,13 @@ function subscribeAssistantEvents() {
 }
 
 function subscribeLifecycleEvents() {
-  const lifecycleEvents: Array<{ phase?: string; tag?: string; text?: string }> = [];
+  const lifecycleEvents: Array<{
+    phase?: string;
+    tag?: string;
+    text?: string;
+    source?: string;
+    promptDispatched?: boolean;
+  }> = [];
   const stop = onAgentEvent((evt) => {
     if (evt.stream !== "lifecycle") {
       return;
@@ -196,9 +202,27 @@ function subscribeLifecycleEvents() {
       phase: typeof evt.data?.phase === "string" ? evt.data.phase : undefined,
       tag: typeof evt.data?.tag === "string" ? evt.data.tag : undefined,
       text: typeof evt.data?.text === "string" ? evt.data.text : undefined,
+      source: typeof evt.data?.source === "string" ? evt.data.source : undefined,
+      promptDispatched:
+        typeof evt.data?.promptDispatched === "boolean" ? evt.data.promptDispatched : undefined,
     });
   });
   return { lifecycleEvents, stop };
+}
+
+function subscribeStatusEvents() {
+  const statusEvents: Array<{ tag?: string; text?: string; source?: string }> = [];
+  const stop = onAgentEvent((evt) => {
+    if (evt.stream !== "status") {
+      return;
+    }
+    statusEvents.push({
+      tag: typeof evt.data?.tag === "string" ? evt.data.tag : undefined,
+      text: typeof evt.data?.text === "string" ? evt.data.text : undefined,
+      source: typeof evt.data?.source === "string" ? evt.data.source : undefined,
+    });
+  });
+  return { statusEvents, stop };
 }
 
 function subscribeToolEvents() {
@@ -208,6 +232,7 @@ function subscribeToolEvents() {
     toolCallId?: string;
     status?: string;
     text?: string;
+    source?: string;
   }> = [];
   const stop = onAgentEvent((evt) => {
     if (evt.stream !== "tool") {
@@ -219,6 +244,7 @@ function subscribeToolEvents() {
       toolCallId: typeof evt.data?.toolCallId === "string" ? evt.data.toolCallId : undefined,
       status: typeof evt.data?.status === "string" ? evt.data.status : undefined,
       text: typeof evt.data?.text === "string" ? evt.data.text : undefined,
+      source: typeof evt.data?.source === "string" ? evt.data.source : undefined,
     });
   });
   return { toolEvents, stop };
@@ -451,9 +477,10 @@ describe("agentCommand ACP runtime routing", () => {
     });
   });
 
-  it("forwards ACP prompt-status and tool-call events into agent event streams", async () => {
+  it("forwards ACP prompt, status, and tool-call events into the correct agent streams", async () => {
     await withAcpSessionEnv(async () => {
       const { lifecycleEvents, stop: stopLifecycle } = subscribeLifecycleEvents();
+      const { statusEvents, stop: stopStatus } = subscribeStatusEvents();
       const { toolEvents, stop: stopTool } = subscribeToolEvents();
       const runTurn = createRunTurnFromEvents([
         {
@@ -462,12 +489,17 @@ describe("agentCommand ACP runtime routing", () => {
           text: "ACP prompt sent to runtime session",
         },
         {
+          type: "status",
+          tag: "session_info_update",
+          text: "runtime connected",
+        },
+        {
           type: "tool_call",
-          tag: "tool_call",
-          text: "check-network (in_progress)",
+          tag: "tool_call_update",
+          text: "check-network (completed)",
           title: "check-network",
           toolCallId: "tool-1",
-          status: "in_progress",
+          status: "completed",
         },
       ]);
 
@@ -479,6 +511,7 @@ describe("agentCommand ACP runtime routing", () => {
         await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
       } finally {
         stopLifecycle();
+        stopStatus();
         stopTool();
       }
 
@@ -488,16 +521,26 @@ describe("agentCommand ACP runtime routing", () => {
             phase: "prompt",
             tag: "session/prompt",
             text: "ACP prompt sent to runtime session",
+            source: "acp",
+            promptDispatched: true,
           }),
         ]),
       );
+      expect(statusEvents).toEqual([
+        {
+          tag: "session_info_update",
+          text: "runtime connected",
+          source: "acp",
+        },
+      ]);
       expect(toolEvents).toEqual([
         {
-          phase: "start",
+          phase: "end",
           name: "check-network",
           toolCallId: "tool-1",
-          status: "in_progress",
-          text: "check-network (in_progress)",
+          status: "completed",
+          text: "check-network (completed)",
+          source: "acp",
         },
       ]);
     });
