@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { openBoundaryFile } from "../infra/boundary-file-read.js";
 
 const MAX_TYPE_FILE_BYTES = 512_000; // 512KB per type file
 const MAX_TOTAL_TYPE_BYTES = 2_000_000; // 2MB total for all types
@@ -122,25 +121,17 @@ export async function loadTypeDefinitions(params: {
       }
 
       // Try to read the file
-      const opened = await openBoundaryFile({
-        absolutePath,
-        rootPath: params.workspaceDir,
-        boundaryLabel: "workspace root",
-        maxBytes: maxFileBytes,
-      });
-
-      if (!opened.ok) {
-        continue;
-      }
-
       try {
-        const content = await fs.readFile(opened.fd, "utf-8");
-        const size = Buffer.byteLength(content, "utf-8");
+        const stat = await fs.stat(absolutePath);
+        const fileSize = stat.size;
 
-        // Skip if this file would exceed total limit
-        if (totalSize + size > maxTotalBytes) {
+        // Check if we've exceeded total size limit or file is too large
+        if (fileSize > maxFileBytes || totalSize + fileSize > maxTotalBytes) {
           continue;
         }
+
+        const content = await fs.readFile(absolutePath, "utf-8");
+        const size = Buffer.byteLength(content, "utf-8");
 
         files.push({
           relativePath,
@@ -152,12 +143,7 @@ export async function loadTypeDefinitions(params: {
         totalSize += size;
       } catch {
         // Skip files that can't be read
-      } finally {
-        try {
-          await fs.close(opened.fd);
-        } catch {
-          // Ignore close errors
-        }
+        continue;
       }
     }
   };
@@ -169,8 +155,12 @@ export async function loadTypeDefinitions(params: {
     const aIsIndex = path.basename(a.relativePath).toLowerCase() === "index.ts";
     const bIsIndex = path.basename(b.relativePath).toLowerCase() === "index.ts";
 
-    if (aIsIndex && !bIsIndex) return -1;
-    if (!aIsIndex && bIsIndex) return 1;
+    if (aIsIndex && !bIsIndex) {
+      return -1;
+    }
+    if (!aIsIndex && bIsIndex) {
+      return 1;
+    }
 
     return a.relativePath.localeCompare(b.relativePath);
   });
