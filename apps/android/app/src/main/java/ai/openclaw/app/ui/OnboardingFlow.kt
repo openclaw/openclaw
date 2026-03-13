@@ -562,8 +562,8 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                   .addOnCanceledListener {
                     // User dismissed the scanner; preserve current form state.
                   }
-                  .addOnFailureListener { error ->
-                    gatewayError = resolveQrScannerError(error)
+                  .addOnFailureListener {
+                    gatewayError = qrScannerErrorMessage()
                   }
               },
               onAdvancedOpenChange = { gatewayAdvancedOpen = it },
@@ -1790,10 +1790,8 @@ private fun isPermissionGranted(context: Context, permission: String): Boolean {
   return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 }
 
-private fun resolveQrScannerError(error: Exception): String {
-  val detail = error.message?.trim().orEmpty()
-  val prefix = "Google Code Scanner could not start. Update Google Play services or use the setup code manually."
-  return if (detail.isEmpty()) prefix else "$prefix ($detail)"
+private fun qrScannerErrorMessage(): String {
+  return "Google Code Scanner could not start. Update Google Play services or use the setup code manually."
 }
 
 private fun isNotificationListenerEnabled(context: Context): Boolean {
