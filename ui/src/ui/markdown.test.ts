@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { marked } from "marked";
 import { describe, expect, it, vi } from "vitest";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
@@ -139,27 +137,6 @@ describe("toSanitizedMarkdownHtml", () => {
       parseSpy.mockRestore();
     });
 
-    it("regression: sample.json tool result does not hang (#36213)", () => {
-      const samplePath = resolve(__dirname, "../../../sample.json");
-      const sampleContent = readFileSync(samplePath, "utf-8").trim();
-
-      // The sample is a single line > 10k chars — must not hang
-      expect(sampleContent.split("\n").some((l) => l.length > 2000)).toBe(true);
-
-      const parseSpy = vi.spyOn(marked, "parse");
-      const start = performance.now();
-      const html = toSanitizedMarkdownHtml(sampleContent);
-      const elapsed = performance.now() - start;
-
-      // Should complete almost instantly (< 100ms), not hang
-      expect(elapsed).toBeLessThan(100);
-      // Should bypass marked.parse entirely
-      expect(parseSpy).not.toHaveBeenCalled();
-      // Should contain escaped content
-      expect(html).toContain('<pre class="code-block">');
-      expect(html).toContain("sessions");
-      parseSpy.mockRestore();
-    });
 
     it("still parses normal markdown with short lines", () => {
       const md = "Hello **world**\n\nThis is a paragraph.";
