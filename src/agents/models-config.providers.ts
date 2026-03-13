@@ -270,8 +270,24 @@ function normalizeProviderModels(
   return mutated ? { ...provider, models } : provider;
 }
 
+function normalizeGoogleBaseUrl(baseUrl: string | undefined): string | undefined {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  if (!/^https:\/\/generativelanguage\.googleapis\.com(?:\/)?(?:v1beta)?\/?$/i.test(trimmed)) {
+    return trimmed;
+  }
+  return trimmed.replace(/\/+$/, "").replace(/\/v1beta$/i, "") + "/v1beta";
+}
+
 function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
-  return normalizeProviderModels(provider, normalizeGoogleModelId);
+  const modelNormalized = normalizeProviderModels(provider, normalizeGoogleModelId);
+  const normalizedBaseUrl = normalizeGoogleBaseUrl(modelNormalized.baseUrl);
+  if (normalizedBaseUrl !== modelNormalized.baseUrl) {
+    return { ...modelNormalized, baseUrl: normalizedBaseUrl ?? modelNormalized.baseUrl };
+  }
+  return modelNormalized;
 }
 
 function normalizeAntigravityProvider(provider: ProviderConfig): ProviderConfig {
@@ -545,7 +561,7 @@ export function normalizeProviders(params: {
       }
     }
 
-    if (normalizedKey === "google") {
+    if (normalizedProvider?.api === "google-generative-ai") {
       const googleNormalized = normalizeGoogleProvider(normalizedProvider);
       if (googleNormalized !== normalizedProvider) {
         mutated = true;
