@@ -17,6 +17,7 @@ import {
 } from "../plugin-sdk/provider-catalog.js";
 import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
+import { normalizeGoogleApiBaseUrl } from "../infra/google-api-base-url.js";
 import { hasAnthropicVertexAvailableAuth } from "./anthropic-vertex-provider.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
@@ -330,8 +331,25 @@ function normalizeProviderModels(
   return mutated ? { ...provider, models } : provider;
 }
 
+function shouldNormalizeGoogleProvider(providerKey: string, provider: ProviderConfig): boolean {
+  if (providerKey === "google" || providerKey === "google-vertex") {
+    return true;
+  }
+  if (provider.api === "google-generative-ai") {
+    return true;
+  }
+  return provider.models.some((model) => model.api === "google-generative-ai");
+}
+
 function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
-  return normalizeProviderModels(provider, normalizeGoogleModelId);
+  const modelNormalized = normalizeProviderModels(provider, normalizeGoogleModelId);
+  const normalizedBaseUrl = modelNormalized.baseUrl
+    ? normalizeGoogleApiBaseUrl(modelNormalized.baseUrl)
+    : modelNormalized.baseUrl;
+  if (normalizedBaseUrl !== modelNormalized.baseUrl) {
+    return { ...modelNormalized, baseUrl: normalizedBaseUrl ?? modelNormalized.baseUrl };
+  }
+  return modelNormalized;
 }
 
 function normalizeAntigravityProvider(provider: ProviderConfig): ProviderConfig {
@@ -608,7 +626,7 @@ export function normalizeProviders(params: {
       }
     }
 
-    if (normalizedKey === "google" || normalizedKey === "google-vertex") {
+    if (shouldNormalizeGoogleProvider(normalizedKey, normalizedProvider)) {
       const googleNormalized = normalizeGoogleProvider(normalizedProvider);
       if (googleNormalized !== normalizedProvider) {
         mutated = true;
