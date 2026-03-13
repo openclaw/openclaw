@@ -10,6 +10,7 @@ import {
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import {
   createChannelInboundDebouncer,
+  shouldFlushDirectTextInbound,
   shouldDebounceTextInbound,
 } from "../../channels/inbound-debounce-policy.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
@@ -179,6 +180,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         hasMedia: Boolean(entry.message.attachments && entry.message.attachments.length > 0),
       });
     },
+    shouldFlushDirectWhenPending: (entry) =>
+      shouldFlushDirectTextInbound({
+        text: entry.message.text,
+        cfg,
+        requiresDirectFlush: Boolean(entry.message.attachments && entry.message.attachments.length),
+      }),
     onFlush: async (entries) => {
       const last = entries.at(-1);
       if (!last) {

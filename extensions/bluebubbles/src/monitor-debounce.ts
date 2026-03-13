@@ -12,8 +12,8 @@ type BlueBubblesDebounceEntry = {
 };
 
 export type BlueBubblesDebouncer = {
-  enqueue: (item: BlueBubblesDebounceEntry) => Promise<void>;
-  flushKey: (key: string) => Promise<void>;
+  enqueue: (item: BlueBubblesDebounceEntry) => Promise<boolean>;
+  flushKey: (key: string) => Promise<boolean>;
 };
 
 export type BlueBubblesDebounceRegistry = {
@@ -161,6 +161,8 @@ export function createBlueBubblesDebounceRegistry(params: {
           // (e.g., text+image arriving as separate webhooks for the same messageId)
           return true;
         },
+        shouldFlushDirectWhenPending: (entry) =>
+          core.channel.text.hasControlCommand(entry.message.text, config),
         onFlush: async (entries) => {
           if (entries.length === 0) {
             return;

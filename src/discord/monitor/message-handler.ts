@@ -1,6 +1,7 @@
 import type { Client } from "@buape/carbon";
 import {
   createChannelInboundDebouncer,
+  shouldFlushDirectTextInbound,
   shouldDebounceTextInbound,
 } from "../../channels/inbound-debounce-policy.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
@@ -81,6 +82,20 @@ export function createDiscordMessageHandler(
         text: baseText,
         cfg: params.cfg,
         hasMedia: Boolean(
+          (message.attachments && message.attachments.length > 0) ||
+          hasDiscordMessageStickers(message),
+        ),
+      });
+    },
+    shouldFlushDirectWhenPending: (entry) => {
+      const message = entry.data.message;
+      if (!message) {
+        return false;
+      }
+      return shouldFlushDirectTextInbound({
+        text: resolveDiscordMessageText(message, { includeForwarded: false }),
+        cfg: params.cfg,
+        requiresDirectFlush: Boolean(
           (message.attachments && message.attachments.length > 0) ||
           hasDiscordMessageStickers(message),
         ),

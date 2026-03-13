@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { OpenClawConfig } from "../config/config.js";
 import type { InboundDebounceByProvider } from "../config/types.messages.js";
 
@@ -37,13 +38,22 @@ type DebounceBuffer<T> = {
   items: T[];
   timeout: ReturnType<typeof setTimeout> | null;
   debounceMs: number;
+  flushing: boolean;
+  consecutiveFailures: number;
 };
 
 export type InboundDebounceCreateParams<T> = {
   debounceMs: number;
   buildKey: (item: T) => string | null | undefined;
   shouldDebounce?: (item: T) => boolean;
+  shouldFlushDirectWhenPending?: (item: T) => boolean;
   resolveDebounceMs?: (item: T) => number | undefined;
+  maxKeys?: number;
+  maxFlushRetries?: number;
+  maxBufferedItems?: number;
+  maxTotalBufferedItems?: number;
+  maxRetryDelayMs?: number;
+  retryBackoffFactor?: number;
   onFlush: (items: T[]) => Promise<void>;
   onError?: (err: unknown, items: T[]) => void;
 };
@@ -51,6 +61,17 @@ export type InboundDebounceCreateParams<T> = {
 export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>) {
   const buffers = new Map<string, DebounceBuffer<T>>();
   const defaultDebounceMs = Math.max(0, Math.trunc(params.debounceMs));
+  const maxKeys = Math.max(1, Math.trunc(params.maxKeys ?? 1000));
+  const maxFlushRetries = Math.max(0, Math.trunc(params.maxFlushRetries ?? 20));
+  const maxBufferedItems = Math.max(1, Math.trunc(params.maxBufferedItems ?? 500));
+  const maxTotalBufferedItems = Math.max(1, Math.trunc(params.maxTotalBufferedItems ?? 10_000));
+  const retryBackoffFactor = Number.isFinite(params.retryBackoffFactor)
+    ? Math.max(1, params.retryBackoffFactor ?? 2)
+    : 2;
+  const maxRetryDelayMs = Number.isFinite(params.maxRetryDelayMs)
+    ? Math.max(defaultDebounceMs, Math.trunc(params.maxRetryDelayMs ?? 30_000))
+    : Math.max(defaultDebounceMs, 30_000);
+  let totalBufferedItems = 0;
 
   const resolveDebounceMs = (item: T) => {
     const resolved = params.resolveDebounceMs?.(item);
@@ -60,39 +81,227 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     return Math.max(0, Math.trunc(resolved));
   };
 
-  const flushBuffer = async (key: string, buffer: DebounceBuffer<T>) => {
+  const buildKeyHash = (key: string) => createHash("sha256").update(key).digest("hex").slice(0, 12);
+
+  const createDebounceError = (
+    code:
+      | "INBOUND_DEBOUNCE_BUFFER_OVERFLOW"
+      | "INBOUND_DEBOUNCE_TOTAL_BUFFER_OVERFLOW"
+      | "INBOUND_DEBOUNCE_MAX_KEYS_EXCEEDED"
+      | "INBOUND_DEBOUNCE_MAX_RETRIES_EXCEEDED",
+    key: string,
+    extra: Record<string, unknown> = {},
+  ) => {
+    const message =
+      code === "INBOUND_DEBOUNCE_BUFFER_OVERFLOW"
+        ? "inbound debounce buffer overflow"
+        : code === "INBOUND_DEBOUNCE_TOTAL_BUFFER_OVERFLOW"
+          ? "inbound debounce total buffer overflow"
+          : code === "INBOUND_DEBOUNCE_MAX_KEYS_EXCEEDED"
+            ? "inbound debounce key capacity exceeded"
+            : "inbound debounce flush retries exceeded";
+    return Object.assign(new Error(message), {
+      code,
+      debounceKeyHash: buildKeyHash(key),
+      ...extra,
+    });
+  };
+
+  const clearScheduledFlush = (buffer: DebounceBuffer<T>) => {
+    if (!buffer.timeout) {
+      return;
+    }
+    clearTimeout(buffer.timeout);
+    buffer.timeout = null;
+  };
+
+  const emitOverflowError = (key: string, droppedItems: T[]) => {
+    if (droppedItems.length === 0) {
+      return;
+    }
+    params.onError?.(
+      createDebounceError("INBOUND_DEBOUNCE_BUFFER_OVERFLOW", key, {
+        maxBufferedItems,
+      }),
+      droppedItems,
+    );
+  };
+
+  const emitTotalOverflowError = (key: string, droppedItems: T[]) => {
+    if (droppedItems.length === 0) {
+      return;
+    }
+    params.onError?.(
+      createDebounceError("INBOUND_DEBOUNCE_TOTAL_BUFFER_OVERFLOW", key, {
+        maxTotalBufferedItems,
+      }),
+      droppedItems,
+    );
+  };
+
+  const decrementBufferedTotal = (count: number) => {
+    if (count <= 0) {
+      return;
+    }
+    totalBufferedItems = Math.max(0, totalBufferedItems - count);
+  };
+
+  const takeNewestItems = (buffer: DebounceBuffer<T>, count: number): T[] => {
+    if (count <= 0 || buffer.items.length === 0) {
+      return [];
+    }
+    const droppedItems = buffer.items.splice(Math.max(0, buffer.items.length - count), count);
+    decrementBufferedTotal(droppedItems.length);
+    return droppedItems;
+  };
+
+  const trimBufferToLimit = (key: string, buffer: DebounceBuffer<T>) => {
+    const overflow = buffer.items.length - maxBufferedItems;
+    if (overflow <= 0) {
+      return;
+    }
+    // Drop newest items to preserve ordering for already-buffered work.
+    const droppedItems = takeNewestItems(buffer, overflow);
+    emitOverflowError(key, droppedItems);
+  };
+
+  const trimTotalBufferedItemsToLimit = (key: string, buffer: DebounceBuffer<T>) => {
+    const overflow = totalBufferedItems - maxTotalBufferedItems;
+    if (overflow <= 0) {
+      return;
+    }
+    // Drop newest items from the active buffer first to cap aggregate memory growth.
+    const droppedItems = takeNewestItems(buffer, overflow);
+    emitTotalOverflowError(key, droppedItems);
+  };
+
+  const pushBufferedItem = (key: string, buffer: DebounceBuffer<T>, item: T) => {
+    buffer.items.push(item);
+    totalBufferedItems += 1;
+    trimBufferToLimit(key, buffer);
+    trimTotalBufferedItemsToLimit(key, buffer);
+  };
+
+  const requeueBufferedItems = (key: string, buffer: DebounceBuffer<T>, items: T[]) => {
+    if (items.length === 0) {
+      return;
+    }
+    buffer.items.unshift(...items);
+    totalBufferedItems += items.length;
+    trimBufferToLimit(key, buffer);
+    trimTotalBufferedItemsToLimit(key, buffer);
+  };
+
+  const resolveRetryDelayMs = (buffer: DebounceBuffer<T>) => {
+    const exponent = Math.max(0, buffer.consecutiveFailures - 1);
+    const delay = buffer.debounceMs * retryBackoffFactor ** exponent;
+    if (!Number.isFinite(delay)) {
+      return maxRetryDelayMs;
+    }
+    return Math.min(maxRetryDelayMs, Math.max(buffer.debounceMs, Math.trunc(delay)));
+  };
+
+  const hasPendingWork = (buffer: DebounceBuffer<T>) => buffer.flushing || buffer.items.length > 0;
+
+  const deleteCurrentBuffer = (key: string, buffer: DebounceBuffer<T>) => {
+    clearScheduledFlush(buffer);
+    if (buffers.get(key) !== buffer) {
+      return false;
+    }
     buffers.delete(key);
-    if (buffer.timeout) {
-      clearTimeout(buffer.timeout);
-      buffer.timeout = null;
-    }
-    if (buffer.items.length === 0) {
-      return;
-    }
+    return true;
+  };
+
+  const flushDirect = async (items: T[]) => {
     try {
-      await params.onFlush(buffer.items);
+      await params.onFlush(items);
     } catch (err) {
-      params.onError?.(err, buffer.items);
+      params.onError?.(err, items);
     }
   };
 
-  const flushKey = async (key: string) => {
-    const buffer = buffers.get(key);
-    if (!buffer) {
-      return;
-    }
-    await flushBuffer(key, buffer);
-  };
-
-  const scheduleFlush = (key: string, buffer: DebounceBuffer<T>) => {
-    if (buffer.timeout) {
-      clearTimeout(buffer.timeout);
-    }
+  const scheduleFlush = (
+    key: string,
+    buffer: DebounceBuffer<T>,
+    reason: "debounce" | "retry" = "debounce",
+  ) => {
+    clearScheduledFlush(buffer);
+    const delayMs = reason === "retry" ? resolveRetryDelayMs(buffer) : buffer.debounceMs;
     buffer.timeout = setTimeout(() => {
-      void flushBuffer(key, buffer);
-    }, buffer.debounceMs);
+      void flushKeyInternal(key);
+    }, delayMs);
     buffer.timeout.unref?.();
   };
+
+  const scheduleBufferedFlush = (key: string, buffer: DebounceBuffer<T>) => {
+    if (buffer.items.length === 0) {
+      clearScheduledFlush(buffer);
+      return;
+    }
+    scheduleFlush(key, buffer, buffer.consecutiveFailures > 0 ? "retry" : "debounce");
+  };
+
+  async function flushBuffer(key: string, buffer: DebounceBuffer<T>): Promise<boolean> {
+    clearScheduledFlush(buffer);
+    if (buffer.flushing) {
+      if (buffer.items.length > 0) {
+        scheduleBufferedFlush(key, buffer);
+      }
+      return false;
+    }
+    if (buffer.items.length === 0) {
+      deleteCurrentBuffer(key, buffer);
+      return true;
+    }
+    const items = buffer.items.splice(0);
+    decrementBufferedTotal(items.length);
+    buffer.flushing = true;
+    let flushFailed = false;
+    let retriesExceeded = false;
+    let flushError: unknown;
+    try {
+      await params.onFlush(items);
+      buffer.consecutiveFailures = 0;
+    } catch (err) {
+      flushFailed = true;
+      flushError = err;
+      // Preserve ordering when retrying the failed batch.
+      requeueBufferedItems(key, buffer, items);
+      buffer.consecutiveFailures += 1;
+      // Recoverable retries stay quiet so channel handlers do not surface repeated user-visible errors.
+      retriesExceeded = buffer.consecutiveFailures > maxFlushRetries;
+    } finally {
+      buffer.flushing = false;
+    }
+    if (retriesExceeded) {
+      clearScheduledFlush(buffer);
+      const droppedItems = buffer.items.splice(0);
+      decrementBufferedTotal(droppedItems.length);
+      deleteCurrentBuffer(key, buffer);
+      params.onError?.(
+        createDebounceError("INBOUND_DEBOUNCE_MAX_RETRIES_EXCEEDED", key, {
+          maxFlushRetries,
+          cause: flushError,
+        }),
+        droppedItems,
+      );
+      return true;
+    }
+    if (buffer.items.length > 0) {
+      scheduleFlush(key, buffer, flushFailed ? "retry" : "debounce");
+      return false;
+    }
+    deleteCurrentBuffer(key, buffer);
+    return true;
+  }
+
+  async function flushKeyInternal(key: string) {
+    const buffer = buffers.get(key);
+    if (!buffer) {
+      return true;
+    }
+    return flushBuffer(key, buffer);
+  }
 
   const enqueue = async (item: T) => {
     const key = params.buildKey(item);
@@ -101,28 +310,66 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
 
     if (!canDebounce || !key) {
       if (key && buffers.has(key)) {
-        await flushKey(key);
+        const fullyFlushed = await flushKeyInternal(key);
+        const pending = buffers.get(key);
+        if (!fullyFlushed && pending) {
+          if (params.shouldFlushDirectWhenPending?.(item)) {
+            // Priority items like control commands should not be trapped behind a failing buffer.
+            await flushDirect([item]);
+            return false;
+          }
+          // Preserve ordering by appending non-debounced items behind unresolved buffered work.
+          pushBufferedItem(key, pending, item);
+          scheduleBufferedFlush(key, pending);
+          return hasPendingWork(pending);
+        }
       }
-      try {
-        await params.onFlush([item]);
-      } catch (err) {
-        params.onError?.(err, [item]);
-      }
-      return;
+      await flushDirect([item]);
+      return false;
     }
 
     const existing = buffers.get(key);
     if (existing) {
-      existing.items.push(item);
       existing.debounceMs = debounceMs;
-      scheduleFlush(key, existing);
-      return;
+      pushBufferedItem(key, existing, item);
+      if (existing.items.length === 0 && !existing.flushing) {
+        deleteCurrentBuffer(key, existing);
+        return false;
+      }
+      scheduleBufferedFlush(key, existing);
+      return hasPendingWork(existing);
     }
 
-    const buffer: DebounceBuffer<T> = { items: [item], timeout: null, debounceMs };
+    if (buffers.size >= maxKeys) {
+      params.onError?.(
+        createDebounceError("INBOUND_DEBOUNCE_MAX_KEYS_EXCEEDED", key, {
+          maxKeys,
+        }),
+        [item],
+      );
+      await flushDirect([item]);
+      return false;
+    }
+
+    const buffer: DebounceBuffer<T> = {
+      items: [],
+      timeout: null,
+      debounceMs,
+      flushing: false,
+      consecutiveFailures: 0,
+    };
     buffers.set(key, buffer);
+    pushBufferedItem(key, buffer, item);
+    if (buffer.items.length === 0) {
+      deleteCurrentBuffer(key, buffer);
+      return false;
+    }
     scheduleFlush(key, buffer);
+    return true;
   };
 
-  return { enqueue, flushKey };
+  return {
+    enqueue,
+    flushKey: (key: string) => flushKeyInternal(key),
+  };
 }

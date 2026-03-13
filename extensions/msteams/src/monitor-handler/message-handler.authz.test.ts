@@ -14,9 +14,10 @@ describe("msteams monitor handler authz", () => {
           resolveInboundDebounceMs: () => 0,
           createInboundDebouncer: <T>(params: {
             onFlush: (entries: T[]) => Promise<void>;
-          }): { enqueue: (entry: T) => Promise<void> } => ({
+          }): { enqueue: (entry: T) => Promise<boolean> } => ({
             enqueue: async (entry: T) => {
               await params.onFlush([entry]);
+              return false;
             },
           }),
         },

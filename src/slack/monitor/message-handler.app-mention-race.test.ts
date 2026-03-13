@@ -10,6 +10,7 @@ const dispatchPreparedSlackMessageMock = vi.fn<(prepared: unknown) => Promise<vo
 
 vi.mock("../../channels/inbound-debounce-policy.js", () => ({
   shouldDebounceTextInbound: () => false,
+  shouldFlushDirectTextInbound: () => false,
   createChannelInboundDebouncer: (params: {
     onFlush: (
       entries: Array<{
@@ -25,8 +26,9 @@ vi.mock("../../channels/inbound-debounce-policy.js", () => ({
         opts: { source: "message" | "app_mention"; wasMentioned?: boolean };
       }) => {
         await params.onFlush([entry]);
+        return false;
       },
-      flushKey: async (_key: string) => {},
+      flushKey: async (_key: string) => true,
     },
   }),
 }));
