@@ -24,7 +24,9 @@ function toStringOrEmpty(value: unknown): string {
 }
 
 function escapeMarkdownText(text: string): string {
-  return text.replace(MARKDOWN_SPECIAL_CHARS, "\\$1");
+  const escaped = text.replace(MARKDOWN_SPECIAL_CHARS, "\\$1");
+  // Feishu post payloads can mis-handle trailing ":" in rendered text runs.
+  return escaped.replace(/:$/g, "\\:");
 }
 
 function toBoolean(value: unknown): boolean {

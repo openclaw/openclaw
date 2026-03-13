@@ -102,4 +102,23 @@ describe("parsePostContent", () => {
       mentionedOpenIds: [],
     });
   });
+
+  it("escapes trailing colon in text runs", () => {
+    const content = JSON.stringify({
+      title: "",
+      content: [
+        [{ tag: "text", text: "This should keep trailing colon:" }],
+        [{ tag: "text", text: "URL: https://example.com:8080/path" }],
+      ],
+    });
+
+    const result = parsePostContent(content);
+
+    expect(result.textContent).toBe(
+      "This should keep trailing colon\\:\nURL: https://example.com:8080/path",
+    );
+    expect(result.imageKeys).toEqual([]);
+    expect(result.mediaKeys).toEqual([]);
+    expect(result.mentionedOpenIds).toEqual([]);
+  });
 });
