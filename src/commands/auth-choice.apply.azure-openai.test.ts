@@ -152,4 +152,27 @@ describe("applyAuthChoiceAzureOpenAI", () => {
       azureApiVersion: "2025-04-01-preview",
     });
   });
+
+  it("does not persist Azure key when opts base URL validation fails", async () => {
+    const agentDir = await setupTempState();
+    const prompter = createWizardPrompter({}, { defaultSelect: "" });
+    const runtime = createExitThrowingRuntime();
+
+    await expect(
+      applyAuthChoiceAzureOpenAI({
+        authChoice: "azure-openai-api-key",
+        config: {},
+        prompter,
+        runtime,
+        setDefaultModel: true,
+        opts: {
+          azureOpenaiApiKey: "azure-key",
+          azureOpenaiBaseUrl: "https://example.com",
+          azureOpenaiModelId: "gpt-5.4",
+        },
+      }),
+    ).rejects.toThrow(/Azure OpenAI base URL must use an Azure host/i);
+
+    await expect(readAuthProfilesForAgent(agentDir)).rejects.toThrow();
+  });
 });
