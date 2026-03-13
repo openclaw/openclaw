@@ -216,6 +216,17 @@ export function resolveWindowsSpawnProgramCandidate(
 
   if (ext === ".cmd" || ext === ".bat") {
     if (!isFilePath(resolvedCommand)) {
+      const isPathLikeCommand =
+        params.command.includes("/") ||
+        params.command.includes("\\") ||
+        path.isAbsolute(params.command);
+      if (isPathLikeCommand) {
+        return {
+          command: resolvedCommand,
+          leadingArgv: [],
+          resolution: "unresolved-wrapper",
+        };
+      }
       return {
         command: resolvedCommand,
         leadingArgv: [],

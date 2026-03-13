@@ -22,7 +22,7 @@ async function makeTempDir(prefix: string): Promise<string> {
 }
 
 describe("windows-spawn", () => {
-  it("treats missing cmd shims as direct commands", () => {
+  it("treats missing bare cmd shims as direct commands", () => {
     const candidate = resolveWindowsSpawnProgramCandidate({
       command: "qmd.cmd",
       platform: "win32",
@@ -35,6 +35,22 @@ describe("windows-spawn", () => {
       command: "qmd.cmd",
       leadingArgv: [],
       resolution: "direct",
+    });
+  });
+
+  it("keeps relative cmd wrapper paths unresolved when they are not stat-able yet", () => {
+    const candidate = resolveWindowsSpawnProgramCandidate({
+      command: "scripts\\server.cmd",
+      platform: "win32",
+      env: { PATH: "" },
+      execPath: "C:\\node.exe",
+      packageName: "openclaw",
+    });
+
+    expect(candidate).toEqual({
+      command: "scripts\\server.cmd",
+      leadingArgv: [],
+      resolution: "unresolved-wrapper",
     });
   });
 

@@ -289,6 +289,24 @@ describe("resolveAcpClientSpawnInvocation", () => {
       windowsHide: undefined,
     });
   });
+
+  it("falls back to shell mode for relative cmd wrappers resolved from the spawn cwd", () => {
+    const resolved = resolveAcpClientSpawnInvocation(
+      { serverCommand: "scripts\\server.cmd", serverArgs: ["acp"] },
+      {
+        platform: "win32",
+        env: { PATH: "", PATHEXT: ".CMD;.EXE;.BAT" },
+        execPath: "C:\\node\\node.exe",
+      },
+    );
+
+    expect(resolved).toEqual({
+      command: "scripts\\server.cmd",
+      args: ["acp"],
+      shell: true,
+      windowsHide: undefined,
+    });
+  });
 });
 
 describe("resolvePermissionRequest", () => {
