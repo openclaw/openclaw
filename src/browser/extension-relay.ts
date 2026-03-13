@@ -282,6 +282,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
     DEFAULT_EXTENSION_COMMAND_RECONNECT_WAIT_MS,
   );
   let currentLockTab = !!opts.lockTab;
+  let currentLockTabId: string | number | null = null;
   let currentActivationEpoch = 0;
   console.log(
     `[browser/extension-relay] Relay starting on ${info.host}:${info.port} (lockTab=${currentLockTab})`,
@@ -638,16 +639,24 @@ export async function ensureChromeExtensionRelayServer(opts: {
               const data = JSON.parse(body);
               const epoch = (typeof data.activationEpoch === "number" && Number.isFinite(data.activationEpoch)) ? data.activationEpoch : 0;
               
-              if (epoch < currentActivationEpoch) {
-                console.log(`[browser/extension-relay] Ignoring stale lock update (epoch ${epoch} < ${currentActivationEpoch})`);
+              if (epoch <= currentActivationEpoch && currentActivationEpoch !== 0) {
+                console.log(`[browser/extension-relay] Ignoring stale lock update (epoch ${epoch} <= ${currentActivationEpoch})`);
                 res.writeHead(200, { "Content-Type": "application/json" });
-                res.end(JSON.stringify({ ok: true, lockTab: currentLockTab, activationEpoch: currentActivationEpoch }));
+                res.end(JSON.stringify({ ok: true, lockTab: currentLockTab, lockTabId: currentLockTabId, activationEpoch: currentActivationEpoch }));
                 return;
               }
               if (typeof data.lockTab === "boolean") {
                 currentActivationEpoch = epoch;
                 currentLockTab = data.lockTab;
                 const rawTabId = data.tabId;
+                currentLockTabId = null;
+                if (currentLockTab) {
+                  if (typeof rawTabId === "string" && rawTabId.trim()) {
+                    currentLockTabId = rawTabId.trim();
+                  } else if (typeof rawTabId === "number" && Number.isFinite(rawTabId)) {
+                    currentLockTabId = rawTabId;
+                  }
+                }
                 let tabIdHint = "";
                 if (rawTabId !== undefined && rawTabId !== null) {
                   if (typeof rawTabId === "string" && rawTabId.trim()) {
@@ -674,7 +683,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
                   `[browser/extension-relay] Relay on ${info.port} mode: ${mode}${tabIdHint}`,
                 );
                 res.writeHead(200, { "Content-Type": "application/json" });
-                res.end(JSON.stringify({ ok: true, lockTab: currentLockTab }));
+                res.end(JSON.stringify({ ok: true, lockTab: currentLockTab, lockTabId: currentLockTabId, activationEpoch: currentActivationEpoch }));
               } else {
                 console.warn(
                   `[browser/extension-relay] Relay on ${info.port} lockTab PUT rejected: lockTab field missing or not boolean (received: ${JSON.stringify(data)})`
@@ -691,7 +700,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
         }
 
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ connected: extensionConnected(), lockTab: currentLockTab, activationEpoch: currentActivationEpoch }));
+        res.end(JSON.stringify({ connected: extensionConnected(), lockTab: currentLockTab, lockTabId: currentLockTabId, activationEpoch: currentActivationEpoch }));
         return;
       }
 
