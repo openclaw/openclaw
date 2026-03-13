@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import {
   buildTelegramTopicConversationId,
+  normalizeConversationText,
   parseTelegramChatIdFromTarget,
 } from "../../acp/conversation-id.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
@@ -98,18 +99,8 @@ export type SessionInitResult = {
   triggerBodyNormalized: string;
 };
 
-function normalizeSessionText(value: unknown): string {
-  if (typeof value === "string") {
-    return value.trim();
-  }
-  if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
-    return `${value}`.trim();
-  }
-  return "";
-}
-
 function parseDiscordParentChannelFromSessionKey(raw: unknown): string | undefined {
-  const sessionKey = normalizeSessionText(raw);
+  const sessionKey = normalizeConversationText(raw);
   if (!sessionKey) {
     return undefined;
   }
@@ -127,15 +118,15 @@ function resolveAcpResetBindingContext(ctx: MsgContext): {
   conversationId: string;
   parentConversationId?: string;
 } | null {
-  const channelRaw = normalizeSessionText(
+  const channelRaw = normalizeConversationText(
     ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "",
   ).toLowerCase();
   if (!channelRaw) {
     return null;
   }
-  const accountId = normalizeSessionText(ctx.AccountId) || "default";
+  const accountId = normalizeConversationText(ctx.AccountId) || "default";
   const normalizedThreadId =
-    ctx.MessageThreadId != null ? normalizeSessionText(String(ctx.MessageThreadId)) : "";
+    ctx.MessageThreadId != null ? normalizeConversationText(String(ctx.MessageThreadId)) : "";
 
   if (channelRaw === "telegram") {
     const parentConversationId =
@@ -172,7 +163,7 @@ function resolveAcpResetBindingContext(ctx: MsgContext): {
   }
   let parentConversationId: string | undefined;
   if (channelRaw === "discord" && normalizedThreadId) {
-    const fromContext = normalizeSessionText(ctx.ThreadParentId);
+    const fromContext = normalizeConversationText(ctx.ThreadParentId);
     if (fromContext && fromContext !== conversationId) {
       parentConversationId = fromContext;
     } else {
@@ -201,7 +192,7 @@ function resolveBoundAcpSessionForReset(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
 }): string | undefined {
-  const activeSessionKey = normalizeSessionText(params.ctx.SessionKey);
+  const activeSessionKey = normalizeConversationText(params.ctx.SessionKey);
   const bindingContext = resolveAcpResetBindingContext(params.ctx);
   return resolveEffectiveResetTargetSessionKey({
     cfg: params.cfg,
