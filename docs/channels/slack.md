@@ -30,8 +30,8 @@ Status: production-ready for DMs + channels via Slack app integrations. Default 
         In Slack app settings:
 
         - enable **Socket Mode**
-        - create **App Token** (`xapp-...`) with `connections:write`
-        - install app and copy **Bot Token** (`xoxb-...`)
+        - create **App Token** (`slack-app-token-example`) with `connections:write`
+        - install app and copy **Bot Token** (`slack-bot-token-example`)
       </Step>
 
       <Step title="Configure OpenClaw">
@@ -42,8 +42,8 @@ Status: production-ready for DMs + channels via Slack app integrations. Default 
     slack: {
       enabled: true,
       mode: "socket",
-      appToken: "xapp-...",
-      botToken: "xoxb-...",
+      appToken: "slack-app-token-example",
+      botToken: "slack-bot-token-example",
     },
   },
 }
@@ -52,8 +52,8 @@ Status: production-ready for DMs + channels via Slack app integrations. Default 
         Env fallback (default account only):
 
 ```bash
-SLACK_APP_TOKEN=xapp-...
-SLACK_BOT_TOKEN=xoxb-...
+SLACK_APP_TOKEN=slack-app-token-example
+SLACK_BOT_TOKEN=slack-bot-token-example
 ```
 
       </Step>
@@ -100,7 +100,7 @@ openclaw gateway
     slack: {
       enabled: true,
       mode: "http",
-      botToken: "xoxb-...",
+      botToken: "slack-bot-token-example",
       signingSecret: "your-signing-secret",
       webhookPath: "/slack/events",
     },
@@ -126,7 +126,7 @@ openclaw gateway
 - HTTP mode requires `botToken` + `signingSecret`.
 - Config tokens override env fallback.
 - `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` env fallback applies only to the default account.
-- `userToken` (`xoxp-...`) is config-only (no env fallback) and defaults to read-only behavior (`userTokenReadOnly: true`).
+- `userToken` (`slack-user-token-example`) is config-only (no env fallback) and defaults to read-only behavior (`userTokenReadOnly: true`).
 - Optional: add `chat:write.customize` if you want outgoing messages to use the active agent identity (custom `username` and icon). `icon_emoji` uses `:emoji_name:` syntax.
 
 <Tip>
