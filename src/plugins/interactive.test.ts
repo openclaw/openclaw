@@ -146,4 +146,56 @@ describe("plugin interactive handlers", () => {
       }),
     );
   });
+
+  it("does not consume dedupe keys when a handler throws", async () => {
+    const handler = vi
+      .fn(async () => ({ handled: true }))
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce({ handled: true });
+    expect(
+      registerPluginInteractiveHandler("codex-plugin", {
+        channel: "telegram",
+        namespace: "codex",
+        handler,
+      }),
+    ).toEqual({ ok: true });
+
+    const baseParams = {
+      channel: "telegram" as const,
+      data: "codex:resume:thread-1",
+      callbackId: "cb-throw",
+      ctx: {
+        accountId: "default",
+        callbackId: "cb-throw",
+        conversationId: "-10099:topic:77",
+        parentConversationId: "-10099",
+        senderId: "user-1",
+        senderUsername: "ada",
+        threadId: 77,
+        isGroup: true,
+        isForum: true,
+        auth: { isAuthorizedSender: true },
+        callbackMessage: {
+          messageId: 55,
+          chatId: "-10099",
+          messageText: "Pick a thread",
+        },
+      },
+      respond: {
+        reply: vi.fn(async () => {}),
+        editMessage: vi.fn(async () => {}),
+        editButtons: vi.fn(async () => {}),
+        clearButtons: vi.fn(async () => {}),
+        deleteMessage: vi.fn(async () => {}),
+      },
+    };
+
+    await expect(dispatchPluginInteractiveHandler(baseParams)).rejects.toThrow("boom");
+    await expect(dispatchPluginInteractiveHandler(baseParams)).resolves.toEqual({
+      matched: true,
+      handled: true,
+      duplicate: false,
+    });
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
 });

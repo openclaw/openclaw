@@ -61,4 +61,23 @@ describe("createTelegramTypingLease", () => {
 
     lease.stop();
   });
+
+  it("falls back to the default interval for non-finite values", async () => {
+    vi.useFakeTimers();
+    const pulse = vi.fn(async () => undefined);
+
+    const lease = await createTelegramTypingLease({
+      to: "telegram:123",
+      intervalMs: Number.NaN,
+      pulse,
+    });
+
+    expect(pulse).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(3_999);
+    expect(pulse).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(pulse).toHaveBeenCalledTimes(2);
+
+    lease.stop();
+  });
 });

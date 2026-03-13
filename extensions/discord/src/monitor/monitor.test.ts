@@ -598,6 +598,27 @@ describe("discord component interactions", () => {
     );
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
+
+  it("falls through to built-in Discord component routing when a plugin declines handling", async () => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry({ callbackData: "codex:approve" })],
+      modals: [],
+    });
+    dispatchPluginInteractiveHandlerMock.mockResolvedValue({
+      matched: true,
+      handled: false,
+      duplicate: false,
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const { interaction, reply } = createComponentButtonInteraction();
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("resolveDiscordOwnerAllowFrom", () => {

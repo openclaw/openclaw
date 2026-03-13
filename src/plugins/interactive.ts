@@ -187,7 +187,7 @@ export async function dispatchPluginInteractiveHandler(params: {
 
   const dedupeKey =
     params.channel === "telegram" ? params.callbackId?.trim() : params.interactionId?.trim();
-  if (dedupeKey && callbackDedupe.check(dedupeKey)) {
+  if (dedupeKey && callbackDedupe.peek(dedupeKey)) {
     return { matched: true, handled: true, duplicate: true };
   }
 
@@ -253,6 +253,9 @@ export async function dispatchPluginInteractiveHandler(params: {
     });
   }
   const resolved = await result;
+  if (dedupeKey) {
+    callbackDedupe.check(dedupeKey);
+  }
 
   return {
     matched: true,

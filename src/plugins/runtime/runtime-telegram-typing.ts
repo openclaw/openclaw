@@ -19,7 +19,10 @@ export async function createTelegramTypingLease(params: CreateTelegramTypingLeas
   refresh: () => Promise<void>;
   stop: () => void;
 }> {
-  const intervalMs = Math.max(1000, Math.floor(params.intervalMs ?? 4_000));
+  const intervalMs =
+    typeof params.intervalMs === "number" && Number.isFinite(params.intervalMs)
+      ? Math.max(1_000, Math.floor(params.intervalMs))
+      : 4_000;
   let stopped = false;
 
   const refresh = async () => {
