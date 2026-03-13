@@ -985,6 +985,7 @@ export async function compactEmbeddedPiSessionDirect(
           } catch {
             // Cancelled, failed, or timed out; proceed to retry below.
           }
+          backgroundCompact?.catch(() => {}); // suppress unhandled rejection from the aborted first compact
           backgroundCompact = undefined;
           if (backgroundResult != null) {
             log.info(
