@@ -762,6 +762,19 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           }
           await statusReactions.setTool(payload.name);
         },
+        onCompactionStart: async () => {
+          if (isProcessAborted(abortSignal)) {
+            return;
+          }
+          await statusReactions.setCompacting();
+        },
+        onCompactionEnd: async () => {
+          if (isProcessAborted(abortSignal)) {
+            return;
+          }
+          statusReactions.cancelPending();
+          await statusReactions.setThinking();
+        },
       },
     });
     if (isProcessAborted(abortSignal)) {

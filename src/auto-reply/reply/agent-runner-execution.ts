@@ -392,11 +392,15 @@ export async function runAgentTurnWithFallback(params: {
                     await params.opts?.onToolStart?.({ name, phase });
                   }
                 }
-                // Track auto-compaction completion
+                // Track auto-compaction completion and notify UI layer
                 if (evt.stream === "compaction") {
                   const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                  if (phase === "start") {
+                    await params.opts?.onCompactionStart?.();
+                  }
                   if (phase === "end") {
                     autoCompactionCompleted = true;
+                    await params.opts?.onCompactionEnd?.();
                   }
                 }
               },
