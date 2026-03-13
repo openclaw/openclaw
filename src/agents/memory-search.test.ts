@@ -284,6 +284,7 @@ describe("memory search config", () => {
     expect(resolved?.sync.sessions).toEqual({
       deltaBytes: 100000,
       deltaMessages: 50,
+      postCompactionForce: true,
     });
   });
 
