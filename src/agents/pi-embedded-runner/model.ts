@@ -250,9 +250,7 @@ export function resolveModelWithRegistry(params: {
       (candidate) => candidate.id === modelId,
     );
     const resolvedInput: Array<"text" | "image"> = configuredOpenRouterModel?.input
-      ? configuredOpenRouterModel.input.filter(
-          (item) => item === "text" || item === "image",
-        )
+      ? configuredOpenRouterModel.input.filter((item) => item === "text" || item === "image")
       : isLikelyVisionModel(modelId)
         ? ["text", "image"]
         : ["text"];
