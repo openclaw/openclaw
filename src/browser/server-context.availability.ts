@@ -1,12 +1,15 @@
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   PROFILE_ATTACH_RETRY_TIMEOUT_MS,
   PROFILE_POST_RESTART_WS_TIMEOUT_MS,
   resolveCdpReachabilityTimeouts,
 } from "./cdp-timeouts.js";
 import {
+  getChromeWebSocketUrl,
   isChromeCdpReady,
   isChromeReachable,
   launchOpenClawChrome,
+  resolveOpenClawUserDataDir,
   stopOpenClawChrome,
 } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
@@ -27,6 +30,7 @@ import type {
   ContextOptions,
   ProfileRuntimeState,
 } from "./server-context.types.js";
+import { startPeriodicSave } from "./session-persistence.js";
 
 type AvailabilityDeps = {
   opts: ContextOptions;
@@ -69,9 +73,44 @@ export function createProfileAvailability({
     return await isChromeReachable(profile.cdpUrl, httpTimeoutMs);
   };
 
+  const persistenceLog = createSubsystemLogger("browser").child("session-persistence");
+
+  const startSessionPersistence = () => {
+    const resolved = state().resolved;
+    if (!resolved.sessionPersistenceEnabled) {
+      return;
+    }
+
+    const profileState = getProfileState();
+    // Stop any existing periodic save before starting a new one.
+    profileState.stopPeriodicSave?.();
+
+    const stopSave = startPeriodicSave(
+      async () => {
+        try {
+          return await getChromeWebSocketUrl(profile.cdpUrl);
+        } catch {
+          return null;
+        }
+      },
+      resolveOpenClawUserDataDir(profile.name),
+      persistenceLog,
+      resolved.sessionPersistenceIntervalMs,
+    );
+    profileState.stopPeriodicSave = stopSave;
+  };
+
+  const stopSessionPersistence = () => {
+    const profileState = getProfileState();
+    profileState.stopPeriodicSave?.();
+    profileState.stopPeriodicSave = null;
+  };
+
   const attachRunning = (running: NonNullable<ProfileRuntimeState["running"]>) => {
     setProfileRunning(running);
+    startSessionPersistence();
     running.proc.on("exit", () => {
+      stopSessionPersistence();
       // Guard against server teardown (e.g., SIGUSR1 restart)
       if (!opts.getState()) {
         return;
@@ -100,6 +139,7 @@ export function createProfileAvailability({
     }
     profileState.reconcile = null;
     profileState.lastTargetId = null;
+    stopSessionPersistence();
 
     const previousProfile = reconcile.previousProfile;
     if (profileState.running) {
@@ -248,6 +288,7 @@ export function createProfileAvailability({
     if (!profileState.running) {
       return { stopped: false };
     }
+    stopSessionPersistence();
     await stopOpenClawChrome(profileState.running);
     setProfileRunning(null);
     return { stopped: true };

@@ -37,6 +37,8 @@ export type ResolvedBrowserConfig = {
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
   relayBindHost?: string;
+  sessionPersistenceEnabled: boolean;
+  sessionPersistenceIntervalMs: number;
 };
 
 export type ResolvedBrowserProfile = {
@@ -293,6 +295,8 @@ export function resolveBrowserConfig(
     : [];
   const ssrfPolicy = resolveBrowserSsrFPolicy(cfg);
   const relayBindHost = cfg?.relayBindHost?.trim() || undefined;
+  const sessionPersistenceEnabled = cfg?.sessionPersistence?.enabled !== false;
+  const sessionPersistenceIntervalMs = cfg?.sessionPersistence?.intervalMs ?? 60_000;
 
   return {
     enabled,
@@ -315,6 +319,8 @@ export function resolveBrowserConfig(
     ssrfPolicy,
     extraArgs,
     relayBindHost,
+    sessionPersistenceEnabled,
+    sessionPersistenceIntervalMs,
   };
 }
 

@@ -33,6 +33,7 @@ import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
+import { restoreBrowserState, saveBrowserState } from "./session-persistence.js";
 
 const log = createSubsystemLogger("browser").child("chrome");
 
@@ -404,6 +405,19 @@ export async function launchOpenClawChrome(
     `🦞 openclaw browser started (${exe.kind}) profile "${profile.name}" on 127.0.0.1:${profile.cdpPort} (pid ${pid})`,
   );
 
+  // Restore saved cookies from a previous session (best-effort).
+  try {
+    const wsUrl = await getChromeWebSocketUrl(profile.cdpUrl);
+    if (wsUrl) {
+      const restored = await restoreBrowserState(wsUrl, userDataDir);
+      if (restored) {
+        log.info(`🍪 restored ${restored.cookieCount} cookies (saved ${restored.savedAt})`);
+      }
+    }
+  } catch (err) {
+    log.warn(`cookie restore failed: ${String(err)}`);
+  }
+
   return {
     pid,
     exe,
@@ -422,6 +436,18 @@ export async function stopOpenClawChrome(
   if (proc.killed) {
     return;
   }
+
+  // Best-effort: save cookies before shutting down Chrome.
+  try {
+    const wsUrl = await getChromeWebSocketUrl(cdpUrlForPort(running.cdpPort), 500);
+    if (wsUrl) {
+      await saveBrowserState(wsUrl, running.userDataDir);
+      log.info("🍪 browser state saved before shutdown");
+    }
+  } catch {
+    // Best-effort; don't block shutdown.
+  }
+
   try {
     proc.kill("SIGTERM");
   } catch {
