@@ -95,6 +95,9 @@ describe("config pruning defaults", () => {
       expect(cfg.agents?.defaults?.models?.["anthropic/sonnet-4.6"]?.params?.cacheRetention).toBe(
         "short",
       );
+      expect(
+        cfg.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]?.params?.cacheRetention,
+      ).toBeUndefined();
     });
   });
 
