@@ -1,11 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveCronStyleNow } from "../../agents/current-time.js";
-import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 
-const MAX_CONTEXT_CHARS = 3000;
 const DEFAULT_POST_COMPACTION_SECTIONS = ["Session Startup", "Red Lines"];
 const LEGACY_POST_COMPACTION_SECTIONS = ["Every Session", "Safety"];
 
@@ -38,32 +35,15 @@ function matchesSectionSet(sectionNames: string[], expectedSections: string[]): 
   return counts.size === 0;
 }
 
-function formatDateStamp(nowMs: number, timezone: string): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date(nowMs));
-  const year = parts.find((p) => p.type === "year")?.value;
-  const month = parts.find((p) => p.type === "month")?.value;
-  const day = parts.find((p) => p.type === "day")?.value;
-  if (year && month && day) {
-    return `${year}-${month}-${day}`;
-  }
-  return new Date(nowMs).toISOString().slice(0, 10);
-}
-
 /**
- * Read critical sections from workspace AGENTS.md for post-compaction injection.
- * Returns formatted system event text, or null if no AGENTS.md or no relevant sections.
- * Substitutes YYYY-MM-DD placeholders with the real date so agents read the correct
- * daily memory files instead of guessing based on training cutoff.
+ * Read workspace AGENTS.md for post-compaction injection.
+ * Returns a concise reminder to re-read startup files, or null when the
+ * workspace has no relevant startup sections configured.
  */
 export async function readPostCompactionContext(
   workspaceDir: string,
   cfg?: OpenClawConfig,
-  nowMs?: number,
+  _nowMs?: number,
 ): Promise<string | null> {
   const agentsPath = path.join(workspaceDir, "AGENTS.md");
 
@@ -76,6 +56,7 @@ export async function readPostCompactionContext(
     if (!opened.ok) {
       return null;
     }
+
     const content = (() => {
       try {
         return fs.readFileSync(opened.fd, "utf-8");
@@ -84,8 +65,6 @@ export async function readPostCompactionContext(
       }
     })();
 
-    // Extract configured sections from AGENTS.md (default: Session Startup + Red Lines).
-    // An explicit empty array disables post-compaction context injection entirely.
     const configuredSections = cfg?.agents?.defaults?.compaction?.postCompactionSections;
     const sectionNames = Array.isArray(configuredSections)
       ? configuredSections
@@ -95,59 +74,22 @@ export async function readPostCompactionContext(
       return null;
     }
 
-    const foundSectionNames: string[] = [];
-    let sections = extractSections(content, sectionNames, foundSectionNames);
-
-    // Fall back to legacy section names ("Every Session" / "Safety") when using
-    // defaults and the current headings aren't found — preserves compatibility
-    // with older AGENTS.md templates. The fallback also applies when the user
-    // explicitly configures the default pair, so that pinning the documented
-    // defaults never silently changes behavior vs. leaving the field unset.
+    let sections = extractSections(content, sectionNames);
     const isDefaultSections =
       !Array.isArray(configuredSections) ||
       matchesSectionSet(configuredSections, DEFAULT_POST_COMPACTION_SECTIONS);
+
     if (sections.length === 0 && isDefaultSections) {
-      sections = extractSections(content, LEGACY_POST_COMPACTION_SECTIONS, foundSectionNames);
+      sections = extractSections(content, LEGACY_POST_COMPACTION_SECTIONS);
     }
 
     if (sections.length === 0) {
       return null;
     }
 
-    // Only reference section names that were actually found and injected.
-    const displayNames = foundSectionNames.length > 0 ? foundSectionNames : sectionNames;
-
-    const resolvedNowMs = nowMs ?? Date.now();
-    const timezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone);
-    const dateStamp = formatDateStamp(resolvedNowMs, timezone);
-    // Always append the real runtime timestamp — AGENTS.md content may itself contain
-    // "Current time:" as user-authored text, so we must not gate on that substring.
-    const { timeLine } = resolveCronStyleNow(cfg ?? {}, resolvedNowMs);
-
-    const combined = sections.join("\n\n").replaceAll("YYYY-MM-DD", dateStamp);
-    const safeContent =
-      combined.length > MAX_CONTEXT_CHARS
-        ? combined.slice(0, MAX_CONTEXT_CHARS) + "\n...[truncated]..."
-        : combined;
-
-    // When using the default section set, use precise prose that names the
-    // "Session Startup" sequence explicitly. When custom sections are configured,
-    // use generic prose — referencing a hardcoded "Session Startup" sequence
-    // would be misleading for deployments that use different section names.
-    const prose = isDefaultSections
-      ? "Session was just compacted. The conversation summary above is a hint, NOT a substitute for your startup sequence. " +
-        "Execute your Session Startup sequence now — read the required files before responding to the user."
-      : `Session was just compacted. The conversation summary above is a hint, NOT a substitute for your full startup sequence. ` +
-        `Re-read the sections injected below (${displayNames.join(", ")}) and follow your configured startup procedure before responding to the user.`;
-
-    const sectionLabel = isDefaultSections
-      ? "Critical rules from AGENTS.md:"
-      : `Injected sections from AGENTS.md (${displayNames.join(", ")}):`;
-
     return (
       "[Post-compaction context refresh]\n\n" +
-      `${prose}\n\n` +
-      `${sectionLabel}\n\n${safeContent}\n\n${timeLine}`
+      "Session was compacted. Re-read your startup files, AGENTS.md, SOUL.md, USER.md, and today's memory log, before responding."
     );
   } catch {
     return null;
@@ -208,11 +150,11 @@ export function extractSections(
             continue;
           }
         } else {
-          // We're in section — stop if we hit a heading of same or higher level
+          // We're in section, stop if we hit a heading of same or higher level
           if (level <= sectionLevel) {
             break;
           }
-          // Lower-level heading (e.g., ### inside ##) — include it
+          // Lower-level heading (e.g., ### inside ##), include it
           sectionLines.push(line);
           continue;
         }

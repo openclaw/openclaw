@@ -8,11 +8,26 @@ import { listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 
 describe("method scope resolution", () => {
-  it("classifies sessions.resolve + config.schema.lookup as read and poll as write", () => {
+  it("classifies session dashboard lifecycle methods with least privilege scopes", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.resolve")).toEqual([
       "operator.read",
     ]);
     expect(resolveLeastPrivilegeOperatorScopesForMethod("config.schema.lookup")).toEqual([
+      "operator.read",
+    ]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.create")).toEqual([
+      "operator.write",
+    ]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.send")).toEqual([
+      "operator.write",
+    ]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.abort")).toEqual([
+      "operator.write",
+    ]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.messages.subscribe")).toEqual([
+      "operator.read",
+    ]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.messages.unsubscribe")).toEqual([
       "operator.read",
     ]);
     expect(resolveLeastPrivilegeOperatorScopesForMethod("poll")).toEqual(["operator.write"]);

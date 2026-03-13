@@ -63,6 +63,7 @@ import {
   prepareSecretsRuntimeSnapshot,
   resolveCommandSecretsFromActiveRuntimeSnapshot,
 } from "../secrets/runtime.js";
+import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
@@ -73,10 +74,15 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
+import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
-import { createAgentEventHandler } from "./server-chat.js";
+import {
+  createAgentEventHandler,
+  createSessionEventSubscriberRegistry,
+  createSessionMessageSubscriberRegistry,
+} from "./server-chat.js";
 import { createGatewayCloseHandler } from "./server-close.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
@@ -110,6 +116,13 @@ import {
 import { resolveHookClientIpConfig } from "./server/hooks.js";
 import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
+import { resolveSessionKeyForTranscriptFile } from "./session-transcript-key.js";
+import {
+  attachOpenClawTranscriptMeta,
+  loadGatewaySessionRow,
+  loadSessionEntry,
+  readSessionMessages,
+} from "./session-utils.js";
 import {
   ensureGatewayStartupAuth,
   mergeGatewayAuthConfig,
@@ -631,6 +644,8 @@ export async function startGatewayServer(
   const nodeRegistry = new NodeRegistry();
   const nodePresenceTimers = new Map<string, ReturnType<typeof setInterval>>();
   const nodeSubscriptions = createNodeSubscriptionManager();
+  const sessionEventSubscribers = createSessionEventSubscriberRegistry();
+  const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
   const nodeSendEvent = (opts: { nodeId: string; event: string; payloadJSON?: string | null }) => {
     const payload = safeParseJson(opts.payloadJSON ?? null);
     nodeRegistry.sendEvent(opts.nodeId, opts.event, payload);
@@ -739,6 +754,7 @@ export async function startGatewayServer(
           resolveSessionKeyForRun,
           clearAgentRunContext,
           toolEventRecipients,
+          sessionEventSubscribers,
         }),
       );
 
@@ -746,6 +762,79 @@ export async function startGatewayServer(
     ? null
     : onHeartbeatEvent((evt) => {
         broadcast("heartbeat", evt, { dropIfSlow: true });
+      });
+
+  const transcriptUnsub = minimalTestGateway
+    ? null
+    : onSessionTranscriptUpdate((update) => {
+        const sessionKey =
+          update.sessionKey ?? resolveSessionKeyForTranscriptFile(update.sessionFile);
+        if (!sessionKey || update.message === undefined) {
+          return;
+        }
+        const connIds = new Set<string>();
+        for (const connId of sessionEventSubscribers.getAll()) {
+          connIds.add(connId);
+        }
+        for (const connId of sessionMessageSubscribers.get(sessionKey)) {
+          connIds.add(connId);
+        }
+        if (connIds.size === 0) {
+          return;
+        }
+        const { entry, storePath } = loadSessionEntry(sessionKey);
+        const messageSeq = entry?.sessionId
+          ? readSessionMessages(entry.sessionId, storePath, entry.sessionFile).length
+          : undefined;
+        const sessionRow = loadGatewaySessionRow(sessionKey);
+        const sessionSnapshot = sessionRow
+          ? {
+              session: sessionRow,
+              totalTokens: sessionRow.totalTokens,
+              totalTokensFresh: sessionRow.totalTokensFresh,
+              contextTokens: sessionRow.contextTokens,
+              estimatedCostUsd: sessionRow.estimatedCostUsd,
+              modelProvider: sessionRow.modelProvider,
+              model: sessionRow.model,
+              status: sessionRow.status,
+              startedAt: sessionRow.startedAt,
+              endedAt: sessionRow.endedAt,
+              runtimeMs: sessionRow.runtimeMs,
+            }
+          : {};
+        const message = attachOpenClawTranscriptMeta(update.message, {
+          ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
+          ...(typeof messageSeq === "number" ? { seq: messageSeq } : {}),
+        });
+        broadcastToConnIds(
+          "session.message",
+          {
+            sessionKey,
+            message,
+            ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
+            ...(typeof messageSeq === "number" ? { messageSeq } : {}),
+            ...sessionSnapshot,
+          },
+          connIds,
+          { dropIfSlow: true },
+        );
+
+        const sessionEventConnIds = sessionEventSubscribers.getAll();
+        if (sessionEventConnIds.size > 0) {
+          broadcastToConnIds(
+            "sessions.changed",
+            {
+              sessionKey,
+              phase: "message",
+              ts: Date.now(),
+              ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
+              ...(typeof messageSeq === "number" ? { messageSeq } : {}),
+              ...sessionSnapshot,
+            },
+            sessionEventConnIds,
+            { dropIfSlow: true },
+          );
+        }
       });
 
   let heartbeatRunner: HeartbeatRunner = minimalTestGateway
@@ -767,6 +856,11 @@ export async function startGatewayServer(
   if (!minimalTestGateway) {
     void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
   }
+
+  const stopModelPricingRefresh =
+    !minimalTestGateway && process.env.VITEST !== "1"
+      ? startGatewayModelPricingRefresh({ config: cfgAtStart })
+      : () => {};
 
   // Recover pending outbound deliveries from previous crash/restart.
   if (!minimalTestGateway) {
@@ -853,6 +947,15 @@ export async function startGatewayServer(
     chatDeltaSentAt: chatRunState.deltaSentAt,
     addChatRun,
     removeChatRun,
+    subscribeSessionEvents: sessionEventSubscribers.subscribe,
+    unsubscribeSessionEvents: sessionEventSubscribers.unsubscribe,
+    subscribeSessionMessageEvents: sessionMessageSubscribers.subscribe,
+    unsubscribeSessionMessageEvents: sessionMessageSubscribers.unsubscribe,
+    unsubscribeAllSessionEvents: (connId: string) => {
+      sessionEventSubscribers.unsubscribe(connId);
+      sessionMessageSubscribers.unsubscribeAll(connId);
+    },
+    getSessionEventSubscriberConnIds: sessionEventSubscribers.getAll,
     registerToolEventRecipient: toolEventRecipients.add,
     dedupe,
     wizardSessions,
@@ -1035,6 +1138,7 @@ export async function startGatewayServer(
     mediaCleanup,
     agentUnsub,
     heartbeatUnsub,
+    transcriptUnsub,
     chatRunState,
     clients,
     configReloader,
@@ -1062,6 +1166,7 @@ export async function startGatewayServer(
       skillsChangeUnsub();
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
+      stopModelPricingRefresh();
       channelHealthMonitor?.stop();
       clearSecretsRuntimeSnapshot();
       await close(opts);

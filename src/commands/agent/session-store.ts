@@ -10,10 +10,15 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 
 type RunResult = Awaited<
   ReturnType<(typeof import("../../agents/pi-embedded.js"))["runEmbeddedPiAgent"]>
 >;
+
+function resolveNonNegativeNumber(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
 
 export async function updateSessionStoreAfterAgentRun(params: {
   cfg: OpenClawConfig;
@@ -87,6 +92,16 @@ export async function updateSessionStoreAfterAgentRun(params: {
       contextTokens,
       promptTokens,
     });
+    const runEstimatedCostUsd = resolveNonNegativeNumber(
+      estimateUsageCost({
+        usage,
+        cost: resolveModelCostConfig({
+          provider: providerUsed,
+          model: modelUsed,
+          config: cfg,
+        }),
+      }),
+    );
     next.inputTokens = input;
     next.outputTokens = output;
     if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
@@ -98,6 +113,10 @@ export async function updateSessionStoreAfterAgentRun(params: {
     }
     next.cacheRead = usage.cacheRead ?? 0;
     next.cacheWrite = usage.cacheWrite ?? 0;
+    if (runEstimatedCostUsd !== undefined) {
+      next.estimatedCostUsd =
+        (resolveNonNegativeNumber(entry.estimatedCostUsd) ?? 0) + runEstimatedCostUsd;
+    }
   }
   if (compactionsThisRun > 0) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;

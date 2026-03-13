@@ -86,6 +86,8 @@ export default defineConfig({
       "ui/src/ui/views/usage-render-details.test.ts",
       "ui/src/ui/controllers/agents.test.ts",
       "ui/src/ui/controllers/chat.test.ts",
+      "ui/src/ui/controllers/sessions.test.ts",
+      "ui/src/ui/app-gateway.sessions.node.test.ts",
     ],
     setupFiles: ["test/setup.ts"],
     exclude: [

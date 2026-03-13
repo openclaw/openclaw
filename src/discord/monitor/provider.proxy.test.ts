@@ -169,7 +169,9 @@ describe("createDiscordGatewayPlugin", () => {
   it("uses proxy fetch for gateway metadata lookup before registering", async () => {
     const runtime = createRuntime();
     undiciFetchMock.mockResolvedValue({
-      json: async () => ({ url: "wss://gateway.discord.gg" }),
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ url: "wss://gateway.discord.gg" }),
     } as Response);
     const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "http://proxy.test:8080" },
@@ -193,5 +195,62 @@ describe("createDiscordGatewayPlugin", () => {
       }),
     );
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("logs and continues when Discord returns invalid JSON through the proxy", async () => {
+    const runtime = createRuntime();
+    undiciFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "upstream c",
+    } as Response);
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: { proxy: "http://proxy.test:8080" },
+      runtime,
+    });
+
+    await expect(
+      (
+        plugin as unknown as {
+          registerClient: (client: { options: { token: string } }) => Promise<void>;
+        }
+      ).registerClient({
+        options: { token: "token-123" },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("invalid gateway metadata response through proxy"),
+    );
+  });
+
+  it("logs non-200 proxy responses instead of throwing", async () => {
+    const runtime = createRuntime();
+    undiciFetchMock.mockResolvedValue({
+      ok: false,
+      status: 502,
+      text: async () => "upstream crash",
+    } as Response);
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: { proxy: "http://proxy.test:8080" },
+      runtime,
+    });
+
+    await expect(
+      (
+        plugin as unknown as {
+          registerClient: (client: { options: { token: string } }) => Promise<void>;
+        }
+      ).registerClient({
+        options: { token: "token-123" },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("failed to fetch gateway metadata through proxy, status=502"),
+    );
   });
 });

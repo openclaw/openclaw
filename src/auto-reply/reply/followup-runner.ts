@@ -254,6 +254,7 @@ export function createFollowupRunner(params: {
         await persistRunSessionUsage({
           storePath,
           sessionKey,
+          cfg: queued.run.config,
           usage,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           promptTokens,

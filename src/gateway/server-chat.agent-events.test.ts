@@ -5,6 +5,7 @@ import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import {
   createAgentEventHandler,
   createChatRunState,
+  createSessionEventSubscriberRegistry,
   createToolEventRecipientRegistry,
 } from "./server-chat.js";
 
@@ -47,6 +48,7 @@ describe("agent event handler", () => {
     const agentRunSeq = new Map<string, number>();
     const chatRunState = createChatRunState();
     const toolEventRecipients = createToolEventRecipientRegistry();
+    const sessionEventSubscribers = createSessionEventSubscriberRegistry();
 
     const handler = createAgentEventHandler({
       broadcast,
@@ -57,6 +59,7 @@ describe("agent event handler", () => {
       resolveSessionKeyForRun: params?.resolveSessionKeyForRun ?? (() => undefined),
       clearAgentRunContext: vi.fn(),
       toolEventRecipients,
+      sessionEventSubscribers,
     });
 
     return {

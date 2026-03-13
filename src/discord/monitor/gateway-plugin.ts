@@ -63,11 +63,31 @@ export function createDiscordGatewayPlugin(params: {
               },
               dispatcher: fetchAgent,
             } as Record<string, unknown>);
-            this.gatewayInfo = (await response.json()) as APIGatewayBotInfo;
+            const bodyText = await response.text();
+            if (!response.ok) {
+              const preview = bodyText.trim().slice(0, 160) || `<http ${response.status}>`;
+              params.runtime.error?.(
+                danger(
+                  `discord: failed to fetch gateway metadata through proxy, status=${response.status}, body=${JSON.stringify(preview)}`,
+                ),
+              );
+            } else {
+              try {
+                this.gatewayInfo = JSON.parse(bodyText) as APIGatewayBotInfo;
+              } catch (error) {
+                const preview = bodyText.trim().slice(0, 160) || "<empty>";
+                params.runtime.error?.(
+                  danger(
+                    `discord: invalid gateway metadata response through proxy, body=${JSON.stringify(preview)}, error=${error instanceof Error ? error.message : String(error)}`,
+                  ),
+                );
+              }
+            }
           } catch (error) {
-            throw new Error(
-              `Failed to get gateway information from Discord: ${error instanceof Error ? error.message : String(error)}`,
-              { cause: error },
+            params.runtime.error?.(
+              danger(
+                `discord: failed to fetch gateway metadata through proxy: ${error instanceof Error ? error.message : String(error)}`,
+              ),
             );
           }
         }

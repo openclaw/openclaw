@@ -293,27 +293,37 @@ async function persistAcpTurnTranscript(params: {
   });
 
   if (promptText) {
-    sessionManager.appendMessage({
-      role: "user",
+    const promptMessage = {
+      role: "user" as const,
       content: promptText,
       timestamp: Date.now(),
+    };
+    sessionManager.appendMessage(promptMessage);
+    emitSessionTranscriptUpdate({
+      sessionFile,
+      sessionKey: params.sessionKey,
+      message: promptMessage,
     });
   }
 
   if (replyText) {
-    sessionManager.appendMessage({
-      role: "assistant",
+    const replyMessage = {
+      role: "assistant" as const,
       content: [{ type: "text", text: replyText }],
       api: "openai-responses",
       provider: "openclaw",
       model: "acp-runtime",
       usage: ACP_TRANSCRIPT_USAGE,
-      stopReason: "stop",
+      stopReason: "stop" as const,
       timestamp: Date.now(),
+    } as Parameters<typeof sessionManager.appendMessage>[0];
+    sessionManager.appendMessage(replyMessage);
+    emitSessionTranscriptUpdate({
+      sessionFile,
+      sessionKey: params.sessionKey,
+      message: replyMessage,
     });
   }
-
-  emitSessionTranscriptUpdate(sessionFile);
   return sessionEntry;
 }
 
