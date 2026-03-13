@@ -399,6 +399,13 @@ export function createExecTool(
         applyPathPrepend(env, defaultPathPrepend);
       }
 
+      // Per-invocation env only: expose current agent sessionKey to skill scripts without touching global process.env.
+      // This allows tools to discover the openclaw sessionKey via OPENCLAW_SESSION_KEY.
+      const injectedSessionKey = defaults?.sessionKey?.trim();
+      if (injectedSessionKey) {
+        env.OPENCLAW_SESSION_KEY = injectedSessionKey;
+      }
+
       if (host === "node") {
         return executeNodeHostCommand({
           command: params.command,
