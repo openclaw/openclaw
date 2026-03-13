@@ -266,6 +266,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             ...account.config.mux,
           },
           runtime,
+          abortSignal: opts.abortSignal,
         })
       : null;
   const httpReceiver =
@@ -594,7 +595,31 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         }
       }
     } else if (slackMode === "mux") {
-      await app.start();
+      let muxReconnectAttempts = 0;
+      while (!opts.abortSignal?.aborted) {
+        try {
+          await app.start();
+          muxReconnectAttempts = 0;
+          break;
+        } catch (err) {
+          muxReconnectAttempts += 1;
+          if (
+            SLACK_SOCKET_RECONNECT_POLICY.maxAttempts > 0 &&
+            muxReconnectAttempts >= SLACK_SOCKET_RECONNECT_POLICY.maxAttempts
+          ) {
+            throw err;
+          }
+          const delayMs = computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, muxReconnectAttempts);
+          runtime.error?.(
+            `slack mux failed to start, retry ${muxReconnectAttempts}/${SLACK_SOCKET_RECONNECT_POLICY.maxAttempts || "∞"} in ${Math.round(delayMs / 1000)}s (${formatUnknownError(err)})`,
+          );
+          try {
+            await sleepWithAbort(delayMs, opts.abortSignal);
+          } catch {
+            break;
+          }
+        }
+      }
       publishSlackConnectedStatus(opts.setStatus);
       runtime.log?.("slack mux mode connected");
 

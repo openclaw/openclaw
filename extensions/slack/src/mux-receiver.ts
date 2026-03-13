@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { WebSocket } from "ws";
 import type { SlackMuxConfig } from "../config/types.slack.ts";
+import { sleepWithAbort } from "../infra/backoff.js";
 import type { RuntimeEnv } from "../runtime.ts";
 import { audienceFromWsUrl, resolveGcpIdentityToken } from "../utils/gcp-metadata-token.ts";
 
@@ -55,6 +56,7 @@ type PendingApiCall = {
 export type MuxReceiverOptions = {
   mux: SlackMuxConfig;
   runtime?: RuntimeEnv;
+  abortSignal?: AbortSignal;
 };
 
 const API_CALL_TIMEOUT_MS = 30_000;
@@ -80,10 +82,12 @@ export class MuxReceiver {
 
   private readonly mux: SlackMuxConfig;
   private readonly runtime: RuntimeEnv | undefined;
+  private readonly abortSignal: AbortSignal | undefined;
 
   constructor(opts: MuxReceiverOptions) {
     this.mux = opts.mux;
     this.runtime = opts.runtime;
+    this.abortSignal = opts.abortSignal;
   }
 
   /** Called by Bolt's App constructor. */
@@ -233,7 +237,7 @@ export class MuxReceiver {
         // rejected the connect() promise, so starting a background reconnect
         // loop would leave the receiver in an inconsistent state.
         if (everOpened) {
-          this.scheduleReconnect();
+          void this.scheduleReconnect();
         }
       });
 
@@ -248,7 +252,7 @@ export class MuxReceiver {
     });
   }
 
-  private scheduleReconnect(): void {
+  private async scheduleReconnect(): Promise<void> {
     if (this.stopped) {
       return;
     }
@@ -257,19 +261,24 @@ export class MuxReceiver {
     this.backoffMs = Math.min(this.backoffMs * 2, MAX_BACKOFF_MS);
     this.runtime?.log?.(`slack mux reconnecting in ${delay}ms`);
 
-    setTimeout(() => {
-      if (this.stopped) {
-        return;
-      }
-      this.refreshToken()
-        .then(() => this.connect())
-        .catch((err) => {
-          this.runtime?.error?.(`slack mux reconnect failed: ${(err as Error).message}`);
-          // The failed connect() won't schedule another reconnect because
-          // everOpened is false for that attempt.  Keep retrying.
-          this.scheduleReconnect();
-        });
-    }, delay);
+    try {
+      await sleepWithAbort(delay, this.abortSignal);
+    } catch {
+      return;
+    }
+
+    if (this.stopped) {
+      return;
+    }
+
+    this.refreshToken()
+      .then(() => this.connect())
+      .catch((err) => {
+        this.runtime?.error?.(`slack mux reconnect failed: ${(err as Error).message}`);
+        // The failed connect() won't schedule another reconnect because
+        // everOpened is false for that attempt.  Keep retrying.
+        void this.scheduleReconnect();
+      });
   }
 
   /** Send periodic WebSocket pings to keep the connection alive through
