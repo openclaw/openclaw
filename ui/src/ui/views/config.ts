@@ -13,6 +13,13 @@ import {
 } from "./config-form.shared.ts";
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
 
+export type WebPushUiState = {
+  supported: boolean;
+  permission: NotificationPermission | "unsupported";
+  subscribed: boolean;
+  loading: boolean;
+};
+
 export type ConfigProps = {
   raw: string;
   originalRaw: string;
@@ -56,6 +63,10 @@ export type ConfigProps = {
   includeSections?: string[];
   excludeSections?: string[];
   includeVirtualSections?: boolean;
+  webPush?: WebPushUiState;
+  onWebPushSubscribe?: () => void;
+  onWebPushUnsubscribe?: () => void;
+  onWebPushTest?: () => void;
 };
 
 // SVG Icons for sidebar (Lucide-style)
@@ -107,6 +118,12 @@ const sidebarIcons = {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
       <polyline points="22,6 12,13 2,6"></polyline>
+    </svg>
+  `,
+  __notifications__: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+      <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
     </svg>
   `,
   commands: html`
@@ -337,6 +354,7 @@ const SECTION_CATEGORIES: SectionCategory[] = [
       { key: "channels", label: "Channels" },
       { key: "messages", label: "Messages" },
       { key: "broadcast", label: "Broadcast" },
+      { key: "__notifications__", label: "Notifications" },
       { key: "talk", label: "Talk" },
       { key: "audio", label: "Audio" },
     ],
@@ -513,6 +531,107 @@ const THEME_OPTIONS: ThemeOption[] = [
   { id: "dash", label: "Dash", description: "Field family", icon: icons.barChart },
 ];
 
+function renderNotificationsSection(props: ConfigProps) {
+  const push = props.webPush;
+  if (!push) {
+    return html`
+      <div class="settings-appearance">
+        <div class="settings-appearance__section">
+          <h3 class="settings-appearance__heading">Push Notifications</h3>
+          <p class="settings-appearance__hint">Not available in this browser.</p>
+        </div>
+      </div>
+    `;
+  }
+
+  const permissionLabel =
+    push.permission === "granted"
+      ? "Granted"
+      : push.permission === "denied"
+        ? "Denied"
+        : push.permission === "default"
+          ? "Not requested"
+          : "Unsupported";
+
+  const statusDot = push.subscribed ? "settings-status-dot--ok" : "";
+
+  return html`
+    <div class="settings-appearance">
+      <div class="settings-appearance__section">
+        <h3 class="settings-appearance__heading">Push Notifications</h3>
+        <p class="settings-appearance__hint">
+          Receive browser notifications when messages arrive or tasks complete.
+        </p>
+
+        <div class="settings-info-grid">
+          <div class="settings-info-row">
+            <span class="settings-info-row__label">Browser support</span>
+            <span class="settings-info-row__value">${push.supported ? "Available" : "Not supported"}</span>
+          </div>
+          <div class="settings-info-row">
+            <span class="settings-info-row__label">Permission</span>
+            <span class="settings-info-row__value">${permissionLabel}</span>
+          </div>
+          <div class="settings-info-row">
+            <span class="settings-info-row__label">Status</span>
+            <span class="settings-info-row__value">
+              <span class="settings-status-dot ${statusDot}"></span>
+              ${push.subscribed ? "Subscribed" : "Not subscribed"}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      ${
+        push.supported && push.permission !== "denied"
+          ? html`
+            <div class="settings-appearance__section">
+              <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                ${
+                  push.subscribed
+                    ? html`
+                      <button
+                        class="config-bar__btn"
+                        ?disabled=${push.loading || !props.connected}
+                        @click=${() => props.onWebPushUnsubscribe?.()}
+                      >
+                        Unsubscribe
+                      </button>
+                      <button
+                        class="config-bar__btn"
+                        ?disabled=${push.loading || !props.connected}
+                        @click=${() => props.onWebPushTest?.()}
+                      >
+                        Send test
+                      </button>
+                    `
+                    : html`
+                      <button
+                        class="config-bar__btn config-bar__btn--primary"
+                        ?disabled=${push.loading || !props.connected}
+                        @click=${() => props.onWebPushSubscribe?.()}
+                      >
+                        ${push.loading ? "Subscribing..." : "Enable notifications"}
+                      </button>
+                    `
+                }
+              </div>
+            </div>
+          `
+          : push.permission === "denied"
+            ? html`
+                <div class="settings-appearance__section">
+                  <p class="settings-appearance__hint">
+                    Notifications are blocked. Update your browser site permissions to allow notifications.
+                  </p>
+                </div>
+              `
+            : nothing
+      }
+    </div>
+  `;
+}
+
 function renderAppearanceSection(props: ConfigProps) {
   const MODE_OPTIONS: Array<{
     id: ThemeMode;
@@ -676,7 +795,7 @@ export function renderConfig(props: ConfigProps) {
   // Build categorised nav from schema - only include sections that exist in the schema
   const schemaProps = analysis.schema?.properties ?? {};
 
-  const VIRTUAL_SECTIONS = new Set(["__appearance__"]);
+  const VIRTUAL_SECTIONS = new Set(["__appearance__", "__notifications__"]);
   const visibleCategories = SECTION_CATEGORIES.map((cat) => ({
     ...cat,
     sections: cat.sections.filter(
@@ -1003,8 +1122,12 @@ export function renderConfig(props: ConfigProps) {
               ? includeVirtualSections
                 ? renderAppearanceSection(props)
                 : nothing
-              : formMode === "form"
-                ? html`
+              : props.activeSection === "__notifications__"
+                ? includeVirtualSections
+                  ? renderNotificationsSection(props)
+                  : nothing
+                : formMode === "form"
+                  ? html`
                 ${showAppearanceOnRoot ? renderAppearanceSection(props) : nothing}
                 ${
                   props.schemaLoading
@@ -1034,14 +1157,14 @@ export function renderConfig(props: ConfigProps) {
                       })
                 }
               `
-                : (() => {
-                    const sensitiveCount = countSensitiveConfigValues(
-                      props.formValue,
-                      [],
-                      props.uiHints,
-                    );
-                    const blurred = sensitiveCount > 0 && !cvs.rawRevealed;
-                    return html`
+                  : (() => {
+                      const sensitiveCount = countSensitiveConfigValues(
+                        props.formValue,
+                        [],
+                        props.uiHints,
+                      );
+                      const blurred = sensitiveCount > 0 && !cvs.rawRevealed;
+                      return html`
                     ${
                       formUnsafe
                         ? html`
@@ -1092,7 +1215,7 @@ export function renderConfig(props: ConfigProps) {
                       ></textarea>
                     </label>
                   `;
-                  })()
+                    })()
           }
         </div>
 

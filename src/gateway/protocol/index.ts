@@ -174,6 +174,14 @@ import {
   type PushTestParams,
   PushTestParamsSchema,
   PushTestResultSchema,
+  type WebPushVapidPublicKeyParams,
+  WebPushVapidPublicKeyParamsSchema,
+  type WebPushSubscribeParams,
+  WebPushSubscribeParamsSchema,
+  type WebPushUnsubscribeParams,
+  WebPushUnsubscribeParamsSchema,
+  type WebPushTestParams,
+  WebPushTestParamsSchema,
   type PresenceEntry,
   PresenceEntrySchema,
   ProtocolSchemas,
@@ -311,6 +319,16 @@ export const validateNodePendingEnqueueParams = ajv.compile<NodePendingEnqueuePa
   NodePendingEnqueueParamsSchema,
 );
 export const validatePushTestParams = ajv.compile<PushTestParams>(PushTestParamsSchema);
+export const validateWebPushVapidPublicKeyParams = ajv.compile<WebPushVapidPublicKeyParams>(
+  WebPushVapidPublicKeyParamsSchema,
+);
+export const validateWebPushSubscribeParams = ajv.compile<WebPushSubscribeParams>(
+  WebPushSubscribeParamsSchema,
+);
+export const validateWebPushUnsubscribeParams = ajv.compile<WebPushUnsubscribeParams>(
+  WebPushUnsubscribeParamsSchema,
+);
+export const validateWebPushTestParams = ajv.compile<WebPushTestParams>(WebPushTestParamsSchema);
 export const validateSecretsResolveParams = ajv.compile<SecretsResolveParams>(
   SecretsResolveParamsSchema,
 );
@@ -478,6 +496,10 @@ export {
   WakeParamsSchema,
   PushTestParamsSchema,
   PushTestResultSchema,
+  WebPushVapidPublicKeyParamsSchema,
+  WebPushSubscribeParamsSchema,
+  WebPushUnsubscribeParamsSchema,
+  WebPushTestParamsSchema,
   NodePairRequestParamsSchema,
   NodePairListParamsSchema,
   NodePairApproveParamsSchema,
@@ -667,6 +689,10 @@ export type {
   LogsTailParams,
   LogsTailResult,
   PollParams,
+  WebPushVapidPublicKeyParams,
+  WebPushSubscribeParams,
+  WebPushUnsubscribeParams,
+  WebPushTestParams,
   UpdateRunParams,
   ChatInjectParams,
 };
