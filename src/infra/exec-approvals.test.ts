@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { isSafeBinUsage } from "./exec-approvals-allowlist.js";
 import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
   analyzeArgvCommand,
@@ -19,9 +20,11 @@ import {
   requiresExecApproval,
   resolveCommandResolution,
   resolveCommandResolutionFromArgv,
+  resolveExecApprovalsFromFile,
   resolveExecApprovalsPath,
   resolveExecApprovalsSocketPath,
   type ExecAllowlistEntry,
+  type ExecApprovalsFile,
 } from "./exec-approvals.js";
 
 function buildNestedEnvShellCommand(params: {
@@ -728,11 +731,6 @@ describe("exec approvals allowlist evaluation", () => {
       safeBins: normalizeSafeBins(["jq"]),
       cwd: "/tmp",
     });
-    // Safe bins are disabled on Windows (PowerShell parsing/expansion differences).
-    if (process.platform === "win32") {
-      expect(result.allowlistSatisfied).toBe(false);
-      return;
-    }
     expect(result.allowlistSatisfied).toBe(true);
     expect(result.allowlistMatches).toEqual([]);
   });
@@ -858,10 +856,6 @@ describe("exec approvals allowlist evaluation", () => {
       safeBins: normalizeSafeBins(["jq"]),
       cwd: "/tmp",
     });
-    if (process.platform === "win32") {
-      expect(result.allowlistSatisfied).toBe(false);
-      return;
-    }
     expect(result.allowlistSatisfied).toBe(true);
     expect(result.allowlistMatches.map((entry) => entry.pattern)).toEqual(["/usr/bin/tool"]);
     expect(result.segmentSatisfiedBy).toEqual(["allowlist", "safeBins"]);
@@ -920,5 +914,253 @@ describe("exec approvals policy helpers", () => {
         allowlistSatisfied: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("exec approvals wildcard agent", () => {
+  it("merges wildcard allowlist entries with agent entries", () => {
+    const file: ExecApprovalsFile = {
+      version: 1,
+      agents: {
+        "*": { allowlist: [{ pattern: "/bin/hostname" }] },
+        main: { allowlist: [{ pattern: "/usr/bin/uname" }] },
+      },
+    };
+    const resolved = resolveExecApprovalsFromFile({ file, agentId: "main" });
+    expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual([
+      "/bin/hostname",
+      "/usr/bin/uname",
+    ]);
+  });
+});
+
+describe("exec approvals node host allowlist check", () => {
+  // These tests verify the allowlist satisfaction logic used by the node host path
+  // The node host checks: matchAllowlist() || isSafeBinUsage() for each command segment
+  // Using hardcoded resolution objects for cross-platform compatibility
+
+  it("satisfies allowlist when command matches exact path pattern", () => {
+    const resolution = {
+      rawExecutable: "python3",
+      resolvedPath: "/usr/bin/python3",
+      executableName: "python3",
+    };
+    const entries: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/python3" }];
+    const match = matchAllowlist(entries, resolution);
+    expect(match).not.toBeNull();
+    expect(match?.pattern).toBe("/usr/bin/python3");
+  });
+
+  it("satisfies allowlist when command matches ** wildcard pattern", () => {
+    // Simulates symlink resolution: /opt/homebrew/bin/python3 -> /opt/homebrew/opt/python@3.14/bin/python3.14
+    const resolution = {
+      rawExecutable: "python3",
+      resolvedPath: "/opt/homebrew/opt/python@3.14/bin/python3.14",
+      executableName: "python3.14",
+    };
+    // Pattern with ** matches across multiple directories
+    const entries: ExecAllowlistEntry[] = [{ pattern: "/opt/**/python*" }];
+    const match = matchAllowlist(entries, resolution);
+    expect(match?.pattern).toBe("/opt/**/python*");
+  });
+
+  it("does not satisfy allowlist when command is not in allowlist", () => {
+    const resolution = {
+      rawExecutable: "unknown-tool",
+      resolvedPath: "/usr/local/bin/unknown-tool",
+      executableName: "unknown-tool",
+    };
+    // Allowlist has different commands
+    const entries: ExecAllowlistEntry[] = [
+      { pattern: "/usr/bin/python3" },
+      { pattern: "/opt/**/node" },
+    ];
+    const match = matchAllowlist(entries, resolution);
+    expect(match).toBeNull();
+
+    // Also not a safe bin
+    const safe = isSafeBinUsage({
+      argv: ["unknown-tool", "--help"],
+      resolution,
+      safeBins: normalizeSafeBins(["jq", "curl"]),
+    });
+    expect(safe).toBe(false);
+  });
+
+  it("satisfies via safeBins even when not in allowlist", () => {
+    const resolution = {
+      rawExecutable: "jq",
+      resolvedPath: "/usr/bin/jq",
+      executableName: "jq",
+    };
+    // Not in allowlist
+    const entries: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/python3" }];
+    const match = matchAllowlist(entries, resolution);
+    expect(match).toBeNull();
+
+    // But is a safe bin with non-file args
+    const safe = isSafeBinUsage({
+      argv: ["jq", ".foo"],
+      resolution,
+      safeBins: normalizeSafeBins(["jq"]),
+    });
+    expect(safe).toBe(true);
+  });
+});
+
+describe("exec approvals default agent migration", () => {
+  it("migrates legacy default agent entries to main", () => {
+    const file: ExecApprovalsFile = {
+      version: 1,
+      agents: {
+        default: { allowlist: [{ pattern: "/bin/legacy" }] },
+      },
+    };
+    const resolved = resolveExecApprovalsFromFile({ file });
+    expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual(["/bin/legacy"]);
+    expect(resolved.file.agents?.default).toBeUndefined();
+    expect(resolved.file.agents?.main?.allowlist?.[0]?.pattern).toBe("/bin/legacy");
+  });
+
+  it("prefers main agent settings when both main and default exist", () => {
+    const file: ExecApprovalsFile = {
+      version: 1,
+      agents: {
+        main: { ask: "always", allowlist: [{ pattern: "/bin/main" }] },
+        default: { ask: "off", allowlist: [{ pattern: "/bin/legacy" }] },
+      },
+    };
+    const resolved = resolveExecApprovalsFromFile({ file });
+    expect(resolved.agent.ask).toBe("always");
+    expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual(["/bin/main", "/bin/legacy"]);
+    expect(resolved.file.agents?.default).toBeUndefined();
+  });
+});
+
+describe("normalizeExecApprovals handles string allowlist entries (#9790)", () => {
+  it("converts bare string entries to proper ExecAllowlistEntry objects", () => {
+    // Simulates a corrupted or legacy config where allowlist contains plain
+    // strings (e.g. ["ls", "cat"]) instead of { pattern: "..." } objects.
+    const file = {
+      version: 1,
+      agents: {
+        main: {
+          mode: "allowlist",
+          allowlist: ["things", "remindctl", "memo", "which", "ls", "cat", "echo"],
+        },
+      },
+    } as unknown as ExecApprovalsFile;
+
+    const normalized = normalizeExecApprovals(file);
+    const entries = normalized.agents?.main?.allowlist ?? [];
+
+    // Each entry must be a proper object with a pattern string, not a
+    // spread-string like {"0":"t","1":"h","2":"i",...}
+    for (const entry of entries) {
+      expect(entry).toHaveProperty("pattern");
+      expect(typeof entry.pattern).toBe("string");
+      expect(entry.pattern.length).toBeGreaterThan(0);
+      // Spread-string corruption would create numeric keys — ensure none exist
+      expect(entry).not.toHaveProperty("0");
+    }
+
+    expect(entries.map((e) => e.pattern)).toEqual([
+      "things",
+      "remindctl",
+      "memo",
+      "which",
+      "ls",
+      "cat",
+      "echo",
+    ]);
+  });
+
+  it("preserves proper ExecAllowlistEntry objects unchanged", () => {
+    const file: ExecApprovalsFile = {
+      version: 1,
+      agents: {
+        main: {
+          allowlist: [{ pattern: "/usr/bin/ls" }, { pattern: "/usr/bin/cat", id: "existing-id" }],
+        },
+      },
+    };
+
+    const normalized = normalizeExecApprovals(file);
+    const entries = normalized.agents?.main?.allowlist ?? [];
+
+    expect(entries).toHaveLength(2);
+    expect(entries[0]?.pattern).toBe("/usr/bin/ls");
+    expect(entries[1]?.pattern).toBe("/usr/bin/cat");
+    expect(entries[1]?.id).toBe("existing-id");
+  });
+
+  it("handles mixed string and object entries in the same allowlist", () => {
+    const file = {
+      version: 1,
+      agents: {
+        main: {
+          allowlist: ["ls", { pattern: "/usr/bin/cat" }, "echo"],
+        },
+      },
+    } as unknown as ExecApprovalsFile;
+
+    const normalized = normalizeExecApprovals(file);
+    const entries = normalized.agents?.main?.allowlist ?? [];
+
+    expect(entries).toHaveLength(3);
+    expect(entries.map((e) => e.pattern)).toEqual(["ls", "/usr/bin/cat", "echo"]);
+    for (const entry of entries) {
+      expect(entry).not.toHaveProperty("0");
+    }
+  });
+
+  it("drops empty string entries", () => {
+    const file = {
+      version: 1,
+      agents: {
+        main: {
+          allowlist: ["", "  ", "ls"],
+        },
+      },
+    } as unknown as ExecApprovalsFile;
+
+    const normalized = normalizeExecApprovals(file);
+    const entries = normalized.agents?.main?.allowlist ?? [];
+
+    // Only "ls" should survive; empty/whitespace strings should be dropped
+    expect(entries.map((e) => e.pattern)).toEqual(["ls"]);
+  });
+
+  it("drops malformed object entries with missing/non-string patterns", () => {
+    const file = {
+      version: 1,
+      agents: {
+        main: {
+          allowlist: [{ pattern: "/usr/bin/ls" }, {}, { pattern: 123 }, { pattern: "   " }, "echo"],
+        },
+      },
+    } as unknown as ExecApprovalsFile;
+
+    const normalized = normalizeExecApprovals(file);
+    const entries = normalized.agents?.main?.allowlist ?? [];
+
+    expect(entries.map((e) => e.pattern)).toEqual(["/usr/bin/ls", "echo"]);
+    for (const entry of entries) {
+      expect(entry).not.toHaveProperty("0");
+    }
+  });
+
+  it("drops non-array allowlist values", () => {
+    const file = {
+      version: 1,
+      agents: {
+        main: {
+          allowlist: "ls",
+        },
+      },
+    } as unknown as ExecApprovalsFile;
+
+    const normalized = normalizeExecApprovals(file);
+    expect(normalized.agents?.main?.allowlist).toBeUndefined();
   });
 });

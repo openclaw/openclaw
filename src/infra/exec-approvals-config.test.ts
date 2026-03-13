@@ -131,11 +131,6 @@ describe("exec approvals node host allowlist check", () => {
       resolution,
       safeBins: normalizeSafeBins(["jq"]),
     });
-    // Safe bins are disabled on Windows (PowerShell parsing/expansion differences).
-    if (process.platform === "win32") {
-      expect(safe).toBe(false);
-      return;
-    }
     expect(safe).toBe(true);
   });
 });
