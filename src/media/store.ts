@@ -384,6 +384,13 @@ export async function saveMediaSource(
   }
 }
 
+/** Refresh mtime on media files so they survive the 2-minute TTL cleanup.
+ *  Returns per-path settlement results so callers can filter out deleted files. */
+export async function touchMediaFiles(paths: string[]): Promise<PromiseSettledResult<void>[]> {
+  const now = new Date();
+  return Promise.allSettled(paths.map((p) => fs.utimes(p, now, now)));
+}
+
 export async function saveMediaBuffer(
   buffer: Buffer,
   contentType?: string,
