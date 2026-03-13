@@ -32,6 +32,28 @@ describe("shared/tailscale-status", () => {
     );
   });
 
+  it("falls back to the first tailscale ip when DNSName is blank", async () => {
+    const run = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: '{"Self":{"DNSName":"","TailscaleIPs":["100.64.0.10","fd7a::2"]}}',
+    });
+
+    await expect(resolveTailnetHostWithRunner(run)).resolves.toBe("100.64.0.10");
+  });
+
+  it("continues to later command candidates when earlier output has no usable host", async () => {
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({ code: 0, stdout: '{"Self":{}}' })
+      .mockResolvedValueOnce({
+        code: 0,
+        stdout: '{"Self":{"DNSName":"backup.tail.ts.net."}}',
+      });
+
+    await expect(resolveTailnetHostWithRunner(run)).resolves.toBe("backup.tail.ts.net");
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
   it("returns null for non-zero exits, blank output, or invalid json", async () => {
     const run = vi
       .fn()
