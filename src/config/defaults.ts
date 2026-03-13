@@ -12,10 +12,6 @@ import type { OpenClawConfig } from "./types.js";
 import type { ModelDefinitionConfig } from "./types.models.js";
 import { hasConfiguredSecretInput } from "./types.secrets.js";
 
-type WarnState = { warned: boolean };
-
-let defaultWarnState: WarnState = { warned: false };
-
 type AnthropicAuthDefaultsMode = "api_key" | "oauth";
 
 const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
@@ -123,11 +119,6 @@ function resolvePrimaryModelRef(raw?: string): string | null {
   return DEFAULT_MODEL_ALIASES[aliasKey] ?? trimmed;
 }
 
-export type SessionDefaultsOptions = {
-  warn?: (message: string) => void;
-  warnState?: WarnState;
-};
-
 export function applyMessageDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const messages = cfg.messages;
   const hasAckScope = messages?.ackReactionScope !== undefined;
@@ -145,7 +136,6 @@ export function applyMessageDefaults(cfg: OpenClawConfig): OpenClawConfig {
 
 export function applySessionDefaults(
   cfg: OpenClawConfig,
-  options: SessionDefaultsOptions = {},
 ): OpenClawConfig {
   const session = cfg.session;
   if (!session || session.mainKey === undefined) {
@@ -153,20 +143,20 @@ export function applySessionDefaults(
   }
 
   const trimmed = session.mainKey.trim();
-  const warn = options.warn ?? console.warn;
-  const warnState = options.warnState ?? defaultWarnState;
 
-  const next: OpenClawConfig = {
-    ...cfg,
-    session: { ...session, mainKey: "main" },
-  };
-
-  if (trimmed && trimmed !== "main" && !warnState.warned) {
-    warnState.warned = true;
-    warn('session.mainKey is ignored; main session is always "main".');
+  // When mainKey is set but empty/whitespace-only, normalize to the default "main".
+  if (!trimmed) {
+    return {
+      ...cfg,
+      session: { ...session, mainKey: "main" },
+    };
   }
 
-  return next;
+  // Preserve the user-configured mainKey (lowercased for consistency).
+  return {
+    ...cfg,
+    session: { ...session, mainKey: trimmed.toLowerCase() },
+  };
 }
 
 export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
@@ -529,8 +519,4 @@ export function applyCompactionDefaults(cfg: OpenClawConfig): OpenClawConfig {
       },
     },
   };
-}
-
-export function resetSessionDefaultsWarningForTests() {
-  defaultWarnState = { warned: false };
 }

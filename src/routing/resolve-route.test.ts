@@ -851,4 +851,77 @@ describe("binding evaluation cache scalability", () => {
       listBindingsSpy.mockRestore();
     }
   });
+
+  test("uses session.mainKey for direct-message main session key", () => {
+    const cfg: OpenClawConfig = {
+      session: { mainKey: "telegram:direct:123456" },
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: null,
+      peer: { kind: "direct", id: "123456" },
+    });
+    expect(route.sessionKey).toBe("agent:main:telegram:direct:123456");
+    expect(route.mainSessionKey).toBe("agent:main:telegram:direct:123456");
+    expect(route.lastRoutePolicy).toBe("main");
+  });
+
+  test("custom mainKey: non-matching direct DMs still collapse to custom main", () => {
+    const cfg: OpenClawConfig = {
+      session: { mainKey: "telegram:direct:123456" },
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "whatsapp",
+      accountId: null,
+      peer: { kind: "direct", id: "+15559999" },
+    });
+    // With default dmScope ("main"), all direct DMs collapse to the main key
+    expect(route.sessionKey).toBe("agent:main:telegram:direct:123456");
+    expect(route.mainSessionKey).toBe("agent:main:telegram:direct:123456");
+    expect(route.lastRoutePolicy).toBe("main");
+  });
+
+  test("custom mainKey with per-channel-peer dmScope isolates peers correctly", () => {
+    const cfg: OpenClawConfig = {
+      session: {
+        mainKey: "telegram:direct:123456",
+        dmScope: "per-channel-peer",
+      },
+    };
+
+    // The owner's DM matches the custom mainKey
+    const ownerRoute = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: null,
+      peer: { kind: "direct", id: "123456" },
+    });
+    expect(ownerRoute.sessionKey).toBe("agent:main:telegram:direct:123456");
+    expect(ownerRoute.mainSessionKey).toBe("agent:main:telegram:direct:123456");
+    expect(ownerRoute.lastRoutePolicy).toBe("main");
+
+    // Another user's DM is isolated
+    const otherRoute = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: null,
+      peer: { kind: "direct", id: "789" },
+    });
+    expect(otherRoute.sessionKey).toBe("agent:main:telegram:direct:789");
+    expect(otherRoute.mainSessionKey).toBe("agent:main:telegram:direct:123456");
+    expect(otherRoute.lastRoutePolicy).toBe("session");
+  });
+
+  test("defaults mainKey to 'main' when session.mainKey is unset", () => {
+    const cfg: OpenClawConfig = {};
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: null,
+      peer: { kind: "direct", id: "999" },
+    });
+    expect(route.mainSessionKey).toBe("agent:main:main");
+  });
 });

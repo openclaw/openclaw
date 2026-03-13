@@ -8,7 +8,11 @@ import {
   pickFirstExistingAgentId,
   resolveAgentRoute,
 } from "../routing/resolve-route.js";
-import { buildAgentMainSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import {
+  buildAgentMainSessionKey,
+  normalizeMainKey,
+  resolveAgentIdFromSessionKey,
+} from "../routing/session-key.js";
 import {
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
@@ -54,6 +58,7 @@ export function resolveTelegramConversationRoute(params: {
   const rawTopicAgentId = params.topicAgentId?.trim();
   if (rawTopicAgentId) {
     const topicAgentId = pickFirstExistingAgentId(params.cfg, rawTopicAgentId);
+    const configuredMainKey = normalizeMainKey(params.cfg.session?.mainKey);
     route = {
       ...route,
       agentId: topicAgentId,
@@ -64,9 +69,11 @@ export function resolveTelegramConversationRoute(params: {
         peer: { kind: params.isGroup ? "group" : "direct", id: peerId },
         dmScope: params.cfg.session?.dmScope,
         identityLinks: params.cfg.session?.identityLinks,
+        mainKey: configuredMainKey,
       }).toLowerCase(),
       mainSessionKey: buildAgentMainSessionKey({
         agentId: topicAgentId,
+        mainKey: configuredMainKey,
       }).toLowerCase(),
       lastRoutePolicy: deriveLastRoutePolicy({
         sessionKey: buildAgentSessionKey({
@@ -76,9 +83,11 @@ export function resolveTelegramConversationRoute(params: {
           peer: { kind: params.isGroup ? "group" : "direct", id: peerId },
           dmScope: params.cfg.session?.dmScope,
           identityLinks: params.cfg.session?.identityLinks,
+          mainKey: configuredMainKey,
         }).toLowerCase(),
         mainSessionKey: buildAgentMainSessionKey({
           agentId: topicAgentId,
+          mainKey: configuredMainKey,
         }).toLowerCase(),
       }),
     };

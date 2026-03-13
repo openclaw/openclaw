@@ -7,7 +7,7 @@ import { recordSessionMetaFromInbound, resolveStorePath } from "../../config/ses
 import { parseDiscordTarget, type DiscordTargetKind } from "../../discord/targets.js";
 import { parseIMessageTarget, normalizeIMessageHandle } from "../../imessage/targets.js";
 import { buildAgentSessionKey, type RoutePeer } from "../../routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../../routing/session-key.js";
+import { normalizeMainKey, resolveThreadSessionKeys } from "../../routing/session-key.js";
 import {
   looksLikeUuid,
   resolveSignalPeerId,
@@ -115,6 +115,7 @@ function buildBaseSessionKey(params: {
     peer: params.peer,
     dmScope: params.cfg.session?.dmScope ?? "main",
     identityLinks: params.cfg.session?.identityLinks,
+    mainKey: normalizeMainKey(params.cfg.session?.mainKey),
   });
 }
 
