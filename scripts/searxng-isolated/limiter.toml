@@ -1,0 +1,27 @@
+# SearXNG rate limiter for OpenClaw isolated search
+#
+# Prevents runaway agent search loops from overwhelming upstream engines.
+# Tuned for agent workloads: burst-friendly but with hard ceiling.
+#
+# Lab observation: typical agent sessions issue 2-5 searches per conversation
+# turn, with rare bursts of 10-15 during deep research tasks.
+#
+# SearXNG uses a sliding-window rate limiter where `limit` is the sustained
+# rate (requests/minute) and `burst` is the max instantaneous spike allowed.
+
+[botdetection.ip_limit]
+
+# Link token is not needed — this is an API-only instance behind Docker network
+link_token = false
+
+[botdetection.ip_limit.filter_request]
+# HTML requests per minute (not used in API-only mode, but set as a safety net)
+limit = 10
+burst = 5
+
+[botdetection.ip_limit.filter_request.api]
+# JSON API requests per minute from the OpenClaw gateway container.
+# 60 QPM sustained with burst of 30 allows deep research sessions
+# while preventing infinite search loops.
+limit = 60
+burst = 30

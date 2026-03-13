@@ -317,6 +317,20 @@ search:
 - SearXNG must have `format: json` enabled in its `settings.yml`.
 - A remote SearXNG instance is fully supported — just set `url` to any reachable address.
 
+### Advanced: network-isolated search (optional)
+
+SearXNG works with any deployment — bare-metal, VM, LXC, Docker, or remote.
+Just set `url` to wherever your instance is running and OpenClaw will use it.
+
+For deployments that additionally need to restrict agent internet access to
+search-only, an **optional** Docker compose overlay is provided that runs
+SearXNG as a network-isolated egress gateway. This is not required for normal
+use — it's for compliance or containment scenarios where the agent must
+provably have no direct internet access.
+
+See [SearXNG Network Isolation](/tools/web-searxng-isolation) for the
+compose overlay, hardened engine allowlist, and verification steps.
+
 ## web_search
 
 Search the web using your configured provider.
@@ -324,12 +338,13 @@ Search the web using your configured provider.
 ### Requirements
 
 - `tools.web.search.enabled` must not be `false` (default: enabled)
-- API key for your chosen provider:
+- API key or instance URL for your chosen provider:
   - **Brave**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
   - **Gemini**: `GEMINI_API_KEY` or `tools.web.search.gemini.apiKey`
   - **Grok**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`
   - **Kimi**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `tools.web.search.kimi.apiKey`
   - **Perplexity**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey`
+  - **SearXNG**: no API key — set `tools.web.search.searxng.url` (default: `http://localhost:8080`)
 - All provider key fields above support SecretRef objects.
 
 ### Config
@@ -352,7 +367,7 @@ Search the web using your configured provider.
 
 ### Tool parameters
 
-All parameters work for Brave and for native Perplexity Search API unless noted.
+All parameters work for Brave and for native Perplexity Search API unless noted. SearXNG supports `query`, `count`, and `language`.
 
 Perplexity's OpenRouter / Sonar compatibility path supports only `query` and `freshness`.
 If you set `tools.web.search.perplexity.baseUrl` / `model`, use `OPENROUTER_API_KEY`, or configure an `sk-or-...` key, Search API-only filters return explicit errors.

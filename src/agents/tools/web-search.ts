@@ -622,7 +622,7 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       error: "searxng_unreachable",
       message:
         "web_search (searxng) could not reach the configured SearXNG instance. Ensure it is running and set tools.web.search.searxng.url in your config.",
-      docs: "https://docs.openclaw.ai/tools/web#searxng",
+      docs: "https://docs.openclaw.ai/tools/web#using-searxng-self-hosted-no-api-key",
     };
   }
   return {
@@ -1904,7 +1904,7 @@ async function runWebSearch(params: {
   }
 
   if (params.provider === "searxng") {
-    const { results } = await runSearxngSearch({
+    const searchResult = await runSearxngSearch({
       query: params.query,
       count: params.count,
       url: params.searxngUrl ?? DEFAULT_SEARXNG_URL,
@@ -1913,7 +1913,13 @@ async function runWebSearch(params: {
       language: params.searxngLanguage,
       safeSearch: params.searxngSafeSearch,
       timeoutSeconds: params.timeoutSeconds,
-    });
+    }).catch(() => null);
+
+    if (!searchResult) {
+      return missingSearchKeyPayload("searxng");
+    }
+
+    const { results } = searchResult;
 
     const payload = {
       query: params.query,
