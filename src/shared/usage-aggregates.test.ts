@@ -17,6 +17,13 @@ describe("shared/usage-aggregates", () => {
 
     mergeUsageLatency(totals, undefined);
     mergeUsageLatency(totals, {
+      count: 0,
+      avgMs: 999,
+      minMs: 1,
+      maxMs: 999,
+      p95Ms: 999,
+    });
+    mergeUsageLatency(totals, {
       count: 2,
       avgMs: 50,
       minMs: 20,
@@ -51,6 +58,7 @@ describe("shared/usage-aggregates", () => {
       { date: "2026-03-12", count: 1, avgMs: 120, minMs: 120, maxMs: 120, p95Ms: 120 },
       { date: "2026-03-11", count: 1, avgMs: 30, minMs: 30, maxMs: 30, p95Ms: 30 },
     ]);
+    mergeUsageDailyLatency(dailyLatencyMap, null);
 
     const tail = buildUsageAggregateTail({
       byChannelMap: new Map([
@@ -113,5 +121,39 @@ describe("shared/usage-aggregates", () => {
 
     expect(tail.latency).toBeUndefined();
     expect(tail.dailyLatency).toEqual([]);
+  });
+
+  it("normalizes zero-count daily latency entries to zero averages and mins", () => {
+    const dailyLatencyMap = new Map([
+      [
+        "2026-03-12",
+        {
+          date: "2026-03-12",
+          count: 0,
+          sum: 0,
+          min: Number.POSITIVE_INFINITY,
+          max: 0,
+          p95Max: 0,
+        },
+      ],
+    ]);
+
+    const tail = buildUsageAggregateTail({
+      byChannelMap: new Map(),
+      latencyTotals: {
+        count: 0,
+        sum: 0,
+        min: Number.POSITIVE_INFINITY,
+        max: 0,
+        p95Max: 0,
+      },
+      dailyLatencyMap,
+      modelDailyMap: new Map(),
+      dailyMap: new Map(),
+    });
+
+    expect(tail.dailyLatency).toEqual([
+      { date: "2026-03-12", count: 0, avgMs: 0, minMs: 0, maxMs: 0, p95Ms: 0 },
+    ]);
   });
 });
