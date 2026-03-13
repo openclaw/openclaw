@@ -98,37 +98,25 @@ const plugin = {
       }
     });
 
-    // ── after_tool_call: detect leaks + audit log ───────────────
+    // ── after_tool_call: log leaks + audit trail (observational) ─
+    // Note: after_tool_call is fire-and-forget (void hook), so we cannot
+    // modify event.result here. Actual redaction happens in message_sending.
     api.on("after_tool_call", (event) => {
       const resultStr = event.result != null ? JSON.stringify(event.result) : "";
       const findings: AuditEntry["findings"] = [];
 
-      // Leak detection + redaction of tool result
+      // Detect leaks for logging and audit purposes
       if (config.leakDetection && resultStr.length > 0) {
         const leaks = scanForLeaks(resultStr);
 
-        if (leaks.length > 0) {
-          for (const leak of leaks) {
-            logger.warn(
-              `[Security Shield] LEAK DETECTED: ${leak.message} (${leak.ruleId}) in output of '${event.toolName}' — ${leak.evidence}`,
-            );
-            findings.push({
-              ruleId: leak.ruleId,
-              message: leak.message,
-            });
-          }
-
-          // Redact secrets from the tool result before it reaches the LLM
-          if (typeof event.result === "string") {
-            event.result = redactLeaks(event.result);
-          } else if (event.result != null) {
-            const redacted = redactLeaks(JSON.stringify(event.result));
-            try {
-              event.result = JSON.parse(redacted);
-            } catch {
-              event.result = redacted;
-            }
-          }
+        for (const leak of leaks) {
+          logger.warn(
+            `[Security Shield] LEAK DETECTED: ${leak.message} (${leak.ruleId}) in output of '${event.toolName}' — ${leak.evidence}`,
+          );
+          findings.push({
+            ruleId: leak.ruleId,
+            message: leak.message,
+          });
         }
       }
 
