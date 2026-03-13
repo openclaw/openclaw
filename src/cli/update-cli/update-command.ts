@@ -109,14 +109,6 @@ function resolveGatewayInstallEntrypointCandidates(root?: string): string[] {
   ];
 }
 
-function formatCommandFailure(stdout: string, stderr: string): string {
-  const detail = (stderr || stdout).trim();
-  if (!detail) {
-    return "command returned a non-zero exit code";
-  }
-  return detail.split("\n").slice(-3).join("\n");
-}
-
 type UpdateDryRunPreview = {
   dryRun: true;
   root: string;
@@ -185,6 +177,8 @@ async function refreshGatewayServiceEnv(params: {
     args.push("--json");
   }
 
+  // Try to regenerate the service file using the updated binary first.
+  // This ensures OPENCLAW_SERVICE_VERSION in the service file matches the new version.
   for (const candidate of resolveGatewayInstallEntrypointCandidates(params.result.root)) {
     if (!(await pathExists(candidate))) {
       continue;
@@ -195,11 +189,13 @@ async function refreshGatewayServiceEnv(params: {
     if (res.code === 0) {
       return;
     }
-    throw new Error(
-      `updated install refresh failed (${candidate}): ${formatCommandFailure(res.stdout, res.stderr)}`,
-    );
+    // Don't throw here - fall through to runDaemonInstall as a fallback.
+    // This ensures the service file still gets regenerated even if the updated
+    // binary's install command fails (e.g., due to runtime/dependency issues).
   }
 
+  // Fallback: use the current CLI to regenerate the service file.
+  // This will read the new VERSION from the updated package.json.
   await runDaemonInstall({ force: true, json: params.jsonMode || undefined });
 }
 
@@ -536,10 +532,17 @@ async function maybeRestartService(params: {
             jsonMode: Boolean(params.opts.json),
           });
         } catch (err) {
+          // Service env refresh failed, but we should still proceed with restart.
+          // The user may need to manually reinstall the service if version is stale.
           if (!params.opts.json) {
             defaultRuntime.log(
               theme.warn(
-                `Failed to refresh gateway service environment from updated install: ${String(err)}`,
+                `Failed to refresh gateway service environment: ${err instanceof Error ? err.message : String(err)}. The dashboard may show an outdated version.`,
+              ),
+            );
+            defaultRuntime.log(
+              theme.muted(
+                `Tip: Run \`${replaceCliName(formatCliCommand("openclaw gateway install --force"), CLI_NAME)}\` to refresh the service file.`,
               ),
             );
           }
