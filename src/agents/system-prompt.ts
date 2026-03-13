@@ -730,13 +730,24 @@ export function buildAgentSystemPrompt(params: {
     lines.push(...skillsSection);
   }
 
+  // workspaceNotes: injected before deployment config and MEMORY.md. Both workspaceNotes and
+  // deployment config are in the stable prefix for MEMORY.md-daily-change sessions.
+  // For workspaceNotes-change sessions, everything before (skills, modelAliases, etc.) is cached.
+  // For deployment-config-change sessions, workspaceNotes is in the stable prefix too.
+  if (workspaceNotes.length > 0) {
+    lines.push("## Project Notes", "");
+    for (const note of workspaceNotes) {
+      lines.push(note);
+    }
+    lines.push("");
+  }
+
   // Deployment-level config: docs, authorized senders, sandbox settings.
-  // Injected here AFTER model aliases and skills so that when deployment config changes
-  // (rare: docs path update, adding a new authorized device, toggling sandbox), the stable
-  // prefix includes the workspace files, boilerplate, channel config, model aliases, and skills.
-  // This ordering means the deployment config scenario achieves 99%+ stable prefix.
-  // Deployment config changes LESS frequently than skills (monthly) and model aliases (quarterly)
-  // but the KV-cache stable prefix is maximised by placing rarer-changing content later.
+  // Injected AFTER workspaceNotes (and after model aliases, skills) so that when deployment
+  // config changes (rare: docs path update, new authorized device, sandbox toggle), the stable
+  // prefix includes workspace files, boilerplate, channel config, model aliases, skills, AND
+  // project notes. This is a pure win: workspaceNotes scenario stable_chars unaffected (first
+  // diff is at workspaceNotes position regardless), but deployment config scenario gains ~workspaceNotes_size.
   if (!isMinimal) {
     lines.push(...docsSection);
   }
@@ -789,19 +800,6 @@ export function buildAgentSystemPrompt(params: {
         .filter(Boolean)
         .join("\n"),
     );
-    lines.push("");
-  }
-
-  // workspaceNotes: project-specific notes injected second-to-last (after per-conversation
-  // context, deployment config, and skills, before MEMORY.md). This maximises the stable prefix for:
-  //   1. Per-conversation changes (channel/group-chat): workspaceNotes is in stable prefix
-  //   2. workspaceNotes changes (sprint update): everything before workspaceNotes is stable
-  //   3. Skills/aliases changes: workspaceNotes and MEMORY.md remain in stable prefix
-  if (workspaceNotes.length > 0) {
-    lines.push("## Project Notes", "");
-    for (const note of workspaceNotes) {
-      lines.push(note);
-    }
     lines.push("");
   }
 
