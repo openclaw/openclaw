@@ -62,7 +62,26 @@ export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
       return coerceFormValues(value, variants[0]);
     }
 
-    // Try number/boolean coercion for string values
+    // Check if string type is an option - if so, preserve string values as-is
+    // This fixes issues like Discord IDs (numeric-looking strings) being coerced to numbers
+    const hasStringVariant = variants.some((v) => schemaType(v) === "string");
+    if (typeof value === "string" && hasStringVariant) {
+      // For string values when string is a valid variant, try other coercions first
+      // but only if they succeed unambiguously
+      for (const variant of variants) {
+        const variantType = schemaType(variant);
+        if (variantType === "boolean") {
+          const coerced = coerceBooleanString(value);
+          if (typeof coerced === "boolean") {
+            return coerced;
+          }
+        }
+      }
+      // If no unambiguous coercion succeeded, keep as string
+      return value;
+    }
+
+    // Try number/boolean coercion for string values (when string is not a valid variant)
     if (typeof value === "string") {
       for (const variant of variants) {
         const variantType = schemaType(variant);
