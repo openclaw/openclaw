@@ -146,7 +146,7 @@ function buildMessagingSection(params: {
           params.inlineButtonsEnabled
             ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data,style?}]]`; `style` can be `primary`, `success`, or `danger`."
             : params.runtimeChannel
-              ? `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to set ${params.runtimeChannel}.capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
+              ? `- Inline buttons not enabled on this channel. To enable, ask to set capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
               : "",
           ...(params.messageToolHints ?? []),
         ]
