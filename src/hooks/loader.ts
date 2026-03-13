@@ -180,7 +180,9 @@ export async function loadInternalHooks(
       const modulePath = path.resolve(baseDir, rawModule);
       const baseDirReal = resolveExistingRealpath(baseDir);
       if (!baseDirReal) {
-        log.error(`Workspace directory is no longer readable while loading hooks: ${baseDir}`);
+        log.error(
+          `Workspace directory is no longer readable while loading hooks: ${safeLogValue(baseDir)}`,
+        );
         continue;
       }
       const modulePathSafe = resolveExistingRealpath(modulePath);
