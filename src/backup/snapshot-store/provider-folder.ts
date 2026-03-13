@@ -148,6 +148,7 @@ export function createFolderSnapshotStore(
 ): BackupSnapshotStore {
   return {
     async uploadSnapshot(params) {
+      await assertRegularFileWithinLimit(params.payloadPath, MAX_PAYLOAD_BYTES, "Payload file");
       await copyFileAtomic(
         params.payloadPath,
         payloadPath(config.targetDir, params.installationId, params.snapshotId),

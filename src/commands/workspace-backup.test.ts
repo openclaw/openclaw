@@ -185,6 +185,43 @@ describe("workspace backup commands", () => {
     ).rejects.toThrow("workspace path must not be inside backup.target/workspace");
   });
 
+  it("rejects targets inside an external oauth directory", async () => {
+    const originalOauthDir = process.env.OPENCLAW_OAUTH_DIR;
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const workspaceDir = path.join(tempHome.home, "workspace");
+    const oauthDir = path.join(tempHome.home, "external-oauth");
+    try {
+      targetDir = path.join(oauthDir, "backups");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(oauthDir, { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace: workspaceDir,
+            },
+          },
+        }),
+        "utf8",
+      );
+
+      process.env.OPENCLAW_OAUTH_DIR = oauthDir;
+
+      await expect(
+        workspaceBackupInitCommand(runtime, {
+          target: targetDir,
+        }),
+      ).rejects.toThrow("backup.target must not be inside the live OAuth directory.");
+    } finally {
+      if (originalOauthDir == null) {
+        delete process.env.OPENCLAW_OAUTH_DIR;
+      } else {
+        process.env.OPENCLAW_OAUTH_DIR = originalOauthDir;
+      }
+    }
+  });
+
   it("keeps existing mirrors when a configured workspace is temporarily missing", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const workspaceB = path.join(tempHome.home, "workspace-b");

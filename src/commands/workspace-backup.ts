@@ -5,6 +5,7 @@ import { detectPreferredCloudDriveTarget } from "../backup/snapshot-store/target
 import {
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
+  resolveOAuthDir,
   resolveStateDir,
   writeConfigFile,
 } from "../config/config.js";
@@ -226,15 +227,20 @@ async function replaceDirectoryAtomically(sourcePath: string, targetPath: string
 async function assertWorkspaceBackupSafety(
   target: string,
   stateDir: string,
+  oauthDir: string,
   workspaceDirs: readonly string[],
 ): Promise<void> {
   const canonicalTarget = await canonicalizePathForContainment(target);
   const canonicalStateDir = await canonicalizePathForContainment(stateDir);
+  const canonicalOauthDir = await canonicalizePathForContainment(oauthDir);
   const canonicalWorkspaceBackupRoot = await canonicalizePathForContainment(
     workspaceBackupRoot(target),
   );
   if (isPathWithin(canonicalTarget, canonicalStateDir)) {
     throw new Error("backup.target must not be inside the live state directory.");
+  }
+  if (isPathWithin(canonicalTarget, canonicalOauthDir)) {
+    throw new Error("backup.target must not be inside the live OAuth directory.");
   }
   for (const workspaceDir of workspaceDirs) {
     const canonicalWorkspaceDir = await canonicalizePathForContainment(workspaceDir);
@@ -255,6 +261,7 @@ async function resolveWorkspaceBackupState(): Promise<{
   target: string;
   workspaceDirs: string[];
   stateDir: string;
+  oauthDir: string;
 }> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
@@ -266,11 +273,13 @@ async function resolveWorkspaceBackupState(): Promise<{
   }
   const workspaceDirs = collectWorkspaceDirs(snapshot.config);
   const stateDir = resolveStateDir();
-  await assertWorkspaceBackupSafety(target, stateDir, workspaceDirs);
+  const oauthDir = resolveOAuthDir();
+  await assertWorkspaceBackupSafety(target, stateDir, oauthDir, workspaceDirs);
   return {
     target,
     workspaceDirs,
     stateDir,
+    oauthDir,
   };
 }
 
@@ -297,6 +306,7 @@ export async function workspaceBackupInitCommand(
   await assertWorkspaceBackupSafety(
     target,
     resolveStateDir(),
+    resolveOAuthDir(),
     collectWorkspaceDirs(snapshot.config),
   );
   await fs.mkdir(target, { recursive: true });
@@ -334,12 +344,12 @@ export async function workspaceBackupRunCommand(
   runtime: RuntimeEnv,
   opts: WorkspaceBackupRunOptions,
 ): Promise<WorkspaceBackupRunResult> {
-  const { target, workspaceDirs, stateDir } = await resolveWorkspaceBackupState();
+  const { target, workspaceDirs, stateDir, oauthDir } = await resolveWorkspaceBackupState();
   const mirrorRoot = workspaceMirrorRoot(target);
   const stagingRoot = path.join(workspaceBackupRoot(target), ".staging");
   await fs.mkdir(mirrorRoot, { recursive: true });
   await fs.mkdir(stagingRoot, { recursive: true });
-  await assertWorkspaceBackupSafety(target, stateDir, workspaceDirs);
+  await assertWorkspaceBackupSafety(target, stateDir, oauthDir, workspaceDirs);
   await assertPathContainedWithinRoot(mirrorRoot, workspaceBackupRoot(target), "write mirrors");
   await assertPathContainedWithinRoot(
     stagingRoot,

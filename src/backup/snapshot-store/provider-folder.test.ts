@@ -217,6 +217,48 @@ describe("folder snapshot store", () => {
     ).rejects.toThrow("permission denied");
   });
 
+  it("rejects oversize payloads before storing snapshots", async () => {
+    const targetDir = await createTempDir("openclaw-snapshot-store-oversize-");
+    const payloadPath = path.join(targetDir, "source.payload");
+    await fs.writeFile(payloadPath, "payload-data", "utf8");
+
+    const store = createFolderSnapshotStore({
+      targetDir,
+      encryptionKey: "secret",
+    });
+
+    const originalLstat = fs.lstat.bind(fs);
+    vi.spyOn(fs, "lstat").mockImplementation(async (filePath) => {
+      const stat = await originalLstat(filePath);
+      if (filePath === payloadPath) {
+        return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
+          size: 10 * 1024 * 1024 * 1024 + 1,
+        });
+      }
+      return stat;
+    });
+
+    await expect(
+      store.uploadSnapshot({
+        installationId: VALID_INSTALLATION_ID,
+        snapshotId: VALID_SNAPSHOT_ID,
+        envelope: createEnvelope(VALID_SNAPSHOT_ID, VALID_INSTALLATION_ID),
+        payloadPath,
+      }),
+    ).rejects.toThrow("Payload file exceeds maximum allowed size");
+
+    await expect(
+      fs.access(
+        path.join(
+          targetDir,
+          "snapshots",
+          VALID_INSTALLATION_ID,
+          `${VALID_SNAPSHOT_ID}.payload.bin`,
+        ),
+      ),
+    ).rejects.toThrow();
+  });
+
   it("surfaces envelope read failures other than ENOENT", async () => {
     const targetDir = await createTempDir("openclaw-snapshot-store-readfile-");
     const snapshotRoot = path.join(targetDir, "snapshots", VALID_INSTALLATION_ID);
