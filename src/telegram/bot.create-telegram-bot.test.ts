@@ -143,6 +143,41 @@ describe("createTelegramBot", () => {
     expect(payload.Body).toContain("cmd:option_a");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
   });
+
+  it("preserves native command source for Telegram command-menu callbacks when text commands are disabled", async () => {
+    loadConfig.mockReturnValue({
+      commands: { text: false },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-native-fast",
+        data: "tgcmd:/fast status",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 10,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.CommandBody).toBe("/fast status");
+    expect(payload.CommandSource).toBe("native");
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-native-fast");
+  });
   it("wraps inbound message with Telegram envelope", async () => {
     await withEnvAsync({ TZ: "Europe/Vienna" }, async () => {
       createTelegramBot({ token: "tok" });

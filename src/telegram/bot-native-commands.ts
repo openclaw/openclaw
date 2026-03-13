@@ -74,6 +74,7 @@ import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import { buildInlineKeyboard } from "./send.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+const TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX = "tgcmd:";
 
 type TelegramNativeCommandContext = Context & { match?: string };
 
@@ -141,6 +142,18 @@ type RegisterTelegramNativeCommandsParams = {
   shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
   opts: { token: string };
 };
+
+export function buildTelegramNativeCommandCallbackData(commandText: string): string {
+  return `${TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX}${commandText}`;
+}
+
+export function parseTelegramNativeCommandCallbackData(data: string): string | null {
+  if (!data.startsWith(TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX)) {
+    return null;
+  }
+  const commandText = data.slice(TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX.length).trim();
+  return commandText || null;
+}
 
 async function resolveTelegramCommandAuth(params: {
   msg: NonNullable<TelegramNativeCommandContext["message"]>;
@@ -632,7 +645,9 @@ export const registerTelegramNativeCommands = ({
                   };
                   return {
                     text: choice.label,
-                    callback_data: buildCommandTextFromArgs(commandDefinition, args),
+                    callback_data: buildTelegramNativeCommandCallbackData(
+                      buildCommandTextFromArgs(commandDefinition, args),
+                    ),
                   };
                 }),
               );

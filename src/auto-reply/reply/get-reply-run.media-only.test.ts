@@ -172,6 +172,22 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
   });
 
+  it("passes Anthropic fast-mode session state into runReplyAgent", async () => {
+    await runPreparedReply(
+      baseParams({
+        sessionEntry: {
+          fastMode: true,
+        } as never,
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call).toBeTruthy();
+    expect(call?.followupRun.run.fastMode).toBe(true);
+    expect(call?.followupRun.run.provider).toBe("anthropic");
+    expect(call?.followupRun.run.model).toBe("claude-opus-4-1");
+  });
+
   it("keeps thread history context on follow-up turns", async () => {
     const result = await runPreparedReply(
       baseParams({

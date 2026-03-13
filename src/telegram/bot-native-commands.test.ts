@@ -5,7 +5,10 @@ import { STATE_DIR } from "../config/paths.js";
 import { TELEGRAM_COMMAND_NAME_PATTERN } from "../config/telegram-custom-commands.js";
 import type { TelegramAccountConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { registerTelegramNativeCommands } from "./bot-native-commands.js";
+import {
+  buildTelegramNativeCommandCallbackData,
+  registerTelegramNativeCommands,
+} from "./bot-native-commands.js";
 import { createNativeCommandTestParams } from "./bot-native-commands.test-helpers.js";
 
 const { listSkillCommandsForAgents } = vi.hoisted(() => ({
@@ -211,6 +214,55 @@ describe("registerTelegramNativeCommands", () => {
     expect(registeredCommands.some((entry) => entry.command === "plugin_status")).toBe(true);
     expect(registeredCommands.some((entry) => entry.command === "plugin-status")).toBe(false);
     expect(registeredCommands.some((entry) => entry.command === "custom-bad")).toBe(false);
+  });
+
+  it("prefixes native command menu callbacks so Telegram callback routing preserves native mode", async () => {
+    const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+
+    registerTelegramNativeCommands({
+      ...buildParams({}),
+      bot: {
+        api: {
+          setMyCommands: vi.fn().mockResolvedValue(undefined),
+          sendMessage,
+        },
+        command: vi.fn((name: string, handler: (ctx: unknown) => Promise<void>) => {
+          commandHandlers.set(name, handler);
+        }),
+      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      allowFrom: ["*"],
+    });
+
+    const fastHandler = commandHandlers.get("fast");
+    expect(fastHandler).toBeDefined();
+
+    await fastHandler?.({
+      message: {
+        chat: { id: 1234, type: "private" },
+        date: 1736380800,
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message_id: 44,
+      },
+      me: { username: "openclaw_bot" },
+      match: "",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    const [, , params] = sendMessage.mock.calls[0] ?? [];
+    expect(params).toEqual(
+      expect.objectContaining({
+        reply_markup: expect.objectContaining({
+          inline_keyboard: expect.arrayContaining([
+            expect.arrayContaining([
+              expect.objectContaining({
+                callback_data: buildTelegramNativeCommandCallbackData("/fast status"),
+              }),
+            ]),
+          ]),
+        }),
+      }),
+    );
   });
 
   it("passes agent-scoped media roots for plugin command replies with media", async () => {

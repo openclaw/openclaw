@@ -18,6 +18,7 @@ export type TelegramMediaRef = {
 export type TelegramMessageContextOptions = {
   forceWasMentioned?: boolean;
   messageIdOverride?: string;
+  commandSource?: "text" | "native";
 };
 
 export type TelegramLogger = {
