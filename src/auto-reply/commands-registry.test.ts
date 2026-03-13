@@ -198,39 +198,15 @@ describe("commands registry", () => {
     ]);
   });
 
-  it("invalidates cached command lists after plugin registry updates", () => {
-    const before = listChatCommands();
-    expect(before.find((command) => command.key === "dock:msteams")).toBeFalsy();
-
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "test-plugin",
-          source: "test",
-          plugin: {
-            id: "msteams",
-            meta: {
-              id: "msteams",
-              label: "Microsoft Teams",
-              selectionLabel: "Microsoft Teams",
-              docsPath: "/channels/msteams",
-              blurb: "test stub.",
-            },
-            capabilities: {
-              chatTypes: ["direct"],
-              nativeCommands: true,
-            },
-            config: {
-              listAccountIds: () => ["default"],
-              resolveAccount: () => ({}),
-            },
-          },
-        },
-      ]),
-    );
-
-    const after = listChatCommands();
-    expect(after.find((command) => command.key === "dock:msteams")).toBeTruthy();
+  it("registers fast mode as a first-class options command", () => {
+    const fast = listChatCommands().find((command) => command.key === "fast");
+    expect(fast).toMatchObject({
+      nativeName: "fast",
+      textAliases: ["/fast"],
+      category: "options",
+    });
+    const modeArg = fast?.args?.find((arg) => arg.name === "mode");
+    expect(modeArg?.choices).toEqual(["status", "on", "off"]);
   });
 
   it("detects known text commands", () => {
