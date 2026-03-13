@@ -43,9 +43,7 @@ const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional
 
 const DiscordIdSchema = z
   .union([z.string(), z.number()])
-  .refine((value) => typeof value === "string", {
-    message: "Discord IDs must be strings (wrap numeric IDs in quotes).",
-  });
+  .transform((value) => (typeof value === "number" ? String(value) : value));
 const DiscordIdListSchema = z.array(DiscordIdSchema);
 
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);

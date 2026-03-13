@@ -59,7 +59,7 @@ describe("config discord", () => {
     );
   });
 
-  it("rejects numeric discord allowlist entries", () => {
+  it("coerces numeric discord allowlist entries to strings", () => {
     const res = validateConfigObject({
       channels: {
         discord: {
@@ -79,11 +79,10 @@ describe("config discord", () => {
       },
     });
 
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(
-        res.issues.some((issue) => issue.message.includes("Discord IDs must be strings")),
-      ).toBe(true);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.channels?.discord?.allowFrom).toEqual(["123"]);
+      expect(res.config.channels?.discord?.execApprovals?.approvers).toEqual(["555"]);
     }
   });
 });
