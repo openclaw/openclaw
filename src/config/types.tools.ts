@@ -390,6 +390,8 @@ export type MemorySearchConfig = {
       deltaBytes?: number;
       /** Minimum appended JSONL lines before session transcripts are reindexed. */
       deltaMessages?: number;
+      /** Force session-memory sync after compaction even if deltas are below threshold (default: true). */
+      postCompactionForce?: boolean;
     };
   };
   /** Query behavior. */
