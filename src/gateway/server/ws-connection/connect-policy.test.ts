@@ -169,6 +169,42 @@ describe("ws connect policy", () => {
         isLocalClient: false,
       }).kind,
     ).toBe("allow");
+
+    // dangerouslyDisableDeviceAuth=true should allow device-identity bypass
+    // even without a shared token — auth will be checked by resolveConnectAuthDecision. (#43909)
+    const bypassPolicy = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: { dangerouslyDisableDeviceAuth: true },
+      deviceRaw: null,
+    });
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: true,
+        controlUiAuthPolicy: bypassPolicy,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: false,
+        authOk: true,
+        hasSharedAuth: false,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("allow");
+
+    // Same bypass applies from a remote (non-localhost) connection (e.g. iframe at dev.coze.site).
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: true,
+        controlUiAuthPolicy: bypassPolicy,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: true,
+        authOk: true,
+        hasSharedAuth: true,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("allow");
   });
 
   test("pairing bypass requires control-ui bypass + shared auth (or trusted-proxy auth)", () => {

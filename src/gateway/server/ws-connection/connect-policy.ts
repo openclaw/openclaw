@@ -82,6 +82,11 @@ export function evaluateMissingDeviceIdentity(params: {
   if (params.isControlUi && params.trustedProxyAuthOk) {
     return { kind: "allow" };
   }
+  // dangerouslyDisableDeviceAuth bypasses device identity gating entirely.
+  // Shared-secret / token auth is still enforced separately via resolveConnectAuthDecision.
+  if (params.isControlUi && params.controlUiAuthPolicy.allowBypass) {
+    return { kind: "allow" };
+  }
   if (params.isControlUi && !params.controlUiAuthPolicy.allowBypass) {
     // Allow localhost Control UI connections when allowInsecureAuth is configured.
     // Localhost has no network interception risk, and browser SubtleCrypto
