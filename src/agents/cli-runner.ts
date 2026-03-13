@@ -105,13 +105,14 @@ export async function runCliAgent(params: {
     .join("\n");
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
-  const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
-    workspaceDir,
-    config: params.config,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
-  });
+  const { bootstrapFiles, contextFiles, typeDefinitionsPrompt } =
+    await resolveBootstrapContextForRun({
+      workspaceDir,
+      config: params.config,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+    });
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
   const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
   const bootstrapAnalysis = analyzeBootstrapBudget({
@@ -157,6 +158,7 @@ export async function runCliAgent(params: {
     bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
     modelDisplay,
     agentId: sessionAgentId,
+    typeDefinitionsPrompt,
   });
   const systemPromptReport = buildSystemPromptReport({
     source: "run",

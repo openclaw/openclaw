@@ -1422,7 +1422,7 @@ export async function runEmbeddedAttempt(
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
-    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
+    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles, typeDefinitionsPrompt } =
       await resolveBootstrapContextForRun({
         workspaceDir: effectiveWorkspace,
         config: params.config,
@@ -1669,6 +1669,7 @@ export async function runEmbeddedAttempt(
       contextFiles,
       bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
       memoryCitationsMode: params.config?.memory?.citations,
+      typeDefinitionsPrompt,
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",

@@ -28,12 +28,13 @@ export async function resolveCommandsSystemPromptBundle(
   params: HandleCommandsParams,
 ): Promise<CommandsSystemPromptBundle> {
   const workspaceDir = params.workspaceDir;
-  const { bootstrapFiles, contextFiles: injectedFiles } = await resolveBootstrapContextForRun({
-    workspaceDir,
-    config: params.cfg,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionEntry?.sessionId,
-  });
+  const { bootstrapFiles, contextFiles: injectedFiles, typeDefinitionsPrompt } =
+    await resolveBootstrapContextForRun({
+      workspaceDir,
+      config: params.cfg,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionEntry?.sessionId,
+    });
   const skillsSnapshot = (() => {
     try {
       return buildWorkspaceSkillSnapshot(workspaceDir, {
@@ -130,6 +131,7 @@ export async function resolveCommandsSystemPromptBundle(
     runtimeInfo,
     sandboxInfo,
     memoryCitationsMode: params.cfg?.memory?.citations,
+    typeDefinitionsPrompt,
   });
 
   return { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime };
