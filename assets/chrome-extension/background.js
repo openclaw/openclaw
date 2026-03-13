@@ -558,6 +558,8 @@ async function attachTab(tabId, opts = {}) {
   await chrome.debugger.attach(debuggee, '1.3')
   await chrome.debugger.sendCommand(debuggee, 'Page.enable').catch(() => {})
   if (detectedScheme) {
+    // Preserve the tab's existing color-scheme preference after debugger attach.
+    // Without restoring this, attach can knock pages out of their current theme.
     await chrome.debugger
       .sendCommand(debuggee, 'Emulation.setEmulatedMedia', {
         features: [{ name: 'prefers-color-scheme', value: detectedScheme }],
