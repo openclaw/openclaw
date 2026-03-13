@@ -17,12 +17,19 @@ export function normalizeZalouserGroupSlug(raw?: string | null): string {
     .replace(/^-+|-+$/g, "");
 }
 
+export function isZalouserDangerousNameMatchingEnabled(params: {
+  dangerouslyAllowNameMatching?: boolean;
+}): boolean {
+  return params.dangerouslyAllowNameMatching === true;
+}
+
 export function buildZalouserGroupCandidates(params: {
   groupId?: string | null;
   groupChannel?: string | null;
   groupName?: string | null;
   includeGroupIdAlias?: boolean;
   includeWildcard?: boolean;
+  allowNameMatching?: boolean;
 }): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -43,10 +50,12 @@ export function buildZalouserGroupCandidates(params: {
   if (params.includeGroupIdAlias === true && groupId) {
     push(`group:${groupId}`);
   }
-  push(groupChannel);
-  push(groupName);
-  if (groupName) {
-    push(normalizeZalouserGroupSlug(groupName));
+  if (params.allowNameMatching !== false) {
+    push(groupChannel);
+    push(groupName);
+    if (groupName) {
+      push(normalizeZalouserGroupSlug(groupName));
+    }
   }
   if (params.includeWildcard !== false) {
     push("*");
