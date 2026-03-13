@@ -86,10 +86,13 @@ const prompt = buildAgentSystemPrompt({
 const totalChars = prompt.length;
 
 // Dynamic content patterns — anything that changes per-session.
-// Use precise patterns that match only the actual dynamic value,
-// not structural markers that also appear in stable content.
+// Workspace files (# Project Context section) are treated as dynamic because they
+// change between sessions (MEMORY.md daily notes, project status files, etc.).
+// Stable prefix = all boilerplate before the first workspace file or model placeholder.
 const dynamicPatterns: RegExp[] = [
-  // The model placeholder we inject to mark the exact dynamic boundary
+  // Workspace file content — changes as workspace evolves between sessions
+  /^# Project Context$/m,
+  // The model placeholder we inject to mark the per-session model boundary
   /DYNAMIC_MODEL_PLACEHOLDER/,
   // ISO timestamps (userTime, session timestamps)
   /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/,
