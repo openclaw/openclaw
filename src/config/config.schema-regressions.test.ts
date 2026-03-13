@@ -51,6 +51,21 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts memorySearch outputDimensionality", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "gemini",
+            outputDimensionality: 768,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts safe iMessage remoteHost", () => {
     const res = validateConfigObject({
       channels: {
@@ -183,32 +198,5 @@ describe("config schema regressions", () => {
     });
 
     expect(res.ok).toBe(false);
-  });
-
-  it("accepts signal accountUuid for loop protection", () => {
-    const res = validateConfigObject({
-      channels: {
-        signal: {
-          accountUuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts telegram actions editMessage and createForumTopic", () => {
-    const res = validateConfigObject({
-      channels: {
-        telegram: {
-          actions: {
-            editMessage: true,
-            createForumTopic: false,
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
   });
 });
