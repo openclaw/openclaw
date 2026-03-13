@@ -140,6 +140,25 @@ describe("recordTokenUsage", () => {
     expect(content).toBe('{"broken":true');
   });
 
+  it("cross-process lock: concurrent writers via file lock do not lose records", async () => {
+    // Simulate two processes bypassing the in-memory queue by calling
+    // recordTokenUsage from independent promise chains simultaneously.
+    // If the file lock is working they must still land all records.
+    const N = 10;
+    const writes = Array.from({ length: N }, (_, i) => {
+      // Each call is deliberately NOT chained — they race on the file lock.
+      return recordTokenUsage({
+        workspaceDir: tmpDir,
+        label: "llm_output",
+        usage: { input: i + 1, output: 1, total: i + 2 },
+      });
+    });
+    await Promise.all(writes);
+
+    const records = JSON.parse(await fs.readFile(usageFile, "utf-8"));
+    expect(records).toHaveLength(N);
+  });
+
   it("serialises concurrent writes — no record is lost", async () => {
     const N = 20;
     await Promise.all(
