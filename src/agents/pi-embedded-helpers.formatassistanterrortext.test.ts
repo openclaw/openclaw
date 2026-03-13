@@ -152,4 +152,25 @@ describe("formatRawAssistantErrorForUi", () => {
       "The AI service is temporarily unavailable (HTTP 521). Please try again in a moment.",
     );
   });
+
+  it("handles tool_use_id 'does not match' error", () => {
+    const msg = {
+      stopReason: "error",
+      errorMessage:
+        "tool_use_id 'toolu_abc123' does not match any tool_use block in the conversation",
+    } as AssistantMessage;
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Tool call ID mismatch");
+    expect(result).toContain("/reset");
+  });
+
+  it("handles tool_call_id mismatch error", () => {
+    const msg = {
+      stopReason: "error",
+      errorMessage: "tool_call_id mismatch detected in session",
+    } as AssistantMessage;
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Tool call ID mismatch");
+    expect(result).toContain("session state is corrupted");
+  });
 });
