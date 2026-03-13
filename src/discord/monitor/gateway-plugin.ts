@@ -63,12 +63,35 @@ export function createDiscordGatewayPlugin(params: {
               },
               dispatcher: fetchAgent,
             } as Record<string, unknown>);
+            // Check HTTP status before parsing JSON — non-2xx responses (e.g. Discord 503
+            // during transient outages) return non-JSON bodies that would otherwise throw
+            // an opaque JSON parse error. Carbon calls registerClient() without awaiting,
+            // so any unhandled rejection crashes the entire Node.js process.
+            if (!response.ok) {
+              let body = "";
+              try {
+                body = await response.text();
+              } catch {
+                // ignore body read errors
+              }
+              const err = new Error(
+                `Failed to get gateway information from Discord: HTTP ${response.status}: ${body.slice(0, 200)}`,
+              );
+              // Emit on the gateway emitter so the lifecycle error handler picks it up,
+              // then schedule a reconnect attempt with backoff instead of crashing.
+              this.emitter.emit("error", err);
+              this.handleReconnectionAttempt({});
+              return;
+            }
             this.gatewayInfo = (await response.json()) as APIGatewayBotInfo;
           } catch (error) {
-            throw new Error(
+            const err = new Error(
               `Failed to get gateway information from Discord: ${error instanceof Error ? error.message : String(error)}`,
               { cause: error },
             );
+            this.emitter.emit("error", err);
+            this.handleReconnectionAttempt({});
+            return;
           }
         }
         return super.registerClient(client);

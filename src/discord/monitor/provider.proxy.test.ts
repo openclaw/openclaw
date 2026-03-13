@@ -34,12 +34,17 @@ const {
   class GatewayPlugin {
     options: unknown;
     gatewayInfo: unknown;
+    emitter = { emit: vi.fn() };
+    handleReconnectionAttemptSpy = vi.fn();
     constructor(options?: unknown, gatewayInfo?: unknown) {
       this.options = options;
       this.gatewayInfo = gatewayInfo;
     }
     async registerClient(client: unknown) {
       baseRegisterClientSpy(client);
+    }
+    handleReconnectionAttempt(opts: unknown) {
+      this.handleReconnectionAttemptSpy(opts);
     }
   }
 
@@ -169,6 +174,7 @@ describe("createDiscordGatewayPlugin", () => {
   it("uses proxy fetch for gateway metadata lookup before registering", async () => {
     const runtime = createRuntime();
     undiciFetchMock.mockResolvedValue({
+      ok: true,
       json: async () => ({ url: "wss://gateway.discord.gg" }),
     } as Response);
     const plugin = createDiscordGatewayPlugin({
@@ -193,5 +199,36 @@ describe("createDiscordGatewayPlugin", () => {
       }),
     );
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits error and schedules reconnect when Discord returns a non-2xx response", async () => {
+    const runtime = createRuntime();
+    undiciFetchMock.mockResolvedValue({
+      ok: false,
+      status: 503,
+      text: async () => "upstream connect error or disconnect/reset before headers",
+    } as unknown as Response);
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: { proxy: "http://proxy.test:8080" },
+      runtime,
+    });
+
+    await (
+      plugin as unknown as {
+        registerClient: (client: { options: { token: string } }) => Promise<void>;
+      }
+    ).registerClient({
+      options: { token: "token-123" },
+    });
+
+    const emitter = (plugin as unknown as { emitter: { emit: ReturnType<typeof vi.fn> } }).emitter;
+    const reconnectSpy = (
+      plugin as unknown as { handleReconnectionAttemptSpy: ReturnType<typeof vi.fn> }
+    ).handleReconnectionAttemptSpy;
+    expect(emitter.emit).toHaveBeenCalledWith("error", expect.any(Error));
+    const emittedError = (emitter.emit.mock.calls[0] as unknown[])[1] as Error;
+    expect(emittedError.message).toContain("HTTP 503");
+    expect(reconnectSpy).toHaveBeenCalledTimes(1);
+    expect(baseRegisterClientSpy).not.toHaveBeenCalled();
   });
 });
