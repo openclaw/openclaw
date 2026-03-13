@@ -145,7 +145,7 @@ describe("openVerifiedFileSync", () => {
       openSync: () => 42,
       fstatSync: mockFstatSync(mockStat({ isFile: true, size: 1, dev: 2, ino: 1 })),
       closeSync,
-    } as unknown as SafeIoFs;
+    };
 
     const opened = openVerifiedFileSync({
       filePath: "/input/file.txt",
@@ -170,7 +170,7 @@ describe("openVerifiedFileSync", () => {
       openSync: () => 42,
       fstatSync: mockFstatSync(mockStat({ isFile: true })),
       closeSync: () => {},
-    } as unknown as SafeIoFs;
+    };
 
     const opened = openVerifiedFileSync({
       filePath: "/input/file.txt",
