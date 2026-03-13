@@ -215,7 +215,7 @@ export function collectSystemdExecStartValues(contents: string): string[] {
   for (const line of logicalLines) {
     const sectionMatch = line.match(/^\[([^\]]+)\]$/);
     if (sectionMatch) {
-      inServiceSection = sectionMatch[1]?.trim() === "Service";
+      inServiceSection = sectionMatch[1] === "Service";
       continue;
     }
     if (!inServiceSection) {
