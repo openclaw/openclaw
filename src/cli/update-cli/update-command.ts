@@ -36,7 +36,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stylePromptMessage } from "../../terminal/prompt-style.js";
 import { theme } from "../../terminal/theme.js";
-import { pathExists } from "../../utils.js";
+import { pathExists, shortenHomePath } from "../../utils.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-cli.js";
@@ -146,7 +146,7 @@ function printDryRunPreview(preview: UpdateDryRunPreview, jsonMode: boolean): vo
   defaultRuntime.log(theme.heading("Update dry-run"));
   defaultRuntime.log(theme.muted("No changes were applied."));
   defaultRuntime.log("");
-  defaultRuntime.log(`  Root: ${theme.muted(preview.root)}`);
+  defaultRuntime.log(`  Root: ${theme.muted(shortenHomePath(preview.root))}`);
   defaultRuntime.log(`  Install kind: ${theme.muted(preview.installKind)}`);
   defaultRuntime.log(`  Mode: ${theme.muted(preview.mode)}`);
   defaultRuntime.log(`  Channel: ${theme.muted(preview.effectiveChannel)}`);

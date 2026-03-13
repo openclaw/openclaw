@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
@@ -362,6 +363,20 @@ describe("update-cli", () => {
     const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
     expect(logs.join("\n")).toContain("Update dry-run");
     expect(logs.join("\n")).toContain("No changes were applied.");
+  });
+
+  it("updateCommand --dry-run shortens home-root paths in human output", async () => {
+    vi.mocked(defaultRuntime.log).mockClear();
+    serviceLoaded.mockResolvedValue(true);
+    const home = os.homedir();
+    mockPackageInstallStatus(`${home}/.local/share/openclaw`);
+
+    await updateCommand({ dryRun: true, channel: "beta" });
+
+    const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+    expect(logs.join("\n")).toContain("Root:");
+    expect(logs.join("\n")).toContain("~/.local/share/openclaw");
+    expect(logs.join("\n")).not.toContain(`${home}/.local/share/openclaw`);
   });
 
   it("updateStatusCommand prints table output", async () => {
