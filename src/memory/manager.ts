@@ -122,6 +122,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   >();
   private sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
+  private queuedSyncParams: {
+    reason?: string;
+    force?: boolean;
+    sessionFiles?: string[];
+    progress?: (update: MemorySyncProgressUpdate) => void;
+  } | null = null;
   private readonlyRecoveryAttempts = 0;
   private readonlyRecoverySuccesses = 0;
   private readonlyRecoveryFailures = 0;
@@ -456,10 +462,33 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return;
     }
     if (this.syncing) {
+      const queued = this.queuedSyncParams;
+      this.queuedSyncParams = {
+        reason: params?.reason ?? queued?.reason,
+        force: params?.force || queued?.force,
+        sessionFiles: Array.from(
+          new Set([
+            ...(queued?.sessionFiles ?? []),
+            ...(params?.sessionFiles?.filter((sessionFile) => sessionFile.trim().length > 0) ?? []),
+          ]),
+        ),
+        progress: params?.progress ?? queued?.progress,
+      };
       return this.syncing;
     }
-    this.syncing = this.runSyncWithReadonlyRecovery(params).finally(() => {
+    this.syncing = (async () => {
+      let nextParams = params;
+      while (!this.closed) {
+        this.queuedSyncParams = null;
+        await this.runSyncWithReadonlyRecovery(nextParams);
+        if (!this.queuedSyncParams) {
+          break;
+        }
+        nextParams = this.queuedSyncParams;
+      }
+    })().finally(() => {
       this.syncing = null;
+      this.queuedSyncParams = null;
     });
     return this.syncing ?? Promise.resolve();
   }
