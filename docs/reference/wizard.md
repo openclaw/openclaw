@@ -39,6 +39,8 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
     - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then stores it in auth profiles.
     - **xAI (Grok) API key**: prompts for `XAI_API_KEY` and configures xAI as a model provider.
     - **OpenCode**: prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`, get it at https://opencode.ai/auth) and lets you pick the Zen or Go catalog.
+    - **Ollama**: prompts for the Ollama base URL, offers **Cloud + Local** or **Local** mode, discovers available models, and auto-pulls the selected local model when needed.
+    - More detail: [Ollama](/providers/ollama)
     - **API key**: stores the key for you.
     - **Vercel AI Gateway (multi-model proxy)**: prompts for `AI_GATEWAY_API_KEY`.
     - More detail: [Vercel AI Gateway](/providers/vercel-ai-gateway)
@@ -238,6 +240,18 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
     Swap to `--auth-choice opencode-go --opencode-go-api-key "$OPENCODE_API_KEY"` for the Go catalog.
+  </Accordion>
+  <Accordion title="Ollama example">
+    ```bash
+    openclaw onboard --non-interactive \
+      --mode local \
+      --auth-choice ollama \
+      --custom-model-id "qwen3.5:27b" \
+      --accept-risk \
+      --gateway-port 18789 \
+      --gateway-bind loopback
+    ```
+    Add `--custom-base-url "http://ollama-host:11434"` to target a remote Ollama instance.
   </Accordion>
 </AccordionGroup>
 
