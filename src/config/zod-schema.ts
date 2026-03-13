@@ -363,6 +363,7 @@ export const OpenClawSchema = z
                   .union([z.literal("openclaw"), z.literal("clawd"), z.literal("extension")])
                   .optional(),
                 attachOnly: z.boolean().optional(),
+                lockTab: z.boolean().optional(),
                 color: HexColorSchema,
               })
               .strict()

@@ -1,4 +1,6 @@
 import { createHmac } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
@@ -58,7 +60,22 @@ async function resolveGatewayAuthToken(): Promise<string | null> {
     if (err instanceof SecretRefUnavailableError) {
       throw err;
     }
-    // ignore config read failures; caller can fallback to per-process random token
+    // ignore config read failures
+  }
+
+  // Hard fallback: manually read from .openclaw/openclaw.json without loadConfig plugins
+  try {
+    const defaultPath =
+      process.env.OPENCLAW_CONFIG_PATH || path.join(process.cwd(), ".openclaw", "openclaw.json");
+    if (fs.existsSync(defaultPath)) {
+      const raw = fs.readFileSync(defaultPath, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (parsed?.gateway?.auth?.token) {
+        return parsed.gateway.auth.token.trim();
+      }
+    }
+  } catch {
+    // ignore
   }
   return null;
 }
