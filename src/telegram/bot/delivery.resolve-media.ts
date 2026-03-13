@@ -118,6 +118,18 @@ function resolveOptionalTelegramTransport(transport?: TelegramTransport): Telegr
 /** Default idle timeout for Telegram media downloads (30 seconds). */
 const TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 
+function isConnectionLevelMediaFetchFailed(err: unknown): boolean {
+  if (typeof MediaFetchError !== "function" || !err || typeof err !== "object") {
+    return false;
+  }
+  const candidate = err as { code?: unknown; message?: unknown };
+  if (candidate.code !== "fetch_failed" || typeof candidate.message !== "string") {
+    return false;
+  }
+  const lower = candidate.message.toLowerCase();
+  return lower.includes("typeerror: fetch failed");
+}
+
 function resolveIpv4FallbackDispatcherPolicy(
   policy: TelegramTransport["pinnedDispatcherPolicy"],
 ): TelegramTransport["pinnedDispatcherPolicy"] | undefined {
@@ -175,11 +187,7 @@ async function downloadAndSaveTelegramFile(params: {
     const fallbackPolicy = resolveIpv4FallbackDispatcherPolicy(
       params.transport.pinnedDispatcherPolicy,
     );
-    if (
-      !(err instanceof MediaFetchError) ||
-      err.code !== "fetch_failed" ||
-      !fallbackPolicy
-    ) {
+    if (!isConnectionLevelMediaFetchFailed(err) || !fallbackPolicy) {
       throw err;
     }
     logVerbose(
