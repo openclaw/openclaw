@@ -73,7 +73,7 @@ fi
 if [[ "${PACKAGE_VERSION}" =~ ^([0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2})([.-]?beta[.-][0-9]+)?$ ]]; then
   MARKETING_VERSION="${BASH_REMATCH[1]}"
 else
-  echo "Unsupported package.json.version '${PACKAGE_VERSION}'. Expected 2026.3.9 or 2026.3.9-beta.1." >&2
+  echo "Unsupported package.json.version '${PACKAGE_VERSION}'. Expected 2026.3.13 or 2026.3.13-beta.1." >&2
   exit 1
 fi
 

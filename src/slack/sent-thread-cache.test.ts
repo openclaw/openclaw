@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../test/helpers/import-fresh.js";
 import {
   clearSlackThreadParticipationCache,
   hasSlackThreadParticipation,
@@ -47,6 +48,29 @@ describe("slack sent-thread-cache", () => {
     clearSlackThreadParticipationCache();
     expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(false);
     expect(hasSlackThreadParticipation("A1", "C456", "1700000000.000002")).toBe(false);
+  });
+
+  it("shares thread participation across distinct module instances", async () => {
+    const cacheA = await importFreshModule<typeof import("./sent-thread-cache.js")>(
+      import.meta.url,
+      "./sent-thread-cache.js?scope=shared-a",
+    );
+    const cacheB = await importFreshModule<typeof import("./sent-thread-cache.js")>(
+      import.meta.url,
+      "./sent-thread-cache.js?scope=shared-b",
+    );
+
+    cacheA.clearSlackThreadParticipationCache();
+
+    try {
+      cacheA.recordSlackThreadParticipation("A1", "C123", "1700000000.000001");
+      expect(cacheB.hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(true);
+
+      cacheB.clearSlackThreadParticipationCache();
+      expect(cacheA.hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(false);
+    } finally {
+      cacheA.clearSlackThreadParticipationCache();
+    }
   });
 
   it("expired entries return false and are cleaned up on read", () => {
