@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import {
   DEFAULT_SECRET_PROVIDER_ALIAS,
   type SecretInput,
@@ -10,7 +11,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "minimax" | "perplexity";
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -20,6 +21,9 @@ type SearchProviderEntry = {
   placeholder: string;
   signupUrl: string;
 };
+
+const MINIMAX_SIGNUP_URL_GLOBAL = "https://platform.minimax.io/";
+const MINIMAX_SIGNUP_URL_CN = "https://platform.minimaxi.com/";
 
 export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
   {
@@ -55,6 +59,14 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
     signupUrl: "https://platform.moonshot.cn/",
   },
   {
+    value: "minimax",
+    label: "MiniMax Search",
+    hint: "MiniMax web search · OAuth works (API key optional)",
+    envKeys: ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
+    placeholder: "minimax-...",
+    signupUrl: MINIMAX_SIGNUP_URL_GLOBAL,
+  },
+  {
     value: "perplexity",
     label: "Perplexity Search",
     hint: "Structured results · domain/country/language/time filters",
@@ -68,6 +80,40 @@ export function hasKeyInEnv(entry: SearchProviderEntry): boolean {
   return entry.envKeys.some((k) => Boolean(process.env[k]?.trim()));
 }
 
+function resolveSearchProviderSignupUrl(
+  config: OpenClawConfig,
+  entry: SearchProviderEntry,
+): string {
+  if (entry.value !== "minimax") {
+    return entry.signupUrl;
+  }
+
+  const modelPrimary =
+    resolveAgentModelPrimaryValue(config.agents?.defaults?.model)?.trim().toLowerCase() ?? "";
+  if (modelPrimary.startsWith("minimax-cn/")) {
+    return MINIMAX_SIGNUP_URL_CN;
+  }
+
+  const providers = config.models?.providers;
+  if (providers && typeof providers === "object") {
+    const minimaxCn = providers["minimax-cn"];
+    if (minimaxCn && typeof minimaxCn === "object") {
+      return MINIMAX_SIGNUP_URL_CN;
+    }
+
+    const minimax = providers.minimax;
+    if (minimax && typeof minimax === "object") {
+      const baseUrl =
+        "baseUrl" in minimax && typeof minimax.baseUrl === "string" ? minimax.baseUrl : "";
+      if (baseUrl.toLowerCase().includes("minimaxi.com")) {
+        return MINIMAX_SIGNUP_URL_CN;
+      }
+    }
+  }
+
+  return MINIMAX_SIGNUP_URL_GLOBAL;
+}
+
 function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown {
   const search = config.tools?.web?.search;
   switch (provider) {
@@ -79,6 +125,8 @@ function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown 
       return search?.grok?.apiKey;
     case "kimi":
       return search?.kimi?.apiKey;
+    case "minimax":
+      return search?.minimax?.apiKey;
     case "perplexity":
       return search?.perplexity?.apiKey;
   }
@@ -140,6 +188,9 @@ export function applySearchKey(
       break;
     case "kimi":
       search.kimi = { ...search.kimi, apiKey: key };
+      break;
+    case "minimax":
+      search.minimax = { ...search.minimax, apiKey: key };
       break;
     case "perplexity":
       search.perplexity = { ...search.perplexity, apiKey: key };
@@ -244,6 +295,7 @@ export async function setupSearch(
   }
 
   const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === choice)!;
+  const signupUrl = resolveSearchProviderSignupUrl(config, entry);
   const existingKey = resolveExistingKey(config, choice);
   const keyConfigured = hasExistingKey(config, choice);
   const envAvailable = hasKeyInEnv(entry);
@@ -299,7 +351,7 @@ export async function setupSearch(
   await prompter.note(
     [
       "No API key stored — web_search won't work until a key is available.",
-      `Get your key at: ${entry.signupUrl}`,
+      `Get your key at: ${signupUrl}`,
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",

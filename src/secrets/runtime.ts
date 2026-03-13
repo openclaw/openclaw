@@ -155,6 +155,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
       sourceConfig,
       resolvedConfig,
       context,
+      loadAuthStore,
     }),
   };
   preparedSnapshotRefreshContext.set(snapshot, {

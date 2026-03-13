@@ -1,9 +1,15 @@
+import { createHash } from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { logVerbose } from "../../globals.js";
-import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.js";
+import { createResolverContext } from "../../secrets/runtime-shared.js";
+import {
+  resolveMinimaxApiKeyFromAuthProfiles,
+  type RuntimeWebSearchMetadata,
+} from "../../secrets/runtime-web-tools.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import type { AnyAgentTool } from "./common.js";
@@ -22,7 +28,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "minimax", "perplexity"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -39,12 +45,23 @@ const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";
 const DEFAULT_KIMI_BASE_URL = "https://api.moonshot.ai/v1";
 const DEFAULT_KIMI_MODEL = "moonshot-v1-128k";
+const DEFAULT_MINIMAX_API_HOST = "https://api.minimax.io";
+const MINIMAX_SEARCH_PATH = "/v1/coding_plan/search";
+const MINIMAX_VERIFY_QUERY = "ping";
+const MINIMAX_VERIFY_COUNT = 1;
+const MINIMAX_VERIFY_DEFAULT_TTL_MS = 15 * 60 * 1000;
 const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",
   function: { name: "$web_search" },
 } as const;
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
+const MINIMAX_VERIFY_CACHE = new Map<
+  string,
+  CacheEntry<{
+    verified: boolean;
+  }>
+>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
 const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
 const BRAVE_SEARCH_LANG_CODES = new Set([
@@ -333,6 +350,14 @@ type KimiConfig = {
   model?: string;
 };
 
+type MinimaxConfig = {
+  apiKey?: string;
+  baseUrl?: string;
+};
+
+const MINIMAX_PROVIDER_IDS = ["minimax", "minimax-cn", "minimax-portal"] as const;
+type MinimaxProviderId = (typeof MINIMAX_PROVIDER_IDS)[number];
+
 type GrokSearchResponse = {
   output?: Array<{
     type?: string;
@@ -390,6 +415,24 @@ type KimiSearchResponse = {
     url?: string;
     content?: string;
   }>;
+};
+
+type MinimaxBaseResponse = {
+  status_code?: number;
+  status_msg?: string;
+};
+
+type MinimaxSearchResult = {
+  title?: string;
+  link?: string;
+  snippet?: string;
+  date?: string;
+};
+
+type MinimaxSearchResponse = {
+  base_resp?: MinimaxBaseResponse;
+  organic?: MinimaxSearchResult[];
+  related_searches?: string[];
 };
 
 type PerplexitySearchResponse = {
@@ -593,6 +636,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "minimax") {
+    return {
+      error: "missing_minimax_api_key",
+      message:
+        "web_search (minimax) needs credentials. Set MINIMAX_OAUTH_TOKEN or MINIMAX_API_KEY in the Gateway environment, or configure tools.web.search.minimax.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_perplexity_api_key",
     message:
@@ -617,6 +668,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "kimi") {
     return "kimi";
+  }
+  if (raw === "minimax") {
+    return "minimax";
   }
   if (raw === "perplexity") {
     return "perplexity";
@@ -654,6 +708,14 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
         'web_search: no provider configured, auto-detected "kimi" from available API keys',
       );
       return "kimi";
+    }
+    // MiniMax
+    const minimaxConfig = resolveMinimaxConfig(search);
+    if (resolveMinimaxApiKey(minimaxConfig)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "minimax" from available API keys',
+      );
+      return "minimax";
     }
     // Perplexity
     const perplexityConfig = resolvePerplexityConfig(search);
@@ -887,6 +949,154 @@ function resolveKimiBaseUrl(kimi?: KimiConfig): string {
   const fromConfig =
     kimi && "baseUrl" in kimi && typeof kimi.baseUrl === "string" ? kimi.baseUrl.trim() : "";
   return fromConfig || DEFAULT_KIMI_BASE_URL;
+}
+
+function resolveMinimaxConfig(search?: WebSearchConfig): MinimaxConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const minimax = "minimax" in search ? search.minimax : undefined;
+  if (!minimax || typeof minimax !== "object") {
+    return {};
+  }
+  return minimax as MinimaxConfig;
+}
+
+function resolveMinimaxApiKey(minimax?: MinimaxConfig): string | undefined {
+  const fromConfig = normalizeApiKey(minimax?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnvOauthToken = normalizeApiKey(process.env.MINIMAX_OAUTH_TOKEN);
+  if (fromEnvOauthToken) {
+    return fromEnvOauthToken;
+  }
+  const fromEnvApiKey = normalizeApiKey(process.env.MINIMAX_API_KEY);
+  return fromEnvApiKey || undefined;
+}
+
+async function resolveMinimaxRuntimeCredentials(params: {
+  cfg?: OpenClawConfig;
+  minimax?: MinimaxConfig;
+  runtimeWebSearch?: RuntimeWebSearchMetadata;
+}): Promise<{ apiKey?: string; apiHost?: string }> {
+  const apiKey = resolveMinimaxApiKey(params.minimax);
+  if (apiKey) {
+    return {
+      apiKey,
+      apiHost: resolveMinimaxApiHost({
+        cfg: params.cfg,
+        minimax: params.minimax,
+        runtimeApiHost: params.runtimeWebSearch?.minimaxApiHost,
+      }),
+    };
+  }
+
+  const cfg = params.cfg;
+  if (!cfg) {
+    return {};
+  }
+
+  const authProfileMatch = await resolveMinimaxApiKeyFromAuthProfiles({
+    sourceConfig: cfg,
+    context: createResolverContext({
+      sourceConfig: cfg,
+      env: process.env,
+    }),
+  });
+  if (!authProfileMatch) {
+    return {};
+  }
+
+  return {
+    apiKey: authProfileMatch.apiKey,
+    apiHost: resolveMinimaxApiHost({
+      cfg,
+      minimax: params.minimax,
+      runtimeApiHost: params.runtimeWebSearch?.minimaxApiHost ?? authProfileMatch.apiHost,
+    }),
+  };
+}
+
+function resolveUrlOrigin(raw?: string): string | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    return new URL(trimmed).origin;
+  } catch {
+    // Not a full URL yet; retry below by prefixing "https://".
+  }
+  try {
+    return new URL(`https://${trimmed}`).origin;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveConfiguredMinimaxProviderBaseUrl(params: {
+  cfg?: OpenClawConfig;
+  providerId: MinimaxProviderId;
+}): string | undefined {
+  const providers = params.cfg?.models?.providers as Record<string, unknown> | undefined;
+  if (!providers || typeof providers !== "object") {
+    return undefined;
+  }
+  const provider = providers[params.providerId];
+  if (!provider || typeof provider !== "object") {
+    return undefined;
+  }
+  const value = (provider as Record<string, unknown>).baseUrl;
+  return typeof value === "string" ? value.trim() : undefined;
+}
+
+function resolveMinimaxProviderPriority(params: { cfg?: OpenClawConfig }): MinimaxProviderId[] {
+  const modelProviderPrefix = resolveAgentModelPrimaryValue(params.cfg?.agents?.defaults?.model)
+    ?.trim()
+    .toLowerCase()
+    .split("/")[0];
+  if (
+    modelProviderPrefix &&
+    MINIMAX_PROVIDER_IDS.includes(modelProviderPrefix as MinimaxProviderId)
+  ) {
+    return [
+      modelProviderPrefix as MinimaxProviderId,
+      ...MINIMAX_PROVIDER_IDS.filter((id) => id !== modelProviderPrefix),
+    ];
+  }
+  return [...MINIMAX_PROVIDER_IDS];
+}
+
+function resolveMinimaxApiHost(params?: {
+  cfg?: OpenClawConfig;
+  minimax?: MinimaxConfig;
+  runtimeApiHost?: string;
+}): string {
+  const fromRuntime = resolveUrlOrigin(params?.runtimeApiHost);
+  if (fromRuntime) {
+    return fromRuntime;
+  }
+
+  const fromSearchConfig = resolveUrlOrigin(params?.minimax?.baseUrl);
+  if (fromSearchConfig) {
+    return fromSearchConfig;
+  }
+
+  const fromEnv = resolveUrlOrigin(normalizeSecretInput(process.env.MINIMAX_API_HOST));
+  if (fromEnv) {
+    return fromEnv;
+  }
+
+  for (const providerId of resolveMinimaxProviderPriority({ cfg: params?.cfg })) {
+    const baseUrl = resolveConfiguredMinimaxProviderBaseUrl({ cfg: params?.cfg, providerId });
+    const origin = resolveUrlOrigin(baseUrl);
+    if (origin) {
+      return origin;
+    }
+  }
+
+  return DEFAULT_MINIMAX_API_HOST;
 }
 
 function resolveGeminiConfig(search?: WebSearchConfig): GeminiConfig {
@@ -1510,6 +1720,138 @@ async function runKimiSearch(params: {
   };
 }
 
+async function runMinimaxSearch(params: {
+  query: string;
+  apiKey: string;
+  count: number;
+  timeoutSeconds: number;
+  apiHost?: string;
+}): Promise<{
+  results: Array<{
+    title: string;
+    url: string;
+    description: string;
+    published?: string;
+    siteName?: string;
+  }>;
+  relatedSearches?: string[];
+}> {
+  const endpoint = new URL(MINIMAX_SEARCH_PATH, params.apiHost ?? DEFAULT_MINIMAX_API_HOST);
+
+  return withTrustedWebSearchEndpoint(
+    {
+      url: endpoint.toString(),
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+          "MM-API-Source": "OpenClaw",
+        },
+        body: JSON.stringify({
+          q: params.query,
+          count: params.count,
+        }),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        return await throwWebSearchApiError(res, "MiniMax");
+      }
+
+      let data: MinimaxSearchResponse;
+      try {
+        data = (await res.json()) as MinimaxSearchResponse;
+      } catch (error) {
+        throw new Error(`MiniMax API returned invalid JSON: ${String(error)}`, { cause: error });
+      }
+
+      const baseResp = data.base_resp ?? {};
+      const code = typeof baseResp.status_code === "number" ? baseResp.status_code : 0;
+      if (code !== 0) {
+        const msg = typeof baseResp.status_msg === "string" ? baseResp.status_msg.trim() : "";
+        throw new Error(`MiniMax API error (${code})${msg ? `: ${msg}` : ""}`);
+      }
+
+      const organic = Array.isArray(data.organic) ? data.organic : [];
+      const results = organic.slice(0, params.count).map((entry) => {
+        const title = entry.title ?? "";
+        const url = entry.link ?? "";
+        const snippet = entry.snippet ?? "";
+        return {
+          title: title ? wrapWebContent(title, "web_search") : "",
+          url,
+          description: snippet ? wrapWebContent(snippet, "web_search") : "",
+          published: entry.date ?? undefined,
+          siteName: resolveSiteName(url) || undefined,
+        };
+      });
+      const relatedSearches = normalizeMinimaxRelatedSearches(data.related_searches);
+
+      return {
+        results,
+        relatedSearches,
+      };
+    },
+  );
+}
+
+function buildMinimaxVerifyCacheKey(params: { apiHost: string; apiKey: string }): string {
+  const host = resolveUrlOrigin(params.apiHost) ?? params.apiHost.trim().toLowerCase();
+  const digest = createHash("sha256").update(`${host}|${params.apiKey}`).digest("hex");
+  return normalizeCacheKey(`minimax-verify:${digest}`);
+}
+
+async function verifyMinimaxSearchAccess(params: {
+  apiKey: string;
+  apiHost: string;
+  timeoutSeconds: number;
+  cacheTtlMs?: number;
+}): Promise<{ ok: true; cached: boolean } | { ok: false; reason: string; cached: boolean }> {
+  const cacheKey = buildMinimaxVerifyCacheKey({
+    apiHost: params.apiHost,
+    apiKey: params.apiKey,
+  });
+  const cached = readCache(MINIMAX_VERIFY_CACHE, cacheKey);
+  if (cached?.value?.verified) {
+    return { ok: true, cached: true };
+  }
+
+  const probeTimeoutSeconds = Math.max(3, Math.min(params.timeoutSeconds, 8));
+  try {
+    await runMinimaxSearch({
+      query: MINIMAX_VERIFY_QUERY,
+      apiKey: params.apiKey,
+      count: MINIMAX_VERIFY_COUNT,
+      timeoutSeconds: probeTimeoutSeconds,
+      apiHost: params.apiHost,
+    });
+    writeCache(
+      MINIMAX_VERIFY_CACHE,
+      cacheKey,
+      { verified: true },
+      params.cacheTtlMs ?? MINIMAX_VERIFY_DEFAULT_TTL_MS,
+    );
+    return { ok: true, cached: false };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return { ok: false, reason, cached: false };
+  }
+}
+
+function normalizeMinimaxRelatedSearches(values?: unknown[]): string[] | undefined {
+  if (!Array.isArray(values)) {
+    return undefined;
+  }
+  const normalized = values
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item.length > 0)
+    .map((item) => wrapWebContent(item, "web_search"));
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 function mapBraveLlmContextResults(
   data: BraveLlmContextResponse,
 ): { url: string; title: string; snippets: string[]; siteName?: string }[] {
@@ -1602,6 +1944,7 @@ async function runWebSearch(params: {
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
+  minimaxApiHost?: string;
   braveMode?: "web" | "llm-context";
 }): Promise<Record<string, unknown>> {
   const effectiveBraveMode = params.braveMode ?? "web";
@@ -1614,7 +1957,9 @@ async function runWebSearch(params: {
           ? (params.geminiModel ?? DEFAULT_GEMINI_MODEL)
           : params.provider === "kimi"
             ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
-            : "";
+            : params.provider === "minimax"
+              ? (params.minimaxApiHost ?? DEFAULT_MINIMAX_API_HOST)
+              : "";
   const cacheKey = normalizeCacheKey(
     params.provider === "brave" && effectiveBraveMode === "llm-context"
       ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}`
@@ -1738,6 +2083,33 @@ async function runWebSearch(params: {
       },
       content: wrapWebContent(content),
       citations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
+  if (params.provider === "minimax") {
+    const { results, relatedSearches } = await runMinimaxSearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      count: params.count,
+      timeoutSeconds: params.timeoutSeconds,
+      apiHost: params.minimaxApiHost,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: results.length,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results,
+      ...(relatedSearches ? { relatedSearches } : {}),
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
@@ -1909,6 +2281,7 @@ export function createWebSearchTool(options?: {
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const minimaxConfig = resolveMinimaxConfig(search);
   const braveConfig = resolveBraveConfig(search);
   const braveMode = resolveBraveMode(braveConfig);
 
@@ -1921,11 +2294,13 @@ export function createWebSearchTool(options?: {
         ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
         : provider === "kimi"
           ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
-          : provider === "gemini"
-            ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : braveMode === "llm-context"
-              ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
-              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+          : provider === "minimax"
+            ? "Search the web using MiniMax Coding Plan Search. Returns organic web results with snippets."
+            : provider === "gemini"
+              ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
+              : braveMode === "llm-context"
+                ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
+                : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1940,6 +2315,14 @@ export function createWebSearchTool(options?: {
       // do not touch Perplexity-only credential surfaces during tool construction.
       const perplexityRuntime =
         provider === "perplexity" ? resolvePerplexityTransport(perplexityConfig) : undefined;
+      const minimaxRuntime =
+        provider === "minimax"
+          ? await resolveMinimaxRuntimeCredentials({
+              cfg: options?.config,
+              minimax: minimaxConfig,
+              runtimeWebSearch: options?.runtimeWebSearch,
+            })
+          : undefined;
       const apiKey =
         provider === "perplexity"
           ? perplexityRuntime?.apiKey
@@ -1947,12 +2330,35 @@ export function createWebSearchTool(options?: {
             ? resolveGrokApiKey(grokConfig)
             : provider === "kimi"
               ? resolveKimiApiKey(kimiConfig)
-              : provider === "gemini"
-                ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+              : provider === "minimax"
+                ? minimaxRuntime?.apiKey
+                : provider === "gemini"
+                  ? resolveGeminiApiKey(geminiConfig)
+                  : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
+      }
+
+      const timeoutSeconds = resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
+      const minimaxApiHost = resolveMinimaxApiHost({
+        cfg: options?.config,
+        minimax: minimaxConfig,
+        runtimeApiHost: minimaxRuntime?.apiHost ?? options?.runtimeWebSearch?.minimaxApiHost,
+      });
+      if (provider === "minimax") {
+        const verify = await verifyMinimaxSearchAccess({
+          apiKey,
+          apiHost: minimaxApiHost,
+          timeoutSeconds,
+        });
+        if (!verify.ok) {
+          return jsonResult({
+            error: "minimax_search_unavailable",
+            message: `web_search (minimax) credential probe failed for coding_plan/search. ${verify.reason}`,
+            docs: "https://docs.openclaw.ai/tools/web",
+          });
+        }
       }
 
       const supportsStructuredPerplexityFilters =
@@ -2164,7 +2570,7 @@ export function createWebSearchTool(options?: {
         query,
         count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
         apiKey,
-        timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
+        timeoutSeconds,
         cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         provider,
         country,
@@ -2185,6 +2591,7 @@ export function createWebSearchTool(options?: {
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
+        minimaxApiHost,
         braveMode,
       });
       return jsonResult(result);
@@ -2215,8 +2622,14 @@ export const __testing = {
   resolveKimiApiKey,
   resolveKimiModel,
   resolveKimiBaseUrl,
+  resolveMinimaxApiKey,
+  resolveMinimaxRuntimeCredentials,
+  resolveMinimaxApiHost,
+  verifyMinimaxSearchAccess,
+  normalizeMinimaxRelatedSearches,
   extractKimiCitations,
   resolveRedirectUrl: resolveCitationRedirectUrl,
   resolveBraveMode,
   mapBraveLlmContextResults,
+  MINIMAX_VERIFY_CACHE,
 } as const;

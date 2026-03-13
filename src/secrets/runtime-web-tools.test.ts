@@ -1,16 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as authProfiles from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as secretResolve from "./resolve.js";
 import { createResolverContext } from "./runtime-shared.js";
 import { resolveRuntimeWebTools } from "./runtime-web-tools.js";
 
-type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "minimax" | "perplexity";
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
-async function runRuntimeWebTools(params: { config: OpenClawConfig; env?: NodeJS.ProcessEnv }) {
+async function runRuntimeWebTools(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  loadAuthStore?: (
+    agentDir?: string,
+  ) => ReturnType<typeof authProfiles.loadAuthProfileStoreForSecretsRuntime>;
+}) {
   const sourceConfig = structuredClone(params.config);
   const resolvedConfig = structuredClone(params.config);
   const context = createResolverContext({
@@ -21,6 +28,7 @@ async function runRuntimeWebTools(params: { config: OpenClawConfig; env?: NodeJS
     sourceConfig,
     resolvedConfig,
     context,
+    loadAuthStore: params.loadAuthStore,
   });
   return { metadata, resolvedConfig, context };
 }
@@ -62,7 +70,20 @@ function readProviderKey(config: OpenClawConfig, provider: ProviderUnderTest): u
   if (provider === "kimi") {
     return config.tools?.web?.search?.kimi?.apiKey;
   }
+  if (provider === "minimax") {
+    return config.tools?.web?.search?.minimax?.apiKey;
+  }
   return config.tools?.web?.search?.perplexity?.apiKey;
+}
+
+function readMinimaxBaseUrl(config: OpenClawConfig): string | undefined {
+  const search = config.tools?.web?.search as Record<string, unknown> | undefined;
+  const minimax =
+    search && typeof search === "object"
+      ? (search.minimax as Record<string, unknown> | undefined)
+      : undefined;
+  const value = minimax?.baseUrl;
+  return typeof value === "string" ? value : undefined;
 }
 
 describe("runtime web tools resolution", () => {
@@ -90,6 +111,11 @@ describe("runtime web tools resolution", () => {
       provider: "kimi" as const,
       envRefId: "KIMI_PROVIDER_REF",
       resolvedKey: "kimi-provider-key",
+    },
+    {
+      provider: "minimax" as const,
+      envRefId: "MINIMAX_PROVIDER_REF",
+      resolvedKey: "minimax-provider-key",
     },
     {
       provider: "perplexity" as const,
@@ -136,6 +162,9 @@ describe("runtime web tools resolution", () => {
               kimi: {
                 apiKey: { source: "env", provider: "default", id: "KIMI_REF" },
               },
+              minimax: {
+                apiKey: { source: "env", provider: "default", id: "MINIMAX_REF" },
+              },
               perplexity: {
                 apiKey: { source: "env", provider: "default", id: "PERPLEXITY_REF" },
               },
@@ -148,6 +177,7 @@ describe("runtime web tools resolution", () => {
         GEMINI_REF: "gemini-precedence-key",
         GROK_REF: "grok-precedence-key",
         KIMI_REF: "kimi-precedence-key",
+        MINIMAX_REF: "minimax-precedence-key",
         PERPLEXITY_REF: "pplx-precedence-key",
       },
     });
@@ -160,6 +190,7 @@ describe("runtime web tools resolution", () => {
         expect.objectContaining({ path: "tools.web.search.gemini.apiKey" }),
         expect.objectContaining({ path: "tools.web.search.grok.apiKey" }),
         expect.objectContaining({ path: "tools.web.search.kimi.apiKey" }),
+        expect.objectContaining({ path: "tools.web.search.minimax.apiKey" }),
         expect.objectContaining({ path: "tools.web.search.perplexity.apiKey" }),
       ]),
     );
@@ -207,6 +238,279 @@ describe("runtime web tools resolution", () => {
     );
     expect(context.warnings.map((warning) => warning.code)).not.toContain(
       "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+    );
+  });
+
+  it("accepts MINIMAX_OAUTH_TOKEN as minimax credentials", async () => {
+    const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              provider: "minimax",
+            },
+          },
+        },
+      }),
+      env: {
+        MINIMAX_OAUTH_TOKEN: "minimax-oauth-token", // pragma: allowlist secret
+      },
+    });
+
+    expect(metadata.search.providerConfigured).toBe("minimax");
+    expect(metadata.search.providerSource).toBe("configured");
+    expect(metadata.search.selectedProvider).toBe("minimax");
+    expect(metadata.search.selectedProviderKeySource).toBe("env");
+    expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("minimax-oauth-token");
+    expect(context.warnings.map((warning) => warning.code)).not.toContain(
+      "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+    );
+  });
+
+  it("prefers MINIMAX_OAUTH_TOKEN over MINIMAX_API_KEY when both are set", async () => {
+    const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              provider: "minimax",
+            },
+          },
+        },
+      }),
+      env: {
+        MINIMAX_API_KEY: "minimax-api-key", // pragma: allowlist secret
+        MINIMAX_OAUTH_TOKEN: "minimax-oauth-token", // pragma: allowlist secret
+      },
+    });
+
+    expect(metadata.search.providerConfigured).toBe("minimax");
+    expect(metadata.search.providerSource).toBe("configured");
+    expect(metadata.search.selectedProvider).toBe("minimax");
+    expect(metadata.search.selectedProviderKeySource).toBe("env");
+    expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("minimax-oauth-token");
+    expect(context.warnings.map((warning) => warning.code)).not.toContain(
+      "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+    );
+  });
+
+  it("resolves MINIMAX_API_HOST from runtime env snapshot", async () => {
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              provider: "minimax",
+            },
+          },
+        },
+      }),
+      env: {
+        MINIMAX_OAUTH_TOKEN: "minimax-oauth-token", // pragma: allowlist secret
+        MINIMAX_API_HOST: "https://api.minimaxi.com/anthropic",
+      },
+    });
+
+    expect(metadata.search.minimaxApiHost).toBe("https://api.minimaxi.com");
+    expect(readMinimaxBaseUrl(resolvedConfig)).toBe("https://api.minimaxi.com");
+  });
+
+  it("auto-detects minimax using auth profile oauth when env/config keys are missing", async () => {
+    vi.spyOn(authProfiles, "loadAuthProfileStoreForSecretsRuntime").mockReturnValue({
+      version: 1,
+      profiles: {
+        "minimax-cn:default": {
+          type: "oauth",
+          provider: "minimax-cn",
+          access: "profile-oauth-token", // pragma: allowlist secret
+          refresh: "refresh-token", // pragma: allowlist secret
+          expires: Date.now() + 60_000,
+        },
+      },
+      order: {},
+    } as unknown as ReturnType<typeof authProfiles.loadAuthProfileStoreForSecretsRuntime>);
+    vi.spyOn(authProfiles, "listProfilesForProvider").mockImplementation((store, provider) =>
+      provider === "minimax-cn" ? ["minimax-cn:default"] : [],
+    );
+
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+            },
+          },
+        },
+      }),
+      env: {},
+    });
+
+    expect(metadata.search.providerSource).toBe("auto-detect");
+    expect(metadata.search.selectedProvider).toBe("minimax");
+    expect(metadata.search.selectedProviderKeySource).toBe("auth_profile");
+    expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("profile-oauth-token");
+    expect(readMinimaxBaseUrl(resolvedConfig)).toBe("https://api.minimaxi.com");
+  });
+
+  it("prefers configured minimax-portal baseUrl when auth profile fallback is minimax-portal", async () => {
+    vi.spyOn(authProfiles, "loadAuthProfileStoreForSecretsRuntime").mockReturnValue({
+      version: 1,
+      profiles: {
+        "minimax-portal:default": {
+          type: "oauth",
+          provider: "minimax-portal",
+          access: "profile-oauth-token", // pragma: allowlist secret
+          refresh: "refresh-token", // pragma: allowlist secret
+          expires: Date.now() + 60_000,
+        },
+      },
+      order: {},
+    } as unknown as ReturnType<typeof authProfiles.loadAuthProfileStoreForSecretsRuntime>);
+    vi.spyOn(authProfiles, "listProfilesForProvider").mockImplementation((store, provider) =>
+      provider === "minimax-portal" ? ["minimax-portal:default"] : [],
+    );
+
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+            },
+          },
+        },
+        models: {
+          providers: {
+            "minimax-portal": {
+              baseUrl: "https://api.minimaxi.com/anthropic",
+            },
+          },
+        },
+      }),
+      env: {},
+    });
+
+    expect(metadata.search.providerSource).toBe("auto-detect");
+    expect(metadata.search.selectedProvider).toBe("minimax");
+    expect(metadata.search.selectedProviderKeySource).toBe("auth_profile");
+    expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("profile-oauth-token");
+    expect(readMinimaxBaseUrl(resolvedConfig)).toBe("https://api.minimaxi.com");
+  });
+
+  it("keeps auth-profile probing read-only by ignoring expired oauth credentials", async () => {
+    const resolveApiKeySpy = vi.spyOn(authProfiles, "resolveApiKeyForProfile");
+    vi.spyOn(authProfiles, "loadAuthProfileStoreForSecretsRuntime").mockReturnValue({
+      version: 1,
+      profiles: {
+        "minimax:default": {
+          type: "oauth",
+          provider: "minimax",
+          access: "expired-token", // pragma: allowlist secret
+          refresh: "refresh-token", // pragma: allowlist secret
+          expires: Date.now() - 60_000,
+        },
+      },
+      order: {},
+    } as unknown as ReturnType<typeof authProfiles.loadAuthProfileStoreForSecretsRuntime>);
+    vi.spyOn(authProfiles, "listProfilesForProvider").mockImplementation((store, provider) =>
+      provider === "minimax" ? ["minimax:default"] : [],
+    );
+
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              provider: "minimax",
+            },
+          },
+        },
+      }),
+      env: {},
+    });
+
+    expect(metadata.search.selectedProvider).toBeUndefined();
+    expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBeUndefined();
+    expect(resolveApiKeySpy).not.toHaveBeenCalled();
+  });
+
+  it("uses injected auth-store loader for minimax auth-profile probing", async () => {
+    vi.spyOn(authProfiles, "loadAuthProfileStoreForSecretsRuntime").mockReturnValue({
+      version: 1,
+      profiles: {},
+      order: {},
+    } as unknown as ReturnType<typeof authProfiles.loadAuthProfileStoreForSecretsRuntime>);
+
+    const injectedStore = {
+      version: 1,
+      profiles: {
+        "minimax:default": {
+          type: "oauth",
+          provider: "minimax",
+          access: "injected-token", // pragma: allowlist secret
+          refresh: "refresh-token", // pragma: allowlist secret
+          expires: Date.now() + 60_000,
+        },
+      },
+      order: {},
+    } as unknown as ReturnType<typeof authProfiles.loadAuthProfileStoreForSecretsRuntime>;
+
+    const loadAuthStore = vi.fn(() => injectedStore);
+    vi.spyOn(authProfiles, "listProfilesForProvider").mockImplementation((store, provider) =>
+      provider === "minimax" ? ["minimax:default"] : [],
+    );
+
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              provider: "minimax",
+            },
+          },
+        },
+      }),
+      env: {},
+      loadAuthStore,
+    });
+
+    expect(loadAuthStore).toHaveBeenCalledWith(undefined);
+    expect(metadata.search.selectedProvider).toBe("minimax");
+    expect(metadata.search.selectedProviderKeySource).toBe("auth_profile");
+    expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("injected-token");
+  });
+
+  it("treats configured provider as primary and falls back to next available provider", async () => {
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "brave",
+              minimax: {
+                apiKey: "fallback-minimax-key", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      }),
+      env: {},
+    });
+
+    expect(metadata.search.providerConfigured).toBe("brave");
+    expect(metadata.search.providerSource).toBe("configured");
+    expect(metadata.search.selectedProvider).toBe("minimax");
+    expect(metadata.search.selectedProviderKeySource).toBe("config");
+    expect(resolvedConfig.tools?.web?.search?.minimax?.apiKey).toBe("fallback-minimax-key");
+    expect(metadata.search.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "WEB_SEARCH_AUTODETECT_SELECTED",
+          path: "tools.web.search.provider",
+        }),
+      ]),
     );
   });
 

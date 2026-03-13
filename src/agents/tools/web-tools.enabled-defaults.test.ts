@@ -68,7 +68,25 @@ function createKimiSearchTool(kimiConfig?: { apiKey?: string; baseUrl?: string; 
   });
 }
 
-function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi") {
+function createMinimaxSearchTool(minimaxConfig?: { apiKey?: string }) {
+  return createWebSearchTool({
+    config: {
+      tools: {
+        web: {
+          search: {
+            provider: "minimax",
+            ...(minimaxConfig ? { minimax: minimaxConfig } : {}),
+          },
+        },
+      },
+    },
+    sandboxed: true,
+  });
+}
+
+function createProviderSearchTool(
+  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "minimax",
+) {
   const searchConfig =
     provider === "perplexity"
       ? { provider, perplexity: { apiKey: "pplx-config-test" } } // pragma: allowlist secret
@@ -78,7 +96,9 @@ function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "g
           ? { provider, gemini: { apiKey: "gemini-config-test" } } // pragma: allowlist secret
           : provider === "kimi"
             ? { provider, kimi: { apiKey: "moonshot-config-test" } } // pragma: allowlist secret
-            : { provider, apiKey: "brave-config-test" }; // pragma: allowlist secret
+            : provider === "minimax"
+              ? { provider, minimax: { apiKey: "minimax-config-test" } } // pragma: allowlist secret
+              : { provider, apiKey: "brave-config-test" }; // pragma: allowlist secret
   return createWebSearchTool({
     config: {
       tools: {
@@ -123,7 +143,7 @@ function installPerplexityChatFetch(payload?: Record<string, unknown>) {
 }
 
 function createProviderSuccessPayload(
-  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi",
+  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "minimax",
 ) {
   if (provider === "brave") {
     return { web: { results: [] } };
@@ -142,6 +162,13 @@ function createProviderSuccessPayload(
           groundingMetadata: { groundingChunks: [] },
         },
       ],
+    };
+  }
+  if (provider === "minimax") {
+    return {
+      base_resp: { status_code: 0, status_msg: "ok" },
+      organic: [],
+      related_searches: [],
     };
   }
   return {
@@ -305,7 +332,7 @@ describe("web_search provider proxy dispatch", () => {
     global.fetch = priorFetch;
   });
 
-  it.each(["brave", "perplexity", "grok", "gemini", "kimi"] as const)(
+  it.each(["brave", "perplexity", "grok", "gemini", "kimi", "minimax"] as const)(
     "uses proxy-aware dispatcher for %s provider when HTTP_PROXY is configured",
     async (provider) => {
       vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
@@ -774,6 +801,101 @@ describe("web_search kimi provider", () => {
     expect(details.provider).toBe("kimi");
     expect(details.citations).toEqual(["https://openclaw.ai/docs"]);
     expect(details.content).toContain("final answer");
+  });
+});
+
+describe("web_search minimax provider", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+    webSearchTesting.SEARCH_CACHE.clear();
+    webSearchTesting.MINIMAX_VERIFY_CACHE.clear();
+  });
+
+  it("returns a setup hint when MiniMax credentials are missing", async () => {
+    vi.stubEnv("MINIMAX_API_KEY", "");
+    vi.stubEnv("MINIMAX_OAUTH_TOKEN", "");
+    const tool = createMinimaxSearchTool();
+    const result = await tool?.execute?.("call-1", { query: "test" });
+    expect(result?.details).toMatchObject({ error: "missing_minimax_api_key" });
+  });
+
+  it("uses MINIMAX_OAUTH_TOKEN when MINIMAX_API_KEY is not set", async () => {
+    vi.stubEnv("MINIMAX_API_KEY", "");
+    vi.stubEnv("MINIMAX_OAUTH_TOKEN", "minimax-oauth-token");
+    const mockFetch = installMockFetch({
+      base_resp: { status_code: 0, status_msg: "ok" },
+      organic: [{ title: "MiniMax", link: "https://example.com", snippet: "snippet" }],
+      related_searches: ["another query"],
+    });
+    const tool = createMinimaxSearchTool();
+    const result = await tool?.execute?.("call-1", { query: "minimax oauth" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    const verifyUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    expect(verifyUrl.pathname).toBe("/v1/coding_plan/search");
+    const verifyRequestInit = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    const verifyBody = JSON.parse(
+      typeof verifyRequestInit?.body === "string" ? verifyRequestInit.body : "{}",
+    ) as {
+      q?: string;
+      count?: number;
+    };
+    expect(verifyBody).toMatchObject({ q: "ping", count: 1 });
+
+    const requestUrl = new URL(String(mockFetch.mock.calls[1]?.[0]));
+    expect(requestUrl.pathname).toBe("/v1/coding_plan/search");
+    const requestInit = mockFetch.mock.calls[1]?.[1] as RequestInit | undefined;
+    expect(requestInit?.method).toBe("POST");
+    const requestBody = JSON.parse(
+      typeof requestInit?.body === "string" ? requestInit.body : "{}",
+    ) as {
+      q?: string;
+      count?: number;
+    };
+    expect(requestBody).toMatchObject({ q: "minimax oauth", count: 5 });
+    expect(result?.details).toMatchObject({
+      provider: "minimax",
+      count: 1,
+      externalContent: { untrusted: true, source: "web_search", wrapped: true },
+    });
+    const relatedSearches = (result?.details as { relatedSearches?: string[] } | undefined)
+      ?.relatedSearches;
+    expect(relatedSearches?.[0]).toContain("another query");
+    const headers = requestInit?.headers as Record<string, string> | undefined;
+    expect(headers?.Authorization).toBe("Bearer minimax-oauth-token");
+  });
+
+  it("reuses successful MiniMax probe for subsequent requests", async () => {
+    vi.stubEnv("MINIMAX_API_KEY", "");
+    vi.stubEnv("MINIMAX_OAUTH_TOKEN", "minimax-oauth-token");
+    const mockFetch = installMockFetch({
+      base_resp: { status_code: 0, status_msg: "ok" },
+      organic: [{ title: "MiniMax", link: "https://example.com", snippet: "snippet" }],
+    });
+    const tool = createMinimaxSearchTool();
+    await tool?.execute?.("call-1", { query: "first-query" });
+    await tool?.execute?.("call-2", { query: "second-query" });
+
+    // first-query: probe + search ; second-query: search only
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    const firstRequestBody = (mockFetch.mock.calls[0]?.[1] as RequestInit | undefined)?.body;
+    const secondRequestBody = (mockFetch.mock.calls[1]?.[1] as RequestInit | undefined)?.body;
+    const thirdRequestBody = (mockFetch.mock.calls[2]?.[1] as RequestInit | undefined)?.body;
+    const firstBody = JSON.parse(
+      typeof firstRequestBody === "string" ? firstRequestBody : "{}",
+    ) as { q?: string };
+    const secondBody = JSON.parse(
+      typeof secondRequestBody === "string" ? secondRequestBody : "{}",
+    ) as { q?: string };
+    const thirdBody = JSON.parse(
+      typeof thirdRequestBody === "string" ? thirdRequestBody : "{}",
+    ) as { q?: string };
+    expect(firstBody.q).toBe("ping");
+    expect(secondBody.q).toBe("first-query");
+    expect(thirdBody.q).toBe("second-query");
   });
 });
 

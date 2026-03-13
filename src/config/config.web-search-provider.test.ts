@@ -51,6 +51,20 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts minimax provider and config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "minimax",
+        providerConfig: {
+          apiKey: "test-key", // pragma: allowlist secret
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts brave llm-context mode config", () => {
     const res = validateConfigObject(
       buildWebSearchProviderConfig({
@@ -86,6 +100,8 @@ describe("web search provider auto-detection", () => {
     delete process.env.GEMINI_API_KEY;
     delete process.env.KIMI_API_KEY;
     delete process.env.MOONSHOT_API_KEY;
+    delete process.env.MINIMAX_API_KEY;
+    delete process.env.MINIMAX_OAUTH_TOKEN;
     delete process.env.PERPLEXITY_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
     delete process.env.XAI_API_KEY;
@@ -115,6 +131,16 @@ describe("web search provider auto-detection", () => {
   it("auto-detects kimi when only KIMI_API_KEY is set", () => {
     process.env.KIMI_API_KEY = "test-kimi-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("kimi");
+  });
+
+  it("auto-detects minimax when only MINIMAX_API_KEY is set", () => {
+    process.env.MINIMAX_API_KEY = "test-minimax-key"; // pragma: allowlist secret
+    expect(resolveSearchProvider({})).toBe("minimax");
+  });
+
+  it("auto-detects minimax when only MINIMAX_OAUTH_TOKEN is set", () => {
+    process.env.MINIMAX_OAUTH_TOKEN = "test-minimax-oauth-token"; // pragma: allowlist secret
+    expect(resolveSearchProvider({})).toBe("minimax");
   });
 
   it("auto-detects perplexity when only PERPLEXITY_API_KEY is set", () => {
@@ -157,9 +183,10 @@ describe("web search provider auto-detection", () => {
     expect(resolveSearchProvider({})).toBe("gemini");
   });
 
-  it("grok wins over kimi and perplexity when brave and gemini unavailable", () => {
+  it("grok wins over kimi, minimax, and perplexity when brave and gemini unavailable", () => {
     process.env.XAI_API_KEY = "test-xai-key"; // pragma: allowlist secret
     process.env.KIMI_API_KEY = "test-kimi-key"; // pragma: allowlist secret
+    process.env.MINIMAX_API_KEY = "test-minimax-key"; // pragma: allowlist secret
     process.env.PERPLEXITY_API_KEY = "test-perplexity-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("grok");
   });

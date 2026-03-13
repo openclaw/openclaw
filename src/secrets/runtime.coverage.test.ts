@@ -97,6 +97,9 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   if (entry.id === "tools.web.search.kimi.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "kimi");
   }
+  if (entry.id === "tools.web.search.minimax.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "minimax");
+  }
   if (entry.id === "tools.web.search.perplexity.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "perplexity");
   }
