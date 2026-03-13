@@ -12,7 +12,6 @@ import { AGENT_LANE_NESTED } from "../lanes.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 import { resolveGatewayPeerOptions } from "./gateway-peer.js";
-import { resolveGatewayOptions } from "./gateway.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -85,7 +84,10 @@ export function createSessionsSendTool(opts?: {
             ? Math.max(0, Math.floor(params.timeoutSeconds))
             : 30;
         const timeoutMs = timeoutSeconds * 1000;
-        const gateway = resolveGatewayOptions(peerOpts);
+        // Bypass resolveGatewayOptions — it only allows loopback/remote URLs.
+        // Peer URLs from config are pre-validated and passed directly.
+        const peerUrl = peerOpts.gatewayUrl;
+        const peerToken = peerOpts.gatewayToken;
         const idempotencyKey = crypto.randomUUID();
         let runId = idempotencyKey;
 
@@ -94,8 +96,8 @@ export function createSessionsSendTool(opts?: {
         if (!resolvedKey && labelParam) {
           try {
             const resolved = await callGateway<{ key: string }>({
-              url: gateway.url,
-              token: gateway.token,
+              url: peerUrl,
+              token: peerToken,
               method: "sessions.resolve",
               params: {
                 label: labelParam,
@@ -139,8 +141,8 @@ export function createSessionsSendTool(opts?: {
 
         try {
           const response = await callGateway<{ runId: string }>({
-            url: gateway.url,
-            token: gateway.token,
+            url: peerUrl,
+            token: peerToken,
             method: "agent",
             params: sendParams,
             timeoutMs: 10_000,
@@ -167,8 +169,8 @@ export function createSessionsSendTool(opts?: {
         let waitError: string | undefined;
         try {
           const wait = await callGateway<{ status?: string; error?: string }>({
-            url: gateway.url,
-            token: gateway.token,
+            url: peerUrl,
+            token: peerToken,
             method: "agent.wait",
             params: { runId, timeoutMs },
             timeoutMs: timeoutMs + 2000,
@@ -209,8 +211,8 @@ export function createSessionsSendTool(opts?: {
         let reply: string | undefined;
         try {
           const history = await callGateway<{ messages: Array<unknown> }>({
-            url: gateway.url,
-            token: gateway.token,
+            url: peerUrl,
+            token: peerToken,
             method: "chat.history",
             params: { sessionKey: resolvedKey, limit: 50 },
             timeoutMs: 10_000,

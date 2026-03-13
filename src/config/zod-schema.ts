@@ -810,7 +810,12 @@ export const OpenClawSchema = z
             z.string().min(1),
             z
               .object({
-                url: z.string(),
+                url: z
+                  .string()
+                  .refine(
+                    (v) => /^wss?:\/\//i.test(v),
+                    { message: "Peer URL must start with ws:// or wss://" },
+                  ),
                 token: SecretInputSchema.optional().register(sensitive),
               })
               .strict(),

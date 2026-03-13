@@ -45,9 +45,14 @@ export async function resolveGatewayPeerOptions(
             value: peer.token,
             env: process.env,
           })) ?? undefined;
-      } catch {
-        // Fall through — token resolution failure is non-fatal if the peer
-        // gateway doesn't require auth.
+      } catch (err) {
+        // Token was explicitly configured but resolution failed (e.g. missing
+        // env var or secret ref).  This is almost certainly a misconfiguration
+        // — proceeding without auth would silently fail on the remote gateway.
+        throw new Error(
+          `Gateway peer "${gatewayParam}": token configured but could not be resolved — ` +
+            (err instanceof Error ? err.message : String(err)),
+        );
       }
     }
 

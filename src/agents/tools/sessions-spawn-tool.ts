@@ -8,7 +8,6 @@ import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js"
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, ToolInputError } from "./common.js";
 import { resolveGatewayPeerOptions } from "./gateway-peer.js";
-import { resolveGatewayOptions } from "./gateway.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
@@ -118,7 +117,43 @@ export function createSessionsSpawnTool(
         const task = readStringParam(params, "task", { required: true });
         const requestedAgentId = readStringParam(params, "agentId");
         const label = typeof params.label === "string" ? params.label.trim() : "";
-        const gateway = resolveGatewayOptions(peerOpts);
+
+        // Reject spawn parameters that cannot be forwarded to a remote gateway.
+        // The remote gateway owns session creation — these local-only params
+        // would be silently dropped, causing confusing behavior.
+        const UNSUPPORTED_REMOTE_PARAMS = [
+          "runtime",
+          "model",
+          "thinking",
+          "cwd",
+          "runTimeoutSeconds",
+          "timeoutSeconds",
+          "mode",
+          "cleanup",
+          "sandbox",
+          "streamTo",
+          "thread",
+          "attachments",
+          "attachAs",
+          "resumeSessionId",
+        ] as const;
+        const providedUnsupported = UNSUPPORTED_REMOTE_PARAMS.filter(
+          (key) => params[key] !== undefined && params[key] !== null,
+        );
+        if (providedUnsupported.length > 0) {
+          return jsonResult({
+            status: "error",
+            error:
+              `Cross-gateway spawn does not support: ${providedUnsupported.join(", ")}. ` +
+              `These parameters are local-only and cannot be forwarded to the remote gateway.`,
+            remote: true,
+          });
+        }
+
+        // Bypass resolveGatewayOptions — it only allows loopback/remote URLs.
+        // Peer URLs from config are pre-validated and passed directly.
+        const peerUrl = peerOpts.gatewayUrl;
+        const peerToken = peerOpts.gatewayToken;
 
         // Spawn on the remote gateway by sending the task as an agent message.
         // The remote gateway will create the session and run the agent.
@@ -126,8 +161,8 @@ export function createSessionsSpawnTool(
 
         try {
           const response = await callGateway<{ runId?: string }>({
-            url: gateway.url,
-            token: gateway.token,
+            url: peerUrl,
+            token: peerToken,
             method: "agent",
             params: {
               message: task,
