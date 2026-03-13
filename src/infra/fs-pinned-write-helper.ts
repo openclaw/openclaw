@@ -82,6 +82,23 @@ const LOCAL_PINNED_WRITE_PYTHON = [
   "def restore_backup(parent_fd, basename, backup_name):",
   "    os.replace(backup_name, basename, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)",
   "",
+  "def copy_backup_file(parent_fd, basename, backup_name):",
+  "    src_fd = os.open(basename, READ_FLAGS, dir_fd=parent_fd)",
+  "    src_stat = os.fstat(src_fd)",
+  "    backup_fd = None",
+  "    try:",
+  "        backup_fd = os.open(backup_name, WRITE_FLAGS, stat.S_IMODE(src_stat.st_mode) or 0o600, dir_fd=parent_fd)",
+  "        while True:",
+  "            chunk = os.read(src_fd, 65536)",
+  "            if not chunk:",
+  "                break",
+  "            os.write(backup_fd, chunk)",
+  "        os.fsync(backup_fd)",
+  "    finally:",
+  "        if backup_fd is not None:",
+  "            os.close(backup_fd)",
+  "        os.close(src_fd)",
+  "",
   "root_fd = open_dir(root_path)",
   "parent_fd = None",
   "temp_fd = None",
@@ -102,7 +119,12 @@ const LOCAL_PINNED_WRITE_PYTHON = [
   "    try:",
   "        os.lstat(basename, dir_fd=parent_fd)",
   "        backup_name = create_backup_name(parent_fd, basename)",
-  "        os.link(basename, backup_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)",
+  "        try:",
+  "            os.link(basename, backup_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)",
+  "        except OSError as err:",
+  "            if err.errno not in (errno.EPERM, getattr(errno, 'EOPNOTSUPP', errno.EPERM), getattr(errno, 'ENOTSUP', errno.EPERM)):",
+  "                raise",
+  "            copy_backup_file(parent_fd, basename, backup_name)",
   "    except FileNotFoundError:",
   "        backup_name = None",
   "    os.replace(temp_name, basename, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)",
@@ -314,7 +336,15 @@ async function runPinnedWriteFallback(params: {
     await fs.stat(targetPath);
     hadExistingTarget = true;
     await fs.rm(backupPath, { force: true }).catch(() => {});
-    await fs.link(targetPath, backupPath);
+    try {
+      await fs.link(targetPath, backupPath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EPERM" && code !== "EOPNOTSUPP" && code !== "ENOTSUP") {
+        throw error;
+      }
+      await fs.copyFile(targetPath, backupPath);
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       await fs.rm(tempPath, { force: true }).catch(() => {});
