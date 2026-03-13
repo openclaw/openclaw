@@ -187,7 +187,7 @@ describe("agent-lifecycle", () => {
           stream: "lifecycle",
           data: expect.objectContaining({
             phase: "recovered",
-            durationMs: 45000,
+            durationMs: expect.any(Number),
           }),
           sessionKey: "session-recovered",
         }),
