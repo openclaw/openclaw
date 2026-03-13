@@ -54,6 +54,10 @@ export type GetReplyOptions = {
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
   onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
+  /** Called when context auto-compaction starts (allows UX feedback during the pause). */
+  onCompactionStart?: () => Promise<void> | void;
+  /** Called when context auto-compaction completes. */
+  onCompactionEnd?: () => Promise<void> | void;
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;

@@ -75,6 +75,8 @@ describe("resolveProxyFetchFromEnv", () => {
   it("returns proxy fetch using EnvHttpProxyAgent when HTTPS_PROXY is set", async () => {
     vi.stubEnv("HTTP_PROXY", "");
     vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    delete process.env.https_proxy;
+    delete process.env.http_proxy;
     undiciFetch.mockResolvedValue({ ok: true });
 
     const fetchFn = resolveProxyFetchFromEnv();
@@ -91,6 +93,8 @@ describe("resolveProxyFetchFromEnv", () => {
   it("returns proxy fetch when HTTP_PROXY is set", () => {
     vi.stubEnv("HTTPS_PROXY", "");
     vi.stubEnv("HTTP_PROXY", "http://fallback.test:3128");
+    delete process.env.https_proxy;
+    delete process.env.http_proxy;
 
     const fetchFn = resolveProxyFetchFromEnv();
     expect(fetchFn).toBeDefined();

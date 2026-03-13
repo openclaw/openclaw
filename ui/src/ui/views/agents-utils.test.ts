@@ -115,9 +115,14 @@ describe("agentLogoUrl", () => {
 describe("resolveAgentAvatarUrl", () => {
   it("prefers a runtime avatar URL over non-URL identity avatars", () => {
     expect(
-      resolveAgentAvatarUrl({ identity: { avatar: "A", avatarUrl: "/avatar/main" } }, {
-        avatar: "A",
-      } as { avatar: string }),
+      resolveAgentAvatarUrl(
+        { identity: { avatar: "A", avatarUrl: "/avatar/main" } },
+        {
+          agentId: "main",
+          avatar: "A",
+          name: "Main",
+        },
+      ),
     ).toBe("/avatar/main");
   });
 
