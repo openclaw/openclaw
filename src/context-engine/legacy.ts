@@ -102,7 +102,15 @@ export class LegacyContextEngine implements ContextEngine {
     isHeartbeat?: boolean;
     tokenBudget?: number;
     runtimeContext?: ContextEngineRuntimeContext;
+    skipAutoCompaction?: boolean;
   }): Promise<void> {
+    // Guard: skip auto-compaction when the runner already timed out during a
+    // compaction attempt this turn.  Re-triggering compact() here would create
+    // a stall loop in the exact recovery path meant to avoid them.
+    if (params.skipAutoCompaction) {
+      return;
+    }
+
     // Proactive auto-compaction: estimate current token usage and compact
     // before the next turn hits a provider overflow error.
     const { messages, tokenBudget, runtimeContext } = params;

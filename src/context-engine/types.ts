@@ -113,6 +113,13 @@ export interface ContextEngine {
     tokenBudget?: number;
     /** Optional runtime-owned context for engines that need caller state. */
     runtimeContext?: ContextEngineRuntimeContext;
+    /**
+     * When true, the engine must skip proactive auto-compaction.
+     * Set by the runner when the current turn already timed out during a
+     * compaction attempt — re-triggering compact() here would create a
+     * stall loop in the exact recovery path meant to avoid them.
+     */
+    skipAutoCompaction?: boolean;
   }): Promise<void>;
 
   /**

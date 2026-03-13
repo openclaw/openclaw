@@ -1923,6 +1923,7 @@ export async function runEmbeddedAttempt(
                 prePromptMessageCount,
                 tokenBudget: params.contextTokenBudget,
                 runtimeContext: afterTurnRuntimeContext,
+                skipAutoCompaction: timedOutDuringCompaction,
               });
             } catch (afterTurnErr) {
               log.warn(`context engine afterTurn failed: ${String(afterTurnErr)}`);
