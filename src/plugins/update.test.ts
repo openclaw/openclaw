@@ -915,12 +915,14 @@ describe("updateNpmInstalledPlugins", () => {
       marketplaceSource: "vincentkoc/claude-marketplace",
       marketplacePlugin: "claude-bundle",
   describe("integrity drift on version update", () => {
-    it("does not trigger onIntegrityDrift when the resolved spec changes (legitimate update)", async () => {
-      // npm resolves to a new version → different hash is expected and benign
+    it("does not trigger onIntegrityDrift when the resolved spec changes to a new pinned version (legitimate update)", async () => {
+      // Scenario: user updated their pinned spec from myplugin@1.0.0 to myplugin@2.0.0.
+      // The stored integrity is from v1.0.0, but npm correctly resolves myplugin@2.0.0
+      // to itself. Different hash is expected and benign — no drift to report.
       installPluginFromNpmSpecMock.mockImplementation(async (args: InstallNpmSpecCallArgs) => {
         // Simulate the infrastructure detecting a hash mismatch and calling onIntegrityDrift
         const proceed = await args.onIntegrityDrift?.({
-          spec: "myplugin",
+          spec: "myplugin@2.0.0",
           expectedIntegrity: "sha512-OLD==",
           actualIntegrity: "sha512-NEW==",
           resolution: { resolvedSpec: "myplugin@2.0.0", version: "2.0.0" },
@@ -949,7 +951,7 @@ describe("updateNpmInstalledPlugins", () => {
             installs: {
               myplugin: {
                 source: "npm",
-                spec: "myplugin",
+                spec: "myplugin@2.0.0",
                 installPath: "/tmp/myplugin",
                 integrity: "sha512-OLD==",
                 resolvedSpec: "myplugin@1.0.0", // previously installed version
@@ -1016,7 +1018,58 @@ describe("updateNpmInstalledPlugins", () => {
       // Drift was surfaced to the caller and user rejected
       expect(outerDriftHandler).toHaveBeenCalledOnce();
       expect(result.outcomes[0]?.status).toBe("error");
->>>>>>> 4c186a0e14 (fix(plugins): skip integrity drift check when updating to a new version)
+    });
+
+    it("triggers onIntegrityDrift when npm resolves to a different spec than requested (anomalous registry redirect)", async () => {
+      // Spec is pinned to myplugin@2.0.0 but registry returns myplugin@3.0.0 — suspicious.
+      // resolvedSpec !== drift.spec, so the skip guard does not apply.
+      installPluginFromNpmSpecMock.mockImplementation(async (args: InstallNpmSpecCallArgs) => {
+        const proceed = await args.onIntegrityDrift?.({
+          spec: "myplugin@2.0.0",
+          expectedIntegrity: "sha512-OLD==",
+          actualIntegrity: "sha512-UNEXPECTED==",
+          resolution: { resolvedSpec: "myplugin@3.0.0", version: "3.0.0" },
+        });
+        if (!proceed) {
+          return {
+            ok: false,
+            error: "aborted: npm package integrity drift detected for myplugin@2.0.0",
+          };
+        }
+        return {
+          ok: true,
+          pluginId: "myplugin",
+          targetDir: "/tmp/myplugin",
+          extensions: ["index.ts"],
+          version: "3.0.0",
+        };
+      });
+
+      const outerDriftHandler = vi.fn().mockResolvedValue(false); // caller blocks
+      const { updateNpmInstalledPlugins } = await import("./update.js");
+
+      const result = await updateNpmInstalledPlugins({
+        config: {
+          plugins: {
+            installs: {
+              myplugin: {
+                source: "npm",
+                spec: "myplugin@2.0.0",
+                installPath: "/tmp/myplugin",
+                integrity: "sha512-OLD==",
+                resolvedSpec: "myplugin@1.0.0",
+                resolvedVersion: "1.0.0",
+              },
+            },
+          },
+        },
+        pluginIds: ["myplugin"],
+        onIntegrityDrift: outerDriftHandler,
+      });
+
+      // Anomalous resolution was surfaced to the caller
+      expect(outerDriftHandler).toHaveBeenCalledOnce();
+      expect(result.outcomes[0]?.status).toBe("error");
     });
   });
 });
