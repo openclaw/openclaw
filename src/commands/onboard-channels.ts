@@ -348,7 +348,6 @@ export async function setupChannels(
 
   const quickstartDefault =
     options?.initialSelection?.[0] ?? resolveQuickstartDefault(statusByChannel);
-  const builtInChannelIds = coreIds;
 
   const shouldPromptAccountIds = options?.promptAccountIds === true;
   const accountIdsByChannel = new Map<ChannelChoice, string>();
@@ -464,11 +463,6 @@ export async function setupChannels(
       return false;
     }
     const adapter = getChannelOnboardingAdapter(channel);
-    const configured = statusByChannel.get(channel)?.configured === true;
-    if (adapter && builtInChannelIds.has(channel) && !configured) {
-      await refreshStatus(channel);
-      return true;
-    }
     const workspaceDir = resolveAgentWorkspaceDir(next, resolveDefaultAgentId(next));
     reloadOnboardingPluginRegistry({
       cfg: next,

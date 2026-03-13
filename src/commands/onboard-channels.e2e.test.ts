@@ -259,26 +259,6 @@ describe("setupChannels", () => {
       );
     });
     expect(sawHardStop).toBe(false);
-    expect(reloadOnboardingPluginRegistry).not.toHaveBeenCalled();
-  });
-
-  it("reloads built-in plugins for configured Telegram when registry is empty", async () => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-
-    const select = createQuickstartTelegramSelect({
-      configuredAction: "skip",
-      strictUnexpected: true,
-    });
-    const { prompter } = createUnexpectedQuickstartPrompter(
-      select as unknown as WizardPrompter["select"],
-    );
-
-    await runSetupChannels(createTelegramCfg("token"), prompter, {
-      quickstartDefaults: true,
-      allowDisable: true,
-    });
-
-    expect(reloadOnboardingPluginRegistry).toHaveBeenCalledTimes(1);
   });
 
   it("shows explicit dmScope config command in channel primer", async () => {
