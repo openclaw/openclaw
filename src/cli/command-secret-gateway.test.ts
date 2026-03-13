@@ -64,6 +64,17 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
   }
 
+  function expectGatewayUnavailableLocalFallbackDiagnostics(
+    result: Awaited<ReturnType<typeof resolveCommandSecretRefsViaGateway>>,
+  ) {
+    expect(
+      result.diagnostics.some((entry) => entry.includes("gateway secrets.resolve unavailable")),
+    ).toBe(true);
+    expect(
+      result.diagnostics.some((entry) => entry.includes("resolved command secrets locally")),
+    ).toBe(true);
+  }
+
   it("returns config unchanged when no target SecretRefs are configured", async () => {
     const config = {
       talk: {
@@ -208,11 +219,8 @@ describe("resolveCommandSecretRefsViaGateway", () => {
 
   it("falls back to local resolution for web search SecretRefs when gateway is unavailable", async () => {
     const envKey = "WEB_SEARCH_GEMINI_API_KEY_LOCAL_FALLBACK";
-    const priorValue = process.env[envKey];
-    process.env[envKey] = "gemini-local-fallback-key";
-    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
-
-    try {
+    await withEnvValue(envKey, "gemini-local-fallback-key", async () => {
+      callGateway.mockRejectedValueOnce(new Error("gateway closed"));
       const result = await resolveCommandSecretRefsViaGateway({
         config: {
           tools: {
@@ -234,28 +242,14 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         "gemini-local-fallback-key",
       );
       expect(result.targetStatesByPath["tools.web.search.gemini.apiKey"]).toBe("resolved_local");
-      expect(
-        result.diagnostics.some((entry) => entry.includes("gateway secrets.resolve unavailable")),
-      ).toBe(true);
-      expect(
-        result.diagnostics.some((entry) => entry.includes("resolved command secrets locally")),
-      ).toBe(true);
-    } finally {
-      if (priorValue === undefined) {
-        delete process.env[envKey];
-      } else {
-        process.env[envKey] = priorValue;
-      }
-    }
+      expectGatewayUnavailableLocalFallbackDiagnostics(result);
+    });
   });
 
   it("falls back to local resolution for Firecrawl SecretRefs when gateway is unavailable", async () => {
     const envKey = "WEB_FETCH_FIRECRAWL_API_KEY_LOCAL_FALLBACK";
-    const priorValue = process.env[envKey];
-    process.env[envKey] = "firecrawl-local-fallback-key";
-    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
-
-    try {
+    await withEnvValue(envKey, "firecrawl-local-fallback-key", async () => {
+      callGateway.mockRejectedValueOnce(new Error("gateway closed"));
       const result = await resolveCommandSecretRefsViaGateway({
         config: {
           tools: {
@@ -276,19 +270,8 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         "firecrawl-local-fallback-key",
       );
       expect(result.targetStatesByPath["tools.web.fetch.firecrawl.apiKey"]).toBe("resolved_local");
-      expect(
-        result.diagnostics.some((entry) => entry.includes("gateway secrets.resolve unavailable")),
-      ).toBe(true);
-      expect(
-        result.diagnostics.some((entry) => entry.includes("resolved command secrets locally")),
-      ).toBe(true);
-    } finally {
-      if (priorValue === undefined) {
-        delete process.env[envKey];
-      } else {
-        process.env[envKey] = priorValue;
-      }
-    }
+      expectGatewayUnavailableLocalFallbackDiagnostics(result);
+    });
   });
 
   it("marks web SecretRefs inactive when the web surface is disabled during local fallback", async () => {
