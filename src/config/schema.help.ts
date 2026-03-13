@@ -989,6 +989,18 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.imageMaxDimensionPx":
     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
   "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",
+  "agents.defaults.codebaseSearch":
+    "Morph codebase search (WarpGrep) configuration. Provides fast semantic code search using natural-language queries to locate relevant files and line ranges across the workspace.",
+  "agents.defaults.codebaseSearch.enabled":
+    "Enable or disable the codebase_search tool. When enabled and an API key is available, agents can use semantic code search to explore unfamiliar codebases.",
+  "agents.defaults.codebaseSearch.morphApiKey":
+    "API key for Morph codebase search. Falls back to compaction.morphApiKey, then the MORPH_API_KEY environment variable.",
+  "agents.defaults.codebaseSearch.morphApiUrl":
+    "Base URL for the Morph codebase search API. Leave unset to use the default endpoint.",
+  "agents.defaults.codebaseSearch.timeout":
+    "Request timeout in milliseconds for codebase search API calls. Leave unset for the SDK default.",
+  "agents.defaults.codebaseSearch.excludes":
+    "Glob patterns to exclude from codebase search results (e.g., node_modules, dist, .git).",
   "agents.defaults.compaction":
     "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
   "agents.defaults.compaction.mode":

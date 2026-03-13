@@ -6,6 +6,7 @@ import type {
   HumanDelayConfig,
   TypingMode,
 } from "./types.base.js";
+import type { SecretInput } from "./types.secrets.js";
 import type { MemorySearchConfig } from "./types.tools.js";
 
 export type AgentModelEntryConfig = {
@@ -169,6 +170,8 @@ export type AgentDefaultsConfig = {
   cliBackends?: Record<string, CliBackendConfig>;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
+  /** Morph codebase search (WarpGrep) configuration. */
+  codebaseSearch?: AgentCodebaseSearchConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
   /** Embedded Pi runner hardening and compatibility controls. */
@@ -284,6 +287,19 @@ export type AgentDefaultsConfig = {
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
+};
+
+export type AgentCodebaseSearchConfig = {
+  /** Enable or disable the codebase_search tool. Default: enabled when API key is available. */
+  enabled?: boolean;
+  /** Morph API key for codebase search. Falls back to compaction.morphApiKey, then MORPH_API_KEY env var. */
+  morphApiKey?: SecretInput;
+  /** Morph API base URL for codebase search. */
+  morphApiUrl?: string;
+  /** Request timeout in milliseconds. */
+  timeout?: number;
+  /** Glob patterns to exclude from search. */
+  excludes?: string[];
 };
 
 export type AgentCompactionMode = "default" | "safeguard";

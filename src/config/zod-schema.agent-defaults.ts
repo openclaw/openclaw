@@ -11,8 +11,10 @@ import {
   BlockStreamingCoalesceSchema,
   CliBackendSchema,
   HumanDelaySchema,
+  SecretInputSchema,
   TypingModeSchema,
 } from "./zod-schema.core.js";
+import { sensitive } from "./zod-schema.sensitive.js";
 
 export const AgentDefaultsSchema = z
   .object({
@@ -81,6 +83,16 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+      })
+      .strict()
+      .optional(),
+    codebaseSearch: z
+      .object({
+        enabled: z.boolean().optional(),
+        morphApiKey: SecretInputSchema.optional().register(sensitive),
+        morphApiUrl: z.string().optional(),
+        timeout: z.number().optional(),
+        excludes: z.array(z.string()).optional(),
       })
       .strict()
       .optional(),

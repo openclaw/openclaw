@@ -89,6 +89,10 @@ export async function runNonInteractiveOnboardingLocal(params: {
             provider: "morph" as const,
             morphApiKey: opts.morphApiKey,
           },
+          codebaseSearch: {
+            ...nextConfig.agents?.defaults?.codebaseSearch,
+            enabled: true,
+          },
         },
       },
     };

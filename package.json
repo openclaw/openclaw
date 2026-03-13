@@ -350,6 +350,7 @@
     "@mariozechner/pi-ai": "0.57.1",
     "@mariozechner/pi-coding-agent": "0.57.1",
     "@mariozechner/pi-tui": "0.57.1",
+    "@morphllm/morphsdk": "^0.2.143",
     "@mozilla/readability": "^0.6.0",
     "@sinclair/typebox": "0.34.48",
     "@slack/bolt": "^4.6.0",

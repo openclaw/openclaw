@@ -35,6 +35,11 @@ function applyMorphConfig(config: OpenClawConfig, apiKey: string): OpenClawConfi
           provider: "morph" as const,
           morphApiKey: apiKey,
         },
+        codebaseSearch: {
+          ...config.agents?.defaults?.codebaseSearch,
+          enabled: true,
+          morphApiKey: apiKey,
+        },
       },
     },
   };
@@ -50,6 +55,10 @@ function enableMorphProvider(config: OpenClawConfig): OpenClawConfig {
         compaction: {
           ...config.agents?.defaults?.compaction,
           provider: "morph" as const,
+        },
+        codebaseSearch: {
+          ...config.agents?.defaults?.codebaseSearch,
+          enabled: true,
         },
       },
     },
@@ -91,7 +100,7 @@ export async function setupMorph(
       {
         value: "advanced" as const,
         label: "Enhanced",
-        hint: "Faster compaction that remembers key moments and forgets unimportant ones",
+        hint: "Faster compaction + AI-powered codebase search",
       },
     ],
     initialValue: hasMorphConfigured(config) ? "advanced" : "basic",
@@ -109,7 +118,7 @@ export async function setupMorph(
         `Env var: MORPH_API_KEY${envAvailable ? " (detected)" : ""}.`,
         ...(envAvailable ? [] : ["Set MORPH_API_KEY in the Gateway environment."]),
       ].join("\n"),
-      "Compaction",
+      "Morph",
     );
     return enableMorphProvider(config);
   }
@@ -119,7 +128,7 @@ export async function setupMorph(
       "Advanced compaction requires a Morph API key.",
       "Get your key at: https://www.morphllm.com/dashboard/api-keys",
     ].join("\n"),
-    "Compaction",
+    "Morph",
   );
 
   const keyInput = await prompter.text({
@@ -150,7 +159,7 @@ export async function setupMorph(
       "No API key provided — falling back to basic compaction.",
       "You can set this up later with: openclaw configure",
     ].join("\n"),
-    "Compaction",
+    "Morph",
   );
 
   return config;
