@@ -105,8 +105,8 @@ describe("normalizeStoredCronJobs", () => {
     // Should NOT mutate anything for these jobs
     expect(result.mutated).toBe(false);
     // payload.kind should remain unchanged
-    expect(jobs[0]?.payload?.kind).toBe("agentTurn");
-    expect(jobs[1]?.payload?.kind).toBe("systemEvent");
+    expect(jobs[0]?.payload).toMatchObject({ kind: "agentTurn" });
+    expect(jobs[1]?.payload).toMatchObject({ kind: "systemEvent" });
   });
 
   it("normalizes whitespace-padded payload kind values", () => {
@@ -138,7 +138,7 @@ describe("normalizeStoredCronJobs", () => {
     // Should mutate to canonical form
     expect(result.mutated).toBe(true);
     // payload.kind should be canonicalized (trimmed)
-    expect(jobs[0]?.payload?.kind).toBe("agentTurn");
-    expect(jobs[1]?.payload?.kind).toBe("systemEvent");
+    expect(jobs[0]?.payload).toMatchObject({ kind: "agentTurn" });
+    expect(jobs[1]?.payload).toMatchObject({ kind: "systemEvent" });
   });
 });
