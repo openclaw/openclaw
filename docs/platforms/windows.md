@@ -228,8 +228,8 @@ Follow the Linux Getting Started flow inside WSL:
 git clone https://github.com/openclaw/openclaw.git
 cd openclaw
 pnpm install
-pnpm ui:build # auto-installs UI deps on first run
 pnpm build
+pnpm ui:build # auto-installs UI deps on first run
 openclaw onboard
 ```
 
