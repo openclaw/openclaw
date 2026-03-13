@@ -67,6 +67,37 @@ describe("parsePromptEventLine", () => {
     });
   });
 
+  it("parses JSON-RPC result stopReason as done", () => {
+    const line = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 3,
+      result: {
+        stopReason: "end_turn",
+      },
+    });
+    expect(parsePromptEventLine(line)).toEqual({
+      type: "done",
+      stopReason: "end_turn",
+    });
+  });
+
+  it("parses JSON-RPC errors as runtime errors", () => {
+    const line = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 2,
+      error: {
+        code: -32002,
+        message: "Resource not found",
+      },
+    });
+    expect(parsePromptEventLine(line)).toEqual({
+      type: "error",
+      message: "Resource not found",
+      code: undefined,
+      retryable: undefined,
+    });
+  });
+
   it("keeps compatibility with simplified text/done lines", () => {
     expect(parsePromptEventLine(JSON.stringify({ type: "text", content: "alpha" }))).toEqual({
       type: "text_delta",

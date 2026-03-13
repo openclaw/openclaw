@@ -812,6 +812,9 @@ export class AcpGatewayAgent implements Agent {
     }
 
     if (state === "final") {
+      if (messageData) {
+        await this.handleDeltaEvent(pending.sessionId, messageData);
+      }
       const rawStopReason = payload.stopReason as string | undefined;
       const stopReason: StopReason = rawStopReason === "max_tokens" ? "max_tokens" : "end_turn";
       await this.finishPrompt(pending.sessionId, pending, stopReason);
