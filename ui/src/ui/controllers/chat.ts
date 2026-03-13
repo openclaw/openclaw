@@ -63,7 +63,10 @@ function maybeResetToolStream(state: ChatState) {
   }
 }
 
+let _chatHistoryFreshnessToken = 0;
+
 export async function loadChatHistory(state: ChatState) {
+  const currentFreshness = ++_chatHistoryFreshnessToken;
   if (!state.client || !state.connected) {
     return;
   }
@@ -90,7 +93,11 @@ export async function loadChatHistory(state: ChatState) {
     // Auto-apply late successfully resolved history to recover from transient timeouts
     void requestPromise
       .then((res) => {
-        if (hasTimedOut && state.sessionKey === targetSession) {
+        if (
+          hasTimedOut &&
+          state.sessionKey === targetSession &&
+          currentFreshness === _chatHistoryFreshnessToken
+        ) {
           state.lastError = null;
           const messages = Array.isArray(res.messages) ? res.messages : [];
           state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
@@ -193,6 +200,8 @@ export async function sendChatMessage(
   if (!msg && !hasAttachments) {
     return null;
   }
+
+  _chatHistoryFreshnessToken++; // bust history cache on interaction
 
   const now = Date.now();
 
