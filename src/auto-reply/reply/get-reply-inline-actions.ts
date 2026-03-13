@@ -16,7 +16,13 @@ import {
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { getAbortMemory } from "./abort.js";
+import {
+  clearAbortCutoffInSession,
+  readAbortCutoffFromSessionEntry,
+  resolveAbortCutoffFromContext,
+  shouldSkipMessageByAbortCutoff,
+} from "./abort-cutoff.js";
+import { getAbortMemory, isAbortRequestText } from "./abort.js";
 import { buildStatusReply, handleCommands } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { isDirectiveOnly } from "./directive-handling.js";
@@ -24,8 +30,13 @@ import type { createModelSelectionState } from "./model-selection.js";
 import { extractInlineSimpleCommand } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
 
-const builtinSlashCommands = (() => {
-  return listReservedChatSlashCommandNames([
+let builtinSlashCommands: Set<string> | null = null;
+
+function getBuiltinSlashCommands(): Set<string> {
+  if (builtinSlashCommands) {
+    return builtinSlashCommands;
+  }
+  builtinSlashCommands = listReservedChatSlashCommandNames([
     "think",
     "verbose",
     "reasoning",
@@ -35,7 +46,8 @@ const builtinSlashCommands = (() => {
     "status",
     "queue",
   ]);
-})();
+  return builtinSlashCommands;
+}
 
 function resolveSlashCommandName(commandBodyNormalized: string): string | null {
   const trimmed = commandBodyNormalized.trim();
@@ -157,7 +169,7 @@ export async function handleInlineActions(params: {
     allowTextCommands &&
     slashCommandName !== null &&
     // `/skill …` needs the full skill command list.
-    (slashCommandName === "skill" || !builtinSlashCommands.has(slashCommandName));
+    (slashCommandName === "skill" || !getBuiltinSlashCommands().has(slashCommandName));
   const skillCommands =
     shouldLoadSkillCommands && params.skillCommands
       ? params.skillCommands
@@ -252,6 +264,32 @@ export async function handleInlineActions(params: {
     await opts.onBlockReply(reply);
   };
 
+  const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
+  if (!isStopLikeInbound && sessionEntry) {
+    const cutoff = readAbortCutoffFromSessionEntry(sessionEntry);
+    const incoming = resolveAbortCutoffFromContext(ctx);
+    const shouldSkip = cutoff
+      ? shouldSkipMessageByAbortCutoff({
+          cutoffMessageSid: cutoff.messageSid,
+          cutoffTimestamp: cutoff.timestamp,
+          messageSid: incoming?.messageSid,
+          timestamp: incoming?.timestamp,
+        })
+      : false;
+    if (shouldSkip) {
+      typing.cleanup();
+      return { kind: "reply", reply: undefined };
+    }
+    if (cutoff) {
+      await clearAbortCutoffInSession({
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+      });
+    }
+  }
+
   const inlineCommand =
     allowTextCommands && command.isAuthorizedSender
       ? extractInlineSimpleCommand(cleanedBody)
@@ -298,7 +336,10 @@ export async function handleInlineActions(params: {
 
   const runCommands = (commandInput: typeof command) =>
     handleCommands({
-      ctx,
+      // Pass sessionCtx so command handlers can mutate stripped body for same-turn continuation.
+      ctx: sessionCtx,
+      // Keep original finalized context in sync when command handlers need outer-dispatch side effects.
+      rootCtx: ctx,
       cfg,
       command: commandInput,
       agentId,

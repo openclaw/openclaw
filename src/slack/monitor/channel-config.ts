@@ -89,18 +89,35 @@ export function resolveSlackChannelConfig(params: {
   channelId: string;
   channelName?: string;
   channels?: SlackChannelConfigEntries;
+  channelKeys?: string[];
   defaultRequireMention?: boolean;
+  allowNameMatching?: boolean;
 }): SlackChannelConfigResolved | null {
-  const { channelId, channelName, channels, defaultRequireMention } = params;
+  const {
+    channelId,
+    channelName,
+    channels,
+    channelKeys,
+    defaultRequireMention,
+    allowNameMatching,
+  } = params;
   const entries = channels ?? {};
-  const keys = Object.keys(entries);
+  const keys = channelKeys ?? Object.keys(entries);
   const normalizedName = channelName ? normalizeSlackSlug(channelName) : "";
   const directName = channelName ? channelName.trim() : "";
+  // Slack always delivers channel IDs in uppercase (e.g. C0ABC12345) but
+  // operators commonly write them in lowercase in their config. Add both
+  // case variants so the lookup is case-insensitive without requiring a full
+  // entry-scan. buildChannelKeyCandidates deduplicates identical keys.
+  const channelIdLower = channelId.toLowerCase();
+  const channelIdUpper = channelId.toUpperCase();
   const candidates = buildChannelKeyCandidates(
     channelId,
-    channelName ? `#${directName}` : undefined,
-    directName,
-    normalizedName,
+    channelIdLower !== channelId ? channelIdLower : undefined,
+    channelIdUpper !== channelId ? channelIdUpper : undefined,
+    allowNameMatching ? (channelName ? `#${directName}` : undefined) : undefined,
+    allowNameMatching ? directName : undefined,
+    allowNameMatching ? normalizedName : undefined,
   );
   const match = resolveChannelEntryMatchWithFallback({
     entries,

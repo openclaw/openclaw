@@ -1,3 +1,5 @@
+import { coerceIdentityValue } from "../../../src/shared/assistant-identity-values.js";
+
 const MAX_ASSISTANT_NAME = 50;
 const MAX_ASSISTANT_AVATAR = 200;
 
@@ -9,20 +11,6 @@ export type AssistantIdentity = {
   name: string;
   avatar: string | null;
 };
-
-function coerceIdentityValue(value: string | undefined, maxLength: number): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed.length <= maxLength) {
-    return trimmed;
-  }
-  return trimmed.slice(0, maxLength);
-}
 
 export function normalizeAssistantIdentity(
   input?: Partial<AssistantIdentity> | null,

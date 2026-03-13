@@ -2,22 +2,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FollowupRun } from "./queue.js";
 
 const hoisted = vi.hoisted(() => {
-  const resolveAgentModelFallbacksOverrideMock = vi.fn();
-  const resolveAgentIdFromSessionKeyMock = vi.fn();
-  return { resolveAgentModelFallbacksOverrideMock, resolveAgentIdFromSessionKeyMock };
+  const resolveRunModelFallbacksOverrideMock = vi.fn();
+  return { resolveRunModelFallbacksOverrideMock };
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  resolveAgentModelFallbacksOverride: (...args: unknown[]) =>
-    hoisted.resolveAgentModelFallbacksOverrideMock(...args),
-}));
-
-vi.mock("../../config/sessions.js", () => ({
-  resolveAgentIdFromSessionKey: (...args: unknown[]) =>
-    hoisted.resolveAgentIdFromSessionKeyMock(...args),
+  resolveRunModelFallbacksOverride: (...args: unknown[]) =>
+    hoisted.resolveRunModelFallbacksOverrideMock(...args),
 }));
 
 const {
+  buildThreadingToolContext,
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunContexts,
   resolveModelFallbackOptions,
@@ -50,22 +45,20 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
 
 describe("agent-runner-utils", () => {
   beforeEach(() => {
-    hoisted.resolveAgentModelFallbacksOverrideMock.mockClear();
-    hoisted.resolveAgentIdFromSessionKeyMock.mockClear();
+    hoisted.resolveRunModelFallbacksOverrideMock.mockClear();
   });
 
   it("resolves model fallback options from run context", () => {
-    hoisted.resolveAgentIdFromSessionKeyMock.mockReturnValue("agent-id");
-    hoisted.resolveAgentModelFallbacksOverrideMock.mockReturnValue(["fallback-model"]);
+    hoisted.resolveRunModelFallbacksOverrideMock.mockReturnValue(["fallback-model"]);
     const run = makeRun();
 
     const resolved = resolveModelFallbackOptions(run);
 
-    expect(hoisted.resolveAgentIdFromSessionKeyMock).toHaveBeenCalledWith(run.sessionKey);
-    expect(hoisted.resolveAgentModelFallbacksOverrideMock).toHaveBeenCalledWith(
-      run.config,
-      "agent-id",
-    );
+    expect(hoisted.resolveRunModelFallbacksOverrideMock).toHaveBeenCalledWith({
+      cfg: run.config,
+      agentId: run.agentId,
+      sessionKey: run.sessionKey,
+    });
     expect(resolved).toEqual({
       cfg: run.config,
       provider: run.provider,
@@ -73,6 +66,20 @@ describe("agent-runner-utils", () => {
       agentDir: run.agentDir,
       fallbacksOverride: ["fallback-model"],
     });
+  });
+
+  it("passes through missing agentId for helper-based fallback resolution", () => {
+    hoisted.resolveRunModelFallbacksOverrideMock.mockReturnValue(["fallback-model"]);
+    const run = makeRun({ agentId: undefined });
+
+    const resolved = resolveModelFallbackOptions(run);
+
+    expect(hoisted.resolveRunModelFallbacksOverrideMock).toHaveBeenCalledWith({
+      cfg: run.config,
+      agentId: undefined,
+      sessionKey: run.sessionKey,
+    });
+    expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
   });
 
   it("builds embedded run base params with auth profile and run metadata", () => {
@@ -147,6 +154,64 @@ describe("agent-runner-utils", () => {
       senderName: undefined,
       senderUsername: undefined,
       senderE164: undefined,
+    });
+  });
+
+  it("prefers OriginatingChannel over Provider for messageProvider", () => {
+    const run = makeRun();
+
+    const resolved = buildEmbeddedRunContexts({
+      run,
+      sessionCtx: {
+        Provider: "heartbeat",
+        OriginatingChannel: "Telegram",
+        OriginatingTo: "268300329",
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+    });
+
+    expect(resolved.embeddedContext.messageProvider).toBe("telegram");
+    expect(resolved.embeddedContext.messageTo).toBe("268300329");
+  });
+
+  it("uses OriginatingTo for threading tool context on telegram native commands", () => {
+    const context = buildThreadingToolContext({
+      sessionCtx: {
+        Provider: "telegram",
+        To: "slash:8460800771",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:-1003841603622",
+        MessageThreadId: 928,
+        MessageSid: "2284",
+      },
+      config: { channels: { telegram: { allowFrom: ["*"] } } },
+      hasRepliedRef: undefined,
+    });
+
+    expect(context).toMatchObject({
+      currentChannelId: "telegram:-1003841603622",
+      currentThreadTs: "928",
+      currentMessageId: "2284",
+    });
+  });
+
+  it("uses OriginatingTo for threading tool context on discord native commands", () => {
+    const context = buildThreadingToolContext({
+      sessionCtx: {
+        Provider: "discord",
+        To: "slash:1177378744822943744",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:123456789012345678",
+        MessageSid: "msg-9",
+      },
+      config: {},
+      hasRepliedRef: undefined,
+    });
+
+    expect(context).toMatchObject({
+      currentChannelId: "channel:123456789012345678",
+      currentMessageId: "msg-9",
     });
   });
 });

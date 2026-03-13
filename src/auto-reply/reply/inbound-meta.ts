@@ -1,5 +1,6 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
+import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import type { TemplateContext } from "../templating.js";
 
 function safeTrim(value: unknown): string | undefined {
@@ -8,6 +9,37 @@ function safeTrim(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function formatConversationTimestamp(value: unknown): string | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+  const formatted = formatZonedTimestamp(date);
+  if (!formatted) {
+    return undefined;
+  }
+  try {
+    const weekday = new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date);
+    return weekday ? `${weekday} ${formatted}` : formatted;
+  } catch {
+    return formatted;
+  }
+}
+
+function resolveInboundChannel(ctx: TemplateContext): string | undefined {
+  let channelValue = safeTrim(ctx.OriginatingChannel) ?? safeTrim(ctx.Surface);
+  if (!channelValue) {
+    const provider = safeTrim(ctx.Provider);
+    if (provider !== "webchat" && ctx.Surface !== "webchat") {
+      channelValue = provider;
+    }
+  }
+  return channelValue;
 }
 
 export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
@@ -23,22 +55,12 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   // Resolve channel identity: prefer explicit channel, then surface, then provider.
   // For webchat/Hub Chat sessions (when Surface is 'webchat' or undefined with no real channel),
   // omit the channel field entirely rather than falling back to an unrelated provider.
-  let channelValue = safeTrim(ctx.OriginatingChannel) ?? safeTrim(ctx.Surface);
-  if (!channelValue) {
-    // Only fall back to Provider if it represents a real messaging channel.
-    // For webchat/internal sessions, ctx.Provider may be unrelated (e.g., the user's configured
-    // default channel), so skip it to avoid incorrect runtime labels like "channel=whatsapp".
-    const provider = safeTrim(ctx.Provider);
-    // Check if provider is "webchat" or if we're in an internal/webchat context
-    if (provider !== "webchat" && ctx.Surface !== "webchat") {
-      channelValue = provider;
-    }
-    // Otherwise leave channelValue undefined (no channel label)
-  }
+  const channelValue = resolveInboundChannel(ctx);
 
   const payload = {
     schema: "openclaw.inbound_meta.v1",
     chat_id: safeTrim(ctx.OriginatingTo),
+    account_id: safeTrim(ctx.AccountId),
     channel: channelValue,
     provider: safeTrim(ctx.Provider),
     surface: safeTrim(ctx.Surface),
@@ -63,26 +85,34 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const blocks: string[] = [];
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
+  const directChannelValue = resolveInboundChannel(ctx);
+  const includeDirectConversationInfo = Boolean(
+    directChannelValue && directChannelValue !== "webchat",
+  );
+  const shouldIncludeConversationInfo = !isDirect || includeDirectConversationInfo;
 
   const messageId = safeTrim(ctx.MessageSid);
   const messageIdFull = safeTrim(ctx.MessageSidFull);
+  const resolvedMessageId = messageId ?? messageIdFull;
+  const timestampStr = formatConversationTimestamp(ctx.Timestamp);
+
   const conversationInfo = {
-    message_id: isDirect ? undefined : messageId,
-    message_id_full: isDirect
-      ? undefined
-      : messageIdFull && messageIdFull !== messageId
-        ? messageIdFull
-        : undefined,
-    reply_to_id: isDirect ? undefined : safeTrim(ctx.ReplyToId),
-    sender_id: isDirect ? undefined : safeTrim(ctx.SenderId),
+    message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
+    reply_to_id: shouldIncludeConversationInfo ? safeTrim(ctx.ReplyToId) : undefined,
+    sender_id: shouldIncludeConversationInfo ? safeTrim(ctx.SenderId) : undefined,
     conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),
-    sender: isDirect
-      ? undefined
-      : (safeTrim(ctx.SenderE164) ?? safeTrim(ctx.SenderId) ?? safeTrim(ctx.SenderUsername)),
+    sender: shouldIncludeConversationInfo
+      ? (safeTrim(ctx.SenderName) ??
+        safeTrim(ctx.SenderE164) ??
+        safeTrim(ctx.SenderId) ??
+        safeTrim(ctx.SenderUsername))
+      : undefined,
+    timestamp: timestampStr,
     group_subject: safeTrim(ctx.GroupSubject),
     group_channel: safeTrim(ctx.GroupChannel),
     group_space: safeTrim(ctx.GroupSpace),
     thread_label: safeTrim(ctx.ThreadLabel),
+    topic_id: ctx.MessageThreadId != null ? String(ctx.MessageThreadId) : undefined,
     is_forum: ctx.IsForum === true ? true : undefined,
     is_group_chat: !isDirect ? true : undefined,
     was_mentioned: ctx.WasMentioned === true ? true : undefined,
@@ -105,20 +135,20 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
     );
   }
 
-  const senderInfo = isDirect
-    ? undefined
-    : {
-        label: resolveSenderLabel({
-          name: safeTrim(ctx.SenderName),
-          username: safeTrim(ctx.SenderUsername),
-          tag: safeTrim(ctx.SenderTag),
-          e164: safeTrim(ctx.SenderE164),
-        }),
-        name: safeTrim(ctx.SenderName),
-        username: safeTrim(ctx.SenderUsername),
-        tag: safeTrim(ctx.SenderTag),
-        e164: safeTrim(ctx.SenderE164),
-      };
+  const senderInfo = {
+    label: resolveSenderLabel({
+      name: safeTrim(ctx.SenderName),
+      username: safeTrim(ctx.SenderUsername),
+      tag: safeTrim(ctx.SenderTag),
+      e164: safeTrim(ctx.SenderE164),
+      id: safeTrim(ctx.SenderId),
+    }),
+    id: safeTrim(ctx.SenderId),
+    name: safeTrim(ctx.SenderName),
+    username: safeTrim(ctx.SenderUsername),
+    tag: safeTrim(ctx.SenderTag),
+    e164: safeTrim(ctx.SenderE164),
+  };
   if (senderInfo?.label) {
     blocks.push(
       ["Sender (untrusted metadata):", "```json", JSON.stringify(senderInfo, null, 2), "```"].join(

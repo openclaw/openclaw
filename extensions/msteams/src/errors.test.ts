@@ -3,6 +3,7 @@ import {
   classifyMSTeamsSendError,
   formatMSTeamsSendErrorHint,
   formatUnknownError,
+  isRevokedProxyError,
 } from "./errors.js";
 
 describe("msteams errors", () => {
@@ -41,5 +42,29 @@ describe("msteams errors", () => {
   it("provides actionable hints for common cases", () => {
     expect(formatMSTeamsSendErrorHint({ kind: "auth" })).toContain("msteams");
     expect(formatMSTeamsSendErrorHint({ kind: "throttled" })).toContain("throttled");
+  });
+
+  describe("isRevokedProxyError", () => {
+    it("returns true for revoked proxy TypeError", () => {
+      expect(
+        isRevokedProxyError(new TypeError("Cannot perform 'set' on a proxy that has been revoked")),
+      ).toBe(true);
+      expect(
+        isRevokedProxyError(new TypeError("Cannot perform 'get' on a proxy that has been revoked")),
+      ).toBe(true);
+    });
+
+    it("returns false for non-TypeError errors", () => {
+      expect(isRevokedProxyError(new Error("proxy that has been revoked"))).toBe(false);
+    });
+
+    it("returns false for unrelated TypeErrors", () => {
+      expect(isRevokedProxyError(new TypeError("undefined is not a function"))).toBe(false);
+    });
+
+    it("returns false for non-error values", () => {
+      expect(isRevokedProxyError(null)).toBe(false);
+      expect(isRevokedProxyError("proxy that has been revoked")).toBe(false);
+    });
   });
 });

@@ -16,6 +16,17 @@ import {
   optimizeImageToJpeg,
 } from "./media.js";
 
+const convertHeicToJpegMock = vi.fn();
+
+vi.mock("../media/image-ops.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../media/image-ops.js")>("../media/image-ops.js");
+  return {
+    ...actual,
+    convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
+  };
+});
+
 let fixtureRoot = "";
 let fixtureFileCount = 0;
 let largeJpegBuffer: Buffer;
@@ -23,6 +34,7 @@ let largeJpegFile = "";
 let tinyPngBuffer: Buffer;
 let tinyPngFile = "";
 let tinyPngWrongExtFile = "";
+let fakeHeicFile = "";
 let alphaPngBuffer: Buffer;
 let alphaPngFile = "";
 let fallbackPngBuffer: Buffer;
@@ -50,6 +62,10 @@ async function createLargeTestJpeg(): Promise<{ buffer: Buffer; file: string }> 
   return { buffer: largeJpegBuffer, file: largeJpegFile };
 }
 
+function cloneStatWithDev<T extends { dev: number | bigint }>(stat: T, dev: number | bigint): T {
+  return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { dev }) as T;
+}
+
 beforeAll(async () => {
   fixtureRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-test-"),
@@ -72,6 +88,7 @@ beforeAll(async () => {
     .toBuffer();
   tinyPngFile = await writeTempFile(tinyPngBuffer, ".png");
   tinyPngWrongExtFile = await writeTempFile(tinyPngBuffer, ".bin");
+  fakeHeicFile = await writeTempFile(Buffer.from("fake-heic"), ".heic");
   alphaPngBuffer = await sharp({
     create: {
       width: 64,
@@ -172,6 +189,22 @@ describe("web media loading", () => {
 
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/jpeg");
+  });
+
+  it("normalizes HEIC local files to JPEG output", async () => {
+    convertHeicToJpegMock.mockResolvedValueOnce(tinyPngBuffer);
+
+    const result = await loadWebMedia(fakeHeicFile, 1024 * 1024);
+
+    expect(convertHeicToJpegMock).toHaveBeenCalledTimes(1);
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/jpeg");
+    expect(result.fileName).toBe(path.basename(fakeHeicFile, ".heic") + ".jpg");
+    expect(result.buffer.length).toBeGreaterThan(0);
+    expect(result.buffer.equals(tinyPngBuffer)).toBe(false);
+    // Confirm the output is actually JPEG (magic bytes 0xFF 0xD8)
+    expect(result.buffer[0]).toBe(0xff);
+    expect(result.buffer[1]).toBe(0xd8);
   });
 
   it("includes URL + status in fetch errors", async () => {
@@ -357,6 +390,30 @@ describe("local media root guard", () => {
     expect(result.kind).toBe("image");
   });
 
+  it("accepts win32 dev=0 stat mismatch for local file loads", async () => {
+    const actualLstat = await fs.lstat(tinyPngFile);
+    const actualStat = await fs.stat(tinyPngFile);
+    const zeroDev = typeof actualLstat.dev === "bigint" ? 0n : 0;
+
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const lstatSpy = vi
+      .spyOn(fs, "lstat")
+      .mockResolvedValue(cloneStatWithDev(actualLstat, zeroDev));
+    const statSpy = vi.spyOn(fs, "stat").mockResolvedValue(cloneStatWithDev(actualStat, zeroDev));
+
+    try {
+      const result = await loadWebMedia(tinyPngFile, 1024 * 1024, {
+        localRoots: [resolvePreferredOpenClawTmpDir()],
+      });
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    } finally {
+      statSpy.mockRestore();
+      lstatSpy.mockRestore();
+      platformSpy.mockRestore();
+    }
+  });
+
   it("requires readFile override for localRoots bypass", async () => {
     await expect(
       loadWebMedia(tinyPngFile, {
@@ -400,7 +457,7 @@ describe("local media root guard", () => {
       }),
     ).resolves.toEqual(
       expect.objectContaining({
-        kind: "unknown",
+        kind: undefined,
       }),
     );
 
@@ -411,7 +468,7 @@ describe("local media root guard", () => {
       }),
     ).resolves.toEqual(
       expect.objectContaining({
-        kind: "unknown",
+        kind: undefined,
       }),
     );
   });
@@ -441,7 +498,7 @@ describe("local media root guard", () => {
       }),
     ).resolves.toEqual(
       expect.objectContaining({
-        kind: "unknown",
+        kind: undefined,
       }),
     );
   });

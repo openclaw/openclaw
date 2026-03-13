@@ -177,6 +177,13 @@ export type WebhookVerificationResult = {
   reason?: string;
   /** Signature is valid, but request was seen before within replay window. */
   isReplay?: boolean;
+  /** Stable key derived from authenticated request material. */
+  verifiedRequestKey?: string;
+};
+
+export type WebhookParseOptions = {
+  /** Stable request key from verifyWebhook. */
+  verifiedRequestKey?: string;
 };
 
 export type WebhookContext = {
@@ -239,6 +246,23 @@ export type StartListeningInput = {
 export type StopListeningInput = {
   callId: CallId;
   providerCallId: ProviderCallId;
+};
+
+// -----------------------------------------------------------------------------
+// Call Status Verification (used on restart to verify persisted calls)
+// -----------------------------------------------------------------------------
+
+export type GetCallStatusInput = {
+  providerCallId: ProviderCallId;
+};
+
+export type GetCallStatusResult = {
+  /** Provider-specific status string (e.g. "completed", "in-progress") */
+  status: string;
+  /** True when the provider confirms the call has ended */
+  isTerminal: boolean;
+  /** True when the status could not be determined (transient error) */
+  isUnknown?: boolean;
 };
 
 // -----------------------------------------------------------------------------

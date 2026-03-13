@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { isAllowedParsedChatSender } from "./allow-from.js";
+import {
+  formatAllowFromLowercase,
+  formatNormalizedAllowFromEntries,
+  isAllowedParsedChatSender,
+  isNormalizedSenderAllowed,
+} from "./allow-from.js";
 
 function parseAllowTarget(
   entry: string,
@@ -69,5 +74,67 @@ describe("isAllowedParsedChatSender", () => {
     });
 
     expect(allowed).toBe(true);
+  });
+});
+
+describe("isNormalizedSenderAllowed", () => {
+  it("allows wildcard", () => {
+    expect(
+      isNormalizedSenderAllowed({
+        senderId: "attacker",
+        allowFrom: ["*"],
+      }),
+    ).toBe(true);
+  });
+
+  it("normalizes case and strips prefixes", () => {
+    expect(
+      isNormalizedSenderAllowed({
+        senderId: "12345",
+        allowFrom: ["ZALO:12345", "zl:777"],
+        stripPrefixRe: /^(zalo|zl):/i,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects when sender is missing", () => {
+    expect(
+      isNormalizedSenderAllowed({
+        senderId: "999",
+        allowFrom: ["zl:12345"],
+        stripPrefixRe: /^(zalo|zl):/i,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("formatAllowFromLowercase", () => {
+  it("trims, strips prefixes, and lowercases entries", () => {
+    expect(
+      formatAllowFromLowercase({
+        allowFrom: [" Telegram:UserA ", "tg:UserB", "  "],
+        stripPrefixRe: /^(telegram|tg):/i,
+      }),
+    ).toEqual(["usera", "userb"]);
+  });
+});
+
+describe("formatNormalizedAllowFromEntries", () => {
+  it("applies custom normalization after trimming", () => {
+    expect(
+      formatNormalizedAllowFromEntries({
+        allowFrom: ["  @Alice ", "", " @Bob "],
+        normalizeEntry: (entry) => entry.replace(/^@/, "").toLowerCase(),
+      }),
+    ).toEqual(["alice", "bob"]);
+  });
+
+  it("filters empty normalized entries", () => {
+    expect(
+      formatNormalizedAllowFromEntries({
+        allowFrom: ["@", "valid"],
+        normalizeEntry: (entry) => entry.replace(/^@$/, ""),
+      }),
+    ).toEqual(["valid"]);
   });
 });

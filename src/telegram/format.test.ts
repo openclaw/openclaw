@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markdownToTelegramHtml } from "./format.js";
+import { markdownToTelegramHtml, splitTelegramHtmlChunks } from "./format.js";
 
 describe("markdownToTelegramHtml", () => {
   it("handles core markdown-to-telegram conversions", () => {
@@ -93,5 +93,45 @@ describe("markdownToTelegramHtml", () => {
   it("renders spoiler with nested formatting", () => {
     const res = markdownToTelegramHtml("||**secret** text||");
     expect(res).toBe("<tg-spoiler><b>secret</b> text</tg-spoiler>");
+  });
+
+  it("does not treat single pipe as spoiler", () => {
+    const res = markdownToTelegramHtml("(￣_￣|) face");
+    expect(res).not.toContain("tg-spoiler");
+    expect(res).toContain("|");
+  });
+
+  it("does not treat unpaired || as spoiler", () => {
+    const res = markdownToTelegramHtml("before || after");
+    expect(res).not.toContain("tg-spoiler");
+    expect(res).toContain("||");
+  });
+
+  it("keeps valid spoiler pairs when a trailing || is unmatched", () => {
+    const res = markdownToTelegramHtml("||secret|| trailing ||");
+    expect(res).toContain("<tg-spoiler>secret</tg-spoiler>");
+    expect(res).toContain("trailing ||");
+  });
+
+  it("splits long multiline html text without breaking balanced tags", () => {
+    const chunks = splitTelegramHtmlChunks(`<b>${"A\n".repeat(2500)}</b>`, 4000);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+    expect(chunks[0]).toMatch(/^<b>[\s\S]*<\/b>$/);
+    expect(chunks[1]).toMatch(/^<b>[\s\S]*<\/b>$/);
+  });
+
+  it("fails loudly when a leading entity cannot fit inside a chunk", () => {
+    expect(() => splitTelegramHtmlChunks(`A&amp;${"B".repeat(20)}`, 4)).toThrow(/leading entity/i);
+  });
+
+  it("treats malformed leading ampersands as plain text when chunking html", () => {
+    const chunks = splitTelegramHtmlChunks(`&${"A".repeat(5000)}`, 4000);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+  });
+
+  it("fails loudly when tag overhead leaves no room for text", () => {
+    expect(() => splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10)).toThrow(/tag overhead/i);
   });
 });

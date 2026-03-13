@@ -1,13 +1,17 @@
 import { spawnSync } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
+import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
 
 export type RestartAttempt = {
   ok: boolean;
-  method: "launchctl" | "systemd" | "supervisor";
+  method: "launchctl" | "systemd" | "schtasks" | "supervisor";
   detail?: string;
   tried?: string[];
 };
@@ -15,10 +19,13 @@ export type RestartAttempt = {
 const SPAWN_TIMEOUT_MS = 2000;
 const SIGUSR1_AUTH_GRACE_MS = 5000;
 const DEFAULT_DEFERRAL_POLL_MS = 500;
-const DEFAULT_DEFERRAL_MAX_WAIT_MS = 30_000;
+// Cover slow in-flight embedded compaction work before forcing restart.
+const DEFAULT_DEFERRAL_MAX_WAIT_MS = 90_000;
 const RESTART_COOLDOWN_MS = 30_000;
 
 const restartLog = createSubsystemLogger("restart");
+
+export { findGatewayPidsOnPortSync };
 
 let sigusr1AuthorizedCount = 0;
 let sigusr1AuthorizedUntil = 0;
@@ -287,37 +294,45 @@ export function triggerOpenClawRestart(): RestartAttempt {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return { ok: true, method: "supervisor", detail: "test mode" };
   }
+
+  cleanStaleGatewayProcessesSync();
+
   const tried: string[] = [];
-  if (process.platform !== "darwin") {
-    if (process.platform === "linux") {
-      const unit = normalizeSystemdUnit(
-        process.env.OPENCLAW_SYSTEMD_UNIT,
-        process.env.OPENCLAW_PROFILE,
-      );
-      const userArgs = ["--user", "restart", unit];
-      tried.push(`systemctl ${userArgs.join(" ")}`);
-      const userRestart = spawnSync("systemctl", userArgs, {
-        encoding: "utf8",
-        timeout: SPAWN_TIMEOUT_MS,
-      });
-      if (!userRestart.error && userRestart.status === 0) {
-        return { ok: true, method: "systemd", tried };
-      }
-      const systemArgs = ["restart", unit];
-      tried.push(`systemctl ${systemArgs.join(" ")}`);
-      const systemRestart = spawnSync("systemctl", systemArgs, {
-        encoding: "utf8",
-        timeout: SPAWN_TIMEOUT_MS,
-      });
-      if (!systemRestart.error && systemRestart.status === 0) {
-        return { ok: true, method: "systemd", tried };
-      }
-      const detail = [
-        `user: ${formatSpawnDetail(userRestart)}`,
-        `system: ${formatSpawnDetail(systemRestart)}`,
-      ].join("; ");
-      return { ok: false, method: "systemd", detail, tried };
+  if (process.platform === "linux") {
+    const unit = normalizeSystemdUnit(
+      process.env.OPENCLAW_SYSTEMD_UNIT,
+      process.env.OPENCLAW_PROFILE,
+    );
+    const userArgs = ["--user", "restart", unit];
+    tried.push(`systemctl ${userArgs.join(" ")}`);
+    const userRestart = spawnSync("systemctl", userArgs, {
+      encoding: "utf8",
+      timeout: SPAWN_TIMEOUT_MS,
+    });
+    if (!userRestart.error && userRestart.status === 0) {
+      return { ok: true, method: "systemd", tried };
     }
+    const systemArgs = ["restart", unit];
+    tried.push(`systemctl ${systemArgs.join(" ")}`);
+    const systemRestart = spawnSync("systemctl", systemArgs, {
+      encoding: "utf8",
+      timeout: SPAWN_TIMEOUT_MS,
+    });
+    if (!systemRestart.error && systemRestart.status === 0) {
+      return { ok: true, method: "systemd", tried };
+    }
+    const detail = [
+      `user: ${formatSpawnDetail(userRestart)}`,
+      `system: ${formatSpawnDetail(systemRestart)}`,
+    ].join("; ");
+    return { ok: false, method: "systemd", detail, tried };
+  }
+
+  if (process.platform === "win32") {
+    return relaunchGatewayScheduledTask(process.env);
+  }
+
+  if (process.platform !== "darwin") {
     return {
       ok: false,
       method: "supervisor",
@@ -329,7 +344,8 @@ export function triggerOpenClawRestart(): RestartAttempt {
     process.env.OPENCLAW_LAUNCHD_LABEL ||
     resolveGatewayLaunchAgentLabel(process.env.OPENCLAW_PROFILE);
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  const target = uid !== undefined ? `gui/${uid}/${label}` : label;
+  const domain = uid !== undefined ? `gui/${uid}` : "gui/501";
+  const target = `${domain}/${label}`;
   const args = ["kickstart", "-k", target];
   tried.push(`launchctl ${args.join(" ")}`);
   const res = spawnSync("launchctl", args, {
@@ -339,10 +355,39 @@ export function triggerOpenClawRestart(): RestartAttempt {
   if (!res.error && res.status === 0) {
     return { ok: true, method: "launchctl", tried };
   }
+
+  // kickstart fails when the service was previously booted out (deregistered from launchd).
+  // Fall back to bootstrap (re-register from plist) + kickstart.
+  // Use env HOME to match how launchd.ts resolves the plist install path.
+  const home = process.env.HOME?.trim() || os.homedir();
+  const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
+  const bootstrapArgs = ["bootstrap", domain, plistPath];
+  tried.push(`launchctl ${bootstrapArgs.join(" ")}`);
+  const boot = spawnSync("launchctl", bootstrapArgs, {
+    encoding: "utf8",
+    timeout: SPAWN_TIMEOUT_MS,
+  });
+  if (boot.error || (boot.status !== 0 && boot.status !== null)) {
+    return {
+      ok: false,
+      method: "launchctl",
+      detail: formatSpawnDetail(boot),
+      tried,
+    };
+  }
+  const retryArgs = ["kickstart", "-k", target];
+  tried.push(`launchctl ${retryArgs.join(" ")}`);
+  const retry = spawnSync("launchctl", retryArgs, {
+    encoding: "utf8",
+    timeout: SPAWN_TIMEOUT_MS,
+  });
+  if (!retry.error && retry.status === 0) {
+    return { ok: true, method: "launchctl", tried };
+  }
   return {
     ok: false,
     method: "launchctl",
-    detail: formatSpawnDetail(res),
+    detail: formatSpawnDetail(retry),
     tried,
   };
 }

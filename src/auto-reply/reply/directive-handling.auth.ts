@@ -6,16 +6,32 @@ import {
 } from "../../agents/auth-profiles.js";
 import {
   ensureAuthProfileStore,
-  getCustomProviderApiKey,
   resolveAuthProfileOrder,
   resolveEnvApiKey,
+  resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { coerceSecretRef } from "../../config/types.secrets.js";
 import { shortenHomePath } from "../../utils.js";
 import { maskApiKey } from "../../utils/mask-api-key.js";
 
 export type ModelAuthDetailMode = "compact" | "verbose";
+
+function resolveStoredCredentialLabel(params: {
+  value: unknown;
+  refValue: unknown;
+  mode: ModelAuthDetailMode;
+}): string {
+  const masked = maskApiKey(typeof params.value === "string" ? params.value : "");
+  if (masked !== "missing") {
+    return masked;
+  }
+  if (coerceSecretRef(params.refValue)) {
+    return params.mode === "compact" ? "(ref)" : "ref";
+  }
+  return "missing";
+}
 
 export const resolveAuthLabel = async (
   provider: string,
@@ -57,12 +73,22 @@ export const resolveAuthLabel = async (
       }
 
       if (profile.type === "api_key") {
+        const keyLabel = resolveStoredCredentialLabel({
+          value: profile.key,
+          refValue: profile.keyRef,
+          mode,
+        });
         return {
-          label: `${profileId} api-key ${maskApiKey(profile.key ?? "")}${more}`,
+          label: `${profileId} api-key ${keyLabel}${more}`,
           source: "",
         };
       }
       if (profile.type === "token") {
+        const tokenLabel = resolveStoredCredentialLabel({
+          value: profile.token,
+          refValue: profile.tokenRef,
+          mode,
+        });
         const exp =
           typeof profile.expires === "number" &&
           Number.isFinite(profile.expires) &&
@@ -72,7 +98,7 @@ export const resolveAuthLabel = async (
               : ` exp ${formatUntil(profile.expires)}`
             : "";
         return {
-          label: `${profileId} token ${maskApiKey(profile.token)}${exp}${more}`,
+          label: `${profileId} token ${tokenLabel}${exp}${more}`,
           source: "",
         };
       }
@@ -118,10 +144,20 @@ export const resolveAuthLabel = async (
         return `${profileId}=missing${suffix}`;
       }
       if (profile.type === "api_key") {
+        const keyLabel = resolveStoredCredentialLabel({
+          value: profile.key,
+          refValue: profile.keyRef,
+          mode,
+        });
         const suffix = flags.length > 0 ? ` (${flags.join(", ")})` : "";
-        return `${profileId}=${maskApiKey(profile.key ?? "")}${suffix}`;
+        return `${profileId}=${keyLabel}${suffix}`;
       }
       if (profile.type === "token") {
+        const tokenLabel = resolveStoredCredentialLabel({
+          value: profile.token,
+          refValue: profile.tokenRef,
+          mode,
+        });
         if (
           typeof profile.expires === "number" &&
           Number.isFinite(profile.expires) &&
@@ -130,7 +166,7 @@ export const resolveAuthLabel = async (
           flags.push(profile.expires <= now ? "expired" : `exp ${formatUntil(profile.expires)}`);
         }
         const suffix = flags.length > 0 ? ` (${flags.join(", ")})` : "";
-        return `${profileId}=token:${maskApiKey(profile.token)}${suffix}`;
+        return `${profileId}=token:${tokenLabel}${suffix}`;
       }
       const display = resolveAuthProfileDisplayLabel({
         cfg,
@@ -168,7 +204,7 @@ export const resolveAuthLabel = async (
     const label = isOAuthEnv ? "OAuth (env)" : maskApiKey(envKey.apiKey);
     return { label, source: mode === "verbose" ? envKey.source : "" };
   }
-  const customKey = getCustomProviderApiKey(cfg, provider);
+  const customKey = resolveUsableCustomProviderApiKey({ cfg, provider })?.apiKey;
   if (customKey) {
     return {
       label: maskApiKey(customKey),

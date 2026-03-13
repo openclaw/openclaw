@@ -13,7 +13,6 @@ import {
   setGatewaySigusr1RestartPolicy,
   setPreRestartDeferralCheck,
 } from "./restart.js";
-import { createTelegramRetryRunner } from "./retry-policy.js";
 import { listTailnetAddresses } from "./tailnet.js";
 
 describe("infra runtime", () => {
@@ -58,27 +57,6 @@ describe("infra runtime", () => {
       );
       expect(error).toHaveBeenCalledWith("Missing required binary: ghost. Please install it.");
       expect(exit).toHaveBeenCalledWith(1);
-    });
-  });
-
-  describe("createTelegramRetryRunner", () => {
-    afterEach(() => {
-      vi.useRealTimers();
-    });
-
-    it("retries when custom shouldRetry matches non-telegram error", async () => {
-      vi.useFakeTimers();
-      const runner = createTelegramRetryRunner({
-        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
-        shouldRetry: (err) => err instanceof Error && err.message === "boom",
-      });
-      const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValue("ok");
-
-      const promise = runner(fn, "request");
-      await vi.runAllTimersAsync();
-
-      await expect(promise).resolves.toBe("ok");
-      expect(fn).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -244,8 +222,8 @@ describe("infra runtime", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
 
-        // Advance past the 30s max deferral wait
-        await vi.advanceTimersByTimeAsync(30_000);
+        // Advance past the 90s max deferral wait
+        await vi.advanceTimersByTimeAsync(90_000);
         expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
       } finally {
         process.removeListener("SIGUSR1", handler);
