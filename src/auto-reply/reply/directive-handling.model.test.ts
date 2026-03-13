@@ -57,24 +57,28 @@ function resolveModelSelectionForCommand(params: {
   });
 }
 
+async function resolveModelInfoReply(
+  overrides: Partial<Parameters<typeof maybeHandleModelDirectiveInfo>[0]> = {},
+) {
+  return maybeHandleModelDirectiveInfo({
+    directives: parseInlineDirectives("/model"),
+    cfg: baseConfig(),
+    agentDir: "/tmp/agent",
+    activeAgentId: "main",
+    provider: "anthropic",
+    model: "claude-opus-4-5",
+    defaultProvider: "anthropic",
+    defaultModel: "claude-opus-4-5",
+    aliasIndex: baseAliasIndex(),
+    allowedModelCatalog: [],
+    resetModelOverride: false,
+    ...overrides,
+  });
+}
+
 describe("/model chat UX", () => {
   it("shows summary for /model with no args", async () => {
-    const directives = parseInlineDirectives("/model");
-    const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
-
-    const reply = await maybeHandleModelDirectiveInfo({
-      directives,
-      cfg,
-      agentDir: "/tmp/agent",
-      activeAgentId: "main",
-      provider: "anthropic",
-      model: "claude-opus-4-5",
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-5",
-      aliasIndex: baseAliasIndex(),
-      allowedModelCatalog: [],
-      resetModelOverride: false,
-    });
+    const reply = await resolveModelInfoReply();
 
     expect(reply?.text).toContain("Current:");
     expect(reply?.text).toContain("Browse: /models");
@@ -82,21 +86,11 @@ describe("/model chat UX", () => {
   });
 
   it("shows active runtime model when different from selected model", async () => {
-    const directives = parseInlineDirectives("/model");
-    const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
-
-    const reply = await maybeHandleModelDirectiveInfo({
-      directives,
-      cfg,
-      agentDir: "/tmp/agent",
-      activeAgentId: "main",
+    const reply = await resolveModelInfoReply({
       provider: "fireworks",
       model: "fireworks/minimax-m2p5",
       defaultProvider: "fireworks",
       defaultModel: "fireworks/minimax-m2p5",
-      aliasIndex: baseAliasIndex(),
-      allowedModelCatalog: [],
-      resetModelOverride: false,
       sessionEntry: {
         modelProvider: "deepinfra",
         model: "moonshotai/Kimi-K2.5",
