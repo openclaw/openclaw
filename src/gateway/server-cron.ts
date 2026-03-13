@@ -11,6 +11,7 @@ import { resolveStorePath } from "../config/sessions/paths.js";
 import { resolveFailureDestination, sendFailureNotificationAnnounce } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
+import { resolveCronAgentSessionKey } from "../cron/isolated-agent/session-key.js";
 import {
   appendCronRunLog,
   resolveCronRunLogPath,
@@ -27,6 +28,8 @@ import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
+import { resetLane } from "../process/command-queue.js";
+import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 
@@ -294,6 +297,34 @@ export function buildGatewayCronService(params: {
         sessionKey: `cron:${job.id}`,
         lane: "cron",
       });
+    },
+    resetCommandLanes: ({ job }) => {
+      const runLaneReset = (lane: string) => {
+        const result = resetLane(lane, {
+          dropQueued: false,
+          skipIfActive: false,
+          force: true,
+        });
+        if (result.droppedQueued > 0) {
+          cronLogger.warn(
+            {
+              lane: result.lane,
+              droppedQueued: result.droppedQueued,
+            },
+            "cron: unexpected queued task drop during degraded runner recovery",
+          );
+        }
+      };
+
+      runLaneReset(CommandLane.Cron);
+      runLaneReset(CommandLane.Nested);
+
+      const { agentId: resolvedAgentId } = resolveCronAgent(job.agentId);
+      const sessionKey = resolveCronAgentSessionKey({
+        sessionKey: `cron:${job.id}`,
+        agentId: resolvedAgentId,
+      });
+      runLaneReset(`session:${sessionKey}`);
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);

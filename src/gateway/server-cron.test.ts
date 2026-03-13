@@ -9,6 +9,7 @@ const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatNowMock = vi.fn();
 const loadConfigMock = vi.fn();
 const fetchWithSsrFGuardMock = vi.fn();
+const resetLaneMock = vi.fn();
 
 function enqueueSystemEvent(...args: unknown[]) {
   return enqueueSystemEventMock(...args);
@@ -38,6 +39,16 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
 }));
 
+vi.mock("../process/command-queue.js", async () => {
+  const actual = await vi.importActual<typeof import("../process/command-queue.js")>(
+    "../process/command-queue.js",
+  );
+  return {
+    ...actual,
+    resetLane: (...args: unknown[]) => resetLaneMock(...args),
+  };
+});
+
 import { buildGatewayCronService } from "./server-cron.js";
 
 function createCronConfig(name: string): OpenClawConfig {
@@ -58,6 +69,13 @@ describe("buildGatewayCronService", () => {
     requestHeartbeatNowMock.mockClear();
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
+    resetLaneMock.mockReset();
+    resetLaneMock.mockImplementation((lane: string) => ({
+      lane,
+      reset: true,
+      activeBefore: 0,
+      droppedQueued: 0,
+    }));
   });
 
   it("routes main-target jobs to the scoped session for enqueue + wake", async () => {
@@ -93,6 +111,61 @@ describe("buildGatewayCronService", () => {
           sessionKey: "agent:main:discord:channel:ops",
         }),
       );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("force-resets cron, nested, and isolated session lanes during degraded recovery", () => {
+    const tmpDir = path.join(os.tmpdir(), `server-cron-reset-${Date.now()}`);
+    const cfg = {
+      agents: {
+        default: "main",
+        list: [{ id: "main" }],
+      },
+      session: {
+        mainKey: "main",
+      },
+      cron: {
+        store: path.join(tmpDir, "cron.json"),
+      },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      const internalState = state.cron as unknown as {
+        state: {
+          deps: {
+            resetCommandLanes?: (params: { job: { id: string; agentId?: string | null } }) => void;
+          };
+        };
+      };
+      internalState.state.deps.resetCommandLanes?.({
+        job: { id: "degraded-41423", agentId: "main" },
+      });
+
+      expect(resetLaneMock).toHaveBeenCalledTimes(3);
+      expect(resetLaneMock).toHaveBeenNthCalledWith(1, "cron", {
+        dropQueued: false,
+        skipIfActive: false,
+        force: true,
+      });
+      expect(resetLaneMock).toHaveBeenNthCalledWith(2, "nested", {
+        dropQueued: false,
+        skipIfActive: false,
+        force: true,
+      });
+      expect(resetLaneMock).toHaveBeenNthCalledWith(3, "session:agent:main:cron:degraded-41423", {
+        dropQueued: false,
+        skipIfActive: false,
+        force: true,
+      });
     } finally {
       state.cron.stop();
     }

@@ -76,12 +76,14 @@ function getLaneState(lane: string): LaneState {
   return created;
 }
 
-function completeTask(state: LaneState, taskId: number, taskGeneration: number): boolean {
-  if (taskGeneration !== state.generation) {
-    return false;
-  }
-  state.activeTaskIds.delete(taskId);
-  return true;
+function completeTask(state: LaneState, taskId: number, _taskGeneration: number): boolean {
+  // Always remove the specific task ID when it settles. Task IDs are globally
+  // unique, so this cannot remove work started by a newer generation.
+  //
+  // This preserves lane concurrency safety after force-reset generation bumps:
+  // in-flight tasks from the previous generation still free a slot when they
+  // eventually finish instead of leaving the lane blocked forever.
+  return state.activeTaskIds.delete(taskId);
 }
 
 function drainLane(lane: string) {
@@ -232,6 +234,81 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
     entry.reject(new CommandLaneClearedError(cleaned));
   }
   return removed;
+}
+
+export type ResetLaneOptions = {
+  /**
+   * Reject queued-but-not-started tasks instead of draining them after reset.
+   */
+  dropQueued?: boolean;
+  /**
+   * Fail closed by default when tasks are still marked active to avoid
+   * clearing runtime bookkeeping while work may still be executing.
+   *
+   * Defaults to `true` when omitted.
+   */
+  skipIfActive?: boolean;
+  /**
+   * Explicitly allow reset with active tasks.
+   *
+   * For safety, callers must set BOTH `skipIfActive: false` and `force: true`
+   * to reset a lane that still has active task IDs.
+   */
+  force?: boolean;
+};
+
+export type ResetLaneResult = {
+  lane: string;
+  reset: boolean;
+  activeBefore: number;
+  droppedQueued: number;
+};
+
+/**
+ * Reset one lane runtime state without mutating other lanes.
+ *
+ * Unlike `resetAllLanes()`, this does not touch global gateway draining state.
+ * Callers can either preserve queued work (default) or drop it.
+ */
+export function resetLane(lane: string, opts?: ResetLaneOptions): ResetLaneResult {
+  const cleaned = lane.trim() || CommandLane.Main;
+  const state = queueState.lanes.get(cleaned);
+  if (!state) {
+    return { lane: cleaned, reset: false, activeBefore: 0, droppedQueued: 0 };
+  }
+
+  const activeBefore = state.activeTaskIds.size;
+  let droppedQueued = 0;
+
+  const skipIfActive = opts?.skipIfActive ?? true;
+  const force = opts?.force === true;
+
+  if (activeBefore > 0 && (skipIfActive || !force)) {
+    return { lane: cleaned, reset: false, activeBefore, droppedQueued };
+  }
+
+  if (opts?.dropQueued && state.queue.length > 0) {
+    const pending = state.queue.splice(0);
+    droppedQueued = pending.length;
+    for (const entry of pending) {
+      entry.reject(new CommandLaneClearedError(cleaned));
+    }
+  }
+
+  state.generation += 1;
+
+  // Preserve active bookkeeping when tasks are still running so force-reset
+  // cannot create artificial concurrency headroom.
+  if (activeBefore === 0) {
+    state.activeTaskIds.clear();
+    state.draining = false;
+  }
+
+  if (!opts?.dropQueued && state.queue.length > 0) {
+    drainLane(cleaned);
+  }
+
+  return { lane: cleaned, reset: true, activeBefore, droppedQueued };
 }
 
 /**

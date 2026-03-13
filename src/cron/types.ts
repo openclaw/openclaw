@@ -57,11 +57,13 @@ export type CronRunTelemetry = {
   usage?: CronUsageSummary;
 };
 
+export type CronRunErrorKind = "delivery-target" | "isolated-runner-timeout";
+
 export type CronRunOutcome = {
   status: CronRunStatus;
   error?: string;
   /** Optional classifier for execution errors to guide fallback behavior. */
-  errorKind?: "delivery-target";
+  errorKind?: CronRunErrorKind;
   summary?: string;
   sessionId?: string;
   sessionKey?: string;
