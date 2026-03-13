@@ -14,6 +14,19 @@ const gatewayClientCalls: Array<{
 }> = [];
 const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
 const installGatewayDaemonNonInteractiveMock = vi.hoisted(() => vi.fn(async () => {}));
+const gatewayServiceMock = vi.hoisted(() => ({
+  label: "LaunchAgent",
+  loadedText: "loaded",
+  isLoaded: vi.fn(async () => true),
+  readRuntime: vi.fn(async () => ({
+    status: "running",
+    state: "active",
+    pid: 4242,
+  })),
+}));
+const readLastGatewayErrorLineMock = vi.hoisted(() =>
+  vi.fn(async () => "Gateway failed to start: required secrets are unavailable."),
+);
 let waitForGatewayReachableMock:
   | ((params: { url: string; token?: string; password?: string; deadlineMs?: number }) => Promise<{
       ok: boolean;
@@ -62,6 +75,14 @@ vi.mock("./onboard-helpers.js", async (importOriginal) => {
 
 vi.mock("./onboard-non-interactive/local/daemon-install.js", () => ({
   installGatewayDaemonNonInteractive: installGatewayDaemonNonInteractiveMock,
+}));
+
+vi.mock("../daemon/service.js", () => ({
+  resolveGatewayService: () => gatewayServiceMock,
+}));
+
+vi.mock("../daemon/diagnostics.js", () => ({
+  readLastGatewayErrorLine: readLastGatewayErrorLineMock,
 }));
 
 const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");
@@ -134,6 +155,9 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   afterEach(() => {
     waitForGatewayReachableMock = undefined;
     installGatewayDaemonNonInteractiveMock.mockClear();
+    gatewayServiceMock.isLoaded.mockClear();
+    gatewayServiceMock.readRuntime.mockClear();
+    readLastGatewayErrorLineMock.mockClear();
   });
 
   it("writes gateway token auth into config", async () => {
@@ -373,6 +397,73 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
       expect(installGatewayDaemonNonInteractiveMock).toHaveBeenCalledTimes(1);
       expect(capturedDeadlineMs).toBe(45_000);
+    });
+  }, 60_000);
+
+  it("emits structured JSON diagnostics when daemon health fails", async () => {
+    await withStateDir("state-local-daemon-health-json-fail-", async (stateDir) => {
+      waitForGatewayReachableMock = vi.fn(async () => ({
+        ok: false,
+        detail: "gateway closed (1006 abnormal closure (no close frame)): no close reason",
+      }));
+
+      let capturedError = "";
+      const runtimeWithCapture = {
+        log: () => {},
+        error: (message: string) => {
+          capturedError = message;
+          throw new Error(message);
+        },
+        exit: (_code: number) => {
+          throw new Error("exit should not be reached after runtime.error");
+        },
+      };
+
+      await expect(
+        runNonInteractiveOnboarding(
+          {
+            nonInteractive: true,
+            mode: "local",
+            workspace: path.join(stateDir, "openclaw"),
+            authChoice: "skip",
+            skipSkills: true,
+            skipHealth: false,
+            installDaemon: true,
+            gatewayBind: "loopback",
+            json: true,
+          },
+          runtimeWithCapture,
+        ),
+      ).rejects.toThrow(/"phase": "gateway-health"/);
+
+      const parsed = JSON.parse(capturedError) as {
+        ok: boolean;
+        phase: string;
+        installDaemon: boolean;
+        detail?: string;
+        gateway?: { wsUrl?: string };
+        hints?: string[];
+        diagnostics?: {
+          service?: {
+            label?: string;
+            loaded?: boolean;
+            runtimeStatus?: string;
+            pid?: number;
+          };
+          lastGatewayError?: string;
+        };
+      };
+      expect(parsed.ok).toBe(false);
+      expect(parsed.phase).toBe("gateway-health");
+      expect(parsed.installDaemon).toBe(true);
+      expect(parsed.detail).toContain("1006 abnormal closure");
+      expect(parsed.gateway?.wsUrl).toContain("ws://127.0.0.1:");
+      expect(parsed.hints).toContain("Run `openclaw gateway status --deep` for more detail.");
+      expect(parsed.diagnostics?.service?.label).toBe("LaunchAgent");
+      expect(parsed.diagnostics?.service?.loaded).toBe(true);
+      expect(parsed.diagnostics?.service?.runtimeStatus).toBe("running");
+      expect(parsed.diagnostics?.service?.pid).toBe(4242);
+      expect(parsed.diagnostics?.lastGatewayError).toContain("required secrets are unavailable");
     });
   }, 60_000);
 
