@@ -401,7 +401,9 @@ export function convertMessagesToInputItems(
           if (!callId || !toolName) {
             continue;
           }
-          const itemId = callIdRaw?.startsWith(`${callId}|`) ? callIdRaw.slice(callId.length + 1) : undefined;
+          const itemId = callIdRaw?.startsWith(`${callId}|`)
+            ? callIdRaw.slice(callId.length + 1)
+            : undefined;
           items.push({
             type: "function_call",
             ...(itemId ? { id: itemId } : {}),
