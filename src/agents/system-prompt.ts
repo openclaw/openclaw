@@ -502,7 +502,9 @@ export function buildAgentSystemPrompt(params: {
     "## Workspace",
     `Your working directory is: ${displayWorkspaceDir}`,
     workspaceGuidance,
-    ...workspaceNotes,
+    // Note: workspaceNotes are injected in the dynamic tail (after workspace files) for
+    // KV-cache stability. Project notes change when users update sprint/project config;
+    // placing them after AGENTS.md ensures stable workspace files stay in the cached prefix.
     "",
     ...docsSection,
     params.sandboxInfo?.enabled ? "## Sandbox" : "",
@@ -679,6 +681,17 @@ export function buildAgentSystemPrompt(params: {
     for (const file of standardContextFiles) {
       lines.push(`## ${file.path}`, "", file.content, "");
     }
+  }
+
+  // workspaceNotes: project-specific notes from the user's workspace config.
+  // Injected here (after all workspace files, before per-session dynamic fields) so that
+  // changes to project notes only invalidate the tail — not the stable workspace file prefix.
+  if (workspaceNotes.length > 0) {
+    lines.push("## Project Notes", "");
+    for (const note of workspaceNotes) {
+      lines.push(note);
+    }
+    lines.push("");
   }
 
   // Dynamic per-session fields on a final line so the stable prefix above can be KV-cached.
