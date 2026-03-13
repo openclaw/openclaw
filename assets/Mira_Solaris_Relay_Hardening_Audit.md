@@ -121,7 +121,7 @@ Following the internal code review, the following final refinements were impleme
 
 ## **8. Industrial Stress Audit: Final Logic Upgrades**
 
-A deep stress audit was conducted to simulate "Worst-Case Execution" scenarios (SW hibernation + high-speed swaps + protocol congestion). 13 logic gaps were identified and resolved to achieve final architectural certification.
+A deep stress audit was conducted to simulate "Worst-Case Execution" scenarios (SW hibernation + high-speed swaps + protocol congestion). 16 logic gaps were identified and resolved to achieve final architectural certification.
 
 ### **Core Stress-Mitigation Matrix**
 
@@ -134,6 +134,9 @@ A deep stress audit was conducted to simulate "Worst-Case Execution" scenarios (
 | **Memory** | Ancestry Orphan Leak | Implemented **Recursive Ancestry GC** in `onRemoved` to prune entire subtrees. |
 | **Temporal** | Epoch Double-Jump | `onReplaced` is now the authoritative epoch owner; `onActivated` jumps are suppressed during swaps. |
 | **Security** | Origin Leak | Origin-check `addedTabId` during swap; sever all ancestry links if entering `chrome://`. |
+| **Identity** | Sync Recovery Race | `await detachTab` and mandatory `return` on failed sync points in `onReplaced`. |
+| **Persistence** | Partial Rehydration | Integrated `detachTab` into `rehydrateState` loop for full recursive GC on boot. |
+| **Termination** | Metadata Blindness | Expanded `detachTab` guard to capture dangling Buffers, Ancestry, and Child Sessions. |
 
 ### **Certification Status**
 All 16 points of failure have been addressed via the `atomic transaction` refactor of the background routing layer. The system now features a **Janitorial Master Cleaner** (`detachTab`) that uses upfront snapshotting to guarantee 100% identity fidelity.
