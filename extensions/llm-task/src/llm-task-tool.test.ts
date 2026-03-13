@@ -29,6 +29,21 @@ function fakeApi(overrides: any = {}) {
   };
 }
 
+function mockEmbeddedRunJson(payload: unknown) {
+  // oxlint-disable-next-line typescript/no-explicit-any
+  (runEmbeddedPiAgent as any).mockResolvedValueOnce({
+    meta: {},
+    payloads: [{ text: JSON.stringify(payload) }],
+  });
+}
+
+async function executeEmbeddedRun(input: Record<string, unknown>) {
+  const tool = createLlmTaskTool(fakeApi());
+  await tool.execute("id", input);
+  // oxlint-disable-next-line typescript/no-explicit-any
+  return (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
+}
+
 describe("llm-task tool (json-only)", () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -96,42 +111,25 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("passes provider/model overrides to embedded runner", async () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
-    (runEmbeddedPiAgent as any).mockResolvedValueOnce({
-      meta: {},
-      payloads: [{ text: JSON.stringify({ ok: true }) }],
+    mockEmbeddedRunJson({ ok: true });
+    const call = await executeEmbeddedRun({
+      prompt: "x",
+      provider: "anthropic",
+      model: "claude-4-sonnet",
     });
-    const tool = createLlmTaskTool(fakeApi());
-    await tool.execute("id", { prompt: "x", provider: "anthropic", model: "claude-4-sonnet" });
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const call = (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
     expect(call.provider).toBe("anthropic");
     expect(call.model).toBe("claude-4-sonnet");
   });
 
   it("passes thinking override to embedded runner", async () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
-    (runEmbeddedPiAgent as any).mockResolvedValueOnce({
-      meta: {},
-      payloads: [{ text: JSON.stringify({ ok: true }) }],
-    });
-    const tool = createLlmTaskTool(fakeApi());
-    await tool.execute("id", { prompt: "x", thinking: "high" });
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const call = (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
+    mockEmbeddedRunJson({ ok: true });
+    const call = await executeEmbeddedRun({ prompt: "x", thinking: "high" });
     expect(call.thinkLevel).toBe("high");
   });
 
   it("normalizes thinking aliases", async () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
-    (runEmbeddedPiAgent as any).mockResolvedValueOnce({
-      meta: {},
-      payloads: [{ text: JSON.stringify({ ok: true }) }],
-    });
-    const tool = createLlmTaskTool(fakeApi());
-    await tool.execute("id", { prompt: "x", thinking: "on" });
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const call = (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
+    mockEmbeddedRunJson({ ok: true });
+    const call = await executeEmbeddedRun({ prompt: "x", thinking: "on" });
     expect(call.thinkLevel).toBe("low");
   });
 
@@ -150,24 +148,13 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("does not pass thinkLevel when thinking is omitted", async () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
-    (runEmbeddedPiAgent as any).mockResolvedValueOnce({
-      meta: {},
-      payloads: [{ text: JSON.stringify({ ok: true }) }],
-    });
-    const tool = createLlmTaskTool(fakeApi());
-    await tool.execute("id", { prompt: "x" });
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const call = (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
+    mockEmbeddedRunJson({ ok: true });
+    const call = await executeEmbeddedRun({ prompt: "x" });
     expect(call.thinkLevel).toBeUndefined();
   });
 
   it("enforces allowedModels", async () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
-    (runEmbeddedPiAgent as any).mockResolvedValueOnce({
-      meta: {},
-      payloads: [{ text: JSON.stringify({ ok: true }) }],
-    });
+    mockEmbeddedRunJson({ ok: true });
     const tool = createLlmTaskTool(
       fakeApi({ pluginConfig: { allowedModels: ["openai-codex/gpt-5.2"] } }),
     );
@@ -177,15 +164,8 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("disables tools for embedded run", async () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
-    (runEmbeddedPiAgent as any).mockResolvedValueOnce({
-      meta: {},
-      payloads: [{ text: JSON.stringify({ ok: true }) }],
-    });
-    const tool = createLlmTaskTool(fakeApi());
-    await tool.execute("id", { prompt: "x" });
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const call = (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
+    mockEmbeddedRunJson({ ok: true });
+    const call = await executeEmbeddedRun({ prompt: "x" });
     expect(call.disableTools).toBe(true);
   });
 });
