@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **ClawCollect** — Hosted form collection bridge for OpenClaw with public links, collector results pages, and chat summaries. Requires a separately deployed Cloudflare Workers backend.
+  npm: `@clawcollect/clawcollect`
+  repo: `https://github.com/ruan11223344/clawcollect`
+  install: `openclaw plugins install @clawcollect/clawcollect`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
