@@ -197,6 +197,43 @@ describe("resolveMatrixRoomId", () => {
     expect(first).toBe("!nova:example.org");
     expect(second).toBe("!asst:example.org");
   });
+
+  it("ignores blank and duplicate m.direct room ids", async () => {
+    const userId = "@clean:example.org";
+    const activeRoom = "!active:example.org";
+    const client = createMockClient({
+      directContent: {
+        [userId]: ["   ", activeRoom, activeRoom],
+      },
+      joinedRooms: [activeRoom],
+      membersByRoom: {
+        [activeRoom]: ["@bot:example.org", userId],
+      },
+      roomStateEvents: {
+        [`${activeRoom}|m.room.member|${userId}`]: { is_direct: true },
+        [`${activeRoom}|m.room.member|@bot:example.org`]: {},
+      },
+    });
+
+    const resolved = await resolveMatrixRoomId(client, userId);
+
+    expect(resolved).toBe(activeRoom);
+    expect(client.setAccountData).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the first valid m.direct room when joined room inspection fails", async () => {
+    const userId = "@fallback-valid:example.org";
+    const client = createMockClient({
+      directContent: {
+        [userId]: ["   ", "!valid:example.org", "!other:example.org"],
+      },
+      getJoinedRoomsError: new Error("offline"),
+    });
+
+    const resolved = await resolveMatrixRoomId(client, userId);
+
+    expect(resolved).toBe("!valid:example.org");
+  });
 });
 
 describe("normalizeThreadId", () => {

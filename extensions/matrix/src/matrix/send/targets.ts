@@ -19,28 +19,87 @@ export function normalizeThreadId(raw?: string | number | null): string | null {
 
 // Size-capped to prevent unbounded growth (#4948)
 const MAX_DIRECT_ROOM_CACHE_SIZE = 1024;
-const directRoomCache = new Map<string, string>();
-const clientIds = new WeakMap<MatrixClient, number>();
-let nextClientId = 1;
+type DirectRoomCacheEntry = {
+  roomId: string;
+  evicted: boolean;
+};
 
-function getDirectRoomCacheKey(client: MatrixClient, userId: string): string {
-  const existing = clientIds.get(client);
+const directRoomCache = new WeakMap<MatrixClient, Map<string, DirectRoomCacheEntry>>();
+const directRoomCacheOrder: Array<{
+  clientCache: Map<string, DirectRoomCacheEntry>;
+  userId: string;
+  entry: DirectRoomCacheEntry;
+}> = [];
+let directRoomCacheSize = 0;
+
+function getDirectRoomCacheForClient(client: MatrixClient): Map<string, DirectRoomCacheEntry> {
+  const existing = directRoomCache.get(client);
   if (existing) {
-    return `${existing}:${userId}`;
+    return existing;
   }
-  const created = nextClientId++;
-  clientIds.set(client, created);
-  return `${created}:${userId}`;
+  const created = new Map<string, DirectRoomCacheEntry>();
+  directRoomCache.set(client, created);
+  return created;
 }
 
-function setDirectRoomCached(key: string, value: string): void {
-  directRoomCache.set(key, value);
-  if (directRoomCache.size > MAX_DIRECT_ROOM_CACHE_SIZE) {
-    const oldest = directRoomCache.keys().next().value;
-    if (oldest !== undefined) {
-      directRoomCache.delete(oldest);
-    }
+function getDirectRoomCached(client: MatrixClient, userId: string): string | null {
+  const clientCache = directRoomCache.get(client);
+  return clientCache?.get(userId)?.roomId ?? null;
+}
+
+function clearDirectRoomCacheEntry(client: MatrixClient, userId: string): void {
+  const clientCache = directRoomCache.get(client);
+  const existing = clientCache?.get(userId);
+  if (!clientCache || !existing) {
+    return;
   }
+  existing.evicted = true;
+  clientCache.delete(userId);
+  directRoomCacheSize -= 1;
+}
+
+function setDirectRoomCached(client: MatrixClient, userId: string, roomId: string): void {
+  const clientCache = getDirectRoomCacheForClient(client);
+  const previous = clientCache.get(userId);
+  if (previous) {
+    previous.evicted = true;
+    directRoomCacheSize -= 1;
+  }
+
+  const entry: DirectRoomCacheEntry = { roomId, evicted: false };
+  clientCache.set(userId, entry);
+  directRoomCacheOrder.push({ clientCache, userId, entry });
+  directRoomCacheSize += 1;
+
+  while (directRoomCacheSize > MAX_DIRECT_ROOM_CACHE_SIZE) {
+    const oldest = directRoomCacheOrder.shift();
+    if (!oldest || oldest.entry.evicted) {
+      continue;
+    }
+    oldest.entry.evicted = true;
+    oldest.clientCache.delete(oldest.userId);
+    directRoomCacheSize -= 1;
+  }
+}
+
+function normalizeRoomIdList(input: unknown): string[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const entry of input) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const trimmed = entry.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+  return normalized;
 }
 
 function isMatrixNotFoundError(err: unknown): boolean {
@@ -152,8 +211,7 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
     throw new Error(`Matrix user IDs must be fully qualified (got "${trimmed}")`);
   }
 
-  const cacheKey = getDirectRoomCacheKey(client, trimmed);
-  const cached = directRoomCache.get(cacheKey);
+  const cached = getDirectRoomCached(client, trimmed);
   if (cached) {
     return cached;
   }
@@ -165,7 +223,7 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
       string,
       string[] | undefined
     >;
-    directList = Array.isArray(directContent?.[trimmed]) ? directContent[trimmed] : [];
+    directList = normalizeRoomIdList(directContent?.[trimmed]);
   } catch {
     // Ignore and fall back.
   }
@@ -180,7 +238,11 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
   const joinedRooms = await client.getJoinedRooms().catch(() => []);
   const joinedSet = new Set(joinedRooms);
   const candidateIds = new Set<string>();
-  directList.forEach((roomId) => candidateIds.add(roomId));
+  const directIndexByRoomId = new Map<string, number>();
+  directList.forEach((roomId, index) => {
+    directIndexByRoomId.set(roomId, index);
+    candidateIds.add(roomId);
+  });
   joinedRooms.forEach((roomId) => candidateIds.add(roomId));
 
   const candidates: DirectRoomCandidate[] = [];
@@ -201,7 +263,7 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
       }
 
       const dmCached = client.dms?.isDm?.(roomId) === true;
-      const directIndex = directList.indexOf(roomId);
+      const directIndex = directIndexByRoomId.get(roomId);
       const hasDirectUserFlag = await hasDirectFlag(client, roomId, trimmed);
       const hasDirectSelfFlag = await hasDirectFlag(client, roomId, selfUserId);
       const hasExplicitName =
@@ -209,7 +271,7 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
 
       candidates.push({
         roomId,
-        directIndex: directIndex >= 0 ? directIndex : null,
+        directIndex: directIndex ?? null,
         dmCached,
         hasDirectFlag: hasDirectUserFlag || hasDirectSelfFlag,
         memberCount: members.length,
@@ -238,7 +300,7 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
   })[0];
 
   if (bestCandidate) {
-    setDirectRoomCached(cacheKey, bestCandidate.roomId);
+    setDirectRoomCached(client, trimmed, bestCandidate.roomId);
     if (directList[0] !== bestCandidate.roomId) {
       await persistDirectRoom(client, trimmed, bestCandidate.roomId);
     }
@@ -246,11 +308,56 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
   }
 
   if (directList[0]) {
-    setDirectRoomCached(cacheKey, directList[0]);
+    setDirectRoomCached(client, trimmed, directList[0]);
     return directList[0];
   }
 
   throw new Error(`No direct room found for ${trimmed} (m.direct missing)`);
+}
+
+function isPrefixedMatrixTarget(target: string, prefix: string): boolean {
+  return target.toLowerCase().startsWith(prefix);
+}
+
+export function isMatrixUserTarget(raw: string): boolean {
+  const target = normalizeTarget(raw);
+  if (isPrefixedMatrixTarget(target, "matrix:")) {
+    return isMatrixUserTarget(target.slice("matrix:".length));
+  }
+  if (isPrefixedMatrixTarget(target, "room:")) {
+    return isMatrixUserTarget(target.slice("room:".length));
+  }
+  if (isPrefixedMatrixTarget(target, "channel:")) {
+    return isMatrixUserTarget(target.slice("channel:".length));
+  }
+  if (isPrefixedMatrixTarget(target, "user:")) {
+    return target.slice("user:".length).trim().startsWith("@");
+  }
+  return target.startsWith("@");
+}
+
+export function clearDirectRoomCacheForTarget(client: MatrixClient, raw: string): void {
+  if (!isMatrixUserTarget(raw)) {
+    return;
+  }
+  const target = normalizeTarget(raw);
+  if (isPrefixedMatrixTarget(target, "matrix:")) {
+    clearDirectRoomCacheForTarget(client, target.slice("matrix:".length));
+    return;
+  }
+  if (isPrefixedMatrixTarget(target, "room:")) {
+    clearDirectRoomCacheForTarget(client, target.slice("room:".length));
+    return;
+  }
+  if (isPrefixedMatrixTarget(target, "channel:")) {
+    clearDirectRoomCacheForTarget(client, target.slice("channel:".length));
+    return;
+  }
+  if (isPrefixedMatrixTarget(target, "user:")) {
+    clearDirectRoomCacheEntry(client, target.slice("user:".length).trim());
+    return;
+  }
+  clearDirectRoomCacheEntry(client, target);
 }
 
 export async function resolveMatrixRoomId(client: MatrixClient, raw: string): Promise<string> {
