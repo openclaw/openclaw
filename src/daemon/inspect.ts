@@ -49,6 +49,35 @@ export function renderGatewayServiceCleanupHints(
   }
 }
 
+// Returns platform-appropriate commands to manually remove a specific extra
+// gateway service found by findExtraGatewayServices.  Unlike
+// renderGatewayServiceCleanupHints (which always targets the current profile),
+// this function uses the actual label/name of the service that was detected.
+export function renderCleanupHintsForService(service: ExtraGatewayService): string[] {
+  switch (service.platform) {
+    case "darwin":
+      return [
+        `launchctl bootout gui/$UID/${service.label}`,
+        `rm ~/Library/LaunchAgents/${service.label}.plist`,
+      ];
+    case "linux": {
+      // label is the raw readdir entry (e.g. "openclaw-gateway-backup.service");
+      // strip the .service suffix for the unit name used in commands.
+      const unit = service.label.endsWith(".service")
+        ? service.label.slice(0, -".service".length)
+        : service.label;
+      return [
+        `systemctl --user disable --now ${unit}.service`,
+        `rm ~/.config/systemd/user/${unit}.service`,
+      ];
+    }
+    case "win32":
+      return [`schtasks /Delete /TN "${service.label}" /F`];
+    default:
+      return [];
+  }
+}
+
 function resolveHomeDir(env: Record<string, string | undefined>): string {
   const home = env.HOME?.trim() || env.USERPROFILE?.trim();
   if (!home) {
