@@ -1,3 +1,5 @@
+export { Type } from "@sinclair/typebox";
+
 export type {
   AnyAgentTool,
   OpenClawPluginApi,
@@ -62,6 +64,9 @@ export {
 } from "./run-command.js";
 export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
+export { callGatewayTool, readGatewayCallOptions } from "../agents/tools/gateway.js";
+export type { GatewayCallOptions } from "../agents/tools/gateway.js";
+
 export { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 export type { GatewayBindUrlResult } from "../shared/gateway-bind-url.js";
 
@@ -70,3 +75,8 @@ export type {
   TailscaleStatusCommandResult,
   TailscaleStatusCommandRunner,
 } from "../shared/tailscale-status.js";
+
+export { parseAgentSessionKey, resolveThreadSessionKeys } from "../routing/session-key.js";
+export type { ParsedAgentSessionKey } from "../routing/session-key.js";
+
+export { extractDeliveryInfo } from "../config/sessions.js";
