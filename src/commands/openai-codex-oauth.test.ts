@@ -9,13 +9,9 @@ const mocks = vi.hoisted(() => ({
   formatOpenAIOAuthTlsPreflightFix: vi.fn(),
 }));
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
-  return {
-    ...original,
-    loginOpenAICodex: mocks.loginOpenAICodex,
-  };
-});
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  loginOpenAICodex: mocks.loginOpenAICodex,
+}));
 
 vi.mock("./oauth-flow.js", () => ({
   createVpsAwareOAuthHandlers: mocks.createVpsAwareOAuthHandlers,

@@ -86,6 +86,11 @@ vi.mock("../../hooks/internal-hooks.js", async () => {
   };
 });
 
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: vi.fn(),
+  getOAuthProviders: vi.fn(() => []),
+}));
+
 vi.mock("@mariozechner/pi-coding-agent", () => {
   return {
     createAgentSession: vi.fn(async () => {

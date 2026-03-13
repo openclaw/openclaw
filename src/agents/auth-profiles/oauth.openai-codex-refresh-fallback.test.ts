@@ -17,17 +17,13 @@ const { getOAuthApiKeyMock } = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
-  return {
-    ...original,
-    getOAuthApiKey: getOAuthApiKeyMock,
-    getOAuthProviders: () => [
-      { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
-      { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" }, // pragma: allowlist secret
-    ],
-  };
-});
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: getOAuthApiKeyMock,
+  getOAuthProviders: () => [
+    { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
+    { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" }, // pragma: allowlist secret
+  ],
+}));
 
 function createExpiredOauthStore(params: {
   profileId: string;
