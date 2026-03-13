@@ -1,5 +1,5 @@
-import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeChatChannelId } from "../channels/registry.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
 

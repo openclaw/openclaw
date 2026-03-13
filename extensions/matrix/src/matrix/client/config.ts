@@ -1,14 +1,14 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/matrix";
+import type { CoreConfig } from "../../types.js";
+import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "../../secret-input.js";
-import type { CoreConfig } from "../../types.js";
 import { loadMatrixSdk } from "../sdk-runtime.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
-import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 
 function clean(value: unknown, path: string): string {
   return normalizeResolvedSecretInputString({ value, path }) ?? "";

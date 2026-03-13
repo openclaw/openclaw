@@ -1,3 +1,15 @@
+import type { OpenClawConfig } from "../config/config.js";
+import type {
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
+} from "../config/types.js";
+import type { ResolvedAgentRoute } from "../routing/resolve-route.js";
+import type {
+  TelegramMediaRef,
+  TelegramMessageContextOptions,
+} from "./bot-message-context.types.js";
+import type { TelegramContext } from "./bot/types.js";
 import { normalizeCommandBody } from "../auto-reply/commands-registry.js";
 import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../auto-reply/envelope.js";
 import {
@@ -7,22 +19,11 @@ import {
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { toLocationContext } from "../channels/location.js";
 import { recordInboundSession } from "../channels/session.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
-import type {
-  TelegramDirectConfig,
-  TelegramGroupConfig,
-  TelegramTopicConfig,
-} from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
-import type { ResolvedAgentRoute } from "../routing/resolve-route.js";
 import { resolveInboundLastRouteSessionKey } from "../routing/resolve-route.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
 import { normalizeAllowFrom } from "./bot-access.js";
-import type {
-  TelegramMediaRef,
-  TelegramMessageContextOptions,
-} from "./bot-message-context.types.js";
 import {
   buildGroupLabel,
   buildSenderLabel,
@@ -32,7 +33,6 @@ import {
   normalizeForwardedContext,
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
-import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 
 export async function buildTelegramInboundContextPayload(params: {

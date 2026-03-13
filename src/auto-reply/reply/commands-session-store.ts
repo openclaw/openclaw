@@ -1,7 +1,7 @@
 import type { SessionEntry } from "../../config/sessions.js";
+import type { CommandHandler } from "./commands-types.js";
 import { updateSessionStore } from "../../config/sessions.js";
 import { applyAbortCutoffToSessionEntry, type AbortCutoff } from "./abort-cutoff.js";
-import type { CommandHandler } from "./commands-types.js";
 
 type CommandParams = Parameters<CommandHandler>[0];
 

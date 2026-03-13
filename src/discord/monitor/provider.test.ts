@@ -1,8 +1,8 @@
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 
 type NativeCommandSpecMock = {
   name: string;

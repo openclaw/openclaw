@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { installSubagentsCommandCoreMocks } from "./commands-subagents.test-mocks.js";
 
 const hoisted = vi.hoisted(() => {

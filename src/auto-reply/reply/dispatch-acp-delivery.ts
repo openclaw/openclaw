@@ -1,11 +1,11 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
-import { logVerbose } from "../../globals.js";
-import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
-import { maybeApplyTtsToPayload } from "../../tts/tts.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
+import { logVerbose } from "../../globals.js";
+import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import { maybeApplyTtsToPayload } from "../../tts/tts.js";
 import { routeReply } from "./route-reply.js";
 
 export type AcpDispatchDeliveryMeta = {

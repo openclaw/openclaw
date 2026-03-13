@@ -1,6 +1,6 @@
 import type { SessionEntry } from "../../config/sessions.js";
-import { updateSessionStore } from "../../config/sessions.js";
 import type { MsgContext } from "../templating.js";
+import { updateSessionStore } from "../../config/sessions.js";
 
 export type AbortCutoff = {
   messageSid?: string;

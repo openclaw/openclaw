@@ -1,6 +1,7 @@
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/zalouser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./monitor.send-mocks.js";
+import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
 import { __testing } from "./monitor.js";
 import {
   sendDeliveredZalouserMock,
@@ -9,7 +10,6 @@ import {
   sendTypingZalouserMock,
 } from "./monitor.send-mocks.js";
 import { setZalouserRuntime } from "./runtime.js";
-import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
 
 function createAccount(): ResolvedZalouserAccount {
   return {

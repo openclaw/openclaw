@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
+import type { TelegramAccountConfig } from "../config/types.telegram.js";
 import {
   coerceSecretRef,
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
-import type { TelegramAccountConfig } from "../config/types.telegram.js";
 import { resolveAccountWithDefaultFallback } from "../plugin-sdk/account-resolution.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";

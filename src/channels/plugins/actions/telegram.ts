@@ -1,3 +1,5 @@
+import type { TelegramActionConfig } from "../../../config/types.telegram.js";
+import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import {
   readNumberParam,
   readStringArrayParam,
@@ -5,7 +7,6 @@ import {
   readStringParam,
 } from "../../../agents/tools/common.js";
 import { handleTelegramAction } from "../../../agents/tools/telegram-actions.js";
-import type { TelegramActionConfig } from "../../../config/types.telegram.js";
 import { readBooleanParam } from "../../../plugin-sdk/boolean-param.js";
 import { extractToolSend } from "../../../plugin-sdk/tool-send.js";
 import { resolveTelegramPollVisibility } from "../../../poll-params.js";
@@ -15,7 +16,6 @@ import {
   resolveTelegramPollActionGateState,
 } from "../../../telegram/accounts.js";
 import { isTelegramInlineButtonsEnabled } from "../../../telegram/inline-buttons.js";
-import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import { resolveReactionMessageId } from "./reaction-message-id.js";
 import { createUnionActionGate, listTokenSourcedAccounts } from "./shared.js";
 

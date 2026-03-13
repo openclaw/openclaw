@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
-import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import {
   buildBootstrapContextFiles,
   resolveBootstrapMaxChars,

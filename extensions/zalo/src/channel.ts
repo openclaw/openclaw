@@ -1,3 +1,9 @@
+import type {
+  ChannelAccountSnapshot,
+  ChannelDock,
+  ChannelPlugin,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/zalo";
 import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenProviderGroupPolicyWarnings,
@@ -5,12 +11,6 @@ import {
   buildOpenGroupPolicyWarning,
   mapAllowFromEntries,
 } from "openclaw/plugin-sdk/compat";
-import type {
-  ChannelAccountSnapshot,
-  ChannelDock,
-  ChannelPlugin,
-  OpenClawConfig,
-} from "openclaw/plugin-sdk/zalo";
 import {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,

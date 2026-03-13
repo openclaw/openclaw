@@ -1,12 +1,13 @@
 import { isIP } from "node:net";
 import path from "node:path";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
+import type { ExecFn } from "./windows-acl.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
 import { execDockerRaw } from "../agents/sandbox/docker.js";
 import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
 import { resolveBrowserControlAuth } from "../browser/control-auth.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
@@ -51,7 +52,6 @@ import {
 } from "./audit-fs.js";
 import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
-import type { ExecFn } from "./windows-acl.js";
 
 export type SecurityAuditSeverity = "info" | "warn" | "critical";
 

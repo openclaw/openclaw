@@ -1,10 +1,10 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import type { GroupPolicy } from "../../config/types.base.js";
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
 } from "../../config/runtime-group-policy.js";
-import type { GroupPolicy } from "../../config/types.base.js";
 
 type GroupPolicyWarningCollector = (groupPolicy: GroupPolicy) => string[];
 

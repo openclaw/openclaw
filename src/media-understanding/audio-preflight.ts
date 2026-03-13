@@ -1,5 +1,6 @@
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { MediaUnderstandingProvider } from "./types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { isAudioAttachment } from "./attachments.js";
 import { runAudioTranscription } from "./audio-transcription-runner.js";
@@ -8,7 +9,6 @@ import {
   normalizeMediaAttachments,
   resolveMediaAttachmentLocalRoots,
 } from "./runner.js";
-import type { MediaUnderstandingProvider } from "./types.js";
 
 /**
  * Transcribes the first audio attachment BEFORE mention checking.

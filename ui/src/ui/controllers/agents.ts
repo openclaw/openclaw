@@ -1,7 +1,7 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { AgentsListResult, ToolsCatalogResult } from "../types.ts";
-import { saveConfig } from "./config.ts";
 import type { ConfigState } from "./config.ts";
+import { saveConfig } from "./config.ts";
 
 export type AgentsState = {
   client: GatewayBrowserClient | null;

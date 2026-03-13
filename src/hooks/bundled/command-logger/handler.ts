@@ -26,9 +26,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { HookHandler } from "../../hooks.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import type { HookHandler } from "../../hooks.js";
 
 const log = createSubsystemLogger("command-logger");
 

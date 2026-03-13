@@ -3,13 +3,13 @@ import type {
   ExecApprovalsAllowlistEntry,
   ExecApprovalsFile,
 } from "../controllers/exec-approvals.ts";
+import type { NodesProps } from "./nodes.ts";
 import { clampText, formatRelativeTimestamp } from "../format.ts";
 import {
   resolveConfigAgents as resolveSharedConfigAgents,
   resolveNodeTargets,
   type NodeTargetOption,
 } from "./nodes-shared.ts";
-import type { NodesProps } from "./nodes.ts";
 
 type ExecSecurity = "deny" | "allowlist" | "full";
 type ExecAsk = "off" | "on-miss" | "always";

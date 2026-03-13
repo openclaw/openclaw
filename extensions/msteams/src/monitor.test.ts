@@ -1,7 +1,7 @@
-import { once } from "node:events";
 import type { Server } from "node:http";
-import { createConnection, type AddressInfo } from "node:net";
 import express from "express";
+import { once } from "node:events";
+import { createConnection, type AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
 import { applyMSTeamsWebhookTimeouts } from "./monitor.js";
 

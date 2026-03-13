@@ -1,6 +1,6 @@
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { getChannelDock } from "../channels/dock.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 

@@ -1,6 +1,6 @@
+import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {

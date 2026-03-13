@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   patchChannelOnboardingAdapter,
   setDefaultChannelPluginRegistryForTests,

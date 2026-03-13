@@ -1,12 +1,13 @@
+import { confirm, select, text } from "@clack/prompts";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { confirm, select, text } from "@clack/prompts";
-import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
-import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecretProviderConfig, SecretRef, SecretRefSource } from "../config/types.secrets.js";
+import type { SecretsApplyPlan } from "./plan.js";
+import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { runSecretsApply, type SecretsApplyResult } from "./apply.js";
@@ -18,7 +19,6 @@ import {
   hasConfigurePlanChanges,
   type ConfigureCandidate,
 } from "./configure-plan.js";
-import type { SecretsApplyPlan } from "./plan.js";
 import { PROVIDER_ENV_VARS } from "./provider-env-vars.js";
 import { isValidSecretProviderAlias, resolveDefaultSecretProviderAlias } from "./ref-contract.js";
 import { resolveSecretRefValue } from "./resolve.js";

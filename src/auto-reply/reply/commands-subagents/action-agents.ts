@@ -1,5 +1,5 @@
-import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import type { CommandHandlerResult } from "../commands-types.js";
+import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import { formatRunLabel, sortSubagentRuns } from "../subagents-utils.js";
 import {
   type SubagentsCommandContext,

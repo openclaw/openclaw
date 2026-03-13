@@ -1,11 +1,11 @@
 import { Type } from "@sinclair/typebox";
+import type { AnyAgentTool } from "./common.js";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
   createSessionVisibilityGuard,

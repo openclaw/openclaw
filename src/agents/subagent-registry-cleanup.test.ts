@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { resolveDeferredCleanupDecision } from "./subagent-registry-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { resolveDeferredCleanupDecision } from "./subagent-registry-cleanup.js";
 
 function makeEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
   return {

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -53,7 +54,6 @@ import {
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { parseIMessageNotification } from "./parse-notification.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
-import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
 
 /**
  * Try to detect remote host from an SSH wrapper script like:

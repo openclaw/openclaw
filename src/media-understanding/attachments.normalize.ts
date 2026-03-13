@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import type { MsgContext } from "../auto-reply/templating.js";
-import { getFileExtension, isAudioFileName, kindFromMime } from "../media/mime.js";
 import type { MediaAttachment } from "./types.js";
+import { getFileExtension, isAudioFileName, kindFromMime } from "../media/mime.js";
 
 export function normalizeAttachmentPath(raw?: string | null): string | undefined {
   const value = raw?.trim();

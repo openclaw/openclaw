@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import type { HookHandler } from "../../hooks.js";
+import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { createHookEvent } from "../../hooks.js";
 
 // Avoid calling the embedded Pi agent (global command lane); keep this unit test deterministic.

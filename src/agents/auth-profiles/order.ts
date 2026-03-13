@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import type { AuthProfileStore } from "./types.js";
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -9,7 +10,6 @@ import {
   type AuthCredentialReasonCode,
 } from "./credential-state.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profiles.js";
-import type { AuthProfileStore } from "./types.js";
 import {
   clearExpiredCooldowns,
   isProfileInCooldown,

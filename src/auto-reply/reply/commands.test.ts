@@ -2,19 +2,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { MsgContext } from "../templating.js";
 import { abortEmbeddedPiRun, compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
 import {
   addSubagentRunForTests,
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import * as internalHooks from "../../hooks/internal-hooks.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import type { MsgContext } from "../templating.js";
 import { resetBashChatCommandForTests } from "./bash-command.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { buildCommandsPaginationKeyboard } from "./commands-info.js";
@@ -125,8 +125,8 @@ vi.mock("../../acp/persistent-bindings.js", async () => {
   };
 });
 
-import { buildConfiguredAcpSessionKey } from "../../acp/persistent-bindings.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+import { buildConfiguredAcpSessionKey } from "../../acp/persistent-bindings.js";
 import { buildCommandContext, handleCommands } from "./commands.js";
 
 // Avoid expensive workspace scans during /context tests.

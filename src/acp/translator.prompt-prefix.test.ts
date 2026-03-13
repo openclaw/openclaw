@@ -1,6 +1,6 @@
+import type { PromptRequest } from "@agentclientprotocol/sdk";
 import os from "node:os";
 import path from "node:path";
-import type { PromptRequest } from "@agentclientprotocol/sdk";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import { createInMemorySessionStore } from "./session.js";

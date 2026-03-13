@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { loadAgents, loadToolsCatalog, saveAgentsConfig } from "./agents.ts";
 import type { AgentsConfigSaveState, AgentsState } from "./agents.ts";
+import { loadAgents, loadToolsCatalog, saveAgentsConfig } from "./agents.ts";
 
 function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn> } {
   const request = vi.fn();

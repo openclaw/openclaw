@@ -5,8 +5,8 @@ import {
   normalizeAccountId,
   resolveAccountWithDefaultFallback,
 } from "openclaw/plugin-sdk/nextcloud-talk";
-import { normalizeResolvedSecretInputString } from "./secret-input.js";
 import type { CoreConfig, NextcloudTalkAccountConfig } from "./types.js";
+import { normalizeResolvedSecretInputString } from "./secret-input.js";
 
 function isTruthyEnvValue(value?: string): boolean {
   const normalized = (value ?? "").trim().toLowerCase();

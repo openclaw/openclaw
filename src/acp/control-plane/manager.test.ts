@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
-import { AcpRuntimeError } from "../runtime/errors.js";
 import type { AcpRuntime, AcpRuntimeCapabilities } from "../runtime/types.js";
+import { AcpRuntimeError } from "../runtime/errors.js";
 
 const hoisted = vi.hoisted(() => {
   const listAcpSessionEntriesMock = vi.fn();

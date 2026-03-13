@@ -1,3 +1,4 @@
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
@@ -6,7 +7,6 @@ import {
   promptSecretRefForOnboarding,
   resolveSecretInputModeForEnvSelection,
 } from "./auth-choice.apply-helpers.js";
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "./auth-token.js";
 import { applyAgentDefaultModelPrimary } from "./onboard-auth.config-shared.js";
 import { applyAuthProfileConfig, setAnthropicApiKey } from "./onboard-auth.js";

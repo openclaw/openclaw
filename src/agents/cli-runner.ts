@@ -1,7 +1,8 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
-import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
+import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import { shouldLogVerbose } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
@@ -42,7 +43,6 @@ import {
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
 } from "./pi-embedded-helpers.js";
-import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js";
 

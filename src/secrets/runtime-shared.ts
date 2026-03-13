@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { SecretRefResolveCache } from "./resolve.js";
 import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
 import { secretRefKey } from "./ref-contract.js";
-import type { SecretRefResolveCache } from "./resolve.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isRecord } from "./shared.js";
 

@@ -1,6 +1,11 @@
 import type { IncomingMessage } from "node:http";
-import os from "node:os";
 import type { WebSocket } from "ws";
+import os from "node:os";
+import type { createSubsystemLogger } from "../../../logging/subsystem.js";
+import type { AuthRateLimiter } from "../../auth-rate-limit.js";
+import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
+import type { GatewayWsClient } from "../ws-types.js";
 import { loadConfig } from "../../../config/config.js";
 import {
   deriveDeviceIdFromPublicKey,
@@ -20,12 +25,9 @@ import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skil
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
-import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { isGatewayCliClient, isWebchatClient } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
-import type { AuthRateLimiter } from "../../auth-rate-limit.js";
-import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { isLocalDirectRequest } from "../../auth.js";
 import {
   buildCanvasScopedHostUrl,
@@ -64,7 +66,6 @@ import {
 import { parseGatewayRole } from "../../role-policy.js";
 import { MAX_BUFFERED_BYTES, MAX_PAYLOAD_BYTES, TICK_INTERVAL_MS } from "../../server-constants.js";
 import { handleGatewayRequest } from "../../server-methods.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import { formatError } from "../../server-utils.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
@@ -75,7 +76,6 @@ import {
   incrementPresenceVersion,
   refreshGatewayHealthSnapshot,
 } from "../health-state.js";
-import type { GatewayWsClient } from "../ws-types.js";
 import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
 import { formatGatewayAuthFailureMessage, type AuthProvidedKind } from "./auth-messages.js";
 import {

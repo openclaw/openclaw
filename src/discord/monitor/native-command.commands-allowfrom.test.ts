@@ -1,8 +1,8 @@
 import { ChannelType } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NativeCommandSpec } from "../../auto-reply/commands-registry.js";
-import * as dispatcherModule from "../../auto-reply/reply/provider-dispatcher.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import * as dispatcherModule from "../../auto-reply/reply/provider-dispatcher.js";
 import * as pluginCommandsModule from "../../plugins/commands.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 import {

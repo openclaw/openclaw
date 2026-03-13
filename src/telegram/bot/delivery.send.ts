@@ -1,6 +1,6 @@
 import { type Bot, GrammyError } from "grammy";
-import { formatErrorMessage } from "../../infra/errors.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
 import { markdownToTelegramHtml } from "../format.js";
 import { buildInlineKeyboard } from "../send.js";

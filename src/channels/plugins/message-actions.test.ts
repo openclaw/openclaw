@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ChannelPlugin } from "./types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -11,7 +12,6 @@ import {
   supportsChannelMessageCards,
   supportsChannelMessageCardsForChannel,
 } from "./message-actions.js";
-import type { ChannelPlugin } from "./types.js";
 
 const emptyRegistry = createTestRegistry([]);
 

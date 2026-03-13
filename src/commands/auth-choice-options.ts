@@ -1,7 +1,7 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
+import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 import { AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI } from "./auth-choice-legacy.js";
 import { ONBOARD_PROVIDER_AUTH_FLAGS } from "./onboard-provider-auth-flags.js";
-import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 
 export type { AuthChoiceGroupId };
 

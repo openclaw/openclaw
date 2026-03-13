@@ -1,9 +1,9 @@
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveThreadBindingIdleTimeoutMs,
   resolveThreadBindingMaxAgeMs,
   resolveThreadBindingsEnabled,
 } from "../../channels/thread-bindings-policy.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 
 export {

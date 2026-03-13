@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
+import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
 

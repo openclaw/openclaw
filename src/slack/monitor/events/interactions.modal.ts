@@ -1,7 +1,7 @@
+import type { SlackMonitorContext } from "../context.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { parseSlackModalPrivateMetadata } from "../../modal-metadata.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
-import type { SlackMonitorContext } from "../context.js";
 
 export type ModalInputSummary = {
   blockId: string;

@@ -1,9 +1,9 @@
+import type { AllowlistMatch } from "../channels/allowlist-match.js";
 import {
   firstDefined,
   isSenderIdAllowed,
   mergeDmAllowFromSources,
 } from "../channels/allow-from.js";
-import type { AllowlistMatch } from "../channels/allowlist-match.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 export type NormalizedAllowFrom = {

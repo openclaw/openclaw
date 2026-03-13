@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { NodeListNode } from "../shared/node-list-types.js";
 import { loadConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { parseNodeList, parsePairingList } from "../shared/node-list-parse.js";
-import type { NodeListNode } from "../shared/node-list-types.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildGatewayConnectionDetails } from "./call.js";
 import { GatewayClient } from "./client.js";

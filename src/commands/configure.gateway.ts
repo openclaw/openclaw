@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { resolveGatewayPort } from "../config/config.js";
 import { isValidEnvSecretRefId, type SecretInput } from "../config/types.secrets.js";
 import {
@@ -8,7 +9,6 @@ import {
   TAILSCALE_MISSING_BIN_NOTE_LINES,
 } from "../gateway/gateway-config-prompts.shared.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
 import { note } from "../terminal/note.js";

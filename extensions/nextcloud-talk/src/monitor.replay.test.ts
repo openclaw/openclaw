@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import type { NextcloudTalkInboundMessage } from "./types.js";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
 import { startWebhookServer } from "./monitor.test-harness.js";
-import type { NextcloudTalkInboundMessage } from "./types.js";
 
 describe("createNextcloudTalkWebhookServer replay handling", () => {
   it("acknowledges replayed requests and skips onMessage side effects", async () => {

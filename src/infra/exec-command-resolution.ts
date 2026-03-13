@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
+import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
 import { resolveDispatchWrapperExecutionPlan } from "./exec-wrapper-resolution.js";
 import { resolveExecutablePath as resolveExecutableCandidatePath } from "./executable-path.js";
 import { expandHomePrefix } from "./home-dir.js";

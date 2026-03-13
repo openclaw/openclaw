@@ -1,6 +1,15 @@
+import type { ResolvedBrowserProfile } from "./config.js";
+import type {
+  BrowserServerState,
+  BrowserRouteContext,
+  BrowserTab,
+  ContextOptions,
+  ProfileContext,
+  ProfileRuntimeState,
+  ProfileStatus,
+} from "./server-context.types.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
-import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveProfile } from "./config.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import {
@@ -11,15 +20,6 @@ import { createProfileAvailability } from "./server-context.availability.js";
 import { createProfileResetOps } from "./server-context.reset.js";
 import { createProfileSelectionOps } from "./server-context.selection.js";
 import { createProfileTabOps } from "./server-context.tab-ops.js";
-import type {
-  BrowserServerState,
-  BrowserRouteContext,
-  BrowserTab,
-  ContextOptions,
-  ProfileContext,
-  ProfileRuntimeState,
-  ProfileStatus,
-} from "./server-context.types.js";
 
 export type {
   BrowserRouteContext,

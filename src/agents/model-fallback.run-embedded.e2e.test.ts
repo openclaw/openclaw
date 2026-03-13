@@ -1,12 +1,12 @@
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
-import { runWithModelFallback } from "./model-fallback.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
+import { runWithModelFallback } from "./model-fallback.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({

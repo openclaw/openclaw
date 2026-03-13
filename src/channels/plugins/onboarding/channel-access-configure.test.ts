@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { configureChannelAccessWithAllowlist } from "./channel-access-configure.js";
 import type { ChannelAccessPolicy } from "./channel-access.js";
+import { configureChannelAccessWithAllowlist } from "./channel-access-configure.js";
 
 function createPrompter(params: { confirm: boolean; policy?: ChannelAccessPolicy; text?: string }) {
   return {

@@ -1,5 +1,5 @@
-import { createRequire } from "node:module";
 import type { ErrorObject, ValidateFunction } from "ajv";
+import { createRequire } from "node:module";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 

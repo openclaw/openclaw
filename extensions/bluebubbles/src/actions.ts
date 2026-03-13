@@ -11,6 +11,7 @@ import {
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
 } from "openclaw/plugin-sdk/bluebubbles";
+import type { BlueBubblesSendTarget } from "./types.js";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
 import {
@@ -28,7 +29,6 @@ import { sendBlueBubblesReaction } from "./reactions.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import { normalizeBlueBubblesHandle, parseBlueBubblesTarget } from "./targets.js";
-import type { BlueBubblesSendTarget } from "./types.js";
 
 const providerId = "bluebubbles";
 

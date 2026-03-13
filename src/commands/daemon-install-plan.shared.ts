@@ -1,9 +1,9 @@
+import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import {
   emitNodeRuntimeWarning,
   type DaemonInstallWarnFn,
 } from "./daemon-install-runtime-warning.js";
-import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 export function resolveGatewayDevMode(argv: string[] = process.argv): boolean {
   const entry = argv[1];

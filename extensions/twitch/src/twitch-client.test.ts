@@ -10,8 +10,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TwitchClientManager } from "./twitch-client.js";
 import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
+import { TwitchClientManager } from "./twitch-client.js";
 
 // Mock @twurple dependencies
 const mockConnect = vi.fn().mockResolvedValue(undefined);

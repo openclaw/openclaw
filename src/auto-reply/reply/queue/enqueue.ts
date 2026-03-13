@@ -1,8 +1,8 @@
+import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
 import { createDedupeCache } from "../../../infra/dedupe.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
 import { kickFollowupDrainIfIdle } from "./drain.js";
 import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
-import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
 
 const RECENT_QUEUE_MESSAGE_IDS = createDedupeCache({
   ttlMs: 5 * 60 * 1000,

@@ -1,7 +1,7 @@
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { getActivePluginRegistry, getActivePluginRegistryKey } from "../../plugins/runtime.js";

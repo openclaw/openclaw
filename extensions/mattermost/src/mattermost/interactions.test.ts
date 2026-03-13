@@ -1,8 +1,8 @@
 import { type IncomingMessage, type ServerResponse } from "node:http";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import type { MattermostClient } from "./client.js";
 import { setMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
-import type { MattermostClient } from "./client.js";
 import {
   buildButtonAttachments,
   computeInteractionCallbackUrl,

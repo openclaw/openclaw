@@ -4,8 +4,8 @@ import type {
   GroupToolPolicyConfig,
 } from "openclaw/plugin-sdk/feishu";
 import { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/feishu";
-import { normalizeFeishuTarget } from "./targets.js";
 import type { FeishuConfig, FeishuGroupConfig } from "./types.js";
+import { normalizeFeishuTarget } from "./targets.js";
 
 export type FeishuAllowlistMatch = AllowlistMatch<"wildcard" | "id">;
 

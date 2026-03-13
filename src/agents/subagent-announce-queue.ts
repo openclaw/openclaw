@@ -1,3 +1,4 @@
+import type { AgentInternalEvent } from "./internal-events.js";
 import { type QueueDropPolicy, type QueueMode } from "../auto-reply/reply/queue.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -17,7 +18,6 @@ import {
   previewQueueSummaryPrompt,
   waitForQueueDebounce,
 } from "../utils/queue-helpers.js";
-import type { AgentInternalEvent } from "./internal-events.js";
 
 export type AnnounceQueueItem = {
   // Stable announce identity shared by direct + queued delivery paths.

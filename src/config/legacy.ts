@@ -1,6 +1,6 @@
+import type { LegacyConfigIssue } from "./types.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy.migrations.js";
 import { LEGACY_CONFIG_RULES } from "./legacy.rules.js";
-import type { LegacyConfigIssue } from "./types.js";
 
 function getPathValue(root: Record<string, unknown>, path: string[]): unknown {
   let cursor: unknown = root;

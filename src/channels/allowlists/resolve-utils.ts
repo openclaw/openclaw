@@ -1,5 +1,5 @@
-import { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
 import { summarizeStringEntries } from "../../shared/string-sample.js";
 
 export type AllowlistUserResolutionLike = {

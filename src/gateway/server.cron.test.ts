@@ -1,9 +1,9 @@
+import type WebSocket from "ws";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate as setImmediatePromise } from "node:timers/promises";
 import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
-import type WebSocket from "ws";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import {
   connectOk,

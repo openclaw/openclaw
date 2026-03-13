@@ -1,4 +1,8 @@
 import { ChannelType, MessageType, type User } from "@buape/carbon";
+import type {
+  DiscordMessagePreflightContext,
+  DiscordMessagePreflightParams,
+} from "./message-handler.preflight.types.js";
 import {
   ensureConfiguredAcpRouteReady,
   resolveConfiguredAcpRoute,
@@ -49,10 +53,6 @@ import {
   resolveDiscordSystemLocation,
   resolveTimestampMs,
 } from "./format.js";
-import type {
-  DiscordMessagePreflightContext,
-  DiscordMessagePreflightParams,
-} from "./message-handler.preflight.types.js";
 import {
   resolveDiscordChannelInfo,
   resolveDiscordMessageChannelId,

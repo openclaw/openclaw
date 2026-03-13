@@ -1,10 +1,10 @@
-import { FileDiff, preloadHighlighter } from "@pierre/diffs";
 import type {
   FileContents,
   FileDiffMetadata,
   FileDiffOptions,
   SupportedLanguages,
 } from "@pierre/diffs";
+import { FileDiff, preloadHighlighter } from "@pierre/diffs";
 import type { DiffViewerPayload, DiffLayout, DiffTheme } from "./types.js";
 import { parseViewerPayloadJson } from "./viewer-payload.js";
 

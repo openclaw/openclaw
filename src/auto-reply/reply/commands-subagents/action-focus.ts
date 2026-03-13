@@ -1,3 +1,4 @@
+import type { CommandHandlerResult } from "../commands-types.js";
 import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
@@ -12,7 +13,6 @@ import {
   resolveThreadBindingMaxAgeMsForChannel,
 } from "../../../channels/thread-bindings-policy.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
-import type { CommandHandlerResult } from "../commands-types.js";
 import {
   type SubagentsCommandContext,
   isDiscordSurface,

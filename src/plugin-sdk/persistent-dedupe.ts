@@ -1,5 +1,5 @@
-import { createDedupeCache } from "../infra/dedupe.js";
 import type { FileLockOptions } from "./file-lock.js";
+import { createDedupeCache } from "../infra/dedupe.js";
 import { withFileLock } from "./file-lock.js";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
 

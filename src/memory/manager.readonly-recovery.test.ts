@@ -1,11 +1,11 @@
+import type { DatabaseSync } from "node:sqlite";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resetEmbeddingMocks } from "./embedding.test-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
+import { resetEmbeddingMocks } from "./embedding.test-mocks.js";
 import { getRequiredMemoryIndexManager } from "./test-manager-helpers.js";
 
 describe("memory manager readonly recovery", () => {

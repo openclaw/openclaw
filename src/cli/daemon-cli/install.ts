@@ -1,3 +1,4 @@
+import type { DaemonInstallOptions } from "./types.js";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
@@ -16,7 +17,6 @@ import {
   installDaemonServiceAndEmit,
 } from "./response.js";
 import { parsePort } from "./shared.js";
-import type { DaemonInstallOptions } from "./types.js";
 
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const json = Boolean(opts.json);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { listNativeCommandSpecs } from "../../auto-reply/commands-registry.js";
 import type { OpenClawConfig, loadConfig } from "../../config/config.js";
+import { listNativeCommandSpecs } from "../../auto-reply/commands-registry.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 

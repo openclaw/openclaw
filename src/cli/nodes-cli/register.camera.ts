@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import type { NodesRpcOpts } from "./types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { renderTable } from "../../terminal/table.js";
 import { shortenHomePath } from "../../utils.js";
@@ -19,7 +20,6 @@ import {
   resolveNode,
   resolveNodeId,
 } from "./rpc.js";
-import type { NodesRpcOpts } from "./types.js";
 
 const parseFacing = (value: string): CameraFacing => {
   const v = String(value ?? "")

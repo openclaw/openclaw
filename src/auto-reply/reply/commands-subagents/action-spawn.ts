@@ -1,5 +1,5 @@
-import { spawnSubagentDirect } from "../../../agents/subagent-spawn.js";
 import type { CommandHandlerResult } from "../commands-types.js";
+import { spawnSubagentDirect } from "../../../agents/subagent-spawn.js";
 import { type SubagentsCommandContext, stopWithText } from "./shared.js";
 
 export async function handleSubagentsSpawnAction(

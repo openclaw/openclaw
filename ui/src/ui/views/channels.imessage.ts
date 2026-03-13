@@ -1,8 +1,8 @@
 import { html, nothing } from "lit";
-import { formatRelativeTimestamp } from "../format.ts";
 import type { IMessageStatus } from "../types.ts";
-import { renderChannelConfigSection } from "./channels.config.ts";
 import type { ChannelsProps } from "./channels.types.ts";
+import { formatRelativeTimestamp } from "../format.ts";
+import { renderChannelConfigSection } from "./channels.config.ts";
 
 export function renderIMessageCard(params: {
   props: ChannelsProps;

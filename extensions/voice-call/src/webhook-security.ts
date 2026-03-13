@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
-import { getHeader } from "./http-headers.js";
 import type { WebhookContext } from "./types.js";
+import { getHeader } from "./http-headers.js";
 
 const REPLAY_WINDOW_MS = 10 * 60 * 1000;
 const REPLAY_CACHE_MAX_ENTRIES = 10_000;

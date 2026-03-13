@@ -543,7 +543,7 @@ function addVec(a: Float64Array, b: Float64Array): Float64Array {
   return out;
 }
 
-/** Matrix-vector multiply: M(rows×cols) · v(cols) → out(rows) */
+/** Matrix-vector multiply: M^T(cols×rows) · v(rows) → out(cols) */
 function matVecMul(M: Float64Array, v: Float64Array, rows: number, cols: number): Float64Array {
   const out = new Float64Array(cols);
   for (let j = 0; j < cols; j++) {

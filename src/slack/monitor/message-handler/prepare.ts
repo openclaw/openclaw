@@ -1,3 +1,6 @@
+import type { FinalizedMsgContext } from "../../../auto-reply/templating.js";
+import type { SlackMessageEvent } from "../../types.js";
+import type { PreparedSlackMessage } from "./types.js";
 import { resolveAckReaction } from "../../../agents/identity.js";
 import { hasControlCommand } from "../../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../../auto-reply/commands-registry.js";
@@ -14,7 +17,6 @@ import {
   buildMentionRegexes,
   matchesMentionWithExplicit,
 } from "../../../auto-reply/reply/mentions.js";
-import type { FinalizedMsgContext } from "../../../auto-reply/templating.js";
 import {
   shouldAckReaction as shouldAckReactionGate,
   type AckReactionScope,
@@ -35,7 +37,6 @@ import { reactSlackMessage } from "../../actions.js";
 import { sendMessageSlack } from "../../send.js";
 import { hasSlackThreadParticipation } from "../../sent-thread-cache.js";
 import { resolveSlackThreadContext } from "../../threading.js";
-import type { SlackMessageEvent } from "../../types.js";
 import {
   normalizeSlackAllowOwnerEntry,
   resolveSlackAllowListMatch,
@@ -50,7 +51,6 @@ import { resolveSlackThreadStarter } from "../media.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
-import type { PreparedSlackMessage } from "./types.js";
 
 const mentionRegexCache = new WeakMap<SlackMonitorContext, Map<string, RegExp[]>>();
 

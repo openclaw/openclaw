@@ -1,11 +1,11 @@
 import type { Api, Context, Model } from "@mariozechner/pi-ai";
 import { complete } from "@mariozechner/pi-ai";
+import type { ImageDescriptionRequest, ImageDescriptionResult } from "../types.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../../agents/minimax-vlm.js";
 import { getApiKeyForModel, requireApiKey } from "../../agents/model-auth.js";
 import { normalizeModelRef } from "../../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
 import { coerceImageAssistantText } from "../../agents/tools/image-tool.helpers.js";
-import type { ImageDescriptionRequest, ImageDescriptionResult } from "../types.js";
 
 let piModelDiscoveryRuntimePromise: Promise<
   typeof import("../../agents/pi-model-discovery-runtime.js")

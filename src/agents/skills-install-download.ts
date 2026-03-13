@@ -1,9 +1,11 @@
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { ReadableStream as NodeReadableStream } from "node:stream/web";
+import type { SkillInstallResult } from "./skills-install.js";
+import type { SkillEntry, SkillInstallSpec } from "./skills.js";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import { writeFileFromPathWithinRoot } from "../infra/fs-safe.js";
 import { assertCanonicalPathWithinBase } from "../infra/install-safe-path.js";
@@ -12,8 +14,6 @@ import { isWithinDir } from "../infra/path-safety.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
 import { extractArchive } from "./skills-install-extract.js";
 import { formatInstallFailureMessage } from "./skills-install-output.js";
-import type { SkillInstallResult } from "./skills-install.js";
-import type { SkillEntry, SkillInstallSpec } from "./skills.js";
 import { resolveSkillToolsRootDir } from "./skills/tools-dir.js";
 
 function isNodeReadableStream(value: unknown): value is NodeJS.ReadableStream {

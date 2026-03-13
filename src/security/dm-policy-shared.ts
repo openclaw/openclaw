@@ -1,7 +1,7 @@
-import { mergeDmAllowFromSources, resolveGroupAllowFromSources } from "../channels/allow-from.js";
-import { resolveControlCommandGate } from "../channels/command-gating.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { GroupPolicy } from "../config/types.base.js";
+import { mergeDmAllowFromSources, resolveGroupAllowFromSources } from "../channels/allow-from.js";
+import { resolveControlCommandGate } from "../channels/command-gating.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { evaluateMatchedGroupAccessForPolicy } from "../plugin-sdk/group-access.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";

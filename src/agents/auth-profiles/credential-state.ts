@@ -1,5 +1,5 @@
-import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
 import type { AuthProfileCredential } from "./types.js";
+import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
 
 export type AuthCredentialReasonCode =
   | "ok"

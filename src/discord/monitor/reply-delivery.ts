@@ -1,13 +1,13 @@
 import type { RequestClient } from "@buape/carbon";
-import { resolveAgentAvatar } from "../../agents/identity-avatar.js";
 import type { ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { loadConfig } from "../../config/config.js";
 import type { MarkdownTableMode, ReplyToMode } from "../../config/types.base.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import { resolveAgentAvatar } from "../../agents/identity-avatar.js";
+import { loadConfig } from "../../config/config.js";
 import { createDiscordRetryRunner, type RetryRunner } from "../../infra/retry-policy.js";
 import { resolveRetryConfig, retryAsync, type RetryConfig } from "../../infra/retry.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import { resolveDiscordAccount } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord, sendWebhookMessageDiscord } from "../send.js";

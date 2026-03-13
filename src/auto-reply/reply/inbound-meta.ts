@@ -1,7 +1,7 @@
+import type { TemplateContext } from "../templating.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
-import type { TemplateContext } from "../templating.js";
 
 function safeTrim(value: unknown): string | undefined {
   if (typeof value !== "string") {

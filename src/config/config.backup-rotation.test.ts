@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "./types.js";
 import {
   maintainConfigBackups,
   rotateConfigBackups,
@@ -12,7 +13,6 @@ import {
   resolveConfigPathFromTempState,
 } from "./config.backup-rotation.test-helpers.js";
 import { withTempHome } from "./test-helpers.js";
-import type { OpenClawConfig } from "./types.js";
 
 describe("config backup rotation", () => {
   it("keeps a 5-deep backup ring for config writes", async () => {

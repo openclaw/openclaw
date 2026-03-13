@@ -1,6 +1,6 @@
+import type { BlueBubblesAttachment } from "./types.js";
 import { parseFiniteNumber } from "../../../src/infra/parse-finite-number.js";
 import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
-import type { BlueBubblesAttachment } from "./types.js";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)

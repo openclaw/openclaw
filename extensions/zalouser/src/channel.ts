@@ -1,7 +1,3 @@
-import {
-  buildAccountScopedDmSecurityPolicy,
-  mapAllowFromEntries,
-} from "openclaw/plugin-sdk/compat";
 import type {
   ChannelAccountSnapshot,
   ChannelDirectoryEntry,
@@ -12,6 +8,10 @@ import type {
   OpenClawConfig,
   GroupToolPolicyConfig,
 } from "openclaw/plugin-sdk/zalouser";
+import {
+  buildAccountScopedDmSecurityPolicy,
+  mapAllowFromEntries,
+} from "openclaw/plugin-sdk/compat";
 import {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,

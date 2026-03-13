@@ -68,6 +68,7 @@ type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: CacheRetention;
   openaiWsWarmup?: boolean;
+  transport?: string;
 };
 
 /**
@@ -162,8 +163,8 @@ function createStreamFnWithExtraParams(
   // data_collection, ignore, sort, quantizations, etc.
   const providerRouting =
     provider === "openrouter" &&
-    extraParams.provider != null &&
-    typeof extraParams.provider === "object"
+      extraParams.provider != null &&
+      typeof extraParams.provider === "object"
       ? (extraParams.provider as Record<string, unknown>)
       : undefined;
 
@@ -182,9 +183,9 @@ function createStreamFnWithExtraParams(
     // pi-ai picks it up via model.compat.openRouterRouting.
     const effectiveModel = providerRouting
       ? ({
-          ...model,
-          compat: { ...model.compat, openRouterRouting: providerRouting },
-        } as unknown as typeof model)
+        ...model,
+        compat: { ...model.compat, openRouterRouting: providerRouting },
+      } as unknown as typeof model)
       : model;
     return underlying(effectiveModel, context, {
       ...streamParams,
@@ -444,8 +445,8 @@ function createCodexDefaultTransportWrapper(baseStreamFn: StreamFn | undefined):
   return (model, context, options) =>
     underlying(model, context, {
       ...options,
-      transport: options?.transport ?? "auto",
-    });
+      transport: (options as Record<string, unknown>)?.transport ?? "auto",
+    } as any);
 }
 
 function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
@@ -456,12 +457,12 @@ function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | undefined)
       | undefined;
     const mergedOptions = {
       ...options,
-      transport: options?.transport ?? "auto",
+      transport: (options as any)?.transport ?? "auto",
       // Warm-up is optional in OpenAI docs; enabled by default here for lower
       // first-turn latency on WebSocket sessions. Set params.openaiWsWarmup=false
       // to disable per model.
       openaiWsWarmup: typedOptions?.openaiWsWarmup ?? true,
-    } as SimpleStreamOptions;
+    } as any;
     return underlying(model, context, mergedOptions);
   };
 }
@@ -1197,8 +1198,8 @@ export function applyExtraParamsToAgent(
   const override =
     extraParamsOverride && Object.keys(extraParamsOverride).length > 0
       ? Object.fromEntries(
-          Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
-        )
+        Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
+      )
       : undefined;
   const merged = Object.assign({}, resolvedExtraParams, override);
   const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider);

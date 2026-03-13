@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import { applyDerivedTags } from "./schema.tags.js";

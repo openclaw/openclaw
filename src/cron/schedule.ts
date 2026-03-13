@@ -1,6 +1,6 @@
 import { Cron } from "croner";
-import { parseAbsoluteTimeMs } from "./parse.js";
 import type { CronSchedule } from "./types.js";
+import { parseAbsoluteTimeMs } from "./parse.js";
 
 const CRON_EVAL_CACHE_MAX = 512;
 const cronEvalCache = new Map<string, Cron>();

@@ -3,8 +3,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type {
+  MemoryEmbeddingProbeResult,
+  MemoryProviderStatus,
+  MemorySearchManager,
+  MemorySearchResult,
+  MemorySource,
+  MemorySyncProgressUpdate,
+} from "./types.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveStateDir } from "../config/paths.js";
 import { writeFileWithinRoot } from "../infra/fs-safe.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -20,14 +28,6 @@ import {
   type SessionFileEntry,
 } from "./session-files.js";
 import { requireNodeSqlite } from "./sqlite.js";
-import type {
-  MemoryEmbeddingProbeResult,
-  MemoryProviderStatus,
-  MemorySearchManager,
-  MemorySearchResult,
-  MemorySource,
-  MemorySyncProgressUpdate,
-} from "./types.js";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
 import type {

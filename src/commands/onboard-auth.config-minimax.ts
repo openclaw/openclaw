@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { toAgentModelListLike } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import { toAgentModelListLike } from "../config/model-input.js";
 import {
   applyAgentDefaultModelPrimary,
   applyOnboardAuthAgentModelsAndProviders,

@@ -1,11 +1,11 @@
+import type { RuntimeEnv } from "./message-handler.preflight.types.js";
+import type { DiscordMonitorStatusSink } from "./status.js";
 import { createRunStateMachine } from "../../channels/run-state-machine.js";
 import { danger } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-time/format-duration.ts";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { materializeDiscordInboundJob, type DiscordInboundJob } from "./inbound-job.js";
-import type { RuntimeEnv } from "./message-handler.preflight.types.js";
 import { processDiscordMessage } from "./message-handler.process.js";
-import type { DiscordMonitorStatusSink } from "./status.js";
 import { normalizeDiscordInboundWorkerTimeoutMs, runDiscordTaskWithTimeout } from "./timeouts.js";
 
 type DiscordInboundWorkerParams = {

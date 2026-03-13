@@ -1,3 +1,9 @@
+import type {
+  SignalEnvelope,
+  SignalEventHandlerDeps,
+  SignalReactionMessage,
+  SignalReceivePayload,
+} from "./event-handler.types.js";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -49,12 +55,6 @@ import {
 } from "../identity.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
-import type {
-  SignalEnvelope,
-  SignalEventHandlerDeps,
-  SignalReactionMessage,
-  SignalReceivePayload,
-} from "./event-handler.types.js";
 import { renderSignalMentions } from "./mentions.js";
 
 function formatAttachmentKindCount(kind: string, count: number): string {

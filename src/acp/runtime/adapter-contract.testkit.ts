@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expect } from "vitest";
-import { toAcpRuntimeError } from "./errors.js";
 import type { AcpRuntime, AcpRuntimeEvent } from "./types.js";
+import { toAcpRuntimeError } from "./errors.js";
 
 export type AcpRuntimeAdapterContractParams = {
   createRuntime: () => Promise<AcpRuntime> | AcpRuntime;

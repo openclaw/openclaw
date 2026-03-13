@@ -1,16 +1,16 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
-import { isSecureWebSocketUrl } from "../gateway/net.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import type { SecretInputMode } from "./onboard-types.js";
+import { isSecureWebSocketUrl } from "../gateway/net.js";
 import { discoverGatewayBeacons } from "../infra/bonjour-discovery.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   promptSecretRefForOnboarding,
   resolveSecretInputModeForEnvSelection,
 } from "./auth-choice.apply-helpers.js";
 import { detectBinary } from "./onboard-helpers.js";
-import type { SecretInputMode } from "./onboard-types.js";
 
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 

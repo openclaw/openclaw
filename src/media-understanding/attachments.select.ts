@@ -1,10 +1,10 @@
 import type { MediaUnderstandingAttachmentsConfig } from "../config/types.tools.js";
+import type { MediaAttachment, MediaUnderstandingCapability } from "./types.js";
 import {
   isAudioAttachment,
   isImageAttachment,
   isVideoAttachment,
 } from "./attachments.normalize.js";
-import type { MediaAttachment, MediaUnderstandingCapability } from "./types.js";
 
 const DEFAULT_MAX_ATTACHMENTS = 1;
 

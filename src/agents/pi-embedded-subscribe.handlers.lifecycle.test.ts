@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import { handleAgentEnd } from "./pi-embedded-subscribe.handlers.lifecycle.js";
-import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 
 vi.mock("../infra/agent-events.js", () => ({
   emitAgentEvent: vi.fn(),

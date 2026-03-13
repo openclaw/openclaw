@@ -1,9 +1,9 @@
 import fsSync from "node:fs";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveMemoryBackendConfig } from "../memory/backend-config.js";
 import { DEFAULT_LOCAL_MODEL } from "../memory/embeddings.js";
 import { hasConfiguredMemorySecretInput } from "../memory/secret-input.js";

@@ -1,9 +1,9 @@
-import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { readGatewayTokenEnv } from "../gateway/credentials.js";
 import { resolveConfiguredSecretInputWithFallback } from "../gateway/resolve-configured-secret-input-string.js";
 import { copyToClipboard } from "../infra/clipboard.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   detectBrowserOpenSupport,

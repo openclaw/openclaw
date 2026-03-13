@@ -1,15 +1,15 @@
+import type { App } from "@slack/bolt";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { App } from "@slack/bolt";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { expectInboundContextContract } from "../../../../test/helpers/inbound-contract.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { resolveAgentRoute } from "../../../routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
+import { expectInboundContextContract } from "../../../../test/helpers/inbound-contract.js";
+import { resolveAgentRoute } from "../../../routing/resolve-route.js";
+import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
 import { prepareSlackMessage } from "./prepare.js";
 import { createInboundSlackTestContext, createSlackTestAccount } from "./prepare.test-helpers.js";
 

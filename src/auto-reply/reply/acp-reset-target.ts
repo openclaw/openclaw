@@ -1,5 +1,5 @@
-import { resolveConfiguredAcpBindingRecord } from "../../acp/persistent-bindings.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveConfiguredAcpBindingRecord } from "../../acp/persistent-bindings.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { DEFAULT_ACCOUNT_ID, isAcpSessionKey } from "../../routing/session-key.js";
 

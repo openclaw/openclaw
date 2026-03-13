@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import type { WebInboundMsg } from "./types.js";
 import { logVerbose } from "../../globals.js";
 import { sleep } from "../../utils.js";
 import { loadWebMedia } from "../media.js";
 import { deliverWebReply } from "./deliver-reply.js";
-import type { WebInboundMsg } from "./types.js";
 
 vi.mock("../../globals.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../globals.js")>();

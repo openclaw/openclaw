@@ -7,6 +7,9 @@ import type {
   LeaveEvent,
   PostbackEvent,
 } from "@line/bot-sdk";
+import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   clearHistoryEntriesIfEnabled,
@@ -17,7 +20,6 @@ import {
 import { buildMentionRegexes, matchesMentionPatterns } from "../auto-reply/reply/mentions.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -32,7 +34,6 @@ import {
 } from "../pairing/pairing-store.js";
 import { evaluateMatchedGroupAccessForPolicy } from "../plugin-sdk/group-access.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
-import type { RuntimeEnv } from "../runtime.js";
 import {
   firstDefined,
   isSenderAllowed,
@@ -49,7 +50,6 @@ import {
 import { downloadLineMedia } from "./download.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { pushMessageLine, replyMessageLine } from "./send.js";
-import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
 
 interface MediaRef {
   path: string;

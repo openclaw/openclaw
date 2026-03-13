@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { OpenClawConfig } from "../config/config.js";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 
 export function listAuthProfileStorePaths(config: OpenClawConfig, stateDir: string): string[] {

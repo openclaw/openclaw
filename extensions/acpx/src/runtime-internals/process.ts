@@ -1,10 +1,10 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync } from "node:fs";
 import type {
   WindowsSpawnProgram,
   WindowsSpawnProgramCandidate,
   WindowsSpawnResolution,
 } from "openclaw/plugin-sdk/acpx";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync } from "node:fs";
 import {
   applyWindowsSpawnProgramPolicy,
   materializeWindowsSpawnProgram,

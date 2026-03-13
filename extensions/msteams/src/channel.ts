@@ -1,12 +1,12 @@
-import {
-  collectAllowlistProviderRestrictSendersWarnings,
-  formatAllowFromLowercase,
-} from "openclaw/plugin-sdk/compat";
 import type {
   ChannelMessageActionName,
   ChannelPlugin,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/msteams";
+import {
+  collectAllowlistProviderRestrictSendersWarnings,
+  formatAllowFromLowercase,
+} from "openclaw/plugin-sdk/compat";
 import {
   buildProbeChannelStatusSummary,
   buildRuntimeAccountStatusSnapshot,

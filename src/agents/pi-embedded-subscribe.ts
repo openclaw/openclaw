@@ -1,10 +1,15 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { InlineCodeState } from "../markdown/code-spans.js";
+import type {
+  EmbeddedPiSubscribeContext,
+  EmbeddedPiSubscribeState,
+} from "./pi-embedded-subscribe.handlers.types.js";
+import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { InlineCodeState } from "../markdown/code-spans.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
 import { WorldModelManager } from "../world-model/manager.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
@@ -13,12 +18,7 @@ import {
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
 import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.handlers.js";
-import type {
-  EmbeddedPiSubscribeContext,
-  EmbeddedPiSubscribeState,
-} from "./pi-embedded-subscribe.handlers.types.js";
 import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
-import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { formatReasoningMessage, stripDowngradedToolCallText } from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
@@ -107,11 +107,16 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!params.onBlockReply) {
       return;
     }
-    void Promise.resolve()
-      .then(() => params.onBlockReply?.(payload))
-      .catch((err) => {
-        log.warn(`block reply callback failed: ${String(err)}`);
-      });
+    try {
+      const result = params.onBlockReply(payload);
+      if (result instanceof Promise) {
+        result.catch((err) => {
+          log.warn(`block reply callback failed: ${String(err)}`);
+        });
+      }
+    } catch (err) {
+      log.warn(`block reply callback failed: ${String(err)}`);
+    }
   };
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
@@ -475,7 +480,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     return output;
   };
 
-  const emitBlockChunk = (text: string) => {
+  const emitBlockChunk = (text: string, options?: { skipDedupe?: boolean }) => {
     if (state.suppressBlockChunks) {
       return;
     }
@@ -497,7 +502,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       return;
     }
 
-    if (shouldSkipAssistantText(chunk)) {
+    if (!options?.skipDedupe && shouldSkipAssistantText(chunk)) {
       return;
     }
 
@@ -543,7 +548,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       return;
     }
     if (blockChunker?.hasBuffered()) {
-      blockChunker.drain({ force: true, emit: emitBlockChunk });
+      blockChunker.drain({ force: true, emit: (chunk) => emitBlockChunk(chunk, { skipDedupe: true }) });
       blockChunker.reset();
       return;
     }
@@ -622,6 +627,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     emitToolOutput,
     stripBlockTags,
     emitBlockChunk,
+    emitBlockReplySafely,
     flushBlockReplyBuffer,
     emitReasoningStream,
     consumeReplyDirectives,

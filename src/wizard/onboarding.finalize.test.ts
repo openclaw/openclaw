@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 
 const runTui = vi.hoisted(() => vi.fn(async () => {}));
 const probeGatewayReachable = vi.hoisted(() => vi.fn(async () => ({ ok: true })));

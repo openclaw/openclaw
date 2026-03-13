@@ -1,7 +1,7 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveSharedMatrixClient, stopSharedClient } from "./shared.js";
 import type { MatrixAuth } from "./types.js";
+import { resolveSharedMatrixClient, stopSharedClient } from "./shared.js";
 
 const createMatrixClientMock = vi.hoisted(() => vi.fn());
 

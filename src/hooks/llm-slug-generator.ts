@@ -5,6 +5,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
@@ -14,7 +15,6 @@ import {
 import { DEFAULT_PROVIDER, DEFAULT_MODEL } from "../agents/defaults.js";
 import { parseModelRef } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("llm-slug-generator");

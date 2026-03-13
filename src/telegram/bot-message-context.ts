@@ -1,3 +1,5 @@
+import type { TelegramDirectConfig, TelegramGroupConfig } from "../config/types.js";
+import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
 import { ensureConfiguredAcpRouteReady } from "../acp/persistent-bindings.route.js";
 import { resolveAckReaction } from "../agents/identity.js";
 import { shouldAckReaction as shouldAckReactionGate } from "../channels/ack-reactions.js";
@@ -7,7 +9,6 @@ import {
   type StatusReactionController,
 } from "../channels/status-reactions.js";
 import { loadConfig } from "../config/config.js";
-import type { TelegramDirectConfig, TelegramGroupConfig } from "../config/types.js";
 import { logVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { buildAgentSessionKey, deriveLastRoutePolicy } from "../routing/resolve-route.js";
@@ -16,7 +17,6 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { firstDefined, normalizeAllowFrom, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import { resolveTelegramInboundBody } from "./bot-message-context.body.js";
 import { buildTelegramInboundContextPayload } from "./bot-message-context.session.js";
-import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
 import {
   buildTypingThreadParams,
   resolveTelegramDirectPeerId,

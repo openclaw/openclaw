@@ -1,7 +1,7 @@
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
 import type { FeishuMessageEvent } from "./bot.js";
+import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
 import {
   buildBroadcastSessionKey,
   buildFeishuAgentBody,

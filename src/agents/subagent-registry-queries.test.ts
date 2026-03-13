@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   countActiveRunsForSessionFromRuns,
   countPendingDescendantRunsExcludingRunFromRuns,
@@ -7,7 +8,6 @@ import {
   resolveRequesterForChildSessionFromRuns,
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
 } from "./subagent-registry-queries.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function makeRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
   const runId = overrides.runId ?? "run-default";

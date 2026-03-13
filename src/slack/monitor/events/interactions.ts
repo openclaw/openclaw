@@ -1,8 +1,8 @@
 import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
+import type { SlackMonitorContext } from "../context.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
-import type { SlackMonitorContext } from "../context.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import {
   registerModalLifecycleHandler,

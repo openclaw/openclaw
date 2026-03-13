@@ -99,7 +99,7 @@ export class WorldModelManager {
         const lstmModel = new LSTMWorldModel({
           latentDim: wmConfig.lstm?.latentDim ?? 128,
           hiddenDim: wmConfig.lstm?.hiddenDim ?? 256,
-          actionVocabSize: wmConfig.lstm?.actionVocabSize ?? 64,
+          actionVocabSize: wmConfig.lstm?.actionVocabSize ?? 4096,
           weightsPath: wmConfig.lstm?.weightsPath,
         });
         await lstmModel.initialize();
@@ -115,7 +115,7 @@ export class WorldModelManager {
   async observe(state: WorldModelState, action: WorldModelAction): Promise<void> {
     // Reality Check: Did we predict this?
     if (this.predictionBuffer.length > 0) {
-      const lastPrediction = this.predictionBuffer[this.predictionBuffer.length - 1];
+      const lastPrediction = this.predictionBuffer.pop()!;
       // Simple heuristic: Check if ANY predicted action matches the observed action type/tool
       const match = lastPrediction.actions.find((p) => {
         if (p.type !== action.type) {
@@ -172,22 +172,26 @@ export class WorldModelManager {
       try {
         const actions = await this.activeModel.predict(state);
 
-        // Store in buffer for Reality Check
-        this.predictionBuffer.push({ actions, timestamp: Date.now() });
-        if (this.predictionBuffer.length > this.MAX_HISTORY) {
-          this.predictionBuffer.shift();
+        const filtered =
+          this.minConfidence > 0
+            ? actions.filter((a) => (a.confidence ?? 0) >= this.minConfidence)
+            : actions;
+
+        if (this.minConfidence > 0 && filtered.length < actions.length) {
+          log.debug(
+            `[WorldModel] Filtered ${actions.length - filtered.length} predictions below confidence ${this.minConfidence}`,
+          );
         }
 
-        if (this.minConfidence > 0) {
-          const filtered = actions.filter((a) => (a.confidence ?? 0) >= this.minConfidence);
-          if (filtered.length < actions.length) {
-            log.debug(
-              `[WorldModel] Filtered ${actions.length - filtered.length} predictions below confidence ${this.minConfidence}`,
-            );
+        if (filtered.length > 0) {
+          // Store in buffer for Reality Check
+          this.predictionBuffer.push({ actions: filtered, timestamp: Date.now() });
+          if (this.predictionBuffer.length > this.MAX_HISTORY) {
+            this.predictionBuffer.shift();
           }
-          return filtered;
         }
-        return actions;
+
+        return filtered;
       } catch (err) {
         log.error(`Failed to predict world model action: ${String(err)}`);
       }

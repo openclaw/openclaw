@@ -1,3 +1,4 @@
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
 import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
@@ -7,7 +8,6 @@ import {
   buildChannelAccountSnapshot,
   buildReadOnlySourceChannelAccountSnapshot,
 } from "../../channels/plugins/status.js";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";

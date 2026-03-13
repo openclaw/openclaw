@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { listIrcAccountIds, resolveDefaultIrcAccountId } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
+import { listIrcAccountIds, resolveDefaultIrcAccountId } from "./accounts.js";
 
 function asConfig(value: unknown): CoreConfig {
   return value as CoreConfig;

@@ -1,5 +1,8 @@
-import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../agents/auth-profiles.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+import type { ApiKeyStorageOptions } from "./onboard-auth.credentials.js";
+import type { AuthChoice, SecretInputMode } from "./onboard-types.js";
+import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../agents/auth-profiles.js";
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
   normalizeSecretInputModeInput,
@@ -9,13 +12,11 @@ import {
   normalizeTokenProviderInput,
 } from "./auth-choice.apply-helpers.js";
 import { applyAuthChoiceHuggingface } from "./auth-choice.apply.huggingface.js";
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyAuthChoiceOpenRouter } from "./auth-choice.apply.openrouter.js";
 import {
   applyGoogleGeminiModelDefault,
   GOOGLE_GEMINI_DEFAULT_MODEL,
 } from "./google-gemini-model-default.js";
-import type { ApiKeyStorageOptions } from "./onboard-auth.credentials.js";
 import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
@@ -77,7 +78,6 @@ import {
   setZaiApiKey,
   ZAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.js";
-import type { AuthChoice, SecretInputMode } from "./onboard-types.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
 import { detectZaiEndpoint } from "./zai-endpoint-detect.js";
 

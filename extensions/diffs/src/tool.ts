@@ -1,11 +1,11 @@
-import fs from "node:fs/promises";
-import { Static, Type } from "@sinclair/typebox";
 import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/diffs";
+import { Static, Type } from "@sinclair/typebox";
+import fs from "node:fs/promises";
+import type { DiffArtifactStore } from "./store.js";
+import type { DiffRenderOptions, DiffToolDefaults } from "./types.js";
 import { PlaywrightDiffScreenshotter, type DiffScreenshotter } from "./browser.js";
 import { resolveDiffImageRenderOptions } from "./config.js";
 import { renderDiffDocument } from "./render.js";
-import type { DiffArtifactStore } from "./store.js";
-import type { DiffRenderOptions, DiffToolDefaults } from "./types.js";
 import {
   DIFF_IMAGE_QUALITY_PRESETS,
   DIFF_LAYOUTS,

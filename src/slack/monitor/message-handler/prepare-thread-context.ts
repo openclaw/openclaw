@@ -1,9 +1,9 @@
-import { formatInboundEnvelope } from "../../../auto-reply/envelope.js";
-import { readSessionUpdatedAt } from "../../../config/sessions.js";
-import { logVerbose } from "../../../globals.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
+import { formatInboundEnvelope } from "../../../auto-reply/envelope.js";
+import { readSessionUpdatedAt } from "../../../config/sessions.js";
+import { logVerbose } from "../../../globals.js";
 import {
   resolveSlackMedia,
   resolveSlackThreadHistory,

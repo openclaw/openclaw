@@ -7,6 +7,13 @@ import {
   resolveInboundRouteEnvelopeBuilderWithRuntime,
   resolveWebhookPath,
 } from "openclaw/plugin-sdk/googlechat";
+import type {
+  GoogleChatCoreRuntime,
+  GoogleChatMonitorOptions,
+  GoogleChatRuntimeEnv,
+  WebhookTarget,
+} from "./monitor-types.js";
+import type { GoogleChatAttachment, GoogleChatEvent } from "./types.js";
 import { type ResolvedGoogleChatAccount } from "./accounts.js";
 import {
   downloadGoogleChatMedia,
@@ -16,15 +23,8 @@ import {
 } from "./api.js";
 import { type GoogleChatAudienceType } from "./auth.js";
 import { applyGoogleChatInboundAccessPolicy, isSenderAllowed } from "./monitor-access.js";
-import type {
-  GoogleChatCoreRuntime,
-  GoogleChatMonitorOptions,
-  GoogleChatRuntimeEnv,
-  WebhookTarget,
-} from "./monitor-types.js";
 import { createGoogleChatWebhookRequestHandler } from "./monitor-webhook.js";
 import { getGoogleChatRuntime } from "./runtime.js";
-import type { GoogleChatAttachment, GoogleChatEvent } from "./types.js";
 export type { GoogleChatMonitorOptions, GoogleChatRuntimeEnv } from "./monitor-types.js";
 export { isSenderAllowed };
 

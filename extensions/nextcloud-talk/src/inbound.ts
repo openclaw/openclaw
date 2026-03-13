@@ -16,6 +16,7 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/nextcloud-talk";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
+import type { CoreConfig, GroupPolicy, NextcloudTalkInboundMessage } from "./types.js";
 import {
   normalizeNextcloudTalkAllowlist,
   resolveNextcloudTalkAllowlistMatch,
@@ -27,7 +28,6 @@ import {
 import { resolveNextcloudTalkRoomKind } from "./room-info.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
-import type { CoreConfig, GroupPolicy, NextcloudTalkInboundMessage } from "./types.js";
 
 const CHANNEL_ID = "nextcloud-talk" as const;
 

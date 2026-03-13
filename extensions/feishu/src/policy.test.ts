@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { FeishuConfig } from "./types.js";
 import {
   isFeishuGroupAllowed,
   resolveFeishuAllowlistMatch,
   resolveFeishuGroupConfig,
 } from "./policy.js";
-import type { FeishuConfig } from "./types.js";
 
 describe("feishu policy", () => {
   describe("resolveFeishuGroupConfig", () => {

@@ -1,3 +1,9 @@
+import type {
+  SessionEntry,
+  loadSessionStore as loadSessionStoreFn,
+  resolveStorePath as resolveStorePathFn,
+} from "../../../config/sessions.js";
+import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
 import {
   countPendingDescendantRuns,
   type SubagentRunRecord,
@@ -9,11 +15,6 @@ import {
   sanitizeTextContent,
   stripToolMessages,
 } from "../../../agents/tools/sessions-helpers.js";
-import type {
-  SessionEntry,
-  loadSessionStore as loadSessionStoreFn,
-  resolveStorePath as resolveStorePathFn,
-} from "../../../config/sessions.js";
 import { parseDiscordTarget } from "../../../discord/targets.js";
 import { callGateway } from "../../../gateway/call.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
@@ -32,7 +33,6 @@ import {
   resolveDiscordAccountId,
   resolveChannelAccountId,
 } from "../channel-context.js";
-import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
 import {
   formatRunLabel,
   formatRunStatus,

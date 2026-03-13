@@ -1,10 +1,10 @@
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SandboxConfig } from "./types.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { ensureSandboxContainer } from "./docker.js";
 import { collectDockerFlagValues } from "./test-args.js";
-import type { SandboxConfig } from "./types.js";
 
 type SpawnCall = {
   command: string;

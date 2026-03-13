@@ -1,6 +1,6 @@
+import type { DiscordDmCommandAccess } from "./dm-command-auth.js";
 import { issuePairingChallenge } from "../../pairing/pairing-challenge.js";
 import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
-import type { DiscordDmCommandAccess } from "./dm-command-auth.js";
 
 export async function handleDiscordDmCommandDecision(params: {
   dmAccess: DiscordDmCommandAccess;

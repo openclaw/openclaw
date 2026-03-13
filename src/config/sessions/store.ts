@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
 import {
   archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,

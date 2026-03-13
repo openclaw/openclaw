@@ -14,13 +14,6 @@ import {
   type StringSelectMenuInteraction,
 } from "@buape/carbon";
 import { ApplicationCommandOptionType, ButtonStyle } from "discord-api-types/v10";
-import {
-  ensureConfiguredAcpRouteReady,
-  resolveConfiguredAcpRoute,
-} from "../../acp/persistent-bindings.route.js";
-import { resolveHumanDelayConfig } from "../../agents/identity.js";
-import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
-import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import type {
   ChatCommandDefinition,
   CommandArgDefinition,
@@ -28,6 +21,17 @@ import type {
   CommandArgs,
   NativeCommandSpec,
 } from "../../auto-reply/commands-registry.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { OpenClawConfig, loadConfig } from "../../config/config.js";
+import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
+import type { ThreadBindingManager } from "./thread-bindings.js";
+import {
+  ensureConfiguredAcpRouteReady,
+  resolveConfiguredAcpRoute,
+} from "../../acp/persistent-bindings.route.js";
+import { resolveHumanDelayConfig } from "../../agents/identity.js";
+import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -39,11 +43,9 @@ import {
 } from "../../auto-reply/commands-registry.js";
 import { resolveStoredModelOverride } from "../../auto-reply/reply/model-selection.js";
 import { dispatchReplyWithDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { resolveNativeCommandSessionTargets } from "../../channels/native-command-session-targets.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
-import type { OpenClawConfig, loadConfig } from "../../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
@@ -52,7 +54,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import { executePluginCommand, matchPluginCommand } from "../../plugins/commands.js";
-import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { chunkItems } from "../../utils/chunk-items.js";
 import { withTimeout } from "../../utils/with-timeout.js";
 import { loadWebMedia } from "../../web/media.js";
@@ -89,7 +90,6 @@ import {
   resolveDiscordEffectiveRoute,
 } from "./route-resolution.js";
 import { resolveDiscordSenderIdentity } from "./sender-identity.js";
-import type { ThreadBindingManager } from "./thread-bindings.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];

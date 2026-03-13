@@ -1,11 +1,11 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { ChannelId } from "./plugins/types.js";
 import { inspectDiscordAccount, type InspectedDiscordAccount } from "../discord/account-inspect.js";
 import { inspectSlackAccount, type InspectedSlackAccount } from "../slack/account-inspect.js";
 import {
   inspectTelegramAccount,
   type InspectedTelegramAccount,
 } from "../telegram/account-inspect.js";
-import type { ChannelId } from "./plugins/types.js";
 
 export type ReadOnlyInspectedAccount =
   | InspectedDiscordAccount

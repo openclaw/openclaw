@@ -1,5 +1,5 @@
-import { normalizeLegacyDeliveryInput } from "../legacy-delivery.js";
 import type { CronDelivery, CronJobCreate } from "../types.js";
+import { normalizeLegacyDeliveryInput } from "../legacy-delivery.js";
 
 export function normalizeCronCreateDeliveryInput(input: CronJobCreate): CronJobCreate {
   const payloadRecord =

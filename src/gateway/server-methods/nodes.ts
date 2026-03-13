@@ -1,3 +1,4 @@
+import type { GatewayRequestHandlers } from "./types.js";
 import { loadConfig } from "../../config/config.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import {
@@ -43,7 +44,6 @@ import {
   safeParseJson,
   uniqueSortedStrings,
 } from "./nodes.helpers.js";
-import type { GatewayRequestHandlers } from "./types.js";
 
 const NODE_WAKE_RECONNECT_WAIT_MS = 3_000;
 const NODE_WAKE_RECONNECT_RETRY_WAIT_MS = 12_000;

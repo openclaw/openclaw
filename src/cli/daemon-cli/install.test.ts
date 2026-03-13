@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureFullEnv } from "../../test-utils/env.js";
 import type { DaemonActionResponse } from "./response.js";
+import { captureFullEnv } from "../../test-utils/env.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());

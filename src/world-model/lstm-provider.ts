@@ -55,6 +55,9 @@ export class LSTMWorldModel implements IWorldModel {
   /** Rolling hidden state per session for contextual predictions */
   private sessionStates: Map<string, LSTMHiddenState> = new Map();
 
+  /** Maximum number of parallel sessions to keep in memory */
+  private readonly MAX_SESSIONS = 1000;
+
   constructor(config: LSTMWorldModelConfig = {}) {
     this.latentDim = config.latentDim ?? 128;
     this.hiddenDim = config.hiddenDim ?? 256;
@@ -106,7 +109,16 @@ export class LSTMWorldModel implements IWorldModel {
 
     // Forward pass (inference only, no backprop)
     const { state: newHidden } = this.lstm.forward(input, sessionState);
+    if (this.sessionStates.has(sessionId)) {
+      this.sessionStates.delete(sessionId);
+    }
     this.sessionStates.set(sessionId, newHidden);
+    if (this.sessionStates.size > this.MAX_SESSIONS) {
+      const oldest = this.sessionStates.keys().next().value;
+      if (oldest !== undefined) {
+        this.sessionStates.delete(oldest);
+      }
+    }
     this.hiddenState = newHidden;
   }
 

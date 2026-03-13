@@ -1,15 +1,15 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import type { WorldModelAction } from "../world-model/types.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
-import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
-import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./pi-embedded-subscribe.handlers.types.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
+import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import {
   extractMessagingToolSend,
   extractToolErrorMessage,
@@ -248,9 +248,9 @@ export async function handleToolExecutionStart(
   }
 
   // World Model Prediction (before tool execution)
-  void ctx.worldModelManager
+  ctx.worldModelManager
     .predict({
-      sessionId: (ctx.params.session as { id?: string }).id,
+      sessionId: ctx.params.sessionId,
       runId: ctx.params.runId,
       messages: ctx.state.assistantTexts.slice(-10),
     })
@@ -268,7 +268,7 @@ export async function handleToolExecutionStart(
   // World Model Observation
   void ctx.worldModelManager.observe(
     {
-      sessionId: (ctx.params.session as { id?: string }).id,
+      sessionId: ctx.params.sessionId,
       runId: ctx.params.runId,
       messages: ctx.state.assistantTexts.slice(-10),
     },
@@ -468,7 +468,7 @@ export async function handleToolExecutionEnd(
   const wmArgs = toolStartData.get(toolCallId)?.args;
   void ctx.worldModelManager.observe(
     {
-      sessionId: (ctx.params.session as { id?: string }).id,
+      sessionId: ctx.params.sessionId,
       runId: ctx.params.runId,
       messages: ctx.state.assistantTexts.slice(-10),
     },

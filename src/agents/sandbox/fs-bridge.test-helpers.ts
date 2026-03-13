@@ -15,11 +15,11 @@ vi.mock("../../infra/boundary-file-read.js", async (importOriginal) => {
   };
 });
 
+import type { SandboxContext } from "./types.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { execDockerRaw } from "./docker.js";
 import * as fsBridgeModule from "./fs-bridge.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
-import type { SandboxContext } from "./types.js";
 
 export const createSandboxFsBridge = fsBridgeModule.createSandboxFsBridge;
 

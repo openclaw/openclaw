@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { LineConfig, LineGroupConfig } from "./types.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
-import type { LineConfig, LineGroupConfig } from "./types.js";
 
 export function resolveLineGroupLookupIds(groupId?: string | null): string[] {
   const normalized = groupId?.trim();

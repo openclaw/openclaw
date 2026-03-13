@@ -1,17 +1,23 @@
 import fs from "node:fs";
-import { loadConfig } from "../../config/config.js";
-import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-} from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import type {
   CostUsageSummary,
   SessionDailyModelUsage,
   SessionMessageCounts,
   SessionModelUsage,
 } from "../../infra/session-cost-usage.js";
+import type {
+  SessionUsageEntry,
+  SessionsUsageAggregates,
+  SessionsUsageResult,
+} from "../../shared/usage-types.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import { loadConfig } from "../../config/config.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../../config/sessions/paths.js";
+import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import {
   loadCostUsageSummary,
   loadSessionCostSummary,
@@ -25,11 +31,6 @@ import {
   mergeUsageDailyLatency,
   mergeUsageLatency,
 } from "../../shared/usage-aggregates.js";
-import type {
-  SessionUsageEntry,
-  SessionsUsageAggregates,
-  SessionsUsageResult,
-} from "../../shared/usage-types.js";
 import {
   ErrorCodes,
   errorShape,
@@ -41,7 +42,6 @@ import {
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
 } from "../session-utils.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
 const DAY_MS = 24 * 60 * 60 * 1000;

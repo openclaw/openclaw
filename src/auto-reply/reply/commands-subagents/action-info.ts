@@ -1,7 +1,7 @@
+import type { CommandHandlerResult } from "../commands-types.js";
 import { countPendingDescendantRuns } from "../../../agents/subagent-registry.js";
 import { loadSessionStore, resolveStorePath } from "../../../config/sessions.js";
 import { formatDurationCompact } from "../../../shared/subagents-format.js";
-import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
 import {
   type SubagentsCommandContext,

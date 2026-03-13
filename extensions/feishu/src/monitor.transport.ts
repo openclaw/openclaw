@@ -1,10 +1,11 @@
-import * as http from "http";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import * as http from "http";
 import {
   applyBasicWebhookRequestGuards,
   type RuntimeEnv,
   installRequestBodyLimitGuard,
 } from "openclaw/plugin-sdk/feishu";
+import type { ResolvedFeishuAccount } from "./types.js";
 import { createFeishuWSClient } from "./client.js";
 import {
   botNames,
@@ -16,7 +17,6 @@ import {
   recordWebhookStatus,
   wsClients,
 } from "./monitor.state.js";
-import type { ResolvedFeishuAccount } from "./types.js";
 
 export type MonitorTransportParams = {
   account: ResolvedFeishuAccount;

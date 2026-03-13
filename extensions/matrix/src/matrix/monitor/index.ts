@@ -8,9 +8,9 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/matrix";
+import type { CoreConfig, MatrixConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import { resolveMatrixTargets } from "../../resolve-targets.js";
 import { getMatrixRuntime } from "../../runtime.js";
-import type { CoreConfig, MatrixConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import { resolveMatrixAccount } from "../accounts.js";
 import { setActiveMatrixClient } from "../active-client.js";
 import {

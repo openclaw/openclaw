@@ -1,5 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import type { SubagentEndReason } from "../context-engine/types.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -10,7 +12,6 @@ import {
 } from "../config/sessions.js";
 import { ensureContextEnginesInitialized } from "../context-engine/init.js";
 import { resolveContextEngine } from "../context-engine/registry.js";
-import type { SubagentEndReason } from "../context-engine/types.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -54,7 +55,6 @@ import {
   persistSubagentRunsToDisk,
   restoreSubagentRunsFromDisk,
 } from "./subagent-registry-state.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 
 export type { SubagentRunRecord } from "./subagent-registry.types.js";

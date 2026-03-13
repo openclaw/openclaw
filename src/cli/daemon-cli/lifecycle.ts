@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
+import type { DaemonLifecycleOptions } from "./types.js";
 import { isRestartEnabled } from "../../config/commands.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { parseCmdScriptCommandLine } from "../../daemon/cmd-argv.js";
@@ -25,7 +26,6 @@ import {
   waitForGatewayHealthyRestart,
 } from "./restart-health.js";
 import { parsePortFromArgs, renderGatewayServiceStartHints } from "./shared.js";
-import type { DaemonLifecycleOptions } from "./types.js";
 
 const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
 const POST_RESTART_HEALTH_DELAY_MS = DEFAULT_RESTART_HEALTH_DELAY_MS;

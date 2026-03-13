@@ -1,8 +1,11 @@
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import type { ImageSanitizationLimits } from "./image-sanitization.js";
+import type { AnyAgentTool } from "./pi-tools.types.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import {
   SafeOpenError,
   openFileWithinRoot,
@@ -11,7 +14,6 @@ import {
 } from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
-import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import { wrapHostEditToolWithPostWriteRecovery } from "./pi-tools.host-edit.js";
 import {
@@ -21,9 +23,7 @@ import {
   patchToolSchemaForClaudeCompatibility,
   wrapToolParamNormalization,
 } from "./pi-tools.params.js";
-import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
-import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 export {

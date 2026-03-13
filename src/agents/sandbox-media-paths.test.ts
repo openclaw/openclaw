@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createSandboxBridgeReadFile } from "./sandbox-media-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { createSandboxBridgeReadFile } from "./sandbox-media-paths.js";
 
 describe("createSandboxBridgeReadFile", () => {
   it("delegates reads through the sandbox bridge with sandbox root cwd", async () => {

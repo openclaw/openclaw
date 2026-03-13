@@ -4,12 +4,12 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SecurityAuditOptions, SecurityAuditReport } from "./audit.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   collectInstalledSkillsCodeSafetyFindings,
   collectPluginsCodeSafetyFindings,
 } from "./audit-extra.js";
-import type { SecurityAuditOptions, SecurityAuditReport } from "./audit.js";
 import { runSecurityAudit } from "./audit.js";
 import * as skillScanner from "./skill-scanner.js";
 

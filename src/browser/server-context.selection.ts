@@ -1,9 +1,9 @@
-import { fetchOk } from "./cdp.helpers.js";
-import { appendCdpPath } from "./cdp.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import type { PwAiModule } from "./pw-ai-module.js";
-import { getPwAiModule } from "./pw-ai-module.js";
 import type { BrowserTab, ProfileRuntimeState } from "./server-context.types.js";
+import { fetchOk } from "./cdp.helpers.js";
+import { appendCdpPath } from "./cdp.js";
+import { getPwAiModule } from "./pw-ai-module.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 
 type SelectionDeps = {

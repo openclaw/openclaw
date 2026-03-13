@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { AudioTranscriptionRequest, VideoDescriptionRequest } from "./types.js";
 import { buildProviderRegistry, runCapability } from "./runner.js";
 import { withAudioFixture, withVideoFixture } from "./runner.test-utils.js";
-import type { AudioTranscriptionRequest, VideoDescriptionRequest } from "./types.js";
 
 async function runAudioCapabilityWithFetchCapture(params: {
   fixturePrefix: string;

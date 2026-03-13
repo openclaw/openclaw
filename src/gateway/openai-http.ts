@@ -1,9 +1,11 @@
-import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createDefaultDeps } from "../cli/deps.js";
-import { agentCommandFromIngress } from "../commands/agent.js";
+import { randomUUID } from "node:crypto";
 import type { ImageContent } from "../commands/agent/types.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
+import type { AuthRateLimiter } from "./auth-rate-limit.js";
+import type { ResolvedGatewayAuth } from "./auth.js";
+import { createDefaultDeps } from "../cli/deps.js";
+import { agentCommandFromIngress } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import { estimateBase64DecodedBytes } from "../media/base64.js";
@@ -23,8 +25,6 @@ import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
 } from "./agent-prompt.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { resolveGatewayRequestContext } from "./http-utils.js";

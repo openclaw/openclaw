@@ -1,3 +1,17 @@
+import type { MsgContext } from "../auto-reply/templating.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type {
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
+} from "../config/types.js";
+import type { NormalizedAllowFrom } from "./bot-access.js";
+import type {
+  TelegramLogger,
+  TelegramMediaRef,
+  TelegramMessageContextOptions,
+} from "./bot-message-context.types.js";
+import type { TelegramContext } from "./bot/types.js";
 import {
   findModelInCatalog,
   loadModelCatalog,
@@ -10,25 +24,12 @@ import {
   type HistoryEntry,
 } from "../auto-reply/reply/history.js";
 import { buildMentionRegexes, matchesMentionWithExplicit } from "../auto-reply/reply/mentions.js";
-import type { MsgContext } from "../auto-reply/templating.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
 import { formatLocationText, type NormalizedLocation } from "../channels/location.js";
 import { logInboundDrop } from "../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type {
-  TelegramDirectConfig,
-  TelegramGroupConfig,
-  TelegramTopicConfig,
-} from "../config/types.js";
 import { logVerbose } from "../globals.js";
-import type { NormalizedAllowFrom } from "./bot-access.js";
 import { isSenderAllowed } from "./bot-access.js";
-import type {
-  TelegramLogger,
-  TelegramMediaRef,
-  TelegramMessageContextOptions,
-} from "./bot-message-context.types.js";
 import {
   buildSenderLabel,
   buildTelegramGroupPeerId,
@@ -38,7 +39,6 @@ import {
   hasBotMention,
   resolveTelegramMediaPlaceholder,
 } from "./bot/helpers.js";
-import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 
 export type TelegramInboundBodyResult = {

@@ -1,10 +1,10 @@
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 import { normalizeEmbeddingModelWithPrefixes } from "./embeddings-model-normalize.js";
 import {
   createRemoteEmbeddingProvider,
   resolveRemoteEmbeddingClient,
 } from "./embeddings-remote-provider.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 
 export type OpenAiEmbeddingClient = {
   baseUrl: string;

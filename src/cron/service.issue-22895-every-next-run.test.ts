@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { computeJobNextRunAtMs } from "./service/jobs.js";
 import type { CronJob } from "./types.js";
+import { computeJobNextRunAtMs } from "./service/jobs.js";
 
 const EVERY_30_MIN_MS = 30 * 60_000;
 const ANCHOR_MS = Date.parse("2026-02-22T09:14:00.000Z");

@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "./types.js";
+import type { ModelDefinitionConfig } from "./types.models.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { normalizeProviderId, parseModelRef } from "../agents/model-selection.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
@@ -8,8 +10,6 @@ import {
   resolveActiveTalkProviderConfig,
   resolveTalkApiKey,
 } from "./talk.js";
-import type { OpenClawConfig } from "./types.js";
-import type { ModelDefinitionConfig } from "./types.models.js";
 import { hasConfiguredSecretInput } from "./types.secrets.js";
 
 type WarnState = { warned: boolean };

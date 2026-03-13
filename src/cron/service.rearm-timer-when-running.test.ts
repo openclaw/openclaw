@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CronJob } from "./types.js";
 import {
   createNoopLogger,
   createCronStoreHarness,
@@ -8,7 +9,6 @@ import {
 } from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.js";
-import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness();

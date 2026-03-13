@@ -1,5 +1,5 @@
-import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { EventEmitter } from "node:events";
 
 export function makeReq(method: string, body: string): IncomingMessage {
   const req = new EventEmitter() as IncomingMessage & { destroyed: boolean };

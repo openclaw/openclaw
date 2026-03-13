@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
-import { isRestartEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { isRestartEnabled } from "../../config/commands.js";
 import { resolveConfigSnapshotHash } from "../../config/io.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import {

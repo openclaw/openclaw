@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import type { FinalizedMsgContext } from "../templating.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import {
@@ -6,7 +7,6 @@ import {
   toInternalMessagePreprocessedContext,
   toInternalMessageTranscribedContext,
 } from "../../hooks/message-hook-mappers.js";
-import type { FinalizedMsgContext } from "../templating.js";
 
 export function emitPreAgentMessageHooks(params: {
   ctx: FinalizedMsgContext;

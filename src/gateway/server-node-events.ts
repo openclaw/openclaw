@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
@@ -14,7 +15,6 @@ import { normalizeMainKey, scopedHeartbeatWakeOptions } from "../routing/session
 import { defaultRuntime } from "../runtime.js";
 import { parseMessageWithAttachments } from "./chat-attachments.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
-import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   loadSessionEntry,
   pruneLegacyStoreKeys,

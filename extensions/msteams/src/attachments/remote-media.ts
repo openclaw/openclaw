@@ -1,7 +1,7 @@
 import type { SsrFPolicy } from "openclaw/plugin-sdk/msteams";
+import type { MSTeamsInboundMedia } from "./types.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { inferPlaceholder } from "./shared.js";
-import type { MSTeamsInboundMedia } from "./types.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 

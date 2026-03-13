@@ -1,10 +1,10 @@
-import { isRecord } from "../utils.js";
-import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import type {
   AuditTelegramGroupMembershipParams,
   TelegramGroupMembershipAudit,
   TelegramGroupMembershipAuditEntry,
 } from "./audit.js";
+import { isRecord } from "../utils.js";
+import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { makeProxyFetch } from "./proxy.js";
 
 const TELEGRAM_API_BASE = "https://api.telegram.org";

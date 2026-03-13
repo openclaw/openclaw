@@ -199,9 +199,9 @@ describe("applyExtraParamsToAgent", () => {
     applyProvider: string;
     applyModelId: string;
     model:
-      | Model<"openai-responses">
-      | Model<"openai-codex-responses">
-      | Model<"openai-completions">;
+    | Model<"openai-responses">
+    | Model<"openai-codex-responses">
+    | Model<"openai-completions">;
     options?: SimpleStreamOptions;
     cfg?: Record<string, unknown>;
     payload?: Record<string, unknown>;
@@ -894,8 +894,8 @@ describe("applyExtraParamsToAgent", () => {
     expect(
       (
         payloads[0]?.contents as
-          | Array<{ parts?: Array<{ inlineData?: { mimeType?: string; data?: string } }> }>
-          | undefined
+        | Array<{ parts?: Array<{ inlineData?: { mimeType?: string; data?: string } }> }>
+        | undefined
       )?.[0]?.parts?.[1]?.inlineData,
     ).toEqual({
       mimeType: "image/png",
@@ -987,7 +987,7 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.transport).toBe("websocket");
+    expect((calls[0] as any)?.transport).toBe("websocket");
   });
 
   it("passes configured websocket transport through stream options for openai-codex gpt-5.4", () => {
@@ -1017,7 +1017,7 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.transport).toBe("websocket");
+    expect((calls[0] as any)?.transport).toBe("websocket");
   });
 
   it("defaults Codex transport to auto (WebSocket-first)", () => {
@@ -1034,7 +1034,7 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.transport).toBe("auto");
+    expect((calls[0] as any)?.transport).toBe("auto");
   });
 
   it("defaults OpenAI transport to auto (WebSocket-first)", () => {
@@ -1051,7 +1051,7 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.transport).toBe("auto");
+    expect((calls[0] as any)?.transport).toBe("auto");
     expect(calls[0]?.openaiWsWarmup).toBe(true);
   });
 
@@ -1066,10 +1066,10 @@ describe("applyExtraParamsToAgent", () => {
       id: "gpt-5",
     } as Model<"openai-responses">;
     const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, { transport: "sse" });
+    void agent.streamFn?.(model, context, { transport: "sse" } as any);
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.transport).toBe("sse");
+    expect((calls[0] as any)?.transport).toBe("sse");
   });
 
   it("allows disabling OpenAI websocket warm-up via model params", () => {
@@ -1161,7 +1161,7 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.transport).toBe("sse");
+    expect((calls[0] as any)?.transport).toBe("sse");
   });
 
   it("lets runtime options override configured transport", () => {
@@ -1188,10 +1188,10 @@ describe("applyExtraParamsToAgent", () => {
       id: "gpt-5.3-codex",
     } as Model<"openai-codex-responses">;
     const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, { transport: "sse" });
+    void agent.streamFn?.(model, context, { transport: "sse" } as any);
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.transport).toBe("sse");
+    expect((calls[0] as any)?.transport).toBe("sse");
   });
 
   it("falls back to Codex default transport when configured value is invalid", () => {
@@ -1221,7 +1221,7 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.transport).toBe("auto");
+    expect((calls[0] as any)?.transport).toBe("auto");
   });
 
   it("disables prompt caching for non-Anthropic Bedrock models", () => {
@@ -1254,7 +1254,7 @@ describe("applyExtraParamsToAgent", () => {
     } as Model<"openai-completions">;
     const context: Context = { messages: [] };
 
-    void agent.streamFn?.(model, context, {});
+    void agent.streamFn?.(model, context, {} as any);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.cacheRetention).toBeUndefined();

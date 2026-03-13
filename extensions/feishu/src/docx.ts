@@ -1,10 +1,10 @@
+import type * as Lark from "@larksuiteoapi/node-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
+import { Type } from "@sinclair/typebox";
 import { existsSync, promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute } from "node:path";
 import { basename } from "node:path";
-import type * as Lark from "@larksuiteoapi/node-sdk";
-import { Type } from "@sinclair/typebox";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
 import { BATCH_SIZE, insertBlocksInBatches } from "./docx-batch-insert.js";

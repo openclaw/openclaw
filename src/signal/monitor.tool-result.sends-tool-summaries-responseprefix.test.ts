@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SignalDaemonExitEvent } from "./daemon.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { normalizeE164 } from "../utils.js";
-import type { SignalDaemonExitEvent } from "./daemon.js";
 import {
   createMockSignalDaemonHandle,
   config,

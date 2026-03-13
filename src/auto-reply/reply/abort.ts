@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../../config/config.js";
+import type { FinalizedMsgContext, MsgContext } from "../templating.js";
 import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
@@ -9,7 +11,6 @@ import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../../agents/tools/sessions-helpers.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   loadSessionStore,
   resolveSessionStoreEntry,
@@ -21,7 +22,6 @@ import { logVerbose } from "../../globals.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import { normalizeCommandBody, type CommandNormalizeOptions } from "../commands-registry.js";
-import type { FinalizedMsgContext, MsgContext } from "../templating.js";
 import {
   applyAbortCutoffToSessionEntry,
   resolveAbortCutoffFromContext,

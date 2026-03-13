@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { resolveZaloToken } from "./token.js";
 import type { ZaloConfig } from "./types.js";
+import { resolveZaloToken } from "./token.js";
 
 describe("resolveZaloToken", () => {
   it("falls back to top-level token for non-default accounts without overrides", () => {

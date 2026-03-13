@@ -1,6 +1,6 @@
+import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForSecretsRuntime,

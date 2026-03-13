@@ -1,5 +1,5 @@
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 
 export type OutboundSessionContext = {
   /** Canonical session key used for internal hook dispatch. */

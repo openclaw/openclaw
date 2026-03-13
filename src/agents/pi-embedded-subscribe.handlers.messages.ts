@@ -1,4 +1,5 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
+import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -7,7 +8,6 @@ import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
-import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
 import {
   extractAssistantText,
@@ -257,7 +257,7 @@ export function handleMessageUpdate(
   }
 
   if (ctx.params.onBlockReply && ctx.blockChunking && ctx.state.blockReplyBreak === "text_end") {
-    ctx.blockChunker?.drain({ force: false, emit: ctx.emitBlockChunk });
+    ctx.blockChunker?.drain({ force: false, emit: (chunk) => ctx.emitBlockChunk(chunk, { skipDedupe: true }) });
   }
 
   if (evtType === "text_end" && ctx.state.blockReplyBreak === "text_end") {
@@ -342,16 +342,7 @@ export function handleMessageEnd(
   ctx.finalizeAssistantTexts({ text, addedDuringMessage, chunkerHasBuffered });
 
   const onBlockReply = ctx.params.onBlockReply;
-  const emitBlockReplySafely = (payload: Parameters<NonNullable<typeof onBlockReply>>[0]) => {
-    if (!onBlockReply) {
-      return;
-    }
-    void Promise.resolve()
-      .then(() => onBlockReply(payload))
-      .catch((err) => {
-        ctx.log.warn(`block reply callback failed: ${String(err)}`);
-      });
-  };
+
   const shouldEmitReasoning = Boolean(
     ctx.state.includeReasoning &&
     formattedReasoning &&
@@ -365,7 +356,7 @@ export function handleMessageEnd(
       return;
     }
     ctx.state.lastReasoningSent = formattedReasoning;
-    emitBlockReplySafely({ text: formattedReasoning, isReasoning: true });
+    ctx.emitBlockReplySafely({ text: formattedReasoning, isReasoning: true });
   };
 
   if (shouldEmitReasoningBeforeAnswer) {
@@ -388,7 +379,7 @@ export function handleMessageEnd(
     } = splitResult;
     // Emit if there's content OR audioAsVoice flag (to propagate the flag).
     if (cleanedText || (mediaUrls && mediaUrls.length > 0) || audioAsVoice) {
-      emitBlockReplySafely({
+      ctx.emitBlockReplySafely({
         text: cleanedText,
         mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
         audioAsVoice,
@@ -406,7 +397,7 @@ export function handleMessageEnd(
     onBlockReply
   ) {
     if (ctx.blockChunker?.hasBuffered()) {
-      ctx.blockChunker.drain({ force: true, emit: ctx.emitBlockChunk });
+      ctx.blockChunker.drain({ force: true, emit: (chunk) => ctx.emitBlockChunk(chunk, { skipDedupe: true }) });
       ctx.blockChunker.reset();
     } else if (text !== ctx.state.lastBlockReplyText) {
       // Check for duplicates before emitting (same logic as emitBlockChunk).

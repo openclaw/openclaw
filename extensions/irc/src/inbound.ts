@@ -18,6 +18,7 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/irc";
 import type { ResolvedIrcAccount } from "./accounts.js";
+import type { CoreConfig, IrcInboundMessage } from "./types.js";
 import { normalizeIrcAllowlist, resolveIrcAllowlistMatch } from "./normalize.js";
 import {
   resolveIrcMentionGate,
@@ -28,7 +29,6 @@ import {
 } from "./policy.js";
 import { getIrcRuntime } from "./runtime.js";
 import { sendMessageIrc } from "./send.js";
-import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
 const CHANNEL_ID = "irc" as const;
 

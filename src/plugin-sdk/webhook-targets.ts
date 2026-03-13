@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
+import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { normalizeWebhookPath } from "./webhook-path.js";
 import {
   beginWebhookRequestPipelineOrReject,

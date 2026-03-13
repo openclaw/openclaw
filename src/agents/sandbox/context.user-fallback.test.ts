@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { resolveSandboxDockerUser } from "./context.js";
 import type { SandboxDockerConfig } from "./types.js";
+import { resolveSandboxDockerUser } from "./context.js";
 
 const baseDocker: SandboxDockerConfig = {
   image: "ghcr.io/example/sandbox:latest",

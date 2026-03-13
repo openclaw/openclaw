@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadSessionStore } from "../config/sessions.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { loadSessionStore } from "../config/sessions.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import {
   assertModelSelection,

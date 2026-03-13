@@ -1,12 +1,12 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { TelegramButtonStyle, TelegramInlineButtons } from "../../telegram/button-types.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import {
   createTelegramActionGate,
   resolveTelegramPollActionGateState,
 } from "../../telegram/accounts.js";
-import type { TelegramButtonStyle, TelegramInlineButtons } from "../../telegram/button-types.js";
 import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,

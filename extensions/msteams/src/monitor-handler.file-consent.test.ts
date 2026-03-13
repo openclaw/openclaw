@@ -2,15 +2,15 @@ import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsAdapter } from "./messenger.js";
+import type { MSTeamsPollStore } from "./polls.js";
+import type { MSTeamsTurnContext } from "./sdk-types.js";
 import {
   type MSTeamsActivityHandler,
   type MSTeamsMessageHandlerDeps,
   registerMSTeamsHandlers,
 } from "./monitor-handler.js";
 import { clearPendingUploads, getPendingUpload, storePendingUpload } from "./pending-uploads.js";
-import type { MSTeamsPollStore } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
-import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 const fileConsentMockState = vi.hoisted(() => ({
   uploadToConsentUrl: vi.fn(),

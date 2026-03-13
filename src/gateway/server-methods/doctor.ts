@@ -1,8 +1,8 @@
+import type { GatewayRequestHandlers } from "./types.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
 import { getMemorySearchManager } from "../../memory/index.js";
 import { formatError } from "../server-utils.js";
-import type { GatewayRequestHandlers } from "./types.js";
 
 export type DoctorMemoryStatusPayload = {
   agentId: string;

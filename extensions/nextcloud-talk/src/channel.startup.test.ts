@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createStartAccountContext } from "../../test-utils/start-account-context.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
+import { createStartAccountContext } from "../../test-utils/start-account-context.js";
 
 const hoisted = vi.hoisted(() => ({
   monitorNextcloudTalkProvider: vi.fn(),

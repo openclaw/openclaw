@@ -1,6 +1,6 @@
-import { listAcpBindings } from "../config/bindings.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentAcpBinding } from "../config/types.js";
+import { listAcpBindings } from "../config/bindings.js";
 import { pickFirstExistingAgentId } from "../routing/resolve-route.js";
 import {
   DEFAULT_ACCOUNT_ID,

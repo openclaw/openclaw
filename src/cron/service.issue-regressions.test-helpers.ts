@@ -3,9 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, vi } from "vitest";
-import { useFrozenTime, useRealTime } from "../test-utils/frozen-time.js";
 import type { CronService } from "./service.js";
 import type { CronJob, CronJobState } from "./types.js";
+import { useFrozenTime, useRealTime } from "../test-utils/frozen-time.js";
 
 const TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1_000;
 

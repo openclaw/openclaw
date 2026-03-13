@@ -2,8 +2,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveApiKeyForProvider, resolveEnvApiKey } from "../agents/model-auth.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveApiKeyForProvider, resolveEnvApiKey } from "../agents/model-auth.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { captureEnv } from "../test-utils/env.js";
 import {

@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WorkspaceBootstrapFile } from "./workspace.js";
 import {
   clearAllBootstrapSnapshots,
   clearBootstrapSnapshot,
   getOrLoadBootstrapFiles,
 } from "./bootstrap-cache.js";
-import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 vi.mock("./workspace.js", () => ({
   loadWorkspaceBootstrapFiles: vi.fn(),

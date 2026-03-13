@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionDeliveryTarget } from "./targets.js";
 import {
   resolveHeartbeatDeliveryTarget,
   resolveOutboundTarget,
   resolveSessionDeliveryTarget,
 } from "./targets.js";
-import type { SessionDeliveryTarget } from "./targets.js";
 import {
   installResolveOutboundTargetPluginRegistryHooks,
   runResolveOutboundTargetCoreTests,

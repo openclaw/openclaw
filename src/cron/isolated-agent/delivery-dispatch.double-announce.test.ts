@@ -58,13 +58,13 @@ vi.mock("./subagent-followup.js", () => ({
   waitForDescendantSubagentSummary: vi.fn().mockResolvedValue(undefined),
 }));
 
+import type { DeliveryTargetResolution } from "./delivery-target.js";
+import type { RunCronAgentTurnResult } from "./run.js";
 import { runSubagentAnnounceFlow } from "../../agents/subagent-announce.js";
 // Import after mocks
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
 import { shouldEnqueueCronMainSummary } from "../heartbeat-policy.js";
 import { dispatchCronDelivery } from "./delivery-dispatch.js";
-import type { DeliveryTargetResolution } from "./delivery-target.js";
-import type { RunCronAgentTurnResult } from "./run.js";
 import {
   expectsSubagentFollowup,
   isLikelyInterimCronMessage,

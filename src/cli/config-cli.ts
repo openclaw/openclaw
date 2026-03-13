@@ -1,12 +1,12 @@
 import type { Command } from "commander";
 import JSON5 from "json5";
+import type { RuntimeEnv } from "../runtime.js";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { danger, info, success } from "../globals.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";

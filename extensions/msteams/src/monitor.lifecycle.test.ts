@@ -1,5 +1,5 @@
-import { EventEmitter } from "node:events";
 import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk/msteams";
+import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsPollStore } from "./polls.js";

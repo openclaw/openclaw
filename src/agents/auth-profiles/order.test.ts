@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { resolveAuthProfileOrder } from "./order.js";
 import type { AuthProfileStore } from "./types.js";
+import { resolveAuthProfileOrder } from "./order.js";
 
 describe("resolveAuthProfileOrder", () => {
   it("accepts base-provider credentials for volcengine-plan auth lookup", () => {

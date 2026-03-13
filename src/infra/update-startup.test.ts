@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
 import type { UpdateCheckResult } from "./update-check.js";
+import { captureEnv } from "../test-utils/env.js";
 
 vi.mock("./openclaw-root.js", () => ({
   resolveOpenClawPackageRoot: vi.fn(),

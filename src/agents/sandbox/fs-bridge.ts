@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import type { SandboxContext, SandboxWorkspaceAccess } from "./types.js";
 import { execDockerRaw, type ExecDockerRawResult } from "./docker.js";
 import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
 import {
@@ -15,7 +16,6 @@ import {
   type SandboxResolvedFsPath,
 } from "./fs-paths.js";
 import { normalizeContainerPath } from "./path-utils.js";
-import type { SandboxContext, SandboxWorkspaceAccess } from "./types.js";
 
 type RunCommandOptions = {
   args?: string[];

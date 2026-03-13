@@ -1,8 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import { afterEach, describe, expect, it } from "vitest";
+import type { WebhookTarget } from "./monitor-shared.js";
 import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
-import type { WebhookTarget } from "./monitor-shared.js";
 import { registerBlueBubblesWebhookTarget } from "./monitor.js";
 
 function createTarget(): WebhookTarget {

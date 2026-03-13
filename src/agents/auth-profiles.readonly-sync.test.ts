@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 
 const mocks = vi.hoisted(() => ({
   syncExternalCliCredentials: vi.fn((store: AuthProfileStore) => {

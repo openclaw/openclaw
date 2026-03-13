@@ -8,12 +8,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import type { InternalHookHandler } from "./internal-hooks.js";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveHookConfig } from "./config.js";
 import { shouldIncludeHook } from "./config.js";
 import { buildImportUrl } from "./import-url.js";
-import type { InternalHookHandler } from "./internal-hooks.js";
 import { registerInternalHook } from "./internal-hooks.js";
 import { resolveFunctionModuleExport } from "./module-loader.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";

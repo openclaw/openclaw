@@ -2,9 +2,10 @@ import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { CliDeps } from "../cli/deps.js";
+import type { CronJob } from "./types.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import type { CliDeps } from "../cli/deps.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
@@ -13,7 +14,6 @@ import {
   writeSessionStore,
   writeSessionStoreEntries,
 } from "./isolated-agent.test-harness.js";
-import type { CronJob } from "./types.js";
 
 function makeDeps(): CliDeps {
   return {

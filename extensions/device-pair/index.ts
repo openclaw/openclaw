@@ -1,5 +1,5 @@
-import os from "node:os";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/device-pair";
+import os from "node:os";
 import {
   approveDevicePairing,
   listDevicePairing,

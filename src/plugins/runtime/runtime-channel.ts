@@ -1,3 +1,4 @@
+import type { PluginRuntime } from "./types.js";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { handleSlackAction } from "../../agents/tools/slack-actions.js";
 import {
@@ -114,7 +115,6 @@ import { probeTelegram } from "../../telegram/probe.js";
 import { sendMessageTelegram, sendPollTelegram } from "../../telegram/send.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
 import { createRuntimeWhatsApp } from "./runtime-whatsapp.js";
-import type { PluginRuntime } from "./types.js";
 
 export function createRuntimeChannel(): PluginRuntime["channel"] {
   return {

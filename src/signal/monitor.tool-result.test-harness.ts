@@ -1,8 +1,8 @@
 import { beforeEach, vi } from "vitest";
-import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
-import { resetSystemEventsForTest } from "../infra/system-events.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import type { SignalDaemonExitEvent, SignalDaemonHandle } from "./daemon.js";
+import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
+import { resetSystemEventsForTest } from "../infra/system-events.js";
 
 type SignalToolResultTestMocks = {
   waitForTransportReadyMock: MockFn;

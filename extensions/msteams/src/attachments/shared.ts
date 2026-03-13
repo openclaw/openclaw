@@ -1,3 +1,4 @@
+import type { SsrFPolicy } from "openclaw/plugin-sdk/msteams";
 import { lookup } from "node:dns/promises";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
@@ -5,7 +6,6 @@ import {
   isPrivateIpAddress,
   normalizeHostnameSuffixAllowlist,
 } from "openclaw/plugin-sdk/msteams";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/msteams";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
 type InlineImageCandidate =

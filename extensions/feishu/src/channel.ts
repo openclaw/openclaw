@@ -1,9 +1,9 @@
+import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import {
   collectAllowlistProviderRestrictSendersWarnings,
   formatAllowFromLowercase,
   mapAllowFromEntries,
 } from "openclaw/plugin-sdk/compat";
-import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import {
   buildProbeChannelStatusSummary,
   buildRuntimeAccountStatusSnapshot,
@@ -11,6 +11,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
 } from "openclaw/plugin-sdk/feishu";
+import type { ResolvedFeishuAccount, FeishuConfig } from "./types.js";
 import {
   resolveFeishuAccount,
   resolveFeishuCredentials,
@@ -29,7 +30,6 @@ import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import { probeFeishu } from "./probe.js";
 import { sendMessageFeishu } from "./send.js";
 import { normalizeFeishuTarget, looksLikeFeishuId, formatFeishuTarget } from "./targets.js";
-import type { ResolvedFeishuAccount, FeishuConfig } from "./types.js";
 
 const meta: ChannelMeta = {
   id: "feishu",

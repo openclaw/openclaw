@@ -1,8 +1,8 @@
+import type { SlackMonitorContext } from "./context.js";
 import { formatAllowlistMatchMeta } from "../../channels/allowlist-match.js";
 import { issuePairingChallenge } from "../../pairing/pairing-challenge.js";
 import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
 import { resolveSlackAllowListMatch } from "./allow-list.js";
-import type { SlackMonitorContext } from "./context.js";
 
 export async function authorizeSlackDirectMessage(params: {
   ctx: SlackMonitorContext;

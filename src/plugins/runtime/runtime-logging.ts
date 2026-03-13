@@ -1,7 +1,7 @@
+import type { PluginRuntime } from "./types.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { getChildLogger } from "../../logging.js";
 import { normalizeLogLevel } from "../../logging/levels.js";
-import type { PluginRuntime } from "./types.js";
 
 export function createRuntimeLogging(): PluginRuntime["logging"] {
   return {

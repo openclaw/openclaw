@@ -1,6 +1,6 @@
+import type { ProviderUsageSnapshot, UsageProviderId } from "./provider-usage.types.js";
 import { parseFiniteNumber as parseFiniteNumberish } from "./parse-finite-number.js";
 import { PROVIDER_LABELS } from "./provider-usage.shared.js";
-import type { ProviderUsageSnapshot, UsageProviderId } from "./provider-usage.types.js";
 
 export async function fetchJson(
   url: string,

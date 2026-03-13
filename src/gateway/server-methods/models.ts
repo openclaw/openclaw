@@ -1,3 +1,4 @@
+import type { GatewayRequestHandlers } from "./types.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { buildAllowedModelSet } from "../../agents/model-selection.js";
 import { loadConfig } from "../../config/config.js";
@@ -7,7 +8,6 @@ import {
   formatValidationErrors,
   validateModelsListParams,
 } from "../protocol/index.js";
-import type { GatewayRequestHandlers } from "./types.js";
 
 export const modelsHandlers: GatewayRequestHandlers = {
   "models.list": async ({ params, respond, context }) => {

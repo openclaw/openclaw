@@ -1,5 +1,5 @@
-import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { createServer } from "node:http";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";

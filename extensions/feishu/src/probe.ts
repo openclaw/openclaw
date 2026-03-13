@@ -1,6 +1,6 @@
+import type { FeishuProbeResult } from "./types.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import { createFeishuClient, type FeishuClientCredentials } from "./client.js";
-import type { FeishuProbeResult } from "./types.js";
 
 /** Cache probe results to reduce repeated health-check calls.
  * Gateway health checks call probeFeishu() every minute; without caching this

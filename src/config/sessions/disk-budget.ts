@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { SessionEntry } from "./types.js";
 import { isPrimarySessionTranscriptFileName, isSessionArchiveArtifactName } from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
-import type { SessionEntry } from "./types.js";
 
 export type SessionDiskBudgetConfig = {
   maxDiskBytes: number | null;

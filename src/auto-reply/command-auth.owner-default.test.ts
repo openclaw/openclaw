@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveCommandAuthorization } from "./command-auth.js";
 import type { MsgContext } from "./templating.js";
+import { resolveCommandAuthorization } from "./command-auth.js";
 import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registry-fixture.js";
 
 installDiscordRegistryHooks();

@@ -157,7 +157,7 @@ Reply ONLY with the JSON object.
       throw new Error("Model not initialized");
     }
 
-    const stream = Helpers.streamSimple(
+    const stream = streamSimple(
       this.model,
       {
         messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
@@ -185,10 +185,4 @@ Reply ONLY with the JSON object.
     }
     return fullText;
   }
-}
-
-// Helper to access streamSimple since it might be imported differently in environments
-// We use a pragmatic approach: strict import at top, wrapper here.
-class Helpers {
-  static streamSimple = streamSimple;
 }

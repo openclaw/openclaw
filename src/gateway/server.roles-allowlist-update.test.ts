@@ -3,10 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { CONFIG_PATH } from "../config/config.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
+import { CONFIG_PATH } from "../config/config.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
 vi.mock("../infra/update-runner.js", () => ({
   runGatewayUpdate: vi.fn(async () => ({

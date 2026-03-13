@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.js";
+import type { ChannelDirectoryEntry } from "./types.js";
 import { inspectDiscordAccount } from "../../discord/account-inspect.js";
 import { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
 import { inspectSlackAccount } from "../../slack/account-inspect.js";
@@ -6,7 +7,6 @@ import { inspectTelegramAccount } from "../../telegram/account-inspect.js";
 import { resolveWhatsAppAccount } from "../../web/accounts.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 import { normalizeSlackMessagingTarget } from "./normalize/slack.js";
-import type { ChannelDirectoryEntry } from "./types.js";
 
 export type DirectoryConfigParams = {
   cfg: OpenClawConfig;

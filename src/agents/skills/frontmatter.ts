@@ -1,4 +1,11 @@
 import type { Skill } from "@mariozechner/pi-coding-agent";
+import type {
+  OpenClawSkillMetadata,
+  ParsedSkillFrontmatter,
+  SkillEntry,
+  SkillInstallSpec,
+  SkillInvocationPolicy,
+} from "./types.js";
 import { validateRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import { parseFrontmatterBlock } from "../../markdown/frontmatter.js";
 import {
@@ -12,13 +19,6 @@ import {
   resolveOpenClawManifestOs,
   resolveOpenClawManifestRequires,
 } from "../../shared/frontmatter.js";
-import type {
-  OpenClawSkillMetadata,
-  ParsedSkillFrontmatter,
-  SkillEntry,
-  SkillInstallSpec,
-  SkillInvocationPolicy,
-} from "./types.js";
 
 export function parseFrontmatter(content: string): ParsedSkillFrontmatter {
   return parseFrontmatterBlock(content);

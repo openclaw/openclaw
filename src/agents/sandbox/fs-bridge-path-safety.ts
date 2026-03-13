@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { openBoundaryFile, type BoundaryFileOpenResult } from "../../infra/boundary-file-read.js";
 import type { PathAliasPolicy } from "../../infra/path-alias-guards.js";
 import type { SafeOpenSyncAllowedType } from "../../infra/safe-open-sync.js";
 import type { SandboxResolvedFsPath, SandboxFsMount } from "./fs-paths.js";
+import { openBoundaryFile, type BoundaryFileOpenResult } from "../../infra/boundary-file-read.js";
 import { isPathInsideContainerRoot, normalizeContainerPath } from "./path-utils.js";
 
 export type PathSafetyOptions = {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { makeDirectPlugin } from "../../test-utils/channel-plugin-test-fixtures.js";
 import { buildChannelsTable } from "./channels.js";
 

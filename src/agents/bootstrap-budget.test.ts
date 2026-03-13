@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { WorkspaceBootstrapFile } from "./workspace.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapInjectionStats,
@@ -8,7 +9,6 @@ import {
   formatBootstrapTruncationWarningLines,
   resolveBootstrapWarningSignaturesSeen,
 } from "./bootstrap-budget.js";
-import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 describe("buildBootstrapInjectionStats", () => {
   it("maps raw and injected sizes and marks truncation", () => {

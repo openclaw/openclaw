@@ -1,3 +1,4 @@
+import type { HandleCommandsParams } from "../commands-types.js";
 import {
   buildTelegramTopicConversationId,
   parseTelegramChatIdFromTarget,
@@ -5,7 +6,6 @@ import {
 import { DISCORD_THREAD_BINDING_CHANNEL } from "../../../channels/thread-bindings-policy.js";
 import { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
-import type { HandleCommandsParams } from "../commands-types.js";
 import { resolveTelegramConversationId } from "../telegram-context.js";
 
 function normalizeString(value: unknown): string {

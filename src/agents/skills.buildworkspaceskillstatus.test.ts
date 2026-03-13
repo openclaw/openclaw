@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { SkillEntry } from "./skills/types.js";
 import { withEnv } from "../test-utils/env.js";
 import { buildWorkspaceSkillStatus } from "./skills-status.js";
-import type { SkillEntry } from "./skills/types.js";
 
 function makeEntry(params: {
   name: string;

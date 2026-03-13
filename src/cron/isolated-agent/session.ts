@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
-import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import {
   evaluateSessionFreshness,
   loadSessionStore,

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import type { ResolvedBrowserProfile } from "./config.js";
-import { stopChromeExtensionRelayServer } from "./extension-relay.js";
 import type { ProfileRuntimeState } from "./server-context.types.js";
+import { stopChromeExtensionRelayServer } from "./extension-relay.js";
 import { movePathToTrash } from "./trash.js";
 
 type ResetDeps = {

@@ -1,6 +1,8 @@
+import type { ZodIssue } from "zod";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ZodIssue } from "zod";
+import type { OpenClawConfig } from "../config/config.js";
+import type { DoctorOptions } from "./doctor-prompter.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import {
   isNumericTelegramUserId,
@@ -11,7 +13,6 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getChannelsCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { listRouteBindings } from "../config/bindings.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH, migrateLegacyConfig, readConfigFileSnapshot } from "../config/config.js";
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
@@ -52,7 +53,6 @@ import { listTelegramAccountIds, resolveTelegramAccount } from "../telegram/acco
 import { note } from "../terminal/note.js";
 import { isRecord, resolveHomeDir } from "../utils.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
-import type { DoctorOptions } from "./doctor-prompter.js";
 import { autoMigrateLegacyStateDir } from "./doctor-state-migrations.js";
 
 type UnrecognizedKeysIssue = ZodIssue & {

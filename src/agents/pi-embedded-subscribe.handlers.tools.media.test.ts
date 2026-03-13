@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
 } from "./pi-embedded-subscribe.handlers.tools.js";
-import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 
 // Minimal mock context factory. Only the fields needed for the media emission path.
 function createMockContext(overrides?: {
@@ -28,6 +28,8 @@ function createMockContext(overrides?: {
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
       messagingToolSentTargets: [],
+      successfulCronAdds: 0,
+      assistantTexts: [],
     },
     log: { debug: vi.fn(), warn: vi.fn() },
     shouldEmitToolResult: vi.fn(() => false),
@@ -56,6 +58,10 @@ function createMockContext(overrides?: {
     incrementCompactionCount: vi.fn(),
     getUsageTotals: vi.fn(() => undefined),
     getCompactionCount: vi.fn(() => 0),
+    worldModelManager: {
+      predict: vi.fn(() => Promise.resolve([])),
+      observe: vi.fn(() => Promise.resolve()),
+    } as any,
   } as unknown as EmbeddedPiSubscribeContext;
 }
 

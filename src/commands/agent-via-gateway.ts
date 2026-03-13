@@ -1,11 +1,11 @@
+import type { CliDeps } from "../cli/deps.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { listAgentIds } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { CliDeps } from "../cli/deps.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,

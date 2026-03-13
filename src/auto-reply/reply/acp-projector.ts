@@ -1,9 +1,10 @@
 import type { AcpRuntimeEvent, AcpSessionUpdateTag } from "../../acp/runtime/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { ReplyPayload } from "../types.js";
+import type { ReplyDispatchKind } from "./reply-dispatcher.js";
 import { EmbeddedBlockChunker } from "../../agents/pi-embedded-block-chunker.js";
 import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
-import type { ReplyPayload } from "../types.js";
 import {
   type AcpHiddenBoundarySeparator,
   isAcpTagVisible,
@@ -11,7 +12,6 @@ import {
   resolveAcpStreamingConfig,
 } from "./acp-stream-settings.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
-import type { ReplyDispatchKind } from "./reply-dispatcher.js";
 
 const ACP_BLOCK_REPLY_TIMEOUT_MS = 15_000;
 const ACP_LIVE_IDLE_FLUSH_FLOOR_MS = 750;

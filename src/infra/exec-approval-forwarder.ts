@@ -1,10 +1,15 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type {
   ExecApprovalForwardingConfig,
   ExecApprovalForwardTarget,
 } from "../config/types.approvals.js";
+import type {
+  ExecApprovalDecision,
+  ExecApprovalRequest,
+  ExecApprovalResolved,
+} from "./exec-approvals.js";
+import { loadConfig } from "../config/config.js";
+import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAccountId, parseAgentSessionKey } from "../routing/session-key.js";
 import { compileSafeRegex, testRegexWithBoundedInput } from "../security/safe-regex.js";
@@ -13,11 +18,6 @@ import {
   normalizeMessageChannel,
   type DeliverableMessageChannel,
 } from "../utils/message-channel.js";
-import type {
-  ExecApprovalDecision,
-  ExecApprovalRequest,
-  ExecApprovalResolved,
-} from "./exec-approvals.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
 

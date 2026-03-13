@@ -1,4 +1,10 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import type {
+  AcpRuntime,
+  AcpRuntimeCapabilities,
+  AcpRuntimeHandle,
+  AcpRuntimeStatus,
+} from "../runtime/types.js";
 import { logVerbose } from "../../globals.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
@@ -15,12 +21,6 @@ import {
   resolveRuntimeHandleIdentifiersFromIdentity,
   resolveSessionIdentityFromMeta,
 } from "../runtime/session-identity.js";
-import type {
-  AcpRuntime,
-  AcpRuntimeCapabilities,
-  AcpRuntimeHandle,
-  AcpRuntimeStatus,
-} from "../runtime/types.js";
 import { reconcileManagerRuntimeSessionIdentifiers } from "./manager.identity-reconcile.js";
 import {
   applyManagerRuntimeControls,

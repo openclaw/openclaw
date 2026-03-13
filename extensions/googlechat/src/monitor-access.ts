@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/googlechat";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   createScopedPairingAccess,
@@ -11,11 +12,10 @@ import {
   resolveSenderScopedGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/googlechat";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/googlechat";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { sendGoogleChatMessage } from "./api.js";
 import type { GoogleChatCoreRuntime } from "./monitor-types.js";
 import type { GoogleChatAnnotation, GoogleChatMessage, GoogleChatSpace } from "./types.js";
+import { sendGoogleChatMessage } from "./api.js";
 
 function normalizeUserId(raw?: string | null): string {
   const trimmed = raw?.trim() ?? "";

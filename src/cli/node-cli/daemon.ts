@@ -1,3 +1,4 @@
+import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { buildNodeInstallPlan } from "../../commands/node-daemon-install-helpers.js";
 import {
   DEFAULT_NODE_DAEMON_RUNTIME,
@@ -14,7 +15,6 @@ import {
   buildPlatformRuntimeLogHints,
   buildPlatformServiceStartHints,
 } from "../../daemon/runtime-hints.js";
-import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize } from "../../terminal/theme.js";

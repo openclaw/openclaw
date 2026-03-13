@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 
 const MAX_CONTEXT_CHARS = 3000;

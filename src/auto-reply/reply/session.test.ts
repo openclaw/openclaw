@@ -2,10 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import * as bootstrapCache from "../../agents/bootstrap-cache.js";
-import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import * as bootstrapCache from "../../agents/bootstrap-cache.js";
+import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
   __testing as sessionBindingTesting,

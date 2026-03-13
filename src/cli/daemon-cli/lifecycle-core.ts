@@ -1,8 +1,8 @@
 import type { Writable } from "node:stream";
+import type { GatewayService } from "../../daemon/service.js";
 import { readBestEffortConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
-import type { GatewayService } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js";

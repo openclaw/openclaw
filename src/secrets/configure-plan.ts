@@ -1,12 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SecretsApplyPlan } from "./plan.js";
 import {
   resolveSecretInputRef,
   type SecretProviderConfig,
   type SecretRef,
 } from "../config/types.secrets.js";
-import type { SecretsApplyPlan } from "./plan.js";
 import { isRecord } from "./shared.js";
 import {
   discoverAuthProfileSecretTargets,

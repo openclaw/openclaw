@@ -97,7 +97,10 @@ export type EmbeddedPiSubscribeContext = {
     text: string,
     state: { thinking: boolean; final: boolean; inlineCode?: InlineCodeState },
   ) => string;
-  emitBlockChunk: (text: string) => void;
+  emitBlockChunk: (text: string, options?: { skipDedupe?: boolean }) => void;
+  emitBlockReplySafely: (
+    payload: Parameters<NonNullable<SubscribeEmbeddedPiSessionParams["onBlockReply"]>>[0],
+  ) => void;
   flushBlockReplyBuffer: () => void;
   emitReasoningStream: (text: string) => void;
   consumeReplyDirectives: (
@@ -157,6 +160,7 @@ export type ToolHandlerState = Pick<
   | "messagingToolSentMediaUrls"
   | "messagingToolSentTargets"
   | "successfulCronAdds"
+  | "assistantTexts"
 >;
 
 export type ToolHandlerContext = {
@@ -170,9 +174,10 @@ export type ToolHandlerContext = {
   emitToolSummary: (toolName?: string, meta?: string) => void;
   emitToolOutput: (toolName?: string, meta?: string, output?: string) => void;
   trimMessagingToolSent: () => void;
+  worldModelManager: import("../world-model/manager.js").WorldModelManager;
 };
 
 export type EmbeddedPiSubscribeEvent =
   | AgentEvent
-  | { type: string; [k: string]: unknown }
+  | { type: string;[k: string]: unknown }
   | { type: "message_start"; message: AgentMessage };

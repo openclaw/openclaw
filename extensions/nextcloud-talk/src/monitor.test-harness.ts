@@ -1,7 +1,7 @@
 import { type AddressInfo } from "node:net";
 import { afterEach } from "vitest";
-import { createNextcloudTalkWebhookServer } from "./monitor.js";
 import type { NextcloudTalkWebhookServerOptions } from "./types.js";
+import { createNextcloudTalkWebhookServer } from "./monitor.js";
 
 export type WebhookHarness = {
   webhookUrl: string;

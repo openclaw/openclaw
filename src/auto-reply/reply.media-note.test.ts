@@ -1,9 +1,9 @@
 import path from "node:path";
 import "./reply.directive.directive-behavior.e2e-mocks.js";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { getReplyFromConfig } from "./reply.js";
 
 function makeResult(text: string) {

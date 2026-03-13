@@ -1,6 +1,6 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/feishu";
-import { probeFeishu } from "./probe.js";
 import type { ResolvedFeishuAccount } from "./types.js";
+import { probeFeishu } from "./probe.js";
 
 export const FEISHU_STARTUP_BOT_INFO_TIMEOUT_MS = 10_000;
 

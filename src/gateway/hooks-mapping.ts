@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { HookMessageChannel } from "./hooks.js";
 import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
-import type { HookMessageChannel } from "./hooks.js";
 
 export type HookMappingResolved = {
   id: string;

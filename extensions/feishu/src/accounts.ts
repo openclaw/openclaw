@@ -1,6 +1,5 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
-import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "./secret-input.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type {
   FeishuConfig,
   FeishuAccountConfig,
@@ -8,6 +7,7 @@ import type {
   FeishuDomain,
   ResolvedFeishuAccount,
 } from "./types.js";
+import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "./secret-input.js";
 
 /**
  * List all configured account IDs from the accounts field.

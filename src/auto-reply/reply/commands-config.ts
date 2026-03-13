@@ -1,3 +1,4 @@
+import type { CommandHandler } from "./commands-types.js";
 import { resolveChannelConfigWrites } from "../../channels/plugins/config-writes.js";
 import { normalizeChannelId } from "../../channels/registry.js";
 import {
@@ -22,7 +23,6 @@ import {
   requireCommandFlagEnabled,
   requireGatewayClientScopeForInternalChannel,
 } from "./command-gates.js";
-import type { CommandHandler } from "./commands-types.js";
 import { parseConfigCommand } from "./config-commands.js";
 import { parseDebugCommand } from "./debug-commands.js";
 

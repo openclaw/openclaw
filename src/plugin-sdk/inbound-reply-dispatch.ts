@@ -1,13 +1,13 @@
+import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
+import type { FinalizedMsgContext } from "../auto-reply/templating.js";
+import type { GetReplyOptions } from "../auto-reply/types.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { withReplyDispatcher } from "../auto-reply/dispatch.js";
 import {
   dispatchReplyFromConfig,
   type DispatchFromConfigResult,
 } from "../auto-reply/reply/dispatch-from-config.js";
-import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
-import type { FinalizedMsgContext } from "../auto-reply/templating.js";
-import type { GetReplyOptions } from "../auto-reply/types.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { createNormalizedOutboundDeliverer, type OutboundReplyPayload } from "./reply-payload.js";
 
 type ReplyOptionsWithoutModelSelected = Omit<

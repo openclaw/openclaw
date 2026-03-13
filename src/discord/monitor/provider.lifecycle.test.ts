@@ -1,5 +1,5 @@
-import { EventEmitter } from "node:events";
 import type { Client } from "@buape/carbon";
+import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WaitForDiscordGatewayStopParams } from "../monitor.gateway.js";

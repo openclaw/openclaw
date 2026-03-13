@@ -1,9 +1,12 @@
+import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { CronJob, CronRunTelemetry } from "../types.js";
+import type { DeliveryTargetResolution } from "./delivery-target.js";
+import type { RunCronAgentTurnResult } from "./run.js";
 import { runSubagentAnnounceFlow } from "../../agents/subagent-announce.js";
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
@@ -13,10 +16,7 @@ import {
 } from "../../infra/outbound/outbound-session.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { logWarn } from "../../logger.js";
-import type { CronJob, CronRunTelemetry } from "../types.js";
-import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickSummaryFromOutput } from "./helpers.js";
-import type { RunCronAgentTurnResult } from "./run.js";
 import {
   expectsSubagentFollowup,
   isLikelyInterimCronMessage,

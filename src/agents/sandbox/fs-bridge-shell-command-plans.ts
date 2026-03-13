@@ -1,6 +1,6 @@
-import { PATH_ALIAS_POLICIES } from "../../infra/path-alias-guards.js";
 import type { AnchoredSandboxEntry, PathSafetyCheck } from "./fs-bridge-path-safety.js";
 import type { SandboxResolvedFsPath } from "./fs-paths.js";
+import { PATH_ALIAS_POLICIES } from "../../infra/path-alias-guards.js";
 
 export type SandboxFsCommandPlan = {
   checks: PathSafetyCheck[];

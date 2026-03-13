@@ -1,6 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { DiscordActionConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { DiscordSendComponents, DiscordSendEmbeds } from "../../discord/send.shared.js";
 import { readDiscordComponentSpec } from "../../discord/components.js";
 import {
   createThreadDiscord,
@@ -24,7 +25,6 @@ import {
   sendVoiceMessageDiscord,
   unpinMessageDiscord,
 } from "../../discord/send.js";
-import type { DiscordSendComponents, DiscordSendEmbeds } from "../../discord/send.shared.js";
 import { resolveDiscordChannelId } from "../../discord/targets.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { resolvePollMaxSelections } from "../../polls.js";

@@ -3,6 +3,8 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionConfig } from "../types.base.js";
+import type { SessionEntry } from "./types.js";
 import * as jsonFiles from "../../infra/json-files.js";
 import {
   clearSessionStoreCacheForTest,
@@ -11,7 +13,6 @@ import {
   resolveAndPersistSessionFile,
   updateSessionStore,
 } from "../sessions.js";
-import type { SessionConfig } from "../types.base.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -20,7 +21,6 @@ import {
 } from "./paths.js";
 import { resolveSessionResetPolicy } from "./reset.js";
 import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
-import type { SessionEntry } from "./types.js";
 
 function useTempSessionsFixture(prefix: string) {
   let tempDir = "";

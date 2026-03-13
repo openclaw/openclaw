@@ -40,7 +40,7 @@ describe("readSecretFromFile", () => {
     );
   });
 
-  it("rejects symlinks", async () => {
+  it.skipIf(process.platform === "win32")("rejects symlinks", async () => {
     const dir = await createTempDir();
     const target = path.join(dir, "target.txt");
     const link = path.join(dir, "secret-link.txt");

@@ -1,20 +1,21 @@
+import type {
+  OpenClawConfig,
+  GatewayBindMode,
+  GatewayControlUiConfig,
+} from "../../config/types.js";
+import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
+import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
+import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
+import type { GatewayRpcOpts } from "./types.js";
 import {
   createConfigIO,
   resolveConfigPath,
   resolveGatewayPort,
   resolveStateDir,
 } from "../../config/config.js";
-import type {
-  OpenClawConfig,
-  GatewayBindMode,
-  GatewayControlUiConfig,
-} from "../../config/types.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
-import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import { findExtraGatewayServices } from "../../daemon/inspect.js";
-import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import { auditGatewayServiceConfig } from "../../daemon/service-audit.js";
-import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { trimToUndefined } from "../../gateway/credentials.js";
 import { resolveGatewayBindHost } from "../../gateway/net.js";
@@ -30,7 +31,6 @@ import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
 import { loadGatewayTlsRuntime } from "../../infra/tls/gateway.js";
 import { probeGatewayStatus } from "./probe.js";
 import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
-import type { GatewayRpcOpts } from "./types.js";
 
 type ConfigSummary = {
   path: string;

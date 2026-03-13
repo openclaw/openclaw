@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ChannelAccountSnapshot, ChannelPlugin } from "./types.js";
 import { projectSafeChannelAccountSnapshotFields } from "../account-snapshot-fields.js";
 import { inspectReadOnlyChannelAccount } from "../read-only-account-inspect.js";
-import type { ChannelAccountSnapshot, ChannelPlugin } from "./types.js";
 
 // Channel docking: status snapshots flow through plugin.status hooks here.
 async function buildSnapshotFromAccount<ResolvedAccount>(params: {

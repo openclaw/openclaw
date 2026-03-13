@@ -1,4 +1,12 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
+import type { DmPolicy } from "../config/types.base.js";
+import type {
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
+} from "../config/types.js";
+import type { TelegramMediaRef } from "./bot-message-context.js";
+import type { TelegramContext } from "./bot/types.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   createInboundDebouncer,
@@ -21,12 +29,6 @@ import {
   resolveSessionStoreEntry,
   resolveStorePath,
 } from "../config/sessions.js";
-import type { DmPolicy } from "../config/types.base.js";
-import type {
-  TelegramDirectConfig,
-  TelegramGroupConfig,
-  TelegramTopicConfig,
-} from "../config/types.js";
 import { danger, logVerbose, warn } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { MediaFetchError } from "../media/fetch.js";
@@ -39,7 +41,6 @@ import {
   normalizeDmAllowFromWithStore,
   type NormalizedAllowFrom,
 } from "./bot-access.js";
-import type { TelegramMediaRef } from "./bot-message-context.js";
 import { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import {
   MEDIA_GROUP_TIMEOUT_MS,
@@ -54,7 +55,6 @@ import {
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
 } from "./bot/helpers.js";
-import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramConversationRoute } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import {

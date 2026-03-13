@@ -1,6 +1,6 @@
 import os from "node:os";
-import { resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { resolveGatewayPort } from "../config/paths.js";
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,

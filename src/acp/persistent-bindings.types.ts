@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
-import { sanitizeAgentId } from "../routing/session-key.js";
 import type { AcpRuntimeSessionMode } from "./runtime/types.js";
+import { sanitizeAgentId } from "../routing/session-key.js";
 
 export type ConfiguredAcpBindingChannel = "discord" | "telegram";
 

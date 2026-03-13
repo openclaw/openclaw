@@ -1,12 +1,12 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { ChannelGroupPolicy } from "../config/group-policy.js";
-import { resolveOpenProviderRuntimeGroupPolicy } from "../config/runtime-group-policy.js";
 import type {
   TelegramAccountConfig,
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "../config/types.js";
+import { resolveOpenProviderRuntimeGroupPolicy } from "../config/runtime-group-policy.js";
 import { evaluateMatchedGroupAccessForPolicy } from "../plugin-sdk/group-access.js";
 import { isSenderAllowed, type NormalizedAllowFrom } from "./bot-access.js";
 import { firstDefined } from "./bot-access.js";

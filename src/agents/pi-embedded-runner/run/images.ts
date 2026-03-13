@@ -1,15 +1,15 @@
+import type { ImageContent } from "@mariozechner/pi-ai";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ImageContent } from "@mariozechner/pi-ai";
+import type { ImageSanitizationLimits } from "../../image-sanitization.js";
+import type { SandboxFsBridge } from "../../sandbox/fs-bridge.js";
 import { resolveUserPath } from "../../../utils.js";
 import { loadWebMedia } from "../../../web/media.js";
-import type { ImageSanitizationLimits } from "../../image-sanitization.js";
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
 } from "../../sandbox-media-paths.js";
 import { assertSandboxPath } from "../../sandbox-paths.js";
-import type { SandboxFsBridge } from "../../sandbox/fs-bridge.js";
 import { sanitizeImageBlocks } from "../../tool-images.js";
 import { log } from "../logger.js";
 

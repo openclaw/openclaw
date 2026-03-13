@@ -1,8 +1,8 @@
-import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
+import type { GatewayProbeResult } from "../../gateway/probe.js";
+import { resolveGatewayPort } from "../../config/config.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { readGatewayPasswordEnv, readGatewayTokenEnv } from "../../gateway/credentials.js";
-import type { GatewayProbeResult } from "../../gateway/probe.js";
 import { resolveConfiguredSecretInputString } from "../../gateway/resolve-configured-secret-input-string.js";
 import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
 import { colorize, theme } from "../../terminal/theme.js";

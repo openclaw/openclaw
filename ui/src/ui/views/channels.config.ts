@@ -1,7 +1,7 @@
 import { html } from "lit";
 import type { ConfigUiHints } from "../types.ts";
-import { formatChannelExtraValue, resolveChannelConfigValue } from "./channel-config-extras.ts";
 import type { ChannelsProps } from "./channels.types.ts";
+import { formatChannelExtraValue, resolveChannelConfigValue } from "./channel-config-extras.ts";
 import { analyzeConfigSchema, renderNode, schemaType, type JsonSchema } from "./config-form.ts";
 
 type ChannelConfigFormProps = {

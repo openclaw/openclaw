@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
+import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpSessionMeta, createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
 

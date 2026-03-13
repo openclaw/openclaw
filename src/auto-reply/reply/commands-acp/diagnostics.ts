@@ -1,12 +1,12 @@
+import type { SessionEntry } from "../../../config/sessions/types.js";
+import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
 import { formatAcpRuntimeErrorText } from "../../../acp/runtime/error-text.js";
 import { toAcpRuntimeError } from "../../../acp/runtime/errors.js";
 import { getAcpRuntimeBackend, requireAcpRuntimeBackend } from "../../../acp/runtime/registry.js";
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
 import { loadSessionStore } from "../../../config/sessions.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
-import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandBindingContext } from "./context.js";
 import {
   ACP_DOCTOR_USAGE,

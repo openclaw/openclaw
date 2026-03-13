@@ -1,3 +1,5 @@
+import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
+import type { NodeDaemonRuntime } from "./node-daemon-runtime.js";
 import { formatNodeServiceDescription } from "../daemon/constants.js";
 import { resolveNodeProgramArguments } from "../daemon/program-args.js";
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
@@ -5,8 +7,6 @@ import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
 } from "./daemon-install-plan.shared.js";
-import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
-import type { NodeDaemonRuntime } from "./node-daemon-runtime.js";
 
 export type NodeInstallPlan = {
   programArguments: string[];

@@ -1,5 +1,12 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, beforeEach } from "vitest";
+import type {
+  ContextEngine,
+  ContextEngineInfo,
+  AssembleResult,
+  CompactResult,
+  IngestResult,
+} from "./types.js";
 // ---------------------------------------------------------------------------
 // We dynamically import the registry so we can get a fresh module per test
 // group when needed.  For most groups we use the shared singleton directly.
@@ -11,13 +18,6 @@ import {
   listContextEngineIds,
   resolveContextEngine,
 } from "./registry.js";
-import type {
-  ContextEngine,
-  ContextEngineInfo,
-  AssembleResult,
-  CompactResult,
-  IngestResult,
-} from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Helpers

@@ -2,9 +2,9 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { RestartAttempt } from "./restart.js";
 import { quoteCmdScriptArg } from "../daemon/cmd-argv.js";
 import { resolveGatewayWindowsTaskName } from "../daemon/constants.js";
-import type { RestartAttempt } from "./restart.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 const TASK_RESTART_RETRY_LIMIT = 12;

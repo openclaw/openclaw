@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
+import type { FeishuConfig } from "./types.js";
 import {
   resolveDefaultFeishuAccountId,
   resolveDefaultFeishuAccountSelection,
   resolveFeishuAccount,
   resolveFeishuCredentials,
 } from "./accounts.js";
-import type { FeishuConfig } from "./types.js";
 
 const asConfig = (value: Partial<FeishuConfig>) => value as FeishuConfig;
 

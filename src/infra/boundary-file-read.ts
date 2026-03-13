@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { PathAliasPolicy } from "./path-alias-guards.js";
 import {
   resolveBoundaryPath,
   resolveBoundaryPathSync,
   type ResolvedBoundaryPath,
 } from "./boundary-path.js";
-import type { PathAliasPolicy } from "./path-alias-guards.js";
 import {
   openVerifiedFileSync,
   type SafeOpenSyncAllowedType,

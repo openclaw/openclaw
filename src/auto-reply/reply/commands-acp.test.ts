@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 
 const hoisted = vi.hoisted(() => {
   const callGatewayMock = vi.fn();

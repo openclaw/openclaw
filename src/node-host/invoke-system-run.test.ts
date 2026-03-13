@@ -3,11 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, type Mock, vi } from "vitest";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
-import { saveExecApprovals } from "../infra/exec-approvals.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
+import type { HandleSystemRunInvokeOptions } from "./invoke-system-run.js";
+import { saveExecApprovals } from "../infra/exec-approvals.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke, formatSystemRunAllowlistMissMessage } from "./invoke-system-run.js";
-import type { HandleSystemRunInvokeOptions } from "./invoke-system-run.js";
 
 type MockedRunCommand = Mock<HandleSystemRunInvokeOptions["runCommand"]>;
 type MockedRunViaMacAppExecHost = Mock<HandleSystemRunInvokeOptions["runViaMacAppExecHost"]>;

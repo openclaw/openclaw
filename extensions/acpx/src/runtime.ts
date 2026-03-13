@@ -1,4 +1,3 @@
-import { createInterface } from "node:readline";
 import type {
   AcpRuntimeCapabilities,
   AcpRuntimeDoctorReport,
@@ -11,6 +10,7 @@ import type {
   AcpRuntimeTurnInput,
   PluginLogger,
 } from "openclaw/plugin-sdk/acpx";
+import { createInterface } from "node:readline";
 import { AcpRuntimeError } from "openclaw/plugin-sdk/acpx";
 import { toAcpMcpServers, type ResolvedAcpxPluginConfig } from "./config.js";
 import { checkAcpxVersion } from "./ensure.js";

@@ -14,8 +14,8 @@ import { createBaseToolHandlerState } from "./pi-tool-handler-state.test-helpers
 const hookMocks = vi.hoisted(() => ({
   runner: {
     hasHooks: vi.fn(() => true),
-    runAfterToolCall: vi.fn(async () => {}),
-    runBeforeToolCall: vi.fn(async () => {}),
+    runAfterToolCall: vi.fn(async () => { }),
+    runBeforeToolCall: vi.fn(async () => { }),
   },
 }));
 
@@ -78,6 +78,7 @@ function createToolHandlerCtx() {
       toolMetaById: new Map<string, unknown>(),
       ...createBaseToolHandlerState(),
       successfulCronAdds: 0,
+      assistantTexts: [],
     },
     log: { debug: vi.fn(), warn: vi.fn() },
     flushBlockReplyBuffer: vi.fn(),
@@ -86,6 +87,10 @@ function createToolHandlerCtx() {
     emitToolSummary: vi.fn(),
     emitToolOutput: vi.fn(),
     trimMessagingToolSent: vi.fn(),
+    worldModelManager: {
+      predict: vi.fn(() => Promise.resolve([])),
+      observe: vi.fn(() => Promise.resolve()),
+    } as any,
   };
 }
 

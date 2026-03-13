@@ -1,3 +1,9 @@
+import type {
+  MarkdownTableMode,
+  OpenClawConfig,
+  OutboundReplyPayload,
+  RuntimeEnv,
+} from "openclaw/plugin-sdk/zalouser";
 import {
   DM_GROUP_ACCESS_REASON,
   DEFAULT_GROUP_HISTORY_LIMIT,
@@ -8,12 +14,6 @@ import {
   recordPendingHistoryEntryIfEnabled,
   resolveDmGroupAccessWithLists,
 } from "openclaw/plugin-sdk/compat";
-import type {
-  MarkdownTableMode,
-  OpenClawConfig,
-  OutboundReplyPayload,
-  RuntimeEnv,
-} from "openclaw/plugin-sdk/zalouser";
 import {
   createTypingCallbacks,
   createScopedPairingAccess,
@@ -30,6 +30,7 @@ import {
   summarizeMapping,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/zalouser";
+import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
 import {
   buildZalouserGroupCandidates,
   findZalouserGroupEntry,
@@ -43,7 +44,6 @@ import {
   sendSeenZalouser,
   sendTypingZalouser,
 } from "./send.js";
-import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
 import {
   listZaloFriends,
   listZaloGroups,

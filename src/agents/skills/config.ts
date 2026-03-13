@@ -1,4 +1,5 @@
 import type { OpenClawConfig, SkillConfig } from "../../config/config.js";
+import type { SkillEligibilityContext, SkillEntry } from "./types.js";
 import {
   evaluateRuntimeEligibility,
   hasBinary,
@@ -8,7 +9,6 @@ import {
 } from "../../shared/config-eval.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveSkillKey } from "./frontmatter.js";
-import type { SkillEligibilityContext, SkillEntry } from "./types.js";
 
 const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.enabled": true,

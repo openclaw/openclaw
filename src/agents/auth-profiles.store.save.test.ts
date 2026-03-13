@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveAuthStorePath } from "./auth-profiles/paths.js";
 import { saveAuthProfileStore } from "./auth-profiles/store.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 describe("saveAuthProfileStore", () => {
   it("strips plaintext when keyRef/tokenRef are present", async () => {

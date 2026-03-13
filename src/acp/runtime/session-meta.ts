@@ -1,6 +1,6 @@
 import path from "node:path";
-import { resolveAgentSessionDirs } from "../../agents/session-dirs.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAgentSessionDirs } from "../../agents/session-dirs.js";
 import { loadConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { loadSessionStore, resolveStorePath, updateSessionStore } from "../../config/sessions.js";

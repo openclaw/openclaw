@@ -1,6 +1,6 @@
-import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginRecord } from "./registry.js";
+import { normalizeChatChannelId } from "../channels/registry.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
 export type NormalizedPluginsConfig = {

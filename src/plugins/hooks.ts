@@ -5,7 +5,6 @@
  * error handling, priority ordering, and async support.
  */
 
-import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 import type { PluginRegistry } from "./registry.js";
 import type {
   PluginHookAfterCompactionEvent,
@@ -51,6 +50,7 @@ import type {
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
 } from "./types.js";
+import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 
 // Re-export types for consumers
 export type {

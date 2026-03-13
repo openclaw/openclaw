@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { ChannelMessageActionContext } from "../../types.js";
 import {
   readNumberParam,
   readStringArrayParam,
@@ -8,7 +9,6 @@ import { readDiscordParentIdParam } from "../../../../agents/tools/discord-actio
 import { handleDiscordAction } from "../../../../agents/tools/discord-actions.js";
 import { resolveDiscordChannelId } from "../../../../discord/targets.js";
 import { readBooleanParam } from "../../../../plugin-sdk/boolean-param.js";
-import type { ChannelMessageActionContext } from "../../types.js";
 import { resolveReactionMessageId } from "../reaction-message-id.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
 

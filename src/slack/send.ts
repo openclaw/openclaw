@@ -1,4 +1,5 @@
 import { type Block, type KnownBlock, type WebClient } from "@slack/web-api";
+import type { SlackTokenSource } from "./accounts.js";
 import {
   chunkMarkdownTextWithMode,
   resolveChunkMode,
@@ -13,7 +14,6 @@ import {
   withTrustedEnvProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
 import { loadWebMedia } from "../web/media.js";
-import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";

@@ -1,20 +1,20 @@
+import type { OpenClawConfig } from "../config/config.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import type { SecretInputMode } from "./onboard-types.js";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { ModelProviderConfig } from "../config/types.models.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import {
   normalizeSecretInput,
   normalizeOptionalSecretInput,
 } from "../utils/normalize-secret-input.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
 import { ensureApiKeyFromEnvOrPrompt } from "./auth-choice.apply-helpers.js";
 import { applyPrimaryModel } from "./model-picker.js";
 import { normalizeAlias } from "./models/shared.js";
-import type { SecretInputMode } from "./onboard-types.js";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
 const DEFAULT_CONTEXT_WINDOW = CONTEXT_WINDOW_HARD_MIN_TOKENS;

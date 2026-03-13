@@ -1,10 +1,10 @@
+import type { OpenClawConfig } from "../../config/config.js";
 import { type ChannelId, getChannelPlugin } from "../../channels/plugins/index.js";
 import {
   type CommandSecretResolutionMode,
   resolveCommandSecretRefsViaGateway,
 } from "../../cli/command-secret-gateway.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { requireValidConfigSnapshot } from "../config-validation.js";

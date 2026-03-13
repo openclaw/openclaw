@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { computeJobNextRunAtMs } from "./service/jobs.js";
 import type { CronJob } from "./types.js";
+import { computeJobNextRunAtMs } from "./service/jobs.js";
 
 const ORIGINAL_AT_MS = Date.parse("2026-02-22T10:00:00.000Z");
 const LAST_RUN_AT_MS = Date.parse("2026-02-22T10:00:05.000Z"); // ran shortly after scheduled time

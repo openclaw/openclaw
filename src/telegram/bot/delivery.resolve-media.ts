@@ -1,4 +1,5 @@
 import { GrammyError } from "grammy";
+import type { StickerMetadata, TelegramContext } from "./types.js";
 import { logVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { retryAsync } from "../../infra/retry.js";
@@ -6,7 +7,6 @@ import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import { resolveTelegramMediaPlaceholder } from "./helpers.js";
-import type { StickerMetadata, TelegramContext } from "./types.js";
 
 const FILE_TOO_BIG_RE = /file is too big/i;
 const TELEGRAM_MEDIA_SSRF_POLICY = {

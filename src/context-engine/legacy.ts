@@ -1,5 +1,4 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { registerContextEngine } from "./registry.js";
 import type {
   ContextEngine,
   ContextEngineInfo,
@@ -7,6 +6,7 @@ import type {
   CompactResult,
   IngestResult,
 } from "./types.js";
+import { registerContextEngine } from "./registry.js";
 
 /**
  * LegacyContextEngine wraps the existing compaction behavior behind the

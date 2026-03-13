@@ -1,11 +1,11 @@
-import crypto from "node:crypto";
-import { configureClient } from "@tloncorp/api";
 import type {
   ChannelOutboundAdapter,
   ChannelPlugin,
   ChannelSetupInput,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/tlon";
+import { configureClient } from "@tloncorp/api";
+import crypto from "node:crypto";
 import {
   applyAccountNameToChannelSection,
   DEFAULT_ACCOUNT_ID,

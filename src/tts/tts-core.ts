@@ -1,6 +1,13 @@
-import { rmSync } from "node:fs";
 import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
 import { EdgeTTS } from "node-edge-tts";
+import { rmSync } from "node:fs";
+import type { OpenClawConfig } from "../config/config.js";
+import type {
+  ResolvedTtsConfig,
+  ResolvedTtsModelOverrides,
+  TtsDirectiveOverrides,
+  TtsDirectiveParseResult,
+} from "./tts.js";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
 import { getApiKeyForModel, requireApiKey } from "../agents/model-auth.js";
 import {
@@ -11,13 +18,6 @@ import {
 } from "../agents/model-selection.js";
 import { createConfiguredOllamaStreamFn } from "../agents/ollama-stream.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type {
-  ResolvedTtsConfig,
-  ResolvedTtsModelOverrides,
-  TtsDirectiveOverrides,
-  TtsDirectiveParseResult,
-} from "./tts.js";
 
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";

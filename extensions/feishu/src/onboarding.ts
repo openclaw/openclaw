@@ -18,9 +18,9 @@ import {
   setTopLevelChannelGroupPolicy,
   splitOnboardingEntries,
 } from "openclaw/plugin-sdk/feishu";
+import type { FeishuConfig } from "./types.js";
 import { resolveFeishuCredentials } from "./accounts.js";
 import { probeFeishu } from "./probe.js";
-import type { FeishuConfig } from "./types.js";
 
 const channel = "feishu" as const;
 

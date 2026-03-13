@@ -1,5 +1,5 @@
-import { isRecord, parseDotPath } from "./shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
+import { isRecord, parseDotPath } from "./shared.js";
 
 export type PathPatternToken =
   | { kind: "literal"; value: string }

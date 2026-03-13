@@ -1,6 +1,6 @@
 import { describe, expectTypeOf, it } from "vitest";
-import { createPluginRuntime } from "./index.js";
 import type { PluginRuntime } from "./types.js";
+import { createPluginRuntime } from "./index.js";
 
 describe("plugin runtime type contract", () => {
   it("createPluginRuntime returns the declared PluginRuntime shape", () => {

@@ -1,6 +1,6 @@
+import type { ExecApprovalRecord } from "./exec-approval-manager.js";
 import { resolveSystemRunApprovalRuntimeContext } from "../infra/system-run-approval-context.js";
 import { resolveSystemRunCommand } from "../infra/system-run-command.js";
-import type { ExecApprovalRecord } from "./exec-approval-manager.js";
 import {
   systemRunApprovalGuardError,
   systemRunApprovalRequired,

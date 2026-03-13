@@ -1,5 +1,5 @@
-import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   diagnosticSessionStates,

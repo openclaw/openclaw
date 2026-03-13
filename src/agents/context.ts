@@ -1,8 +1,8 @@
 // Lazy-load pi-coding-agent model metadata so we can infer context windows when
 // the agent reports a model id. This includes custom models.json entries.
 
-import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";

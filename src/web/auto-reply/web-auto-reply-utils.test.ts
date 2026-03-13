@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { WebInboundMsg } from "./types.js";
 import { saveSessionStore } from "../../config/sessions.js";
 import { withTempDir } from "../../test-utils/temp-dir.js";
 import {
@@ -10,7 +11,6 @@ import {
   resolveOwnerList,
 } from "./mentions.js";
 import { getSessionSnapshot } from "./session-snapshot.js";
-import type { WebInboundMsg } from "./types.js";
 import { elide, isLikelyWhatsAppCryptoError } from "./util.js";
 
 const makeMsg = (overrides: Partial<WebInboundMsg>): WebInboundMsg =>

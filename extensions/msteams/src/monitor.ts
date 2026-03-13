@@ -1,5 +1,5 @@
-import type { Server } from "node:http";
 import type { Request, Response } from "express";
+import type { Server } from "node:http";
 import {
   DEFAULT_WEBHOOK_MAX_BODY_BYTES,
   keepHttpServerTaskAlive,
@@ -8,10 +8,10 @@ import {
   type OpenClawConfig,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/msteams";
-import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
-import { formatUnknownError } from "./errors.js";
 import type { MSTeamsAdapter } from "./messenger.js";
+import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
+import { formatUnknownError } from "./errors.js";
 import { registerMSTeamsHandlers, type MSTeamsActivityHandler } from "./monitor-handler.js";
 import { createMSTeamsPollStoreFs, type MSTeamsPollStore } from "./polls.js";
 import {

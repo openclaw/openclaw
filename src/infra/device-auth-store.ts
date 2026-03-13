@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { DeviceAuthStore } from "../shared/device-auth.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   clearDeviceAuthTokenFromStore,
@@ -7,7 +8,6 @@ import {
   loadDeviceAuthTokenFromStore,
   storeDeviceAuthTokenInStore,
 } from "../shared/device-auth-store.js";
-import type { DeviceAuthStore } from "../shared/device-auth.js";
 
 const DEVICE_AUTH_FILE = "device-auth.json";
 

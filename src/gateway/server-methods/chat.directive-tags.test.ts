@@ -1,13 +1,13 @@
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import type { GatewayRequestContext } from "./types.js";
 import { GATEWAY_CLIENT_CAPS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
 import { ErrorCodes } from "../protocol/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../protocol/schema/primitives.js";
-import type { GatewayRequestContext } from "./types.js";
 
 const mockState = vi.hoisted(() => ({
   transcriptPath: "",

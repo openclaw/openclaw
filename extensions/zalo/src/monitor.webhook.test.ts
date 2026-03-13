@@ -1,7 +1,8 @@
-import { createServer, type RequestListener } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/zalo";
+import { createServer, type RequestListener } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ResolvedZaloAccount } from "./types.js";
 import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import {
@@ -11,7 +12,6 @@ import {
   handleZaloWebhookRequest,
   registerZaloWebhookTarget,
 } from "./monitor.js";
-import type { ResolvedZaloAccount } from "./types.js";
 
 async function withServer(handler: RequestListener, fn: (baseUrl: string) => Promise<void>) {
   const server = createServer(handler);

@@ -1,5 +1,5 @@
-import { shouldMoveSingleAccountChannelKey } from "../channels/plugins/setup-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { shouldMoveSingleAccountChannelKey } from "../channels/plugins/setup-helpers.js";
 import {
   formatSlackStreamingBooleanMigrationMessage,
   formatSlackStreamModeMigrationMessage,

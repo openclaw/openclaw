@@ -1,9 +1,9 @@
 import type { OpenClawConfig } from "../../../config/config.js";
-import { isValidEnvSecretRefId } from "../../../config/types.secrets.js";
 import type { RuntimeEnv } from "../../../runtime.js";
+import type { OnboardOptions } from "../../onboard-types.js";
+import { isValidEnvSecretRefId } from "../../../config/types.secrets.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import { normalizeGatewayTokenInput, randomToken } from "../../onboard-helpers.js";
-import type { OnboardOptions } from "../../onboard-types.js";
 
 export function applyNonInteractiveGatewayConfig(params: {
   nextConfig: OpenClawConfig;

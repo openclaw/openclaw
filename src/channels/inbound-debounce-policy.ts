@@ -1,11 +1,11 @@
-import { hasControlCommand } from "../auto-reply/command-detection.js";
 import type { CommandNormalizeOptions } from "../auto-reply/commands-registry.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
   type InboundDebounceCreateParams,
 } from "../auto-reply/inbound-debounce.js";
-import type { OpenClawConfig } from "../config/types.js";
 
 export function shouldDebounceTextInbound(params: {
   text: string | null | undefined;

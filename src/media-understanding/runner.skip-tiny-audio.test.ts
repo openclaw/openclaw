@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { AudioTranscriptionRequest } from "./types.js";
 import { MIN_AUDIO_FILE_BYTES } from "./defaults.js";
 import {
   buildProviderRegistry,
@@ -11,7 +12,6 @@ import {
   normalizeMediaAttachments,
   runCapability,
 } from "./runner.js";
-import type { AudioTranscriptionRequest } from "./types.js";
 
 async function withAudioFixture(params: {
   filePrefix: string;

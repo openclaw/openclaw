@@ -1,8 +1,8 @@
 import type { BrowserRouteContext } from "../server-context.js";
+import type { BrowserRouteRegistrar } from "./types.js";
 import { readBody, resolveTargetIdFromBody, withPlaywrightRouteContext } from "./agent.shared.js";
 import { ensureOutputRootDir, resolveWritableOutputPathOrRespond } from "./output-paths.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./path-output.js";
-import type { BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toNumber, toStringOrEmpty } from "./utils.js";
 
 function buildDownloadRequestBase(cdpUrl: string, targetId: string, timeoutMs: number | undefined) {

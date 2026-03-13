@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { FailoverReason } from "./pi-embedded-helpers.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
@@ -27,7 +28,6 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection.js";
-import type { FailoverReason } from "./pi-embedded-helpers.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
 
 const log = createSubsystemLogger("model-fallback");

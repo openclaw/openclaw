@@ -1,11 +1,11 @@
+import JSZip from "jszip";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import JSZip from "jszip";
 import * as tar from "tar";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { withRealpathSymlinkRebindRace } from "../test-utils/symlink-rebind-race.js";
 import type { ArchiveSecurityError } from "./archive.js";
+import { withRealpathSymlinkRebindRace } from "../test-utils/symlink-rebind-race.js";
 import { extractArchive, resolveArchiveKind, resolvePackedRootDir } from "./archive.js";
 
 let fixtureRoot = "";

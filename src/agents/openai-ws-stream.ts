@@ -21,7 +21,6 @@
  * @see src/agents/openai-ws-connection.ts for the connection manager
  */
 
-import { randomUUID } from "node:crypto";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type {
   AssistantMessage,
@@ -32,6 +31,7 @@ import type {
   ToolCall,
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
+import { randomUUID } from "node:crypto";
 import {
   OpenAIWebSocketManager,
   type ContentPart,

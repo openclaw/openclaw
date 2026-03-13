@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
-import { OLLAMA_LOCAL_AUTH_MARKER } from "../../agents/model-auth-markers.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { OLLAMA_LOCAL_AUTH_MARKER } from "../../agents/model-auth-markers.js";
 
 let mockStore: AuthProfileStore;
 let mockAllowedProfiles: string[];

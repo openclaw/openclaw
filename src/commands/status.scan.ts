@@ -1,7 +1,9 @@
+import type { OpenClawConfig } from "../config/config.js";
+import type { MemoryProviderStatus } from "../memory/types.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getStatusCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { withProgress } from "../cli/progress.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { readBestEffortConfig } from "../config/config.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
@@ -10,9 +12,7 @@ import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
 import { getMemorySearchManager } from "../memory/index.js";
-import type { MemoryProviderStatus } from "../memory/types.js";
 import { runExec } from "../process/exec.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { buildChannelsTable } from "./status-all/channels.js";
 import { getAgentLocalStatuses } from "./status.agent-local.js";
 import {

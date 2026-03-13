@@ -1,3 +1,12 @@
+import type { GatewayAuthChoice, SecretInputMode } from "../commands/onboard-types.js";
+import type { GatewayBindMode, GatewayTailscaleMode, OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type {
+  GatewayWizardSettings,
+  QuickstartGatewayDefaults,
+  WizardFlow,
+} from "./onboarding.types.js";
+import type { WizardPrompter } from "./prompts.js";
 import {
   promptSecretRefForOnboarding,
   resolveSecretInputModeForEnvSelection,
@@ -7,8 +16,6 @@ import {
   randomToken,
   validateGatewayPasswordInput,
 } from "../commands/onboard-helpers.js";
-import type { GatewayAuthChoice, SecretInputMode } from "../commands/onboard-types.js";
-import type { GatewayBindMode, GatewayTailscaleMode, OpenClawConfig } from "../config/config.js";
 import { ensureControlUiAllowedOriginsForNonLoopbackBind } from "../config/gateway-control-ui-origins.js";
 import {
   normalizeSecretInputString,
@@ -23,15 +30,8 @@ import {
 } from "../gateway/gateway-config-prompts.shared.js";
 import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
 import { resolveOnboardingSecretInputString } from "./onboarding.secret-input.js";
-import type {
-  GatewayWizardSettings,
-  QuickstartGatewayDefaults,
-  WizardFlow,
-} from "./onboarding.types.js";
-import type { WizardPrompter } from "./prompts.js";
 
 type ConfigureGatewayOptions = {
   flow: WizardFlow;

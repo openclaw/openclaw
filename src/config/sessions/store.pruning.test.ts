@@ -2,9 +2,9 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "./types.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { capEntryCount, pruneStaleEntries, rotateSessionFile } from "./store.js";
-import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
