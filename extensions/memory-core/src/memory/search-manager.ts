@@ -51,14 +51,25 @@ export async function getMemorySearchManager(params: {
   if (resolved.backend === "postgres") {
     try {
       const { PostgresMemoryManager } = await import("./postgres-manager.js");
-      const manager = await PostgresMemoryManager.create({
+      const primary = await PostgresMemoryManager.create({
         cfg: params.cfg,
         agentId: params.agentId,
       });
-      return { manager };
+      const wrapper = new FallbackMemoryManager(
+        {
+          primary,
+          fallbackFactory: async () => {
+            const { MemoryIndexManager } = await loadManagerRuntime();
+            return await MemoryIndexManager.get(params);
+          },
+        },
+        () => {},
+      );
+      return { manager: wrapper };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      log.warn(`postgres memory backend failed; falling back to builtin: ${message}`);
+      log.error(`postgres memory backend failed to initialize: ${message}`);
+      log.warn("falling back to builtin memory backend");
       // Fall through to builtin below
     }
   }

@@ -96,6 +96,41 @@ const fallbackSearch = fallbackManager.search;
 const mockMemoryIndexGet = vi.hoisted(() => vi.fn(async () => fallbackManager));
 const mockCloseAllMemoryIndexManagers = vi.hoisted(() => vi.fn(async () => {}));
 
+const mockPostgresPrimary = vi.hoisted(() => ({
+  search: vi.fn(async () => [
+    {
+      path: "MEMORY.md",
+      startLine: 1,
+      endLine: 10,
+      score: 0.85,
+      snippet: "postgres result",
+      source: "memory" as const,
+      citation: "MEMORY.md#L1-L10",
+    },
+  ]),
+  readFile: vi.fn(async () => ({ text: "pg content", path: "MEMORY.md" })),
+  status: vi.fn(() =>
+    createManagerStatus({
+      backend: "postgres" as "builtin",
+      provider: "postgres",
+      model: "text-embedding-3-small",
+      requestedProvider: "openai",
+    }),
+  ),
+  sync: vi.fn(async () => {}),
+  probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+  probeVectorAvailability: vi.fn(async () => true),
+  close: vi.fn(async () => {}),
+}));
+
+const mockPostgresCreate = vi.hoisted(() => vi.fn(async () => mockPostgresPrimary));
+
+vi.mock("./postgres-manager.js", () => ({
+  PostgresMemoryManager: {
+    create: mockPostgresCreate,
+  },
+}));
+
 vi.mock("./qmd-manager.js", () => ({
   QmdMemoryManager: {
     create: vi.fn(async () => mockPrimary),
@@ -158,6 +193,15 @@ beforeEach(async () => {
   mockMemoryIndexGet.mockClear();
   mockMemoryIndexGet.mockResolvedValue(fallbackManager);
   createQmdManagerMock.mockClear();
+  mockPostgresCreate.mockClear();
+  mockPostgresCreate.mockResolvedValue(mockPostgresPrimary);
+  mockPostgresPrimary.search.mockClear();
+  mockPostgresPrimary.readFile.mockClear();
+  mockPostgresPrimary.status.mockClear();
+  mockPostgresPrimary.sync.mockClear();
+  mockPostgresPrimary.probeEmbeddingAvailability.mockClear();
+  mockPostgresPrimary.probeVectorAvailability.mockClear();
+  mockPostgresPrimary.close.mockClear();
 });
 
 describe("getMemorySearchManager caching", () => {
@@ -352,5 +396,49 @@ describe("getMemorySearchManager caching", () => {
     await closeAllMemorySearchManagers();
 
     expect(mockCloseAllMemoryIndexManagers).toHaveBeenCalledTimes(1);
+  });
+});
+
+function createPostgresCfg(agentId: string): OpenClawConfig {
+  return {
+    memory: { backend: "postgres", postgres: { connectionString: "postgres://localhost/test" } },
+    agents: { list: [{ id: agentId, default: true, workspace: "/tmp/workspace" }] },
+  };
+}
+
+describe("getMemorySearchManager postgres routing", () => {
+  it("routes to postgres backend when configured", async () => {
+    const cfg = createPostgresCfg("pg-agent");
+    const result = await getMemorySearchManager({ cfg, agentId: "pg-agent" });
+    const manager = requireManager(result);
+
+    const results = await manager.search("hello");
+    expect(results).toHaveLength(1);
+    expect(results[0]?.snippet).toBe("postgres result");
+    expect(mockPostgresCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to builtin when postgres create fails", async () => {
+    const cfg = createPostgresCfg("pg-fail-agent");
+    mockPostgresCreate.mockRejectedValueOnce(new Error("connection refused"));
+
+    const result = await getMemorySearchManager({ cfg, agentId: "pg-fail-agent" });
+    const manager = requireManager(result);
+
+    const results = await manager.search("hello");
+    expect(results).toHaveLength(1);
+    expect(results[0]?.snippet).toBe("fallback");
+  });
+
+  it("falls back to builtin when postgres search fails at runtime", async () => {
+    const cfg = createPostgresCfg("pg-runtime-fail");
+    mockPostgresPrimary.search.mockRejectedValueOnce(new Error("connection lost"));
+
+    const result = await getMemorySearchManager({ cfg, agentId: "pg-runtime-fail" });
+    const manager = requireManager(result);
+
+    const results = await manager.search("hello");
+    expect(results).toHaveLength(1);
+    expect(results[0]?.snippet).toBe("fallback");
   });
 });

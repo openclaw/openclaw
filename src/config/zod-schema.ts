@@ -113,9 +113,21 @@ const MemoryQmdSchema = z
 
 const MemorySchema = z
   .object({
-    backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
+    backend: z.union([z.literal("builtin"), z.literal("qmd"), z.literal("postgres")]).optional(),
     citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
     qmd: MemoryQmdSchema.optional(),
+    postgres: z
+      .object({
+        connectionString: z.string().optional(),
+        embeddingProvider: z.string().optional(),
+        embeddingModel: z.string().optional(),
+        embeddingDimensions: z.number().int().positive().optional(),
+        indexType: z.union([z.literal("ivfflat"), z.literal("hnsw")]).optional(),
+        maxConnections: z.number().int().positive().optional(),
+        minSimilarity: z.number().min(0).max(1).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

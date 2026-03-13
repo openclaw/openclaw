@@ -300,6 +300,9 @@ export function resolveMemoryBackendConfig(params: {
 }): ResolvedMemoryBackendConfig {
   const backend = params.cfg.memory?.backend ?? DEFAULT_BACKEND;
   const citations = params.cfg.memory?.citations ?? DEFAULT_CITATIONS;
+  if (backend === "postgres") {
+    return { backend: "postgres", citations };
+  }
   if (backend !== "qmd") {
     return { backend: "builtin", citations };
   }

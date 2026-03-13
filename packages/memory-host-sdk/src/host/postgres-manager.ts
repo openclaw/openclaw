@@ -68,7 +68,8 @@ type CountRow = { c: string };
 const PG_MANAGER_CACHE = new Map<string, PostgresMemoryManager>();
 
 function buildPgCacheKey(agentId: string, connectionString: string): string {
-  return `${agentId}:${connectionString}`;
+  const hash = crypto.createHash("sha256").update(connectionString).digest("hex").slice(0, 16);
+  return `${agentId}:pg:${hash}`;
 }
 
 // ── Schema ──────────────────────────────────────────────────────────────────
@@ -213,7 +214,10 @@ export class PostgresMemoryManager implements MemorySearchManager {
     this.workspaceDir = params.workspaceDir;
     this.cfg = params.cfg;
     this.pgConfig = params.pgConfig;
-    this.minSimilarity = params.pgConfig.minSimilarity ?? DEFAULT_MIN_SIMILARITY;
+    const rawMinSim = params.pgConfig.minSimilarity ?? DEFAULT_MIN_SIMILARITY;
+    this.minSimilarity = Number.isFinite(rawMinSim)
+      ? Math.max(0, Math.min(1, rawMinSim))
+      : DEFAULT_MIN_SIMILARITY;
     this.cacheKey = params.cacheKey;
   }
 
@@ -290,10 +294,28 @@ export class PostgresMemoryManager implements MemorySearchManager {
       );
     }
 
+    // Validate dimensions match the embedding provider's output
+    let validatedDimensions = dimensions;
+    if (provider) {
+      try {
+        const probe = await provider.embedQuery("dimension probe");
+        if (probe?.length && probe.length !== dimensions) {
+          log.warn(
+            `Configured embedding dimensions (${dimensions}) do not match provider output (${probe.length}); using ${probe.length}`,
+          );
+          validatedDimensions = probe.length;
+        }
+      } catch (err) {
+        log.warn(
+          `Could not probe embedding dimensions: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
     const manager = new PostgresMemoryManager({
       pool,
       provider,
-      dimensions,
+      dimensions: validatedDimensions,
       agentId: params.agentId,
       workspaceDir,
       cfg: params.cfg,
@@ -519,6 +541,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
   async sync(params?: {
     reason?: string;
     force?: boolean;
+    sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
     log.info(`Syncing memory files (reason: ${params?.reason ?? "manual"})...`);
@@ -559,7 +582,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
       try {
         const stat = await fs.stat(extra);
         if (stat.isFile() && extra.endsWith(".md")) {
-          const relPath = path.relative(this.workspaceDir, extra);
+          const relPath = path.relative(this.workspaceDir, extra).replace(/\\/g, "/");
           filesToSync.push({ fullPath: extra, relPath, source: "memory" });
         }
       } catch {

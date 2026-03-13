@@ -31,19 +31,23 @@ docker run -e POSTGRES_PASSWORD=secret pgvector/pgvector:pg16
 
 ## Configuration
 
-In your OpenClaw config (`~/.openclaw/config.yaml`):
+In your OpenClaw config (`~/.openclaw/config.json`):
 
-```yaml
-memory:
-  backend: postgres
-  postgres:
-    connectionString: postgres://user:password@localhost:5432/openclaw_memory
-    embeddingProvider: openai # openai, voyage, gemini, ollama
-    embeddingModel: text-embedding-3-small
-    embeddingDimensions: 1536
-    indexType: hnsw # hnsw (default) or ivfflat
-    maxConnections: 5
-    minSimilarity: 0.3
+```json
+{
+  "memory": {
+    "backend": "postgres",
+    "postgres": {
+      "connectionString": "postgres://user:password@localhost:5432/openclaw_memory",
+      "embeddingProvider": "openai",
+      "embeddingModel": "text-embedding-3-small",
+      "embeddingDimensions": 1536,
+      "indexType": "hnsw",
+      "maxConnections": 5,
+      "minSimilarity": 0.3
+    }
+  }
+}
 ```
 
 Or via environment variable:
