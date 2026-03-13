@@ -5,10 +5,7 @@ export type PluginConfig = {
   strategyAgentUrl: string;
   strategyAssistantId: string;
   requestTimeoutMs: number;
-  /** Gateway /hooks/wake URL — enables async webhook mode when set */
-  webhookUrl?: string;
-  /** Bearer token for /hooks/wake authentication */
-  hooksToken?: string;
+  maxConcurrentTasks: number;
 };
 
 function readEnv(keys: string[]): string | undefined {
@@ -43,22 +40,14 @@ export function resolveConfig(api: OpenClawPluginApi): PluginConfig {
     readEnv(["FINDOO_API_KEY", "OPENFINCLAW_FINDOO_API_KEY"]) ??
     "";
 
-  const webhookUrl =
-    (typeof raw?.webhookUrl === "string" ? raw.webhookUrl : undefined) ??
-    readEnv(["OPENFINCLAW_FINDOO_WEBHOOK_URL"]) ??
-    undefined;
-
-  const hooksToken =
-    (typeof raw?.hooksToken === "string" ? raw.hooksToken : undefined) ??
-    readEnv(["OPENFINCLAW_HOOKS_TOKEN"]) ??
-    undefined;
+  const concurrentRaw = raw?.maxConcurrentTasks ?? readEnv(["OPENFINCLAW_FINDOO_MAX_CONCURRENT"]);
+  const concurrent = Number(concurrentRaw);
 
   return {
     apiKey,
     strategyAgentUrl: strategyAgentUrl.replace(/\/+$/, ""),
     strategyAssistantId,
     requestTimeoutMs: Number.isFinite(timeout) && timeout >= 5000 ? Math.floor(timeout) : 120_000,
-    webhookUrl: webhookUrl?.replace(/\/+$/, ""),
-    hooksToken,
+    maxConcurrentTasks: Number.isFinite(concurrent) && concurrent >= 1 ? Math.floor(concurrent) : 5,
   };
 }

@@ -7,15 +7,18 @@ describe("findoo-alpha-plugin registration", () => {
     tools: Map<string, unknown>;
     services: Map<string, unknown>;
     logs: Array<{ level: string; msg: string }>;
+    hooks: Map<string, unknown>;
   } {
     const tools = new Map<string, unknown>();
     const services = new Map<string, unknown>();
     const logs: Array<{ level: string; msg: string }> = [];
+    const hooks = new Map<string, unknown>();
 
     return {
       tools,
       services,
       logs,
+      hooks,
       pluginConfig: { apiKey: "test-license-key" },
       resolvePath: (p: string) => `/tmp/test/${p}`,
       logger: {
@@ -27,11 +30,21 @@ describe("findoo-alpha-plugin registration", () => {
       registerTool: (tool: { name: string }) => {
         tools.set(tool.name, tool);
       },
-      runtime: { services },
+      on: (event: string, handler: unknown) => {
+        hooks.set(event, handler);
+      },
+      runtime: {
+        services,
+        system: {
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeatNow: vi.fn(),
+        },
+      },
     } as unknown as OpenClawPluginApi & {
       tools: Map<string, unknown>;
       services: Map<string, unknown>;
       logs: Array<{ level: string; msg: string }>;
+      hooks: Map<string, unknown>;
     };
   }
 
@@ -55,7 +68,7 @@ describe("findoo-alpha-plugin registration", () => {
     vi.restoreAllMocks();
   });
 
-  it("registers fin-strategy-agent service", () => {
+  it("registers fin-strategy-agent service with getExpertManager", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ ok: true }), { status: 200 }),
     );
@@ -64,10 +77,27 @@ describe("findoo-alpha-plugin registration", () => {
     findooPlugin.register(api);
 
     expect(api.services.has("fin-strategy-agent")).toBe(true);
-    const svc = api.services.get("fin-strategy-agent") as { getConfig: () => unknown };
+    const svc = api.services.get("fin-strategy-agent") as {
+      getConfig: () => unknown;
+      getExpertManager: () => unknown;
+    };
     const cfg = svc.getConfig() as { url: string; assistantId: string };
     expect(cfg.url).toBe("http://43.128.100.43:5085");
     expect(cfg.assistantId).toBe("d2310a07-b552-453c-a8bb-7b9b86de6b23");
+    expect(svc.getExpertManager()).toBeDefined();
+
+    vi.restoreAllMocks();
+  });
+
+  it("registers before_prompt_build hook", () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+
+    const api = createMockApi();
+    findooPlugin.register(api);
+
+    expect(api.hooks.has("before_prompt_build")).toBe(true);
 
     vi.restoreAllMocks();
   });
@@ -82,25 +112,7 @@ describe("findoo-alpha-plugin registration", () => {
     expect(api.logs.some((l) => l.msg.includes("license key not configured"))).toBe(true);
   });
 
-  it("logs webhook mode when webhookUrl configured", () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ ok: true }), { status: 200 }),
-    );
-
-    const api = createMockApi();
-    (api as unknown as { pluginConfig: Record<string, unknown> }).pluginConfig = {
-      apiKey: "test-key",
-      webhookUrl: "http://gateway:18789/hooks/wake",
-      hooksToken: "test-token",
-    };
-    findooPlugin.register(api);
-
-    expect(api.logs.some((l) => l.msg.includes("webhook mode"))).toBe(true);
-
-    vi.restoreAllMocks();
-  });
-
-  it("logs sync fallback mode when no webhookUrl", () => {
+  it("logs async mode", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ ok: true }), { status: 200 }),
     );
@@ -108,7 +120,7 @@ describe("findoo-alpha-plugin registration", () => {
     const api = createMockApi();
     findooPlugin.register(api);
 
-    expect(api.logs.some((l) => l.msg.includes("sync fallback mode"))).toBe(true);
+    expect(api.logs.some((l) => l.msg.includes("async mode"))).toBe(true);
 
     vi.restoreAllMocks();
   });

@@ -1,9 +1,9 @@
 {
   "name": "@openfinclaw/findoo-alpha-plugin",
-  "version": "2026.3.12",
-  "description": "Strategy Agent bridge — A2A protocol integration for LangGraph strategy-agent (37 financial analysis skills)",
+  "version": "2026.3.13",
+  "description": "Strategy Agent bridge — LangGraph native API + ACP async relay for financial analysis (37 skills)",
   "keywords": [
-    "a2a",
+    "acp",
     "agent",
     "finance",
     "langgraph",
