@@ -324,13 +324,13 @@ function readFilesIntoAttachments(files: File[], props: ChatProps) {
       props.onRequestUpdate?.();
     };
     reader.addEventListener("load", () => {
-      additions.push({
+      const newAttachment: ChatAttachment = {
         id: generateAttachmentId(),
         dataUrl: reader.result as string,
         mimeType: file.type,
-      });
-      // Use getCurrentBase() to get fresh state at load time, not stale base
-      syncBufferedAttachments(props, [...getCurrentBase(), ...additions]);
+      };
+      // Get fresh base and only add current file, not accumulated additions
+      syncBufferedAttachments(props, [...getCurrentBase(), newAttachment]);
       settle();
     });
     reader.addEventListener("error", settle);
