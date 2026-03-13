@@ -8,6 +8,10 @@ import { buildModelAliasLines } from "../model-alias-lines.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { resolveForwardCompatModel } from "../model-forward-compat.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
+import {
+  buildSuppressedBuiltInModelError,
+  shouldSuppressBuiltInModel,
+} from "../model-suppression.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 
@@ -93,12 +97,18 @@ function applyConfiguredProviderOverrides(params: {
       headers: discoveredHeaders,
     };
   }
+  const resolvedInput = configuredModel?.input ?? discoveredModel.input;
+  const normalizedInput =
+    Array.isArray(resolvedInput) && resolvedInput.length > 0
+      ? resolvedInput.filter((item) => item === "text" || item === "image")
+      : (["text"] as Array<"text" | "image">);
+
   return {
     ...discoveredModel,
     api: configuredModel?.api ?? providerConfig.api ?? discoveredModel.api,
     baseUrl: providerConfig.baseUrl ?? discoveredModel.baseUrl,
     reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
-    input: configuredModel?.input ?? discoveredModel.input,
+    input: normalizedInput,
     cost: configuredModel?.cost ?? discoveredModel.cost,
     contextWindow: configuredModel?.contextWindow ?? discoveredModel.contextWindow,
     maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
@@ -153,6 +163,9 @@ export function resolveModelWithRegistry(params: {
   cfg?: OpenClawConfig;
 }): Model<Api> | undefined {
   const { provider, modelId, modelRegistry, cfg } = params;
+  if (shouldSuppressBuiltInModel({ provider, id: modelId })) {
+    return undefined;
+  }
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
 
@@ -297,6 +310,10 @@ const LOCAL_PROVIDER_HINTS: Record<string, string> = {
 };
 
 function buildUnknownModelError(provider: string, modelId: string): string {
+  const suppressed = buildSuppressedBuiltInModelError({ provider, id: modelId });
+  if (suppressed) {
+    return suppressed;
+  }
   const base = `Unknown model: ${provider}/${modelId}`;
   const hint = LOCAL_PROVIDER_HINTS[provider.toLowerCase()];
   return hint ? `${base}. ${hint}` : base;
