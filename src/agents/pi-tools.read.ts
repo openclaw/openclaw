@@ -25,7 +25,7 @@ import {
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import { wrapUntrustedPromptDataBlock } from "./sanitize-for-prompt.js";
+import { sanitizeForPromptLiteral, wrapUntrustedPromptDataBlock } from "./sanitize-for-prompt.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 export {
@@ -65,7 +65,8 @@ export function isInboundMediaPath(filePath: string): boolean {
   return (
     normalized.includes(`/${INBOUND_MEDIA_PATH_SEGMENT}/`) ||
     normalized.startsWith(`${INBOUND_MEDIA_PATH_SEGMENT}/`) ||
-    normalized === INBOUND_MEDIA_PATH_SEGMENT
+    normalized === INBOUND_MEDIA_PATH_SEGMENT ||
+    normalized.endsWith(`/${INBOUND_MEDIA_PATH_SEGMENT}`)
   );
 }
 
@@ -715,7 +716,7 @@ function wrapInboundFileResult(
     ) {
       const text = (block as { text: string }).text;
       const wrapped = wrapUntrustedPromptDataBlock({
-        label: `File: ${filePath}`,
+        label: `File: ${sanitizeForPromptLiteral(filePath)}`,
         text,
       });
       return { ...(block as object), text: wrapped || text };

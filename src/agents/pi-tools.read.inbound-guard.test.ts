@@ -104,30 +104,50 @@ describe("createOpenClawReadTool — inbound media prompt injection guard", () =
     expect(textBlock!.text).toBe("# AGENTS.md content\nDo helpful things.");
   });
 
-  it("does NOT wrap image content blocks from inbound paths", async () => {
-    // For image-only results (no text block), the result should pass through unchanged.
-    // The inbound guard only wraps text blocks; image blocks are not affected.
+  it("does NOT wrap image-type content blocks from inbound paths", async () => {
+    // Real image binary blocks (type: "image") must pass through unchanged —
+    // the guard only wraps text blocks.
     const base: AnyAgentTool = {
       name: "read",
       description: "mock read tool",
       inputSchema: { type: "object", properties: { path: { type: "string" } } },
       execute: vi.fn(async () => ({
-        // Only a text block describing the image — no actual image data block
-        // (avoids triggering normalizeReadImageResult's MIME sniffing)
+        content: [{ type: "image", mediaType: "image/png", data: "aGVsbG8=" }],
+      })),
+    } as unknown as AnyAgentTool;
+
+    const tool = createOpenClawReadTool(base);
+    const result = await tool.execute("tc4a", { path: "media/inbound/photo.png" });
+
+    const imageBlock = (
+      result.content as Array<{ type: string; mediaType?: string; data?: string }>
+    ).find((b) => b.type === "image");
+    expect(imageBlock).toBeDefined();
+    expect(imageBlock!.mediaType).toBe("image/png");
+    // No text wrapping should have been applied to the image block
+    expect(imageBlock).not.toHaveProperty("text");
+  });
+
+  it("wraps text-descriptor blocks from inbound image paths", async () => {
+    // When the read tool returns a text block describing an image (e.g. a caption
+    // or alt-text), that text block must still be wrapped as untrusted data.
+    const base: AnyAgentTool = {
+      name: "read",
+      description: "mock read tool",
+      inputSchema: { type: "object", properties: { path: { type: "string" } } },
+      execute: vi.fn(async () => ({
         content: [{ type: "text", text: "Read image file [image/png]" }],
       })),
     } as unknown as AnyAgentTool;
 
     const tool = createOpenClawReadTool(base);
-    const result = await tool.execute("tc4", { path: "media/inbound/photo.png" });
+    const result = await tool.execute("tc4b", { path: "media/inbound/photo.png" });
 
     const textBlock = (result.content as Array<{ type: string; text: string }>).find(
       (b) => b.type === "text",
     );
-    // The text header describing the image should be wrapped as untrusted data
     expect(textBlock).toBeDefined();
     expect(textBlock!.text).toContain("<untrusted-text>");
-    // The original image description should be inside the wrapper
     expect(textBlock!.text).toContain("Read image file");
   });
 
