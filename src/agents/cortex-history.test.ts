@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendCortexCaptureHistory,
+  getCachedLatestCortexCaptureHistoryEntry,
   getLatestCortexCaptureHistoryEntry,
   getLatestCortexCaptureHistoryEntrySync,
   readRecentCortexCaptureHistory,
@@ -68,6 +69,11 @@ describe("cortex capture history", () => {
       sessionId: "session-1",
       channelId: "channel-1",
     });
+    const cachedEntry = getCachedLatestCortexCaptureHistoryEntry({
+      agentId: "main",
+      sessionId: "session-1",
+      channelId: "channel-1",
+    });
     const syncEntry = getLatestCortexCaptureHistoryEntrySync({
       agentId: "main",
       sessionId: "session-1",
@@ -76,6 +82,7 @@ describe("cortex capture history", () => {
 
     expect(asyncEntry?.timestamp).toBe(2_000);
     expect(asyncEntry?.syncedCodingContext).toBe(true);
+    expect(cachedEntry?.timestamp).toBe(2_000);
     expect(syncEntry?.timestamp).toBe(2_000);
     expect(syncEntry?.syncPlatforms).toEqual(["claude-code", "cursor", "copilot"]);
   });
