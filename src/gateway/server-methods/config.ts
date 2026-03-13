@@ -248,6 +248,7 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
   const pluginRegistry = loadOpenClawPlugins({
     config: cfg,
     cache: true,
+    activate: false,
     workspaceDir,
     logger: {
       info: () => {},

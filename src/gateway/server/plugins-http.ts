@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "../method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
@@ -25,6 +26,14 @@ export {
 export { shouldEnforceGatewayAuthForPluginPath } from "./plugins-http/route-auth.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
+
+function resolveCandidateRegistries(initialRegistry: PluginRegistry): PluginRegistry[] {
+  const activeRegistry = getActivePluginRegistry();
+  if (!activeRegistry || activeRegistry === initialRegistry) {
+    return [initialRegistry];
+  }
+  return [activeRegistry, initialRegistry];
+}
 
 function createPluginRouteRuntimeClient(params: {
   requiresGatewayAuth: boolean;
@@ -63,21 +72,34 @@ export function createGatewayPluginRequestHandler(params: {
   registry: PluginRegistry;
   log: SubsystemLogger;
 }): PluginHttpRequestHandler {
-  const { registry, log } = params;
+  const { registry: initialRegistry, log } = params;
   return async (req, res, providedPathContext, dispatchContext) => {
-    const routes = registry.httpRoutes ?? [];
-    if (routes.length === 0) {
-      return false;
-    }
-
     const pathContext =
       providedPathContext ??
       (() => {
         const url = new URL(req.url ?? "/", "http://localhost");
         return resolvePluginRoutePathContext(url.pathname);
       })();
-    const matchedRoutes = findMatchingPluginHttpRoutes(registry, pathContext);
-    if (matchedRoutes.length === 0) {
+
+    // Route registrations can temporarily live on either the current active
+    // registry or the startup snapshot during config/plugin churn. Check both
+    // so webhooks keep resolving across registry swaps in either direction.
+    let registry: PluginRegistry | null = null;
+    let matchedRoutes: ReturnType<typeof findMatchingPluginHttpRoutes> | null = null;
+    for (const candidate of resolveCandidateRegistries(initialRegistry)) {
+      const routes = candidate.httpRoutes ?? [];
+      if (routes.length === 0) {
+        continue;
+      }
+      const candidateMatches = findMatchingPluginHttpRoutes(candidate, pathContext);
+      if (candidateMatches.length === 0) {
+        continue;
+      }
+      registry = candidate;
+      matchedRoutes = candidateMatches;
+      break;
+    }
+    if (!registry || !matchedRoutes) {
       return false;
     }
     const requiresGatewayAuth = matchedPluginRoutesRequireGatewayAuth(matchedRoutes);

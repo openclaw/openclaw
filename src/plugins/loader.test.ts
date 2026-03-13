@@ -14,15 +14,17 @@ async function importFreshPluginTestModules() {
   vi.unmock("./hooks.js");
   vi.unmock("./loader.js");
   vi.unmock("jiti");
-  const [loader, hookRunnerGlobal, hooks] = await Promise.all([
+  const [loader, hookRunnerGlobal, hooks, runtime] = await Promise.all([
     import("./loader.js"),
     import("./hook-runner-global.js"),
     import("./hooks.js"),
+    import("./runtime.js"),
   ]);
   return {
     ...loader,
     ...hookRunnerGlobal,
     ...hooks,
+    ...runtime,
   };
 }
 
@@ -30,9 +32,11 @@ const {
   __testing,
   clearPluginLoaderCache,
   createHookRunner,
+  getActivePluginRegistry,
   getGlobalHookRunner,
   loadOpenClawPlugins,
   resetGlobalHookRunner,
+  setActivePluginRegistry,
 } = await importFreshPluginTestModules();
 const previousUmask = process.umask(0o022);
 
@@ -470,6 +474,51 @@ describe("loadOpenClawPlugins", () => {
     expect(getGlobalHookRunner()).not.toBeNull();
 
     resetGlobalHookRunner();
+  });
+
+  it("keeps the live registry unchanged when loading read-only registries", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const activePlugin = writePlugin({
+      id: "active-registry",
+      filename: "active-registry.cjs",
+      body: `module.exports = { id: "active-registry", register() {} };`,
+    });
+    const readOnlyPlugin = writePlugin({
+      id: "read-only-registry",
+      filename: "read-only-registry.cjs",
+      body: `module.exports = { id: "read-only-registry", register() {} };`,
+    });
+
+    const activeRegistry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: activePlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [activePlugin.file] },
+          allow: ["active-registry"],
+        },
+      },
+    });
+    setActivePluginRegistry(activeRegistry, "live-registry");
+
+    const readOnlyOptions = {
+      activate: false,
+      cache: true,
+      workspaceDir: readOnlyPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [readOnlyPlugin.file] },
+          allow: ["read-only-registry"],
+        },
+      },
+    } satisfies Parameters<typeof loadOpenClawPlugins>[0];
+
+    const first = loadOpenClawPlugins(readOnlyOptions);
+    const second = loadOpenClawPlugins(readOnlyOptions);
+
+    expect(first.plugins.some((entry) => entry.id === "read-only-registry")).toBe(true);
+    expect(second).toBe(first);
+    expect(getActivePluginRegistry()).toBe(activeRegistry);
   });
 
   it("does not reuse cached bundled plugin registries across env changes", () => {
