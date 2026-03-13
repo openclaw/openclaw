@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  extractMSTeamsConversationMessageId,
   normalizeMSTeamsConversationId,
   parseMSTeamsActivityTimestamp,
   stripMSTeamsMentionTags,
@@ -23,6 +24,28 @@ describe("msteams inbound", () => {
     it("strips the ;messageid suffix", () => {
       expect(normalizeMSTeamsConversationId("19:abc@thread.tacv2;messageid=deadbeef")).toBe(
         "19:abc@thread.tacv2",
+      );
+    });
+  });
+
+  describe("extractMSTeamsConversationMessageId", () => {
+    it("extracts messageid from conversation.id with ;messageid= suffix", () => {
+      expect(extractMSTeamsConversationMessageId("19:abc@thread.tacv2;messageid=1234567890")).toBe(
+        "1234567890",
+      );
+    });
+
+    it("returns undefined when no ;messageid= suffix is present", () => {
+      expect(extractMSTeamsConversationMessageId("19:abc@thread.tacv2")).toBeUndefined();
+    });
+
+    it("returns undefined for empty string", () => {
+      expect(extractMSTeamsConversationMessageId("")).toBeUndefined();
+    });
+
+    it("handles case-insensitive messageid parameter", () => {
+      expect(extractMSTeamsConversationMessageId("19:abc@thread.tacv2;MessageId=ABCDEF")).toBe(
+        "ABCDEF",
       );
     });
   });

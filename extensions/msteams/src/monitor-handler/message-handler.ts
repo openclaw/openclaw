@@ -46,7 +46,8 @@ import { extractMSTeamsPollVote } from "../polls.js";
 import { createMSTeamsReplyDispatcher } from "../reply-dispatcher.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
-import { recordMSTeamsSentMessage, wasMSTeamsMessageSent } from "../sent-message-cache.js";
+import { recordMSTeamsSentMessage } from "../sent-message-cache.js";
+import { computeImplicitMention } from "./implicit-mention.js";
 import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
 
 export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
@@ -560,6 +561,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         for (const id of ids) {
           recordMSTeamsSentMessage(conversationId, id);
         }
+        // Also record the thread root message ID so that subsequent thread
+        // replies are detected as implicit mentions. The conversation.id
+        // ;messageid= suffix points to the thread root (the user's original
+        // message), not the bot's reply, so we need to cache it separately.
+        if (conversationMessageId) {
+          recordMSTeamsSentMessage(conversationId, conversationMessageId);
+        }
       },
       tokenProvider,
       sharePointSiteId,
@@ -679,11 +687,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       ? (activity.attachments as unknown as MSTeamsAttachmentLike[])
       : [];
     const wasMentioned = wasMSTeamsBotMentioned(activity);
-    const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
-    const replyToId = activity.replyToId ?? undefined;
-    const implicitMention = Boolean(
-      conversationId && replyToId && wasMSTeamsMessageSent(conversationId, replyToId),
-    );
+    const rawConversationId = activity.conversation?.id ?? "";
+    const conversationId = normalizeMSTeamsConversationId(rawConversationId);
+    const implicitMention = computeImplicitMention(activity);
 
     await inboundDebouncer.enqueue({
       context,
