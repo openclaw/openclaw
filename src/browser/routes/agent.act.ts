@@ -18,6 +18,17 @@ import {
 import type { BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
 
+const SELECTOR_ALLOWED_KINDS: ReadonlySet<string> = new Set([
+  "batch",
+  "click",
+  "drag",
+  "hover",
+  "scrollIntoView",
+  "select",
+  "type",
+  "wait",
+]);
+
 export function registerBrowserAgentActRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
@@ -30,16 +41,6 @@ export function registerBrowserAgentActRoutes(
     }
     const kind: ActKind = kindRaw;
     const targetId = resolveTargetIdFromBody(body);
-    const SELECTOR_ALLOWED_KINDS = new Set([
-      "batch",
-      "click",
-      "drag",
-      "hover",
-      "scrollIntoView",
-      "select",
-      "type",
-      "wait",
-    ]);
     if (Object.hasOwn(body, "selector") && !SELECTOR_ALLOWED_KINDS.has(kind)) {
       return jsonError(res, 400, SELECTOR_UNSUPPORTED_MESSAGE);
     }
