@@ -9,6 +9,12 @@ describe("concatOptionalTextSegments", () => {
   it("keeps explicit empty-string right value", () => {
     expect(concatOptionalTextSegments({ left: "A", right: "" })).toBe("");
   });
+
+  it("falls back to whichever side is present and honors custom separators", () => {
+    expect(concatOptionalTextSegments({ left: "A" })).toBe("A");
+    expect(concatOptionalTextSegments({ right: "B" })).toBe("B");
+    expect(concatOptionalTextSegments({ left: "A", right: "B", separator: " | " })).toBe("A | B");
+  });
 });
 
 describe("joinPresentTextSegments", () => {
@@ -22,5 +28,12 @@ describe("joinPresentTextSegments", () => {
 
   it("trims segments when requested", () => {
     expect(joinPresentTextSegments(["  A  ", "  B  "], { trim: true })).toBe("A\n\nB");
+  });
+
+  it("keeps whitespace-only segments unless trim is enabled and supports custom separators", () => {
+    expect(joinPresentTextSegments(["A", "   ", "B"], { separator: " | " })).toBe("A |     | B");
+    expect(joinPresentTextSegments(["A", "   ", "B"], { trim: true, separator: " | " })).toBe(
+      "A | B",
+    );
   });
 });

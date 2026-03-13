@@ -12,6 +12,10 @@ function resetWarningFilterInstallState(): void {
   process.emitWarning = baseEmitWarning;
 }
 
+async function flushWarnings(): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
 describe("warning filter", () => {
   beforeEach(() => {
     resetWarningFilterInstallState();
@@ -23,36 +27,49 @@ describe("warning filter", () => {
   });
 
   it("suppresses known deprecation and experimental warning signatures", () => {
-    expect(
-      shouldIgnoreWarning({
+    const ignoredWarnings = [
+      {
         name: "DeprecationWarning",
         code: "DEP0040",
         message: "The punycode module is deprecated.",
-      }),
-    ).toBe(true);
-    expect(
-      shouldIgnoreWarning({
+      },
+      {
         name: "DeprecationWarning",
         code: "DEP0060",
         message: "The `util._extend` API is deprecated.",
-      }),
-    ).toBe(true);
-    expect(
-      shouldIgnoreWarning({
+      },
+      {
         name: "ExperimentalWarning",
         message: "SQLite is an experimental feature and might change at any time",
-      }),
-    ).toBe(true);
+      },
+    ];
+
+    for (const warning of ignoredWarnings) {
+      expect(shouldIgnoreWarning(warning)).toBe(true);
+    }
   });
 
   it("keeps unknown warnings visible", () => {
-    expect(
-      shouldIgnoreWarning({
+    const visibleWarnings = [
+      {
         name: "DeprecationWarning",
         code: "DEP9999",
         message: "Totally new warning",
-      }),
-    ).toBe(false);
+      },
+      {
+        name: "ExperimentalWarning",
+        message: "Different experimental warning",
+      },
+      {
+        name: "DeprecationWarning",
+        code: "DEP0040",
+        message: "Different deprecated module",
+      },
+    ];
+
+    for (const warning of visibleWarnings) {
+      expect(shouldIgnoreWarning(warning)).toBe(false);
+    }
   });
 
   it("installs once and suppresses known warnings at emit time", async () => {
@@ -82,11 +99,18 @@ describe("warning filter", () => {
         type: "DeprecationWarning",
         code: "DEP0060",
       });
-      await new Promise((resolve) => setImmediate(resolve));
+      emitWarning(
+        Object.assign(new Error("The punycode module is deprecated."), {
+          name: "DeprecationWarning",
+          code: "DEP0040",
+        }),
+      );
+      await flushWarnings();
       expect(seenWarnings.find((warning) => warning.code === "DEP0060")).toBeUndefined();
+      expect(seenWarnings.find((warning) => warning.code === "DEP0040")).toBeUndefined();
 
       emitWarning("Visible warning", { type: "Warning", code: "OPENCLAW_TEST_WARNING" });
-      await new Promise((resolve) => setImmediate(resolve));
+      await flushWarnings();
       expect(
         seenWarnings.find((warning) => warning.code === "OPENCLAW_TEST_WARNING"),
       ).toBeDefined();
