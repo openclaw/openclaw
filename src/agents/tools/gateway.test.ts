@@ -75,6 +75,15 @@ describe("resolveGatewayTarget – env URL override classification", () => {
     expect(resolveGatewayTarget()).toBeUndefined();
   });
 
+  it("returns undefined (local) when gateway.mode=remote with a loopback remote.url (no tunnel evidence)", () => {
+    // A configured loopback remote.url (e.g. ws://127.0.0.1:18789) is indistinguishable
+    // from a local gateway on a custom port. Without a non-loopback URL proving SSH tunnel
+    // usage, classify as local so deliveryContext is preserved and post-restart wake
+    // messages are not misrouted via stale extractDeliveryInfo routing.
+    setConfig({ gateway: { mode: "remote", remote: { url: "ws://127.0.0.1:18789" } } });
+    expect(resolveGatewayTarget()).toBeUndefined();
+  });
+
   it("returns undefined when gateway.mode=remote but gateway.remote.url is empty string", () => {
     setConfig({ gateway: { mode: "remote", remote: { url: "  " } } });
     expect(resolveGatewayTarget()).toBeUndefined();
