@@ -70,11 +70,10 @@ describe("last-tab guard (closeTarget safety)", () => {
     expect(isLastRemainingTab([null, { id: 5 }, { id: 6 }], 5)).toBe(false);
   });
 
-  it("treats tabs with undefined id as valid entries (chrome behavior)", () => {
-    // Chrome can return tab objects with id=undefined in edge cases.
-    // The current implementation filters by id !== tabIdToClose, so
-    // undefined-id entries count as "other tabs" (safe to close).
-    expect(isLastRemainingTab([{ id: undefined }, { id: 7 }], 7)).toBe(false);
+  it("treats undefined-id tab entries as non-closeable", () => {
+    // Target.closeTarget always calls chrome.tabs.remove with a concrete numeric id.
+    // Undefined-id entries from chrome.tabs.query are not actionable fallback tabs.
+    expect(isLastRemainingTab([{ id: undefined }, { id: 7 }], 7)).toBe(true);
   });
 
   it("blocks when allTabs is not an array (defensive)", () => {
