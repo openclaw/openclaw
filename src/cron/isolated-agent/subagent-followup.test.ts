@@ -33,6 +33,29 @@ async function resolveAfterAdvancingTimers<T>(promise: Promise<T>, advanceMs = 1
   return promise;
 }
 
+function createDescendantRun(params?: {
+  runId?: string;
+  childSessionKey?: string;
+  task?: string;
+  cleanup?: "keep" | "delete";
+  endedAt?: number;
+  frozenResultText?: string | null;
+}) {
+  return {
+    runId: params?.runId ?? "run-1",
+    childSessionKey: params?.childSessionKey ?? "child-1",
+    requesterSessionKey: "test-session",
+    requesterDisplayKey: "test-session",
+    task: params?.task ?? "task-1",
+    cleanup: params?.cleanup ?? "keep",
+    createdAt: 1000,
+    endedAt: params?.endedAt ?? 2000,
+    ...(params?.frozenResultText === undefined
+      ? {}
+      : { frozenResultText: params.frozenResultText }),
+  };
+}
+
 describe("isLikelyInterimCronMessage", () => {
   it("detects 'on it' as interim", () => {
     expect(isLikelyInterimCronMessage("on it")).toBe(true);
@@ -85,18 +108,7 @@ describe("readDescendantSubagentFallbackReply", () => {
   });
 
   it("reads reply from child session transcript", async () => {
-    vi.mocked(listDescendantRunsForRequester).mockReturnValue([
-      {
-        runId: "run-1",
-        childSessionKey: "child-1",
-        requesterSessionKey: "test-session",
-        requesterDisplayKey: "test-session",
-        task: "task-1",
-        cleanup: "keep",
-        createdAt: 1000,
-        endedAt: 2000,
-      },
-    ]);
+    vi.mocked(listDescendantRunsForRequester).mockReturnValue([createDescendantRun()]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue("child output text");
     const result = await readDescendantSubagentFallbackReply({
       sessionKey: "test-session",
@@ -107,17 +119,10 @@ describe("readDescendantSubagentFallbackReply", () => {
 
   it("falls back to frozenResultText when session transcript unavailable", async () => {
     vi.mocked(listDescendantRunsForRequester).mockReturnValue([
-      {
-        runId: "run-1",
-        childSessionKey: "child-1",
-        requesterSessionKey: "test-session",
-        requesterDisplayKey: "test-session",
-        task: "task-1",
+      createDescendantRun({
         cleanup: "delete",
-        createdAt: 1000,
-        endedAt: 2000,
         frozenResultText: "frozen child output",
-      },
+      }),
     ]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
     const result = await readDescendantSubagentFallbackReply({
@@ -129,17 +134,7 @@ describe("readDescendantSubagentFallbackReply", () => {
 
   it("prefers session transcript over frozenResultText", async () => {
     vi.mocked(listDescendantRunsForRequester).mockReturnValue([
-      {
-        runId: "run-1",
-        childSessionKey: "child-1",
-        requesterSessionKey: "test-session",
-        requesterDisplayKey: "test-session",
-        task: "task-1",
-        cleanup: "keep",
-        createdAt: 1000,
-        endedAt: 2000,
-        frozenResultText: "frozen text",
-      },
+      createDescendantRun({ frozenResultText: "frozen text" }),
     ]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue("live transcript text");
     const result = await readDescendantSubagentFallbackReply({
@@ -151,28 +146,14 @@ describe("readDescendantSubagentFallbackReply", () => {
 
   it("joins replies from multiple descendants", async () => {
     vi.mocked(listDescendantRunsForRequester).mockReturnValue([
-      {
-        runId: "run-1",
-        childSessionKey: "child-1",
-        requesterSessionKey: "test-session",
-        requesterDisplayKey: "test-session",
-        task: "task-1",
-        cleanup: "keep",
-        createdAt: 1000,
-        endedAt: 2000,
-        frozenResultText: "first child output",
-      },
-      {
+      createDescendantRun({ frozenResultText: "first child output" }),
+      createDescendantRun({
         runId: "run-2",
         childSessionKey: "child-2",
-        requesterSessionKey: "test-session",
-        requesterDisplayKey: "test-session",
         task: "task-2",
-        cleanup: "keep",
-        createdAt: 1000,
         endedAt: 3000,
         frozenResultText: "second child output",
-      },
+      }),
     ]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
     const result = await readDescendantSubagentFallbackReply({
@@ -184,27 +165,14 @@ describe("readDescendantSubagentFallbackReply", () => {
 
   it("skips SILENT_REPLY_TOKEN descendants", async () => {
     vi.mocked(listDescendantRunsForRequester).mockReturnValue([
-      {
-        runId: "run-1",
-        childSessionKey: "child-1",
-        requesterSessionKey: "test-session",
-        requesterDisplayKey: "test-session",
-        task: "task-1",
-        cleanup: "keep",
-        createdAt: 1000,
-        endedAt: 2000,
-      },
-      {
+      createDescendantRun(),
+      createDescendantRun({
         runId: "run-2",
         childSessionKey: "child-2",
-        requesterSessionKey: "test-session",
-        requesterDisplayKey: "test-session",
         task: "task-2",
-        cleanup: "keep",
-        createdAt: 1000,
         endedAt: 3000,
         frozenResultText: "useful output",
-      },
+      }),
     ]);
     vi.mocked(readLatestAssistantReply).mockImplementation(async (params) => {
       if (params.sessionKey === "child-1") {
@@ -221,17 +189,10 @@ describe("readDescendantSubagentFallbackReply", () => {
 
   it("returns undefined when frozenResultText is null", async () => {
     vi.mocked(listDescendantRunsForRequester).mockReturnValue([
-      {
-        runId: "run-1",
-        childSessionKey: "child-1",
-        requesterSessionKey: "test-session",
-        requesterDisplayKey: "test-session",
-        task: "task-1",
+      createDescendantRun({
         cleanup: "delete",
-        createdAt: 1000,
-        endedAt: 2000,
         frozenResultText: null,
-      },
+      }),
     ]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
     const result = await readDescendantSubagentFallbackReply({
