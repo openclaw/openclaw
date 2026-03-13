@@ -9,7 +9,7 @@ import {
   pressChromeMcpKey,
   resizeChromeMcpPage,
 } from "../chrome-mcp.js";
-import type { BrowserFormField } from "../client-actions-core.js";
+import type { BrowserActRequest, BrowserFormField } from "../client-actions-core.js";
 import { normalizeBrowserFormField } from "../form-fields.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { registerBrowserAgentActDownloadRoutes } from "./agent.act.download.js";
@@ -115,9 +115,7 @@ const SELECTOR_ALLOWED_KINDS: ReadonlySet<string> = new Set([
   "wait",
 ]);
 
-function normalizeBatchAction(
-  value: unknown,
-): Record<string, unknown> & { kind: ActKind } {
+function normalizeBatchAction(value: unknown): BrowserActRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("batch actions must be objects");
   }
@@ -307,15 +305,7 @@ function normalizeBatchAction(
       const selector = toStringOrEmpty(raw.selector) || undefined;
       const url = toStringOrEmpty(raw.url) || undefined;
       const fn = toStringOrEmpty(raw.fn) || undefined;
-      if (
-        timeMs === undefined &&
-        !text &&
-        !textGone &&
-        !selector &&
-        !url &&
-        !loadState &&
-        !fn
-      ) {
+      if (timeMs === undefined && !text && !textGone && !selector && !url && !loadState && !fn) {
         throw new Error(
           "wait requires at least one of: timeMs, text, textGone, selector, url, loadState, fn",
         );
@@ -424,6 +414,13 @@ export function registerBrowserAgentActRoutes(
             }
             const modifiers = parsedModifiers.modifiers;
             if (isExistingSession) {
+              if (selector) {
+                return jsonError(
+                  res,
+                  501,
+                  "existing-session click does not support selector targeting yet; use ref.",
+                );
+              }
               if ((button && button !== "left") || (modifiers && modifiers.length > 0)) {
                 return jsonError(
                   res,
@@ -434,7 +431,7 @@ export function registerBrowserAgentActRoutes(
               await clickChromeMcpElement({
                 profileName,
                 targetId: tab.targetId,
-                uid: ref,
+                uid: ref!,
                 doubleClick,
               });
               return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
@@ -483,6 +480,13 @@ export function registerBrowserAgentActRoutes(
             const slowly = toBoolean(body.slowly) ?? false;
             const timeoutMs = toNumber(body.timeoutMs);
             if (isExistingSession) {
+              if (selector) {
+                return jsonError(
+                  res,
+                  501,
+                  "existing-session type does not support selector targeting yet; use ref.",
+                );
+              }
               if (slowly) {
                 return jsonError(
                   res,
@@ -493,7 +497,7 @@ export function registerBrowserAgentActRoutes(
               await fillChromeMcpElement({
                 profileName,
                 targetId: tab.targetId,
-                uid: ref,
+                uid: ref!,
                 value: text,
               });
               if (submit) {
@@ -561,6 +565,13 @@ export function registerBrowserAgentActRoutes(
             }
             const timeoutMs = toNumber(body.timeoutMs);
             if (isExistingSession) {
+              if (selector) {
+                return jsonError(
+                  res,
+                  501,
+                  "existing-session hover does not support selector targeting yet; use ref.",
+                );
+              }
               if (timeoutMs) {
                 return jsonError(
                   res,
@@ -568,7 +579,7 @@ export function registerBrowserAgentActRoutes(
                   "existing-session hover does not support timeoutMs overrides.",
                 );
               }
-              await hoverChromeMcpElement({ profileName, targetId: tab.targetId, uid: ref });
+              await hoverChromeMcpElement({ profileName, targetId: tab.targetId, uid: ref! });
               return res.json({ ok: true, targetId: tab.targetId });
             }
             const pw = await requirePwAi(res, `act:${kind}`);
@@ -592,6 +603,13 @@ export function registerBrowserAgentActRoutes(
             }
             const timeoutMs = toNumber(body.timeoutMs);
             if (isExistingSession) {
+              if (selector) {
+                return jsonError(
+                  res,
+                  501,
+                  "existing-session scrollIntoView does not support selector targeting yet; use ref.",
+                );
+              }
               if (timeoutMs) {
                 return jsonError(
                   res,
@@ -603,7 +621,7 @@ export function registerBrowserAgentActRoutes(
                 profileName,
                 targetId: tab.targetId,
                 fn: `(el) => { el.scrollIntoView({ block: "center", inline: "center" }); return true; }`,
-                args: [ref],
+                args: [ref!],
               });
               return res.json({ ok: true, targetId: tab.targetId });
             }
@@ -640,6 +658,13 @@ export function registerBrowserAgentActRoutes(
             }
             const timeoutMs = toNumber(body.timeoutMs);
             if (isExistingSession) {
+              if (startSelector || endSelector) {
+                return jsonError(
+                  res,
+                  501,
+                  "existing-session drag does not support selector targeting yet; use startRef/endRef.",
+                );
+              }
               if (timeoutMs) {
                 return jsonError(
                   res,
@@ -650,8 +675,8 @@ export function registerBrowserAgentActRoutes(
               await dragChromeMcpElement({
                 profileName,
                 targetId: tab.targetId,
-                fromUid: startRef,
-                toUid: endRef,
+                fromUid: startRef!,
+                toUid: endRef!,
               });
               return res.json({ ok: true, targetId: tab.targetId });
             }
@@ -679,6 +704,13 @@ export function registerBrowserAgentActRoutes(
             }
             const timeoutMs = toNumber(body.timeoutMs);
             if (isExistingSession) {
+              if (selector) {
+                return jsonError(
+                  res,
+                  501,
+                  "existing-session select does not support selector targeting yet; use ref.",
+                );
+              }
               if (values.length !== 1) {
                 return jsonError(
                   res,
@@ -696,7 +728,7 @@ export function registerBrowserAgentActRoutes(
               await fillChromeMcpElement({
                 profileName,
                 targetId: tab.targetId,
-                uid: ref,
+                uid: ref!,
                 value: values[0] ?? "",
               });
               return res.json({ ok: true, targetId: tab.targetId });
@@ -943,7 +975,7 @@ export function registerBrowserAgentActRoutes(
             if (!pw) {
               return;
             }
-            let actions: Array<Record<string, unknown> & { kind: ActKind }>;
+            let actions: BrowserActRequest[];
             try {
               actions = Array.isArray(body.actions) ? body.actions.map(normalizeBatchAction) : [];
             } catch (err) {
