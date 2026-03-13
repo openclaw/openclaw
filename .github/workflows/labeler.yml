@@ -16,6 +16,9 @@ on:
         required: false
         default: "50"
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 permissions: {}
 
 jobs:

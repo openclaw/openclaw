@@ -8,6 +8,9 @@ on:
   pull_request_target:
     types: [labeled]
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 permissions: {}
 
 jobs:
