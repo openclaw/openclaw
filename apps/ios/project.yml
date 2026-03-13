@@ -98,6 +98,17 @@ targets:
         SUPPORTS_LIVE_ACTIVITIES: YES
         ENABLE_APPINTENTS_METADATA: NO
         ENABLE_APP_INTENTS_METADATA_GENERATION: NO
+      configs:
+        Debug:
+          OPENCLAW_PUSH_TRANSPORT: direct
+          OPENCLAW_PUSH_DISTRIBUTION: local
+          OPENCLAW_PUSH_RELAY_BASE_URL: ""
+          OPENCLAW_PUSH_APNS_ENVIRONMENT: sandbox
+        Release:
+          OPENCLAW_PUSH_TRANSPORT: direct
+          OPENCLAW_PUSH_DISTRIBUTION: local
+          OPENCLAW_PUSH_RELAY_BASE_URL: ""
+          OPENCLAW_PUSH_APNS_ENVIRONMENT: production
     info:
       path: Sources/Info.plist
       properties:
@@ -131,6 +142,10 @@ targets:
         NSSpeechRecognitionUsageDescription: OpenClaw uses on-device speech recognition for voice wake.
         NSSupportsLiveActivities: true
         ITSAppUsesNonExemptEncryption: false
+        OpenClawPushTransport: "$(OPENCLAW_PUSH_TRANSPORT)"
+        OpenClawPushDistribution: "$(OPENCLAW_PUSH_DISTRIBUTION)"
+        OpenClawPushRelayBaseURL: "$(OPENCLAW_PUSH_RELAY_BASE_URL)"
+        OpenClawPushAPNsEnvironment: "$(OPENCLAW_PUSH_APNS_ENVIRONMENT)"
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown

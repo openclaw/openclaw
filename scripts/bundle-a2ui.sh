@@ -32,13 +32,13 @@ INPUT_PATHS=(
 )
 
 compute_hash() {
-  ROOT_DIR="$ROOT_DIR" node --input-type=module - "${INPUT_PATHS[@]}" <<'NODE'
+  ROOT_DIR="$ROOT_DIR" node --input-type=module --eval '
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
 const rootDir = process.env.ROOT_DIR ?? process.cwd();
-const inputs = process.argv.slice(2);
+const inputs = process.argv.slice(1);
 const files = [];
 
 async function walk(entryPath) {
@@ -73,7 +73,7 @@ for (const filePath of files) {
 }
 
 process.stdout.write(hash.digest("hex"));
-NODE
+' "${INPUT_PATHS[@]}"
 }
 
 current_hash="$(compute_hash)"
