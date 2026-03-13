@@ -113,6 +113,26 @@ function runDockerSetup(
   });
 }
 
+async function runDockerSetupWithUnsetGatewayToken(
+  sandbox: DockerSetupSandbox,
+  suffix: string,
+  prepare?: (configDir: string) => Promise<void>,
+) {
+  const configDir = join(sandbox.rootDir, `config-${suffix}`);
+  const workspaceDir = join(sandbox.rootDir, `workspace-${suffix}`);
+  await mkdir(configDir, { recursive: true });
+  await prepare?.(configDir);
+
+  const result = runDockerSetup(sandbox, {
+    OPENCLAW_GATEWAY_TOKEN: undefined,
+    OPENCLAW_CONFIG_DIR: configDir,
+    OPENCLAW_WORKSPACE_DIR: workspaceDir,
+  });
+  const envFile = await readFile(join(sandbox.rootDir, ".env"), "utf8");
+
+  return { result, envFile };
+}
+
 async function withUnixSocket<T>(socketPath: string, run: () => Promise<T>): Promise<T> {
   const server = createServer();
   await new Promise<void>((resolve, reject) => {
@@ -243,52 +263,39 @@ describe("docker-setup.sh", () => {
 
   it("reuses existing config token when OPENCLAW_GATEWAY_TOKEN is unset", async () => {
     const activeSandbox = requireSandbox(sandbox);
-    const configDir = join(activeSandbox.rootDir, "config-token-reuse");
-    const workspaceDir = join(activeSandbox.rootDir, "workspace-token-reuse");
-    await mkdir(configDir, { recursive: true });
-    await writeFile(
-      join(configDir, "openclaw.json"),
-      JSON.stringify({ gateway: { auth: { mode: "token", token: "config-token-123" } } }),
+    const { result, envFile } = await runDockerSetupWithUnsetGatewayToken(
+      activeSandbox,
+      "token-reuse",
+      async (configDir) => {
+        await writeFile(
+          join(configDir, "openclaw.json"),
+          JSON.stringify({ gateway: { auth: { mode: "token", token: "config-token-123" } } }),
+        );
+      },
     );
 
-    const result = runDockerSetup(activeSandbox, {
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_CONFIG_DIR: configDir,
-      OPENCLAW_WORKSPACE_DIR: workspaceDir,
-    });
-
     expect(result.status).toBe(0);
-    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
     expect(envFile).toContain("OPENCLAW_GATEWAY_TOKEN=config-token-123"); // pragma: allowlist secret
   });
 
   it("reuses existing .env token when OPENCLAW_GATEWAY_TOKEN and config token are unset", async () => {
     const activeSandbox = requireSandbox(sandbox);
-    const configDir = join(activeSandbox.rootDir, "config-dotenv-token-reuse");
-    const workspaceDir = join(activeSandbox.rootDir, "workspace-dotenv-token-reuse");
-    await mkdir(configDir, { recursive: true });
     await writeFile(
       join(activeSandbox.rootDir, ".env"),
       "OPENCLAW_GATEWAY_TOKEN=dotenv-token-123\nOPENCLAW_GATEWAY_PORT=18789\n", // pragma: allowlist secret
     );
-
-    const result = runDockerSetup(activeSandbox, {
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_CONFIG_DIR: configDir,
-      OPENCLAW_WORKSPACE_DIR: workspaceDir,
-    });
+    const { result, envFile } = await runDockerSetupWithUnsetGatewayToken(
+      activeSandbox,
+      "dotenv-token-reuse",
+    );
 
     expect(result.status).toBe(0);
-    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
     expect(envFile).toContain("OPENCLAW_GATEWAY_TOKEN=dotenv-token-123"); // pragma: allowlist secret
     expect(result.stderr).toBe("");
   });
 
   it("reuses the last non-empty .env token and strips CRLF without truncating '='", async () => {
     const activeSandbox = requireSandbox(sandbox);
-    const configDir = join(activeSandbox.rootDir, "config-dotenv-last-wins");
-    const workspaceDir = join(activeSandbox.rootDir, "workspace-dotenv-last-wins");
-    await mkdir(configDir, { recursive: true });
     await writeFile(
       join(activeSandbox.rootDir, ".env"),
       [
@@ -297,15 +304,12 @@ describe("docker-setup.sh", () => {
         "OPENCLAW_GATEWAY_TOKEN=last=token=value\r", // pragma: allowlist secret
       ].join("\n"),
     );
-
-    const result = runDockerSetup(activeSandbox, {
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_CONFIG_DIR: configDir,
-      OPENCLAW_WORKSPACE_DIR: workspaceDir,
-    });
+    const { result, envFile } = await runDockerSetupWithUnsetGatewayToken(
+      activeSandbox,
+      "dotenv-last-wins",
+    );
 
     expect(result.status).toBe(0);
-    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
     expect(envFile).toContain("OPENCLAW_GATEWAY_TOKEN=last=token=value"); // pragma: allowlist secret
     expect(envFile).not.toContain("OPENCLAW_GATEWAY_TOKEN=first-token");
     expect(envFile).not.toContain("\r");
