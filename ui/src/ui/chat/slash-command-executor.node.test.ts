@@ -275,6 +275,7 @@ describe("executeSlashCommand directives", () => {
               inputTokens: 1200,
               outputTokens: 300,
               totalTokens: 1500,
+              totalTokensFresh: false,
               contextTokens: 4000,
             }),
           ],
@@ -292,6 +293,38 @@ describe("executeSlashCommand directives", () => {
 
     expect(result.content).toBe(
       "**Session Usage**\nInput: **1.2k** tokens\nOutput: **300** tokens\nTotal: **1.5k** tokens\nContext: **30%** of 4k\nModel: `gpt-4.1-mini`",
+    );
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
+  });
+
+  it("uses fresh total tokens for /usage context percent when input tokens are accumulated", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:warden:main", {
+              model: "gpt-5.4",
+              inputTokens: 529_712,
+              outputTokens: 1_576,
+              totalTokens: 130_364,
+              totalTokensFresh: true,
+              contextTokens: 272_000,
+            }),
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:warden:main",
+      "usage",
+      "",
+    );
+
+    expect(result.content).toBe(
+      "**Session Usage**\nInput: **529.7k** tokens\nOutput: **1.6k** tokens\nTotal: **130.4k** tokens\nContext: **48%** of 272k\nModel: `gpt-5.4`",
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
   });

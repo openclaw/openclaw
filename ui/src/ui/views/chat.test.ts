@@ -353,6 +353,35 @@ describe("chat view", () => {
     nowSpy.mockRestore();
   });
 
+  it("uses fresh total tokens for the context notice instead of accumulated input tokens", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sessionKey: "agent:warden:main",
+          sessions: {
+            ...createSessions(),
+            defaults: { model: null, contextTokens: 272_000 },
+            sessions: [
+              {
+                key: "agent:warden:main",
+                kind: "direct",
+                updatedAt: Date.now(),
+                inputTokens: 529_712,
+                totalTokens: 130_364,
+                totalTokensFresh: true,
+                contextTokens: 272_000,
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".context-notice")).toBeNull();
+  });
+
   it("renders fallback-cleared indicator shortly after transition", () => {
     const container = document.createElement("div");
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
