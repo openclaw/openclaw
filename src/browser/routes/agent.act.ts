@@ -1043,6 +1043,9 @@ export function registerBrowserAgentActRoutes(
             if (!actions.length) {
               return jsonError(res, 400, "actions are required");
             }
+            if (countBatchActions(actions) > MAX_BATCH_ACTIONS) {
+              return jsonError(res, 400, `batch exceeds maximum of ${MAX_BATCH_ACTIONS} actions`);
+            }
             const targetIdError = validateBatchTargetIds(actions, tab.targetId);
             if (targetIdError) {
               return jsonError(res, 403, targetIdError);
