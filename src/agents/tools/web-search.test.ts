@@ -253,8 +253,8 @@ describe("x_search config resolution", () => {
   });
 
   it("uses default model when not specified", () => {
-    expect(resolveXSearchModel({})).toBe("grok-4-1-fast");
-    expect(resolveXSearchModel(undefined)).toBe("grok-4-1-fast");
+    expect(resolveXSearchModel({})).toBe("grok-4-1-fast-non-reasoning");
+    expect(resolveXSearchModel(undefined)).toBe("grok-4-1-fast-non-reasoning");
   });
 
   it("uses config model when provided", () => {
