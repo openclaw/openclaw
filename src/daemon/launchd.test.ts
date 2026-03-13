@@ -353,24 +353,13 @@ describe("launchd install", () => {
       stdout: new PassThrough(),
     });
 
-    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-    const label = "ai.openclaw.gateway";
-    const plistPath = resolveLaunchAgentPlistPath(env);
-    const serviceId = `${domain}/${label}`;
+    const { serviceId } = expectLaunchctlEnableBootstrapOrder(env);
     const kickstartCalls = state.launchctlCalls.filter(
       (c) => c[0] === "kickstart" && c[1] === "-k" && c[2] === serviceId,
-    );
-    const enableIndex = state.launchctlCalls.findIndex(
-      (c) => c[0] === "enable" && c[1] === serviceId,
-    );
-    const bootstrapIndex = state.launchctlCalls.findIndex(
-      (c) => c[0] === "bootstrap" && c[1] === domain && c[2] === plistPath,
     );
 
     expect(result).toEqual({ outcome: "completed" });
     expect(kickstartCalls).toHaveLength(2);
-    expect(enableIndex).toBeGreaterThanOrEqual(0);
-    expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
   });
 
