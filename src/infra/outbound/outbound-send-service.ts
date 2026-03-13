@@ -100,11 +100,17 @@ function fingerprintOutboundSend(params: {
   message: string;
   mediaUrls?: string[];
   replyToId?: string;
+  gifPlayback?: boolean;
+  pluginParams?: unknown;
 }): string {
   const payload = JSON.stringify({
     message: params.message,
     mediaUrls: params.mediaUrls ?? [],
     replyToId: params.replyToId ?? null,
+    gifPlayback: params.gifPlayback ?? false,
+    // Include any plugin-specific parameters so that sends differing only in
+    // plugin params (e.g. effects, sticker ids) are not collapsed as duplicates.
+    pluginParams: params.pluginParams ?? null,
   });
   return crypto.createHash("sha1").update(payload).digest("hex");
 }
@@ -252,6 +258,8 @@ export async function executeSendAction(params: {
       message: params.message.trim(),
       mediaUrls: params.mediaUrls ?? (params.mediaUrl ? [params.mediaUrl] : undefined),
       replyToId: params.replyToId,
+      gifPlayback: params.gifPlayback,
+      pluginParams: (params.ctx.params as { pluginParams?: unknown }).pluginParams,
     });
     maybeTripOutboundCircuitBreaker({
       key: breakerKey,
