@@ -1368,7 +1368,7 @@ export const registerTelegramHandlers = ({
         const resolvedSelModel = selMatch
           ? selMatch[1]
           : compactSelMatch
-            ? compactSelMatch[1]
+            ? `${compactSelMatch[1]}/${compactSelMatch[2]}`
             : null;
 
         if (resolvedSelModel) {
