@@ -5,6 +5,38 @@ import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
 import { getProfileContext, jsonError } from "./utils.js";
 
+/**
+ * Enrich a tab-targeting response body with targetId and URL.
+ * Pure function — no side effects, no I/O. Mutates `body` in place.
+ *
+ * @returns true if enrichment was applied, false if body was not eligible.
+ */
+export function enrichTabResponseBody(
+  body: unknown,
+  tab: { targetId: string; url?: string },
+  postRunUrl?: string,
+): boolean {
+  if (
+    !body ||
+    typeof body !== "object" ||
+    Array.isArray(body) ||
+    (body as Record<string, unknown>).ok !== true
+  ) {
+    return false;
+  }
+  const record = body as Record<string, unknown>;
+  if (record.targetId === undefined) {
+    record.targetId = tab.targetId;
+  }
+  if (record.url === undefined) {
+    const resolvedUrl = postRunUrl || tab.url;
+    if (resolvedUrl) {
+      record.url = resolvedUrl;
+    }
+  }
+  return true;
+}
+
 export const SELECTOR_UNSUPPORTED_MESSAGE = [
   "Error: 'selector' is not supported. Use 'ref' from snapshot instead.",
   "",
@@ -109,11 +141,85 @@ export async function withRouteTabContext<T>(
   }
   try {
     const tab = await profileCtx.ensureTabAvailable(params.targetId);
-    return await params.run({
-      profileCtx,
-      tab,
-      cdpUrl: profileCtx.profile.cdpUrl,
-    });
+
+    // Enrich every successful tab-targeting response with the current page URL.
+    // This gives downstream consumers (security plugins, audit loggers, etc.)
+    // a consistent way to know which page was targeted without issuing a
+    // separate tabs query.  Existing explicit handler values win; the wrapper
+    // only fills in missing fields.
+    //
+    // URL resolution happens *after* the handler runs so that actions which
+    // navigate (e.g. /act, /navigate) report the post-action URL, not a stale
+    // pre-run snapshot.  We avoid a pre-run Playwright page lookup here to
+    // prevent doubling CDP connection latency — handlers that need a page
+    // already resolve one themselves.
+
+    // Capture original json so we can intercept after run() completes.
+    const originalJson = params.res.json.bind(params.res);
+    let interceptedBody: unknown = undefined;
+    let jsonCalled = false;
+    params.res.json = (body: unknown) => {
+      interceptedBody = body;
+      jsonCalled = true;
+      // Don't send yet — we'll enrich and send after run().
+      return params.res;
+    };
+
+    let result: T | undefined;
+    try {
+      result = await params.run({
+        profileCtx,
+        tab,
+        cdpUrl: profileCtx.profile.cdpUrl,
+      });
+    } catch (runErr) {
+      // Restore original res.json so error handling can actually send.
+      params.res.json = originalJson;
+      throw runErr;
+    }
+
+    // Now enrich and flush the intercepted response body.
+    if (jsonCalled) {
+      // Only resolve the live URL when the response is eligible for
+      // enrichment (ok: true). Skip the Playwright CDP lookup for error
+      // responses to avoid unnecessary connection latency.
+      let postRunUrl: string | undefined;
+      const isEligible =
+        interceptedBody &&
+        typeof interceptedBody === "object" &&
+        !Array.isArray(interceptedBody) &&
+        (interceptedBody as Record<string, unknown>).ok === true &&
+        (interceptedBody as Record<string, unknown>).url === undefined;
+      if (isEligible) {
+        // Resolve live URL *after* the handler ran, so navigating actions
+        // report the post-action URL.  Try Playwright first (actual page
+        // state), fall back to tab metadata URL.
+        // Note: cross-site navigations that trigger a renderer swap may
+        // invalidate tab.targetId; in that case getPageForTargetId returns
+        // null and we fall back to the (possibly stale) tab.url.
+        try {
+          const pwMod = await getPwAiModuleBase({ mode: "soft" });
+          if (pwMod?.getPageForTargetId) {
+            const page = await pwMod.getPageForTargetId({
+              cdpUrl: profileCtx.profile.cdpUrl,
+              targetId: tab.targetId,
+            });
+            if (page) {
+              postRunUrl = page.url();
+            }
+          }
+        } catch {
+          // Playwright unavailable — fall back to tab.url
+        }
+      }
+      enrichTabResponseBody(interceptedBody, tab, postRunUrl);
+      // Restore res.json before flushing so that if originalJson throws
+      // (e.g. BigInt serialization), the outer catch can still send errors.
+      params.res.json = originalJson;
+      originalJson(interceptedBody);
+    }
+
+    return result;
   } catch (err) {
     handleRouteError(params.ctx, params.res, err);
     return undefined;
