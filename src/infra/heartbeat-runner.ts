@@ -7,6 +7,7 @@ import {
 } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
+import { isEmbeddedPiRunActive } from "../agents/pi-embedded.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
@@ -658,6 +659,14 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: preflight.skipReason };
   }
   const { entry, sessionKey, storePath } = preflight.session;
+  const activeSessionId = entry?.sessionId?.trim();
+  if (activeSessionId && isEmbeddedPiRunActive(activeSessionId)) {
+    // Preserve queued system events for the next retry. If we call
+    // getReplyFromConfig while the target session is still running, the
+    // session-updates path drains those events before runReplyAgent drops the
+    // heartbeat as active. That turns a temporary busy state into a lost wake.
+    return { status: "skipped", reason: "requests-in-flight" };
+  }
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
