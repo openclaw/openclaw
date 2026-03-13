@@ -12,6 +12,7 @@ import {
 import type { BrowserActRequest, BrowserFormField } from "../client-actions-core.js";
 import { normalizeBrowserFormField } from "../form-fields.js";
 import type { BrowserRouteContext } from "../server-context.js";
+import { matchBrowserUrlPattern } from "../url-pattern.js";
 import { registerBrowserAgentActDownloadRoutes } from "./agent.act.download.js";
 import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
 import {
@@ -47,7 +48,6 @@ function buildExistingSessionWaitPredicate(params: {
   text?: string;
   textGone?: string;
   selector?: string;
-  url?: string;
   loadState?: "load" | "domcontentloaded" | "networkidle";
   fn?: string;
 }): string | null {
@@ -60,9 +60,6 @@ function buildExistingSessionWaitPredicate(params: {
   }
   if (params.selector) {
     checks.push(`Boolean(document.querySelector(${JSON.stringify(params.selector)}))`);
-  }
-  if (params.url) {
-    checks.push(`window.location.href === ${JSON.stringify(params.url)}`);
   }
   if (params.loadState === "domcontentloaded") {
     checks.push(`document.readyState === "interactive" || document.readyState === "complete"`);
@@ -94,17 +91,30 @@ async function waitForExistingSessionCondition(params: {
     await sleep(params.timeMs);
   }
   const predicate = buildExistingSessionWaitPredicate(params);
-  if (!predicate) {
+  if (!predicate && !params.url) {
     return;
   }
   const timeoutMs = Math.max(250, params.timeoutMs ?? 10_000);
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const ready = await evaluateChromeMcpScript({
-      profileName: params.profileName,
-      targetId: params.targetId,
-      fn: `async () => ${predicate}`,
-    });
+    let ready = true;
+    if (predicate) {
+      ready = Boolean(
+        await evaluateChromeMcpScript({
+          profileName: params.profileName,
+          targetId: params.targetId,
+          fn: `async () => ${predicate}`,
+        }),
+      );
+    }
+    if (ready && params.url) {
+      const currentUrl = await evaluateChromeMcpScript({
+        profileName: params.profileName,
+        targetId: params.targetId,
+        fn: "() => window.location.href",
+      });
+      ready = typeof currentUrl === "string" && matchBrowserUrlPattern(params.url, currentUrl);
+    }
     if (ready) {
       return;
     }
