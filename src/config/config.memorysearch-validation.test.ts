@@ -284,7 +284,7 @@ describe("validateConfigObject - memorySearch", () => {
     expect(result.issues[0]?.message).toContain("non-empty baseUrl");
   });
 
-  it("validates per-agent memorySearch configurations", () => {
+  it("accepts per-agent memorySearch configurations (can inherit from defaults)", () => {
     const result = validateConfigObject({
       agents: {
         defaults: {
@@ -301,20 +301,14 @@ describe("validateConfigObject - memorySearch", () => {
             id: "agent-1",
             memorySearch: {
               provider: "ollama",
-              // Missing baseUrl - should be caught
+              // Missing baseUrl - should be OK because can inherit from defaults
             },
           },
         ],
       },
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.issues).toHaveLength(1);
-    expect(result.issues[0]?.path).toBe("agents.list[0].memorySearch");
-    expect(result.issues[0]?.message).toContain("host (baseUrl)");
+    expect(result.ok).toBe(true);
   });
 
   it("accepts valid per-agent memorySearch configurations", () => {
@@ -347,7 +341,7 @@ describe("validateConfigObject - memorySearch", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("validates multiple per-agent memorySearch configurations", () => {
+  it("validates multiple per-agent memorySearch configurations (empty baseUrl still rejected)", () => {
     const result = validateConfigObject({
       agents: {
         defaults: {
@@ -364,7 +358,7 @@ describe("validateConfigObject - memorySearch", () => {
             id: "agent-1",
             memorySearch: {
               provider: "ollama",
-              // Missing baseUrl - should be caught
+              // Missing baseUrl - OK (can inherit from defaults)
             },
           },
           {
@@ -372,7 +366,7 @@ describe("validateConfigObject - memorySearch", () => {
             memorySearch: {
               provider: "ollama",
               remote: {
-                baseUrl: "", // Empty baseUrl - should also be caught
+                baseUrl: "", // Empty baseUrl - should be caught
               },
             },
           },
@@ -384,8 +378,7 @@ describe("validateConfigObject - memorySearch", () => {
     if (result.ok) {
       return;
     }
-    expect(result.issues).toHaveLength(2);
-    expect(result.issues[0]?.path).toBe("agents.list[0].memorySearch");
-    expect(result.issues[1]?.path).toBe("agents.list[1].memorySearch");
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0]?.path).toBe("agents.list[1].memorySearch");
   });
 });

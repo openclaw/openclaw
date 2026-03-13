@@ -363,7 +363,7 @@ describe("checkMemorySearch", () => {
     expect(result.issues).toHaveLength(0);
   });
 
-  it("returns invalid when provider is 'auto'", async () => {
+  it("returns valid when provider is 'auto' (valid runtime mode)", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "auto",
       model: "",
@@ -402,12 +402,10 @@ describe("checkMemorySearch", () => {
 
     const result = await checkMemorySearch(cfg);
 
-    expect(result.valid).toBe(false);
+    // "auto" is a valid runtime mode
+    expect(result.valid).toBe(true);
     expect(result.provider).toBe("auto");
-    expect(result.issues).toHaveLength(1);
-    expect(result.issues[0].field).toBe("provider");
-    expect(result.issues[0].message).toContain('"auto"');
-    expect(result.issues[0].fix).toBeDefined();
+    expect(result.issues).toHaveLength(0);
   });
 
   it("returns invalid when openai provider is missing apiKey", async () => {
@@ -456,7 +454,7 @@ describe("checkMemorySearch", () => {
     expect(result.issues[0].fix).toContain("OPENAI_API_KEY");
   });
 
-  it("returns invalid when openai provider is missing model", async () => {
+  it("returns valid when openai provider has no model (uses default)", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "openai",
       model: "",
@@ -495,9 +493,9 @@ describe("checkMemorySearch", () => {
 
     const result = await checkMemorySearch(cfg);
 
-    expect(result.valid).toBe(false);
-    expect(result.issues).toHaveLength(1);
-    expect(result.issues[0].field).toBe("model");
+    // Model is optional - runtime has defaults
+    expect(result.valid).toBe(true);
+    expect(result.issues).toHaveLength(0);
   });
 
   it("returns valid when openai has both apiKey and model", async () => {
@@ -543,7 +541,7 @@ describe("checkMemorySearch", () => {
     expect(result.issues).toHaveLength(0);
   });
 
-  it("returns invalid when ollama provider is missing host", async () => {
+  it("returns valid when ollama provider has no baseUrl (uses default)", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "ollama",
       model: "nomic-embed-text",
@@ -582,14 +580,13 @@ describe("checkMemorySearch", () => {
 
     const result = await checkMemorySearch(cfg);
 
-    expect(result.valid).toBe(false);
+    // baseUrl is optional - runtime uses default
+    expect(result.valid).toBe(true);
     expect(result.provider).toBe("ollama");
-    expect(result.issues).toHaveLength(1);
-    expect(result.issues[0].field).toBe("remote.baseUrl");
-    expect(result.issues[0].fix).toContain("baseUrl");
+    expect(result.issues).toHaveLength(0);
   });
 
-  it("returns invalid when ollama provider is missing model", async () => {
+  it("returns valid when ollama provider has no model (uses default)", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "ollama",
       model: "",
@@ -628,9 +625,9 @@ describe("checkMemorySearch", () => {
 
     const result = await checkMemorySearch(cfg);
 
-    expect(result.valid).toBe(false);
-    expect(result.issues).toHaveLength(1);
-    expect(result.issues[0].field).toBe("model");
+    // Model is optional - runtime has defaults
+    expect(result.valid).toBe(true);
+    expect(result.issues).toHaveLength(0);
   });
 
   it("returns valid when ollama has both host and model", async () => {
@@ -728,6 +725,8 @@ describe("noteMemorySearchDiagnostics", () => {
   beforeEach(() => {
     note.mockClear();
     resolveMemorySearchConfig.mockReset();
+    resolveApiKeyForProvider.mockReset();
+    resolveApiKeyForProvider.mockResolvedValue(null); // Default: no API key in env
   });
 
   it("does not output anything when memory search is disabled", async () => {
@@ -752,23 +751,18 @@ describe("noteMemorySearchDiagnostics", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
-  it("outputs structured error when provider is 'auto'", async () => {
+  it("does not output error when provider is 'auto' (valid runtime mode)", async () => {
     resolveMemorySearchConfig.mockReturnValue(
       createMockMemorySearchConfig({ provider: "auto", model: "" }),
     );
 
     await noteMemorySearchDiagnostics(cfg);
 
-    expect(note).toHaveBeenCalledTimes(1);
-    const message = note.mock.calls[0]?.[0] as string;
-    expect(message).toContain("[FAIL] memorySearch configuration invalid");
-    expect(message).toContain("Provider: auto");
-    expect(message).toContain("memorySearch.provider is set to");
-    expect(message).toContain("Example configuration:");
-    expect(message).toContain("docs.openclaw.ai");
+    // "auto" is a valid runtime mode - should not produce error
+    expect(note).not.toHaveBeenCalled();
   });
 
-  it("outputs structured error when openai provider is missing apiKey", async () => {
+  it("outputs structured error when openai provider has no apiKey and no env var", async () => {
     resolveMemorySearchConfig.mockReturnValue(
       createMockMemorySearchConfig({
         provider: "openai",
@@ -776,6 +770,7 @@ describe("noteMemorySearchDiagnostics", () => {
         remote: {},
       }),
     );
+    resolveApiKeyForProvider.mockResolvedValue(null); // No env var
 
     await noteMemorySearchDiagnostics(cfg);
 
@@ -788,7 +783,7 @@ describe("noteMemorySearchDiagnostics", () => {
     expect(message).toContain("OPENAI_API_KEY");
   });
 
-  it("outputs structured error when openai provider is missing model", async () => {
+  it("does not output error when openai provider has apiKey but no model (uses default)", async () => {
     resolveMemorySearchConfig.mockReturnValue(
       createMockMemorySearchConfig({
         provider: "openai",
@@ -799,53 +794,44 @@ describe("noteMemorySearchDiagnostics", () => {
 
     await noteMemorySearchDiagnostics(cfg);
 
-    expect(note).toHaveBeenCalledTimes(1);
-    const message = note.mock.calls[0]?.[0] as string;
-    expect(message).toContain("[FAIL] memorySearch configuration invalid");
-    expect(message).toContain("model");
-    expect(message).toContain("model to be specified");
+    // Model is optional - runtime has defaults, so no error
+    expect(note).not.toHaveBeenCalled();
   });
 
-  it("outputs structured error when ollama provider is missing host", async () => {
+  it("does not output error when ollama provider has no baseUrl (uses default)", async () => {
     resolveMemorySearchConfig.mockReturnValue(
       createMockMemorySearchConfig({ provider: "ollama", model: "nomic-embed-text", remote: {} }),
     );
 
     await noteMemorySearchDiagnostics(cfg);
 
-    expect(note).toHaveBeenCalledTimes(1);
-    const message = note.mock.calls[0]?.[0] as string;
-    expect(message).toContain("[FAIL] memorySearch configuration invalid");
-    expect(message).toContain("Provider: ollama");
-    expect(message).toContain("remote.baseUrl");
-    expect(message).toContain("baseUrl");
-    expect(message).toContain("localhost:11434");
+    // baseUrl is optional - runtime uses default, so no error
+    expect(note).not.toHaveBeenCalled();
   });
 
-  it("includes example configuration snippet in output", async () => {
+  it("does not output error when openai has apiKey but no model (uses default)", async () => {
     resolveMemorySearchConfig.mockReturnValue(
-      createMockMemorySearchConfig({ provider: "openai", model: "", remote: {} }),
+      createMockMemorySearchConfig({
+        provider: "openai",
+        model: "",
+        remote: { apiKey: "test-key" },
+      }),
     );
 
     await noteMemorySearchDiagnostics(cfg);
 
-    expect(note).toHaveBeenCalledTimes(1);
-    const message = note.mock.calls[0]?.[0] as string;
-    // Check for YAML code block with example config
-    expect(message).toContain("```yaml");
-    expect(message).toContain("memorySearch:");
-    expect(message).toContain("provider: openai");
+    // Model is optional - no error when apiKey is present
+    expect(note).not.toHaveBeenCalled();
   });
 
-  it("includes documentation link in output", async () => {
+  it("does not output error for valid 'auto' provider mode", async () => {
     resolveMemorySearchConfig.mockReturnValue(
       createMockMemorySearchConfig({ provider: "auto", model: "", remote: {} }),
     );
 
     await noteMemorySearchDiagnostics(cfg);
 
-    expect(note).toHaveBeenCalledTimes(1);
-    const message = note.mock.calls[0]?.[0] as string;
-    expect(message).toContain("docs.openclaw.ai/configuration#memory-search");
+    // "auto" is valid, no error
+    expect(note).not.toHaveBeenCalled();
   });
 });

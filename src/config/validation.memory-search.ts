@@ -94,25 +94,8 @@ function validateSingleMemorySearch(
 
   if (provider === "ollama") {
     const baseUrl = memorySearch?.remote?.baseUrl;
-    // For per-agent configs (configPath contains .list[), require baseUrl
-    // For defaults, allow omitting baseUrl - runtime will use default http://127.0.0.1:11434
-    const isPerAgent = configPath.includes(".list[");
-    if (isPerAgent) {
-      // Per-agent configs must have baseUrl defined
-      if (baseUrl === undefined) {
-        return [
-          toIssue(
-            createValidationError({
-              provider,
-              configPath,
-              missing: ["host (baseUrl)"],
-              message: "Missing Ollama host configuration for memory search.",
-            }),
-          ),
-        ];
-      }
-    }
     // Reject if baseUrl is explicitly set to an empty or whitespace string
+    // Allow undefined - runtime will use default http://127.0.0.1:11434 or inherit from defaults
     if (typeof baseUrl === "string" && baseUrl.trim().length === 0) {
       return [
         toIssue(

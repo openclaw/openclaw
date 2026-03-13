@@ -194,8 +194,8 @@ async function hasApiKeyForProvider(
   // Map embedding provider names to model-auth provider names
   const authProvider = provider === "gemini" ? "google" : provider;
   try {
-    await resolveApiKeyForProvider({ provider: authProvider, cfg, agentDir });
-    return true;
+    const result = await resolveApiKeyForProvider({ provider: authProvider, cfg, agentDir });
+    return result != null;
   } catch {
     return false;
   }
@@ -283,17 +283,14 @@ export async function checkMemorySearch(
 
   const issues: MemorySearchDiagnosticResult["issues"] = [];
 
-  // Check if provider is "auto" - this should be resolved to a specific provider
+  // Check if provider is "auto" - this is a valid runtime mode (auto-selects provider)
+  // Skip validation for "auto" as it relies on runtime resolution
   if (resolved.provider === "auto") {
-    issues.push({
-      field: "provider",
-      message: 'memorySearch.provider is set to "auto" - no specific provider configured',
-      fix: `Set a specific provider: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.provider openai")} or ${formatCliCommand("openclaw config set agents.defaults.memorySearch.provider ollama")}`,
-    });
+    // "auto" is a valid mode - return valid as the runtime will handle resolution
     return {
-      valid: false,
+      valid: true,
       provider: resolved.provider,
-      issues,
+      issues: [],
     };
   }
 
@@ -311,32 +308,10 @@ export async function checkMemorySearch(
       });
     }
 
-    // Check for model
-    if (!resolved.model || resolved.model.trim() === "") {
-      issues.push({
-        field: "model",
-        message: "openai provider requires a model to be specified",
-        fix: `Set a model: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.model text-embedding-3-small")}`,
-      });
-    }
+    // Note: model is optional - runtime has provider defaults
   } else if (resolved.provider === "ollama") {
-    // Check for host
-    if (!resolved.remote?.baseUrl || resolved.remote.baseUrl.trim() === "") {
-      issues.push({
-        field: "remote.baseUrl",
-        message: "ollama provider requires host (baseUrl) to be configured",
-        fix: `Set the Ollama host: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.remote.baseUrl http://localhost:11434")}`,
-      });
-    }
-
-    // Check for model
-    if (!resolved.model || resolved.model.trim() === "") {
-      issues.push({
-        field: "model",
-        message: "ollama provider requires a model to be specified",
-        fix: `Set a model: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.model nomic-embed-text")}`,
-      });
-    }
+    // Note: baseUrl is optional - runtime uses default http://127.0.0.1:11434 if not set
+    // Note: model is optional - runtime has provider defaults
   }
   // For other providers (local, gemini, voyage, mistral), the existing noteMemorySearchHealth
   // function handles the validation
