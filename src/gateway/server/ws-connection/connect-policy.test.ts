@@ -532,6 +532,36 @@ describe("ws connect policy", () => {
       }),
     ).toBe(true);
 
+    // Remote device-token backend client is trusted when authOk=true.
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams(
+          GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          GATEWAY_CLIENT_MODES.BACKEND,
+        ),
+        isLocalClient: false,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
+        authOk: true,
+        authMethod: "device-token",
+      }),
+    ).toBe(true);
+
+    // Remote bootstrap-token backend client is trusted when authOk=true.
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams(
+          GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          GATEWAY_CLIENT_MODES.BACKEND,
+        ),
+        isLocalClient: false,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
+        authOk: true,
+        authMethod: "bootstrap-token",
+      }),
+    ).toBe(true);
+
     // Remote backend client (gateway.mode=remote) with valid shared-secret auth is trusted.
     expect(
       shouldSkipBackendSelfPairing({
@@ -557,6 +587,34 @@ describe("ws connect policy", () => {
         hasBrowserOriginHeader: true,
         sharedAuthOk: true,
         authMethod: "token",
+      }),
+    ).toBe(false);
+
+    // Browser-origin device-token / bootstrap-token backend connections are also rejected.
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams(
+          GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          GATEWAY_CLIENT_MODES.BACKEND,
+        ),
+        isLocalClient: false,
+        hasBrowserOriginHeader: true,
+        sharedAuthOk: false,
+        authOk: true,
+        authMethod: "device-token",
+      }),
+    ).toBe(false);
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams(
+          GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          GATEWAY_CLIENT_MODES.BACKEND,
+        ),
+        isLocalClient: false,
+        hasBrowserOriginHeader: true,
+        sharedAuthOk: false,
+        authOk: true,
+        authMethod: "bootstrap-token",
       }),
     ).toBe(false);
 
