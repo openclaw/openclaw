@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { resolveBrowserSsrFPolicy } from "../../browser/config.js";
 import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../browser/constants.js";
 import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "../../browser/control-auth.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -184,6 +185,9 @@ export async function resolveSandboxContext(params: {
           cfg: resolvedCfg,
           evaluateEnabled,
           bridgeAuth,
+          // Propagate top-level browser.ssrfPolicy so sandbox browser respects the user's
+          // allowPrivateNetwork / allowedHostnames configuration rather than always running strict.
+          ssrfPolicy: resolveBrowserSsrFPolicy(params.config?.browser),
         })
       : null;
 
