@@ -35,6 +35,11 @@ export function resetCliCredentialCachesForTest(): void {
   minimaxCliCache = null;
 }
 
+/** Invalidate the Claude CLI credential cache so the next read fetches fresh data. */
+export function invalidateClaudeCliCache(): void {
+  claudeCliCache = null;
+}
+
 export type ClaudeCliCredential =
   | {
       type: "oauth";

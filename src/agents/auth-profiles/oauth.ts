@@ -7,6 +7,7 @@ import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import {
+  invalidateClaudeCliCache,
   readClaudeCliCredentials,
   writeClaudeCliCredentials,
 } from "../cli-credentials.js";
@@ -182,7 +183,7 @@ async function refreshOAuthTokenWithLock(params: {
     // when the network path (e.g. proxy) is unreliable.
     if (cred.provider === "anthropic") {
       try {
-        const cliCred = readClaudeCliCredentials({ allowKeychainPrompt: false });
+        const cliCred = readClaudeCliCredentials({});
         if (cliCred && cliCred.type === "oauth" && Date.now() < cliCred.expires) {
           const adopted: OAuthCredentials = {
             access: cliCred.access,
@@ -249,6 +250,7 @@ async function refreshOAuthTokenWithLock(params: {
     if (cred.provider === "anthropic") {
       try {
         writeClaudeCliCredentials(result.newCredentials);
+        invalidateClaudeCliCache();
       } catch {
         // Best-effort: don't fail the refresh if write-back fails.
       }
