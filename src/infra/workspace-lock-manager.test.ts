@@ -506,4 +506,39 @@ describe("workspace lock manager", () => {
       await fs.rm(lockPath, { force: true });
     }
   });
+
+  it("does not let stale handle callbacks release a newer lock owner", async () => {
+    const dir = await makeCaseDir();
+    const target = path.join(dir, "stale-handle.txt");
+
+    const first = await acquireWorkspaceLock(target, {
+      kind: "file",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 5_000,
+    });
+    const staleRelease = first.release;
+
+    await first.release();
+
+    const second = await acquireWorkspaceLock(target, {
+      kind: "file",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 5_000,
+    });
+
+    await staleRelease();
+
+    await expect(
+      acquireWorkspaceLock(target, {
+        kind: "file",
+        timeoutMs: 25,
+        pollIntervalMs: 5,
+        ttlMs: 5_000,
+      }),
+    ).rejects.toThrow(/workspace lock timeout/);
+
+    await second.release();
+  });
 });

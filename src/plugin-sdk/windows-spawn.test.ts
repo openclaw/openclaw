@@ -50,7 +50,8 @@ describe("resolveWindowsSpawnProgramCandidate", () => {
     });
 
     expect(candidate.command).toBe("C:\\node\\node.exe");
-    expect(candidate.leadingArgv).toEqual([entryPath]);
+    expect(candidate.leadingArgv).toHaveLength(1);
+    expect(await fs.realpath(candidate.leadingArgv[0])).toBe(await fs.realpath(entryPath));
     expect(candidate.resolution).toBe("node-entrypoint");
     expect(candidate.windowsHide).toBe(true);
   });

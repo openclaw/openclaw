@@ -150,14 +150,14 @@ async function isStaleLock(lockPath: string, ttlMs: number): Promise<boolean> {
   }
 }
 
-async function refreshLock(mapKey: string): Promise<void> {
+async function refreshLock(mapKey: string, token: string): Promise<void> {
   const held = HELD_WORKSPACE_LOCKS.get(mapKey);
-  if (!held) {
+  if (!held || held.token !== token) {
     return;
   }
 
   const payload = await readPayload(held.lockPath);
-  if (!payload || payload.token !== held.token) {
+  if (!payload || payload.token !== held.token || payload.token !== token) {
     return;
   }
 
@@ -179,15 +179,15 @@ async function refreshLock(mapKey: string): Promise<void> {
   }
 }
 
-async function releaseLock(mapKey: string): Promise<void> {
+async function releaseLock(mapKey: string, token: string): Promise<void> {
   const held = HELD_WORKSPACE_LOCKS.get(mapKey);
-  if (!held) {
+  if (!held || held.token !== token) {
     return;
   }
 
   HELD_WORKSPACE_LOCKS.delete(mapKey);
   const payload = await readPayload(held.lockPath);
-  if (!payload || payload.token !== held.token) {
+  if (!payload || payload.token !== held.token || payload.token !== token) {
     return;
   }
   await fs.rm(held.lockPath, { force: true }).catch(() => undefined);
@@ -240,8 +240,8 @@ export async function acquireWorkspaceLock(
       HELD_WORKSPACE_LOCKS.set(mapKey, { lockPath, token: payload.token, ttlMs });
       return {
         lockPath,
-        release: () => releaseLock(mapKey),
-        refresh: () => refreshLock(mapKey),
+        release: () => releaseLock(mapKey, payload.token),
+        refresh: () => refreshLock(mapKey, payload.token),
       };
     } catch (err) {
       const code = (err as { code?: string }).code;
