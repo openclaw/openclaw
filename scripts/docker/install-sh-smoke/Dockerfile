@@ -6,21 +6,21 @@ RUN --mount=type=cache,id=openclaw-install-sh-smoke-apt-cache,target=/var/cache/
   --mount=type=cache,id=openclaw-install-sh-smoke-apt-lists,target=/var/lib/apt,sharing=locked \
   set -eux; \
   for attempt in 1 2 3; do \
-    if apt-get update -o Acquire::Retries=3; then break; fi; \
-    echo "apt-get update failed (attempt ${attempt})" >&2; \
-    if [ "${attempt}" -eq 3 ]; then exit 1; fi; \
-    sleep 3; \
+  if apt-get update -o Acquire::Retries=3; then break; fi; \
+  echo "apt-get update failed (attempt ${attempt})" >&2; \
+  if [ "${attempt}" -eq 3 ]; then exit 1; fi; \
+  sleep 3; \
   done; \
-  apt-get -o Acquire::Retries=3 upgrade -y; \
+  DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 upgrade -y --no-install-recommends; \
   apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-    bash \
-    ca-certificates \
-    curl \
-    git \
-    g++ \
-    make \
-    python3 \
-    sudo
+  bash \
+  ca-certificates \
+  curl \
+  git \
+  g++ \
+  make \
+  python3 \
+  sudo
 
 COPY install-sh-common/cli-verify.sh /usr/local/install-sh-common/cli-verify.sh
 COPY install-sh-common/version-parse.sh /usr/local/install-sh-common/version-parse.sh
