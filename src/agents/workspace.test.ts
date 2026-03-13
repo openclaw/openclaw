@@ -27,6 +27,15 @@ describe("resolveDefaultAgentWorkspaceDir", () => {
 
     expect(dir).toBe(path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "workspace"));
   });
+
+  it("does not duplicate .openclaw when OPENCLAW_HOME already points to state dir", () => {
+    const dir = resolveDefaultAgentWorkspaceDir({
+      OPENCLAW_HOME: "/srv/openclaw-home/.openclaw",
+      HOME: "/home/other",
+    } as NodeJS.ProcessEnv);
+
+    expect(dir).toBe(path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "workspace"));
+  });
 });
 
 const WORKSPACE_STATE_PATH_SEGMENTS = ["workspace-state.json"] as const;
