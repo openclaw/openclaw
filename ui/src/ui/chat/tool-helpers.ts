@@ -35,3 +35,13 @@ export function getTruncatedPreview(text: string): string {
   }
   return lines.length < allLines.length ? preview + "…" : preview;
 }
+
+/**
+ * Returns true when text looks like it should be JSON (starts with `{` or `[`).
+ * Used to choose safe plain-text rendering over markdown when JSON parsing fails,
+ * preventing marked.parse() from hanging on malformed tool output.
+ */
+export function looksLikeJson(text: string): boolean {
+  const t = text.trimStart();
+  return t.startsWith("{") || t.startsWith("[");
+}

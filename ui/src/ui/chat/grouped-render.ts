@@ -16,6 +16,7 @@ import {
 import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
 import { isTtsSupported, speakText, stopTts, isTtsSpeaking } from "./speech.ts";
 import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
+import { looksLikeJson } from "./tool-helpers.ts";
 
 type ImageBlock = {
   url: string;
@@ -700,7 +701,9 @@ function renderGroupedMessage(
                         <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                       </details>`
                     : markdown
-                      ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
+                      ? looksLikeJson(markdown)
+                        ? html`<pre class="chat-tool-text">${markdown}</pre>`
+                        : html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
                       : nothing
                 }
                 ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar) : nothing}
