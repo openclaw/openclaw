@@ -23,6 +23,7 @@ Interactive onboarding wizard (local or remote Gateway setup).
 openclaw onboard
 openclaw onboard --flow quickstart
 openclaw onboard --flow manual
+openclaw onboard --rescue-watchdog
 openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 ```
 
@@ -83,6 +84,14 @@ Gateway token options in non-interactive mode:
 - With `--install-daemon`, if token mode requires a token and the configured token SecretRef is unresolved, onboarding fails closed with remediation guidance.
 - With `--install-daemon`, if both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, onboarding blocks install until mode is set explicitly.
 
+Rescue watchdog option:
+
+- `--rescue-watchdog` creates a second isolated local profile that monitors the primary profile and restarts it automatically when health checks fail.
+- Rescue setup installs its own local Gateway service, uses a separate workspace and port, and adds a rescue cron job that probes the primary profile every 5 minutes.
+- If needed, onboarding automatically enables primary `--install-daemon` because rescue depends on the main Gateway running as a managed service.
+- Interactive QuickStart keeps its minimal prompt set, so rescue watchdog appears there only when you pass `--rescue-watchdog` explicitly.
+- Rescue onboarding is only supported for normal profiles. It is skipped for profiles already named `rescue` or ending in `-rescue`.
+
 Example:
 
 ```bash
@@ -92,6 +101,7 @@ openclaw onboard --non-interactive \
   --auth-choice skip \
   --gateway-auth token \
   --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN \
+  --rescue-watchdog \
   --accept-risk
 ```
 

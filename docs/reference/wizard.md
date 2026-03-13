@@ -117,6 +117,13 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
     - Starts the Gateway (if needed) and runs `openclaw health`.
     - Tip: `openclaw status --deep` adds gateway health probes to status output (requires a reachable gateway).
   </Step>
+  <Step title="Rescue watchdog">
+    - Optional one-click setup during local onboarding, or via non-interactive `--rescue-watchdog`.
+    - Creates a second isolated rescue profile with its own workspace, Gateway port, auth token, and managed service.
+    - Adds a rescue cron job that probes the primary profile every 5 minutes and runs restart/repair commands when the primary gateway is unhealthy.
+    - Rescue setup is not available while onboarding profiles already named `rescue` or ending in `-rescue`.
+    - On Linux, rescue setup is skipped when systemd user services are unavailable.
+  </Step>
   <Step title="Skills (recommended)">
     - Reads the available skills and checks requirements.
     - Lets you choose a node manager: **npm / pnpm** (bun not recommended).
@@ -144,11 +151,14 @@ openclaw onboard --non-interactive \
   --gateway-port 18789 \
   --gateway-bind loopback \
   --install-daemon \
+  --rescue-watchdog \
   --daemon-runtime node \
   --skip-skills
 ```
 
 Add `--json` for a machine‑readable summary.
+
+`--rescue-watchdog` forces managed primary service install if needed, then creates a second isolated rescue profile that monitors and repairs the primary profile automatically.
 
 Gateway token SecretRef in non-interactive mode:
 

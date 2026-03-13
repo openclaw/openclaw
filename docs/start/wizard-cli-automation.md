@@ -26,11 +26,14 @@ openclaw onboard --non-interactive \
   --gateway-port 18789 \
   --gateway-bind loopback \
   --install-daemon \
+  --rescue-watchdog \
   --daemon-runtime node \
   --skip-skills
 ```
 
 Add `--json` for a machine-readable summary.
+
+`--rescue-watchdog` creates a second isolated rescue profile with its own local Gateway service and a cron job that checks the primary profile every 5 minutes. If needed, onboarding automatically enables managed primary service install.
 
 Use `--secret-input-mode ref` to store env-backed refs in auth profiles instead of plaintext values.
 Interactive selection between env refs and configured provider refs (`file` or `exec`) is available in the onboarding wizard flow.

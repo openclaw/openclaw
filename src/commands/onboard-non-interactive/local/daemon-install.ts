@@ -13,10 +13,10 @@ export async function installGatewayDaemonNonInteractive(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   port: number;
-}) {
+}): Promise<boolean> {
   const { opts, runtime, port } = params;
   if (!opts.installDaemon) {
-    return;
+    return true;
   }
 
   const daemonRuntimeRaw = opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
@@ -24,13 +24,13 @@ export async function installGatewayDaemonNonInteractive(params: {
     process.platform === "linux" ? await isSystemdUserServiceAvailable() : true;
   if (process.platform === "linux" && !systemdAvailable) {
     runtime.log("Systemd user services are unavailable; skipping service install.");
-    return;
+    return false;
   }
 
   if (!isGatewayDaemonRuntime(daemonRuntimeRaw)) {
     runtime.error("Invalid --daemon-runtime (use node or bun)");
     runtime.exit(1);
-    return;
+    return false;
   }
 
   const service = resolveGatewayService();
@@ -50,7 +50,7 @@ export async function installGatewayDaemonNonInteractive(params: {
       ].join(" "),
     );
     runtime.exit(1);
-    return;
+    return false;
   }
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
     env: process.env,
@@ -70,7 +70,8 @@ export async function installGatewayDaemonNonInteractive(params: {
   } catch (err) {
     runtime.error(`Gateway service install failed: ${String(err)}`);
     runtime.log(gatewayInstallErrorHint());
-    return;
+    return false;
   }
   await ensureSystemdUserLingerNonInteractive({ runtime });
+  return true;
 }

@@ -58,7 +58,7 @@ surface state explicitly:
 
 - `active`: the SecretRef is part of the effective auth surface and must resolve.
 - `inactive`: the SecretRef is ignored for this runtime because another auth surface wins, or
-  because remote auth is disabled/not active.
+  because no remote auth surface is active.
 
 These entries are logged with `SECRETS_GATEWAY_AUTH_SURFACE` and include the reason used by the
 active-surface policy, so you can see why a credential was treated as active or inactive.

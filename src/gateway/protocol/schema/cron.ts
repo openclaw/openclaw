@@ -21,6 +21,17 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
   );
 }
 
+function cronRescueWatchdogPayloadSchema(params: { monitoredProfile: TSchema }) {
+  return Type.Object(
+    {
+      kind: Type.Literal("rescueWatchdog"),
+      monitoredProfile: params.monitoredProfile,
+      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
+    },
+    { additionalProperties: false },
+  );
+}
+
 const CronSessionTargetSchema = Type.Union([Type.Literal("main"), Type.Literal("isolated")]);
 const CronWakeModeSchema = Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]);
 const CronRunStatusSchema = Type.Union([
@@ -134,6 +145,7 @@ export const CronPayloadSchema = Type.Union([
     { additionalProperties: false },
   ),
   cronAgentTurnPayloadSchema({ message: NonEmptyString }),
+  cronRescueWatchdogPayloadSchema({ monitoredProfile: NonEmptyString }),
 ]);
 
 export const CronPayloadPatchSchema = Type.Union([
@@ -145,6 +157,7 @@ export const CronPayloadPatchSchema = Type.Union([
     { additionalProperties: false },
   ),
   cronAgentTurnPayloadSchema({ message: Type.Optional(NonEmptyString) }),
+  cronRescueWatchdogPayloadSchema({ monitoredProfile: Type.Optional(NonEmptyString) }),
 ]);
 
 export const CronFailureAlertSchema = Type.Object(

@@ -17,6 +17,8 @@ export type GatewayServiceManageArgs = {
 export type GatewayServiceControlArgs = {
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
+  /** When aborted, child processes spawned by the operation should be killed. */
+  signal?: AbortSignal;
 };
 
 export type GatewayServiceRestartResult = { outcome: "completed" } | { outcome: "scheduled" };

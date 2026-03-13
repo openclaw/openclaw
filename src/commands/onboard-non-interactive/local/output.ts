@@ -1,4 +1,5 @@
 import type { RuntimeEnv } from "../../../runtime.js";
+import type { RescueWatchdogSetupResult } from "../../onboard-rescue.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 export function logNonInteractiveOnboardingJson(params: {
@@ -15,6 +16,7 @@ export function logNonInteractiveOnboardingJson(params: {
   };
   installDaemon?: boolean;
   daemonRuntime?: string;
+  rescueWatchdog?: RescueWatchdogSetupResult;
   skipSkills?: boolean;
   skipHealth?: boolean;
 }) {
@@ -30,6 +32,7 @@ export function logNonInteractiveOnboardingJson(params: {
         gateway: params.gateway,
         installDaemon: Boolean(params.installDaemon),
         daemonRuntime: params.daemonRuntime,
+        rescueWatchdog: params.rescueWatchdog,
         skipSkills: Boolean(params.skipSkills),
         skipHealth: Boolean(params.skipHealth),
       },

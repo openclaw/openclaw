@@ -135,8 +135,12 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
     throw new Error('main cron jobs require payload.kind="systemEvent"');
   }
-  if (job.sessionTarget === "isolated" && job.payload.kind !== "agentTurn") {
-    throw new Error('isolated cron jobs require payload.kind="agentTurn"');
+  if (
+    job.sessionTarget === "isolated" &&
+    job.payload.kind !== "agentTurn" &&
+    job.payload.kind !== "rescueWatchdog"
+  ) {
+    throw new Error('isolated cron jobs require payload.kind="agentTurn" or "rescueWatchdog"');
   }
 }
 
@@ -176,10 +180,13 @@ function validateTelegramDeliveryTarget(to: string | undefined): string | undefi
   return undefined;
 }
 
-function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
+function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery" | "payload">) {
   // No delivery object or mode is "none" -- nothing to validate.
   if (!job.delivery || job.delivery.mode === "none") {
     return;
+  }
+  if (job.payload.kind === "rescueWatchdog") {
+    throw new Error('cron payload.kind="rescueWatchdog" does not support delivery');
   }
   if (job.delivery.mode === "webhook") {
     const target = normalizeHttpWebhookUrl(job.delivery.to);
@@ -200,10 +207,17 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
   }
 }
 
-function assertFailureDestinationSupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
+function assertFailureDestinationSupport(
+  job: Pick<CronJob, "sessionTarget" | "delivery" | "payload">,
+) {
   const failureDestination = job.delivery?.failureDestination;
   if (!failureDestination) {
     return;
+  }
+  if (job.payload.kind === "rescueWatchdog") {
+    throw new Error(
+      'cron payload.kind="rescueWatchdog" does not support delivery.failureDestination',
+    );
   }
   if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
     throw new Error(
@@ -660,6 +674,20 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
     return { kind: "systemEvent", text };
   }
 
+  if (patch.kind === "rescueWatchdog") {
+    if (existing.kind !== "rescueWatchdog") {
+      return buildPayloadFromPatch(patch);
+    }
+    const monitoredProfile =
+      typeof patch.monitoredProfile === "string" ? patch.monitoredProfile.trim() : "";
+    return {
+      kind: "rescueWatchdog",
+      monitoredProfile: monitoredProfile || existing.monitoredProfile,
+      timeoutSeconds:
+        typeof patch.timeoutSeconds === "number" ? patch.timeoutSeconds : existing.timeoutSeconds,
+    };
+  }
+
   if (existing.kind !== "agentTurn") {
     return buildPayloadFromPatch(patch);
   }
@@ -747,22 +775,35 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     return { kind: "systemEvent", text: patch.text };
   }
 
-  if (typeof patch.message !== "string" || patch.message.length === 0) {
-    throw new Error('cron.update payload.kind="agentTurn" requires message');
+  if (patch.kind === "agentTurn") {
+    if (typeof patch.message !== "string" || patch.message.length === 0) {
+      throw new Error('cron.update payload.kind="agentTurn" requires message');
+    }
+    return {
+      kind: "agentTurn",
+      message: patch.message,
+      model: patch.model,
+      thinking: patch.thinking,
+      timeoutSeconds: patch.timeoutSeconds,
+      lightContext: patch.lightContext,
+      allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
+      deliver: patch.deliver,
+      channel: patch.channel,
+      to: patch.to,
+      bestEffortDeliver: patch.bestEffortDeliver,
+    };
+  }
+
+  const monitoredProfile =
+    typeof patch.monitoredProfile === "string" ? patch.monitoredProfile.trim() : "";
+  if (!monitoredProfile) {
+    throw new Error('cron.update payload.kind="rescueWatchdog" requires monitoredProfile');
   }
 
   return {
-    kind: "agentTurn",
-    message: patch.message,
-    model: patch.model,
-    thinking: patch.thinking,
+    kind: "rescueWatchdog",
+    monitoredProfile,
     timeoutSeconds: patch.timeoutSeconds,
-    lightContext: patch.lightContext,
-    allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
-    deliver: patch.deliver,
-    channel: patch.channel,
-    to: patch.to,
-    bestEffortDeliver: patch.bestEffortDeliver,
   };
 }
 

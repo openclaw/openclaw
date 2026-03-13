@@ -1123,8 +1123,29 @@ export async function executeJobCore(
     }
   }
 
+  if (job.payload.kind === "rescueWatchdog") {
+    if (abortSignal?.aborted) {
+      return resolveAbortError();
+    }
+    if (!state.deps.runRescueWatchdogJob) {
+      return { status: "skipped", error: "isolated rescue watchdog runner unavailable" };
+    }
+    const res = await state.deps.runRescueWatchdogJob({
+      job,
+      monitoredProfile: job.payload.monitoredProfile,
+      abortSignal,
+    });
+    if (abortSignal?.aborted) {
+      return { status: "error", error: timeoutErrorMessage() };
+    }
+    return res;
+  }
+
   if (job.payload.kind !== "agentTurn") {
-    return { status: "skipped", error: "isolated job requires payload.kind=agentTurn" };
+    return {
+      status: "skipped",
+      error: 'isolated job requires payload.kind="agentTurn" or "rescueWatchdog"',
+    };
   }
   if (abortSignal?.aborted) {
     return resolveAbortError();

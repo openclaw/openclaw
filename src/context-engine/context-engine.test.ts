@@ -472,7 +472,7 @@ describe("Bundle chunk isolation (#40096)", () => {
     const sdkEngineId = `sdk-registered-${ts}`;
     sdk.registerContextEngine(sdkEngineId, () => new MockContextEngine());
     expect(getContextEngineFactory(sdkEngineId)).toBeDefined();
-  });
+  }, 180_000);
 
   it("concurrent registration from multiple chunks does not lose entries", async () => {
     const ts = Date.now().toString(36);

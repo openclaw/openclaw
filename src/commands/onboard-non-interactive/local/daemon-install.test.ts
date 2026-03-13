@@ -55,28 +55,47 @@ describe("installGatewayDaemonNonInteractive", () => {
   it("does not pass plaintext token for SecretRef-managed install", async () => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    await installGatewayDaemonNonInteractive({
-      nextConfig: {
-        gateway: {
-          auth: {
-            mode: "token",
-            token: {
-              source: "env",
-              provider: "default",
-              id: "OPENCLAW_GATEWAY_TOKEN",
+    await expect(
+      installGatewayDaemonNonInteractive({
+        nextConfig: {
+          gateway: {
+            auth: {
+              mode: "token",
+              token: {
+                source: "env",
+                provider: "default",
+                id: "OPENCLAW_GATEWAY_TOKEN",
+              },
             },
           },
-        },
-      } as OpenClawConfig,
-      opts: { installDaemon: true },
-      runtime,
-      port: 18789,
-    });
+        } as OpenClawConfig,
+        opts: { installDaemon: true },
+        runtime,
+        port: 18789,
+      }),
+    ).resolves.toBe(true);
 
     expect(resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
     expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
     expect("token" in buildGatewayInstallPlan.mock.calls[0][0]).toBe(false);
     expect(serviceInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns false when the managed service install fails", async () => {
+    serviceInstall.mockRejectedValueOnce(new Error("boom"));
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(
+      installGatewayDaemonNonInteractive({
+        nextConfig: {} as OpenClawConfig,
+        opts: { installDaemon: true },
+        runtime,
+        port: 18789,
+      }),
+    ).resolves.toBe(false);
+
+    expect(runtime.error).toHaveBeenCalledWith("Gateway service install failed: Error: boom");
+    expect(runtime.log).toHaveBeenCalledWith("hint");
   });
 
   it("aborts with actionable error when SecretRef is unresolved", async () => {
@@ -88,12 +107,14 @@ describe("installGatewayDaemonNonInteractive", () => {
     });
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    await installGatewayDaemonNonInteractive({
-      nextConfig: {} as OpenClawConfig,
-      opts: { installDaemon: true },
-      runtime,
-      port: 18789,
-    });
+    await expect(
+      installGatewayDaemonNonInteractive({
+        nextConfig: {} as OpenClawConfig,
+        opts: { installDaemon: true },
+        runtime,
+        port: 18789,
+      }),
+    ).resolves.toBe(false);
 
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Gateway install blocked"));
     expect(runtime.exit).toHaveBeenCalledWith(1);

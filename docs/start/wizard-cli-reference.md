@@ -22,6 +22,7 @@ Local mode (default) walks you through:
 - Channels and providers (Telegram, WhatsApp, Discord, Google Chat, Mattermost plugin, Signal)
 - Daemon install (LaunchAgent or systemd user unit)
 - Health check
+- Optional rescue watchdog setup
 - Skills setup
 
 Remote mode configures this machine to connect to a gateway elsewhere.
@@ -84,6 +85,13 @@ It does not install or modify anything on the remote host.
   <Step title="Health check">
     - Starts gateway (if needed) and runs `openclaw health`.
     - `openclaw status --deep` adds gateway health probes to status output.
+  </Step>
+  <Step title="Rescue watchdog">
+    - Optional one-click setup during local onboarding, or via non-interactive `--rescue-watchdog`.
+    - Creates a second isolated rescue profile with its own workspace, Gateway port, auth token, and managed service.
+    - Adds a rescue cron job that probes the primary profile every 5 minutes and runs restart/repair commands when the primary gateway is unhealthy.
+    - Rescue setup is not available while onboarding profiles already named `rescue` or ending in `-rescue`.
+    - On Linux, rescue setup is skipped when systemd user services are unavailable.
   </Step>
   <Step title="Skills">
     - Reads available skills and checks requirements.
@@ -263,6 +271,8 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `wizard.lastRunCommit`
 - `wizard.lastRunCommand`
 - `wizard.lastRunMode`
+
+Non-interactive JSON output can also include `rescueWatchdog` with the generated rescue profile name, port, workspace, and cron job details when `--rescue-watchdog` is enabled.
 
 `openclaw agents add` writes `agents.list[]` and optional `bindings`.
 

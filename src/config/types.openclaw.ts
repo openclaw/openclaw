@@ -59,6 +59,11 @@ export type OpenClawConfig = {
     lastRunCommit?: string;
     lastRunCommand?: string;
     lastRunMode?: "local" | "remote";
+    rescueWatchdog?: {
+      managed?: boolean;
+      monitoredProfile?: string;
+      agentId?: string;
+    };
   };
   diagnostics?: DiagnosticsConfig;
   logging?: LoggingConfig;
