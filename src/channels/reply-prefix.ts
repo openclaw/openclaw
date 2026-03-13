@@ -30,6 +30,12 @@ export function createReplyPrefixContext(params: {
   const { cfg, agentId } = params;
 
   // Pre-seed with config defaults so early-exit paths (e.g. abort) resolve the prefix template.
+  // TODO(reply-prefix): two known gaps when abort fires before onModelSelected:
+  // 1. No `catalog` passed to resolveThinkingDefault — reasoning models without an explicit
+  //    thinkingDefault config resolve to "off" instead of "low".
+  // 2. No session context (modelOverride/providerOverride) — if the user switched models
+  //    via /model, the abort prefix shows the config default model, not the active override.
+  // Fix: accept optional sessionEntry here and pass catalog once available at call sites.
   const defaultModel = resolveDefaultModelForAgent({ cfg, agentId });
   const defaultThinking = resolveThinkingDefault({
     cfg,
