@@ -20,6 +20,19 @@ export function normalizeThreadId(raw?: string | number | null): string | null {
 // Size-capped to prevent unbounded growth (#4948)
 const MAX_DIRECT_ROOM_CACHE_SIZE = 1024;
 const directRoomCache = new Map<string, string>();
+const clientIds = new WeakMap<MatrixClient, number>();
+let nextClientId = 1;
+
+function getDirectRoomCacheKey(client: MatrixClient, userId: string): string {
+  const existing = clientIds.get(client);
+  if (existing) {
+    return `${existing}:${userId}`;
+  }
+  const created = nextClientId++;
+  clientIds.set(client, created);
+  return `${created}:${userId}`;
+}
+
 function setDirectRoomCached(key: string, value: string): void {
   directRoomCache.set(key, value);
   if (directRoomCache.size > MAX_DIRECT_ROOM_CACHE_SIZE) {
@@ -28,6 +41,82 @@ function setDirectRoomCached(key: string, value: string): void {
       directRoomCache.delete(oldest);
     }
   }
+}
+
+function isMatrixNotFoundError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) {
+    return false;
+  }
+  const candidate = err as { errcode?: string; statusCode?: number };
+  return candidate.errcode === "M_NOT_FOUND" || candidate.statusCode === 404;
+}
+
+async function getSelfUserId(client: MatrixClient): Promise<string | null> {
+  try {
+    return await client.getUserId();
+  } catch {
+    return null;
+  }
+}
+
+async function hasDirectFlag(
+  client: MatrixClient,
+  roomId: string,
+  userId: string | null,
+): Promise<boolean> {
+  if (!userId) {
+    return false;
+  }
+  try {
+    const state = await client.getRoomStateEvent(roomId, "m.room.member", userId);
+    return state?.is_direct === true;
+  } catch {
+    return false;
+  }
+}
+
+async function getRoomHasExplicitName(client: MatrixClient, roomId: string): Promise<boolean> {
+  try {
+    const nameState = await client.getRoomStateEvent(roomId, "m.room.name", "");
+    return Boolean(nameState?.name?.trim());
+  } catch (err) {
+    if (isMatrixNotFoundError(err)) {
+      return false;
+    }
+    return true;
+  }
+}
+
+type DirectRoomCandidate = {
+  roomId: string;
+  directIndex: number | null;
+  dmCached: boolean;
+  hasDirectFlag: boolean;
+  memberCount: number;
+  hasExplicitName: boolean;
+};
+
+function scoreDirectRoomCandidate(candidate: DirectRoomCandidate): number {
+  let score = 0;
+  if (candidate.dmCached) {
+    score += 1000;
+  }
+  if (candidate.hasDirectFlag) {
+    score += 500;
+  }
+  if (candidate.memberCount === 2 && !candidate.hasExplicitName) {
+    score += 250;
+  }
+  if (candidate.directIndex !== null) {
+    score += 100 - Math.min(candidate.directIndex, 100);
+  }
+  if (candidate.memberCount === 2) {
+    score += 25;
+  }
+  if (candidate.hasExplicitName) {
+    score -= 25;
+  }
+  return score;
 }
 
 async function persistDirectRoom(
@@ -63,32 +152,44 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
     throw new Error(`Matrix user IDs must be fully qualified (got "${trimmed}")`);
   }
 
-  const cached = directRoomCache.get(trimmed);
+  const cacheKey = getDirectRoomCacheKey(client, trimmed);
+  const cached = directRoomCache.get(cacheKey);
   if (cached) {
     return cached;
   }
 
-  // 1) Fast path: use account data (m.direct) for *this* logged-in user (the bot).
+  // 1) Gather the bot's direct-room hints for this specific Matrix account.
+  let directList: string[] = [];
   try {
     const directContent = (await client.getAccountData(EventType.Direct)) as Record<
       string,
       string[] | undefined
     >;
-    const list = Array.isArray(directContent?.[trimmed]) ? directContent[trimmed] : [];
-    if (list && list.length > 0) {
-      setDirectRoomCached(trimmed, list[0]);
-      return list[0];
-    }
+    directList = Array.isArray(directContent?.[trimmed]) ? directContent[trimmed] : [];
   } catch {
     // Ignore and fall back.
   }
 
-  // 2) Fallback: look for an existing joined room that looks like a 1:1 with the user.
-  // Many clients only maintain m.direct for *their own* account data, so relying on it is brittle.
-  let fallbackRoom: string | null = null;
   try {
-    const rooms = await client.getJoinedRooms();
-    for (const roomId of rooms) {
+    await client.dms?.update?.();
+  } catch {
+    // Ignore DM cache refresh failures and keep going.
+  }
+
+  const selfUserId = await getSelfUserId(client);
+  const joinedRooms = await client.getJoinedRooms().catch(() => []);
+  const joinedSet = new Set(joinedRooms);
+  const candidateIds = new Set<string>();
+  directList.forEach((roomId) => candidateIds.add(roomId));
+  joinedRooms.forEach((roomId) => candidateIds.add(roomId));
+
+  const candidates: DirectRoomCandidate[] = [];
+  try {
+    for (const roomId of candidateIds) {
+      if (!joinedSet.has(roomId)) {
+        continue;
+      }
+
       let members: string[];
       try {
         members = await client.getJoinedRoomMembers(roomId);
@@ -98,24 +199,55 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
       if (!members.includes(trimmed)) {
         continue;
       }
-      // Prefer classic 1:1 rooms, but allow larger rooms if requested.
-      if (members.length === 2) {
-        setDirectRoomCached(trimmed, roomId);
-        await persistDirectRoom(client, trimmed, roomId);
-        return roomId;
-      }
-      if (!fallbackRoom) {
-        fallbackRoom = roomId;
-      }
+
+      const dmCached = client.dms?.isDm?.(roomId) === true;
+      const directIndex = directList.indexOf(roomId);
+      const hasDirectUserFlag = await hasDirectFlag(client, roomId, trimmed);
+      const hasDirectSelfFlag = await hasDirectFlag(client, roomId, selfUserId);
+      const hasExplicitName =
+        members.length === 2 ? await getRoomHasExplicitName(client, roomId) : true;
+
+      candidates.push({
+        roomId,
+        directIndex: directIndex >= 0 ? directIndex : null,
+        dmCached,
+        hasDirectFlag: hasDirectUserFlag || hasDirectSelfFlag,
+        memberCount: members.length,
+        hasExplicitName,
+      });
     }
   } catch {
     // Ignore and fall back.
   }
 
-  if (fallbackRoom) {
-    setDirectRoomCached(trimmed, fallbackRoom);
-    await persistDirectRoom(client, trimmed, fallbackRoom);
-    return fallbackRoom;
+  const bestCandidate = [...candidates].sort((left, right) => {
+    const scoreDelta = scoreDirectRoomCandidate(right) - scoreDirectRoomCandidate(left);
+    if (scoreDelta !== 0) {
+      return scoreDelta;
+    }
+    if (left.directIndex !== null && right.directIndex !== null) {
+      return left.directIndex - right.directIndex;
+    }
+    if (left.directIndex !== null) {
+      return -1;
+    }
+    if (right.directIndex !== null) {
+      return 1;
+    }
+    return left.memberCount - right.memberCount;
+  })[0];
+
+  if (bestCandidate) {
+    setDirectRoomCached(cacheKey, bestCandidate.roomId);
+    if (directList[0] !== bestCandidate.roomId) {
+      await persistDirectRoom(client, trimmed, bestCandidate.roomId);
+    }
+    return bestCandidate.roomId;
+  }
+
+  if (directList[0]) {
+    setDirectRoomCached(cacheKey, directList[0]);
+    return directList[0];
   }
 
   throw new Error(`No direct room found for ${trimmed} (m.direct missing)`);
