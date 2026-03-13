@@ -72,4 +72,20 @@ describe("resolveCliSpawnInvocation", () => {
       }),
     ).toThrow(/without shell execution/);
   });
+
+  it("keeps bare commands bare when no Windows wrapper exists on PATH", () => {
+    process.env.PATH = originalPath ?? "";
+    process.env.PATHEXT = ".CMD;.EXE";
+
+    const invocation = resolveCliSpawnInvocation({
+      command: "qmd",
+      args: ["query", "hello"],
+      env: process.env,
+      packageName: "qmd",
+    });
+
+    expect(invocation.command).toBe("qmd");
+    expect(invocation.argv).toEqual(["query", "hello"]);
+    expect(invocation.shell).not.toBe(true);
+  });
 });
