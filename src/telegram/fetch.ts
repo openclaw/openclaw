@@ -231,7 +231,6 @@ function resolveTelegramDispatcherPolicy(params: {
 function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
   dispatcher: TelegramDispatcher;
   mode: TelegramDispatcherMode;
-  effectivePolicy: PinnedDispatcherPolicy;
 } {
   if (policy.mode === "explicit-proxy") {
     const proxyOptions = policy.proxyTls
@@ -244,7 +243,6 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
       return {
         dispatcher: new ProxyAgent(proxyOptions),
         mode: "explicit-proxy",
-        effectivePolicy: policy,
       };
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
@@ -266,7 +264,6 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
       return {
         dispatcher: new EnvHttpProxyAgent(proxyOptions),
         mode: "env-proxy",
-        effectivePolicy: policy,
       };
     } catch (err) {
       log.warn(
@@ -287,7 +284,6 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
             : undefined,
         ),
         mode: "direct",
-        effectivePolicy: directPolicy,
       };
     }
   }
@@ -301,7 +297,6 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
         : undefined,
     ),
     mode: "direct",
-    effectivePolicy: policy,
   };
 }
 
@@ -392,8 +387,6 @@ function shouldRetryWithIpv4Fallback(err: unknown): boolean {
 // Prefer wrapped fetch when available to normalize AbortSignal across runtimes.
 export type TelegramTransport = {
   fetch: typeof fetch;
-  sourceFetch: typeof fetch;
-  pinnedDispatcherPolicy?: PinnedDispatcherPolicy;
 };
 
 export function resolveTelegramTransport(
@@ -421,7 +414,7 @@ export function resolveTelegramTransport(
   const dnsResultOrder = normalizeDnsResultOrder(dnsDecision.value);
   // Preserve fully caller-owned custom fetch implementations.
   if (proxyFetch && !explicitProxyUrl) {
-    return { fetch: sourceFetch, sourceFetch };
+    return { fetch: sourceFetch };
   }
 
   const useEnvProxy = !explicitProxyUrl && hasEnvHttpProxyForTelegramApi();
@@ -489,11 +482,7 @@ export function resolveTelegramTransport(
     }
   }) as typeof fetch;
 
-  return {
-    fetch: resolvedFetch,
-    sourceFetch,
-    pinnedDispatcherPolicy: defaultDispatcher.effectivePolicy,
-  };
+  return { fetch: resolvedFetch };
 }
 
 export function resolveTelegramFetch(

@@ -35,6 +35,15 @@ vi.mock("undici", () => ({
   fetch: undiciFetch,
 }));
 
+function buildFetchFallbackError(code: string) {
+  const connectErr = Object.assign(new Error(`connect ${code} api.telegram.org:443`), {
+    code,
+  });
+  return Object.assign(new TypeError("fetch failed"), {
+    cause: connectErr,
+  });
+}
+
 describe("fetchRemoteMedia telegram network policy", () => {
   type LookupFn = NonNullable<Parameters<typeof fetchRemoteMedia>[0]["lookupFn"]>;
 
@@ -66,9 +75,9 @@ describe("fetchRemoteMedia telegram network policy", () => {
 
     await fetchRemoteMedia({
       url: "https://api.telegram.org/file/bottok/photos/1.jpg",
-      fetchImpl: telegramTransport.sourceFetch,
-      dispatcherPolicy: telegramTransport.pinnedDispatcherPolicy,
+      fetchImpl: telegramTransport.fetch,
       lookupFn,
+      pinDns: false,
       maxBytes: 1024,
       ssrfPolicy: {
         allowedHostnames: ["api.telegram.org"],
@@ -116,9 +125,9 @@ describe("fetchRemoteMedia telegram network policy", () => {
 
     await fetchRemoteMedia({
       url: "https://api.telegram.org/file/bottok/files/1.pdf",
-      fetchImpl: telegramTransport.sourceFetch,
-      dispatcherPolicy: telegramTransport.pinnedDispatcherPolicy,
+      fetchImpl: telegramTransport.fetch,
       lookupFn,
+      pinDns: false,
       maxBytes: 1024,
       ssrfPolicy: {
         allowedHostnames: ["api.telegram.org"],
@@ -138,5 +147,73 @@ describe("fetchRemoteMedia telegram network policy", () => {
 
     expect(init?.dispatcher?.options?.uri).toBe("http://127.0.0.1:7890");
     expect(ProxyAgentCtor).toHaveBeenCalled();
+  });
+
+  it("allows Telegram transport to arm sticky IPv4 fallback for file downloads", async () => {
+    const lookupFn = vi.fn(async () => [
+      { address: "149.154.167.220", family: 4 },
+      { address: "2001:67c:4e8:f004::9", family: 6 },
+    ]) as unknown as LookupFn;
+    undiciFetch
+      .mockRejectedValueOnce(buildFetchFallbackError("EHOSTUNREACH"))
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([0xff, 0xd8, 0xff, 0x00]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        }),
+      );
+
+    const telegramTransport = resolveTelegramTransport(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await fetchRemoteMedia({
+      url: "https://api.telegram.org/file/bottok/photos/2.jpg",
+      fetchImpl: telegramTransport.fetch,
+      lookupFn,
+      pinDns: false,
+      maxBytes: 1024,
+      ssrfPolicy: {
+        allowedHostnames: ["api.telegram.org"],
+        allowRfc2544BenchmarkRange: true,
+      },
+    });
+
+    expect(undiciFetch).toHaveBeenCalledTimes(2);
+
+    const firstInit = undiciFetch.mock.calls[0]?.[1] as
+      | (RequestInit & {
+          dispatcher?: {
+            options?: {
+              connect?: Record<string, unknown>;
+            };
+          };
+        })
+      | undefined;
+    const secondInit = undiciFetch.mock.calls[1]?.[1] as
+      | (RequestInit & {
+          dispatcher?: {
+            options?: {
+              connect?: Record<string, unknown>;
+            };
+          };
+        })
+      | undefined;
+
+    expect(firstInit?.dispatcher?.options?.connect).toEqual(
+      expect.objectContaining({
+        autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 300,
+      }),
+    );
+    expect(secondInit?.dispatcher?.options?.connect).toEqual(
+      expect.objectContaining({
+        family: 4,
+        autoSelectFamily: false,
+      }),
+    );
   });
 });

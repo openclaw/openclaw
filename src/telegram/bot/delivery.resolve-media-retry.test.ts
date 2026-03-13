@@ -150,6 +150,7 @@ async function expectTransientGetFileRetrySuccess() {
   expect(fetchRemoteMedia).toHaveBeenCalledWith(
     expect.objectContaining({
       url: `https://api.telegram.org/file/bot${BOT_TOKEN}/voice/file_0.oga`,
+      pinDns: false,
       ssrfPolicy: {
         allowRfc2544BenchmarkRange: true,
         allowedHostnames: ["api.telegram.org"],
@@ -301,7 +302,7 @@ describe("resolveMedia getFile retry", () => {
   it("uses caller-provided fetch impl for file downloads", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
     const callerFetch = vi.fn() as unknown as typeof fetch;
-    const callerTransport = { fetch: callerFetch, sourceFetch: callerFetch };
+    const callerTransport = { fetch: callerFetch };
     fetchRemoteMedia.mockResolvedValueOnce({
       buffer: Buffer.from("pdf-data"),
       contentType: "application/pdf",
@@ -323,6 +324,7 @@ describe("resolveMedia getFile retry", () => {
     expect(fetchRemoteMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         fetchImpl: callerFetch,
+        pinDns: false,
       }),
     );
   });
@@ -330,7 +332,7 @@ describe("resolveMedia getFile retry", () => {
   it("uses caller-provided fetch impl for sticker downloads", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "stickers/file_0.webp" });
     const callerFetch = vi.fn() as unknown as typeof fetch;
-    const callerTransport = { fetch: callerFetch, sourceFetch: callerFetch };
+    const callerTransport = { fetch: callerFetch };
     fetchRemoteMedia.mockResolvedValueOnce({
       buffer: Buffer.from("sticker-data"),
       contentType: "image/webp",
@@ -352,6 +354,7 @@ describe("resolveMedia getFile retry", () => {
     expect(fetchRemoteMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         fetchImpl: callerFetch,
+        pinDns: false,
       }),
     );
   });

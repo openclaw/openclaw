@@ -103,7 +103,6 @@ function resolveRequiredTelegramTransport(transport?: TelegramTransport): Telegr
   }
   return {
     fetch: resolvedFetch,
-    sourceFetch: resolvedFetch,
   };
 }
 
@@ -128,11 +127,12 @@ async function downloadAndSaveTelegramFile(params: {
   const url = `https://api.telegram.org/file/bot${params.token}/${params.filePath}`;
   const fetched = await fetchRemoteMedia({
     url,
-    fetchImpl: params.transport.sourceFetch,
-    dispatcherPolicy: params.transport.pinnedDispatcherPolicy,
+    // Keep Telegram's resolver-owned retry/proxy logic in control for media downloads.
+    fetchImpl: params.transport.fetch,
     filePathHint: params.filePath,
     maxBytes: params.maxBytes,
     readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
+    pinDns: false,
     ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
   });
   const originalName = params.telegramFileName ?? fetched.fileName ?? params.filePath;
