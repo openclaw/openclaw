@@ -165,6 +165,8 @@ export function renderChatSessionSelect(state: AppViewState) {
 
 export function renderChatControls(state: AppViewState) {
   const hideCron = state.sessionsHideCron ?? true;
+  const hideHooks = state.sessionsHideHooks ?? true;
+  const hideSubagents = state.sessionsHideSubagents ?? true;
   const hiddenCronCount = hideCron
     ? countHiddenCronSessions(state.sessionKey, state.sessionsResult)
     : 0;
@@ -175,6 +177,8 @@ export function renderChatControls(state: AppViewState) {
     mainSessionKey,
     hideCron,
     (state as unknown as OpenClawApp).sessionsWithUnread,
+    hideHooks,
+    hideSubagents,
   );
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
@@ -420,6 +424,11 @@ export function parseSessionKey(key: string): SessionKeyInfo {
     return { prefix: "Cron:", fallbackName: "Cron Job:" };
   }
 
+  // ── Hook delivery (agent:<x>:hook:<uuid>) ─────────
+  if (normalized.startsWith("hook:") || key.includes(":hook:")) {
+    return { prefix: "Hook:", fallbackName: "Hook Delivery:" };
+  }
+
   // ── Direct chat  (agent:<x>:<channel>:direct:<id>) ──
   const directMatch = key.match(/^agent:[^:]+:([^:]+):direct:(.+)$/);
   if (directMatch) {
@@ -492,26 +501,65 @@ export function isCronSessionKey(key: string): boolean {
   return rest.startsWith("cron:");
 }
 
+export function isHookSessionKey(key: string): boolean {
+  const normalized = key.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.startsWith("hook:")) {
+    return true;
+  }
+  if (!normalized.startsWith("agent:")) {
+    return false;
+  }
+  const parts = normalized.split(":").filter(Boolean);
+  if (parts.length < 3) {
+    return false;
+  }
+  const rest = parts.slice(2).join(":");
+  return rest.startsWith("hook:");
+}
+
+export function isSubagentSessionKey(key: string): boolean {
+  const normalized = key.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  // Common patterns: agent:<id>:subagent:<uuid>
+  if (normalized.includes(":subagent:")) {
+    return true;
+  }
+  return normalized.startsWith("subagent:");
+}
+
 export function resolveSessionOptions(
   sessionKey: string,
   sessions: SessionsListResult | null,
   mainSessionKey?: string | null,
   hideCron = false,
   sessionsWithUnread?: Set<string>,
+  hideHooks = true,
+  hideSubagents = true,
 ) {
+  // If the caller doesn't provide a main session key, default to the conventional
+  // "main" session. (Callers can explicitly pass null to suppress.)
+  const effectiveMainSessionKey = mainSessionKey === undefined ? "main" : mainSessionKey;
+
   const seen = new Set<string>();
   const options: Array<{ key: string; displayName?: string; hasUnread?: boolean }> = [];
 
-  const resolvedMain = mainSessionKey && sessions?.sessions?.find((s) => s.key === mainSessionKey);
+  const resolvedMain = effectiveMainSessionKey
+    ? sessions?.sessions?.find((s) => s.key === effectiveMainSessionKey)
+    : undefined;
   const resolvedCurrent = sessions?.sessions?.find((s) => s.key === sessionKey);
 
   // Add main session key first
-  if (mainSessionKey) {
-    seen.add(mainSessionKey);
+  if (effectiveMainSessionKey) {
+    seen.add(effectiveMainSessionKey);
     options.push({
-      key: mainSessionKey,
-      displayName: resolveSessionDisplayName(mainSessionKey, resolvedMain || undefined),
-      hasUnread: sessionsWithUnread?.has(mainSessionKey) ?? false,
+      key: effectiveMainSessionKey,
+      displayName: resolveSessionDisplayName(effectiveMainSessionKey, resolvedMain || undefined),
+      hasUnread: sessionsWithUnread?.has(effectiveMainSessionKey) ?? false,
     });
   }
 
@@ -530,7 +578,23 @@ export function resolveSessionOptions(
   // Sort by most recent activity (updatedAt descending).
   if (sessions?.sessions) {
     const remaining = sessions.sessions
-      .filter((s) => !seen.has(s.key) && !(hideCron && isCronSessionKey(s.key)))
+      .filter((s) => {
+        if (seen.has(s.key)) {
+          return false;
+        }
+        // Never silently drop the active session (handled above), but hide
+        // background/system sessions from the dropdown by default.
+        if (hideCron && isCronSessionKey(s.key)) {
+          return false;
+        }
+        if (hideHooks && isHookSessionKey(s.key)) {
+          return false;
+        }
+        if (hideSubagents && isSubagentSessionKey(s.key)) {
+          return false;
+        }
+        return true;
+      })
       .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 
     for (const s of remaining) {
@@ -565,6 +629,8 @@ export function resolveSessionOptionGroups(
 ): SessionOptionGroup[] {
   const rows = sessions?.sessions ?? [];
   const hideCron = state.sessionsHideCron ?? true;
+  const hideHooks = state.sessionsHideHooks ?? true;
+  const hideSubagents = state.sessionsHideSubagents ?? true;
   const byKey = new Map<string, SessionsListResult["sessions"][number]>();
   for (const row of rows) {
     byKey.set(row.key, row);
@@ -608,8 +674,16 @@ export function resolveSessionOptionGroups(
   };
 
   for (const row of rows) {
-    if (hideCron && row.key !== sessionKey && isCronSessionKey(row.key)) {
-      continue;
+    if (row.key !== sessionKey) {
+      if (hideCron && isCronSessionKey(row.key)) {
+        continue;
+      }
+      if (hideHooks && isHookSessionKey(row.key)) {
+        continue;
+      }
+      if (hideSubagents && isSubagentSessionKey(row.key)) {
+        continue;
+      }
     }
     addOption(row.key);
   }

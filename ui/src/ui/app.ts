@@ -283,6 +283,9 @@ export class OpenClawApp extends LitElement {
   // Track sessions with unread messages (key = sessionKey)
   @state() sessionsWithUnread: Set<string> = new Set();
   @state() sessionsHideCron = true;
+  // Hide system/background sessions from the chat session dropdown by default.
+  @state() sessionsHideHooks = true;
+  @state() sessionsHideSubagents = true;
   @state() sessionsSearchQuery = "";
   @state() sessionsSortColumn: "key" | "kind" | "updated" | "tokens" = "updated";
   @state() sessionsSortDir: "asc" | "desc" = "desc";
@@ -354,8 +357,10 @@ export class OpenClawApp extends LitElement {
   @state() cronJobsLimit = 50;
   @state() cronJobsQuery = "";
   @state() cronJobsEnabledFilter: import("./types.js").CronJobsEnabledFilter = "all";
-  @state() cronJobsScheduleKindFilter: import("./controllers/cron.js").CronJobsScheduleKindFilter = "all";
-  @state() cronJobsLastStatusFilter: import("./controllers/cron.js").CronJobsLastStatusFilter = "all";
+  @state() cronJobsScheduleKindFilter: import("./controllers/cron.js").CronJobsScheduleKindFilter =
+    "all";
+  @state() cronJobsLastStatusFilter: import("./controllers/cron.js").CronJobsLastStatusFilter =
+    "all";
   @state() cronJobsSortBy: import("./types.js").CronJobsSortBy = "nextRunAtMs";
   @state() cronJobsSortDir: import("./types.js").CronSortDir = "asc";
   @state() cronStatus: CronStatus | null = null;

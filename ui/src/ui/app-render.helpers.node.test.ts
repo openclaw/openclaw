@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isCronSessionKey,
+  isHookSessionKey,
   parseSessionKey,
   resolveSessionDisplayName,
   resolveSessionOptions,
@@ -44,6 +45,17 @@ describe("parseSessionKey", () => {
     expect(parseSessionKey("cron:daily-briefing-uuid")).toEqual({
       prefix: "Cron:",
       fallbackName: "Cron Job:",
+    });
+  });
+
+  it("identifies hook delivery sessions", () => {
+    expect(parseSessionKey("agent:main:hook:abc-123")).toEqual({
+      prefix: "Hook:",
+      fallbackName: "Hook Delivery:",
+    });
+    expect(parseSessionKey("hook:abc-123")).toEqual({
+      prefix: "Hook:",
+      fallbackName: "Hook Delivery:",
     });
   });
 
@@ -286,6 +298,20 @@ describe("isCronSessionKey", () => {
   });
 });
 
+describe("isHookSessionKey", () => {
+  it("returns true for hook: prefixed keys", () => {
+    expect(isHookSessionKey("hook:abc-123")).toBe(true);
+    expect(isHookSessionKey("agent:main:hook:abc-123")).toBe(true);
+    expect(isHookSessionKey("agent:main:hook:abc-123:delivery:1")).toBe(true);
+  });
+
+  it("returns false for non-hook keys", () => {
+    expect(isHookSessionKey("main")).toBe(false);
+    expect(isHookSessionKey("cron:abc-123")).toBe(false);
+    expect(isHookSessionKey("agent:main:telegram:direct:user123")).toBe(false);
+  });
+});
+
 /* ================================================================
  *  resolveSessionOptions – sorting by recent activity
  * ================================================================ */
@@ -382,5 +408,34 @@ describe("resolveSessionOptions", () => {
     expect(result.length).toBe(2);
     expect(result[0].key).toBe("main");
     expect(result[1].key).toBe("regular");
+  });
+
+  it("filters out hook + subagent sessions by default", () => {
+    const sessions = [
+      makeSession("regular", 1000),
+      makeSession("agent:main:hook:abc-123", 4000),
+      makeSession("agent:main:subagent:def-456", 3000),
+    ];
+
+    const result = resolveSessionOptions("main", {
+      ts: Date.now(),
+      sessions,
+      defaults: { model: null, contextTokens: null },
+    });
+
+    expect(result.map((r) => r.key)).toEqual(["main", "regular"]);
+  });
+
+  it("never drops the currently active hook session", () => {
+    const sessions = [makeSession("agent:main:hook:abc-123", 4000)];
+
+    const result = resolveSessionOptions("agent:main:hook:abc-123", {
+      ts: Date.now(),
+      sessions,
+      defaults: { model: null, contextTokens: null },
+    });
+
+    expect(result[0].key).toBe("main");
+    expect(result[1].key).toBe("agent:main:hook:abc-123");
   });
 });

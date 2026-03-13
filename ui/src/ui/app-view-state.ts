@@ -183,6 +183,8 @@ export type AppViewState = {
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
   sessionsHideCron: boolean;
+  sessionsHideHooks?: boolean;
+  sessionsHideSubagents?: boolean;
   sessionsSearchQuery: string;
   sessionsSortColumn: "key" | "kind" | "updated" | "tokens";
   sessionsSortDir: "asc" | "desc";
