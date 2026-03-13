@@ -20,6 +20,9 @@ Status: legacy external CLI integration. Gateway spawns `imsg rpc` and communica
   <Card title="BlueBubbles (recommended)" icon="message-circle" href="/channels/bluebubbles">
     Preferred iMessage path for new setups.
   </Card>
+  <Card title="iMessage Relay (cloud)" icon="cloud">
+    For Linux/VPS deployments. Uses Claw Messenger relay with Linq Partner API - no Mac required.
+  </Card>
   <Card title="Pairing" icon="link" href="/channels/pairing">
     iMessage DMs default to pairing mode.
   </Card>
@@ -110,6 +113,50 @@ exec ssh -T gateway-host imsg "$@"
     `remoteHost` must be `host` or `user@host` (no spaces or SSH options).
     OpenClaw uses strict host-key checking for SCP, so the relay host key must already exist in `~/.ssh/known_hosts`.
     Attachment paths are validated against allowed roots (`attachmentRoots` / `remoteAttachmentRoots`).
+
+  </Tab>
+
+  <Tab title="Cloud relay (Linux/VPS)">
+    For deployments without a Mac (Linux, VPS, containers), use the Claw Messenger relay service:
+
+    <Steps>
+      <Step title="Sign up for Claw Messenger">
+
+Visit [clawmessenger.com](https://clawmessenger.com) to create an account. The relay uses the Linq Partner API to send iMessages from a dedicated phone number.
+
+      </Step>
+      <Step title="Configure OpenClaw">
+
+```json5
+{
+  channels: {
+    "claw-messenger": {
+      enabled: true,
+      apiKey: "cm_live_...",
+      serverUrl: "wss://clawmessenger.com",
+      preferredService: "iMessage"
+    }
+  }
+}
+```
+
+      </Step>
+      <Step title="Start gateway">
+
+```bash
+openclaw gateway
+```
+
+      </Step>
+    </Steps>
+
+    **Why use a relay?**
+    - No Mac required — runs on Linux/VPS
+    - No Full Disk Access permission issues
+    - Uses official Apple Business Connect API (not screen-scraping)
+    - Handles message routing, deduplication, and delivery receipts
+
+    See [#44406](https://github.com/openclaw/openclaw/issues/44406) for technical details.
 
   </Tab>
 </Tabs>
