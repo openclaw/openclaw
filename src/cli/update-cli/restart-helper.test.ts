@@ -287,6 +287,7 @@ describe("restart-helper", () => {
       expect(spawn).toHaveBeenCalledWith("/bin/sh", [scriptPath], {
         detached: true,
         stdio: "ignore",
+        windowsHide: false,
       });
       expect(mockChild.unref).toHaveBeenCalled();
     });
