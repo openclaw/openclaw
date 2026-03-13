@@ -10,6 +10,9 @@ concurrency:
   group: install-smoke-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   docs-scope:
     runs-on: blacksmith-16vcpu-ubuntu-2404
@@ -17,7 +20,7 @@ jobs:
       docs_only: ${{ steps.check.outputs.docs_only }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -38,11 +41,13 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout CLI
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Docker Builder
-        uses: useblacksmith/setup-docker-builder@v1
+        uses: docker/setup-buildx-action@v4
 
+      # Blacksmith can fall back to the local docker driver, which rejects gha
+      # cache export/import. Keep smoke builds driver-agnostic.
       - name: Build root Dockerfile smoke image
         uses: useblacksmith/build-push-action@v2
         with:
@@ -52,8 +57,6 @@ jobs:
           load: true
           push: false
           provenance: false
-          cache-from: type=gha,scope=install-smoke-root-dockerfile
-          cache-to: type=gha,mode=max,scope=install-smoke-root-dockerfile
 
       - name: Run root Dockerfile CLI smoke
         run: |
@@ -73,8 +76,6 @@ jobs:
           load: true
           push: false
           provenance: false
-          cache-from: type=gha,scope=install-smoke-root-dockerfile-ext
-          cache-to: type=gha,mode=max,scope=install-smoke-root-dockerfile-ext
 
       - name: Smoke test Dockerfile with extension build arg
         run: |
@@ -89,8 +90,6 @@ jobs:
           load: true
           push: false
           provenance: false
-          cache-from: type=gha,scope=install-smoke-installer-root
-          cache-to: type=gha,mode=max,scope=install-smoke-installer-root
 
       - name: Build installer non-root image
         if: github.event_name != 'pull_request'
@@ -102,8 +101,6 @@ jobs:
           load: true
           push: false
           provenance: false
-          cache-from: type=gha,scope=install-smoke-installer-nonroot
-          cache-to: type=gha,mode=max,scope=install-smoke-installer-nonroot
 
       - name: Run installer docker tests
         env:

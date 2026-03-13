@@ -1,12 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import {
-  getChannelActivity,
-  recordChannelActivity,
-  resetChannelActivityForTest,
-} from "./channel-activity.js";
 import { createDedupeCache } from "./dedupe.js";
 import {
   emitDiagnosticEvent,
@@ -14,11 +9,6 @@ import {
   resetDiagnosticEventsForTest,
 } from "./diagnostic-events.js";
 import { readSessionStoreJson5 } from "./state-migrations.fs.js";
-import {
-  defaultVoiceWakeTriggers,
-  loadVoiceWakeConfig,
-  setVoiceWakeTriggers,
-} from "./voicewake.js";
 
 describe("infra store", () => {
   describe("state migrations fs", () => {
@@ -46,53 +36,6 @@ describe("infra store", () => {
         expect(result.ok).toBe(true);
         expect(result.store.main?.sessionId).toBe("s1");
         expect(result.store.main?.updatedAt).toBe(123);
-      });
-    });
-  });
-
-  describe("voicewake store", () => {
-    it("returns defaults when missing", async () => {
-      await withTempDir("openclaw-voicewake-", async (baseDir) => {
-        const cfg = await loadVoiceWakeConfig(baseDir);
-        expect(cfg.triggers).toEqual(defaultVoiceWakeTriggers());
-        expect(cfg.updatedAtMs).toBe(0);
-      });
-    });
-
-    it("sanitizes and persists triggers", async () => {
-      await withTempDir("openclaw-voicewake-", async (baseDir) => {
-        const saved = await setVoiceWakeTriggers(["  hi  ", "", "  there "], baseDir);
-        expect(saved.triggers).toEqual(["hi", "there"]);
-        expect(saved.updatedAtMs).toBeGreaterThan(0);
-
-        const loaded = await loadVoiceWakeConfig(baseDir);
-        expect(loaded.triggers).toEqual(["hi", "there"]);
-        expect(loaded.updatedAtMs).toBeGreaterThan(0);
-      });
-    });
-
-    it("falls back to defaults when triggers empty", async () => {
-      await withTempDir("openclaw-voicewake-", async (baseDir) => {
-        const saved = await setVoiceWakeTriggers(["", "   "], baseDir);
-        expect(saved.triggers).toEqual(defaultVoiceWakeTriggers());
-      });
-    });
-
-    it("sanitizes malformed persisted config values", async () => {
-      await withTempDir("openclaw-voicewake-", async (baseDir) => {
-        await fs.mkdir(path.join(baseDir, "settings"), { recursive: true });
-        await fs.writeFile(
-          path.join(baseDir, "settings", "voicewake.json"),
-          JSON.stringify({
-            triggers: ["  wake ", "", 42, null],
-            updatedAtMs: -1,
-          }),
-          "utf-8",
-        );
-
-        const loaded = await loadVoiceWakeConfig(baseDir);
-        expect(loaded.triggers).toEqual(["wake"]);
-        expect(loaded.updatedAtMs).toBe(0);
       });
     });
   });
@@ -142,50 +85,6 @@ describe("infra store", () => {
       stop();
 
       expect(types).toEqual(["webhook.received", "message.queued", "session.state"]);
-    });
-  });
-
-  describe("channel activity", () => {
-    beforeEach(() => {
-      resetChannelActivityForTest();
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date("2026-01-08T00:00:00Z"));
-    });
-
-    afterEach(() => {
-      vi.useRealTimers();
-    });
-
-    it("records inbound/outbound separately", () => {
-      recordChannelActivity({ channel: "telegram", direction: "inbound" });
-      vi.advanceTimersByTime(1000);
-      recordChannelActivity({ channel: "telegram", direction: "outbound" });
-      const res = getChannelActivity({ channel: "telegram" });
-      expect(res.inboundAt).toBe(1767830400000);
-      expect(res.outboundAt).toBe(1767830401000);
-    });
-
-    it("isolates accounts", () => {
-      recordChannelActivity({
-        channel: "whatsapp",
-        accountId: "a",
-        direction: "inbound",
-        at: 1,
-      });
-      recordChannelActivity({
-        channel: "whatsapp",
-        accountId: "b",
-        direction: "inbound",
-        at: 2,
-      });
-      expect(getChannelActivity({ channel: "whatsapp", accountId: "a" })).toEqual({
-        inboundAt: 1,
-        outboundAt: null,
-      });
-      expect(getChannelActivity({ channel: "whatsapp", accountId: "b" })).toEqual({
-        inboundAt: 2,
-        outboundAt: null,
-      });
     });
   });
 

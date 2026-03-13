@@ -32,6 +32,7 @@ import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
 import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { resolveDiscordDraftStreamingChunking } from "../draft-chunking.js";
 import { createDiscordDraftStream } from "../draft-stream.js";
@@ -426,6 +427,11 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     channel: "discord",
     accountId,
   });
+  const maxLinesPerMessage = resolveDiscordMaxLinesPerMessage({
+    cfg,
+    discordConfig,
+    accountId,
+  });
   const chunkMode = resolveChunkMode(cfg, "discord", accountId);
 
   const typingCallbacks = createTypingCallbacks({
@@ -484,7 +490,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     const formatted = convertMarkdownTables(text, tableMode);
     const chunks = chunkDiscordTextWithMode(formatted, {
       maxChars: draftMaxChars,
-      maxLines: discordConfig?.maxLinesPerMessage,
+      maxLines: maxLinesPerMessage,
       chunkMode,
     });
     if (!chunks.length && formatted) {
@@ -678,6 +684,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
 
         const replyToId = replyReference.use();
         await deliverDiscordReply({
+          cfg,
           replies: [payload],
           target: deliverTarget,
           token,
@@ -687,7 +694,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           replyToId,
           replyToMode,
           textLimit,
-          maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+          maxLinesPerMessage,
           tableMode,
           chunkMode,
           sessionKey: ctxPayload.SessionKey,
@@ -761,6 +768,19 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
             return;
           }
           await statusReactions.setTool(payload.name);
+        },
+        onCompactionStart: async () => {
+          if (isProcessAborted(abortSignal)) {
+            return;
+          }
+          await statusReactions.setCompacting();
+        },
+        onCompactionEnd: async () => {
+          if (isProcessAborted(abortSignal)) {
+            return;
+          }
+          statusReactions.cancelPending();
+          await statusReactions.setThinking();
         },
       },
     });
