@@ -22,7 +22,7 @@ jobs:
       docs_changed: ${{ steps.check.outputs.docs_changed }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -53,7 +53,7 @@ jobs:
       run_windows: ${{ steps.scope.outputs.run_windows }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -86,7 +86,7 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
@@ -101,13 +101,13 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "true"
+          use-sticky-disk: "false"
 
       - name: Build dist
         run: pnpm build
 
       - name: Upload dist artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist-build
           path: dist/
@@ -120,7 +120,7 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
@@ -128,10 +128,10 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "true"
+          use-sticky-disk: "false"
 
       - name: Download dist artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dist-build
           path: dist/
@@ -166,7 +166,7 @@ jobs:
 
       - name: Checkout
         if: github.event_name != 'push' || matrix.runtime != 'bun'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
@@ -175,7 +175,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "${{ matrix.runtime == 'bun' }}"
-          use-sticky-disk: "true"
+          use-sticky-disk: "false"
 
       - name: Configure Node test resources
         if: (github.event_name != 'push' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
@@ -197,7 +197,7 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
@@ -205,7 +205,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "true"
+          use-sticky-disk: "false"
 
       - name: Check types and lint and oxfmt
         run: pnpm check
@@ -223,7 +223,7 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
@@ -231,7 +231,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "true"
+          use-sticky-disk: "false"
 
       - name: Check docs
         run: pnpm check:docs
@@ -243,7 +243,7 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
@@ -253,7 +253,7 @@ jobs:
           node-version: "22.x"
           cache-key-suffix: "node22"
           install-bun: "false"
-          use-sticky-disk: "true"
+          use-sticky-disk: "false"
 
       - name: Configure Node 22 test resources
         run: |
@@ -276,12 +276,12 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -300,7 +300,7 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
@@ -319,7 +319,7 @@ jobs:
 
       - name: Setup Python
         id: setup-python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -329,7 +329,7 @@ jobs:
             .github/workflows/ci.yml
 
       - name: Restore pre-commit cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
@@ -412,7 +412,7 @@ jobs:
             command: pnpm test
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
@@ -436,7 +436,7 @@ jobs:
           }
 
       - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@v6
         with:
           node-version: 24.x
           check-latest: false
@@ -498,7 +498,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
@@ -534,7 +534,7 @@ jobs:
           swiftformat --lint apps/macos/Sources --config .swiftformat
 
       - name: Cache SwiftPM
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/Library/Caches/org.swift.swiftpm
           key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
@@ -570,7 +570,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
@@ -739,12 +739,12 @@ jobs:
             command: ./gradlew --no-daemon :app:assembleDebug
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           # setup-android's sdkmanager currently crashes on JDK 21 in CI.
