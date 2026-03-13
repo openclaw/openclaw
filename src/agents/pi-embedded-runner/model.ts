@@ -60,9 +60,6 @@ function isLikelyVisionModel(modelId: string): boolean {
     /llava/,
     /llama-3\.2.*vision/,
     /pixtral/,
-    /qwen-vl/,
-    /qwen2-vl/,
-    /qwen2\.5-vl/,
   ];
   return visionPatterns.some((pattern) => pattern.test(lower));
 }
@@ -267,6 +264,8 @@ export function resolveModelWithRegistry(params: {
     });
   }
 
+  // Fallback for non-OpenRouter providers with custom providerConfig or mock models.
+  // OpenRouter returns early above using isLikelyVisionModel heuristic.
   const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
