@@ -75,6 +75,17 @@ function resolveAnthropicFastServiceTier(enabled: boolean): AnthropicServiceTier
   return enabled ? "auto" : "standard_only";
 }
 
+function hasOpenAiAnthropicToolPayloadCompatFlag(model: { compat?: unknown }): boolean {
+  if (!model.compat || typeof model.compat !== "object" || Array.isArray(model.compat)) {
+    return false;
+  }
+
+  return (
+    (model.compat as { requiresOpenAiAnthropicToolPayload?: unknown })
+      .requiresOpenAiAnthropicToolPayload === true
+  );
+}
+
 function requiresAnthropicToolPayloadCompatibilityForModel(model: {
   api?: unknown;
   provider?: unknown;
@@ -90,15 +101,7 @@ function requiresAnthropicToolPayloadCompatibilityForModel(model: {
   ) {
     return true;
   }
-
-  if (!model.compat || typeof model.compat !== "object" || Array.isArray(model.compat)) {
-    return false;
-  }
-
-  return (
-    (model.compat as { requiresOpenAiAnthropicToolPayload?: unknown })
-      .requiresOpenAiAnthropicToolPayload === true
-  );
+  return hasOpenAiAnthropicToolPayloadCompatFlag(model);
 }
 
 function usesOpenAiFunctionAnthropicToolSchemaForModel(model: {
@@ -108,13 +111,7 @@ function usesOpenAiFunctionAnthropicToolSchemaForModel(model: {
   if (typeof model.provider === "string" && usesOpenAiFunctionAnthropicToolSchema(model.provider)) {
     return true;
   }
-  if (!model.compat || typeof model.compat !== "object" || Array.isArray(model.compat)) {
-    return false;
-  }
-  return (
-    (model.compat as { requiresOpenAiAnthropicToolPayload?: unknown })
-      .requiresOpenAiAnthropicToolPayload === true
-  );
+  return hasOpenAiAnthropicToolPayloadCompatFlag(model);
 }
 
 function usesOpenAiStringModeAnthropicToolChoiceForModel(model: {
@@ -127,13 +124,7 @@ function usesOpenAiStringModeAnthropicToolChoiceForModel(model: {
   ) {
     return true;
   }
-  if (!model.compat || typeof model.compat !== "object" || Array.isArray(model.compat)) {
-    return false;
-  }
-  return (
-    (model.compat as { requiresOpenAiAnthropicToolPayload?: unknown })
-      .requiresOpenAiAnthropicToolPayload === true
-  );
+  return hasOpenAiAnthropicToolPayloadCompatFlag(model);
 }
 
 function normalizeOpenAiFunctionAnthropicToolDefinition(
