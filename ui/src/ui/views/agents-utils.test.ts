@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentLogoUrl,
   resolveConfiguredCronModelSuggestions,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
@@ -96,5 +97,16 @@ describe("sortLocaleStrings", () => {
 
   it("accepts any iterable input, including sets", () => {
     expect(sortLocaleStrings(new Set(["beta", "alpha"]))).toEqual(["alpha", "beta"]);
+  });
+});
+
+describe("agentLogoUrl", () => {
+  it("keeps base-mounted control UI logo paths absolute to the mount", () => {
+    expect(agentLogoUrl("/ui")).toBe("/ui/favicon.svg");
+    expect(agentLogoUrl("/apps/openclaw/")).toBe("/apps/openclaw/favicon.svg");
+  });
+
+  it("uses a route-relative fallback before basePath bootstrap finishes", () => {
+    expect(agentLogoUrl("")).toBe("favicon.svg");
   });
 });
