@@ -81,31 +81,30 @@ The result: the memory grows organically. After the BTC monitor session, it know
 - **Does not hardcode solutions.** No "if 429 then say this." The agent reasons about failures itself. The extension gives it the right context.
 - **Does not use a separate LLM call.** Verification is done with shell commands. Memory is a JSONL file. No inference cost.
 - **Does not replace the agent's reasoning.** The agent still figures out the approach. The extension verifies outcomes and injects what it has learned.
-- **Does not block every message.** Only messages containing a success claim where verification fails.
+- **Does not block the message on the same turn.** The wrong claim reaches the user once. The correction is injected on the next turn. This is a limitation of the hook system — `llm_output` is fire-and-forget and `before_message_write` is sync-only, so async verification can't block in time.
 
 ---
 
 ## Architecture
 
-wh```
+```
 extensions/selfhealing/
-├── index.ts — registers all hooks
+├── index.ts          — registers all hooks
 ├── src/
-│ ├── memory.ts — read/write selfhealing.jsonl
-│ └── verifier.ts — runs verification checks, stores result in memory Map
-└── tests/
-├── memory.test.ts
-└── verifier.test.ts
-
+│   ├── memory.ts     — read/write selfhealing.jsonl
+│   └── verifier.ts   — process tracking, claim detection, verification
 ```
 
 ## Hooks Used
 
-| Hook | Type | Job |
-|---|---|---|
-| `session_start` | async | Load past lessons into context |
-| `before_prompt_build` | async | Prepend lessons + active corrections |
-| `llm_output` | async, fire-and-forget | Detect success claims, run verification, store result |
-| `before_message_write` | sync | Read result, block message if verification failed |
-| `agent_end` | async | Write what happened to memory |
+| Hook                  | Type  | Job                                              |
+| --------------------- | ----- | ------------------------------------------------ |
+| `session_start`       | async | Load past lessons into context                   |
+| `before_prompt_build` | sync  | Prepend lessons + active corrections             |
+| `after_tool_call`     | sync  | Track exec/subagent processes                    |
+| `llm_output`          | sync  | Detect success claims, verify, store corrections |
+| `agent_end`           | async | Write what happened to memory                    |
+
+```
+
 ```

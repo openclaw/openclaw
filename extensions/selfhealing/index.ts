@@ -2,11 +2,10 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { readMemory, appendMemory } from "./src/memory.js";
 import {
   parseExecCommand,
+  createSubagentEntry,
   detectClaim,
   verifyAll,
-  configure,
   type TrackedProcess,
-  type VerificationResult,
 } from "./src/verifier.js";
 
 type PluginConfig = {
@@ -23,7 +22,10 @@ const processCache = new Map<string, TrackedProcess[]>();
 // Corrections to inject into the next turn (from failed verifications)
 const correctionCache = new Map<string, string>();
 
-function resolveKey(ctx: { sessionId?: string; sessionKey?: string; runId?: string }): string {
+// Track active delayed checks so they can be cancelled on session end
+const delayedChecks = new Map<string, ReturnType<typeof setTimeout>[]>();
+
+function resolveKey(ctx: { sessionId?: string; sessionKey?: string }): string {
   return ctx.sessionId ?? ctx.sessionKey ?? "default";
 }
 
@@ -36,17 +38,15 @@ export default function register(api: OpenClawPluginApi) {
   const workspaceDir = api.config?.agents?.defaults?.workspace ?? process.cwd();
   const maxLessons = cfg.maxLessons ?? 10;
 
-  // Pass the full config — verifier resolves provider/model from it
-  configure(api.config, workspaceDir);
-
   // Load past lessons when session starts
   api.on("session_start", async (_event, ctx) => {
+    const key = resolveKey(ctx);
     const entries = await readMemory(workspaceDir);
     if (entries.length === 0) return;
     const recent = entries.slice(-maxLessons);
     const lessons = recent.map((e) => e.lesson);
     const text = `[Past lessons from previous sessions]\n${lessons.map((l) => `- ${l}`).join("\n")}`;
-    sessionCache.set(ctx.sessionId, { text, lessons });
+    sessionCache.set(key, { text, lessons });
   });
 
   // Prepend past lessons + any corrections from failed verifications
@@ -81,34 +81,32 @@ export default function register(api: OpenClawPluginApi) {
       processCache.set(key, existing);
 
       // Delayed re-check: after 15 seconds, verify the process is still alive
-      // If it died, inject a correction into the next turn
-      setTimeout(() => {
+      const timer = setTimeout(() => {
+        // Only fire if session is still active (key still in processCache)
+        if (!processCache.has(key)) return;
         const result = verifyAll([tracked]);
         if (!result.passed) {
           correctionCache.set(key, `Delayed check: ${result.reason}`);
         }
       }, 15_000);
+
+      const timers = delayedChecks.get(key) ?? [];
+      timers.push(timer);
+      delayedChecks.set(key, timers);
     }
 
     if (_event.toolName === "sessions_spawn") {
       const label = typeof _event.params.label === "string" ? _event.params.label : "subagent";
       const existing = processCache.get(key) ?? [];
-      existing.push({
-        process: label,
-        logFile: null,
-        command: `sessions_spawn: ${label}`,
-        startedAt: Date.now(),
-      });
+      existing.push(createSubagentEntry(label));
       processCache.set(key, existing);
     }
   });
 
   // After every model response — detect success claims and verify
   api.on("llm_output", (_event, ctx) => {
-    api.logger.info(`[selfhealing] llm_output FIRED`);
     const key = resolveKey(ctx);
     const text = _event.assistantTexts.join(" ");
-    api.logger.info(`[selfhealing] text=${text.slice(0, 100)} isClaim=${detectClaim(text)}`);
 
     const isClaim = detectClaim(text);
     if (!isClaim) return;
@@ -116,12 +114,20 @@ export default function register(api: OpenClawPluginApi) {
     api.logger.info(`[selfhealing] claim detected. key=${key}`);
 
     const tracked = processCache.get(key) ?? [];
+    // Only verify if there are exec processes — subagents can't be ps-checked
+    const execProcesses = tracked.filter((t) => t.kind === "exec");
+
     if (tracked.length === 0) {
       correctionCache.set(
         key,
         "You claimed success but no background processes or subagents were tracked. Verify the task is actually running before claiming completion.",
       );
       api.logger.info("[selfhealing] correction set — no processes tracked");
+      return;
+    }
+
+    if (execProcesses.length === 0) {
+      // Only subagents tracked — can't verify via OS, skip
       return;
     }
 
@@ -138,8 +144,12 @@ export default function register(api: OpenClawPluginApi) {
     const tracked = processCache.get(key) ?? [];
     const summary = tracked.map((p) => p.command.slice(0, 100)).join(" | ");
 
+    // Cancel any pending delayed checks for this session
+    const timers = delayedChecks.get(key) ?? [];
+    for (const t of timers) clearTimeout(t);
+    delayedChecks.delete(key);
+
     if (event.success && tracked.length > 0) {
-      // Don't trust event.success — verify processes are actually alive
       const verification = verifyAll(tracked);
       if (verification.passed) {
         await appendMemory(workspaceDir, {
@@ -148,7 +158,6 @@ export default function register(api: OpenClawPluginApi) {
           source: "session_success",
         });
       } else {
-        // Agent said success but processes are dead — write as failure
         await appendMemory(workspaceDir, {
           timestamp: new Date().toISOString(),
           lesson: `Session claimed success but verification failed: ${verification.reason}. Commands attempted: ${summary}`,
