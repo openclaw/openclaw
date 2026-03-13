@@ -47,10 +47,11 @@ describe("normalizeStoredCronJobs", () => {
     });
   });
 
-  it("does not report mutation when payload kind is already correctly cased", () => {
+  it("does not report legacyPayloadKind issue when payload kind is already correctly cased", () => {
     const jobs = [
       {
         id: "correctly-cased-job",
+        name: "Test Job",
         schedule: { kind: "cron", expr: "0 * * * *" },
         payload: {
           kind: "agentTurn",
@@ -59,6 +60,7 @@ describe("normalizeStoredCronJobs", () => {
       },
       {
         id: "correctly-cased-system-event",
+        name: "System Event Job",
         schedule: { kind: "cron", expr: "0 * * * *" },
         payload: {
           kind: "systemEvent",
@@ -71,11 +73,13 @@ describe("normalizeStoredCronJobs", () => {
 
     // Should not report legacyPayloadKind issue when kind is already correct
     expect(result.issues.legacyPayloadKind).toBeUndefined();
-    expect(jobs[0]?.payload).toMatchObject({
+    const payload0 = jobs[0]?.payload as Record<string, unknown> | undefined;
+    const payload1 = jobs[1]?.payload as Record<string, unknown> | undefined;
+    expect(payload0).toMatchObject({
       kind: "agentTurn",
       message: "already correct",
     });
-    expect(jobs[1]?.payload).toMatchObject({
+    expect(payload1).toMatchObject({
       kind: "systemEvent",
       text: "system message",
     });
@@ -85,6 +89,7 @@ describe("normalizeStoredCronJobs", () => {
     const jobs = [
       {
         id: "lowercase-agentturn",
+        name: "Uppercase AgentTurn",
         schedule: { kind: "cron", expr: "0 * * * *" },
         payload: {
           kind: "AGENTTURN",
@@ -93,6 +98,7 @@ describe("normalizeStoredCronJobs", () => {
       },
       {
         id: "mixed-case-systemevent",
+        name: "Mixed Case SystemEvent",
         schedule: { kind: "cron", expr: "0 * * * *" },
         payload: {
           kind: "SystemEvent",
@@ -105,11 +111,13 @@ describe("normalizeStoredCronJobs", () => {
 
     expect(result.mutated).toBe(true);
     expect(result.issues.legacyPayloadKind).toBe(2);
-    expect(jobs[0]?.payload).toMatchObject({
+    const payload0 = jobs[0]?.payload as Record<string, unknown> | undefined;
+    const payload1 = jobs[1]?.payload as Record<string, unknown> | undefined;
+    expect(payload0).toMatchObject({
       kind: "agentTurn",
       message: "uppercase",
     });
-    expect(jobs[1]?.payload).toMatchObject({
+    expect(payload1).toMatchObject({
       kind: "systemEvent",
       text: "mixed case",
     });
