@@ -8,27 +8,41 @@ import {
 import { createSessionManagerRuntimeRegistry } from "./pi-extensions/session-manager-runtime-registry.js";
 
 describe("applyDiscoveredContextWindows", () => {
-  it("keeps the largest context window when duplicate model ids are discovered across providers", () => {
+  it("keeps the smallest raw fallback while storing provider-scoped entries independently", () => {
     const cache = new Map<string, number>();
     applyDiscoveredContextWindows({
       cache,
       models: [
         { id: "gemini-3-flash", provider: "google", contextWindow: 1_000_000 },
-        { id: "github-copilot/gemini-3-flash", provider: "github-copilot", contextWindow: 128_000 },
+        { id: "gemini-3-flash", provider: "github-copilot", contextWindow: 128_000 },
       ],
     });
 
-    // Normalized bare key should take the largest value (V4.2)
-    expect(cache.get("gemini-3-flash")).toBe(1_000_000);
-    // Scoped keys should still preserve individual limits
+    // Raw fallback stays conservative.
+    expect(cache.get("gemini-3-flash")).toBe(128_000);
+    // Provider-aware callers can still recover the correct scoped limit.
     expect(cache.get("google::gemini-3-flash")).toBe(1_000_000);
     expect(cache.get("github-copilot::gemini-3-flash")).toBe(128_000);
+  });
+
+  it("preserves raw slash-containing discovery ids", () => {
+    const cache = new Map<string, number>();
+    applyDiscoveredContextWindows({
+      cache,
+      models: [
+        { id: "github-copilot/gemini-3.1-pro-preview", contextWindow: 128_000 },
+        { id: "google-gemini-cli/gemini-3.1-pro-preview", contextWindow: 1_048_576 },
+      ],
+    });
+
+    expect(cache.get("github-copilot/gemini-3.1-pro-preview")).toBe(128_000);
+    expect(cache.get("google-gemini-cli/gemini-3.1-pro-preview")).toBe(1_048_576);
   });
 });
 
 describe("applyConfiguredContextWindows", () => {
-  it("overrides discovered cache values with explicit models.providers contextWindow", () => {
-    const cache = new Map<string, number>([["claude-opus-4-6", 1_000_000]]);
+  it("keeps config authoritative without overwriting unrelated raw discovery ids", () => {
+    const cache = new Map<string, number>([["openrouter/anthropic/claude-opus-4-6", 1_000_000]]);
     applyConfiguredContextWindows({
       cache,
       modelsConfig: {
@@ -40,8 +54,29 @@ describe("applyConfiguredContextWindows", () => {
       },
     });
 
-    expect(cache.get("claude-opus-4-6")).toBe(200_000);
-    expect(cache.get("openrouter::claude-opus-4-6")).toBe(200_000);
+    expect(cache.get("anthropic/claude-opus-4-6")).toBe(200_000);
+    expect(cache.get("openrouter::anthropic/claude-opus-4-6")).toBe(200_000);
+    // Raw discovery entry is untouched.
+    expect(cache.get("openrouter/anthropic/claude-opus-4-6")).toBe(1_000_000);
+  });
+
+  it("adds scoped config entries without clobbering raw discovery keys", () => {
+    const cache = new Map<string, number>();
+    cache.set("google-gemini-cli/gemini-3.1-pro-preview", 1_048_576);
+    applyConfiguredContextWindows({
+      cache,
+      modelsConfig: {
+        providers: {
+          "google-gemini-cli": {
+            models: [{ id: "gemini-3.1-pro-preview", contextWindow: 200_000 }],
+          },
+        },
+      },
+    });
+
+    expect(cache.get("gemini-3.1-pro-preview")).toBe(200_000);
+    expect(cache.get("google-gemini-cli::gemini-3.1-pro-preview")).toBe(200_000);
+    expect(cache.get("google-gemini-cli/gemini-3.1-pro-preview")).toBe(1_048_576);
   });
 
   it("adds config-only model context windows and ignores invalid entries", () => {
@@ -52,7 +87,7 @@ describe("applyConfiguredContextWindows", () => {
         providers: {
           openrouter: {
             models: [
-              { id: "custom/model-name", contextWindow: 150_000 },
+              { id: "custom/model", contextWindow: 150_000 },
               { id: "bad/model", contextWindow: 0 },
               { id: "", contextWindow: 300_000 },
             ],
@@ -61,8 +96,8 @@ describe("applyConfiguredContextWindows", () => {
       },
     });
 
-    expect(cache.get("model-name")).toBe(150_000);
-    expect(cache.get("openrouter::model-name")).toBe(150_000);
+    expect(cache.get("custom/model")).toBe(150_000);
+    expect(cache.get("openrouter::custom/model")).toBe(150_000);
     expect(cache.has("bad/model")).toBe(false);
   });
 });

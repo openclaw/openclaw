@@ -6,9 +6,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { normalizeProviderId } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
-type ModelEntry = { id: string; contextWindow?: number };
+type ModelEntry = { id: string; provider?: string; contextWindow?: number };
 type ModelRegistryLike = {
   getAvailable?: () => ModelEntry[];
   getAll: () => ModelEntry[];
@@ -25,23 +26,12 @@ function normalizeModelId(modelId: string): string {
   return modelId.toLowerCase().trim();
 }
 
-function getBareModelId(modelId: string): string {
-  const normalized = normalizeModelId(modelId);
-  const slashIndex = normalized.indexOf("/");
-  if (slashIndex >= 0) {
-    return normalized.slice(slashIndex + 1);
-  }
-  return normalized;
-}
-
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
   maxMs: 60_000,
   factor: 2,
   jitter: 0,
 };
-
-const CONFIG_DERIVED_KEYS = new Set<string>();
 
 export function applyDiscoveredContextWindows(params: {
   cache: Map<string, number>;
@@ -57,28 +47,22 @@ export function applyDiscoveredContextWindows(params: {
       continue;
     }
 
-    const provider = (model as any).provider;
     const normalizedModelId = normalizeModelId(model.id);
-    const bareModelId = getBareModelId(model.id);
-
-    // 1. Scoped lookup (highest precedence)
-    if (provider) {
-      const scopedKey = `${provider.toLowerCase().trim()}::${bareModelId}`;
-      if (!CONFIG_DERIVED_KEYS.has(scopedKey)) {
-        const existingScoped = params.cache.get(scopedKey);
-        if (existingScoped === undefined || contextWindow < existingScoped) {
-          params.cache.set(scopedKey, contextWindow);
-        }
-      }
+    const existing = params.cache.get(normalizedModelId);
+    // Keep the conservative minimum on the raw model-id key. Provider-aware
+    // callers should use the provider-qualified lookup path first.
+    if (existing === undefined || contextWindow < existing) {
+      params.cache.set(normalizedModelId, contextWindow);
     }
 
-    // 2. Bare modelId lookup (legacy/fallback precedence)
-    if (!CONFIG_DERIVED_KEYS.has(bareModelId)) {
-      const existingBare = params.cache.get(bareModelId);
-      // For the global bare-id cache, prefer the largest window to avoid proxy poisoning (V4.2)
-      if (existingBare === undefined || contextWindow > existingBare) {
-        params.cache.set(bareModelId, contextWindow);
-      }
+    const provider = typeof model.provider === "string" ? model.provider : undefined;
+    if (!provider) {
+      continue;
+    }
+    const scopedKey = `${normalizeProviderId(provider)}::${normalizedModelId}`;
+    const existingScoped = params.cache.get(scopedKey);
+    if (existingScoped === undefined || contextWindow < existingScoped) {
+      params.cache.set(scopedKey, contextWindow);
     }
   }
 }
@@ -103,18 +87,14 @@ export function applyConfiguredContextWindows(params: {
         continue;
       }
 
-      const normalizedProvider = providerId.toLowerCase().trim();
+      const normalizedProvider = normalizeProviderId(providerId);
       const normalizedModelId = normalizeModelId(modelId);
-      const bareModelId = getBareModelId(modelId);
 
-      // Set scoped key (Config overrides discovery)
-      const scopedKey = `${normalizedProvider}::${bareModelId}`;
-      params.cache.set(scopedKey, contextWindow);
-      CONFIG_DERIVED_KEYS.add(scopedKey);
-
-      // Set bare key (Config overrides discovery)
-      params.cache.set(bareModelId, contextWindow);
-      CONFIG_DERIVED_KEYS.add(bareModelId);
+      // Config remains authoritative on the exact model-id fallback key.
+      params.cache.set(normalizedModelId, contextWindow);
+      // Provider-scoped cache keys live in a separate namespace, so these
+      // writes cannot collide with raw slash-containing discovery ids.
+      params.cache.set(`${normalizedProvider}::${normalizedModelId}`, contextWindow);
     }
   }
 }
@@ -234,16 +214,43 @@ export function lookupContextTokens(modelId?: string, provider?: string): number
   const normalizedModelId = normalizeModelId(modelId);
 
   if (provider) {
-    const scopedKey = `${provider.toLowerCase().trim()}::${getBareModelId(normalizedModelId)}`;
+    const normalizedProvider = normalizeProviderId(provider);
+    const scopedKey = `${normalizedProvider}::${normalizedModelId}`;
     const scopedLimit = MODEL_CACHE.get(scopedKey);
     if (scopedLimit !== undefined) {
       return scopedLimit;
     }
+
+    // Legacy discovery entries may still be stored as provider/model raw ids.
+    if (!normalizedModelId.includes("/")) {
+      const qualifiedLimit = MODEL_CACHE.get(`${normalizedProvider}/${normalizedModelId}`);
+      if (qualifiedLimit !== undefined) {
+        return qualifiedLimit;
+      }
+    }
   }
 
-  // Fallback to legacy behavior where we check for a bare modelId match.
-  const bareModelId = getBareModelId(normalizedModelId);
-  return MODEL_CACHE.get(bareModelId);
+  const directLimit = MODEL_CACHE.get(normalizedModelId);
+  if (directLimit !== undefined) {
+    return directLimit;
+  }
+
+  // For model-only calls with slash-containing ids, also try the inferred
+  // provider-qualified namespace. This keeps bare callers compatible with the
+  // provider-aware cache when the model string already carries provider context.
+  const slash = normalizedModelId.indexOf("/");
+  if (!provider && slash > 0) {
+    const inferredProvider = normalizeProviderId(normalizedModelId.slice(0, slash));
+    const inferredModel = normalizedModelId.slice(slash + 1).trim();
+    if (inferredModel) {
+      const inferredScoped = MODEL_CACHE.get(`${inferredProvider}::${inferredModel}`);
+      if (inferredScoped !== undefined) {
+        return inferredScoped;
+      }
+    }
+  }
+
+  return undefined;
 }
 
 if (!shouldSkipEagerContextWindowWarmup()) {
@@ -281,18 +288,64 @@ function resolveProviderModelRef(params: {
   }
   const providerRaw = params.provider?.trim();
   if (providerRaw) {
-    return { provider: providerRaw.toLowerCase(), model: normalizeModelId(modelRaw) };
+    // Keep the exact model id when the provider is explicit. Some providers use
+    // slash-containing model identifiers (for example OpenRouter namespaced ids).
+    return { provider: normalizeProviderId(providerRaw), model: modelRaw };
   }
   const slash = modelRaw.indexOf("/");
   if (slash <= 0) {
     return undefined;
   }
-  const provider = modelRaw.slice(0, slash).trim().toLowerCase();
+  const provider = normalizeProviderId(modelRaw.slice(0, slash));
   const model = modelRaw.slice(slash + 1).trim();
   if (!provider || !model) {
     return undefined;
   }
-  return { provider, model: normalizeModelId(model) };
+  return { provider, model };
+}
+
+// Look up an explicit contextWindow override for a specific provider+model
+// directly from config, without going through the shared discovery cache.
+// This avoids cache-key ambiguity for slash-containing provider-local ids.
+function resolveConfiguredProviderContextWindow(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  model: string,
+): number | undefined {
+  const providers = (cfg?.models as ModelsConfig | undefined)?.providers;
+  if (!providers) {
+    return undefined;
+  }
+
+  function findContextWindow(matchProviderId: (id: string) => boolean): number | undefined {
+    for (const [providerId, providerConfig] of Object.entries(providers)) {
+      if (!matchProviderId(providerId)) {
+        continue;
+      }
+      if (!Array.isArray(providerConfig?.models)) {
+        continue;
+      }
+      for (const m of providerConfig.models) {
+        if (
+          typeof m?.id === "string" &&
+          m.id === model &&
+          typeof m?.contextWindow === "number" &&
+          m.contextWindow > 0
+        ) {
+          return m.contextWindow;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  const exactResult = findContextWindow((id) => id.trim().toLowerCase() === provider.toLowerCase());
+  if (exactResult !== undefined) {
+    return exactResult;
+  }
+
+  const normalizedProvider = normalizeProviderId(provider);
+  return findContextWindow((id) => normalizeProviderId(id) === normalizedProvider);
 }
 
 function isAnthropic1MModel(provider: string, model: string): boolean {
@@ -325,6 +378,16 @@ export function resolveContextTokensForModel(params: {
     const modelParams = resolveConfiguredModelParams(params.cfg, ref.provider, ref.model);
     if (modelParams?.context1m === true && isAnthropic1MModel(ref.provider, ref.model)) {
       return ANTHROPIC_CONTEXT_1M_TOKENS;
+    }
+    if (params.provider) {
+      const configuredWindow = resolveConfiguredProviderContextWindow(
+        params.cfg,
+        ref.provider,
+        ref.model,
+      );
+      if (configuredWindow !== undefined) {
+        return configuredWindow;
+      }
     }
   }
 
