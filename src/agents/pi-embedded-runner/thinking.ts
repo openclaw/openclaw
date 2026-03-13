@@ -13,7 +13,7 @@ export function isAssistantMessageWithContent(message: AgentMessage): message is
 }
 
 /**
- * Strip all `type: "thinking"` content blocks from assistant messages.
+ * Strip all `type: "thinking"` and `type: "redacted_thinking"` content blocks from assistant messages.
  *
  * If an assistant message becomes empty after stripping, it is replaced with
  * a synthetic `{ type: "text", text: "" }` block to preserve turn structure
