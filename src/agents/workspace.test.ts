@@ -29,7 +29,8 @@ describe("resolveDefaultAgentWorkspaceDir", () => {
   });
 });
 
-const WORKSPACE_STATE_PATH_SEGMENTS = [".openclaw", "workspace-state.json"] as const;
+const WORKSPACE_STATE_PATH_SEGMENTS = ["workspace-state.json"] as const;
+const LEGACY_WORKSPACE_STATE_PATH_SEGMENTS = [".openclaw", "workspace-state.json"] as const;
 
 async function readOnboardingState(dir: string): Promise<{
   version: number;
@@ -121,6 +122,26 @@ describe("ensureAgentWorkspace", () => {
     const state = await readOnboardingState(tempDir);
     expect(state.bootstrapSeededAt).toBeUndefined();
     expect(state.onboardingCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("migrates legacy workspace onboarding state to workspace root", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    const legacyDir = path.join(tempDir, ".openclaw");
+    const legacyPath = path.join(tempDir, ...LEGACY_WORKSPACE_STATE_PATH_SEGMENTS);
+    const legacyState = {
+      version: 1,
+      bootstrapSeededAt: "2026-03-13T08:00:00.000Z",
+      onboardingCompletedAt: "2026-03-13T08:00:01.000Z",
+    };
+    await fs.mkdir(legacyDir, { recursive: true });
+    await fs.writeFile(legacyPath, `${JSON.stringify(legacyState, null, 2)}\n`, "utf-8");
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    const migrated = await readOnboardingState(tempDir);
+    expect(migrated.bootstrapSeededAt).toBe(legacyState.bootstrapSeededAt);
+    expect(migrated.onboardingCompletedAt).toBe(legacyState.onboardingCompletedAt);
+    await expect(fs.access(legacyPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("treats memory-backed workspaces as existing even when template files are missing", async () => {
