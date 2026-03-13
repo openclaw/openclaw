@@ -357,6 +357,7 @@ export type StreamingEvent =
   | z.infer<typeof ResponseCreatedEventSchema>
   | z.infer<typeof ResponseInProgressEventSchema>
   | z.infer<typeof ResponseCompletedEventSchema>
+  | z.infer<typeof ResponseIncompleteEventSchema>
   | z.infer<typeof ResponseFailedEventSchema>
   | z.infer<typeof OutputItemAddedEventSchema>
   | z.infer<typeof OutputItemDoneEventSchema>
