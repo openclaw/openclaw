@@ -16,6 +16,8 @@ export type ExecApprovalForwardingConfig = {
   enabled?: boolean;
   /** Delivery mode (session=origin chat, targets=config targets, both=both). Default: session. */
   mode?: ExecApprovalForwardingMode;
+  /** Skip Unix socket forwarding and use Telegram/Discord directly. Default: false. */
+  bypassSocket?: boolean;
   /** Only forward approvals for these agent IDs. Omit = all agents. */
   agentFilter?: string[];
   /** Only forward approvals matching these session key patterns (substring or regex). */
