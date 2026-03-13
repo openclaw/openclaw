@@ -4,12 +4,12 @@ import { normalizeProviderId } from "../../../agents/model-selection.js";
 import { parseDurationMs } from "../../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
-import type { ApiKeyStorageOptions } from "../../../onboard-auth.credentials.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import { normalizeSecretInput } from "../../../utils/normalize-secret-input.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-token.js";
+import type { ApiKeyStorageOptions } from "../../onboard-auth.credentials.js";
 import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
