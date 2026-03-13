@@ -261,7 +261,7 @@ export class GatewayBrowserClient {
     const authToken = selectedAuth.authToken;
     const deviceToken = selectedAuth.authDeviceToken ?? selectedAuth.resolvedDeviceToken;
     const auth =
-      authToken || selectedAuth.authPassword
+      authToken || selectedAuth.authPassword || deviceToken
         ? {
             token: authToken,
             deviceToken,
@@ -447,9 +447,13 @@ export class GatewayBrowserClient {
       Boolean(explicitGatewayToken) &&
       Boolean(storedToken) &&
       isTrustedRetryEndpoint(this.opts.url);
-    const resolvedDeviceToken = !(explicitGatewayToken || authPassword)
-      ? (storedToken ?? undefined)
-      : undefined;
+    // Always resolve the device token independently of shared credentials.
+    // The gateway server supports deviceToken fallback when the shared
+    // token/password is absent or invalid.  Suppressing the stored token
+    // caused reconnects to fail with "device identity required" after SPA
+    // navigation dropped the shared token from the URL hash (#39611,
+    // #39667, #44485).
+    const resolvedDeviceToken = storedToken ?? undefined;
     const authToken = explicitGatewayToken ?? resolvedDeviceToken;
     return {
       authToken,
