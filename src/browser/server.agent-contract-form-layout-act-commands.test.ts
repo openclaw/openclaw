@@ -156,7 +156,6 @@ describe("browser control server", () => {
         kind: "evaluate",
         fn: "() => 1",
       });
-
       expect(res.error).toContain("browser.evaluateEnabled=false");
       expect(pwMocks.evaluateViaPlaywright).not.toHaveBeenCalled();
     },
