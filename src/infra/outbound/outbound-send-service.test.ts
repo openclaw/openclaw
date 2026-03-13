@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   sendPoll: vi.fn(),
   getAgentScopedMediaLocalRoots: vi.fn(() => ["/tmp/agent-roots"]),
+  appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
 }));
 
 vi.mock("../../channels/plugins/message-actions.js", () => ({
@@ -26,6 +27,10 @@ vi.mock("../../media/local-roots.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../../config/sessions.js", () => ({
+  appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
+}));
+
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
 
 describe("executeSendAction", () => {
@@ -35,6 +40,7 @@ describe("executeSendAction", () => {
     mocks.sendPoll.mockClear();
     mocks.getDefaultMediaLocalRoots.mockClear();
     mocks.getAgentScopedMediaLocalRoots.mockClear();
+    mocks.appendAssistantMessageToSessionTranscript.mockClear();
   });
 
   it("forwards ctx.agentId to sendMessage on core outbound path", async () => {
@@ -123,6 +129,41 @@ describe("executeSendAction", () => {
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
       expect.objectContaining({
         mediaLocalRoots: ["/tmp/agent-roots"],
+      }),
+    );
+  });
+
+  it("passes mirror idempotency keys through plugin-handled sends", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue({
+      ok: true,
+      value: { messageId: "msg-plugin" },
+      continuePrompt: "",
+      output: "",
+      sessionId: "s1",
+      model: "gpt-5.2",
+      usage: {},
+    });
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", message: "hello" },
+        dryRun: false,
+        mirror: {
+          sessionKey: "agent:main:discord:channel:123",
+          idempotencyKey: "idem-plugin-send-1",
+        },
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:discord:channel:123",
+        text: "hello",
+        idempotencyKey: "idem-plugin-send-1",
       }),
     );
   });
