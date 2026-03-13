@@ -96,6 +96,40 @@ function resolveRuntimeHooks(params?: {
   return params?.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
 }
 
+/**
+ * Heuristic to detect vision-capable models based on their model ID.
+ * OpenRouter models often follow naming patterns that indicate vision support.
+ */
+function isLikelyVisionModel(modelId: string): boolean {
+  const lower = modelId.toLowerCase();
+  const visionPatterns = [
+    /vision/,
+    /\bvl\b/, // "vl" as a separate segment (e.g., qwen-vl, MiniMax-VL-01)
+    /-vl-/, // "vl" as a segment (e.g., qwen2-vl-72b)
+    /visual/,
+    /claude-3/,
+    /claude-opus-4/,
+    /claude-sonnet-4/,
+    /claude-haiku-4/,
+    /gpt-4o/,
+    /gpt-4-turbo/,
+    /gpt-4-vision/,
+    /gpt-5/,
+    /gemini-1\.5/,
+    /gemini-2/,
+    /gemini-pro-vision/,
+    /gemini-flash/,
+    /llava/,
+    /llama-3\.2.*vision/,
+    /pixtral/,
+    /qwen-vl/,
+    /qwen2-vl/,
+    /qwen2\.5-vl/,
+  ];
+  return visionPatterns.some((pattern) => pattern.test(lower));
+}
+
+
 function applyResolvedTransportFallback(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -468,6 +502,44 @@ function resolveConfiguredFallbackModel(params: {
 }): Model<Api> | undefined {
   const { provider, modelId, cfg, agentDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const normalizedProvider = normalizeProviderId(provider);
+
+  // OpenRouter is a pass-through proxy - any model ID available on OpenRouter
+  // should work without being pre-registered in the local catalog.
+  // This fallback uses heuristics when the plugin-based capability lookup returns nothing.
+  if (normalizedProvider === "openrouter") {
+    const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
+    const configuredInput = configuredModel?.input;
+    // Use configured input if available, otherwise detect vision models by ID pattern
+    const resolvedInput: Array<"text" | "image"> =
+      Array.isArray(configuredInput) && configuredInput.length > 0
+        ? configuredInput.filter(
+            (item): item is "text" | "image" => item === "text" || item === "image",
+          )
+        : isLikelyVisionModel(modelId)
+          ? ["text", "image"]
+          : ["text"];
+    return normalizeResolvedModel({
+      provider,
+      cfg,
+      agentDir,
+      model: {
+        id: modelId,
+        name: modelId,
+        api: "openai-completions",
+        provider,
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: configuredModel?.reasoning ?? false,
+        input: resolvedInput,
+        cost: configuredModel?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: configuredModel?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+        // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
+        maxTokens: configuredModel?.maxTokens ?? 8192,
+      } as Model<Api>,
+      runtimeHooks,
+    });
+  }
+
   const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,

@@ -597,16 +597,24 @@ describe("resolveModel", () => {
     });
   });
 
-  it("falls back to text-only when OpenRouter API cache is empty", () => {
+  it("falls back to heuristic vision detection when OpenRouter API cache is empty", () => {
     mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
 
-    const result = resolveModelForTest("openrouter", "openrouter/healer-alpha", "/tmp/agent");
-
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
+    // Vision model detected by heuristic
+    const visionResult = resolveModelForTest("openrouter", "openai/gpt-4o", "/tmp/agent");
+    expect(visionResult.error).toBeUndefined();
+    expect(visionResult.model).toMatchObject({
       provider: "openrouter",
-      id: "openrouter/healer-alpha",
-      reasoning: false,
+      id: "openai/gpt-4o",
+      input: ["text", "image"],
+    });
+
+    // Non-vision model defaults to text-only
+    const textResult = resolveModelForTest("openrouter", "deepseek/deepseek-chat", "/tmp/agent");
+    expect(textResult.error).toBeUndefined();
+    expect(textResult.model).toMatchObject({
+      provider: "openrouter",
+      id: "deepseek/deepseek-chat",
       input: ["text"],
     });
   });
@@ -702,6 +710,110 @@ describe("resolveModel", () => {
     expect(result.model).toMatchObject({
       provider: "openrouter",
       id: "openrouter/healer-alpha",
+      input: ["text", "image"],
+    });
+  });
+
+  it("resolves OpenRouter vision models with image input based on configured model", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("anthropic/claude-opus-4-6"),
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModelForTest("openrouter", "anthropic/claude-opus-4-6", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "anthropic/claude-opus-4-6",
+      input: ["text", "image"],
+    });
+  });
+
+  it("resolves OpenRouter vision models by model ID pattern heuristic", () => {
+    // Without explicit config, vision models are detected by ID pattern
+    mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
+    const visionModelIds = [
+      "openai/gpt-4o",
+      "openai/gpt-4-turbo",
+      "anthropic/claude-3-opus",
+      "anthropic/claude-sonnet-4-5",
+      "google/gemini-1.5-pro",
+      "google/gemini-flash-2.0",
+      "qwen/qwen2-vl-72b",
+      "mistralai/pixtral-large",
+      "meta-llama/llama-3.2-90b-vision",
+    ];
+
+    for (const modelId of visionModelIds) {
+      const result = resolveModelForTest("openrouter", modelId, "/tmp/agent");
+
+      expect(result.error).toBeUndefined();
+      expect(result.model?.input).toContain("image");
+      expect(result.model?.input).toContain("text");
+    }
+  });
+
+  it("resolves OpenRouter text-only models without image input", () => {
+    // Models without vision patterns default to text-only
+    mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
+    const textOnlyModelIds = [
+      "deepseek/deepseek-chat",
+      "meta-llama/llama-3.1-70b-instruct",
+      "mistralai/mistral-large",
+    ];
+
+    for (const modelId of textOnlyModelIds) {
+      const result = resolveModelForTest("openrouter", modelId, "/tmp/agent");
+
+      expect(result.error).toBeUndefined();
+      expect(result.model?.input).toEqual(["text"]);
+    }
+  });
+
+  it("uses explicitly configured imageModel.primary with OpenRouter (#44648)", () => {
+    // Regression test: when imageModel.primary is configured to an OpenRouter vision model,
+    // the model should resolve with image input capability
+    const cfg = {
+      agents: {
+        defaults: {
+          imageModel: { primary: "openrouter/openai/gpt-4o" },
+        },
+      },
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("openai/gpt-4o"),
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("openrouter", "openai/gpt-4o", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "openai/gpt-4o",
       input: ["text", "image"],
     });
   });
