@@ -154,6 +154,8 @@ function applySkillConfigEnvOverrides(params: {
   }
 
   const pendingOverrides: Record<string, string> = {};
+
+  // Step 1 — skill-level env (highest user-configured precedence).
   if (skillConfig.env) {
     for (const [rawKey, envValue] of Object.entries(skillConfig.env)) {
       const envKey = rawKey.trim();
@@ -166,6 +168,7 @@ function applySkillConfigEnvOverrides(params: {
     }
   }
 
+  // Step 2 — apiKey fallback for the skill's primary env var.
   const resolvedApiKey =
     normalizeResolvedSecretInputString({
       value: skillConfig.apiKey,
@@ -210,16 +213,56 @@ function createEnvReverter(updates: EnvUpdate[]) {
   };
 }
 
+/**
+ * Second-pass: inject global skills.env defaults for any keys not already
+ * acquired by a per-skill override. Running this after all per-skill overrides
+ * ensures skill-level env always wins, regardless of iteration order.
+ */
+function applyGlobalEnvPass(params: { updates: EnvUpdate[]; globalEnv: Record<string, string> }) {
+  const { updates, globalEnv } = params;
+  if (Object.keys(globalEnv).length === 0) {
+    return;
+  }
+  // All global env keys are explicitly user-configured, so allow sensitive names.
+  const allowedSensitiveKeys = new Set(
+    Object.keys(globalEnv)
+      .map((k) => k.trim())
+      .filter(Boolean),
+  );
+  const sanitized = sanitizeSkillEnvOverrides({
+    overrides: globalEnv,
+    allowedSensitiveKeys,
+  });
+
+  for (const [envKey, envValue] of Object.entries(sanitized.allowed)) {
+    // Skip only if the key is externally managed (set outside our ref-counting system).
+    // Keys already active from a skill override are still acquired here so that the
+    // ref-count is incremented — this prevents a concurrent session's revert from
+    // releasing the variable while this session is still running.
+    if (process.env[envKey] !== undefined && !activeSkillEnvEntries.has(envKey)) {
+      continue;
+    }
+    if (!acquireActiveSkillEnvKey(envKey, envValue)) {
+      continue;
+    }
+    updates.push({ key: envKey });
+    // If a skill already owns this key, acquireActiveSkillEnvKey keeps its value;
+    // process.env already reflects the skill's value, so no assignment needed.
+    if (!activeSkillEnvEntries.get(envKey) || process.env[envKey] === undefined) {
+      process.env[envKey] = activeSkillEnvEntries.get(envKey)?.value ?? envValue;
+    }
+  }
+}
+
 export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: OpenClawConfig }) {
   const { skills, config } = params;
   const updates: EnvUpdate[] = [];
+  const globalEnv = config?.skills?.env ?? {};
 
+  // Pass 1: per-skill env and apiKey overrides (higher precedence than global).
   for (const entry of skills) {
     const skillKey = resolveSkillKey(entry.skill, entry);
-    const skillConfig = resolveSkillConfig(config, skillKey);
-    if (!skillConfig) {
-      continue;
-    }
+    const skillConfig = resolveSkillConfig(config, skillKey) ?? {};
 
     applySkillConfigEnvOverrides({
       updates,
@@ -229,6 +272,9 @@ export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: 
       skillKey,
     });
   }
+
+  // Pass 2: global env defaults — only fills keys not set by any skill above.
+  applyGlobalEnvPass({ updates, globalEnv });
 
   return createEnvReverter(updates);
 }
@@ -242,12 +288,11 @@ export function applySkillEnvOverridesFromSnapshot(params: {
     return () => {};
   }
   const updates: EnvUpdate[] = [];
+  const globalEnv = config?.skills?.env ?? {};
 
+  // Pass 1: per-skill env and apiKey overrides.
   for (const skill of snapshot.skills) {
-    const skillConfig = resolveSkillConfig(config, skill.name);
-    if (!skillConfig) {
-      continue;
-    }
+    const skillConfig = resolveSkillConfig(config, skill.name) ?? {};
 
     applySkillConfigEnvOverrides({
       updates,
@@ -257,6 +302,9 @@ export function applySkillEnvOverridesFromSnapshot(params: {
       skillKey: skill.name,
     });
   }
+
+  // Pass 2: global env defaults — only fills keys not set by any skill above.
+  applyGlobalEnvPass({ updates, globalEnv });
 
   return createEnvReverter(updates);
 }

@@ -857,6 +857,7 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         entries: z.record(z.string(), SkillEntrySchema).optional(),
+        env: z.record(z.string(), z.string()).optional(),
       })
       .strict()
       .optional(),

@@ -44,4 +44,15 @@ export type SkillsConfig = {
   install?: SkillsInstallConfig;
   limits?: SkillsLimitsConfig;
   entries?: Record<string, SkillConfig>;
+  /**
+   * Global environment variable overrides shared across all skills.
+   * Individual skill `env` entries take precedence over these globals.
+   * Useful for API keys or shared config that multiple skills need.
+   *
+   * @example
+   * ```json
+   * { "skills": { "env": { "OPENAI_API_KEY": "sk-..." } } }
+   * ```
+   */
+  env?: Record<string, string>;
 };

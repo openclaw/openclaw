@@ -182,6 +182,7 @@ function buildSkillStatus(
   const isEnvSatisfied = (envName: string) =>
     Boolean(
       process.env[envName] ||
+      config?.skills?.env?.[envName] ||
       skillConfig?.env?.[envName] ||
       (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
     );
