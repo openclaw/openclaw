@@ -175,4 +175,67 @@ describe("before_agent_start hook merger", () => {
     expect(result?.modelOverride).toBe("llama3.3:8b");
     expect(result?.providerOverride).toBe("ollama");
   });
+
+  // =========================================================================
+  // skip flag
+  // =========================================================================
+
+  it("returns skip=true from a single plugin", async () => {
+    const result = await runWithSingleHook({ skip: true });
+    expect(result?.skip).toBe(true);
+  });
+
+  it("skip=true propagates even when other fields are set", async () => {
+    const result = await runWithSingleHook({
+      skip: true,
+      prependContext: "some context",
+      modelOverride: "gpt-4o",
+    });
+    expect(result?.skip).toBe(true);
+    expect(result?.prependContext).toBe("some context");
+    expect(result?.modelOverride).toBe("gpt-4o");
+  });
+
+  it("skip=true from any plugin wins during merge", async () => {
+    addBeforeAgentStartHook(registry, "observer-plugin", () => ({ skip: true }), 10);
+    addBeforeAgentStartHook(
+      registry,
+      "context-plugin",
+      () => ({ prependContext: "extra context" }),
+      1,
+    );
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+
+    expect(result?.skip).toBe(true);
+    expect(result?.prependContext).toBe("extra context");
+  });
+
+  it("skip=false does not skip", async () => {
+    const result = await runWithSingleHook({ skip: false, prependContext: "ctx" });
+    expect(result?.skip).toBeFalsy();
+    expect(result?.prependContext).toBe("ctx");
+  });
+
+  it("skip defaults to undefined when not set", async () => {
+    const result = await runWithSingleHook({ prependContext: "ctx" });
+    expect(result?.skip).toBeUndefined();
+  });
+
+  it("lower-priority plugin setting skip=true still propagates", async () => {
+    addBeforeAgentStartHook(
+      registry,
+      "high-priority",
+      () => ({ modelOverride: "llama3.3:8b" }),
+      10,
+    );
+    addBeforeAgentStartHook(registry, "low-priority", () => ({ skip: true }), 1);
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+
+    expect(result?.skip).toBe(true);
+    expect(result?.modelOverride).toBe("llama3.3:8b");
+  });
 });
