@@ -27,6 +27,15 @@ describe("resolveGlobalSingleton", () => {
     expect(resolveGlobalSingleton(TEST_KEY, create)).toBeUndefined();
     expect(create).toHaveBeenCalledTimes(1);
   });
+
+  it("reuses a prepopulated global value without calling the factory", () => {
+    const existing = { value: 7 };
+    const create = vi.fn(() => ({ value: 1 }));
+    (globalThis as Record<PropertyKey, unknown>)[TEST_KEY] = existing;
+
+    expect(resolveGlobalSingleton(TEST_KEY, create)).toBe(existing);
+    expect(create).not.toHaveBeenCalled();
+  });
 });
 
 describe("resolveGlobalMap", () => {
@@ -35,5 +44,12 @@ describe("resolveGlobalMap", () => {
     const second = resolveGlobalMap<string, number>(TEST_MAP_KEY);
 
     expect(first).toBe(second);
+  });
+
+  it("preserves existing map contents across repeated resolution", () => {
+    const map = resolveGlobalMap<string, number>(TEST_MAP_KEY);
+    map.set("a", 1);
+
+    expect(resolveGlobalMap<string, number>(TEST_MAP_KEY).get("a")).toBe(1);
   });
 });
