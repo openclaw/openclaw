@@ -1988,6 +1988,8 @@ install_openclaw() {
         local current_version=""
         current_version="$(resolve_openclaw_version)"
         if semver_equal "$current_version" "$resolved_version"; then
+            # Still ensure bin link is intact (may have been broken by interrupted install)
+            ensure_openclaw_bin_link || true
             ui_success "OpenClaw is already up to date (v${resolved_version}). Use --force to reinstall."
             return 0
         fi
