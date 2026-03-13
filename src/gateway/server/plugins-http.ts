@@ -64,6 +64,12 @@ export function createGatewayPluginRequestHandler(params: {
   log: SubsystemLogger;
 }): PluginHttpRequestHandler {
   const { registry, log } = params;
+  // Share the authoritative registry via process so it is reachable across
+  // jiti VM realm boundaries.  Plugin loading through jiti may create
+  // separate VM contexts where the registry object identity differs; this
+  // ensures findMatchingPluginHttpRoutes always sees the real routes.
+  (process as unknown as { __openclawPluginRegistry?: PluginRegistry }).__openclawPluginRegistry =
+    registry;
   return async (req, res, providedPathContext, dispatchContext) => {
     const routes = registry.httpRoutes ?? [];
     if (routes.length === 0) {

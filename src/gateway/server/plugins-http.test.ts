@@ -87,6 +87,10 @@ async function createSubagentRuntime(): Promise<PluginRuntime["subagent"]> {
 }
 
 describe("createGatewayPluginRequestHandler", () => {
+  beforeEach(() => {
+    (process as unknown as { __openclawPluginRegistry?: unknown }).__openclawPluginRegistry =
+      undefined;
+  });
   it("caps unauthenticated plugin routes to non-admin subagent scopes", async () => {
     loadOpenClawPlugins.mockReset();
     handleGatewayRequest.mockReset();
