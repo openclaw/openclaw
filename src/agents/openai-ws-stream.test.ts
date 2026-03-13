@@ -362,18 +362,16 @@ describe("convertTools", () => {
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({
       type: "function",
-      function: {
-        name: "exec",
-        description: "Run a command",
-        parameters: { type: "object", properties: { cmd: { type: "string" } } },
-      },
+      name: "exec",
+      description: "Run a command",
+      parameters: { type: "object", properties: { cmd: { type: "string" } } },
     });
   });
 
   it("handles tools without description", () => {
     const tools = [{ name: "ping", description: "", parameters: {} }];
     const result = convertTools(tools as Parameters<typeof convertTools>[0]);
-    expect(result[0]?.function?.name).toBe("ping");
+    expect(result[0]?.name).toBe("ping");
   });
 });
 
@@ -445,6 +443,35 @@ describe("convertMessagesToInputItems", () => {
       type: "message",
       role: "assistant",
       content: "Let me run that.",
+      phase: "commentary",
+    });
+  });
+
+  it("preserves assistant phase from textSignature metadata without local phase field", () => {
+    const msg = {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "text" as const,
+          text: "Working on it.",
+          textSignature: JSON.stringify({ v: 1, id: "msg_sig", phase: "commentary" }),
+        },
+      ],
+      stopReason: "stop",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {},
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems([msg] as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      type: "message",
+      role: "assistant",
+      content: "Working on it.",
       phase: "commentary",
     });
   });
@@ -553,6 +580,34 @@ describe("convertMessagesToInputItems", () => {
     >[0]);
     expect(items).toHaveLength(1);
     expect((items[0] as { content?: unknown }).content).toBe("Here is my answer.");
+  });
+
+  it("replays reasoning blocks from thinking signatures", () => {
+    const msg = {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "thinking" as const,
+          thinking: "internal reasoning...",
+          thinkingSignature: JSON.stringify({
+            type: "reasoning",
+            id: "rs_test",
+            summary: [],
+          }),
+        },
+        { type: "text" as const, text: "Here is my answer." },
+      ],
+      stopReason: "stop",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {},
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems([msg] as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items.map((item) => item.type)).toEqual(["reasoning", "message"]);
   });
 
   it("returns empty array for empty messages", () => {

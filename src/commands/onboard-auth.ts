@@ -52,10 +52,6 @@ export {
   applyMinimaxApiConfigCn,
   applyMinimaxApiProviderConfig,
   applyMinimaxApiProviderConfigCn,
-  applyMinimaxConfig,
-  applyMinimaxHostedConfig,
-  applyMinimaxHostedProviderConfig,
-  applyMinimaxProviderConfig,
 } from "./onboard-auth.config-minimax.js";
 
 export {
