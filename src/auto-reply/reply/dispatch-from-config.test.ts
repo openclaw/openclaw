@@ -543,6 +543,51 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("delivers deterministic exec approval tool payloads in groups", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "group",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onToolResult?.({
+        text: "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
+        channelData: {
+          execApproval: {
+            approvalId: "117ba06d-1111-2222-3333-444444444444",
+            approvalSlug: "117ba06d",
+            allowedDecisions: ["allow-once", "allow-always", "deny"],
+          },
+        },
+      });
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
+    expect(firstToolResultPayload(dispatcher)).toEqual(
+      expect.objectContaining({
+        text: "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
+        channelData: {
+          execApproval: {
+            approvalId: "117ba06d-1111-2222-3333-444444444444",
+            approvalSlug: "117ba06d",
+            allowedDecisions: ["allow-once", "allow-always", "deny"],
+          },
+        },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "NO_REPLY" });
+  });
+
   it("sends tool results via dispatcher in DM sessions", async () => {
     setNoAbort();
     const cfg = emptyConfig;
@@ -599,6 +644,50 @@ describe("dispatchReplyFromConfig", () => {
     expect(sent?.mediaUrl).toBe("https://example.com/tts-native.opus");
     expect(sent?.text).toBeUndefined();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers deterministic exec approval tool payloads for native commands", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      CommandSource: "native",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onToolResult?.({
+        text: "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
+        channelData: {
+          execApproval: {
+            approvalId: "117ba06d-1111-2222-3333-444444444444",
+            approvalSlug: "117ba06d",
+            allowedDecisions: ["allow-once", "allow-always", "deny"],
+          },
+        },
+      });
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
+    expect(firstToolResultPayload(dispatcher)).toEqual(
+      expect.objectContaining({
+        channelData: {
+          execApproval: {
+            approvalId: "117ba06d-1111-2222-3333-444444444444",
+            approvalSlug: "117ba06d",
+            allowedDecisions: ["allow-once", "allow-always", "deny"],
+          },
+        },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "NO_REPLY" });
   });
 
   it("fast-aborts without calling the reply resolver", async () => {
@@ -1537,6 +1626,47 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses local discord exec approval tool prompts when discord approvals are enabled", async () => {
+    setNoAbort();
+    const cfg = {
+      channels: {
+        discord: {
+          enabled: true,
+          execApprovals: {
+            enabled: true,
+            approvers: ["123"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      AccountId: "default",
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, options?: GetReplyOptions) => {
+      await options?.onToolResult?.({
+        text: "Approval required.",
+        channelData: {
+          execApproval: {
+            approvalId: "12345678-1234-1234-1234-123456789012",
+            approvalSlug: "12345678",
+            allowedDecisions: ["allow-once", "allow-always", "deny"],
+          },
+        },
+      });
+      return { text: "done" } as ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "done" }),
+    );
   });
 
   it("deduplicates same-agent inbound replies across main and direct session keys", async () => {

@@ -6,8 +6,9 @@ import {
 } from "./probe-auth.js";
 
 describe("resolveGatewayProbeAuthSafe", () => {
-  it("returns probe auth credentials when available", () => {
-    const result = resolveGatewayProbeAuthSafe({
+  it.each([
+    {
+      name: "returns probe auth credentials when available",
       cfg: {
         gateway: {
           auth: {
@@ -15,20 +16,17 @@ describe("resolveGatewayProbeAuthSafe", () => {
           },
         },
       } as OpenClawConfig,
-      mode: "local",
+      mode: "local" as const,
       env: {} as NodeJS.ProcessEnv,
-    });
-
-    expect(result).toEqual({
-      auth: {
-        token: "token-value",
-        password: undefined,
+      expected: {
+        auth: {
+          token: "token-value",
+          password: undefined,
+        },
       },
-    });
-  });
-
-  it("returns warning and empty auth when token SecretRef is unresolved", () => {
-    const result = resolveGatewayProbeAuthSafe({
+    },
+    {
+      name: "returns warning and empty auth when a local token SecretRef is unresolved",
       cfg: {
         gateway: {
           auth: {
@@ -42,17 +40,41 @@ describe("resolveGatewayProbeAuthSafe", () => {
           },
         },
       } as OpenClawConfig,
-      mode: "local",
+      mode: "local" as const,
       env: {} as NodeJS.ProcessEnv,
-    });
-
-    expect(result.auth).toEqual({});
-    expect(result.warning).toContain("gateway.auth.token");
-    expect(result.warning).toContain("unresolved");
-  });
-
-  it("ignores unresolved local token SecretRef in remote mode when remote-only auth is requested", () => {
-    const result = resolveGatewayProbeAuthSafe({
+      expected: {
+        auth: {},
+        warningIncludes: ["gateway.auth.token", "unresolved"],
+      },
+    },
+    {
+      name: "does not fall through to remote token when the local SecretRef is unresolved",
+      cfg: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+          },
+          remote: {
+            token: "remote-token",
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      } as OpenClawConfig,
+      mode: "local" as const,
+      env: {} as NodeJS.ProcessEnv,
+      expected: {
+        auth: {},
+        warningIncludes: ["gateway.auth.token", "unresolved"],
+      },
+    },
+    {
+      name: "ignores unresolved local token SecretRefs in remote mode",
       cfg: {
         gateway: {
           mode: "remote",
@@ -70,16 +92,22 @@ describe("resolveGatewayProbeAuthSafe", () => {
           },
         },
       } as OpenClawConfig,
-      mode: "remote",
+      mode: "remote" as const,
       env: {} as NodeJS.ProcessEnv,
-    });
-
-    expect(result).toEqual({
-      auth: {
-        token: undefined,
-        password: undefined,
+      expected: {
+        auth: {
+          token: undefined,
+          password: undefined,
+        },
       },
-    });
+    },
+  ])("$name", ({ cfg, mode, env, expected }) => {
+    const result = resolveGatewayProbeAuthSafe({ cfg, mode, env });
+
+    expect(result.auth).toEqual(expected.auth);
+    for (const fragment of expected.warningIncludes ?? []) {
+      expect(result.warning).toContain(fragment);
+    }
   });
 });
 
