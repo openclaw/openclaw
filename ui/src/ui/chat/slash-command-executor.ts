@@ -4,14 +4,13 @@
  */
 
 import type { ModelCatalogEntry } from "../../../../src/agents/model-catalog.js";
-import { resolveThinkingDefault } from "../../../../src/agents/model-selection.js";
 import {
   formatThinkingLevels,
   normalizeThinkLevel,
   normalizeVerboseLevel,
+  resolveThinkingDefaultForModel,
 } from "../../../../src/auto-reply/thinking.js";
 import type { HealthSummary } from "../../../../src/commands/health.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
@@ -64,6 +63,8 @@ export async function executeSlashCommand(
       return await executeModel(client, sessionKey, args);
     case "think":
       return await executeThink(client, sessionKey, args);
+    case "fast":
+      return await executeFast(client, sessionKey, args);
     case "verbose":
       return await executeVerbose(client, sessionKey, args);
     case "export":
@@ -176,6 +177,7 @@ async function executeThink(
   args: string,
 ): Promise<SlashCommandResult> {
   const rawLevel = args.trim();
+
   if (!rawLevel) {
     try {
       const { session, models } = await loadThinkingCommandState(client, sessionKey);
@@ -219,6 +221,7 @@ async function executeVerbose(
   args: string,
 ): Promise<SlashCommandResult> {
   const rawLevel = args.trim();
+
   if (!rawLevel) {
     try {
       const session = await loadCurrentSession(client, sessionKey);
@@ -248,6 +251,44 @@ async function executeVerbose(
     };
   } catch (err) {
     return { content: `Failed to set verbose mode: ${String(err)}` };
+  }
+}
+
+async function executeFast(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  args: string,
+): Promise<SlashCommandResult> {
+  const rawMode = args.trim().toLowerCase();
+
+  if (!rawMode || rawMode === "status") {
+    try {
+      const session = await loadCurrentSession(client, sessionKey);
+      return {
+        content: formatDirectiveOptions(
+          `Current fast mode: ${resolveCurrentFastMode(session)}.`,
+          "status, on, off",
+        ),
+      };
+    } catch (err) {
+      return { content: `Failed to get fast mode: ${String(err)}` };
+    }
+  }
+
+  if (rawMode !== "on" && rawMode !== "off") {
+    return {
+      content: `Unrecognized fast mode "${args.trim()}". Valid levels: status, on, off.`,
+    };
+  }
+
+  try {
+    await client.request("sessions.patch", { key: sessionKey, fastMode: rawMode === "on" });
+    return {
+      content: `Fast mode ${rawMode === "on" ? "enabled" : "disabled"}.`,
+      action: "refresh",
+    };
+  } catch (err) {
+    return { content: `Failed to set fast mode: ${String(err)}` };
   }
 }
 
@@ -526,12 +567,15 @@ function resolveCurrentThinkingLevel(
   if (!session?.modelProvider || !session.model) {
     return "off";
   }
-  return resolveThinkingDefault({
-    cfg: {} as OpenClawConfig,
+  return resolveThinkingDefaultForModel({
     provider: session.modelProvider,
     model: session.model,
     catalog: models,
   });
+}
+
+function resolveCurrentFastMode(session: GatewaySessionRow | undefined): "on" | "off" {
+  return session?.fastMode === true ? "on" : "off";
 }
 
 function fmtTokens(n: number): string {

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  getDefaultMediaLocalRoots: vi.fn(() => []),
   dispatchChannelMessageAction: vi.fn(),
   sendMessage: vi.fn(),
   sendPoll: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock("./message.js", () => ({
 }));
 
 vi.mock("../../media/local-roots.js", () => ({
+  getDefaultMediaLocalRoots: mocks.getDefaultMediaLocalRoots,
   getAgentScopedMediaLocalRoots: mocks.getAgentScopedMediaLocalRoots,
 }));
 
@@ -27,6 +29,7 @@ describe("executeSendAction", () => {
     mocks.dispatchChannelMessageAction.mockClear();
     mocks.sendMessage.mockClear();
     mocks.sendPoll.mockClear();
+    mocks.getDefaultMediaLocalRoots.mockClear();
     mocks.getAgentScopedMediaLocalRoots.mockClear();
   });
 
