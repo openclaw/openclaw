@@ -446,11 +446,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (hasMedia) {
           let mediaFirst = true;
           for (const mediaUrl of mediaList) {
-            // When only media is sent (no text), the first media acts as
-            // the "first message" for auto mode.
+            // In auto mode, only the first message of the turn uses reply;
+            // subsequent messages (including media) are sent as standalone.
+            // When text was already sent, all media are "subsequent".
+            // When no text, the first media item acts as the "first message".
             const mediaReplyTo = mediaFirst
               ? deliveryReplyTo
-              : groupReplyMode === "auto" && !hasText
+              : groupReplyMode === "auto"
                 ? undefined
                 : deliveryReplyTo;
             const mediaReplyInThread = mediaReplyTo ? deliveryReplyInThread : undefined;
