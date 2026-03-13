@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
+import { createGatewayRequest } from "./hooks-test-helpers.js";
+import {
+  DEFAULT_HANDSHAKE_TIMEOUT_MS,
+  DEFAULT_LOCAL_HANDSHAKE_TIMEOUT_MS,
+  MAX_PREAUTH_PAYLOAD_BYTES,
+} from "./server-constants.js";
+import { resolveHandshakeTimeoutMs } from "./server-handshake-timeout.js";
 import { createGatewaySuiteHarness, readConnectChallengeNonce } from "./test-helpers.server.js";
 
 let cleanupEnv: Array<() => void> = [];
@@ -11,6 +17,53 @@ afterEach(async () => {
 });
 
 describe("gateway pre-auth hardening", () => {
+  it("keeps the longer default timeout for direct loopback handshakes only", () => {
+    expect(
+      resolveHandshakeTimeoutMs({
+        req: createGatewayRequest({
+          path: "/",
+          host: "127.0.0.1:18789",
+          remoteAddress: "127.0.0.1",
+        }),
+      }),
+    ).toBe(DEFAULT_LOCAL_HANDSHAKE_TIMEOUT_MS);
+
+    expect(
+      resolveHandshakeTimeoutMs({
+        req: createGatewayRequest({
+          path: "/",
+          host: "[::1]:18789",
+          remoteAddress: "::1",
+        }),
+      }),
+    ).toBe(DEFAULT_LOCAL_HANDSHAKE_TIMEOUT_MS);
+
+    expect(
+      resolveHandshakeTimeoutMs({
+        req: createGatewayRequest({
+          path: "/",
+          host: "gateway.example:18789",
+          remoteAddress: "203.0.113.10",
+        }),
+      }),
+    ).toBe(DEFAULT_HANDSHAKE_TIMEOUT_MS);
+
+    expect(
+      resolveHandshakeTimeoutMs({
+        req: createGatewayRequest({
+          path: "/",
+          host: "gateway.example:18789",
+          remoteAddress: "127.0.0.1",
+          headers: {
+            "x-forwarded-for": "203.0.113.10",
+            "x-forwarded-host": "gateway.example:18789",
+          },
+        }),
+        trustedProxies: ["127.0.0.1"],
+      }),
+    ).toBe(DEFAULT_HANDSHAKE_TIMEOUT_MS);
+  });
+
   it("closes idle unauthenticated sockets after the handshake timeout", async () => {
     const previous = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
     process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = "200";
