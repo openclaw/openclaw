@@ -68,6 +68,21 @@
     pointer-events: auto;
   }
 
+  /* Show the hamburger toggle at the same breakpoint where the drawer takes over. */
+  .topbar-nav-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
+    color: var(--muted);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
+  }
+
   .sidebar,
   .sidebar--collapsed {
     width: 100%;
