@@ -34,6 +34,15 @@ describe("isInboundMediaPath", () => {
     expect(isInboundMediaPath("/inbound/media/file.txt")).toBe(false);
     expect(isInboundMediaPath("media-inbound/file.txt")).toBe(false);
   });
+
+  it("correctly classifies non-canonical path forms (double-slashes, dot segments)", () => {
+    // Regression: non-canonical paths must not bypass the inbound guard
+    // (see #11207 P1 review — path.posix.normalize now applied before check)
+    expect(isInboundMediaPath("media//inbound/file.txt")).toBe(true);
+    expect(isInboundMediaPath("/workspace//media/inbound/file.txt")).toBe(true);
+    expect(isInboundMediaPath("./media/inbound/file.txt")).toBe(true);
+    expect(isInboundMediaPath("/workspace/./media/inbound/file.txt")).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
