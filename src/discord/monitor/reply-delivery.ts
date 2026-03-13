@@ -4,7 +4,11 @@ import type { ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MarkdownTableMode, ReplyToMode } from "../../config/types.base.js";
-import { createDiscordRetryRunner, type RetryRunner } from "../../infra/retry-policy.js";
+import {
+  createDiscordRetryRunner,
+  isRetryableDiscordNetworkError,
+  type RetryRunner,
+} from "../../infra/retry-policy.js";
 import { resolveRetryConfig, retryAsync, type RetryConfig } from "../../infra/retry.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -37,6 +41,9 @@ const DISCORD_DELIVERY_RETRY_DEFAULTS: ResolvedRetryConfig = {
 };
 
 function isRetryableDiscordError(err: unknown): boolean {
+  if (isRetryableDiscordNetworkError(err)) {
+    return true;
+  }
   const status = (err as { status?: number }).status ?? (err as { statusCode?: number }).statusCode;
   return status === 429 || (status !== undefined && status >= 500);
 }

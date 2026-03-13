@@ -1,5 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTelegramRetryRunner } from "./retry-policy.js";
+import { createTelegramRetryRunner, isRetryableDiscordNetworkError } from "./retry-policy.js";
+
+describe("isRetryableDiscordNetworkError", () => {
+  it("returns true for TypeError with 'fetch failed'", () => {
+    expect(isRetryableDiscordNetworkError(new TypeError("fetch failed"))).toBe(true);
+  });
+
+  it("returns true for error with ECONNRESET code", () => {
+    const err = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+    expect(isRetryableDiscordNetworkError(err)).toBe(true);
+  });
+
+  it("returns true for TypeError with 'fetch failed' even with unknown code", () => {
+    const err = Object.assign(new TypeError("fetch failed"), { code: "UNKNOWN_CODE" });
+    expect(isRetryableDiscordNetworkError(err)).toBe(true);
+  });
+
+  it("returns false for non-Error values", () => {
+    expect(isRetryableDiscordNetworkError("fetch failed")).toBe(false);
+    expect(isRetryableDiscordNetworkError(null)).toBe(false);
+  });
+
+  it("returns false for regular Error without network indicators", () => {
+    expect(isRetryableDiscordNetworkError(new Error("bad request"))).toBe(false);
+  });
+});
 
 describe("createTelegramRetryRunner", () => {
   describe("strictShouldRetry", () => {
