@@ -22,12 +22,17 @@ export type ModelAliasIndex = {
   byKey: Map<string, string[]>;
 };
 
-const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
-  "opus-4.6": "claude-opus-4-6",
-  "opus-4.5": "claude-opus-4-5",
-  "sonnet-4.6": "claude-sonnet-4-6",
-  "sonnet-4.5": "claude-sonnet-4-5",
-};
+// Lazy initialization to avoid TDZ issues during module loading
+// when parseModelRef is called before this module finishes initializing
+function getAnthropicModelAliases(): Record<string, string> {
+  return {
+    "opus-4.6": "claude-opus-4-6",
+    "opus-4.5": "claude-opus-4-5",
+    "sonnet-4.6": "claude-sonnet-4-6",
+    "sonnet-4.5": "claude-sonnet-4-5",
+  };
+}
+
 const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
 
 function normalizeAliasKey(value: string): string {
@@ -119,7 +124,7 @@ function normalizeAnthropicModelId(model: string): string {
     return trimmed;
   }
   const lower = trimmed.toLowerCase();
-  return ANTHROPIC_MODEL_ALIASES[lower] ?? trimmed;
+  return getAnthropicModelAliases()[lower] ?? trimmed;
 }
 
 function normalizeProviderModelId(provider: string, model: string): string {
