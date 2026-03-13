@@ -21,15 +21,16 @@ export function createWhatsAppLoginTool(): ChannelAgentTool {
     }),
     execute: async (_toolCallId, args) => {
       const action = (args as { action?: string })?.action ?? "start";
+      const timeoutMs =
+        typeof (args as { timeoutMs?: unknown }).timeoutMs === "number"
+          ? (args as { timeoutMs?: number }).timeoutMs
+          : undefined;
       if (action === "wait") {
         const result = await callGatewayTool<ChannelLoginWithQrWaitResult>(
           "web.login.wait",
-          {},
+          { timeoutMs },
           {
-            timeoutMs:
-              typeof (args as { timeoutMs?: unknown }).timeoutMs === "number"
-                ? (args as { timeoutMs?: number }).timeoutMs
-                : undefined,
+            timeoutMs,
           },
         );
         return {
@@ -40,12 +41,9 @@ export function createWhatsAppLoginTool(): ChannelAgentTool {
 
       const result = await callGatewayTool<ChannelLoginWithQrStartResult>(
         "web.login.start",
-        {},
+        { timeoutMs },
         {
-          timeoutMs:
-            typeof (args as { timeoutMs?: unknown }).timeoutMs === "number"
-              ? (args as { timeoutMs?: number }).timeoutMs
-              : undefined,
+          timeoutMs,
           force:
             typeof (args as { force?: unknown }).force === "boolean"
               ? (args as { force?: boolean }).force

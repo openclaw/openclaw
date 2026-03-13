@@ -30,7 +30,7 @@ describe("createWhatsAppLoginTool", () => {
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
       "web.login.start",
-      {},
+      { timeoutMs: 5_000 },
       {
         timeoutMs: 5_000,
         force: true,
@@ -61,7 +61,7 @@ describe("createWhatsAppLoginTool", () => {
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
       "web.login.wait",
-      {},
+      { timeoutMs: 5_000 },
       {
         timeoutMs: 5_000,
       },
