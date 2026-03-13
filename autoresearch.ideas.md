@@ -1,0 +1,1 @@
+- Fix `autoresearch.sh` to benchmark the real assembled system prompt again (tsdown now emits hashed chunks, so the old `dist/agents/pi-embedded-helpers/bootstrap.js` path always falls back to `0`).

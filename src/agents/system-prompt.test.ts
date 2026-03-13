@@ -425,6 +425,23 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("15:26");
   });
 
+  it("moves date and runtime sections after injected project context for cache stability", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      userTimezone: "America/Chicago",
+      contextFiles: [{ path: "AGENTS.md", content: "Alpha" }],
+      runtimeInfo: {
+        model: "anthropic/claude-sonnet-4-5",
+      },
+    });
+
+    expect(prompt.indexOf("# Project Context")).toBeGreaterThan(-1);
+    expect(prompt.indexOf("## Current Date & Time")).toBeGreaterThan(
+      prompt.indexOf("# Project Context"),
+    );
+    expect(prompt.indexOf("## Runtime")).toBeGreaterThan(prompt.indexOf("## Current Date & Time"));
+  });
+
   it("includes model alias guidance when aliases are provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

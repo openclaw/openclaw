@@ -562,9 +562,6 @@ export function buildAgentSystemPrompt(params: {
       : "",
     params.sandboxInfo?.enabled ? "" : "",
     ...buildUserIdentitySection(ownerLine, isMinimal),
-    ...buildTimeSection({
-      userTimezone,
-    }),
     "## Workspace Files (injected)",
     "These user-editable files are loaded by OpenClaw and included below in Project Context.",
     "",
@@ -679,7 +676,12 @@ export function buildAgentSystemPrompt(params: {
     );
   }
 
+  // Keep dynamic runtime metadata after the stable prompt body so Anthropic can reuse
+  // a larger cached prefix across sessions.
   lines.push(
+    ...buildTimeSection({
+      userTimezone,
+    }),
     "## Runtime",
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
