@@ -7,6 +7,7 @@ import {
   usesOpenAiStringModeAnthropicToolChoice,
 } from "../provider-capabilities.js";
 import { log } from "./logger.js";
+import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
@@ -341,18 +342,10 @@ export function createAnthropicFastModeWrapper(
       return underlying(model, context, options);
     }
 
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          const payloadObj = payload as Record<string, unknown>;
-          if (payloadObj.service_tier === undefined) {
-            payloadObj.service_tier = serviceTier;
-          }
-        }
-        return originalOnPayload?.(payload, model);
-      },
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      if (payloadObj.service_tier === undefined) {
+        payloadObj.service_tier = serviceTier;
+      }
     });
   };
 }
