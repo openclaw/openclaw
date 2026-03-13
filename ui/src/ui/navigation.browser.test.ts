@@ -107,6 +107,41 @@ describe("control UI routing", () => {
     }
   });
 
+  it("stacks the refreshed top navigation for narrow viewports", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
+
+    const shell = app.querySelector<HTMLElement>(".topnav-shell");
+    const content = app.querySelector<HTMLElement>(".topnav-shell__content");
+    expect(shell).not.toBeNull();
+    expect(content).not.toBeNull();
+    if (!shell || !content) {
+      return;
+    }
+
+    expect(getComputedStyle(shell).flexWrap).toBe("wrap");
+    expect(getComputedStyle(content).width).not.toBe("auto");
+  });
+
+  it("renders the sidebar nav as a horizontal mobile rail", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
+
+    const nav = app.querySelector<HTMLElement>(".sidebar-nav");
+    expect(nav).not.toBeNull();
+    if (!nav) {
+      return;
+    }
+
+    const styles = getComputedStyle(nav);
+    expect(styles.flexDirection).toBe("row");
+    expect(styles.overflowX).toBe("auto");
+  });
+
   it("auto-scrolls chat history to the latest message", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;

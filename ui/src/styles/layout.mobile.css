@@ -22,6 +22,7 @@
   .shell--nav-collapsed .shell-nav {
     width: auto;
     min-width: 0;
+    padding: 0 14px 10px;
     border-bottom: 1px solid var(--border);
   }
 
@@ -35,15 +36,14 @@
     border-right: none;
   }
 
-  .sidebar-header,
-  .sidebar--collapsed .sidebar-header {
-    justify-content: flex-start;
+  .sidebar-shell {
     padding: 8px 10px;
-    flex: 0 0 auto;
+    border-radius: 22px;
   }
 
-  .sidebar-brand {
-    display: none;
+  .sidebar-shell__header {
+    min-height: 32px;
+    padding: 2px 6px 6px;
   }
 
   .sidebar-nav,
@@ -65,18 +65,16 @@
     display: none;
   }
 
-  .nav-group,
-  .nav-group__items,
-  .sidebar--collapsed .nav-group,
-  .sidebar--collapsed .nav-group__items {
+  .nav-section,
+  .sidebar--collapsed .nav-section {
     display: contents;
-  }
-
-  .nav-group {
     margin-bottom: 0;
   }
 
-  .sidebar-nav .nav-group__label {
+  .sidebar-nav .nav-section__label,
+  .sidebar--collapsed .sidebar-shell__header,
+  .sidebar-shell__footer,
+  .sidebar--collapsed .sidebar-shell__footer {
     display: none;
   }
 
@@ -94,15 +92,10 @@
   .sidebar--collapsed .nav-item.active::before {
     content: none;
   }
-
-  .sidebar-footer,
-  .sidebar--collapsed .sidebar-footer {
-    display: none;
-  }
 }
 
 /* Mobile-specific styles */
-@media (max-width: 600px) {
+@media (max-width: 768px) {
   .shell {
     --shell-pad: 8px;
     --shell-gap: 8px;
@@ -111,11 +104,30 @@
   /* Topbar */
   .topbar {
     padding: 10px 12px;
-    gap: 8px;
-    flex-direction: row;
+    min-height: auto;
+  }
+
+  .topnav-shell {
     flex-wrap: wrap;
+    padding: 10px 12px;
+    border-radius: 22px;
+    gap: 10px;
+  }
+
+  .topnav-shell__brand,
+  .topnav-shell__actions {
+    width: 100%;
     justify-content: space-between;
-    align-items: center;
+  }
+
+  .topnav-shell__content {
+    order: 3;
+    width: 100%;
+  }
+
+  .topnav-shell__actions {
+    gap: 10px;
+    align-items: stretch;
   }
 
   .brand {
@@ -137,6 +149,15 @@
     flex-wrap: nowrap;
   }
 
+  .topbar-search {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .topbar-theme-mode {
+    flex-shrink: 0;
+  }
+
   .topbar-status .pill {
     padding: 4px 8px;
     font-size: 11px;
@@ -152,16 +173,18 @@
   }
 
   .shell-nav {
+    padding: 0 12px 8px;
     border-bottom-width: 0;
   }
 
-  .sidebar-header {
+  .sidebar-shell {
     padding: 6px 8px;
+    border-radius: 18px;
   }
 
   .sidebar-nav {
     gap: 6px;
-    padding: 6px 8px 6px 0;
+    padding: 4px 2px;
   }
 
   .nav-item {
