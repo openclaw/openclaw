@@ -53,6 +53,21 @@ const pluginSdkEntrypoints = [
   "keyed-async-queue",
 ] as const;
 
+const pluginSdkSpecifiers = pluginSdkEntrypoints.map((entry) =>
+  entry === "index" ? "openclaw/plugin-sdk" : `openclaw/plugin-sdk/${entry}`,
+);
+
+function buildPluginSdkPackageExports() {
+  return Object.fromEntries(
+    pluginSdkEntrypoints.map((entry) => [
+      entry === "index" ? "./plugin-sdk" : `./plugin-sdk/${entry}`,
+      {
+        default: `./dist/plugin-sdk/${entry}.js`,
+      },
+    ]),
+  );
+}
+
 describe("plugin-sdk exports", () => {
   it("does not expose runtime modules", () => {
     const forbidden = [
@@ -159,6 +174,7 @@ describe("plugin-sdk exports", () => {
 
   it("emits importable bundled subpath entries", { timeout: 240_000 }, async () => {
     const outDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-sdk-build-"));
+    const fixtureDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-sdk-consumer-"));
 
     try {
       await build({
@@ -179,8 +195,47 @@ describe("plugin-sdk exports", () => {
         const module = await import(pathToFileURL(path.join(outDir, `${entry}.js`)).href);
         expect(module).toBeTypeOf("object");
       }
+
+      const packageDir = path.join(fixtureDir, "openclaw");
+      const consumerDir = path.join(fixtureDir, "consumer");
+      const consumerEntry = path.join(consumerDir, "import-plugin-sdk.mjs");
+
+      await fs.mkdir(path.join(packageDir, "dist"), { recursive: true });
+      await fs.symlink(outDir, path.join(packageDir, "dist", "plugin-sdk"), "dir");
+      await fs.writeFile(
+        path.join(packageDir, "package.json"),
+        JSON.stringify(
+          {
+            exports: buildPluginSdkPackageExports(),
+            name: "openclaw",
+            type: "module",
+          },
+          null,
+          2,
+        ),
+      );
+
+      await fs.mkdir(path.join(consumerDir, "node_modules"), { recursive: true });
+      await fs.symlink(packageDir, path.join(consumerDir, "node_modules", "openclaw"), "dir");
+      await fs.writeFile(
+        consumerEntry,
+        [
+          `const specifiers = ${JSON.stringify(pluginSdkSpecifiers)};`,
+          "const results = {};",
+          "for (const specifier of specifiers) {",
+          "  results[specifier] = typeof (await import(specifier));",
+          "}",
+          "export default results;",
+        ].join("\n"),
+      );
+
+      const { default: importResults } = await import(pathToFileURL(consumerEntry).href);
+      expect(importResults).toEqual(
+        Object.fromEntries(pluginSdkSpecifiers.map((specifier) => [specifier, "object"])),
+      );
     } finally {
       await fs.rm(outDir, { recursive: true, force: true });
+      await fs.rm(fixtureDir, { recursive: true, force: true });
     }
   });
 });
