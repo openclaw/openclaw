@@ -610,6 +610,57 @@ export function buildAgentSystemPrompt(params: {
     lines.push("## Reasoning Format", reasoningHint, "");
   }
 
+  // Skip silent replies for subagent/none modes
+  // Placed BEFORE Project Context so this stable boilerplate is cached even when
+  // workspace files change between sessions.
+  if (!isMinimal) {
+    lines.push(
+      "## Silent Replies",
+      `When you have nothing to say, respond with ONLY: ${SILENT_REPLY_TOKEN}`,
+      "",
+      "⚠️ Rules:",
+      "- It must be your ENTIRE message — nothing else",
+      `- Never append it to an actual response (never include "${SILENT_REPLY_TOKEN}" in real replies)`,
+      "- Never wrap it in markdown or code blocks",
+      "",
+      `❌ Wrong: "Here's help... ${SILENT_REPLY_TOKEN}"`,
+      `❌ Wrong: "${SILENT_REPLY_TOKEN}"`,
+      `✅ Right: ${SILENT_REPLY_TOKEN}`,
+      "",
+    );
+  }
+
+  // Skip heartbeats for subagent/none modes
+  // Placed BEFORE Project Context so this stable boilerplate is cached even when
+  // workspace files change between sessions.
+  if (!isMinimal) {
+    lines.push(
+      "## Heartbeats",
+      heartbeatPromptLine,
+      "If you receive a heartbeat poll (a user message matching the heartbeat prompt above), and there is nothing that needs attention, reply exactly:",
+      "HEARTBEAT_OK",
+      'OpenClaw treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',
+      'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',
+      "",
+    );
+  }
+
+  // Keep dynamic runtime metadata after all stable boilerplate so Anthropic can reuse
+  // the maximum stable prefix across sessions.
+  // Order: stable fields → Reasoning (often stable) → dynamic per-session fields (model, agentId).
+  lines.push(
+    ...buildTimeSection({
+      userTimezone,
+    }),
+    "## Runtime",
+    buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
+    `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
+  );
+
+  // Project Context (workspace bootstrap files) is placed LAST in the stable-prefix-ordered
+  // prompt. Workspace files change between sessions (daily notes, project status, MEMORY.md).
+  // By pushing them after all stable boilerplate (Silent Replies, Heartbeats, Runtime), those
+  // sections remain in the Anthropic KV-cached stable prefix even when workspace files change.
   const contextFiles = params.contextFiles ?? [];
   const bootstrapTruncationWarningLines = (params.bootstrapTruncationWarningLines ?? []).filter(
     (line) => line.trim().length > 0,
@@ -645,50 +696,11 @@ export function buildAgentSystemPrompt(params: {
     }
   }
 
-  // Skip silent replies for subagent/none modes
-  if (!isMinimal) {
-    lines.push(
-      "## Silent Replies",
-      `When you have nothing to say, respond with ONLY: ${SILENT_REPLY_TOKEN}`,
-      "",
-      "⚠️ Rules:",
-      "- It must be your ENTIRE message — nothing else",
-      `- Never append it to an actual response (never include "${SILENT_REPLY_TOKEN}" in real replies)`,
-      "- Never wrap it in markdown or code blocks",
-      "",
-      `❌ Wrong: "Here's help... ${SILENT_REPLY_TOKEN}"`,
-      `❌ Wrong: "${SILENT_REPLY_TOKEN}"`,
-      `✅ Right: ${SILENT_REPLY_TOKEN}`,
-      "",
-    );
+  // Dynamic per-session fields on a final line so the stable prefix above can be KV-cached.
+  const dynamicLine = buildRuntimeDynamicLine(runtimeInfo);
+  if (dynamicLine) {
+    lines.push(dynamicLine);
   }
-
-  // Skip heartbeats for subagent/none modes
-  if (!isMinimal) {
-    lines.push(
-      "## Heartbeats",
-      heartbeatPromptLine,
-      "If you receive a heartbeat poll (a user message matching the heartbeat prompt above), and there is nothing that needs attention, reply exactly:",
-      "HEARTBEAT_OK",
-      'OpenClaw treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',
-      'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',
-      "",
-    );
-  }
-
-  // Keep dynamic runtime metadata after the stable prompt body so Anthropic can reuse
-  // a larger cached prefix across sessions.
-  // Order: stable fields → Reasoning (often stable) → dynamic per-session fields (model, agentId).
-  lines.push(
-    ...buildTimeSection({
-      userTimezone,
-    }),
-    "## Runtime",
-    buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
-    `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
-    // Dynamic per-session fields on a final line so the stable prefix above can be KV-cached.
-    buildRuntimeDynamicLine(runtimeInfo),
-  );
 
   return lines.filter(Boolean).join("\n");
 }

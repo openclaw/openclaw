@@ -429,7 +429,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("15:26");
   });
 
-  it("moves date and runtime sections after injected project context for cache stability", () => {
+  it("places project context after runtime/heartbeat stable boilerplate for cache stability", () => {
+    // Workspace files (# Project Context) change between sessions; they are placed LAST so
+    // that Silent Replies, Heartbeats, Time Zone, and Runtime remain in the stable
+    // Anthropic KV-cached prefix even when workspace files are updated.
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       userTimezone: "America/Chicago",
@@ -440,8 +443,11 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt.indexOf("# Project Context")).toBeGreaterThan(-1);
-    expect(prompt.indexOf("## Time Zone")).toBeGreaterThan(prompt.indexOf("# Project Context"));
-    expect(prompt.indexOf("## Runtime")).toBeGreaterThan(prompt.indexOf("## Time Zone"));
+    // Runtime/Time Zone come BEFORE Project Context (stable prefix)
+    expect(prompt.indexOf("## Time Zone")).toBeLessThan(prompt.indexOf("# Project Context"));
+    expect(prompt.indexOf("## Runtime")).toBeLessThan(prompt.indexOf("# Project Context"));
+    // Heartbeats come BEFORE Project Context too
+    expect(prompt.indexOf("## Heartbeats")).toBeLessThan(prompt.indexOf("# Project Context"));
   });
 
   it("includes model alias guidance when aliases are provided", () => {
