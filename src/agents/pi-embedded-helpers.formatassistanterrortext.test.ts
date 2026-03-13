@@ -164,10 +164,10 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(result).toContain("/reset");
   });
 
-  it("handles tool_call_id mismatch error", () => {
+  it("handles tool_use_id mismatch pattern", () => {
     const msg = {
       stopReason: "error",
-      errorMessage: "tool_call_id mismatch detected in session",
+      errorMessage: "tool_use_id mismatch detected in session",
     } as AssistantMessage;
     const result = formatAssistantErrorText(msg);
     expect(result).toContain("Tool call ID mismatch");

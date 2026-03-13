@@ -839,12 +839,6 @@ const IMAGE_DIMENSION_ERROR_RE =
 const IMAGE_DIMENSION_PATH_RE = /messages\.(\d+)\.content\.(\d+)\.image/i;
 const IMAGE_SIZE_ERROR_RE = /image exceeds\s*(\d+(?:\.\d+)?)\s*mb/i;
 
-export function isMissingToolCallInputError(raw: string): boolean {
-  if (!raw) {
-    return false;
-  }
-  return TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw);
-}
 
 export function isToolUseIdMismatchError(raw: string): boolean {
   if (!raw) return false;
@@ -853,6 +847,13 @@ export function isToolUseIdMismatchError(raw: string): boolean {
     lower.includes("tool_use_id") &&
     (lower.includes("does not match") || lower.includes("mismatch"))
   );
+}
+
+export function isMissingToolCallInputError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  return TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw);
 }
 
 export function isBillingAssistantError(msg: AssistantMessage | undefined): boolean {
