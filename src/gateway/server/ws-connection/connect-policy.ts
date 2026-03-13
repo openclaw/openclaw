@@ -34,7 +34,7 @@ export function resolveControlUiAuthPolicy(params: {
 
 export function shouldSkipControlUiPairing(
   policy: ControlUiAuthPolicy,
-  sharedAuthOk: boolean,
+  _sharedAuthOk: boolean,
   trustedProxyAuthOk = false,
 ): boolean {
   // When dangerouslyDisableDeviceAuth is true, skip pairing entirely
@@ -45,7 +45,9 @@ export function shouldSkipControlUiPairing(
   if (trustedProxyAuthOk) {
     return true;
   }
-  return policy.allowBypass && sharedAuthOk;
+  // Note: sharedAuthOk alone no longer skips pairing - must use dangerouslyDisableDeviceAuth
+  // This is intentional: shared auth should still require device identity for security
+  return false;
 }
 
 export function isTrustedProxyControlUiOperatorAuth(params: {
