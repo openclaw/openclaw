@@ -47,19 +47,22 @@ export function applyDiscoveredContextWindows(params: {
       continue;
     }
 
-    const normalizedModelId = normalizeModelId(model.id);
-    const existing = params.cache.get(normalizedModelId);
-    // Keep the conservative minimum on the raw model-id key. Provider-aware
-    // callers should use the provider-qualified lookup path first.
+    const existing = params.cache.get(model.id);
+    // When the same bare model id appears under multiple providers with different
+    // limits, keep the smaller window. This cache feeds both display paths and
+    // runtime paths (flush thresholds, session context-token persistence), so
+    // overestimating the limit could delay compaction and cause context overflow.
+    // Callers that know the active provider should use resolveContextTokensForModel,
+    // which tries the provider-qualified key first and falls back here.
     if (existing === undefined || contextWindow < existing) {
-      params.cache.set(normalizedModelId, contextWindow);
+      params.cache.set(model.id, contextWindow);
     }
 
     const provider = typeof model.provider === "string" ? model.provider : undefined;
     if (!provider) {
       continue;
     }
-    const scopedKey = `${normalizeProviderId(provider)}::${normalizedModelId}`;
+    const scopedKey = `${normalizeProviderId(provider)}::${model.id}`;
     const existingScoped = params.cache.get(scopedKey);
     if (existingScoped === undefined || contextWindow < existingScoped) {
       params.cache.set(scopedKey, contextWindow);
@@ -288,9 +291,9 @@ function resolveProviderModelRef(params: {
   }
   const providerRaw = params.provider?.trim();
   if (providerRaw) {
-    // Keep the exact model id when the provider is explicit. Some providers use
-    // slash-containing model identifiers (for example OpenRouter namespaced ids).
-    return { provider: normalizeProviderId(providerRaw), model: modelRaw };
+    // Keep the exact (lowercased) provider key; callers that need the canonical
+    // alias (e.g. cache key construction) apply normalizeProviderId explicitly.
+    return { provider: providerRaw.toLowerCase(), model: modelRaw };
   }
   const slash = modelRaw.indexOf("/");
   if (slash <= 0) {
@@ -306,7 +309,9 @@ function resolveProviderModelRef(params: {
 
 // Look up an explicit contextWindow override for a specific provider+model
 // directly from config, without going through the shared discovery cache.
-// This avoids cache-key ambiguity for slash-containing provider-local ids.
+// This avoids the cache keyspace collision where "provider/model" synthetic
+// keys overlap with raw slash-containing model IDs (e.g. OpenRouter's
+// "google/gemini-2.5-pro" stored as a raw catalog entry).
 function resolveConfiguredProviderContextWindow(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -317,8 +322,12 @@ function resolveConfiguredProviderContextWindow(
     return undefined;
   }
 
+  // Mirror the lookup order in pi-embedded-runner/model.ts: exact key first,
+  // then normalized fallback. This prevents alias collisions (e.g. when both
+  // "qwen" and "qwen-portal" exist as config keys) from picking the wrong
+  // contextWindow based on Object.entries iteration order.
   function findContextWindow(matchProviderId: (id: string) => boolean): number | undefined {
-    for (const [providerId, providerConfig] of Object.entries(providers)) {
+    for (const [providerId, providerConfig] of Object.entries(providers!)) {
       if (!matchProviderId(providerId)) {
         continue;
       }
@@ -339,11 +348,13 @@ function resolveConfiguredProviderContextWindow(
     return undefined;
   }
 
+  // 1. Exact match (case-insensitive, no alias expansion).
   const exactResult = findContextWindow((id) => id.trim().toLowerCase() === provider.toLowerCase());
   if (exactResult !== undefined) {
     return exactResult;
   }
 
+  // 2. Normalized fallback: covers alias keys such as "qwen" → "qwen-portal".
   const normalizedProvider = normalizeProviderId(provider);
   return findContextWindow((id) => normalizeProviderId(id) === normalizedProvider);
 }
@@ -379,6 +390,13 @@ export function resolveContextTokensForModel(params: {
     if (modelParams?.context1m === true && isAnthropic1MModel(ref.provider, ref.model)) {
       return ANTHROPIC_CONTEXT_1M_TOKENS;
     }
+    // Only do the config direct scan when the caller explicitly passed a
+    // provider. When provider is inferred from a slash in the model string
+    // (e.g. "google/gemini-2.5-pro" → ref.provider = "google"), the model ID
+    // may belong to a DIFFERENT provider (e.g. an OpenRouter session). Scanning
+    // cfg.models.providers.google in that case would return Google's configured
+    // window and misreport context limits for the OpenRouter session.
+    // See status.ts log-usage fallback which calls with only { model } set.
     if (params.provider) {
       const configuredWindow = resolveConfiguredProviderContextWindow(
         params.cfg,
@@ -391,5 +409,45 @@ export function resolveContextTokensForModel(params: {
     }
   }
 
-  return lookupContextTokens(params.model, params.provider) ?? params.fallbackContextTokens;
+  // When provider is explicitly given and the model ID is bare (no slash),
+  // try the provider-qualified cache key BEFORE the bare key.  Discovery
+  // entries are stored under qualified IDs (e.g. "google-gemini-cli/
+  // gemini-3.1-pro-preview → 1M"), while the bare key may hold a cross-
+  // provider minimum (128k).  Returning the qualified entry gives the correct
+  // provider-specific window for /status and session context-token persistence.
+  //
+  // Guard: only when params.provider is explicit (not inferred from a slash in
+  // the model string). For model-only callers (e.g. status.ts log-usage
+  // fallback with model="google/gemini-2.5-pro"), the inferred provider would
+  // construct "google/gemini-2.5-pro" as the qualified key which accidentally
+  // matches OpenRouter's raw discovery entry — the bare lookup is correct there.
+  if (params.provider && ref && !ref.model.includes("/")) {
+    const qualifiedResult = lookupContextTokens(
+      `${normalizeProviderId(ref.provider)}/${ref.model}`,
+    );
+    if (qualifiedResult !== undefined) {
+      return qualifiedResult;
+    }
+  }
+
+  // Bare key fallback.  For model-only calls with slash-containing IDs
+  // (e.g. "google/gemini-2.5-pro") this IS the raw discovery cache key.
+  const bareResult = lookupContextTokens(params.model);
+  if (bareResult !== undefined) {
+    return bareResult;
+  }
+
+  // When provider is implicit, try qualified as a last resort so inferred
+  // provider/model pairs (e.g. model="google-gemini-cli/gemini-3.1-pro")
+  // still find discovery entries stored under that qualified ID.
+  if (!params.provider && ref && !ref.model.includes("/")) {
+    const qualifiedResult = lookupContextTokens(
+      `${normalizeProviderId(ref.provider)}/${ref.model}`,
+    );
+    if (qualifiedResult !== undefined) {
+      return qualifiedResult;
+    }
+  }
+
+  return params.fallbackContextTokens;
 }
