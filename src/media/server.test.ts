@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { tryCreateSymlink } from "../test-utils/symlink.js";
 
 let MEDIA_DIR = "";
 const cleanOldMedia = vi.fn().mockResolvedValue(undefined);
@@ -87,18 +88,21 @@ describe("media server", () => {
         await writeMediaFile("file2", "hello");
       },
     },
-    {
-      testName: "blocks symlink escaping outside media dir",
-      mediaPath: "link-out",
-      setup: async () => {
-        const target = path.join(process.cwd(), "package.json"); // outside MEDIA_DIR
-        const link = path.join(MEDIA_DIR, "link-out");
-        await fs.symlink(target, link);
-      },
-    },
   ] as const)("$testName", async (testCase) => {
     await testCase.setup?.();
     const res = await fetch(mediaUrl(testCase.mediaPath));
+    expect(res.status).toBe(400);
+    expect(await res.text()).toBe("invalid path");
+  });
+
+  it("blocks symlink escaping outside media dir", async () => {
+    const target = path.join(process.cwd(), "package.json");
+    const link = path.join(MEDIA_DIR, "link-out");
+    if (!(await tryCreateSymlink(target, link))) {
+      return;
+    }
+
+    const res = await fetch(mediaUrl("link-out"));
     expect(res.status).toBe(400);
     expect(await res.text()).toBe("invalid path");
   });

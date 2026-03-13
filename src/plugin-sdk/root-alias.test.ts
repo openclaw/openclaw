@@ -128,11 +128,20 @@ describe("plugin-sdk root alias", () => {
     expect(rootSdk.__esModule).toBe(true);
   });
 
-  it("preserves reflection semantics for lazily resolved exports", { timeout: 240_000 }, () => {
-    expect("resolveControlCommandGate" in rootSdk).toBe(true);
-    const keys = Object.keys(rootSdk);
-    expect(keys).toContain("resolveControlCommandGate");
-    const descriptor = Object.getOwnPropertyDescriptor(rootSdk, "resolveControlCommandGate");
+  it("preserves reflection semantics for lazily resolved exports", () => {
+    const lazyModule = loadRootAliasWithStubs({
+      monolithicExports: {
+        resolveDeferredHelper: () => "loaded",
+      },
+    });
+    const lazyRootSdk = lazyModule.moduleExports;
+
+    expect("resolveDeferredHelper" in lazyRootSdk).toBe(true);
+    const keys = Object.keys(lazyRootSdk);
+    expect(keys).toContain("resolveDeferredHelper");
+    const descriptor = Object.getOwnPropertyDescriptor(lazyRootSdk, "resolveDeferredHelper");
     expect(descriptor).toBeDefined();
+    expect(lazyModule.createJitiCalls).toBe(1);
+    expect(lazyModule.jitiLoadCalls).toBe(1);
   });
 });

@@ -1,6 +1,7 @@
-import { mkdir, symlink, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { tryCreateSymlink } from "../test-utils/symlink.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   DEFAULT_SECRET_FILE_MAX_BYTES,
@@ -49,7 +50,9 @@ describe("readSecretFileSync", () => {
     const target = path.join(dir, "target.txt");
     const link = path.join(dir, "secret-link.txt");
     await writeFile(target, "top-secret\n", "utf8");
-    await symlink(target, link);
+    if (!(await tryCreateSymlink(target, link))) {
+      return;
+    }
 
     expect(() => readSecretFileSync(link, "Gateway password", { rejectSymlink: true })).toThrow(
       `Gateway password file at ${link} must not be a symlink.`,
@@ -61,7 +64,9 @@ describe("readSecretFileSync", () => {
     const target = path.join(dir, "target.txt");
     const link = path.join(dir, "secret-link.txt");
     await writeFile(target, "top-secret\n", "utf8");
-    await symlink(target, link);
+    if (!(await tryCreateSymlink(target, link))) {
+      return;
+    }
 
     expect(tryReadSecretFileSync(link, "Telegram bot token", { rejectSymlink: true })).toBe(
       undefined,

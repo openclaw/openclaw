@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -26,7 +26,7 @@ describe("git-hooks/pre-commit (integration)", () => {
     // Use the real hook script and lightweight helper stubs.
     mkdirSync(path.join(dir, "git-hooks"), { recursive: true });
     mkdirSync(path.join(dir, "scripts", "pre-commit"), { recursive: true });
-    symlinkSync(
+    copyFileSync(
       path.join(process.cwd(), "git-hooks", "pre-commit"),
       path.join(dir, "git-hooks", "pre-commit"),
     );

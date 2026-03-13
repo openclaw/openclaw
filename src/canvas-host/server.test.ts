@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { rawDataToString } from "../infra/ws.js";
 import { defaultRuntime } from "../runtime.js";
+import { tryCreateSymlink } from "../test-utils/symlink.js";
 import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH, injectCanvasLiveReload } from "./a2ui.js";
 import { createCanvasHostHandler, startCanvasHost } from "./server.js";
 
@@ -275,8 +276,7 @@ describe("canvas host", () => {
       createdBundle = true;
     }
 
-    await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
-    createdLink = true;
+    createdLink = await tryCreateSymlink(path.join(process.cwd(), "package.json"), linkPath);
 
     const server = await startFixtureCanvasHost(dir);
 
@@ -298,9 +298,11 @@ describe("canvas host", () => {
       );
       expect(traversalRes.status).toBe(404);
       expect(await traversalRes.text()).toBe("not found");
-      const symlinkRes = await fetch(`http://127.0.0.1:${server.port}${A2UI_PATH}/${linkName}`);
-      expect(symlinkRes.status).toBe(404);
-      expect(await symlinkRes.text()).toBe("not found");
+      if (createdLink) {
+        const symlinkRes = await fetch(`http://127.0.0.1:${server.port}${A2UI_PATH}/${linkName}`);
+        expect(symlinkRes.status).toBe(404);
+        expect(await symlinkRes.text()).toBe("not found");
+      }
     } finally {
       await server.close();
       if (createdLink) {

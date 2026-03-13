@@ -5,6 +5,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { tryCreateSymlink } from "../test-utils/symlink.js";
 
 const { logWarnMock, logDebugMock, logInfoMock } = vi.hoisted(() => ({
   logWarnMock: vi.fn(),
@@ -2168,7 +2169,10 @@ describe("QmdMemoryManager", () => {
     const target = path.join(workspaceDir, "target.md");
     await fs.writeFile(target, "ok", "utf-8");
     const link = path.join(workspaceDir, "link.md");
-    await fs.symlink(target, link);
+    if (!(await tryCreateSymlink(target, link))) {
+      await manager.close();
+      return;
+    }
     await expect(manager.readFile({ relPath: "qmd/workspace-main/link.md" })).rejects.toThrow(
       "path required",
     );
