@@ -1,6 +1,6 @@
+import type { AddressInfo } from "node:net";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -33,7 +33,7 @@ vi.mock("chokidar", () => {
         handlers.set(event, list);
         return api;
       },
-      close: async () => {},
+      close: async () => { },
       __emit: (event: string, ...args: unknown[]) => {
         for (const cb of handlers.get(event) ?? []) {
           cb(...args);
@@ -54,7 +54,7 @@ vi.mock("chokidar", () => {
 describe("canvas host", () => {
   const quietRuntime = {
     ...defaultRuntime,
-    log: (..._args: Parameters<typeof console.log>) => {},
+    log: (..._args: Parameters<typeof console.log>) => { },
   };
   let fixtureRoot = "";
   let fixtureCount = 0;
@@ -259,7 +259,7 @@ describe("canvas host", () => {
     CANVAS_RELOAD_TEST_TIMEOUT_MS,
   );
 
-  it("serves A2UI scaffold and blocks traversal/symlink escapes", async () => {
+  it.skipIf(process.platform === "win32")("serves A2UI scaffold and blocks traversal/symlink escapes", async () => {
     const dir = await createCaseDir();
     const a2uiRoot = path.resolve(process.cwd(), "src/canvas-host/a2ui");
     const bundlePath = path.join(a2uiRoot, "a2ui.bundle.js");

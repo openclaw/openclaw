@@ -17,7 +17,7 @@ async function main() {
         google: {
           api: "google",
           apiKey: process.env.GEMINI_API_KEY || "test-key",
-        } as any,
+        } as unknown,
       },
     },
   };

@@ -108,8 +108,8 @@ export class StateActionEncoder {
     if (state.messages) {
       const recent = state.messages.slice(-5); // Last 5 messages
       for (const msg of recent) {
-        const text = typeof msg === "string" ? msg : ((msg as any).content ?? JSON.stringify(msg));
-        const tokens = this.tokenize(String(text));
+        const textValue = typeof msg === "string" ? msg : (typeof (msg as { content?: unknown }).content === "string" ? (msg as { content?: string }).content! : JSON.stringify(msg));
+        const tokens = this.tokenize(textValue);
         for (const token of tokens) {
           const emb = this.getEmbedding(this.hashToken(token));
           for (let d = 0; d < this.latentDim; d++) {

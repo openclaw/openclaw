@@ -18,7 +18,7 @@ export class LLMWorldModel implements IWorldModel {
     private config: OpenClawConfig,
     private provider: string = "google",
     private modelId: string = "gemini-1.5-pro",
-  ) {}
+  ) { }
 
   async initialize(): Promise<void> {
     const { model, error } = resolveModel(this.provider, this.modelId, undefined, this.config);
@@ -116,7 +116,7 @@ Action Taken:
 Type: ${action.type}
 ${action.toolName ? `Tool: ${action.toolName}` : ""}
 ${action.toolArgs ? `Args: ${JSON.stringify(action.toolArgs)}` : ""}
-${action.content ? `Content: ${action.content}` : ""}
+${action.content ? `Content: ${JSON.stringify(action.content)}` : ""}
 
 Task:
 1. Simulate the execution of this action.

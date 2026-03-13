@@ -14,6 +14,11 @@ vi.mock("./node-llama.js", () => ({
   importNodeLlamaCpp: (...args: unknown[]) => importNodeLlamaCppMock(...args),
 }));
 
+vi.mock("../infra/net/ssrf.js", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("../infra/net/ssrf.js")>();
+  return { ...orig, resolvePinnedHostnameWithPolicy: async () => "1.2.3.4" };
+});
+
 const createFetchMock = () =>
   vi.fn(async (_input?: unknown, _init?: unknown) => ({
     ok: true,

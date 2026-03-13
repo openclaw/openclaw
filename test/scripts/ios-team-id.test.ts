@@ -122,7 +122,7 @@ function runScript(
   }
 }
 
-describe("scripts/ios-team-id.sh", () => {
+describe.skipIf(process.platform === "win32")("scripts/ios-team-id.sh", () => {
   beforeAll(async () => {
     fixtureRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-ios-team-id-"));
     sharedBinDir = path.join(fixtureRoot, "shared-bin");
@@ -221,11 +221,11 @@ printf 'BBBBB22222\\t0\\tBeta Team\\r\\n'`,
     expect(result.ok).toBe(false);
     expect(
       result.stderr.includes("An Apple account is signed in to Xcode") ||
-        result.stderr.includes("No Apple Team ID found in Xcode accounts"),
+      result.stderr.includes("No Apple Team ID found in Xcode accounts"),
     ).toBe(true);
     expect(
       result.stderr.includes("IOS_DEVELOPMENT_TEAM") ||
-        result.stderr.includes("IOS_ALLOW_KEYCHAIN_TEAM_FALLBACK"),
+      result.stderr.includes("IOS_ALLOW_KEYCHAIN_TEAM_FALLBACK"),
     ).toBe(true);
   });
 });

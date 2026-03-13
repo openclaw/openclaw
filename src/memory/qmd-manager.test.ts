@@ -1,9 +1,9 @@
+import type { DatabaseSync } from "node:sqlite";
+import type { Mock } from "vitest";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
-import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { logWarnMock, logDebugMock, logInfoMock } = vi.hoisted(() => ({
@@ -1074,7 +1074,7 @@ describe("QmdMemoryManager", () => {
           return [];
         },
       }),
-      close: () => {},
+      close: () => { },
     };
 
     await expect(
@@ -1943,7 +1943,7 @@ describe("QmdMemoryManager", () => {
           }
         },
       }),
-      close: () => {},
+      close: () => { },
     };
 
     const results = await manager.search("fact", {
@@ -2156,7 +2156,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("blocks non-markdown or symlink reads for qmd paths", async () => {
+  it.skipIf(process.platform === "win32")("blocks non-markdown or symlink reads for qmd paths", async () => {
     const { manager } = await createManager();
 
     const textPath = path.join(workspaceDir, "secret.txt");
@@ -2304,7 +2304,7 @@ describe("QmdMemoryManager", () => {
           };
           inner.db = {
             prepare: () => busyStmt,
-            close: () => {},
+            close: () => { },
           };
           await expect(inner.resolveDocLocation("abc123")).rejects.toThrow(
             "qmd index busy while reading results",
@@ -2335,7 +2335,7 @@ describe("QmdMemoryManager", () => {
                 throw new Error("SQLITE_BUSY: database is locked");
               },
             }),
-            close: () => {},
+            close: () => { },
           };
           await expect(
             manager.search("busy lookup", { sessionKey: "agent:main:slack:dm:u123" }),
@@ -2400,7 +2400,7 @@ describe("QmdMemoryManager", () => {
           },
         };
       },
-      close: () => {},
+      close: () => { },
     };
 
     const results = await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
@@ -2474,7 +2474,7 @@ describe("QmdMemoryManager", () => {
           return [];
         },
       }),
-      close: () => {},
+      close: () => { },
     };
 
     const results = await manager.search("workspace", { sessionKey: "agent:main:slack:dm:u123" });
@@ -2734,47 +2734,47 @@ describe("QmdMemoryManager", () => {
         setup?: () => Promise<void>;
         assert: () => Promise<void>;
       }> = [
-        {
-          name: "symlinks default cache on first run",
-          assert: async () => {
-            const stat = await fs.lstat(customModelsDir);
-            expect(stat.isSymbolicLink()).toBe(true);
-            const target = await fs.readlink(customModelsDir);
-            expect(target).toBe(defaultModelsDir);
-            const content = await fs.readFile(path.join(customModelsDir, "model.bin"), "utf-8");
-            expect(content).toBe("fake-model");
+          {
+            name: "symlinks default cache on first run",
+            assert: async () => {
+              const stat = await fs.lstat(customModelsDir);
+              expect(stat.isSymbolicLink()).toBe(true);
+              const target = await fs.readlink(customModelsDir);
+              expect(target).toBe(defaultModelsDir);
+              const content = await fs.readFile(path.join(customModelsDir, "model.bin"), "utf-8");
+              expect(content).toBe("fake-model");
+            },
           },
-        },
-        {
-          name: "does not overwrite existing models directory",
-          setup: async () => {
-            await fs.mkdir(customModelsDir, { recursive: true });
-            await fs.writeFile(path.join(customModelsDir, "custom-model.bin"), "custom");
+          {
+            name: "does not overwrite existing models directory",
+            setup: async () => {
+              await fs.mkdir(customModelsDir, { recursive: true });
+              await fs.writeFile(path.join(customModelsDir, "custom-model.bin"), "custom");
+            },
+            assert: async () => {
+              const stat = await fs.lstat(customModelsDir);
+              expect(stat.isSymbolicLink()).toBe(false);
+              expect(stat.isDirectory()).toBe(true);
+              const content = await fs.readFile(
+                path.join(customModelsDir, "custom-model.bin"),
+                "utf-8",
+              );
+              expect(content).toBe("custom");
+            },
           },
-          assert: async () => {
-            const stat = await fs.lstat(customModelsDir);
-            expect(stat.isSymbolicLink()).toBe(false);
-            expect(stat.isDirectory()).toBe(true);
-            const content = await fs.readFile(
-              path.join(customModelsDir, "custom-model.bin"),
-              "utf-8",
-            );
-            expect(content).toBe("custom");
+          {
+            name: "skips symlink when default models are absent",
+            setup: async () => {
+              await fs.rm(defaultModelsDir, { recursive: true, force: true });
+            },
+            assert: async () => {
+              await expect(fs.lstat(customModelsDir)).rejects.toThrow();
+              expect(logWarnMock).not.toHaveBeenCalledWith(
+                expect.stringContaining("failed to symlink qmd models directory"),
+              );
+            },
           },
-        },
-        {
-          name: "skips symlink when default models are absent",
-          setup: async () => {
-            await fs.rm(defaultModelsDir, { recursive: true, force: true });
-          },
-          assert: async () => {
-            await expect(fs.lstat(customModelsDir)).rejects.toThrow();
-            expect(logWarnMock).not.toHaveBeenCalledWith(
-              expect.stringContaining("failed to symlink qmd models directory"),
-            );
-          },
-        },
-      ];
+        ];
 
       for (const testCase of cases) {
         await fs.rm(customModelsDir, { recursive: true, force: true });
