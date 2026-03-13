@@ -78,11 +78,11 @@ export function resolveAllProxyFallbackOptions(
     return undefined;
   }
 
+  // Delegate to resolveEnvHttpProxyUrl which already implements lower-case
+  // precedence (e.g. blank http_proxy="" overrides non-empty HTTP_PROXY).
   const hasStandardProxy =
-    !!env.HTTP_PROXY?.trim() ||
-    !!env.HTTPS_PROXY?.trim() ||
-    !!env.http_proxy?.trim() ||
-    !!env.https_proxy?.trim();
+    resolveEnvHttpProxyUrl("http", env) !== undefined ||
+    resolveEnvHttpProxyUrl("https", env) !== undefined;
 
   if (hasStandardProxy) {
     return undefined;
