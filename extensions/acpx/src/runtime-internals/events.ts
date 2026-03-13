@@ -65,6 +65,28 @@ function resolveStructuredPromptPayload(parsed: Record<string, unknown>): {
     }
   }
 
+  const result = parsed.result;
+  if (isRecord(result)) {
+    const stopReason = asTrimmedString(result.stopReason);
+    if (stopReason) {
+      return {
+        type: "done",
+        payload: result,
+      };
+    }
+  }
+
+  const rpcError = parsed.error;
+  if (isRecord(rpcError)) {
+    const message = asTrimmedString(rpcError.message);
+    if (message) {
+      return {
+        type: "error",
+        payload: rpcError,
+      };
+    }
+  }
+
   const sessionUpdate = asOptionalString(parsed.sessionUpdate) as AcpSessionUpdateTag | undefined;
   if (sessionUpdate) {
     return {
