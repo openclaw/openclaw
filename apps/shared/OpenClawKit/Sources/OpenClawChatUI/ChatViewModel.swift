@@ -154,6 +154,7 @@ public final class OpenClawChatViewModel {
 
         for entry in sorted {
             guard !included.contains(entry.key) else { continue }
+            guard entry.key == self.sessionKey || !Self.isHiddenInternalSession(entry.key) else { continue }
             guard (entry.updatedAt ?? 0) >= cutoff else { continue }
             result.append(entry)
             included.insert(entry.key)
@@ -174,6 +175,12 @@ public final class OpenClawChatViewModel {
         let trimmed = self.sessionDefaults?.mainSessionKey?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return (trimmed?.isEmpty == false ? trimmed : nil) ?? "main"
+    }
+
+    private static func isHiddenInternalSession(_ key: String) -> Bool {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return trimmed == "onboarding" || trimmed.hasSuffix(":onboarding")
     }
 
     public var showsModelPicker: Bool {
@@ -581,7 +588,9 @@ public final class OpenClawChatViewModel {
                 sessionKey: sessionKey,
                 model: nextModelRef)
             guard requestID == self.latestModelSelectionRequestIDsBySession[sessionKey] else {
-                self.applySuccessfulModelSelection(next, sessionKey: sessionKey, syncSelection: false)
+                // Keep older successful patches as rollback state, but do not replay
+                // stale UI/session state over a newer in-flight or completed selection.
+                self.lastSuccessfulModelSelectionIDsBySession[sessionKey] = next
                 return
             }
             self.applySuccessfulModelSelection(next, sessionKey: sessionKey, syncSelection: true)

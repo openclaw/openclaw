@@ -661,6 +661,73 @@ extension TestChatTransportState {
         #expect(keys == ["Luke’s MacBook Pro", "recent-1"])
     }
 
+    @Test func sessionChoicesHideInternalOnboardingSession() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let recent = now - (2 * 60 * 1000)
+        let recentOlder = now - (5 * 60 * 1000)
+        let history = historyPayload(sessionKey: "agent:main:main", sessionId: "sess-main")
+        let sessions = OpenClawChatSessionsListResponse(
+            ts: now,
+            path: nil,
+            count: 2,
+            defaults: OpenClawChatSessionsDefaults(
+                model: nil,
+                contextTokens: nil,
+                mainSessionKey: "agent:main:main"),
+            sessions: [
+                OpenClawChatSessionEntry(
+                    key: "agent:main:onboarding",
+                    kind: nil,
+                    displayName: "Luke’s MacBook Pro",
+                    surface: nil,
+                    subject: nil,
+                    room: nil,
+                    space: nil,
+                    updatedAt: recent,
+                    sessionId: nil,
+                    systemSent: nil,
+                    abortedLastRun: nil,
+                    thinkingLevel: nil,
+                    verboseLevel: nil,
+                    inputTokens: nil,
+                    outputTokens: nil,
+                    totalTokens: nil,
+                    modelProvider: nil,
+                    model: nil,
+                    contextTokens: nil),
+                OpenClawChatSessionEntry(
+                    key: "agent:main:main",
+                    kind: nil,
+                    displayName: "Luke’s MacBook Pro",
+                    surface: nil,
+                    subject: nil,
+                    room: nil,
+                    space: nil,
+                    updatedAt: recentOlder,
+                    sessionId: nil,
+                    systemSent: nil,
+                    abortedLastRun: nil,
+                    thinkingLevel: nil,
+                    verboseLevel: nil,
+                    inputTokens: nil,
+                    outputTokens: nil,
+                    totalTokens: nil,
+                    modelProvider: nil,
+                    model: nil,
+                    contextTokens: nil),
+            ])
+
+        let (_, vm) = await makeViewModel(
+            sessionKey: "agent:main:main",
+            historyResponses: [history],
+            sessionsResponses: [sessions])
+        await MainActor.run { vm.load() }
+        try await waitUntil("sessions loaded") { await MainActor.run { !vm.sessions.isEmpty } }
+
+        let keys = await MainActor.run { vm.sessionChoices.map(\.key) }
+        #expect(keys == ["agent:main:main"])
+    }
+
     @Test func resetTriggerResetsSessionAndReloadsHistory() async throws {
         let before = historyPayload(
             messages: [
@@ -857,7 +924,8 @@ extension TestChatTransportState {
         }
 
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4-pro")
-        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "openai/gpt-5.4-pro")
+        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "gpt-5.4-pro")
+        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.modelProvider } == "openai")
     }
 
     @Test func sendWaitsForInFlightModelPatchToFinish() async throws {
@@ -951,11 +1019,15 @@ extension TestChatTransportState {
         }
 
         try await waitUntil("older model completion wins after latest failure") {
-            await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model == "openai/gpt-5.4" }
+            await MainActor.run {
+                vm.sessions.first(where: { $0.key == "main" })?.model == "gpt-5.4" &&
+                    vm.sessions.first(where: { $0.key == "main" })?.modelProvider == "openai"
+            }
         }
 
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4")
-        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "openai/gpt-5.4")
+        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "gpt-5.4")
+        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.modelProvider } == "openai")
         #expect(await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"])
     }
 
@@ -1111,12 +1183,17 @@ extension TestChatTransportState {
         }
 
         try await waitUntil("late model completion updates only the original session") {
-            await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model == "openai/gpt-5.4" }
+            await MainActor.run {
+                vm.sessions.first(where: { $0.key == "main" })?.model == "gpt-5.4" &&
+                    vm.sessions.first(where: { $0.key == "main" })?.modelProvider == "openai"
+            }
         }
 
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4")
-        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "openai/gpt-5.4")
+        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "gpt-5.4")
+        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.modelProvider } == "openai")
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "other" })?.model } == "openai/gpt-5.4-pro")
+        #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "other" })?.modelProvider } == nil)
         #expect(await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"])
     }
 
