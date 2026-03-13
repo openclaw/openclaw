@@ -499,6 +499,106 @@ describe("preflightDiscordMessage", () => {
     expect(result?.hasAnyMention).toBe(true);
   });
 
+  it("does not treat @everyone as an explicit mention by default", async () => {
+    const channelId = "channel-everyone-default-off";
+    const guildId = "guild-everyone-default-off";
+    const message = createMessage({
+      id: "m-everyone-default-off",
+      channelId,
+      content: "@everyone heads up",
+      mentionedEveryone: true,
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {} as DiscordConfig,
+      guildEntries: {
+        [guildId]: {
+          requireMention: true,
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("treats @everyone as an explicit mention when everyoneMentionsBot=true", async () => {
+    const channelId = "channel-everyone-explicit-on";
+    const guildId = "guild-everyone-explicit-on";
+    const message = createMessage({
+      id: "m-everyone-explicit-on",
+      channelId,
+      content: "@everyone heads up",
+      mentionedEveryone: true,
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {
+        everyoneMentionsBot: true,
+      } as DiscordConfig,
+      guildEntries: {
+        [guildId]: {
+          requireMention: true,
+        },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.wasMentioned).toBe(true);
+  });
+
+  it("allows channel config to disable everyoneMentionsBot overrides", async () => {
+    const channelId = "channel-everyone-channel-off";
+    const guildId = "guild-everyone-channel-off";
+    const message = createMessage({
+      id: "m-everyone-channel-off",
+      channelId,
+      content: "@everyone heads up",
+      mentionedEveryone: true,
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {
+        everyoneMentionsBot: true,
+      } as DiscordConfig,
+      guildEntries: {
+        [guildId]: {
+          requireMention: true,
+          channels: {
+            general: {
+              everyoneMentionsBot: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("ignores bot-sent @everyone mentions for detection", async () => {
     const channelId = "channel-everyone-1";
     const guildId = "guild-everyone-1";
@@ -538,6 +638,39 @@ describe("preflightDiscordMessage", () => {
 
     expect(result).not.toBeNull();
     expect(result?.hasAnyMention).toBe(false);
+  });
+
+  it("does not treat bot-sent @everyone as explicit when everyoneMentionsBot=true", async () => {
+    const channelId = "channel-everyone-bot-off";
+    const guildId = "guild-everyone-bot-off";
+    const message = createMessage({
+      id: "m-everyone-bot-off",
+      channelId,
+      content: "@everyone heads up",
+      mentionedEveryone: true,
+      author: {
+        id: "relay-bot-1",
+        bot: true,
+        username: "Relay",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {
+        allowBots: "mentions",
+        everyoneMentionsBot: true,
+      } as DiscordConfig,
+      guildEntries: {
+        [guildId]: {
+          requireMention: false,
+        },
+      },
+    });
+
+    expect(result).toBeNull();
   });
 
   it("uses attachment content_type for guild audio preflight mention detection", async () => {
