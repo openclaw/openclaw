@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -18,8 +19,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -128,96 +132,142 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
     verticalArrangement = Arrangement.spacedBy(14.dp),
   ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-      Text("Connection Control", style = mobileCaption1.copy(fontWeight = FontWeight.Bold), color = mobileAccent)
       Text("Gateway Connection", style = mobileTitle1, color = mobileText)
       Text(
-        "One primary action. Open advanced controls only when needed.",
+        if (isConnected) "Your gateway is active and ready." else "Connect to your gateway to get started.",
         style = mobileCallout,
         color = mobileTextSecondary,
       )
     }
 
+    // Status cards in a unified card group
     Surface(
       modifier = Modifier.fillMaxWidth(),
       shape = RoundedCornerShape(14.dp),
-      color = mobileSurface,
+      color = Color.White,
       border = BorderStroke(1.dp, mobileBorder),
     ) {
-      Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("Active endpoint", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
-        Text(activeEndpoint, style = mobileBody.copy(fontFamily = FontFamily.Monospace), color = mobileText)
+      Column {
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          Surface(
+            shape = RoundedCornerShape(10.dp),
+            color = mobileAccentSoft,
+          ) {
+            Icon(
+              imageVector = Icons.Default.Link,
+              contentDescription = null,
+              modifier = Modifier.padding(8.dp).size(18.dp),
+              tint = mobileAccent,
+            )
+          }
+          Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("Endpoint", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+            Text(activeEndpoint, style = mobileBody.copy(fontFamily = FontFamily.Monospace), color = mobileText)
+          }
+        }
+        HorizontalDivider(color = mobileBorder)
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          Surface(
+            shape = RoundedCornerShape(10.dp),
+            color = if (isConnected) mobileSuccessSoft else mobileSurface,
+          ) {
+            Icon(
+              imageVector = Icons.Default.Cloud,
+              contentDescription = null,
+              modifier = Modifier.padding(8.dp).size(18.dp),
+              tint = if (isConnected) mobileSuccess else mobileTextTertiary,
+            )
+          }
+          Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("Status", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+            Text(statusText, style = mobileBody, color = if (isConnected) mobileSuccess else mobileText)
+          }
+        }
       }
     }
 
-    Surface(
-      modifier = Modifier.fillMaxWidth(),
-      shape = RoundedCornerShape(14.dp),
-      color = mobileSurface,
-      border = BorderStroke(1.dp, mobileBorder),
-    ) {
-      Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("Gateway state", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
-        Text(statusText, style = mobileBody, color = mobileText)
-      }
-    }
-
-    Button(
-      onClick = {
-        if (isConnected) {
+    if (isConnected) {
+      // Outlined secondary button when connected — don't scream "danger"
+      Button(
+        onClick = {
           viewModel.disconnect()
           validationText = null
-          return@Button
-        }
-        if (statusText.contains("operator offline", ignoreCase = true)) {
+        },
+        modifier = Modifier.fillMaxWidth().height(48.dp),
+        shape = RoundedCornerShape(14.dp),
+        colors =
+          ButtonDefaults.buttonColors(
+            containerColor = Color.White,
+            contentColor = mobileDanger,
+          ),
+        border = BorderStroke(1.dp, mobileDanger.copy(alpha = 0.4f)),
+      ) {
+        Icon(Icons.Default.PowerSettingsNew, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(8.dp))
+        Text("Disconnect", style = mobileHeadline.copy(fontWeight = FontWeight.SemiBold))
+      }
+    } else {
+      Button(
+        onClick = {
+          if (statusText.contains("operator offline", ignoreCase = true)) {
+            validationText = null
+            viewModel.refreshGatewayConnection()
+            return@Button
+          }
+
+          val config =
+            resolveGatewayConnectConfig(
+              useSetupCode = inputMode == ConnectInputMode.SetupCode,
+              setupCode = setupCode,
+              manualHost = manualHostInput,
+              manualPort = manualPortInput,
+              manualTls = manualTlsInput,
+              fallbackToken = gatewayToken,
+              fallbackPassword = passwordInput,
+            )
+
+          if (config == null) {
+            validationText =
+              if (inputMode == ConnectInputMode.SetupCode) {
+                "Paste a valid setup code to connect."
+              } else {
+                "Enter a valid manual host and port to connect."
+              }
+            return@Button
+          }
+
           validationText = null
-          viewModel.refreshGatewayConnection()
-          return@Button
-        }
-
-        val config =
-          resolveGatewayConnectConfig(
-            useSetupCode = inputMode == ConnectInputMode.SetupCode,
-            setupCode = setupCode,
-            manualHost = manualHostInput,
-            manualPort = manualPortInput,
-            manualTls = manualTlsInput,
-            fallbackToken = gatewayToken,
-            fallbackPassword = passwordInput,
-          )
-
-        if (config == null) {
-          validationText =
-            if (inputMode == ConnectInputMode.SetupCode) {
-              "Paste a valid setup code to connect."
-            } else {
-              "Enter a valid manual host and port to connect."
-            }
-          return@Button
-        }
-
-        validationText = null
-        viewModel.setManualEnabled(true)
-        viewModel.setManualHost(config.host)
-        viewModel.setManualPort(config.port)
-        viewModel.setManualTls(config.tls)
-        viewModel.setGatewayBootstrapToken(config.bootstrapToken)
-        if (config.token.isNotBlank()) {
-          viewModel.setGatewayToken(config.token)
-        } else if (config.bootstrapToken.isNotBlank()) {
-          viewModel.setGatewayToken("")
-        }
-        viewModel.setGatewayPassword(config.password)
-        viewModel.connectManual()
-      },
-      modifier = Modifier.fillMaxWidth().height(52.dp),
-      shape = RoundedCornerShape(14.dp),
-      colors =
-        ButtonDefaults.buttonColors(
-          containerColor = if (isConnected) mobileDanger else mobileAccent,
-          contentColor = Color.White,
-        ),
-    ) {
-      Text(primaryLabel, style = mobileHeadline.copy(fontWeight = FontWeight.Bold))
+          viewModel.setManualEnabled(true)
+          viewModel.setManualHost(config.host)
+          viewModel.setManualPort(config.port)
+          viewModel.setManualTls(config.tls)
+          viewModel.setGatewayBootstrapToken(config.bootstrapToken)
+          if (config.token.isNotBlank()) {
+            viewModel.setGatewayToken(config.token)
+          } else if (config.bootstrapToken.isNotBlank()) {
+            viewModel.setGatewayToken("")
+          }
+          viewModel.setGatewayPassword(config.password)
+          viewModel.connectManual()
+        },
+        modifier = Modifier.fillMaxWidth().height(52.dp),
+        shape = RoundedCornerShape(14.dp),
+        colors =
+          ButtonDefaults.buttonColors(
+            containerColor = mobileAccent,
+            contentColor = Color.White,
+          ),
+      ) {
+        Text("Connect Gateway", style = mobileHeadline.copy(fontWeight = FontWeight.Bold))
+      }
     }
 
     Surface(
