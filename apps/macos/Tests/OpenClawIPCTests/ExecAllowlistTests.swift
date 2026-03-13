@@ -208,6 +208,30 @@ struct ExecAllowlistTests {
         #expect(resolutions[1].executableName == "touch")
     }
 
+    @Test func `resolve for allowlist unwraps env dispatch wrappers inside shell segments`() {
+        let command = ["/bin/sh", "-lc", "env /usr/bin/touch /tmp/openclaw-allowlist-test"]
+        let resolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: "env /usr/bin/touch /tmp/openclaw-allowlist-test",
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(resolutions.count == 1)
+        #expect(resolutions[0].resolvedPath == "/usr/bin/touch")
+        #expect(resolutions[0].executableName == "touch")
+    }
+
+    @Test func `resolve for allowlist unwraps env assignments inside shell segments`() {
+        let command = ["/bin/sh", "-lc", "env FOO=bar /usr/bin/touch /tmp/openclaw-allowlist-test"]
+        let resolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: "env FOO=bar /usr/bin/touch /tmp/openclaw-allowlist-test",
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(resolutions.count == 1)
+        #expect(resolutions[0].resolvedPath == "/usr/bin/touch")
+        #expect(resolutions[0].executableName == "touch")
+    }
+
     @Test func `resolve for allowlist unwraps env to effective direct executable`() {
         let command = ["/usr/bin/env", "FOO=bar", "/usr/bin/printf", "ok"]
         let resolutions = ExecCommandResolution.resolveForAllowlist(
