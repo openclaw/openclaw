@@ -192,8 +192,8 @@ describe("applyAuthChoice", () => {
   it("prompts and writes provider API key for common providers", async () => {
     const scenarios: Array<{
       authChoice:
-        | "minimax-api"
-        | "minimax-api-key-cn"
+        | "minimax-global-api"
+        | "minimax-cn-api"
         | "synthetic-api-key"
         | "huggingface-api-key";
       promptContains: string;
@@ -204,17 +204,17 @@ describe("applyAuthChoice", () => {
       expectedModelPrefix?: string;
     }> = [
       {
-        authChoice: "minimax-api" as const,
+        authChoice: "minimax-global-api" as const,
         promptContains: "Enter MiniMax API key",
-        profileId: "minimax:default",
+        profileId: "minimax:global",
         provider: "minimax",
         token: "sk-minimax-test",
       },
       {
-        authChoice: "minimax-api-key-cn" as const,
-        promptContains: "Enter MiniMax China API key",
-        profileId: "minimax-cn:default",
-        provider: "minimax-cn",
+        authChoice: "minimax-cn-api" as const,
+        promptContains: "Enter MiniMax CN API key",
+        profileId: "minimax:cn",
+        provider: "minimax",
         token: "sk-minimax-test",
         expectedBaseUrl: MINIMAX_CN_API_BASE_URL,
       },
@@ -1227,7 +1227,7 @@ describe("applyAuthChoice", () => {
 
   it("writes portal OAuth credentials for plugin providers", async () => {
     const scenarios: Array<{
-      authChoice: "qwen-portal" | "minimax-portal";
+      authChoice: "qwen-portal" | "minimax-global-oauth";
       label: string;
       authId: string;
       authLabel: string;
@@ -1252,7 +1252,7 @@ describe("applyAuthChoice", () => {
         apiKey: "qwen-oauth", // pragma: allowlist secret
       },
       {
-        authChoice: "minimax-portal",
+        authChoice: "minimax-global-oauth",
         label: "MiniMax",
         authId: "oauth",
         authLabel: "MiniMax OAuth (Global)",
@@ -1262,7 +1262,6 @@ describe("applyAuthChoice", () => {
         api: "anthropic-messages",
         defaultModel: "minimax-portal/MiniMax-M2.5",
         apiKey: "minimax-oauth", // pragma: allowlist secret
-        selectValue: "oauth",
       },
     ];
     for (const scenario of scenarios) {
@@ -1350,10 +1349,11 @@ describe("resolvePreferredProviderForAuthChoice", () => {
       { authChoice: "github-copilot" as const, expectedProvider: "github-copilot" },
       { authChoice: "qwen-portal" as const, expectedProvider: "qwen-portal" },
       { authChoice: "mistral-api-key" as const, expectedProvider: "mistral" },
+      { authChoice: "ollama" as const, expectedProvider: "ollama" },
       { authChoice: "unknown" as AuthChoice, expectedProvider: undefined },
     ] as const;
     for (const scenario of scenarios) {
-      expect(resolvePreferredProviderForAuthChoice(scenario.authChoice)).toBe(
+      expect(resolvePreferredProviderForAuthChoice({ choice: scenario.authChoice })).toBe(
         scenario.expectedProvider,
       );
     }
