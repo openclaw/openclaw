@@ -35,6 +35,36 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("normalizes Windows-style script paths in preflight errors", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const pyPath = path.join(tmp, "C:\\temp\\bad.py");
+
+      await fs.writeFile(
+        pyPath,
+        [
+          "import json",
+          "# model accidentally wrote shell syntax:",
+          "payload = $DM_JSON",
+          "print(payload)",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+      const error = await tool
+        .execute("call-windows-path", {
+          command: "python C:\\temp\\bad.py",
+          workdir: tmp,
+        })
+        .catch((err) => err);
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/bad\.py:3\./);
+      expect((error as Error).message).not.toMatch(/C:\\temp\\/);
+    });
+  });
+
   it("blocks obvious shell-as-js output before node execution", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const jsPath = path.join(tmp, "bad.js");

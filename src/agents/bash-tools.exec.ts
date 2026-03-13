@@ -77,6 +77,10 @@ function extractScriptTargetFromCommand(
   return null;
 }
 
+function basenameAcrossSeparators(filePath: string): string {
+  return path.win32.basename(path.posix.basename(filePath));
+}
+
 async function validateScriptFileForShellBleed(params: {
   command: string;
   workdir: string;
@@ -123,7 +127,7 @@ async function validateScriptFileForShellBleed(params: {
     throw new Error(
       [
         `exec preflight: detected likely shell variable injection (${token}) in ${target.kind} script: ${path.basename(
-          absPath,
+          basenameAcrossSeparators(absPath),
         )}:${line}.`,
         target.kind === "python"
           ? `In Python, use os.environ.get(${JSON.stringify(token.slice(1))}) instead of raw ${token}.`
