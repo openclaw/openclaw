@@ -16,7 +16,7 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
       channel: Type.Optional(Type.String()),
       to: Type.Optional(Type.String()),
       bestEffortDeliver: Type.Optional(Type.Boolean()),
-      dedupContext: Type.Optional(Type.Boolean()),
+      outputHistory: Type.Optional(Type.Boolean()),
     },
     { additionalProperties: false },
   );

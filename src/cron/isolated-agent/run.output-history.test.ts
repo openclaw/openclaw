@@ -39,16 +39,16 @@ function interceptPrompt(): { get(): string } {
   return { get: () => captured };
 }
 
-describe("runCronIsolatedAgentTurn — dedup context injection", () => {
+describe("runCronIsolatedAgentTurn — output history injection", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
-  it("includes dedup context block when dedupContext is enabled and outputs exist", async () => {
+  it("includes output history block when outputHistory is enabled and outputs exist", async () => {
     const prompt = interceptPrompt();
 
     const result = await runCronIsolatedAgentTurn(
       makeIsolatedAgentTurnParams({
         job: makeIsolatedAgentTurnJob({
-          payload: { kind: "agentTurn", message: "Send daily briefing", dedupContext: true },
+          payload: { kind: "agentTurn", message: "Send daily briefing", outputHistory: true },
           state: {
             recentOutputs: [
               { text: "Yesterday's briefing: Stock market rose 2%", timestamp: 1710230400000 },
@@ -61,13 +61,13 @@ describe("runCronIsolatedAgentTurn — dedup context injection", () => {
 
     expect(result.status).toBe("ok");
     expect(prompt.get()).toContain(
-      "[Your previous outputs for this scheduled task — avoid repeating the same content:]",
+      "[Your previous outputs for this scheduled task — use them as context for your next response:]",
     );
     expect(prompt.get()).toContain("Yesterday's briefing: Stock market rose 2%");
     expect(prompt.get()).toContain("Markets closed flat today");
   });
 
-  it("does not include dedup block when dedupContext is disabled", async () => {
+  it("does not include output history block when outputHistory is disabled", async () => {
     const prompt = interceptPrompt();
 
     const result = await runCronIsolatedAgentTurn(
@@ -85,13 +85,13 @@ describe("runCronIsolatedAgentTurn — dedup context injection", () => {
     expect(prompt.get()).not.toContain("[Your previous outputs for this scheduled task");
   });
 
-  it("does not include dedup block on first run (no previous outputs)", async () => {
+  it("does not include output history block on first run (no previous outputs)", async () => {
     const prompt = interceptPrompt();
 
     const result = await runCronIsolatedAgentTurn(
       makeIsolatedAgentTurnParams({
         job: makeIsolatedAgentTurnJob({
-          payload: { kind: "agentTurn", message: "Send daily briefing", dedupContext: true },
+          payload: { kind: "agentTurn", message: "Send daily briefing", outputHistory: true },
           state: {},
         }),
       }),

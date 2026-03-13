@@ -13,20 +13,20 @@ installCronTestHooks({ logger: noopLogger });
 
 type CronAddInput = Parameters<CronService["add"]>[0];
 
-function buildDedupJob(name: string): CronAddInput {
+function buildOutputHistoryJob(name: string): CronAddInput {
   return {
     name,
     enabled: true,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "test", dedupContext: true },
+    payload: { kind: "agentTurn", message: "test", outputHistory: true },
     delivery: { mode: "none" },
   };
 }
 
-describe("CronService dedup context recording", () => {
-  it("records outputText in recentOutputs when dedupContext is enabled and delivered", async () => {
+describe("CronService output history recording", () => {
+  it("records outputText in recentOutputs when outputHistory is enabled and delivered", async () => {
     const store = await makeStorePath();
     const finished = createFinishedBarrier();
     const cron = new CronService({
@@ -46,7 +46,7 @@ describe("CronService dedup context recording", () => {
 
     await cron.start();
     try {
-      const job = await cron.add(buildDedupJob("dedup-record"));
+      const job = await cron.add(buildOutputHistoryJob("history-record"));
       vi.setSystemTime(new Date(job.state.nextRunAtMs! + 5));
       await vi.runOnlyPendingTimersAsync();
       await finished.waitForOk(job.id);
@@ -62,7 +62,7 @@ describe("CronService dedup context recording", () => {
     }
   });
 
-  it("does not record when dedupContext is not enabled", async () => {
+  it("does not record when outputHistory is not enabled", async () => {
     const store = await makeStorePath();
     const finished = createFinishedBarrier();
     const cron = new CronService({
@@ -83,7 +83,7 @@ describe("CronService dedup context recording", () => {
     await cron.start();
     try {
       const job = await cron.add({
-        ...buildDedupJob("no-dedup"),
+        ...buildOutputHistoryJob("no-history"),
         payload: { kind: "agentTurn", message: "test" },
       });
       vi.setSystemTime(new Date(job.state.nextRunAtMs! + 5));
@@ -118,7 +118,7 @@ describe("CronService dedup context recording", () => {
 
     await cron.start();
     try {
-      const job = await cron.add(buildDedupJob("no-delivery"));
+      const job = await cron.add(buildOutputHistoryJob("no-delivery"));
       vi.setSystemTime(new Date(job.state.nextRunAtMs! + 5));
       await vi.runOnlyPendingTimersAsync();
       await finished.waitForOk(job.id);
@@ -155,7 +155,7 @@ describe("CronService dedup context recording", () => {
 
     await cron.start();
     try {
-      const job = await cron.add(buildDedupJob("cap-test"));
+      const job = await cron.add(buildOutputHistoryJob("cap-test"));
 
       // Run 6 times
       for (let i = 0; i < 6; i++) {
@@ -179,10 +179,12 @@ describe("CronService dedup context recording", () => {
     }
   });
 
-  it("truncates output text at 500 characters", async () => {
+  it("truncates long output keeping head and tail", async () => {
     const store = await makeStorePath();
     const finished = createFinishedBarrier();
-    const longText = "x".repeat(600);
+    const head = "H".repeat(400);
+    const tail = "T".repeat(400);
+    const longText = `${head}${"x".repeat(200)}${tail}`;
     const cron = new CronService({
       storePath: store.storePath,
       cronEnabled: true,
@@ -200,14 +202,19 @@ describe("CronService dedup context recording", () => {
 
     await cron.start();
     try {
-      const job = await cron.add(buildDedupJob("truncate-test"));
+      const job = await cron.add(buildOutputHistoryJob("truncate-test"));
       vi.setSystemTime(new Date(job.state.nextRunAtMs! + 5));
       await vi.runOnlyPendingTimersAsync();
       await finished.waitForOk(job.id);
 
       const jobs = await cron.list({ includeDisabled: true });
       const updated = jobs.find((j) => j.id === job.id);
-      expect(updated?.state.recentOutputs![0].text).toHaveLength(500);
+      const stored = updated?.state.recentOutputs![0].text;
+      // Should contain head and tail with ellipsis separator
+      expect(stored).toContain("H".repeat(300));
+      expect(stored).toContain("T".repeat(300));
+      expect(stored).toContain("…");
+      expect(stored!.length).toBeLessThanOrEqual(603); // 300 + 3 + 300
     } finally {
       cron.stop();
     }

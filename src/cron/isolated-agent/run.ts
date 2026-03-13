@@ -56,7 +56,6 @@ import {
 } from "../../security/external-content.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
-import { buildDedupContextBlock } from "./dedup-context.js";
 import {
   dispatchCronDelivery,
   matchesMessagingToolDeliveryTarget,
@@ -71,6 +70,7 @@ import {
   pickSummaryFromPayloads,
   resolveHeartbeatAckMaxChars,
 } from "./helpers.js";
+import { buildOutputHistoryBlock } from "./output-history.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
@@ -480,9 +480,9 @@ export async function runCronIsolatedAgentTurn(params: {
   }
   commandBody = appendCronDeliveryInstruction({ commandBody, deliveryRequested });
 
-  const dedupBlock = buildDedupContextBlock(params.job);
-  if (dedupBlock) {
-    commandBody = `${commandBody}\n\n${dedupBlock}`;
+  const outputHistoryBlock = buildOutputHistoryBlock(params.job);
+  if (outputHistoryBlock) {
+    commandBody = `${commandBody}\n\n${outputHistoryBlock}`;
   }
 
   const existingSkillsSnapshot = cronSession.sessionEntry.skillsSnapshot;

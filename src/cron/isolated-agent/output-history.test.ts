@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { CronJob } from "../types.js";
-import { buildDedupContextBlock } from "./dedup-context.js";
+import { buildOutputHistoryBlock, truncateOutputForHistory } from "./output-history.js";
 
 function makeJob(overrides?: {
-  dedupContext?: boolean;
+  outputHistory?: boolean;
   recentOutputs?: Array<{ text: string; timestamp: number }>;
   tz?: string;
 }): CronJob {
@@ -24,44 +24,44 @@ function makeJob(overrides?: {
     payload: {
       kind: "agentTurn",
       message: "test",
-      ...(overrides?.dedupContext ? { dedupContext: true } : {}),
+      ...(overrides?.outputHistory ? { outputHistory: true } : {}),
     },
     delivery: { mode: "none" },
     state: overrides?.recentOutputs ? { recentOutputs: overrides.recentOutputs } : {},
   } as CronJob;
 }
 
-describe("buildDedupContextBlock", () => {
-  it("returns undefined when dedupContext is not enabled", () => {
+describe("buildOutputHistoryBlock", () => {
+  it("returns undefined when outputHistory is not enabled", () => {
     const job = makeJob({ recentOutputs: [{ text: "hello", timestamp: 1000 }] });
-    expect(buildDedupContextBlock(job)).toBeUndefined();
+    expect(buildOutputHistoryBlock(job)).toBeUndefined();
   });
 
-  it("returns undefined when dedupContext is enabled but no outputs exist", () => {
-    const job = makeJob({ dedupContext: true });
-    expect(buildDedupContextBlock(job)).toBeUndefined();
+  it("returns undefined when outputHistory is enabled but no outputs exist", () => {
+    const job = makeJob({ outputHistory: true });
+    expect(buildOutputHistoryBlock(job)).toBeUndefined();
   });
 
   it("returns undefined when recentOutputs is empty array", () => {
-    const job = makeJob({ dedupContext: true, recentOutputs: [] });
-    expect(buildDedupContextBlock(job)).toBeUndefined();
+    const job = makeJob({ outputHistory: true, recentOutputs: [] });
+    expect(buildOutputHistoryBlock(job)).toBeUndefined();
   });
 
   it("returns undefined for non-agentTurn payload", () => {
-    const job = makeJob({ dedupContext: true, recentOutputs: [{ text: "hi", timestamp: 1000 }] });
+    const job = makeJob({ outputHistory: true, recentOutputs: [{ text: "hi", timestamp: 1000 }] });
     (job.payload as { kind: string }).kind = "systemEvent";
-    expect(buildDedupContextBlock(job)).toBeUndefined();
+    expect(buildOutputHistoryBlock(job)).toBeUndefined();
   });
 
   it("builds context block with formatted outputs", () => {
     const job = makeJob({
-      dedupContext: true,
+      outputHistory: true,
       recentOutputs: [
         { text: "First output", timestamp: 1710230400000 },
         { text: "Second output", timestamp: 1710316800000 },
       ],
     });
-    const result = buildDedupContextBlock(job);
+    const result = buildOutputHistoryBlock(job);
     expect(result).toBeDefined();
     expect(result).toContain("[Your previous outputs for this scheduled task");
     expect(result).toContain("First output");
@@ -73,23 +73,45 @@ describe("buildDedupContextBlock", () => {
 
   it("uses job timezone for formatting when available", () => {
     const job = makeJob({
-      dedupContext: true,
+      outputHistory: true,
       tz: "Asia/Shanghai",
       recentOutputs: [{ text: "output", timestamp: 1710230400000 }],
     });
-    const result = buildDedupContextBlock(job);
+    const result = buildOutputHistoryBlock(job);
     expect(result).toBeDefined();
     expect(result).toContain("output");
   });
 
   it("works with every-schedule jobs (no tz field)", () => {
     const job = makeJob({
-      dedupContext: true,
+      outputHistory: true,
       recentOutputs: [{ text: "output", timestamp: 1710230400000 }],
     });
     job.schedule = { kind: "every", everyMs: 60_000 };
-    const result = buildDedupContextBlock(job);
+    const result = buildOutputHistoryBlock(job);
     expect(result).toBeDefined();
     expect(result).toContain("output");
+  });
+});
+
+describe("truncateOutputForHistory", () => {
+  it("returns short text unchanged", () => {
+    expect(truncateOutputForHistory("hello")).toBe("hello");
+  });
+
+  it("returns text at exactly the limit unchanged", () => {
+    const text = "x".repeat(600);
+    expect(truncateOutputForHistory(text)).toBe(text);
+  });
+
+  it("truncates long text keeping head and tail", () => {
+    const head = "H".repeat(400);
+    const middle = "M".repeat(200);
+    const tail = "T".repeat(400);
+    const result = truncateOutputForHistory(`${head}${middle}${tail}`);
+    expect(result).toContain("H".repeat(300));
+    expect(result).toContain("T".repeat(300));
+    expect(result).toContain("…");
+    expect(result.length).toBeLessThanOrEqual(603); // 300 + " … " + 300
   });
 });

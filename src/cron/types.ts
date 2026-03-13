@@ -99,9 +99,9 @@ type CronAgentTurnPayloadFields = {
   bestEffortDeliver?: boolean;
   /**
    * When true, inject recent delivered outputs into the agent's system prompt
-   * so it can avoid repeating the same content. Default: false.
+   * as context for the next run. Default: false.
    */
-  dedupContext?: boolean;
+  outputHistory?: boolean;
 };
 
 type CronAgentTurnPayload = {
@@ -136,9 +136,9 @@ export type CronJobState = {
   /** Whether the last run's output was delivered to the target channel. */
   lastDelivered?: boolean;
   /**
-   * Recent delivered outputs for dedup context injection.
+   * Recent delivered outputs for output history injection.
    * Capped at 5 entries, FIFO.
-   * Only populated when `payload.dedupContext` is enabled.
+   * Only populated when `payload.outputHistory` is enabled.
    */
   recentOutputs?: Array<{
     /** Delivered text, truncated to 500 characters. */
