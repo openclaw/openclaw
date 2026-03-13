@@ -63,6 +63,7 @@ export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matchin
 export { resolveChannelContextVisibilityMode } from "../config/context-visibility.js";
 export { resolveToolsBySender } from "../config/group-policy.js";
 export {
+  normalizeNonTelegramGroupPolicy,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
 } from "../config/runtime-group-policy.js";

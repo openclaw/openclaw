@@ -311,7 +311,7 @@ export function createAllowlistProviderOpenWarningCollector<ResolvedAccount>(par
 }
 
 export function collectOpenGroupPolicyRouteAllowlistWarnings(params: {
-  groupPolicy: "open" | "allowlist" | "disabled";
+  groupPolicy: "open" | "allowlist" | "disabled" | "members";
   routeAllowlistConfigured: boolean;
   restrictSenders: Parameters<typeof buildOpenGroupPolicyRestrictSendersWarning>[0];
   noRouteAllowlist: Parameters<typeof buildOpenGroupPolicyNoRouteAllowlistWarning>[0];
@@ -348,7 +348,7 @@ export function createAllowlistProviderRouteAllowlistWarningCollector<ResolvedAc
 }
 
 export function collectOpenGroupPolicyConfiguredRouteWarnings(params: {
-  groupPolicy: "open" | "allowlist" | "disabled";
+  groupPolicy: "open" | "allowlist" | "disabled" | "members";
   routeAllowlistConfigured: boolean;
   configureRouteAllowlist: Parameters<typeof buildOpenGroupPolicyConfigureRouteAllowlistWarning>[0];
   missingRouteAllowlist: Parameters<typeof buildOpenGroupPolicyWarning>[0];
