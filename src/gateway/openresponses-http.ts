@@ -8,10 +8,12 @@
 
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { listAgentIds } from "../agents/agent-scope.js";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { ImageContent } from "../commands/agent/types.js";
+import { loadConfig } from "../config/config.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
@@ -32,9 +34,9 @@ import { defaultRuntime } from "../runtime.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
+import { sendInvalidRequest, sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { resolveGatewayRequestContext } from "./http-utils.js";
+import { InvalidGatewayAgentIdError, resolveGatewayRequestContext } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import {
   CreateResponseBodySchema,
@@ -426,14 +428,25 @@ export async function handleOpenResponsesHttpRequest(
     });
     return true;
   }
-  const { sessionKey, messageChannel } = resolveGatewayRequestContext({
-    req,
-    model,
-    user,
-    sessionPrefix: "openresponses",
-    defaultMessageChannel: "webchat",
-    useMessageChannelHeader: false,
-  });
+  let sessionKey: string;
+  let messageChannel: string;
+  try {
+    ({ sessionKey, messageChannel } = resolveGatewayRequestContext({
+      req,
+      model,
+      user,
+      sessionPrefix: "openresponses",
+      defaultMessageChannel: "webchat",
+      useMessageChannelHeader: false,
+      knownAgentIds: listAgentIds(loadConfig()),
+    }));
+  } catch (err) {
+    if (err instanceof InvalidGatewayAgentIdError) {
+      sendInvalidRequest(res, err.message);
+      return true;
+    }
+    throw err;
+  }
 
   // Build prompt from input
   const prompt = buildAgentPrompt(payload.input);

@@ -1,7 +1,22 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import { formatCliCommand } from "../cli/command-format.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
+
+type ExplicitAgentSelection = {
+  rawAgentId: string;
+  agentId: string;
+};
+
+export class InvalidGatewayAgentIdError extends Error {
+  constructor(rawAgentId: string) {
+    super(
+      `Unknown agent id "${rawAgentId}". Use "${formatCliCommand("openclaw agents list")}" to see configured agents.`,
+    );
+    this.name = "InvalidGatewayAgentIdError";
+  }
+}
 
 export function getHeader(req: IncomingMessage, name: string): string | undefined {
   const raw = req.headers[name.toLowerCase()];
@@ -23,7 +38,9 @@ export function getBearerToken(req: IncomingMessage): string | undefined {
   return token || undefined;
 }
 
-export function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
+function resolveExplicitAgentIdFromHeader(
+  req: IncomingMessage,
+): ExplicitAgentSelection | undefined {
   const raw =
     getHeader(req, "x-openclaw-agent-id")?.trim() ||
     getHeader(req, "x-openclaw-agent")?.trim() ||
@@ -31,10 +48,16 @@ export function resolveAgentIdFromHeader(req: IncomingMessage): string | undefin
   if (!raw) {
     return undefined;
   }
-  return normalizeAgentId(raw);
+  return { rawAgentId: raw, agentId: normalizeAgentId(raw) };
 }
 
-export function resolveAgentIdFromModel(model: string | undefined): string | undefined {
+export function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
+  return resolveExplicitAgentIdFromHeader(req)?.agentId;
+}
+
+function resolveExplicitAgentIdFromModel(
+  model: string | undefined,
+): ExplicitAgentSelection | undefined {
   const raw = model?.trim();
   if (!raw) {
     return undefined;
@@ -47,20 +70,39 @@ export function resolveAgentIdFromModel(model: string | undefined): string | und
   if (!agentId) {
     return undefined;
   }
-  return normalizeAgentId(agentId);
+  return { rawAgentId: agentId, agentId: normalizeAgentId(agentId) };
+}
+
+export function resolveAgentIdFromModel(model: string | undefined): string | undefined {
+  return resolveExplicitAgentIdFromModel(model)?.agentId;
+}
+
+function assertKnownExplicitAgentSelection(
+  selection: ExplicitAgentSelection,
+  knownAgentIds: readonly string[] | undefined,
+): string {
+  if (!knownAgentIds?.includes(selection.agentId)) {
+    throw new InvalidGatewayAgentIdError(selection.rawAgentId);
+  }
+  return selection.agentId;
 }
 
 export function resolveAgentIdForRequest(params: {
   req: IncomingMessage;
   model: string | undefined;
+  knownAgentIds?: readonly string[];
 }): string {
-  const fromHeader = resolveAgentIdFromHeader(params.req);
+  const fromHeader = resolveExplicitAgentIdFromHeader(params.req);
   if (fromHeader) {
-    return fromHeader;
+    return assertKnownExplicitAgentSelection(fromHeader, params.knownAgentIds);
   }
 
-  const fromModel = resolveAgentIdFromModel(params.model);
-  return fromModel ?? "main";
+  const fromModel = resolveExplicitAgentIdFromModel(params.model);
+  if (fromModel) {
+    return assertKnownExplicitAgentSelection(fromModel, params.knownAgentIds);
+  }
+
+  return "main";
 }
 
 export function resolveSessionKey(params: {
@@ -86,8 +128,13 @@ export function resolveGatewayRequestContext(params: {
   sessionPrefix: string;
   defaultMessageChannel: string;
   useMessageChannelHeader?: boolean;
+  knownAgentIds?: readonly string[];
 }): { agentId: string; sessionKey: string; messageChannel: string } {
-  const agentId = resolveAgentIdForRequest({ req: params.req, model: params.model });
+  const agentId = resolveAgentIdForRequest({
+    req: params.req,
+    model: params.model,
+    knownAgentIds: params.knownAgentIds,
+  });
   const sessionKey = resolveSessionKey({
     req: params.req,
     agentId,
