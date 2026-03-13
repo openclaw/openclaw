@@ -109,6 +109,7 @@ Following the internal code review, the following final refinements were impleme
 | **Auto-Attach Visibility** | Removed `skipAttachedEvent: true` in `onActivated`. | CDP clients now immediately "see" and can control auto-attached tabs. |
 | **Permission Pruning** | Removed the unused `scripting` permission. | Reduced extension attack surface and eliminated unnecessary user warnings. |
 | **Selection Fail-Fast** | Removed silent tab substitution in `server-context.selection.ts`. | Agents now receive explicit `BrowserTabNotFoundError` if a `targetId` is stale, preventing incorrect command routing. |
+| **P0: Debugger Session Restore** | Restored `debuggerSession` block in `handleForwardCdpCommand`. | Fixed `ReferenceError` that broke all non-special CDP command routing. |
 
 ### **Project Status**
 *   **PR URL**: [https://github.com/openclaw/openclaw/pull/45055](https://github.com/openclaw/openclaw/pull/45055)
