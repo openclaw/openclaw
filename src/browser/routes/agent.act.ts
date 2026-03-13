@@ -34,6 +34,15 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function browserEvaluateDisabledMessage(action: "wait" | "evaluate"): string {
+  return [
+    action === "wait"
+      ? "wait --fn is disabled by config (browser.evaluateEnabled=false)."
+      : "act:evaluate is disabled by config (browser.evaluateEnabled=false).",
+    "Docs: /gateway/configuration#browser-openclaw-managed-browser",
+  ].join("\n");
+}
+
 function buildExistingSessionWaitPredicate(params: {
   text?: string;
   textGone?: string;
@@ -57,7 +66,7 @@ function buildExistingSessionWaitPredicate(params: {
   }
   if (params.loadState === "domcontentloaded") {
     checks.push(`document.readyState === "interactive" || document.readyState === "complete"`);
-  } else if (params.loadState === "load" || params.loadState === "networkidle") {
+  } else if (params.loadState === "load") {
     checks.push(`document.readyState === "complete"`);
   }
   if (params.fn) {
@@ -438,6 +447,17 @@ export function registerBrowserAgentActRoutes(
     const targetId = resolveTargetIdFromBody(body);
     if (Object.hasOwn(body, "selector") && !SELECTOR_ALLOWED_KINDS.has(kind)) {
       return jsonError(res, 400, SELECTOR_UNSUPPORTED_MESSAGE);
+    }
+    const earlyFn = kind === "wait" || kind === "evaluate" ? toStringOrEmpty(body.fn) : "";
+    if (
+      (kind === "evaluate" || (kind === "wait" && earlyFn)) &&
+      !ctx.state().resolved.evaluateEnabled
+    ) {
+      return jsonError(
+        res,
+        403,
+        browserEvaluateDisabledMessage(kind === "evaluate" ? "evaluate" : "wait"),
+      );
     }
 
     await withRouteTabContext({
@@ -893,14 +913,7 @@ export function registerBrowserAgentActRoutes(
             const fn = toStringOrEmpty(body.fn) || undefined;
             const timeoutMs = toNumber(body.timeoutMs) ?? undefined;
             if (fn && !evaluateEnabled) {
-              return jsonError(
-                res,
-                403,
-                [
-                  "wait --fn is disabled by config (browser.evaluateEnabled=false).",
-                  "Docs: /gateway/configuration#browser-openclaw-managed-browser",
-                ].join("\n"),
-              );
+              return jsonError(res, 403, browserEvaluateDisabledMessage("wait"));
             }
             if (
               timeMs === undefined &&
@@ -918,6 +931,13 @@ export function registerBrowserAgentActRoutes(
               );
             }
             if (isExistingSession) {
+              if (loadState === "networkidle") {
+                return jsonError(
+                  res,
+                  501,
+                  "existing-session wait does not support loadState=networkidle yet.",
+                );
+              }
               await waitForExistingSessionCondition({
                 profileName,
                 targetId: tab.targetId,
@@ -952,14 +972,7 @@ export function registerBrowserAgentActRoutes(
           }
           case "evaluate": {
             if (!evaluateEnabled) {
-              return jsonError(
-                res,
-                403,
-                [
-                  "act:evaluate is disabled by config (browser.evaluateEnabled=false).",
-                  "Docs: /gateway/configuration#browser-openclaw-managed-browser",
-                ].join("\n"),
-              );
+              return jsonError(res, 403, browserEvaluateDisabledMessage("evaluate"));
             }
             const fn = toStringOrEmpty(body.fn);
             if (!fn) {
