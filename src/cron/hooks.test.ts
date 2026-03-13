@@ -1,5 +1,5 @@
 // Authored by: cc (Claude Code) | 2026-03-13
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronConfig } from "../config/types.cron.js";
 import { loadHookEntries, runCronHooks } from "./hooks.js";
 import type { CronHookContext } from "./hooks.js";
@@ -28,6 +28,10 @@ const noopLog = {
   warn: vi.fn(),
   error: vi.fn(),
 };
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 function makeCtx(
   hookPoint: "beforeRun" | "afterComplete" | "onFailure" | "afterRun",
