@@ -1,5 +1,5 @@
-import type { CronStoreJob } from "./store.js";
 import { readTextFile, writeTextAtomic } from "../infra/json-files.js";
+import type { CronStoreJob } from "./store.js";
 
 export type CronStoreIssueKey =
   | "empty"
@@ -39,7 +39,7 @@ function normalizePayloadKind(payload: Record<string, unknown>) {
   return false;
 }
 
-export function normalizeCronStoreJobs(
+export function normalizeStoredCronJobs(
   jobs: Array<Record<string, unknown>>,
 ): NormalizeCronStoreJobsResult {
   const issues: CronStoreIssues = {};
@@ -82,9 +82,6 @@ export function readCronStore(path: string): Array<Record<string, unknown>> {
   return readTextFile(path) as Array<Record<string, unknown>>;
 }
 
-export function writeCronStore(
-  path: string,
-  jobs: Array<Record<string, unknown>>,
-): void {
+export function writeCronStore(path: string, jobs: Array<Record<string, unknown>>): void {
   void writeTextAtomic(path, jobs);
 }
