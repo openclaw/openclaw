@@ -201,6 +201,55 @@ describe("routeReply", () => {
     );
   });
 
+  it("routes directive-only Slack replies when interactive replies are enabled", async () => {
+    mocks.sendMessageSlack.mockClear();
+    const cfg = {
+      channels: {
+        slack: {
+          capabilities: { interactiveReplies: true },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await routeReply({
+      payload: { text: "[[slack_select: Choose one | Alpha:alpha]]" },
+      channel: "slack",
+      to: "channel:C123",
+      cfg,
+    });
+    expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
+      "channel:C123",
+      "",
+      expect.objectContaining({
+        blocks: [
+          expect.objectContaining({
+            type: "actions",
+            block_id: "openclaw_reply_select_1",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("does not bypass the empty-reply guard for invalid Slack blocks", async () => {
+    mocks.sendMessageSlack.mockClear();
+    const res = await routeReply({
+      payload: {
+        text: " ",
+        channelData: {
+          slack: {
+            blocks: " ",
+          },
+        },
+      },
+      channel: "slack",
+      to: "channel:C123",
+      cfg: {} as never,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
+  });
+
   it("does not derive responsePrefix from agent identity when routing", async () => {
     mocks.sendMessageSlack.mockClear();
     const cfg = {

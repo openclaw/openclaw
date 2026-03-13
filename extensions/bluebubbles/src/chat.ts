@@ -26,6 +26,14 @@ function assertPrivateApiEnabled(accountId: string, feature: string): void {
   }
 }
 
+async function assertBlueBubblesActionOk(response: Response, action: string): Promise<void> {
+  if (response.ok) {
+    return;
+  }
+  const errorText = await response.text().catch(() => "");
+  throw new Error(`BlueBubbles ${action} failed (${response.status}): ${errorText || "unknown"}`);
+}
+
 function resolvePartIndex(partIndex: number | undefined): number {
   return typeof partIndex === "number" ? partIndex : 0;
 }
@@ -55,12 +63,7 @@ async function sendBlueBubblesChatEndpointRequest(params: {
     { method: params.method },
     params.opts.timeoutMs,
   );
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => "");
-    throw new Error(
-      `BlueBubbles ${params.action} failed (${res.status}): ${errorText || "unknown"}`,
-    );
-  }
+  await assertBlueBubblesActionOk(res, params.action);
 }
 
 async function sendPrivateApiJsonRequest(params: {
@@ -86,12 +89,7 @@ async function sendPrivateApiJsonRequest(params: {
   }
 
   const res = await blueBubblesFetchWithTimeout(url, request, params.opts.timeoutMs);
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => "");
-    throw new Error(
-      `BlueBubbles ${params.action} failed (${res.status}): ${errorText || "unknown"}`,
-    );
-  }
+  await assertBlueBubblesActionOk(res, params.action);
 }
 
 export async function markBlueBubblesChatRead(

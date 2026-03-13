@@ -101,6 +101,7 @@ vi.mock("../logger.js", async (importOriginal) => {
 });
 
 const { GatewayClient } = await import("./client.js");
+type GatewayClientInstance = InstanceType<typeof GatewayClient>;
 
 function getLatestWs(): MockWebSocket {
   const ws = wsInstances.at(-1);
@@ -368,7 +369,7 @@ describe("GatewayClient connect auth payload", () => {
     );
   }
 
-  function startClientAndConnect(params: { client: GatewayClient; nonce?: string }) {
+  function startClientAndConnect(params: { client: GatewayClientInstance; nonce?: string }) {
     params.client.start();
     const ws = getLatestWs();
     ws.emitOpen();
@@ -409,7 +410,7 @@ describe("GatewayClient connect auth payload", () => {
   }
 
   async function expectNoReconnectAfterConnectFailure(params: {
-    client: GatewayClient;
+    client: GatewayClientInstance;
     firstWs: MockWebSocket;
     connectId: string | undefined;
     failureDetails: Record<string, unknown>;

@@ -5,6 +5,7 @@ describe("shared/device-auth", () => {
   it("trims device auth roles without further rewriting", () => {
     expect(normalizeDeviceAuthRole(" operator ")).toBe("operator");
     expect(normalizeDeviceAuthRole("")).toBe("");
+    expect(normalizeDeviceAuthRole("  NODE.Admin  ")).toBe("NODE.Admin");
   });
 
   it("dedupes, trims, sorts, and filters auth scopes", () => {
@@ -12,5 +13,12 @@ describe("shared/device-auth", () => {
       normalizeDeviceAuthScopes([" node.invoke ", "operator.read", "", "node.invoke", "a.scope"]),
     ).toEqual(["a.scope", "node.invoke", "operator.read"]);
     expect(normalizeDeviceAuthScopes(undefined)).toEqual([]);
+    expect(normalizeDeviceAuthScopes(null as unknown as string[])).toEqual([]);
+    expect(normalizeDeviceAuthScopes(["   ", "\t", "\n"])).toEqual([]);
+    expect(normalizeDeviceAuthScopes(["z.scope", "A.scope", "m.scope"])).toEqual([
+      "A.scope",
+      "m.scope",
+      "z.scope",
+    ]);
   });
 });

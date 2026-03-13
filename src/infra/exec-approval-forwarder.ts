@@ -280,7 +280,7 @@ function defaultResolveSessionTarget(params: {
   cfg: OpenClawConfig;
   request: ExecApprovalRequest;
 }): ExecApprovalForwardTarget | null {
-  const target = resolveExecApprovalSessionTarget({
+  const resolvedTarget = resolveExecApprovalSessionTarget({
     cfg: params.cfg,
     request: params.request,
     turnSourceChannel: normalizeTurnSourceChannel(params.request.request.turnSourceChannel),
@@ -288,17 +288,18 @@ function defaultResolveSessionTarget(params: {
     turnSourceAccountId: params.request.request.turnSourceAccountId?.trim() || undefined,
     turnSourceThreadId: params.request.request.turnSourceThreadId ?? undefined,
   });
-  if (!target.channel || !target.to) {
+  if (!resolvedTarget?.channel || !resolvedTarget.to) {
     return null;
   }
-  if (!isDeliverableMessageChannel(target.channel)) {
+  const channel = resolvedTarget.channel;
+  if (!isDeliverableMessageChannel(channel)) {
     return null;
   }
   return {
-    channel: target.channel,
-    to: target.to,
-    accountId: target.accountId,
-    threadId: target.threadId,
+    channel,
+    to: resolvedTarget.to,
+    accountId: resolvedTarget.accountId,
+    threadId: resolvedTarget.threadId,
   };
 }
 

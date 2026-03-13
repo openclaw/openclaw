@@ -33,6 +33,8 @@ const DEFAULT_CHROME_MCP_ARGS = [
   "-y",
   "chrome-devtools-mcp@latest",
   "--autoConnect",
+  // Direct chrome-devtools-mcp launches do not enable structuredContent by default.
+  "--experimentalStructuredContent",
   "--experimental-page-id-routing",
 ];
 
@@ -131,6 +133,33 @@ function extractJsonBlock(text: string): unknown {
   const match = text.match(/```json\s*([\s\S]*?)\s*```/i);
   const raw = match?.[1]?.trim() || text.trim();
   return raw ? JSON.parse(raw) : null;
+}
+
+function extractMessageText(result: ChromeMcpToolResult): string {
+  const message = extractStructuredContent(result).message;
+  if (typeof message === "string" && message.trim()) {
+    return message;
+  }
+  const blocks = extractTextContent(result);
+  return blocks.find((block) => block.trim()) ?? "";
+}
+
+function extractJsonMessage(result: ChromeMcpToolResult): unknown {
+  const candidates = [extractMessageText(result), ...extractTextContent(result)].filter((text) =>
+    text.trim(),
+  );
+  let lastError: unknown;
+  for (const candidate of candidates) {
+    try {
+      return extractJsonBlock(candidate);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  if (lastError) {
+    throw lastError;
+  }
+  return null;
 }
 
 async function createRealSession(profileName: string): Promise<ChromeMcpSession> {
@@ -457,12 +486,7 @@ export async function evaluateChromeMcpScript(params: {
     function: params.fn,
     ...(params.args?.length ? { args: params.args } : {}),
   });
-  const message = extractStructuredContent(result).message;
-  const text = typeof message === "string" ? message : "";
-  if (!text.trim()) {
-    return null;
-  }
-  return extractJsonBlock(text);
+  return extractJsonMessage(result);
 }
 
 export async function waitForChromeMcpText(params: {

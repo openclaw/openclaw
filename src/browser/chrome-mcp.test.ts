@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  evaluateChromeMcpScript,
   listChromeMcpTabs,
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
@@ -11,7 +12,13 @@ type ToolCall = {
   arguments?: Record<string, unknown>;
 };
 
-function createFakeSession() {
+type ChromeMcpSessionFactory = Exclude<
+  Parameters<typeof setChromeMcpSessionFactoryForTest>[0],
+  null
+>;
+type ChromeMcpSession = Awaited<ReturnType<ChromeMcpSessionFactory>>;
+
+function createFakeSession(): ChromeMcpSession {
   const callTool = vi.fn(async ({ name }: ToolCall) => {
     if (name === "list_pages") {
       return {
@@ -42,6 +49,16 @@ function createFakeSession() {
         ],
       };
     }
+    if (name === "evaluate_script") {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "```json\n123\n```",
+          },
+        ],
+      };
+    }
     throw new Error(`unexpected tool ${name}`);
   });
 
@@ -56,7 +73,7 @@ function createFakeSession() {
       pid: 123,
     },
     ready: Promise.resolve(),
-  };
+  } as unknown as ChromeMcpSession;
 }
 
 describe("chrome MCP page parsing", () => {
@@ -65,7 +82,8 @@ describe("chrome MCP page parsing", () => {
   });
 
   it("parses list_pages text responses when structuredContent is missing", async () => {
-    setChromeMcpSessionFactoryForTest(async () => createFakeSession());
+    const factory: ChromeMcpSessionFactory = async () => createFakeSession();
+    setChromeMcpSessionFactoryForTest(factory);
 
     const tabs = await listChromeMcpTabs("chrome-live");
 
@@ -86,7 +104,8 @@ describe("chrome MCP page parsing", () => {
   });
 
   it("parses new_page text responses and returns the created tab", async () => {
-    setChromeMcpSessionFactoryForTest(async () => createFakeSession());
+    const factory: ChromeMcpSessionFactory = async () => createFakeSession();
+    setChromeMcpSessionFactoryForTest(factory);
 
     const tab = await openChromeMcpTab("chrome-live", "https://example.com/");
 
@@ -96,5 +115,18 @@ describe("chrome MCP page parsing", () => {
       url: "https://example.com/",
       type: "page",
     });
+  });
+
+  it("parses evaluate_script text responses when structuredContent is missing", async () => {
+    const factory: ChromeMcpSessionFactory = async () => createFakeSession();
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const result = await evaluateChromeMcpScript({
+      profileName: "chrome-live",
+      targetId: "1",
+      fn: "() => 123",
+    });
+
+    expect(result).toBe(123);
   });
 });
