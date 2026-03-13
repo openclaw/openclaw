@@ -706,8 +706,10 @@ export function buildRuntimeLine(
   runtimeCapabilities: string[] = [],
   defaultThinkLevel?: ThinkLevel,
 ): string {
+  // Stable fields first (host, os, node, shell, channel, capabilities, thinking),
+  // then dynamic per-session fields (agentId, model, defaultModel) so Anthropic KV cache
+  // can reuse the maximum stable prefix across sessions.
   return `Runtime: ${[
-    runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
     runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
     runtimeInfo?.repoRoot ? `repo=${runtimeInfo.repoRoot}` : "",
     runtimeInfo?.os
@@ -716,14 +718,16 @@ export function buildRuntimeLine(
         ? `arch=${runtimeInfo.arch}`
         : "",
     runtimeInfo?.node ? `node=${runtimeInfo.node}` : "",
-    runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
-    runtimeInfo?.defaultModel ? `default_model=${runtimeInfo.defaultModel}` : "",
     runtimeInfo?.shell ? `shell=${runtimeInfo.shell}` : "",
     runtimeChannel ? `channel=${runtimeChannel}` : "",
     runtimeChannel
       ? `capabilities=${runtimeCapabilities.length > 0 ? runtimeCapabilities.join(",") : "none"}`
       : "",
     `thinking=${defaultThinkLevel ?? "off"}`,
+    // Dynamic per-session fields (kept last to maximise stable KV-cache prefix)
+    runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
+    runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
+    runtimeInfo?.defaultModel ? `default_model=${runtimeInfo.defaultModel}` : "",
   ]
     .filter(Boolean)
     .join(" | ")}`;

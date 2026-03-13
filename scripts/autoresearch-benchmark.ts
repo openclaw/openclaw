@@ -85,13 +85,17 @@ const prompt = buildAgentSystemPrompt({
 
 const totalChars = prompt.length;
 
-// Dynamic content patterns — anything that changes per-session
+// Dynamic content patterns — anything that changes per-session.
+// Use precise patterns that match only the actual dynamic value,
+// not structural markers that also appear in stable content.
 const dynamicPatterns: RegExp[] = [
+  // The model placeholder we inject to mark the exact dynamic boundary
   /DYNAMIC_MODEL_PLACEHOLDER/,
-  /Runtime:.*model=/,
+  // ISO timestamps (userTime, session timestamps)
   /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/,
+  // Explicit dynamic section headers
   /## Current Date & Time/,
-  // userTime: ISO or formatted timestamp in Time Zone section
+  // userTime: formatted current time in Time Zone section
   /Current time:/,
 ];
 
