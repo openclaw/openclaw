@@ -122,8 +122,9 @@ describe("formatAssistantErrorText", () => {
       '{"detail":"The \'gpt-5.3-codex\' model is not supported when using Codex with a ChatGPT account."}',
     );
     const result = formatAssistantErrorText(msg);
-    expect(result).toContain("gpt-5.3-codex");
-    expect(result).not.toContain('"detail"');
+    expect(result).toBe(
+      "LLM error: The 'gpt-5.3-codex' model is not supported when using Codex with a ChatGPT account.",
+    );
   });
 });
 
@@ -153,8 +154,9 @@ describe("formatRawAssistantErrorForUi", () => {
     const text = formatRawAssistantErrorForUi(
       '{"detail":"The \'gpt-5.3-codex\' model is not supported when using Codex with a ChatGPT account."}',
     );
-    expect(text).toContain("gpt-5.3-codex");
-    expect(text).not.toContain('"detail"'); // raw JSON must not leak
+    expect(text).toBe(
+      "LLM error: The 'gpt-5.3-codex' model is not supported when using Codex with a ChatGPT account.",
+    );
   });
 
   it("sanitizes HTML error pages into a clean unavailable message", () => {
