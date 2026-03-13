@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **Ratelimit Retry** — Automatically retry agent conversations that fail due to provider rate limits (429). Detects budget/TPM/RPM errors and queues retries with configurable backoff windows.
+  npm: `@cheapestinference/openclaw-ratelimit-retry`
+  repo: `https://github.com/cheapestinference/openclaw-plugin-ratelimit-retry`
+  install: `openclaw plugins install @cheapestinference/openclaw-ratelimit-retry`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
