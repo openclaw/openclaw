@@ -357,13 +357,159 @@ function isUnsupportedGuiDomain(detail: string): boolean {
   );
 }
 
+const RESTART_PID_WAIT_TIMEOUT_MS = 10_000;
+const RESTART_PID_WAIT_INTERVAL_MS = 200;
+
+async function sleepMs(ms: number): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * Poll until the process exits or the timeout elapses.
+ * Returns true if the process exited within the timeout, false if it is
+ * still alive after the deadline.
+ */
+async function waitForPidExit(pid: number): Promise<boolean> {
+  if (!Number.isFinite(pid) || pid <= 1) {
+    return true;
+  }
+  const deadline = Date.now() + RESTART_PID_WAIT_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      // ESRCH → process is gone (desired outcome).
+      // EPERM → process still exists but we can't signal it; keep polling.
+      if (code === "ESRCH") {
+        return true;
+      }
+    }
+    await sleepMs(RESTART_PID_WAIT_INTERVAL_MS);
+  }
+  return false;
+}
+
+/**
+ * Return an opaque identity token for a PID (its start time as reported by
+ * `ps`), or null if the process no longer exists.  Used to guard against
+ * accidental SIGKILL of a recycled PID.
+ */
+async function getPidStartTime(pid: number): Promise<string | null> {
+  try {
+    const result = await execFileUtf8("ps", ["-p", String(pid), "-o", "lstart="]);
+    const ts = result.stdout.trim();
+    return ts.length > 0 ? ts : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ensure the process is dead: wait for it to exit gracefully, then
+ * SIGKILL if it is still running after the timeout.
+ * Returns true if the process is confirmed gone, false if SIGKILL also
+ * failed (e.g. permission denied or the PID was already recycled).
+ *
+ * @param preBootoutIdentity - Optional identity token (start time) captured
+ *   *before* bootout/stop was requested.  Passing this avoids the race where
+ *   the original process exits quickly, the PID is reused, and the identity
+ *   snapshot inside this function would bind to the new, unrelated process.
+ */
+async function ensurePidGone(pid: number, preBootoutIdentity?: string | null): Promise<boolean> {
+  // Use the caller-supplied identity if provided (captured before bootout);
+  // otherwise fall back to capturing it now.  The caller-supplied value is
+  // strongly preferred because capturing it after bootout can race with PID reuse.
+  const identityBefore =
+    preBootoutIdentity !== undefined ? preBootoutIdentity : await getPidStartTime(pid);
+
+  const exited = await waitForPidExit(pid);
+  if (exited) {
+    return true;
+  }
+
+  // If we never captured a pre-bootout identity we cannot safely determine
+  // whether the PID still belongs to the original process.  Skip SIGKILL to
+  // avoid accidentally killing an unrelated process that reused the PID.
+  if (identityBefore === null) {
+    return false;
+  }
+
+  // Re-validate identity: if the start time changed the original process is
+  // already gone and a new, unrelated process now owns this PID — do not kill it.
+  const identityNow = await getPidStartTime(pid);
+  if (identityNow !== null && identityBefore !== identityNow) {
+    // Different process; the one we wanted is gone.
+    return true;
+  }
+  if (identityNow === null) {
+    // Process disappeared between the wait and our check — gone.
+    return true;
+  }
+
+  // Process is still alive after SIGTERM timeout — send SIGKILL.
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch (err) {
+    // ESRCH means it exited between our identity check and the kill — that is fine.
+    // Any other error (e.g. EPERM) means the process is still alive and unkillable;
+    // return false so callers know the port may not be free.
+    if ((err as NodeJS.ErrnoException).code !== "ESRCH") {
+      return false;
+    }
+    return true;
+  }
+
+  // Give the OS a moment to reap the process after SIGKILL.
+  const killDeadline = Date.now() + 3_000;
+  while (Date.now() < killDeadline) {
+    await sleepMs(100);
+    try {
+      process.kill(pid, 0);
+    } catch (err) {
+      // ESRCH → process is gone (desired outcome).
+      // EPERM → process still exists but we can't signal it; keep polling.
+      if ((err as NodeJS.ErrnoException).code === "ESRCH") {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
+
+  // Capture the PID (and its identity) before bootout so we can wait for the
+  // process to exit and guard against accidental SIGKILL of a recycled PID.
+  const runtime = await execLaunchctl(["print", `${domain}/${label}`]);
+  const currentPid =
+    runtime.code === 0
+      ? parseLaunchctlPrint(runtime.stdout || runtime.stderr || "").pid
+      : undefined;
+  // Capture identity (process start time) NOW — before bootout — so that if the
+  // original process exits quickly and the PID is reused, ensurePidGone can
+  // detect the substitution and avoid killing the wrong process.
+  const pidIdentity = typeof currentPid === "number" ? await getPidStartTime(currentPid) : null;
+
   const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
   if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
     throw new Error(`launchctl bootout failed: ${res.stderr || res.stdout}`.trim());
   }
+
+  // Wait for the process to actually exit; SIGKILL as fallback.
+  if (typeof currentPid === "number") {
+    const gone = await ensurePidGone(currentPid, pidIdentity);
+    if (!gone) {
+      stdout.write(
+        `Warning: PID ${currentPid} may still be running after SIGKILL; port may not be free yet.\n`,
+      );
+    }
+  }
+
   stdout.write(`${formatLine("Stopped LaunchAgent", `${domain}/${label}`)}\n`);
 }
 
@@ -479,8 +625,29 @@ export async function restartLaunchAgent({
     return { outcome: "scheduled" };
   }
 
+  // Capture PID and identity BEFORE kickstart so that, if `kickstart -k` does
+  // not fully drain the old process, we can verify the old PID is gone before
+  // the new instance races for the port (mirrors the stopLaunchAgent pattern).
+  const printBefore = await execLaunchctl(["print", serviceTarget]);
+  const prevPid =
+    printBefore.code === 0
+      ? parseLaunchctlPrint(printBefore.stdout || printBefore.stderr || "").pid
+      : undefined;
+  const prevPidIdentity = typeof prevPid === "number" ? await getPidStartTime(prevPid) : undefined;
+
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (start.code === 0) {
+    // Verify the previous process is actually gone; `kickstart -k` should
+    // handle this, but warn if the PID is still alive after the restart so
+    // the port-still-busy race is observable.
+    if (typeof prevPid === "number") {
+      const gone = await ensurePidGone(prevPid, prevPidIdentity);
+      if (!gone) {
+        stdout.write(
+          `Warning: PID ${prevPid} may still be running after restart; port may not be free yet.\n`,
+        );
+      }
+    }
     try {
       stdout.write(`${formatLine("Restarted LaunchAgent", serviceTarget)}\n`);
     } catch (err: unknown) {
