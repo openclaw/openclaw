@@ -373,12 +373,12 @@ export function createPinnedDispatcher(
   const proxyUrl = policy.proxyUrl.trim();
   // CWE-918: Pass pinned lookup to ProxyAgent so the target hostname resolves
   // to the pre-validated IP addresses, preventing DNS rebinding attacks.
-  const proxyOpts: Record<string, unknown> = {
+  const proxyOpts = {
     uri: proxyUrl,
     ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
     requestTls: withPinnedLookup(pinned.lookup, policy.connect),
-  };
-  return new ProxyAgent(proxyOpts as ConstructorParameters<typeof ProxyAgent>[0]);
+  } as unknown as ConstructorParameters<typeof ProxyAgent>[0];
+  return new ProxyAgent(proxyOpts);
 }
 
 export async function closeDispatcher(dispatcher?: Dispatcher | null): Promise<void> {
