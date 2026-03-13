@@ -43,25 +43,9 @@ export function resolveCliSpawnInvocation(params: {
     env: params.env,
     execPath: process.execPath,
     packageName: params.packageName,
-    allowShellFallback: true,
+    allowShellFallback: false,
   });
   return materializeWindowsSpawnProgram(program, params.args);
-}
-
-export function isWindowsCommandShimEinval(params: {
-  err: unknown;
-  command: string;
-  commandBase: string;
-}): boolean {
-  if (process.platform !== "win32") {
-    return false;
-  }
-  const errno = params.err as NodeJS.ErrnoException | undefined;
-  if (errno?.code !== "EINVAL") {
-    return false;
-  }
-  const escapedBase = params.commandBase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[\\\\/])${escapedBase}\\.cmd$`, "i").test(params.command);
 }
 
 export async function runCliCommand(params: {
