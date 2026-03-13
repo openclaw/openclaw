@@ -265,11 +265,11 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
   }
 }
 
-async function extractMultipleEntries(params: {
+async function hashMultipleEntries(params: {
   archivePath: string;
   entryPaths: Set<string>;
-}): Promise<Map<string, Buffer>> {
-  const results = new Map<string, Buffer>();
+}): Promise<Map<string, string>> {
+  const results = new Map<string, string>();
   const pending: Promise<void>[] = [];
   await tar.t({
     file: params.archivePath,
@@ -281,13 +281,13 @@ async function extractMultipleEntries(params: {
       }
       pending.push(
         new Promise<void>((resolve, reject) => {
-          const chunks: Buffer[] = [];
+          const hash = createHash("sha256");
           entry.on("data", (chunk: Buffer | string) => {
-            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            hash.update(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
           });
           entry.on("error", reject);
           entry.on("end", () => {
-            results.set(entry.path, Buffer.concat(chunks));
+            results.set(entry.path, hash.digest("hex"));
             resolve();
           });
         }),
@@ -349,21 +349,20 @@ async function verifyAssetChecksums(params: {
     }
   }
 
-  // Single-pass extraction of all needed entries
-  const extractedContent = await extractMultipleEntries({
+  // Single-pass streaming hash of all needed entries (no content buffering)
+  const entryHashes = await hashMultipleEntries({
     archivePath: params.archivePath,
     entryPaths: allNeededRawPaths,
   });
 
-  // Verify checksums using extracted content
+  // Verify checksums using streamed hashes
   for (const { asset, assetArchivePath, entries } of checks) {
     if (entries.length === 1 && entries[0] === assetArchivePath) {
       const rawPath = normalizedToRaw.get(entries[0])!;
-      const content = extractedContent.get(rawPath);
-      if (!content) {
-        throw new Error(`Failed to extract entry for asset ${asset.kind} (${asset.sourcePath})`);
+      const computed = entryHashes.get(rawPath);
+      if (!computed) {
+        throw new Error(`Failed to hash entry for asset ${asset.kind} (${asset.sourcePath})`);
       }
-      const computed = createHash("sha256").update(content).digest("hex");
       if (computed !== asset.sha256) {
         throw new Error(
           `Checksum mismatch for asset ${asset.kind} (${asset.sourcePath}): expected ${asset.sha256}, got ${computed}`,
@@ -377,11 +376,10 @@ async function verifyAssetChecksums(params: {
           continue;
         }
         const rawPath = normalizedToRaw.get(entryPath)!;
-        const content = extractedContent.get(rawPath);
-        if (!content) {
-          throw new Error(`Failed to extract entry for asset ${asset.kind} (${asset.sourcePath})`);
+        const sha256 = entryHashes.get(rawPath);
+        if (!sha256) {
+          throw new Error(`Failed to hash entry for asset ${asset.kind} (${asset.sourcePath})`);
         }
-        const sha256 = createHash("sha256").update(content).digest("hex");
         fileHashes.push({ relativePath, sha256 });
       }
 
