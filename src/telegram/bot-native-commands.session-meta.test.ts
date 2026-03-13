@@ -4,7 +4,8 @@ import {
   registerTelegramNativeCommands,
   type RegisterTelegramHandlerParams,
 } from "./bot-native-commands.js";
-import { createNativeCommandTestParams } from "./bot-native-commands.test-helpers.js";
+
+type RegisterTelegramNativeCommandsParams = Parameters<typeof registerTelegramNativeCommands>[0];
 
 // All mocks scoped to this file only — does not affect bot-native-commands.test.ts
 
@@ -106,6 +107,48 @@ function createDeferred<T>() {
     resolve = res;
   });
   return { promise, resolve };
+}
+
+function createNativeCommandTestParams(
+  params: Partial<RegisterTelegramNativeCommandsParams> = {},
+): RegisterTelegramNativeCommandsParams {
+  const log = vi.fn();
+  return {
+    bot:
+      params.bot ??
+      ({
+        api: {
+          setMyCommands: vi.fn().mockResolvedValue(undefined),
+          sendMessage: vi.fn().mockResolvedValue(undefined),
+        },
+        command: vi.fn(),
+      } as unknown as RegisterTelegramNativeCommandsParams["bot"]),
+    cfg: params.cfg ?? ({} as OpenClawConfig),
+    runtime:
+      params.runtime ?? ({ log } as unknown as RegisterTelegramNativeCommandsParams["runtime"]),
+    accountId: params.accountId ?? "default",
+    telegramCfg: params.telegramCfg ?? ({} as RegisterTelegramNativeCommandsParams["telegramCfg"]),
+    allowFrom: params.allowFrom ?? [],
+    groupAllowFrom: params.groupAllowFrom ?? [],
+    replyToMode: params.replyToMode ?? "off",
+    textLimit: params.textLimit ?? 4000,
+    useAccessGroups: params.useAccessGroups ?? false,
+    nativeEnabled: params.nativeEnabled ?? true,
+    nativeSkillsEnabled: params.nativeSkillsEnabled ?? false,
+    nativeDisabledExplicit: params.nativeDisabledExplicit ?? false,
+    resolveGroupPolicy:
+      params.resolveGroupPolicy ??
+      (() =>
+        ({
+          allowlistEnabled: false,
+          allowed: true,
+        }) as ReturnType<RegisterTelegramNativeCommandsParams["resolveGroupPolicy"]>),
+    resolveTelegramGroupConfig:
+      params.resolveTelegramGroupConfig ??
+      (() => ({ groupConfig: undefined, topicConfig: undefined })),
+    shouldSkipUpdate: params.shouldSkipUpdate ?? (() => false),
+    opts: params.opts ?? { token: "token" },
+  };
 }
 
 type TelegramCommandHandler = (ctx: unknown) => Promise<void>;
