@@ -246,4 +246,121 @@ describe("maybeRepairLegacyCronStore", () => {
       to: "https://example.invalid/cron-finished",
     });
   });
+
+  it("removes dead notify:true when cron.webhook is unset (no migration target)", async () => {
+    const storePath = await makeTempStorePath();
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "notify-no-webhook",
+              name: "Notify without webhook",
+              notify: true,
+              createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+              updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
+              schedule: { kind: "every", everyMs: 60_000 },
+              payload: {
+                kind: "systemEvent",
+                text: "Status",
+              },
+              delivery: { mode: "none" },
+              state: {},
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+
+    await maybeRepairLegacyCronStore({
+      cfg: {
+        cron: { store: storePath },
+        // No cron.webhook configured
+      },
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    // notify:true should be removed as dead metadata (no webhook to migrate to)
+    expect(persisted.jobs[0]?.notify).toBeUndefined();
+    // delivery should remain unchanged
+    expect(persisted.jobs[0]?.delivery).toMatchObject({ mode: "none" });
+    // Should print normalized message, NOT a warning
+    expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Cron store normalized"),
+      "Doctor changes",
+    );
+    expect(noteSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("cron.webhook is unset"),
+      "Doctor warnings",
+    );
+  });
+
+  it("removes dead notify:true from announce-delivery jobs when cron.webhook is unset", async () => {
+    const storePath = await makeTempStorePath();
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "announce-with-notify",
+              name: "Announce job",
+              notify: true,
+              createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+              updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
+              schedule: { kind: "every", everyMs: 60_000 },
+              sessionTarget: "isolated",
+              payload: { kind: "agentTurn", message: "Status" },
+              delivery: { mode: "announce", channel: "telegram", to: "123" },
+              state: {},
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+
+    await maybeRepairLegacyCronStore({
+      cfg: {
+        cron: { store: storePath },
+        // No cron.webhook configured
+      },
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    // notify:true should be removed — announce delivery is already working
+    expect(persisted.jobs[0]?.notify).toBeUndefined();
+    // announce delivery should be preserved
+    expect(persisted.jobs[0]?.delivery).toMatchObject({
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+    });
+    expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Cron store normalized"),
+      "Doctor changes",
+    );
+  });
 });
