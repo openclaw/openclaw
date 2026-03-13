@@ -107,7 +107,7 @@ export function extractMSTeamsQuoteInfo(params: {
   text: string;
   /** Raw attachments from the activity. */
   attachments?: ReadonlyArray<{
-    contentType?: string;
+    contentType?: string | null;
     content?: unknown;
   }>;
 }): MSTeamsQuoteInfo | undefined {
@@ -129,7 +129,7 @@ export function extractMSTeamsQuoteInfo(params: {
 function extractQuoteFromHtmlAttachments(
   fallbackText: string,
   attachments: ReadonlyArray<{
-    contentType?: string;
+    contentType?: string | null;
     content?: unknown;
   }>,
 ): MSTeamsQuoteInfo | undefined {
