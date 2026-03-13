@@ -6,6 +6,7 @@ describe("shared/node-list-parse", () => {
     expect(parseNodeList({ nodes: [{ nodeId: "node-1" }] })).toEqual([{ nodeId: "node-1" }]);
     expect(parseNodeList({ nodes: "nope" })).toEqual([]);
     expect(parseNodeList(null)).toEqual([]);
+    expect(parseNodeList(["not-an-object"])).toEqual([]);
   });
 
   it("parses node.pair.list payloads", () => {
@@ -20,5 +21,6 @@ describe("shared/node-list-parse", () => {
     });
     expect(parsePairingList({ pending: 1, paired: "x" })).toEqual({ pending: [], paired: [] });
     expect(parsePairingList(undefined)).toEqual({ pending: [], paired: [] });
+    expect(parsePairingList(["not-an-object"])).toEqual({ pending: [], paired: [] });
   });
 });
