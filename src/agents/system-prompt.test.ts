@@ -387,6 +387,11 @@ describe("buildAgentSystemPrompt", () => {
       const prompt = buildAgentSystemPrompt(testCase.params);
       expect(prompt, testCase.name).toContain("## Current Date & Time");
       expect(prompt, testCase.name).toContain("Time zone: America/Chicago");
+      if (testCase.name === "timezone-only") {
+        expect(prompt, testCase.name).not.toContain("Day of week:");
+      } else {
+        expect(prompt, testCase.name).toContain("Day of week: Monday");
+      }
     }
   });
 
@@ -400,8 +405,8 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("current date");
   });
 
-  // The system prompt intentionally does NOT include the current date/time.
-  // Only the timezone is included, to keep the prompt stable for caching.
+  // The system prompt intentionally does NOT include the full current date/time.
+  // Timezone and weekday are included; full date/time is omitted for cache stability.
   // See: https://github.com/moltbot/moltbot/commit/66eec295b894bce8333886cfbca3b960c57c4946
   // Agents should use session_status or message timestamps to determine the date/time.
   // Related: https://github.com/moltbot/moltbot/issues/1897
@@ -420,6 +425,7 @@ describe("buildAgentSystemPrompt", () => {
     // https://github.com/moltbot/moltbot/issues/3658 for the preferred approach:
     // gateway-level timestamp injection into messages, not the system prompt.
     expect(prompt).toContain("Time zone: America/Chicago");
+    expect(prompt).toContain("Day of week: Monday");
     expect(prompt).not.toContain("Monday, January 5th, 2026");
     expect(prompt).not.toContain("3:26 PM");
     expect(prompt).not.toContain("15:26");
