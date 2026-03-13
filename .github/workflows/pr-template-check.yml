@@ -94,7 +94,9 @@ jobs:
                     return false;
                   }
                   const afterQuestion = line.split("?").slice(1).join("?");
-                  return yesNoPattern.test(afterQuestion);
+                  // Strip template placeholder (`Yes/No`) so unedited lines don't false-positive.
+                  const stripped = afterQuestion.replace(/\(\s*`?Yes\s*\/\s*No`?\s*\)/gi, "");
+                  return yesNoPattern.test(stripped);
                 });
                 if (!answered && !hasContent(securityText, securityPlaceholders)) {
                   issues.push("**Security Impact** section has no answers filled in. Please answer Yes/No for each question.");
