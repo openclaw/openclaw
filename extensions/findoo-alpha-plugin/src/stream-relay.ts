@@ -12,7 +12,7 @@ import type { LangGraphStreamEvent } from "./langgraph-client.js";
 const STREAM_SNIPPET_MAX_CHARS = 220;
 const DEFAULT_STREAM_FLUSH_MS = 2_500;
 const DEFAULT_NO_OUTPUT_NOTICE_MS = 60_000;
-const DEFAULT_MAX_RELAY_LIFETIME_MS = 600_000; // 10 min
+const DEFAULT_MAX_RELAY_LIFETIME_MS = 1_200_000; // 20 min (remote agent may take 10-15 min for deep analysis)
 
 /** LangGraph node name → user-facing Chinese label */
 const NODE_LABELS: Record<string, string> = {
@@ -36,6 +36,7 @@ export type StreamRelayConfig = {
   label: string; // "茅台市场分析"
   enqueueSystemEvent: (text: string, options: { sessionKey: string; contextKey?: string }) => void;
   requestHeartbeatNow: (options?: { reason?: string; sessionKey?: string }) => void;
+  logger?: { info: (msg: string) => void };
   streamFlushMs?: number;
   noOutputNoticeMs?: number;
   maxRelayLifetimeMs?: number;
@@ -69,10 +70,12 @@ export function startStreamRelay(
       sessionKey: config.sessionKey,
       contextKey: `${contextKeyPrefix}:${suffix}`,
     });
+    // Must use "exec-event" reason so heartbeat runner inspects pending system events
     config.requestHeartbeatNow({
-      reason: "wake",
+      reason: "exec-event",
       sessionKey: config.sessionKey,
     });
+    config.logger?.info(`findoo-alpha: relay emit [${suffix}] (${text.length} chars)`);
   }
 
   function flushPending() {
@@ -101,16 +104,29 @@ export function startStreamRelay(
   function extractText(event: LangGraphStreamEvent): { nodeName?: string; text?: string } {
     const data = event.data;
 
-    // LangGraph "updates" format: { <node_name>: { messages: [...] } } or { <node_name>: { output: "..." } }
+    // LangGraph "updates" format:
+    //   { <node_name>: { messages: [...] } }           — standard array
+    //   { <node_name>: { messages: { value: [...] } } } — LangGraph reducer wrapper
+    //   { <node_name>: { output: "..." } }
+    //   { <node_name>: null }                           — middleware checkpoint (skip)
     for (const [key, val] of Object.entries(data)) {
       if (typeof val !== "object" || val === null) continue;
       const nodeData = val as Record<string, unknown>;
 
-      // Try messages array (LangGraph standard)
+      // Try messages — both array and { value: [...] } wrapper formats
+      let msgs: unknown[] | undefined;
       if (Array.isArray(nodeData.messages)) {
-        const lastMsg = nodeData.messages[nodeData.messages.length - 1] as
-          | { content?: string }
-          | undefined;
+        msgs = nodeData.messages;
+      } else if (
+        nodeData.messages &&
+        typeof nodeData.messages === "object" &&
+        Array.isArray((nodeData.messages as Record<string, unknown>).value)
+      ) {
+        msgs = (nodeData.messages as Record<string, unknown>).value as unknown[];
+      }
+
+      if (msgs && msgs.length > 0) {
+        const lastMsg = msgs[msgs.length - 1] as { content?: string } | undefined;
         if (lastMsg?.content && typeof lastMsg.content === "string") {
           return { nodeName: key, text: lastMsg.content };
         }

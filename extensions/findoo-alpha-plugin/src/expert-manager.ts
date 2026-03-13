@@ -104,6 +104,7 @@ export class ExpertManager {
       label,
       enqueueSystemEvent: this.config.enqueueSystemEvent,
       requestHeartbeatNow: this.config.requestHeartbeatNow,
+      logger: this.config.logger,
     });
     this.relays.set(taskId, relay);
 
