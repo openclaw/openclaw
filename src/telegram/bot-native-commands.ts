@@ -604,14 +604,8 @@ export const registerTelegramNativeCommands = ({
           if (!runtimeContext) {
             return;
           }
-          const {
-            threadSpec,
-            route,
-            skipDmThreadSuffix,
-            mediaLocalRoots,
-            tableMode,
-            chunkMode,
-          } = runtimeContext;
+          const { threadSpec, route, skipDmThreadSuffix, mediaLocalRoots, tableMode, chunkMode } =
+            runtimeContext;
           const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
 
           const commandDefinition = findCommandByNativeName(command.name, "telegram");

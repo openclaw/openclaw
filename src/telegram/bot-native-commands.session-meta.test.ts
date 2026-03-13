@@ -521,9 +521,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
         [{ ctx?: { CommandTargetSessionKey?: string } }]
       >
     )[0]?.[0];
-    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe(
-      "agent:codex-acp:session-dm-topic",
-    );
+    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe("agent:codex-acp:session-dm-topic");
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("default:100:topic:42", undefined);
   });
 

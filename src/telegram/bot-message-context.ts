@@ -81,21 +81,17 @@ export const buildTelegramMessageContext = async ({
       : dmPolicy;
   // Fresh config for bindings lookup; other routing inputs are payload-derived.
   const freshCfg = loadConfig();
-  let {
-    route,
-    configuredBinding,
-    configuredBindingSessionKey,
-    skipDmThreadSuffix,
-  } = resolveTelegramConversationRoute({
-    cfg: freshCfg,
-    accountId: account.accountId,
-    chatId,
-    isGroup,
-    resolvedThreadId,
-    replyThreadId,
-    senderId,
-    topicAgentId: topicConfig?.agentId,
-  });
+  let { route, configuredBinding, configuredBindingSessionKey, skipDmThreadSuffix } =
+    resolveTelegramConversationRoute({
+      cfg: freshCfg,
+      accountId: account.accountId,
+      chatId,
+      isGroup,
+      resolvedThreadId,
+      replyThreadId,
+      senderId,
+      topicAgentId: topicConfig?.agentId,
+    });
   const requiresExplicitAccountBinding = (
     candidate: ReturnType<typeof resolveTelegramConversationRoute>["route"],
   ): boolean => candidate.accountId !== DEFAULT_ACCOUNT_ID && candidate.matchedBy === "default";
