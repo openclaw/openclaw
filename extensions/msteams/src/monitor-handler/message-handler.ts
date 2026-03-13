@@ -511,10 +511,15 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     // When a quote is detected, build a structured reply annotation
     // similar to how Telegram formats [Replying to ...] blocks.
-    const agentBody = quoteInfo
-      ? quoteInfo.cleanBody +
-        `\n\n[Replying to ${quoteInfo.quotedSender ?? "unknown"}]\n${quoteInfo.quotedBody ?? "(no text)"}\n[/Replying]`
-      : rawBody;
+    // If cleanBody fell back to the raw text (no content after blockquote in HTML),
+    // skip the annotation to avoid duplicating quoted content.
+    // Also preserve the original rawBody for attachment-only replies so the
+    // attachment placeholder is not lost.
+    const agentBody =
+      quoteInfo && quoteInfo.cleanBody !== text
+        ? quoteInfo.cleanBody +
+          `\n\n[Replying to ${quoteInfo.quotedSender ?? "unknown"}]\n${quoteInfo.quotedBody ?? "(no text)"}\n[/Replying]`
+        : rawBody;
 
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: combinedBody,

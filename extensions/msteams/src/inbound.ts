@@ -65,19 +65,24 @@ export interface MSTeamsQuoteInfo {
  * Strip HTML tags, decode common entities, collapse whitespace and trim.
  */
 function htmlToPlainText(html: string): string {
-  return html
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n")
-    .replace(/<[^>]*>/g, "")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  return (
+    html
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/p>/gi, "\n")
+      .replace(/<[^>]*>/g, "")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'")
+      // Decode numeric character references (decimal and hex) that Teams may produce.
+      .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+      .replace(/&#([0-9]+);/g, (_, dec) => String.fromCodePoint(Number(dec)))
+      .replace(/[ \t]+/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+  );
 }
 
 /**
@@ -144,17 +149,17 @@ function extractQuoteFromHtmlAttachments(
     }
 
     // Match <blockquote> that Teams uses for quoted replies (with Skype Reply schema).
+    // Note: non-greedy match stops at the first </blockquote>, so nested
+    // blockquotes are not supported. Teams does not currently produce them
+    // for quote/reply scenarios.
     const blockquoteRe =
       /<blockquote[^>]*itemtype=["']http:\/\/schema\.skype\.com\/Reply["'][^>]*>([\s\S]*?)<\/blockquote>/i;
     const bqMatch = blockquoteRe.exec(html);
     if (!bqMatch) {
-      // Try a more lenient blockquote match (some Teams clients omit schema attrs).
-      const simpleBqRe = /<blockquote[^>]*>([\s\S]*?)<\/blockquote>/i;
-      const simpleBqMatch = simpleBqRe.exec(html);
-      if (!simpleBqMatch) {
-        continue;
-      }
-      return parseBlockquoteContent(simpleBqMatch, html, fallbackText);
+      // Only match blockquotes with the Skype Reply schema attribute.
+      // Generic blockquotes (e.g. user-authored quote formatting) are not
+      // treated as reply metadata to avoid misinterpreting normal messages.
+      continue;
     }
     return parseBlockquoteContent(bqMatch, html, fallbackText);
   }

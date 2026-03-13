@@ -111,7 +111,7 @@ describe("extractMSTeamsQuoteInfo", () => {
     expect(result!.cleanBody).toBe("不是我改的");
   });
 
-  it("extracts quote from simple blockquote without schema attrs", () => {
+  it("ignores generic blockquote without schema.skype.com/Reply attrs", () => {
     const html = [
       "<blockquote>",
       "  <strong>Robin Liu</strong>",
@@ -125,9 +125,8 @@ describe("extractMSTeamsQuoteInfo", () => {
       attachments: [{ contentType: "text/html", content: html }],
     });
 
-    expect(result).toBeDefined();
-    expect(result!.quotedSender).toBe("Robin Liu");
-    expect(result!.cleanBody).toBe("my reply here");
+    // Generic blockquotes should not be treated as reply metadata
+    expect(result).toBeUndefined();
   });
 
   it("handles content as object with text property", () => {
@@ -185,5 +184,23 @@ describe("extractMSTeamsQuoteInfo", () => {
     expect(result!.quotedSender).toBe("Xiang Chen");
     expect(result!.quotedBody).toBe("谢谢");
     expect(result!.cleanBody).toBe("不客气");
+  });
+
+  it("decodes numeric HTML entities in quoted content", () => {
+    const html =
+      '<blockquote itemscope itemtype="http://schema.skype.com/Reply" itemid="1">' +
+      "<strong>Alice</strong>" +
+      '<p itemprop="copy">Hello &#x2019;world&#x2019; &#8212; test</p>' +
+      "</blockquote>" +
+      "<p>reply here</p>";
+
+    const result = extractMSTeamsQuoteInfo({
+      text: "Alicereply here",
+      attachments: [{ contentType: "text/html", content: html }],
+    });
+
+    expect(result).toBeDefined();
+    expect(result!.quotedBody).toBe("Hello \u2019world\u2019 \u2014 test");
+    expect(result!.cleanBody).toBe("reply here");
   });
 });
