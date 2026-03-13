@@ -90,6 +90,12 @@ describe("format-duration", () => {
       expect(formatDurationPrecise(999)).toBe("999ms");
     });
 
+    it("clamps negative and fractional sub-second values to non-negative milliseconds", () => {
+      expect(formatDurationPrecise(-1)).toBe("0ms");
+      expect(formatDurationPrecise(-500)).toBe("0ms");
+      expect(formatDurationPrecise(999.6)).toBe("1000ms");
+    });
+
     it("shows decimal seconds for >=1s", () => {
       expect(formatDurationPrecise(1000)).toBe("1s");
       expect(formatDurationPrecise(1500)).toBe("1.5s");
