@@ -1,7 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { clampPercent, resolveUsageProviderId, withTimeout } from "./provider-usage.shared.js";
 
 describe("provider-usage.shared", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it.each([
     { value: "z-ai", expected: "zai" },
     { value: " GOOGLE-GEMINI-CLI ", expected: "google-gemini-cli" },
@@ -33,7 +38,18 @@ describe("provider-usage.shared", () => {
   });
 
   it("returns fallback when timeout wins", async () => {
+    vi.useFakeTimers();
     const late = new Promise<string>((resolve) => setTimeout(() => resolve("late"), 50));
-    await expect(withTimeout(late, 1, "fallback")).resolves.toBe("fallback");
+    const result = withTimeout(late, 1, "fallback");
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(result).resolves.toBe("fallback");
+  });
+
+  it("clears the timeout after successful work", async () => {
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+
+    await expect(withTimeout(Promise.resolve("ok"), 100, "fallback")).resolves.toBe("ok");
+
+    expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
   });
 });
