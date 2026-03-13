@@ -48,11 +48,21 @@ describe("fetchCodexUsage", () => {
     const result = await fetchCodexUsage("token", "acct-1", 5000, mockFetch);
 
     expect(result.provider).toBe("openai-codex");
-    expect(result.plan).toBe("Plus ($12.50)");
+    expect(result.plan).toBe("Plus");
+    expect(result.balance).toBe("$12.50");
     expect(result.windows).toEqual([
       { label: "3h", usedPercent: 35.5, resetAt: 1_700_000_000_000 },
       { label: "Day", usedPercent: 75, resetAt: 1_700_050_000_000 },
     ]);
+  });
+
+  it("does not set balance for malformed credit strings", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, { plan_type: "Plus", credits: { balance: "" } }),
+    );
+    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
+    expect(result.balance).toBeUndefined();
+    expect(result.plan).toBe("Plus");
   });
 
   it("labels weekly secondary window as Week", async () => {
