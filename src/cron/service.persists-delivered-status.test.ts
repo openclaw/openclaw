@@ -178,6 +178,20 @@ describe("CronService persists delivered status", () => {
     expect(updated?.state.lastDeliveryError).toBeUndefined();
   });
 
+  it("persists not-delivered when delivery.mode=webhook and runner reports delivered=false", async () => {
+    const updated = await runIsolatedJobAndReadState({
+      job: {
+        ...buildIsolatedAgentTurnJob("webhook-delivery-failed"),
+        delivery: { mode: "webhook", to: "https://example.com/hook" },
+      },
+      delivered: false,
+    });
+    expectSuccessfulCronRun(updated);
+    expect(updated?.state.lastDelivered).toBe(false);
+    expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
+    expect(updated?.state.lastDeliveryError).toBeUndefined();
+  });
+
   it("persists not-requested delivery state when delivery is not configured", async () => {
     const updated = await runIsolatedJobAndReadState({
       job: buildIsolatedAgentTurnJob("no-delivery"),

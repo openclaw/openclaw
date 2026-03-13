@@ -169,7 +169,7 @@ function resolveDeliveryStatus(params: { job: CronJob; delivered?: boolean }): C
   if (params.delivered === false) {
     // When delivery was not requested (mode="none"), delivered=false is expected
     // and should be reported as "not-requested" instead of "not-delivered".
-    return plan.requested ? "not-delivered" : "not-requested";
+    return plan.mode === "none" ? "not-requested" : "not-delivered";
   }
   return plan.requested ? "unknown" : "not-requested";
 }
