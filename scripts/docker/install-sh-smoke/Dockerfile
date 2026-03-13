@@ -11,6 +11,7 @@ RUN --mount=type=cache,id=openclaw-install-sh-smoke-apt-cache,target=/var/cache/
     if [ "${attempt}" -eq 3 ]; then exit 1; fi; \
     sleep 3; \
   done; \
+  apt-get -o Acquire::Retries=3 upgrade -y; \
   apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
     bash \
     ca-certificates \
