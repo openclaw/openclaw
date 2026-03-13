@@ -39,8 +39,9 @@ openclaw agent --local --agent main --thinking low -m "Reply with exactly WINDOW
 Current caveats:
 
 - `openclaw onboard --non-interactive` still expects a reachable local gateway unless you pass `--skip-health`
-- `openclaw onboard --non-interactive --install-daemon` and `openclaw gateway install` currently use Windows Scheduled Tasks
-- on some native Windows setups, Scheduled Task install may require running PowerShell as Administrator
+- `openclaw onboard --non-interactive --install-daemon` and `openclaw gateway install` try Windows Scheduled Tasks first
+- if Scheduled Task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately
+- Scheduled Tasks are still preferred when available because they provide better supervisor status
 
 If you want the native CLI only, without gateway service install, use one of these:
 
@@ -48,6 +49,15 @@ If you want the native CLI only, without gateway service install, use one of the
 openclaw onboard --non-interactive --skip-health
 openclaw gateway run
 ```
+
+If you do want managed startup on native Windows:
+
+```powershell
+openclaw gateway install
+openclaw gateway status --json
+```
+
+If Scheduled Task creation is blocked, the fallback service mode still auto-starts after login through the current user's Startup folder.
 
 ## Gateway
 
