@@ -5,6 +5,7 @@ import { resolveMainSessionKey } from "../config/sessions.js";
 import { isCronSystemEvent } from "./heartbeat-runner.js";
 import {
   drainSystemEventEntries,
+  consumeSystemEventEntries,
   enqueueSystemEvent,
   hasSystemEvents,
   isSystemEventContextChanged,
@@ -154,6 +155,18 @@ describe("system events (session routing)", () => {
     });
     expect(result).toContain("Node: Mac Studio");
     expect(result).not.toContain("last input");
+  });
+
+  it("consumes only the previewed event snapshot, leaving newer events queued", () => {
+    const key = "agent:main:test-consume-preview";
+    enqueueSystemEvent("First event", { sessionKey: key });
+    const previewed = peekSystemEventEntries(key);
+    enqueueSystemEvent("Second event", { sessionKey: key });
+
+    const consumed = consumeSystemEventEntries(key, previewed);
+
+    expect(consumed.map((entry) => entry.text)).toEqual(["First event"]);
+    expect(peekSystemEvents(key)).toEqual(["Second event"]);
   });
 });
 

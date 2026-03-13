@@ -11,15 +11,24 @@ import {
   formatZonedTimestamp,
 } from "../../infra/format-time/format-datetime.ts";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
-import { drainSystemEventEntries } from "../../infra/system-events.js";
+import {
+  consumeSystemEventEntries,
+  drainSystemEventEntries,
+  peekSystemEventEntries,
+  type SystemEvent,
+} from "../../infra/system-events.js";
 
 /** Drain queued system events, format as `System:` lines, return the block (or undefined). */
-export async function drainFormattedSystemEvents(params: {
+type FormattedSystemEventParams = {
   cfg: OpenClawConfig;
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
-}): Promise<string | undefined> {
+};
+
+async function formatSystemEvents(
+  params: FormattedSystemEventParams & { queued: SystemEvent[] },
+): Promise<string | undefined> {
   const compactSystemEvent = (line: string): string | null => {
     const trimmed = line.trim();
     if (!trimmed) {
@@ -85,9 +94,8 @@ export async function drainFormattedSystemEvents(params: {
   };
 
   const systemLines: string[] = [];
-  const queued = drainSystemEventEntries(params.sessionKey);
   systemLines.push(
-    ...queued
+    ...params.queued
       .map((event) => {
         const compacted = compactSystemEvent(event.text);
         if (!compacted) {
@@ -136,6 +144,31 @@ async function persistSessionEntryUpdate(params: {
   await updateSessionStore(params.storePath, (store) => {
     store[params.sessionKey!] = { ...store[params.sessionKey!], ...params.nextEntry };
   });
+}
+
+export async function peekFormattedSystemEvents(
+  params: FormattedSystemEventParams,
+): Promise<{ entries: SystemEvent[]; text?: string }> {
+  const entries = peekSystemEventEntries(params.sessionKey);
+  return {
+    entries,
+    text: await formatSystemEvents({ ...params, queued: entries }),
+  };
+}
+
+export function consumePeekedSystemEvents(
+  sessionKey: string,
+  entries: SystemEvent[],
+): SystemEvent[] {
+  return consumeSystemEventEntries(sessionKey, entries);
+}
+
+/** Drain queued system events, format as `System:` lines, return the block (or undefined). */
+export async function drainFormattedSystemEvents(
+  params: FormattedSystemEventParams,
+): Promise<string | undefined> {
+  const queued = drainSystemEventEntries(params.sessionKey);
+  return formatSystemEvents({ ...params, queued });
 }
 
 export async function ensureSkillSnapshot(params: {

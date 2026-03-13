@@ -96,6 +96,40 @@ export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
   return out;
 }
 
+export function consumeSystemEventEntries(
+  sessionKey: string,
+  expected: SystemEvent[],
+): SystemEvent[] {
+  const key = requireSessionKey(sessionKey);
+  const entry = queues.get(key);
+  if (!entry || expected.length === 0) {
+    return [];
+  }
+  let count = 0;
+  while (count < expected.length && count < entry.queue.length) {
+    const queued = entry.queue[count];
+    const target = expected[count];
+    if (
+      queued?.text !== target?.text ||
+      queued?.ts !== target?.ts ||
+      (queued?.contextKey ?? null) !== (target?.contextKey ?? null)
+    ) {
+      break;
+    }
+    count += 1;
+  }
+  if (count === 0) {
+    return [];
+  }
+  const out = entry.queue.splice(0, count);
+  if (entry.queue.length === 0) {
+    entry.lastText = null;
+    entry.lastContextKey = null;
+    queues.delete(key);
+  }
+  return out;
+}
+
 export function drainSystemEvents(sessionKey: string): string[] {
   return drainSystemEventEntries(sessionKey).map((event) => event.text);
 }

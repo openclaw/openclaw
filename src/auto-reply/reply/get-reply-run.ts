@@ -37,7 +37,7 @@ import {
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runReplyAgent } from "./agent-runner.js";
-import { applySessionHints } from "./body.js";
+import { buildSessionHintedBody, commitSessionHintEffects } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
@@ -47,7 +47,11 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
 import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
-import { drainFormattedSystemEvents, ensureSkillSnapshot } from "./session-updates.js";
+import {
+  consumePeekedSystemEvents,
+  ensureSkillSnapshot,
+  peekFormattedSystemEvents,
+} from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
@@ -326,14 +330,9 @@ export async function runPreparedReply(
   const effectiveBaseBody = baseBodyTrimmed
     ? baseBodyForPrompt
     : "[User sent media without caption]";
-  let prefixedBodyBase = await applySessionHints({
+  let prefixedBodyBase = buildSessionHintedBody({
     baseBody: effectiveBaseBody,
     abortedLastRun,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    abortKey: command.abortKey,
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
@@ -352,12 +351,13 @@ export async function runPreparedReply(
   // The queue/steer path uses effectiveBaseBody (unstripped, no session hints) to match
   // main's pre-PR behavior; the immediate-run path uses prefixedBodyBase (post-hints,
   // post-think-hint-strip) so the run sees the cleaned-up body.
-  const eventsBlock = await drainFormattedSystemEvents({
+  const previewedSystemEvents = await peekFormattedSystemEvents({
     cfg,
     sessionKey,
     isMainSession,
     isNewSession,
   });
+  const eventsBlock = previewedSystemEvents.text;
   const prependEvents = (body: string) => (eventsBlock ? `${eventsBlock}\n\n${body}` : body);
   const bodyWithEvents = prependEvents(effectiveBaseBody);
   prefixedBodyBase = prependEvents(prefixedBodyBase);
@@ -369,6 +369,42 @@ export async function runPreparedReply(
     : threadStarterBody
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
+  const prefixedBody = [threadContextNote, prefixedBodyBase].filter(Boolean).join("\n\n");
+  const mediaNote = buildInboundMediaNote(ctx);
+  const mediaReplyHint = mediaNote
+    ? "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/image.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./image.jpg. Avoid absolute paths (MEDIA:/...) and ~ paths — they are blocked for security. Keep caption in the text body."
+    : undefined;
+  let prefixedCommandBody = mediaNote
+    ? [mediaNote, mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim()
+    : prefixedBody;
+  // Use bodyWithEvents (events prepended, but no session hints / untrusted context) so
+  // deferred turns receive system events while keeping the same scope as effectiveBaseBody did.
+  const queueBodyBase = [threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
+  const queuedBody = mediaNote
+    ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
+    : queueBodyBase;
+
+  const hookRunner = getGlobalHookRunner();
+  if (beforeAgentRunContext && hookRunner?.hasHooks("before_agent_run")) {
+    const beforeAgentRunResult = await hookRunner.runBeforeAgentRun(
+      { prompt: prefixedCommandBody },
+      beforeAgentRunContext,
+    );
+    if (beforeAgentRunResult?.skip) {
+      typing.cleanup();
+      return undefined;
+    }
+  }
+
+  consumePeekedSystemEvents(sessionKey, previewedSystemEvents.entries);
+  await commitSessionHintEffects({
+    abortedLastRun,
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
+    abortKey: command.abortKey,
+  });
   const skillResult = await ensureSkillSnapshot({
     sessionEntry,
     sessionStore,
@@ -383,14 +419,6 @@ export async function runPreparedReply(
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
-  const prefixedBody = [threadContextNote, prefixedBodyBase].filter(Boolean).join("\n\n");
-  const mediaNote = buildInboundMediaNote(ctx);
-  const mediaReplyHint = mediaNote
-    ? "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/image.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./image.jpg. Avoid absolute paths (MEDIA:/...) and ~ paths — they are blocked for security. Keep caption in the text body."
-    : undefined;
-  let prefixedCommandBody = mediaNote
-    ? [mediaNote, mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim()
-    : prefixedBody;
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
@@ -434,12 +462,6 @@ export async function runPreparedReply(
     sessionEntry,
     resolveSessionFilePathOptions({ agentId, storePath }),
   );
-  // Use bodyWithEvents (events prepended, but no session hints / untrusted context) so
-  // deferred turns receive system events while keeping the same scope as effectiveBaseBody did.
-  const queueBodyBase = [threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
-  const queuedBody = mediaNote
-    ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
-    : queueBodyBase;
   const resolvedQueue = resolveQueueSettings({
     cfg,
     channel: sessionCtx.Provider,
@@ -537,18 +559,6 @@ export async function runPreparedReply(
       ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
     },
   };
-
-  const hookRunner = getGlobalHookRunner();
-  if (beforeAgentRunContext && hookRunner?.hasHooks("before_agent_run")) {
-    const beforeAgentRunResult = await hookRunner.runBeforeAgentRun(
-      { prompt: prefixedCommandBody },
-      beforeAgentRunContext,
-    );
-    if (beforeAgentRunResult?.skip) {
-      typing.cleanup();
-      return undefined;
-    }
-  }
 
   return runReplyAgent({
     commandBody: prefixedCommandBody,
