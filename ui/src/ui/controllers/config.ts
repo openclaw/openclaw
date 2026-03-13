@@ -138,7 +138,10 @@ function parseCustomTabs(config: unknown): import("../navigation.ts").CustomTab[
     result.push({
       id: id.trim(),
       label: label.trim(),
-      icon: typeof icon === "string" ? (icon as import("../navigation.ts").CustomTab["icon"]) : undefined,
+      icon:
+        typeof icon === "string"
+          ? (icon as import("../navigation.ts").CustomTab["icon"])
+          : undefined,
       url: url.trim(),
     });
   }

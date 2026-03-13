@@ -478,7 +478,9 @@ export function renderApp(state: AppViewState) {
             const isCustomGroup = group.label === "custom";
             const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
             const hasActiveTab = isCustomGroup
-              ? (group.tabs as import("./navigation.ts").CustomTab[]).some((t) => t.id === state.customTabActive)
+              ? (group.tabs as import("./navigation.ts").CustomTab[]).some(
+                  (t) => t.id === state.customTabActive,
+                )
               : (group.tabs as import("./navigation.ts").Tab[]).some((tab) => tab === state.tab);
             const showItems = hasActiveTab || !isGroupCollapsed;
 
@@ -506,9 +508,14 @@ export function renderApp(state: AppViewState) {
                     : nothing
                 }
                 <div class="nav-group__items">
-                  ${isCustomGroup
-                    ? (group.tabs as import("./navigation.ts").CustomTab[]).map((tab) => renderCustomTabItem(state, tab))
-                    : (group.tabs as import("./navigation.ts").Tab[]).map((tab) => renderTab(state, tab))
+                  ${
+                    isCustomGroup
+                      ? (group.tabs as import("./navigation.ts").CustomTab[]).map((tab) =>
+                          renderCustomTabItem(state, tab),
+                        )
+                      : (group.tabs as import("./navigation.ts").Tab[]).map((tab) =>
+                          renderTab(state, tab),
+                        )
                   }
                 </div>
               </div>
@@ -1910,7 +1917,7 @@ export function renderApp(state: AppViewState) {
 
         ${
           state.customTabActive !== null
-            ? html`<div class="custom-tab-view" style="display:${state.customTabActive !== null ? 'flex' : 'none'}; flex:1; flex-direction:column; height:100%; overflow:hidden;">
+            ? html`<div class="custom-tab-view" style="display:${state.customTabActive !== null ? "flex" : "none"}; flex:1; flex-direction:column; height:100%; overflow:hidden;">
                 ${state.customTabs
                   .filter((tab) => tab.id === state.customTabActive)
                   .map(
