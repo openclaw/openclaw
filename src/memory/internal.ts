@@ -91,7 +91,7 @@ function isAllowedMemoryFilePath(filePath: string, multimodal?: MemoryMultimodal
   );
 }
 
-async function walkDir(dir: string, files: string[], multimodal?: MemoryMultimodalSettings) {
+export async function walkDir(dir: string, files: string[], multimodal?: MemoryMultimodalSettings) {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
@@ -116,6 +116,7 @@ export async function listMemoryFiles(
   workspaceDir: string,
   extraPaths?: string[],
   multimodal?: MemoryMultimodalSettings,
+  excludePaths?: string[],
 ): Promise<string[]> {
   const result: string[] = [];
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
@@ -177,6 +178,14 @@ export async function listMemoryFiles(
     }
     seen.add(key);
     deduped.push(entry);
+  }
+  // Filter out files under shared/excluded directories
+  if (excludePaths && excludePaths.length > 0) {
+    const resolved = excludePaths.map((p) => path.resolve(p));
+    return deduped.filter((f) => {
+      const abs = path.resolve(f);
+      return !resolved.some((exc) => abs.startsWith(exc + path.sep) || abs === exc);
+    });
   }
   return deduped;
 }
