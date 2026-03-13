@@ -837,24 +837,26 @@ describe("memory index", () => {
       internal.activateFallbackProvider = activateFallbackProvider;
       const runUnsafeReindex = vi.fn(async () => {});
       internal.runUnsafeReindex = runUnsafeReindex;
+      try {
+        await manager.sync({
+          reason: "post-compaction",
+          sessionFiles: [sessionPath],
+        });
 
-      await manager.sync({
-        reason: "post-compaction",
-        sessionFiles: [sessionPath],
-      });
-
-      expect(activateFallbackProvider).toHaveBeenCalledWith("embedding backend failed");
-      expect(runUnsafeReindex).toHaveBeenCalledWith({
-        reason: "post-compaction",
-        force: true,
-        progress: undefined,
-      });
-
-      internal.syncSessionFiles = originalSyncSessionFiles;
-      internal.shouldFallbackOnError = originalShouldFallbackOnError;
-      internal.activateFallbackProvider = originalActivateFallbackProvider;
-      internal.runUnsafeReindex = originalRunUnsafeReindex;
-      await manager.close?.();
+        expect(activateFallbackProvider).toHaveBeenCalledWith("embedding backend failed");
+        expect(runUnsafeReindex).toHaveBeenCalledWith({
+          reason: "post-compaction",
+          force: true,
+          sessionFiles: [sessionPath],
+          progress: undefined,
+        });
+      } finally {
+        internal.syncSessionFiles = originalSyncSessionFiles;
+        internal.shouldFallbackOnError = originalShouldFallbackOnError;
+        internal.activateFallbackProvider = originalActivateFallbackProvider;
+        internal.runUnsafeReindex = originalRunUnsafeReindex;
+        await manager.close?.();
+      }
     } finally {
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;

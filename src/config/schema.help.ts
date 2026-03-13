@@ -808,7 +808,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.multimodal.modalities":
     'Chooses which non-markdown media kinds are indexed from extra paths: "image", "audio", or both via "all". Limit this to the media you actually want searchable so indexing stays focused and cheap.',
   "agents.defaults.memorySearch.multimodal.maxFileBytes":
-    "Maximum file size accepted for multimodal memory indexing before the file is skipped. Lower this when large media files would bloat embedding payloads or raise provider limits.",
+    "Maximum file size accepted for multimodal memory indexing before the file is skipped. Keep this lower when large media files would bloat embedding payloads or hit provider limits, and raise it only when you intentionally need bigger image or audio files searchable.",
   "agents.defaults.memorySearch.experimental.sessionMemory":
     "Indexes session transcripts into memory search so responses can reference prior chat turns. Keep this off unless transcript recall is needed, because indexing cost and storage usage both increase.",
   "agents.defaults.memorySearch.provider":
