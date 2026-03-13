@@ -72,26 +72,74 @@ function isRetryableDirectRoomSendError(err: unknown): boolean {
   return errcode === "M_FORBIDDEN" || errcode === "M_NOT_FOUND";
 }
 
+type ResolvedRoomAttemptError = {
+  cause: unknown;
+  sentAnyContent: boolean;
+};
+
+function asResolvedRoomAttemptError(err: unknown): ResolvedRoomAttemptError | null {
+  if (!err || typeof err !== "object") {
+    return null;
+  }
+  const candidate = err as {
+    cause?: unknown;
+    sentAnyContent?: unknown;
+  };
+  if (typeof candidate.sentAnyContent !== "boolean") {
+    return null;
+  }
+  return {
+    cause: candidate.cause,
+    sentAnyContent: candidate.sentAnyContent,
+  };
+}
+
 async function withResolvedRoomRetry<T>(params: {
   client: MatrixClient;
   to: string;
-  action: (roomId: string) => Promise<T>;
+  action: (roomId: string, markContentSent: () => void) => Promise<T>;
 }): Promise<T> {
   const { client, to, action } = params;
+  const runAction = async (roomId: string): Promise<T> => {
+    let sentAnyContent = false;
+    try {
+      return await enqueueSend(
+        roomId,
+        async () =>
+          await action(roomId, () => {
+            sentAnyContent = true;
+          }),
+      );
+    } catch (err) {
+      throw {
+        cause: err,
+        sentAnyContent,
+      } satisfies ResolvedRoomAttemptError;
+    }
+  };
+
   const roomId = await resolveMatrixRoomId(client, to);
   try {
-    return await action(roomId);
+    return await runAction(roomId);
   } catch (err) {
-    if (!isMatrixUserTarget(to) || !isRetryableDirectRoomSendError(err)) {
-      throw err;
+    const attemptError = asResolvedRoomAttemptError(err);
+    const firstError = attemptError?.cause ?? err;
+    if (
+      !isMatrixUserTarget(to) ||
+      attemptError?.sentAnyContent === true ||
+      !isRetryableDirectRoomSendError(firstError)
+    ) {
+      throw firstError;
     }
 
     clearDirectRoomCacheForTarget(client, to);
 
     try {
       const refreshedRoomId = await resolveMatrixRoomId(client, to);
-      return await action(refreshedRoomId);
+      return await runAction(refreshedRoomId);
     } catch (retryErr) {
+      const retryAttemptError = asResolvedRoomAttemptError(retryErr);
+      const resolvedRetryError = retryAttemptError?.cause ?? retryErr;
       clearDirectRoomCacheForTarget(client, to);
       const LogService = getMatrixLogService();
       LogService.warn(
@@ -99,11 +147,11 @@ async function withResolvedRoomRetry<T>(params: {
         "Direct-room self-heal failed after send error; waiting for next external invocation",
         {
           target: to,
-          firstError: String(err),
-          retryError: String(retryErr),
+          firstError: String(firstError),
+          retryError: String(resolvedRetryError),
         },
       );
-      throw retryErr;
+      throw resolvedRetryError;
     }
   }
 }
@@ -131,104 +179,104 @@ export async function sendMessageMatrix(
     return await withResolvedRoomRetry({
       client,
       to,
-      action: async (roomId) =>
-        await enqueueSend(roomId, async () => {
-          const tableMode = getCore().channel.text.resolveMarkdownTableMode({
-            cfg,
-            channel: "matrix",
-            accountId: opts.accountId,
-          });
-          const convertedMessage = getCore().channel.text.convertMarkdownTables(
-            trimmedMessage,
-            tableMode,
-          );
-          const textLimit = getCore().channel.text.resolveTextChunkLimit(cfg, "matrix");
-          const chunkLimit = Math.min(textLimit, MATRIX_TEXT_LIMIT);
-          const chunkMode = getCore().channel.text.resolveChunkMode(cfg, "matrix", opts.accountId);
-          const chunks = getCore().channel.text.chunkMarkdownTextWithMode(
-            convertedMessage,
-            chunkLimit,
-            chunkMode,
-          );
-          const threadId = normalizeThreadId(opts.threadId);
-          const relation = threadId
-            ? buildThreadRelation(threadId, opts.replyToId)
-            : buildReplyRelation(opts.replyToId);
-          const sendContent = async (content: MatrixOutboundContent) => {
-            const eventId = await client.sendMessage(roomId, content);
-            return eventId;
-          };
+      action: async (roomId, markContentSent) => {
+        const tableMode = getCore().channel.text.resolveMarkdownTableMode({
+          cfg,
+          channel: "matrix",
+          accountId: opts.accountId,
+        });
+        const convertedMessage = getCore().channel.text.convertMarkdownTables(
+          trimmedMessage,
+          tableMode,
+        );
+        const textLimit = getCore().channel.text.resolveTextChunkLimit(cfg, "matrix");
+        const chunkLimit = Math.min(textLimit, MATRIX_TEXT_LIMIT);
+        const chunkMode = getCore().channel.text.resolveChunkMode(cfg, "matrix", opts.accountId);
+        const chunks = getCore().channel.text.chunkMarkdownTextWithMode(
+          convertedMessage,
+          chunkLimit,
+          chunkMode,
+        );
+        const threadId = normalizeThreadId(opts.threadId);
+        const relation = threadId
+          ? buildThreadRelation(threadId, opts.replyToId)
+          : buildReplyRelation(opts.replyToId);
+        const sendContent = async (content: MatrixOutboundContent) => {
+          const eventId = await client.sendMessage(roomId, content);
+          markContentSent();
+          return eventId;
+        };
 
-          let lastMessageId = "";
-          if (opts.mediaUrl) {
-            const maxBytes = resolveMediaMaxBytes(opts.accountId, cfg);
-            const media = await getCore().media.loadWebMedia(opts.mediaUrl, maxBytes);
-            const uploaded = await uploadMediaMaybeEncrypted(client, roomId, media.buffer, {
-              contentType: media.contentType,
-              filename: media.fileName,
-            });
-            const durationMs = await resolveMediaDurationMs({
-              buffer: media.buffer,
-              contentType: media.contentType,
-              fileName: media.fileName,
-              kind: media.kind ?? "unknown",
-            });
-            const baseMsgType = resolveMatrixMsgType(media.contentType, media.fileName);
-            const { useVoice } = resolveMatrixVoiceDecision({
-              wantsVoice: opts.audioAsVoice === true,
-              contentType: media.contentType,
-              fileName: media.fileName,
-            });
-            const msgtype = useVoice ? MsgType.Audio : baseMsgType;
-            const isImage = msgtype === MsgType.Image;
-            const imageInfo = isImage
-              ? await prepareImageInfo({ buffer: media.buffer, client })
-              : undefined;
-            const [firstChunk, ...rest] = chunks;
-            const body = useVoice ? "Voice message" : (firstChunk ?? media.fileName ?? "(file)");
-            const content = buildMediaContent({
-              msgtype,
-              body,
-              url: uploaded.url,
-              file: uploaded.file,
-              filename: media.fileName,
-              mimetype: media.contentType,
-              size: media.buffer.byteLength,
-              durationMs,
-              relation,
-              isVoice: useVoice,
-              imageInfo,
-            });
+        let lastMessageId = "";
+        if (opts.mediaUrl) {
+          const maxBytes = resolveMediaMaxBytes(opts.accountId, cfg);
+          const media = await getCore().media.loadWebMedia(opts.mediaUrl, maxBytes);
+          const uploaded = await uploadMediaMaybeEncrypted(client, roomId, media.buffer, {
+            contentType: media.contentType,
+            filename: media.fileName,
+          });
+          const durationMs = await resolveMediaDurationMs({
+            buffer: media.buffer,
+            contentType: media.contentType,
+            fileName: media.fileName,
+            kind: media.kind ?? "unknown",
+          });
+          const baseMsgType = resolveMatrixMsgType(media.contentType, media.fileName);
+          const { useVoice } = resolveMatrixVoiceDecision({
+            wantsVoice: opts.audioAsVoice === true,
+            contentType: media.contentType,
+            fileName: media.fileName,
+          });
+          const msgtype = useVoice ? MsgType.Audio : baseMsgType;
+          const isImage = msgtype === MsgType.Image;
+          const imageInfo = isImage
+            ? await prepareImageInfo({ buffer: media.buffer, client })
+            : undefined;
+          const [firstChunk, ...rest] = chunks;
+          const body = useVoice ? "Voice message" : (firstChunk ?? media.fileName ?? "(file)");
+          const content = buildMediaContent({
+            msgtype,
+            body,
+            url: uploaded.url,
+            file: uploaded.file,
+            filename: media.fileName,
+            mimetype: media.contentType,
+            size: media.buffer.byteLength,
+            durationMs,
+            relation,
+            isVoice: useVoice,
+            imageInfo,
+          });
+          const eventId = await sendContent(content);
+          lastMessageId = eventId ?? lastMessageId;
+          const textChunks = useVoice ? chunks : rest;
+          const followupRelation = threadId ? relation : undefined;
+          for (const chunk of textChunks) {
+            const text = chunk.trim();
+            if (!text) {
+              continue;
+            }
+            const followup = buildTextContent(text, followupRelation);
+            const followupEventId = await sendContent(followup);
+            lastMessageId = followupEventId ?? lastMessageId;
+          }
+        } else {
+          for (const chunk of chunks.length ? chunks : [""]) {
+            const text = chunk.trim();
+            if (!text) {
+              continue;
+            }
+            const content = buildTextContent(text, relation);
             const eventId = await sendContent(content);
             lastMessageId = eventId ?? lastMessageId;
-            const textChunks = useVoice ? chunks : rest;
-            const followupRelation = threadId ? relation : undefined;
-            for (const chunk of textChunks) {
-              const text = chunk.trim();
-              if (!text) {
-                continue;
-              }
-              const followup = buildTextContent(text, followupRelation);
-              const followupEventId = await sendContent(followup);
-              lastMessageId = followupEventId ?? lastMessageId;
-            }
-          } else {
-            for (const chunk of chunks.length ? chunks : [""]) {
-              const text = chunk.trim();
-              if (!text) {
-                continue;
-              }
-              const content = buildTextContent(text, relation);
-              const eventId = await sendContent(content);
-              lastMessageId = eventId ?? lastMessageId;
-            }
           }
+        }
 
-          return {
-            messageId: lastMessageId || "unknown",
-            roomId,
-          };
-        }),
+        return {
+          messageId: lastMessageId || "unknown",
+          roomId,
+        };
+      },
     });
   } finally {
     if (stopOnDone) {
@@ -259,13 +307,14 @@ export async function sendPollMatrix(
     return await withResolvedRoomRetry({
       client,
       to,
-      action: async (roomId) => {
+      action: async (roomId, markContentSent) => {
         const pollContent = buildPollStartContent(poll);
         const threadId = normalizeThreadId(opts.threadId);
         const pollPayload = threadId
           ? { ...pollContent, "m.relates_to": buildThreadRelation(threadId) }
           : pollContent;
         const eventId = await client.sendEvent(roomId, M_POLL_START, pollPayload);
+        markContentSent();
 
         return {
           eventId: eventId ?? "unknown",
