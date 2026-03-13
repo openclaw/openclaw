@@ -268,6 +268,23 @@ describe("resolveAcpClientSpawnInvocation", () => {
     expect(resolved.windowsHide).toBe(true);
   });
 
+  it("dedupes a leading acp server arg from callers", () => {
+    const resolved = resolveAcpClientSpawnInvocation(
+      { serverCommand: "openclaw", serverArgs: ["acp", "--verbose"] },
+      {
+        platform: "darwin",
+        env: {},
+        execPath: "/usr/bin/node",
+      },
+    );
+    expect(resolved).toEqual({
+      command: "openclaw",
+      args: ["acp", "--verbose"],
+      shell: undefined,
+      windowsHide: undefined,
+    });
+  });
+
   it("falls back to shell mode for unresolved wrappers on windows", async () => {
     const dir = await createTempDir();
     const shimPath = path.join(dir, "openclaw.cmd");
