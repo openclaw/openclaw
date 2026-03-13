@@ -36,6 +36,7 @@ vi.mock("../runtime.js", () => ({
 }));
 
 const { registerCronCli } = await import("./cron-cli.js");
+const { defaultRuntime } = await import("../runtime.js");
 
 type CronUpdatePatch = {
   patch?: {
@@ -381,6 +382,83 @@ describe("cron cli", () => {
     const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
     const params = addCall?.[2] as { agentId?: string };
     expect(params?.agentId).toBe("ops");
+  });
+
+  it("warns when --agent is not specified on cron add with --message", async () => {
+    resetGatewayMock();
+    vi.mocked(defaultRuntime.error).mockClear();
+
+    const program = buildProgram();
+    await program.parseAsync(
+      [
+        "cron",
+        "add",
+        "--name",
+        "No agent",
+        "--cron",
+        "* * * * *",
+        "--message",
+        "hello",
+      ],
+      { from: "user" },
+    );
+
+    // Should show warning when --agent is not specified
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("No --agent specified"),
+    );
+  });
+
+  it("does not warn when --system-event is used (no agent needed)", async () => {
+    resetGatewayMock();
+    vi.mocked(defaultRuntime.error).mockClear();
+
+    const program = buildProgram();
+    await program.parseAsync(
+      [
+        "cron",
+        "add",
+        "--name",
+        "System event",
+        "--cron",
+        "* * * * *",
+        "--system-event",
+        "tick",
+      ],
+      { from: "user" },
+    );
+
+    // Should NOT show warning for system-event jobs
+    expect(defaultRuntime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("No --agent specified"),
+    );
+  });
+
+  it("warns even when --session-key is provided (user should still specify agent explicitly)", async () => {
+    resetGatewayMock();
+    vi.mocked(defaultRuntime.error).mockClear();
+
+    const program = buildProgram();
+    await program.parseAsync(
+      [
+        "cron",
+        "add",
+        "--name",
+        "With session key",
+        "--cron",
+        "* * * * *",
+        "--message",
+        "hello",
+        "--session-key",
+        "agent:my-agent:my-session",
+      ],
+      { from: "user" },
+    );
+
+    // Should still show warning even when --session-key is provided
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("No --agent specified"),
+    );
   });
 
   it("sets lightContext on cron add when --light-context is passed", async () => {

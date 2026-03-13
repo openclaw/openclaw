@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import type { CronJob } from "../../cron/types.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
+import { theme } from "../../terminal/theme.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parsePositiveIntOrUndefined } from "../program/helpers.js";
@@ -248,6 +249,16 @@ export function registerCronAddCommand(cron: Command) {
             typeof opts.sessionKey === "string" && opts.sessionKey.trim()
               ? opts.sessionKey.trim()
               : undefined;
+
+          // Only warn for agentTurn jobs (--message) when --agent is not specified
+          if (payload.kind === "agentTurn" && !agentId) {
+            defaultRuntime.error(
+              theme.warn(
+                "No --agent specified; the job will run with the default agent. " +
+                  "Specify --agent to choose a specific agent.",
+              ),
+            );
+          }
 
           const params = {
             name,
