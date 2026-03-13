@@ -125,7 +125,8 @@ function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
 
 let cachedCommands: ChatCommandDefinition[] | null = null;
 let cachedNativeCommandSurfaces: Set<string> | null = null;
-let cachedPluginRegistryVersion: number | null = null;
+let cachedCommandsPluginRegistryVersion: number | null = null;
+let cachedNativeCommandSurfacesPluginRegistryVersion: number | null = null;
 
 function buildChatCommands(): ChatCommandDefinition[] {
   const commands: ChatCommandDefinition[] = [
@@ -605,22 +606,6 @@ function buildChatCommands(): ChatCommandDefinition[] {
       argsMenu: "auto",
     }),
     defineChatCommand({
-      key: "fast",
-      nativeName: "fast",
-      description: "Toggle fast mode.",
-      textAlias: "/fast",
-      category: "options",
-      args: [
-        {
-          name: "mode",
-          description: "status, on, or off",
-          type: "string",
-          choices: ["status", "on", "off"],
-        },
-      ],
-      argsMenu: "auto",
-    }),
-    defineChatCommand({
       key: "reasoning",
       nativeName: "reasoning",
       description: "Toggle reasoning visibility.",
@@ -775,19 +760,23 @@ function buildChatCommands(): ChatCommandDefinition[] {
 
 export function getChatCommands(): ChatCommandDefinition[] {
   const registryVersion = getActivePluginRegistryVersion();
-  if (cachedCommands && cachedPluginRegistryVersion === registryVersion) {
+  if (cachedCommands && cachedCommandsPluginRegistryVersion === registryVersion) {
     return cachedCommands;
   }
   const commands = buildChatCommands();
   cachedCommands = commands;
   cachedNativeCommandSurfaces = null;
-  cachedPluginRegistryVersion = registryVersion;
+  cachedCommandsPluginRegistryVersion = registryVersion;
+  cachedNativeCommandSurfacesPluginRegistryVersion = null;
   return commands;
 }
 
 export function getNativeCommandSurfaces(): Set<string> {
   const registryVersion = getActivePluginRegistryVersion();
-  if (cachedNativeCommandSurfaces && cachedPluginRegistryVersion === registryVersion) {
+  if (
+    cachedNativeCommandSurfaces &&
+    cachedNativeCommandSurfacesPluginRegistryVersion === registryVersion
+  ) {
     return cachedNativeCommandSurfaces;
   }
   cachedNativeCommandSurfaces = new Set(
@@ -795,6 +784,6 @@ export function getNativeCommandSurfaces(): Set<string> {
       .filter((dock) => dock.capabilities.nativeCommands)
       .map((dock) => dock.id),
   );
-  cachedPluginRegistryVersion = registryVersion;
+  cachedNativeCommandSurfacesPluginRegistryVersion = registryVersion;
   return cachedNativeCommandSurfaces;
 }
