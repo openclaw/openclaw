@@ -835,10 +835,13 @@ export async function ensureChromeExtensionRelayServer(opts: {
       rejectUpgrade(socket, 404, "Not Found");
     });
 
-    wssExtension.on("connection", (ws) => {
+    wssExtension.on("connection", (ws, req) => {
       extensionWs = ws;
       clearExtensionDisconnectCleanupTimer();
       flushExtensionReconnectWaiters(true);
+
+      const remote = req.socket.remoteAddress;
+      console.log(`[browser/extension-relay] Extension connected from ${remote}`);
 
       const ping = setInterval(() => {
         if (ws.readyState !== WebSocket.OPEN) {
@@ -900,6 +903,9 @@ export async function ensureChromeExtensionRelayServer(opts: {
               return;
             }
             if (attached?.sessionId && attached?.targetInfo?.targetId) {
+              console.log(
+                `[browser/extension-relay] Target announced: sessionId=${attached.sessionId} targetId=${attached.targetInfo.targetId} url=${attached.targetInfo.url}`,
+              );
               const prev = connectedTargets.get(attached.sessionId);
               const nextTargetId = attached.targetInfo.targetId;
               const prevTargetId = prev?.targetId;

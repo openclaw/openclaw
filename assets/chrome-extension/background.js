@@ -247,13 +247,15 @@ async function rehydrateState() {
     const entries = stored.persistedTabs || []
     // Phase 1: optimistically restore state and badges.
     for (const entry of entries) {
-      tabs.set(entry.tabId, {
+      const tabId = Number(entry.tabId)
+      if (isNaN(tabId)) continue
+      tabs.set(tabId, {
         state: entry.state || 'connected',
         sessionId: entry.sessionId,
         targetId: entry.targetId,
         attachOrder: entry.attachOrder,
       })
-      tabBySession.set(entry.sessionId, entry.tabId)
+      tabBySession.set(entry.sessionId, tabId)
     }
     updateAllBadges()
     // Phase 2: validate asynchronously, remove dead tabs.
@@ -849,7 +851,8 @@ async function connectOrToggleForActiveTab() {
         // ON → LCK: enable lock on relay
         setBadge(tabId, 'connecting')
         void chrome.action.setTitle({ tabId, title: 'OpenClaw Browser Relay: locking…' })
-        const result = await setLockOnRelay(true, tabId)
+        const sessionId = tabs.get(tabId)?.sessionId || null
+        const result = await setLockOnRelay(true, sessionId)
         if (result) {
           updateAllBadges()
           void chrome.action.setTitle({ tabId, title: 'OpenClaw Browser Relay: LOCKED (click to stop / X)' })
@@ -859,7 +862,8 @@ async function connectOrToggleForActiveTab() {
         }
       } else {
         // LCK → X: unlock relay, set state to disabled globally
-        await setLockOnRelay(false, tabId)
+        const sessionId = tabs.get(tabId)?.sessionId || null
+        await setLockOnRelay(false, sessionId)
         extensionIsDisabled = true
         
         // Detach all tabs to fully stop taking commands and remove chrome infobar
