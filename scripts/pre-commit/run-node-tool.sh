@@ -3,6 +3,16 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
+# Resolve node when not in PATH (nvm environments).
+if ! command -v node >/dev/null 2>&1; then
+  for _nvm_node in "$HOME/.nvm/versions/node"/*/bin/node; do
+    if [[ -x "$_nvm_node" ]]; then
+      export PATH="$(dirname "$_nvm_node"):$PATH"
+      break
+    fi
+  done
+fi
+
 if [[ $# -lt 1 ]]; then
   echo "usage: run-node-tool.sh <tool> [args...]" >&2
   exit 2
