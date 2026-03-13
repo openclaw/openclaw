@@ -40,6 +40,7 @@ import {
   XIAOMI_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
+  ZENMUX_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 export {
   applyCloudflareAiGatewayConfig,
@@ -173,6 +174,30 @@ export function applyOpenrouterProviderConfig(cfg: OpenClawConfig): OpenClawConf
 export function applyOpenrouterConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyOpenrouterProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, OPENROUTER_DEFAULT_MODEL_REF);
+}
+
+export function applyZenmuxProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[ZENMUX_DEFAULT_MODEL_REF] = {
+    ...models[ZENMUX_DEFAULT_MODEL_REF],
+    alias: models[ZENMUX_DEFAULT_MODEL_REF]?.alias ?? "ZenMux",
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+  };
+}
+
+export function applyZenmuxConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyZenmuxProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, ZENMUX_DEFAULT_MODEL_REF);
 }
 
 export function applyMoonshotProviderConfig(cfg: OpenClawConfig): OpenClawConfig {

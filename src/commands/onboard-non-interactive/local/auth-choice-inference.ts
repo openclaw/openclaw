@@ -35,6 +35,7 @@ type AuthChoiceFlagOptions = Pick<
   | "modelstudioApiKey"
   | "volcengineApiKey"
   | "byteplusApiKey"
+  | "zenmuxApiKey"
   | "customBaseUrl"
   | "customModelId"
   | "customApiKey"

@@ -24,6 +24,7 @@ import {
   applyVercelAiGatewayConfig,
   applyXaiConfig,
   applyXiaomiConfig,
+  applyZenmuxConfig,
   setAnthropicApiKey,
   setGeminiApiKey,
   setHuggingfaceApiKey,
@@ -45,6 +46,7 @@ import {
   setVolcengineApiKey,
   setXaiApiKey,
   setXiaomiApiKey,
+  setZenmuxApiKey,
   setByteplusApiKey,
 } from "../../onboard-auth.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
@@ -487,6 +489,23 @@ function buildSimpleApiKeyAuthChoices(params: { opts: OnboardOptions }): SimpleA
           applyAuthProfileConfig(cfg, {
             profileId: "huggingface:default",
             provider: "huggingface",
+            mode: "api_key",
+          }),
+        ),
+    },
+    {
+      authChoices: ["zenmux-api-key"],
+      provider: "zenmux",
+      flagValue: params.opts.zenmuxApiKey,
+      flagName: "--zenmux-api-key",
+      envVar: "ZENMUX_API_KEY",
+      profileId: "zenmux:default",
+      setCredential: withStorage(setZenmuxApiKey),
+      applyConfig: (cfg) =>
+        applyZenmuxConfig(
+          applyAuthProfileConfig(cfg, {
+            profileId: "zenmux:default",
+            provider: "zenmux",
             mode: "api_key",
           }),
         ),

@@ -50,6 +50,7 @@ export type BuiltInAuthChoice =
   | "modelstudio-api-key-cn"
   | "modelstudio-api-key"
   | "custom-api-key"
+  | "zenmux-api-key"
   | "skip";
 export type AuthChoice = BuiltInAuthChoice | (string & {});
 
@@ -80,6 +81,7 @@ export type BuiltInAuthChoiceGroupId =
   | "xai"
   | "volcengine"
   | "byteplus"
+  | "zenmux"
   | "custom";
 export type AuthChoiceGroupId = BuiltInAuthChoiceGroupId | (string & {});
 export type GatewayAuthChoice = "token" | "password";
@@ -146,6 +148,7 @@ export type OnboardOptions = {
   customModelId?: string;
   customProviderId?: string;
   customCompatibility?: "openai" | "anthropic";
+  zenmuxApiKey?: string;
   gatewayPort?: number;
   gatewayBind?: GatewayBind;
   gatewayAuth?: GatewayAuthChoice;
