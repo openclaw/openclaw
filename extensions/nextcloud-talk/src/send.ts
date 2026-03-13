@@ -1,4 +1,5 @@
 import { resolveNextcloudTalkAccount } from "./accounts.js";
+import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { generateNextcloudTalkSignature } from "./signature.js";
 import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
@@ -34,22 +35,7 @@ function resolveCredentials(
 }
 
 function normalizeRoomToken(to: string): string {
-  const trimmed = to.trim();
-  if (!trimmed) {
-    throw new Error("Room token is required for Nextcloud Talk sends");
-  }
-
-  let normalized = trimmed;
-  if (normalized.startsWith("nextcloud-talk:")) {
-    normalized = normalized.slice("nextcloud-talk:".length).trim();
-  } else if (normalized.startsWith("nc:")) {
-    normalized = normalized.slice("nc:".length).trim();
-  }
-
-  if (normalized.startsWith("room:")) {
-    normalized = normalized.slice("room:".length).trim();
-  }
-
+  const normalized = stripNextcloudTalkTargetPrefix(to);
   if (!normalized) {
     throw new Error("Room token is required for Nextcloud Talk sends");
   }
