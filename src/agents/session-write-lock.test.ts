@@ -151,6 +151,34 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
+  it("reclaims lock held by dead PID even when lock is fresh", async () => {
+    // Regression: when a process dies unexpectedly (crash, SIGKILL, OOM) the
+    // lock file remains.  A fresh lock whose owning PID is dead must be
+    // reclaimed immediately — the dead-pid check alone is sufficient and must
+    // not require the age-based "too-old" fallback (staleMs).
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      // Use a PID that is almost certainly not running (max valid PID on most
+      // systems), with a very recent createdAt and a very large staleMs so the
+      // only stale signal is the dead PID.
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: 2_147_483_647,
+          createdAt: new Date().toISOString(),
+        }),
+        "utf8",
+      );
+
+      // staleMs is huge — if the dead-pid check weren't working, this would
+      // time out because the lock is too fresh to be considered "too-old".
+      await expectCurrentPidOwnsLock({
+        sessionFile,
+        timeoutMs: 2_000,
+        staleMs: 999_999_999,
+      });
+    });
+  });
+
   it("does not reclaim fresh malformed lock files during contention", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
     try {
