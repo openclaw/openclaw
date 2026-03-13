@@ -885,12 +885,16 @@ async function attachTab(tabId, opts = {}) {
 async function detachTab(tabId, reason, displayError) {
   // 1. Atomic Snapshot: ensures idempotency by returning if identity is already gone.
   const meta = tabs.get(tabId) || reattachingTabs.get(tabId)
-  const hasDanglingState = commandBuffers.has(tabId) || tabAncestry.has(tabId) || [...tabAncestry.values()].includes(tabId)
+  const hasDanglingState = commandBuffers.has(tabId) || 
+                           tabAncestry.has(tabId) || 
+                           [...tabAncestry.values()].includes(tabId) ||
+                           [...childSessionToTab.values()].includes(tabId)
+  
   if (!meta && !hasDanglingState && lockedTabId !== tabId) return
 
   const wasAttached = tabs.has(tabId)
-  const sessionId = meta.sessionId
-  const targetId = meta.targetId
+  const sessionId = meta?.sessionId
+  const targetId = meta?.targetId
 
   // 2. Recursive Ancestry GC: Purge all direct and indirect descendants before clearing registries.
   const purgeAncestry = (id) => {
