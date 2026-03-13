@@ -38,6 +38,113 @@ chmod_scripts_in_dir() {
   fi
 }
 
+bootstrap_auth_profiles() {
+  local auth_dir auth_file tmp_auth
+  local basic_structure_filter version_filter profile_filter validation_filter
+  local validation_err_file validation_err old_umask
+  auth_dir="${STATE_DIR}/agents/main/agent"
+  auth_file="${auth_dir}/auth-profiles.json"
+
+  if [ -z "${CODEX_AUTH_JSON:-}" ]; then
+    echo "auth-bootstrap:skipped (no CODEX_AUTH_JSON)"
+    if [ -f "$auth_file" ]; then
+      echo "auth-bootstrap:clearing-stale-auth-file" >&2
+      rm -f "$auth_file"
+      rmdir "$auth_dir" 2>/dev/null || true
+    fi
+    return 0
+  fi
+
+  # Expected auth bootstrap shape:
+  # {"version"?: number|numeric-string, "profiles": {"id": {"provider": string, "type"| "mode": string, ...}}}
+  basic_structure_filter='
+    type == "object" and
+    ((.profiles | type) == "object") and
+    ((.profiles | length) > 0)
+  '
+  version_filter='
+    (.version? == null) or
+    ((.version | type) == "number") or
+    ((.version | type) == "string" and ((.version | tonumber? | type) == "number"))
+  '
+  # Accept both `type` and the loader-compatible `mode` alias so bootstrap
+  # validation mirrors auth-profiles parsing behavior.
+  profile_filter='
+    .profiles
+    | to_entries
+    | all(
+        .value
+        | type == "object" and
+          ((.provider | type) == "string") and
+          ((.provider | gsub("^\\s+|\\s+$"; "") | length) > 0) and
+          (((.type // .mode) | type) == "string") and
+          (((.type // .mode) as $auth_type | ["api_key", "oauth", "token"] | index($auth_type)) != null)
+      )
+  '
+  validation_filter="($basic_structure_filter) and ($version_filter) and ($profile_filter)"
+  validation_err_file="$(mktemp)"
+  if ! printf '%s' "$CODEX_AUTH_JSON" | jq empty >/dev/null 2>"$validation_err_file"; then
+    rm -f "$validation_err_file"
+    echo "auth-bootstrap:invalid-codex-auth-json: malformed JSON (expected auth-profiles bootstrap schema)" >&2
+    if [ -f "$auth_file" ]; then
+      echo "auth-bootstrap:clearing-stale-auth-file" >&2
+    fi
+    rm -f "$auth_file"
+    return 1
+  fi
+  if ! printf '%s' "$CODEX_AUTH_JSON" \
+    | jq -e "$validation_filter" \
+      >/dev/null 2>"$validation_err_file"; then
+    validation_err="$(
+      tr '\n' ' ' <"$validation_err_file" \
+        | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//' \
+        | head -c 200
+    )"
+    rm -f "$validation_err_file"
+    if [ -z "$validation_err" ]; then
+      validation_err="schema-mismatch"
+    fi
+    echo "auth-bootstrap:invalid-codex-auth-json: $validation_err (expected auth-profiles bootstrap schema)" >&2
+    # Fail closed: invalid bootstrap input must not leave stale auth on the PVC.
+    if [ -f "$auth_file" ]; then
+      echo "auth-bootstrap:clearing-stale-auth-file" >&2
+    fi
+    rm -f "$auth_file"
+    return 1
+  fi
+  rm -f "$validation_err_file"
+
+  # Write credentials atomically with restrictive permissions from the start.
+  old_umask="$(umask)"
+  umask 077
+  mkdir -p "$auth_dir"
+  umask "$old_umask"
+  if ! chmod 700 "$auth_dir"; then
+    echo "auth-bootstrap:chmod-dir-failed" >&2
+    return 1
+  fi
+  old_umask="$(umask)"
+  umask 077
+  tmp_auth="$(mktemp "${auth_file}.bootstrap.tmp.XXXXXX")"
+  umask "$old_umask"
+  if ! chmod 600 "$tmp_auth"; then
+    echo "auth-bootstrap:chmod-failed" >&2
+    rm -f "$tmp_auth"
+    return 1
+  fi
+  if ! printf '%s\n' "$CODEX_AUTH_JSON" >"$tmp_auth"; then
+    echo "auth-bootstrap:write-failed" >&2
+    rm -f "$tmp_auth"
+    return 1
+  fi
+  if ! mv "$tmp_auth" "$auth_file"; then
+    echo "auth-bootstrap:rename-failed" >&2
+    rm -f "$tmp_auth"
+    return 1
+  fi
+  echo "auth-bootstrap:codex-auth-json"
+}
+
 normalize_slack_incident_channels_json() {
   printf '%s' "$SLACK_INCIDENT_CHANNELS_RAW" \
     | tr ',\n' '\n' \
@@ -241,6 +348,7 @@ mkdir -p \
   "$INDEX_DIR" \
   "$PLANS_DIR"
 
+bootstrap_auth_profiles
 ensure_workspace_memory_scaffold "$WORKSPACE_DIR"
 ensure_workspace_memory_scaffold "$SRE_WORKSPACE_DIR"
 
