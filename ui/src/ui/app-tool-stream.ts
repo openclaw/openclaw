@@ -310,6 +310,9 @@ export function handleCompactionEvent(host: CompactionHost, payload: AgentEventP
       host.compactionStatus = null;
       host.compactionClearTimer = null;
     }, COMPACTION_TOAST_DURATION_MS);
+  } else if (phase === "error") {
+    // Compaction failed; clear the indicator immediately without a success toast.
+    host.compactionStatus = null;
   }
 }
 

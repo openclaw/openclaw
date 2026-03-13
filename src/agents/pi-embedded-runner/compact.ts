@@ -719,14 +719,14 @@ export async function compactEmbeddedPiSessionDirect(
       // that must be passed to the resource loader for the safeguard to be active.
       let chunkProgressFired = false;
       let compactionEndEmitted = false;
-      const emitCompactionEndOnce = () => {
+      const emitCompactionEndOnce = (ok = true) => {
         if (chunkProgressFired && !compactionEndEmitted) {
           compactionEndEmitted = true;
           emitAgentEvent({
             runId,
             sessionKey: params.sessionKey,
             stream: "compaction",
-            data: { phase: "end" },
+            data: { phase: ok ? "end" : "error" },
           });
         }
       };
@@ -1135,9 +1135,10 @@ export async function compactEmbeddedPiSessionDirect(
           },
         };
       } finally {
-        // Fallback: clear the UI toast if a non-timeout error interrupted compaction
-        // after progress events had already fired.
-        emitCompactionEndOnce();
+        // Fallback: emit failure phase if a non-timeout error interrupted compaction
+        // after progress events had already fired. Success paths already called
+        // emitCompactionEndOnce(true), so the guard prevents double-emission.
+        emitCompactionEndOnce(false);
         await flushPendingToolResultsAfterIdle({
           agent: session?.agent,
           sessionManager,
