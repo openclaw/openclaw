@@ -78,7 +78,7 @@ describe("chat context notice", () => {
 
     const noticeStyle = getComputedStyle(notice);
     const iconStyle = getComputedStyle(icon);
-    expect(noticeStyle.display).toBe("flex");
+    expect(noticeStyle.display).toBe("inline-flex");
     expect(iconStyle.width).toBe("16px");
     expect(iconStyle.height).toBe("16px");
     expect(icon.getBoundingClientRect().width).toBeLessThan(24);
