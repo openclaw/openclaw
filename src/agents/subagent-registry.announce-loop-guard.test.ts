@@ -83,6 +83,12 @@ describe("announce loop guard (#18264)", () => {
     vi.clearAllMocks();
   });
 
+  const flushAsyncCleanup = async (rounds = 6) => {
+    for (let i = 0; i < rounds; i++) {
+      await Promise.resolve();
+    }
+  };
+
   test("SubagentRunRecord has announceRetryCount and lastAnnounceRetryAt fields", () => {
     registry.resetSubagentRegistryForTests();
 
@@ -188,8 +194,7 @@ describe("announce loop guard (#18264)", () => {
     );
 
     registry.initSubagentRegistry();
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushAsyncCleanup();
 
     expect(announceFn).toHaveBeenCalledTimes(1);
   });
@@ -222,8 +227,7 @@ describe("announce loop guard (#18264)", () => {
     );
 
     registry.initSubagentRegistry();
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushAsyncCleanup();
 
     const runs = registry.listSubagentRunsForRequester("agent:main:main");
     const stored = runs.find((run) => run.runId === runId);
@@ -231,6 +235,156 @@ describe("announce loop guard (#18264)", () => {
     expect(stored?.cleanupCompletedAt).toBeUndefined();
     expect(stored?.announceRetryCount).toBe(1);
     expect(stored?.lastAnnounceRetryAt).toBeTypeOf("number");
+  });
+
+  test("external completion notify stays deferred while descendants are still pending", async () => {
+    announceFn.mockReset();
+    announceFn.mockResolvedValueOnce(false);
+    registry.resetSubagentRegistryForTests();
+
+    const now = Date.now();
+    const runId = "test-external-notify-deferred-descendants";
+    const childRunId = "test-external-notify-deferred-descendants-child";
+    loadSubagentRegistryFromDisk.mockReturnValue(
+      new Map([
+        [
+          runId,
+          {
+            runId,
+            childSessionKey: "agent:main:subagent:child-1",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "agent:main:main",
+            notifyChannel: "telegram",
+            notifyTarget: "telegram:123",
+            task: "wait for descendants",
+            cleanup: "keep" as const,
+            createdAt: now - 30_000,
+            startedAt: now - 20_000,
+            endedAt: now - 10_000,
+            cleanupHandled: false,
+            expectsCompletionMessage: true,
+          },
+        ],
+        [
+          childRunId,
+          {
+            runId: childRunId,
+            childSessionKey: "agent:main:subagent:grandchild-1",
+            requesterSessionKey: "agent:main:subagent:child-1",
+            requesterDisplayKey: "agent:main:subagent:child-1",
+            task: "still running",
+            cleanup: "keep" as const,
+            createdAt: now - 25_000,
+            startedAt: now - 15_000,
+            cleanupHandled: false,
+          },
+        ],
+      ]),
+    );
+
+    registry.initSubagentRegistry();
+    await flushAsyncCleanup();
+
+    const sendCalls = callGatewayMock.mock.calls.filter(
+      (call) => (call[0] as { method?: string })?.method === "send",
+    );
+    expect(sendCalls).toHaveLength(0);
+
+    const runs = registry.listSubagentRunsForRequester("agent:main:main");
+    const stored = runs.find((run) => run.runId === runId);
+    expect(stored?.cleanupHandled).toBe(false);
+    expect(stored?.cleanupCompletedAt).toBeUndefined();
+  });
+
+  test("external completion notify still sends when cleanup gives up after announce failure", async () => {
+    announceFn.mockReset();
+    announceFn.mockResolvedValueOnce(false);
+    registry.resetSubagentRegistryForTests();
+
+    const now = Date.now();
+    const runId = "test-external-notify-give-up";
+    loadSubagentRegistryFromDisk.mockReturnValue(
+      new Map([
+        [
+          runId,
+          {
+            runId,
+            childSessionKey: "agent:main:subagent:child-1",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "agent:main:main",
+            notifyChannel: "telegram",
+            notifyTarget: "telegram:123",
+            task: "give up notify",
+            cleanup: "keep" as const,
+            createdAt: now - 30_000,
+            startedAt: now - 20_000,
+            endedAt: now - 10_000,
+            cleanupHandled: false,
+            announceRetryCount: 2,
+          },
+        ],
+      ]),
+    );
+
+    registry.initSubagentRegistry();
+    await flushAsyncCleanup();
+
+    const sendCall = callGatewayMock.mock.calls.find(
+      (call) => (call[0] as { method?: string })?.method === "send",
+    )?.[0] as { params?: { channel?: string; to?: string } } | undefined;
+    expect(sendCall?.params?.channel).toBe("telegram");
+    expect(sendCall?.params?.to).toBe("telegram:123");
+
+    const runs = registry.listSubagentRunsForRequester("agent:main:main");
+    const stored = runs.find((run) => run.runId === runId);
+    expect(stored?.cleanupCompletedAt).toBeTypeOf("number");
+  });
+
+  test("external completion notify is skipped when announce wakes a continuation run", async () => {
+    announceFn.mockReset();
+    announceFn.mockImplementationOnce(async (params: unknown) => {
+      (params as { onWakeContinuationStarted?: () => void }).onWakeContinuationStarted?.();
+      return true;
+    });
+    registry.resetSubagentRegistryForTests();
+
+    const now = Date.now();
+    const runId = "test-external-notify-wake-continuation";
+    loadSubagentRegistryFromDisk.mockReturnValue(
+      new Map([
+        [
+          runId,
+          {
+            runId,
+            childSessionKey: "agent:main:subagent:child-1",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "agent:main:main",
+            notifyChannel: "telegram",
+            notifyTarget: "telegram:123",
+            task: "wake continuation notify",
+            cleanup: "keep" as const,
+            createdAt: now - 30_000,
+            startedAt: now - 20_000,
+            endedAt: now - 10_000,
+            cleanupHandled: false,
+            expectsCompletionMessage: true,
+            wakeOnDescendantSettle: true,
+          },
+        ],
+      ]),
+    );
+
+    registry.initSubagentRegistry();
+    await flushAsyncCleanup();
+
+    const sendCalls = callGatewayMock.mock.calls.filter(
+      (call) => (call[0] as { method?: string })?.method === "send",
+    );
+    expect(sendCalls).toHaveLength(0);
+
+    const runs = registry.listSubagentRunsForRequester("agent:main:main");
+    const stored = runs.find((run) => run.runId === runId);
+    expect(stored?.cleanupCompletedAt).toBeTypeOf("number");
   });
 
   test("external completion notify keeps requester accountId for same-channel sends", async () => {
@@ -264,8 +418,7 @@ describe("announce loop guard (#18264)", () => {
     );
 
     registry.initSubagentRegistry();
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushAsyncCleanup();
 
     const sendCall = callGatewayMock.mock.calls.find(
       (call) => (call[0] as { method?: string })?.method === "send",
@@ -304,8 +457,7 @@ describe("announce loop guard (#18264)", () => {
     );
 
     registry.initSubagentRegistry();
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushAsyncCleanup();
 
     const sendCall = callGatewayMock.mock.calls.find(
       (call) => (call[0] as { method?: string })?.method === "send",

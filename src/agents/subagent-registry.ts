@@ -584,6 +584,7 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     return false;
   }
   const requesterOrigin = normalizeDeliveryContext(entry.requesterOrigin);
+  let wokeContinuation = false;
   void runSubagentAnnounceFlow({
     childSessionKey: entry.childSessionKey,
     childRunId: entry.runId,
@@ -603,20 +604,24 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     spawnMode: entry.spawnMode,
     expectsCompletionMessage: entry.expectsCompletionMessage,
     wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
+    onWakeContinuationStarted: () => {
+      wokeContinuation = true;
+    },
   })
     .then((didAnnounce) => {
-      // Send external completion notification regardless of whether the
-      // internal announce succeeded.  When the requester session is inactive
-      // (didAnnounce=false), the external notification is the only signal that
-      // the run finished — without it, deferred/inactive cases are silently lost.
-      void sendExternalCompletionNotification(entry);
-      void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
+      void finalizeSubagentCleanup(runId, entry.cleanup, {
+        didAnnounce,
+        wokeContinuation,
+      });
     })
     .catch((error) => {
       defaultRuntime.log(
         `[warn] Subagent announce flow failed during cleanup for run ${runId}: ${String(error)}`,
       );
-      void finalizeSubagentCleanup(runId, entry.cleanup, false);
+      void finalizeSubagentCleanup(runId, entry.cleanup, {
+        didAnnounce: false,
+        wokeContinuation: false,
+      });
     });
   return true;
 }
@@ -903,13 +908,13 @@ async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<void>
 async function finalizeSubagentCleanup(
   runId: string,
   cleanup: "delete" | "keep",
-  didAnnounce: boolean,
+  announceResult: { didAnnounce: boolean; wokeContinuation: boolean },
 ) {
   const entry = subagentRuns.get(runId);
   if (!entry) {
     return;
   }
-  if (didAnnounce) {
+  if (announceResult.didAnnounce) {
     entry.wakeOnDescendantSettle = undefined;
     entry.fallbackFrozenResultText = undefined;
     entry.fallbackFrozenResultCapturedAt = undefined;
@@ -930,6 +935,10 @@ async function finalizeSubagentCleanup(
       cleanup,
       completedAt: Date.now(),
     });
+    // Wake continuations hand completion delivery off to the replacement run.
+    if (!announceResult.wokeContinuation) {
+      void sendExternalCompletionNotification(entry);
+    }
     return;
   }
 
@@ -980,6 +989,7 @@ async function finalizeSubagentCleanup(
       cleanup: "keep",
       completedAt: now,
     });
+    void sendExternalCompletionNotification(entry);
     return;
   }
 
