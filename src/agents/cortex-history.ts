@@ -16,6 +16,27 @@ export type CortexCaptureHistoryEntry = {
   timestamp: number;
 };
 
+const latestCortexCaptureHistoryByKey = new Map<string, CortexCaptureHistoryEntry>();
+
+function buildHistoryCacheKey(params: {
+  agentId: string;
+  sessionId?: string;
+  channelId?: string;
+}): string {
+  return [params.agentId, params.sessionId ?? "", params.channelId ?? ""].join("\u0000");
+}
+
+function cacheHistoryEntry(entry: CortexCaptureHistoryEntry): void {
+  latestCortexCaptureHistoryByKey.set(
+    buildHistoryCacheKey({
+      agentId: entry.agentId,
+      sessionId: entry.sessionId,
+      channelId: entry.channelId,
+    }),
+    entry,
+  );
+}
+
 function resolveHistoryPath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), "logs", "cortex-memory-captures.jsonl");
 }
@@ -27,6 +48,7 @@ export async function appendCortexCaptureHistory(
   const historyPath = resolveHistoryPath(env);
   await fsp.mkdir(path.dirname(historyPath), { recursive: true });
   await fsp.appendFile(historyPath, `${JSON.stringify(entry)}\n`, "utf8");
+  cacheHistoryEntry(entry);
 }
 
 export async function readRecentCortexCaptureHistory(params?: {
@@ -94,6 +116,22 @@ export function getLatestCortexCaptureHistoryEntrySync(params: {
   return null;
 }
 
+export function getCachedLatestCortexCaptureHistoryEntry(params: {
+  agentId: string;
+  sessionId?: string;
+  channelId?: string;
+}): CortexCaptureHistoryEntry | null {
+  return (
+    latestCortexCaptureHistoryByKey.get(
+      buildHistoryCacheKey({
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        channelId: params.channelId,
+      }),
+    ) ?? null
+  );
+}
+
 export async function getLatestCortexCaptureHistoryEntry(params: {
   agentId: string;
   sessionId?: string;
@@ -101,12 +139,15 @@ export async function getLatestCortexCaptureHistoryEntry(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<CortexCaptureHistoryEntry | null> {
   const recent = await readRecentCortexCaptureHistory({ limit: 100, env: params.env });
-  return (
+  const match =
     recent.find(
       (entry) =>
         entry.agentId === params.agentId &&
         (params.sessionId ? entry.sessionId === params.sessionId : true) &&
         (params.channelId ? entry.channelId === params.channelId : true),
-    ) ?? null
-  );
+    ) ?? null;
+  if (match) {
+    cacheHistoryEntry(match);
+  }
+  return match;
 }
