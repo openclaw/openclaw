@@ -108,4 +108,37 @@ describe("normalizeStoredCronJobs", () => {
     expect(jobs[0]?.payload?.kind).toBe("agentTurn");
     expect(jobs[1]?.payload?.kind).toBe("systemEvent");
   });
+
+  it("normalizes whitespace-padded payload kind values", () => {
+    // Regression test: handles edge case from Codex review
+    // Values like " agentTurn " should be canonicalized, not skipped
+    const jobs = [
+      {
+        id: "whitespace-agentTurn",
+        schedule: { kind: "cron", expr: "0 9 * * *" },
+        payload: {
+          kind: " agentTurn ", // Whitespace-padded canonical form
+          message: "morning greeting",
+        },
+      },
+      {
+        id: "whitespace-systemEvent",
+        schedule: { kind: "cron", expr: "0 18 * * *" },
+        payload: {
+          kind: "  systemEvent  ", // Whitespace-padded canonical form
+          text: "evening status",
+        },
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    // Should report legacyPayloadKind issues for whitespace variants
+    expect(result.issues.legacyPayloadKind).toBe(2);
+    // Should mutate to canonical form
+    expect(result.mutated).toBe(true);
+    // payload.kind should be canonicalized (trimmed)
+    expect(jobs[0]?.payload?.kind).toBe("agentTurn");
+    expect(jobs[1]?.payload?.kind).toBe("systemEvent");
+  });
 });

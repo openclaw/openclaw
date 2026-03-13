@@ -28,18 +28,20 @@ function incrementIssue(issues: CronStoreIssues, key: CronStoreIssueKey) {
 }
 
 function normalizePayloadKind(payload: Record<string, unknown>) {
-  const raw = typeof payload.kind === "string" ? payload.kind.trim().toLowerCase() : "";
-  if (raw === "agentturn") {
+  const raw = typeof payload.kind === "string" ? payload.kind.trim() : "";
+  const lower = raw.toLowerCase();
+  if (lower === "agentturn") {
     // Only mutate if the value actually differs from the canonical form
-    if (payload.kind !== "agentTurn") {
+    // This handles both lowercase "agentturn" and whitespace variants like " agentTurn "
+    if (raw !== "agentTurn") {
       payload.kind = "agentTurn";
       return true;
     }
     return false;
   }
-  if (raw === "systemevent") {
+  if (lower === "systemevent") {
     // Only mutate if the value actually differs from the canonical form
-    if (payload.kind !== "systemEvent") {
+    if (raw !== "systemEvent") {
       payload.kind = "systemEvent";
       return true;
     }
