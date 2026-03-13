@@ -490,6 +490,30 @@ describe("runWithModelFallback", () => {
     expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
   });
 
+  it("falls back when Bedrock requires an inference profile id", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          "Invocation of model ID anthropic.claude-opus-4-5-20251101-v1:0 with on-demand throughput is not supported. Retry your request with the ID or ARN of an inference profile that contains this model.",
+        ),
+      )
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "amazon-bedrock",
+      model: "anthropic.claude-opus-4-5-20251101-v1:0",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]?.[0]).toBe("openai");
+    expect(run.mock.calls[1]?.[1]).toBe("gpt-4.1-mini");
+  });
+
   it("warns when falling back due to model_not_found", async () => {
     setLoggerOverride({ level: "silent", consoleLevel: "warn" });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});

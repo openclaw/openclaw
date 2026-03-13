@@ -937,6 +937,17 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
     return true;
   }
 
+  // Bedrock now requires inference profile IDs for some Anthropic models.
+  // Treat the old raw model-id rejection as a model lookup failure so
+  // configured fallbacks can recover automatically.
+  if (
+    lower.includes("model id") &&
+    lower.includes("on-demand throughput is not supported") &&
+    lower.includes("inference profile")
+  ) {
+    return true;
+  }
+
   // Google Gemini: "models/X is not found for api version"
   if (/models\/[^\s]+ is not found/i.test(raw)) {
     return true;

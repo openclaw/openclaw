@@ -824,6 +824,13 @@ describe("classifyFailoverReason", () => {
       classifyFailoverReason("AWS Bedrock: Too many tokens per day. Please try again tomorrow."),
     ).toBe("rate_limit");
   });
+  it("classifies Bedrock inference-profile-required errors as model_not_found", () => {
+    expect(
+      classifyFailoverReason(
+        "Invocation of model ID anthropic.claude-opus-4-5-20251101-v1:0 with on-demand throughput is not supported. Retry your request with the ID or ARN of an inference profile that contains this model.",
+      ),
+    ).toBe("model_not_found");
+  });
   it("classifies provider high-demand / service-unavailable messages as overloaded", () => {
     expect(
       classifyFailoverReason(
