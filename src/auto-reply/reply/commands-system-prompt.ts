@@ -6,7 +6,7 @@ import type { EmbeddedContextFile } from "../../agents/pi-embedded-helpers.js";
 import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
-import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
+import { ensureSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { buildToolSummaryMap } from "../../agents/tool-summaries.js";
@@ -39,7 +39,7 @@ export async function resolveCommandsSystemPromptBundle(
       return buildWorkspaceSkillSnapshot(workspaceDir, {
         config: params.cfg,
         eligibility: { remote: getRemoteSkillEligibility() },
-        snapshotVersion: getSkillsSnapshotVersion(workspaceDir),
+        snapshotVersion: ensureSkillsSnapshotVersion(workspaceDir),
       });
     } catch {
       return { prompt: "", skills: [], resolvedSkills: [] };

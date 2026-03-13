@@ -110,8 +110,11 @@ export function bumpSkillsSnapshotVersion(params?: {
   const reason = params?.reason ?? "manual";
   const changedPath = params?.changedPath;
   if (params?.workspaceDir) {
-    const current = workspaceVersions.get(params.workspaceDir) ?? 0;
-    const next = bumpVersion(current);
+    const local = workspaceVersions.get(params.workspaceDir) ?? 0;
+    // Bump from the effective version so the result always exceeds
+    // globalVersion, even after clock skew (NTP correction, VM resume).
+    const effective = Math.max(globalVersion, local);
+    const next = bumpVersion(effective);
     workspaceVersions.set(params.workspaceDir, next);
     emit({ workspaceDir: params.workspaceDir, reason, changedPath });
     return next;
@@ -122,6 +125,21 @@ export function bumpSkillsSnapshotVersion(params?: {
 }
 
 export function getSkillsSnapshotVersion(workspaceDir?: string): number {
+  if (!workspaceDir) {
+    return globalVersion;
+  }
+  const local = workspaceVersions.get(workspaceDir) ?? 0;
+  return Math.max(globalVersion, local);
+}
+
+// Seed a non-zero baseline per process so persisted snapshots from an older
+// process lifetime can be recognized as stale even before any watcher event fires.
+// Only seeds `globalVersion`; per-workspace entries are written solely by real
+// `bumpSkillsSnapshotVersion` calls, keeping `workspaceVersions` bounded.
+export function ensureSkillsSnapshotVersion(workspaceDir?: string): number {
+  if (globalVersion === 0) {
+    globalVersion = bumpVersion(0);
+  }
   if (!workspaceDir) {
     return globalVersion;
   }

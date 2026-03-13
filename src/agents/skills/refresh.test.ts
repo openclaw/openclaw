@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const watchMock = vi.fn(() => ({
   on: vi.fn(),
@@ -14,6 +14,11 @@ vi.mock("chokidar", () => {
 });
 
 describe("ensureSkillsWatcher", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    watchMock.mockClear();
+  });
+
   it("ignores node_modules, dist, .git, and Python venvs by default", async () => {
     const mod = await import("./refresh.js");
     mod.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
@@ -69,5 +74,16 @@ describe("ensureSkillsWatcher", () => {
     // Should NOT ignore normal skill files
     expect(ignored.some((re) => re.test("/tmp/.hidden/skills/index.md"))).toBe(false);
     expect(ignored.some((re) => re.test("/tmp/workspace/skills/my-skill/SKILL.md"))).toBe(false);
+  });
+
+  it("seeds a non-zero snapshot version on first use", async () => {
+    const mod = await import("./refresh.js");
+
+    expect(mod.getSkillsSnapshotVersion("/tmp/workspace")).toBe(0);
+    const seededVersion = mod.ensureSkillsSnapshotVersion("/tmp/workspace");
+
+    expect(seededVersion).toBeGreaterThan(0);
+    expect(mod.getSkillsSnapshotVersion("/tmp/workspace")).toBe(seededVersion);
+    expect(mod.ensureSkillsSnapshotVersion("/tmp/workspace")).toBe(seededVersion);
   });
 });

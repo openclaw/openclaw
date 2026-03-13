@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
-import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
+import { ensureSkillsSnapshotVersion, ensureSkillsWatcher } from "../../agents/skills/refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
@@ -117,6 +117,8 @@ export async function drainFormattedSystemEvents(params: {
     .join("\n");
 }
 
+const FORBIDDEN_STORE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
 export async function ensureSkillSnapshot(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -155,13 +157,28 @@ export async function ensureSkillSnapshot(params: {
     skillFilter,
   } = params;
 
+  // Guard against prototype pollution if sessionKey is ever attacker-influenced.
+  if (sessionKey && FORBIDDEN_STORE_KEYS.has(sessionKey)) {
+    return {
+      sessionEntry,
+      skillsSnapshot: sessionEntry?.skillsSnapshot,
+      systemSent: sessionEntry?.systemSent ?? false,
+    };
+  }
+
   let nextEntry = sessionEntry;
   let systemSent = sessionEntry?.systemSent ?? false;
   const remoteEligibility = getRemoteSkillEligibility();
-  const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   ensureSkillsWatcher({ workspaceDir, config: cfg });
-  const shouldRefreshSnapshot =
-    snapshotVersion > 0 && (nextEntry?.skillsSnapshot?.version ?? 0) < snapshotVersion;
+  const snapshotVersion = ensureSkillsSnapshotVersion(workspaceDir);
+  const persistedVersion =
+    nextEntry?.skillsSnapshot?.version ??
+    (sessionStore && sessionKey ? sessionStore[sessionKey]?.skillsSnapshot?.version : undefined) ??
+    0;
+  // Treat any version mismatch as stale — not just `<`. After a restart the
+  // persisted version can exceed the freshly seeded in-memory value (clock
+  // skew, burst increments), so equality is the only safe "fresh" signal.
+  const shouldRefreshSnapshot = persistedVersion !== snapshotVersion;
 
   if (isFirstTurnInSession && sessionStore && sessionKey) {
     const current = nextEntry ??
@@ -194,22 +211,25 @@ export async function ensureSkillSnapshot(params: {
     systemSent = true;
   }
 
-  const skillsSnapshot = shouldRefreshSnapshot
-    ? buildWorkspaceSkillSnapshot(workspaceDir, {
-        config: cfg,
-        skillFilter,
-        eligibility: { remote: remoteEligibility },
-        snapshotVersion,
-      })
-    : (nextEntry?.skillsSnapshot ??
-      (isFirstTurnInSession
-        ? undefined
-        : buildWorkspaceSkillSnapshot(workspaceDir, {
-            config: cfg,
-            skillFilter,
-            eligibility: { remote: remoteEligibility },
-            snapshotVersion,
-          })));
+  // If the first-turn block already built a fresh snapshot, skip a redundant rebuild.
+  const alreadyRefreshed = nextEntry?.skillsSnapshot?.version === snapshotVersion;
+  const skillsSnapshot =
+    shouldRefreshSnapshot && !alreadyRefreshed
+      ? buildWorkspaceSkillSnapshot(workspaceDir, {
+          config: cfg,
+          skillFilter,
+          eligibility: { remote: remoteEligibility },
+          snapshotVersion,
+        })
+      : (nextEntry?.skillsSnapshot ??
+        (isFirstTurnInSession
+          ? undefined
+          : buildWorkspaceSkillSnapshot(workspaceDir, {
+              config: cfg,
+              skillFilter,
+              eligibility: { remote: remoteEligibility },
+              snapshotVersion,
+            })));
   if (
     skillsSnapshot &&
     sessionStore &&
@@ -255,7 +275,7 @@ export async function incrementCompactionCount(params: {
     now = Date.now(),
     tokensAfter,
   } = params;
-  if (!sessionStore || !sessionKey) {
+  if (!sessionStore || !sessionKey || FORBIDDEN_STORE_KEYS.has(sessionKey)) {
     return undefined;
   }
   const entry = sessionStore[sessionKey] ?? sessionEntry;
