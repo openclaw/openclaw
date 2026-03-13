@@ -878,6 +878,14 @@ const discordConfig = {
   },
 } as OpenClawConfig;
 
+const telegramConfig = {
+  channels: {
+    telegram: {
+      botToken: "telegram-test",
+    },
+  },
+} as OpenClawConfig;
+
 describe("outbound policy", () => {
   it("blocks same-provider sends by default when target differs from the bound channel", () => {
     expect(() =>
@@ -908,6 +916,38 @@ describe("outbound policy", () => {
         toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
       }),
     ).not.toThrow();
+  });
+
+  it("allows Telegram explicit current-topic targets by default", () => {
+    expect(() =>
+      enforceCrossContextPolicy({
+        cfg: telegramConfig,
+        channel: "telegram",
+        action: "send",
+        args: { to: "telegram:-100123:topic:42" },
+        toolContext: {
+          currentChannelId: "telegram:-100123",
+          currentChannelProvider: "telegram",
+          currentThreadTs: "42",
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("blocks Telegram explicit different-topic targets by default", () => {
+    expect(() =>
+      enforceCrossContextPolicy({
+        cfg: telegramConfig,
+        channel: "telegram",
+        action: "send",
+        args: { to: "telegram:-100123:topic:99" },
+        toolContext: {
+          currentChannelId: "telegram:-100123",
+          currentChannelProvider: "telegram",
+          currentThreadTs: "42",
+        },
+      }),
+    ).toThrow(/Cross-context messaging denied/);
   });
 
   it("allows cross-provider sends when enabled", () => {
