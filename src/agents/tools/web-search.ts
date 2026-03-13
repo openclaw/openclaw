@@ -38,6 +38,7 @@ const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
 const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";
+const DEFAULT_X_SEARCH_MODEL = "grok-4-1-fast-non-reasoning";
 const DEFAULT_KIMI_BASE_URL = "https://api.moonshot.ai/v1";
 const DEFAULT_KIMI_MODEL = "moonshot-v1-128k";
 const KIMI_WEB_SEARCH_TOOL = {
@@ -2235,7 +2236,7 @@ function resolveXSearchApiKey(xSearch?: XSearchConfig): string | undefined {
 function resolveXSearchModel(xSearch?: XSearchConfig): string {
   const fromConfig =
     xSearch && "model" in xSearch && typeof xSearch.model === "string" ? xSearch.model.trim() : "";
-  return fromConfig || DEFAULT_GROK_MODEL;
+  return fromConfig || DEFAULT_X_SEARCH_MODEL;
 }
 
 function resolveXSearchInlineCitations(xSearch?: XSearchConfig): boolean {
