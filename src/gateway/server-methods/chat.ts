@@ -20,6 +20,7 @@ import {
 } from "../../utils/directive-tags.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
+  isGatewayCliClient,
   isWebchatClient,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
@@ -181,21 +182,27 @@ function resolveChatSendOriginatingRoute(params: {
     typeof sessionScopeParts[1] === "string" &&
     sessionChannelHint === routeChannelCandidate;
   const isFromWebchatClient = isWebchatClient(params.client);
+  const isFromGatewayCliClient = isGatewayCliClient(params.client);
+  const hasClientMetadata =
+    (typeof params.client?.mode === "string" && params.client.mode.trim().length > 0) ||
+    (typeof params.client?.id === "string" && params.client.id.trim().length > 0);
   const configuredMainKey = (params.mainKey ?? "main").trim().toLowerCase();
   const isConfiguredMainSessionScope =
     normalizedSessionScopeHead.length > 0 && normalizedSessionScopeHead === configuredMainKey;
+  const canInheritConfiguredMainRoute =
+    isConfiguredMainSessionScope &&
+    params.hasConnectedClient &&
+    (isFromGatewayCliClient || !hasClientMetadata);
 
-  // Webchat/Control UI clients never inherit external delivery routes, even when
-  // accessing channel-scoped sessions. External routes are only for non-webchat
-  // clients where the session key explicitly encodes an external target.
-  // Preserve the old configured-main contract: any connected non-webchat client
-  // may inherit the last external route even when client metadata is absent.
+  // Webchat clients never inherit external delivery routes. Configured-main
+  // sessions are stricter than channel-scoped sessions: only CLI callers, or
+  // legacy callers with no client metadata, may inherit the last external route.
   const canInheritDeliverableRoute = Boolean(
     !isFromWebchatClient &&
     sessionChannelHint &&
     sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
     ((!isChannelAgnosticSessionScope && (isChannelScopedSession || hasLegacyChannelPeerShape)) ||
-      (isConfiguredMainSessionScope && params.hasConnectedClient)),
+      canInheritConfiguredMainRoute),
   );
   const hasDeliverableRoute =
     canInheritDeliverableRoute &&
@@ -973,6 +980,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionId,
       messages: bounded.messages,
       thinkingLevel,
+      fastMode: entry?.fastMode,
       verboseLevel,
     });
   },
