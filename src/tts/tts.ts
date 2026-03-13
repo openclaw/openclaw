@@ -344,7 +344,10 @@ export function resolveTtsConfigForAgent(cfg: OpenClawConfig, agentId?: string):
     return globalConfig;
   }
   return {
-    auto: normalizeTtsAutoMode(agentTts.auto) ?? globalConfig.auto,
+    auto:
+      normalizeTtsAutoMode(agentTts.auto) ??
+      (agentTts.enabled != null ? (agentTts.enabled ? "always" : "off") : undefined) ??
+      globalConfig.auto,
     mode: agentTts.mode ?? globalConfig.mode,
     provider: agentTts.provider ?? globalConfig.provider,
     providerSource: agentTts.provider ? "config" : globalConfig.providerSource,
@@ -390,7 +393,10 @@ export function resolveTtsConfigForAgent(cfg: OpenClawConfig, agentId?: string):
             path: `agents.list[${agentId}].tts.openai.apiKey`,
           })
         : globalConfig.openai.apiKey,
-      baseUrl: agentTts.openai?.baseUrl?.trim() || globalConfig.openai.baseUrl,
+      baseUrl: (agentTts.openai?.baseUrl?.trim() || globalConfig.openai.baseUrl).replace(
+        /\/+$/,
+        "",
+      ),
       model: agentTts.openai?.model ?? globalConfig.openai.model,
       voice: agentTts.openai?.voice ?? globalConfig.openai.voice,
       speed: agentTts.openai?.speed ?? globalConfig.openai.speed,
