@@ -1,4 +1,3 @@
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   pruneExpiredPending,
@@ -8,12 +7,10 @@ import {
 
 describe("pairing file helpers", () => {
   it("resolves pairing file paths from explicit base dirs", () => {
-    const baseDir = process.platform === "win32" ? "C:/tmp/openclaw-state" : "/tmp/openclaw-state";
-
-    expect(resolvePairingPaths(baseDir, "devices")).toEqual({
-      dir: path.join(baseDir, "devices"),
-      pendingPath: path.join(baseDir, "devices", "pending.json"),
-      pairedPath: path.join(baseDir, "devices", "paired.json"),
+    expect(resolvePairingPaths("/tmp/openclaw-state", "devices")).toEqual({
+      dir: "/tmp/openclaw-state/devices",
+      pendingPath: "/tmp/openclaw-state/devices/pending.json",
+      pairedPath: "/tmp/openclaw-state/devices/paired.json",
     });
   });
 
