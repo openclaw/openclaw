@@ -4,11 +4,14 @@ const loadConfigMock = vi.hoisted(() => vi.fn());
 const createConfigIOMock = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentIdMock = vi.hoisted(() => vi.fn());
 const resolveMainSessionKeyMock = vi.hoisted(() => vi.fn());
+const resolveStorePathMock = vi.hoisted(() => vi.fn());
+const loadSessionStoreMock = vi.hoisted(() => vi.fn());
 const normalizeMainKeyMock = vi.hoisted(() => vi.fn());
 const listSystemPresenceMock = vi.hoisted(() => vi.fn());
 const resolveGatewayAuthMock = vi.hoisted(() => vi.fn());
 const getUpdateAvailableMock = vi.hoisted(() => vi.fn());
 const resolveAgentCortexConfigMock = vi.hoisted(() => vi.fn());
+const resolveCortexChannelTargetMock = vi.hoisted(() => vi.fn());
 const getCachedLatestCortexCaptureHistoryEntryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/config.js", () => ({
@@ -22,7 +25,9 @@ vi.mock("../../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../../config/sessions.js", () => ({
+  loadSessionStore: loadSessionStoreMock,
   resolveMainSessionKey: resolveMainSessionKeyMock,
+  resolveStorePath: resolveStorePathMock,
 }));
 
 vi.mock("../../routing/session-key.js", async (importOriginal) => {
@@ -48,6 +53,7 @@ vi.mock("../../infra/update-startup.js", () => ({
 
 vi.mock("../../agents/cortex.js", () => ({
   resolveAgentCortexConfig: resolveAgentCortexConfigMock,
+  resolveCortexChannelTarget: resolveCortexChannelTargetMock,
 }));
 
 vi.mock("../../agents/cortex-history.js", () => ({
@@ -68,6 +74,19 @@ describe("buildGatewaySnapshot", () => {
     createConfigIOMock.mockReturnValue({ configPath: "/tmp/openclaw/openclaw.json" });
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveMainSessionKeyMock.mockReturnValue("agent:main:main");
+    resolveStorePathMock.mockReturnValue("/tmp/openclaw-state/sessions/main/sessions.json");
+    loadSessionStoreMock.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "session-1",
+        updatedAt: 1234,
+        lastChannel: "telegram",
+        lastTo: "telegram:user-123",
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:user-123",
+        },
+      },
+    });
     normalizeMainKeyMock.mockReturnValue("main");
     listSystemPresenceMock.mockReturnValue([]);
     resolveGatewayAuthMock.mockReturnValue({ mode: "token" });
@@ -78,8 +97,11 @@ describe("buildGatewaySnapshot", () => {
       maxChars: 1500,
       graphPath: ".cortex/context.json",
     });
+    resolveCortexChannelTargetMock.mockReturnValue("telegram:user-123");
     getCachedLatestCortexCaptureHistoryEntryMock.mockReturnValue({
       agentId: "main",
+      sessionId: "session-1",
+      channelId: "telegram:user-123",
       captured: true,
       score: 0.7,
       reason: "high-signal memory candidate",
@@ -88,6 +110,23 @@ describe("buildGatewaySnapshot", () => {
     });
 
     const snapshot = buildGatewaySnapshot();
+
+    expect(resolveStorePathMock).toHaveBeenCalledWith(undefined, { agentId: "main" });
+    expect(loadSessionStoreMock).toHaveBeenCalledWith(
+      "/tmp/openclaw-state/sessions/main/sessions.json",
+    );
+    expect(resolveCortexChannelTargetMock).toHaveBeenCalledWith({
+      channel: "telegram",
+      originatingChannel: "telegram",
+      originatingTo: "telegram:user-123",
+      nativeChannelId: "telegram:user-123",
+      to: "telegram:user-123",
+    });
+    expect(getCachedLatestCortexCaptureHistoryEntryMock).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionId: "session-1",
+      channelId: "telegram:user-123",
+    });
 
     expect(snapshot.cortex).toEqual({
       enabled: true,
