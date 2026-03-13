@@ -359,6 +359,7 @@ async function setLockOnRelay(locked, tabId = null) {
     console.warn('[OpenClaw] Refusing lock without an attached tab ID')
     return null
   }
+  console.log(`[OpenClaw] setLockOnRelay(locked=${locked}, tabId=${tabId})`)
   try {
     const port = await getRelayPort()
     const gatewayToken = await getGatewayToken()
@@ -1207,8 +1208,8 @@ chrome.tabs.onActivated.addListener(({ tabId }) => void whenReady(async () => {
   const tab = tabs.get(tabId)
   if (!relayIsLocked && tab && tab.state === 'connected') {
     lockedTabId = tabId
-    // Sync the preferred tab to the gateway logs even in "ON" mode
-    void setLockOnRelay(false, tabId).catch(() => {})
+    // Sync the session ID (e.g. "cb-tab-1") so the gateway logs the preferred tab
+    void setLockOnRelay(false, tab.sessionId || null).catch(() => {})
   }
   updateAllBadges() // Ensure the newly activated tab has the correct badge set if local overriding applies
   await syncAllOverlays()

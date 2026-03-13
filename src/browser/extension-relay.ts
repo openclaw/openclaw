@@ -637,13 +637,25 @@ export async function ensureChromeExtensionRelayServer(opts: {
               const data = JSON.parse(body);
               if (typeof data.lockTab === "boolean") {
                 currentLockTab = data.lockTab;
-                const tabIdHint = typeof data.tabId === "string" ? ` (preferred tab: ${data.tabId})` : "";
+                const rawTabId = data.tabId;
+                let tabIdHint = "";
+                if (rawTabId !== undefined && rawTabId !== null) {
+                  if (typeof rawTabId === "string" && rawTabId.trim()) {
+                    tabIdHint = ` (preferred tab: ${rawTabId.trim()})`;
+                  } else {
+                    // Log whatever we got so issues are visible in future debugging
+                    tabIdHint = ` (preferred tab: [unexpected type=${typeof rawTabId} value=${JSON.stringify(rawTabId)}])`;
+                  }
+                }
                 console.log(
                   `[browser/extension-relay] Relay on ${info.port} lockTab updated to: ${currentLockTab}${tabIdHint}`,
                 );
                 res.writeHead(200, { "Content-Type": "application/json" });
                 res.end(JSON.stringify({ ok: true, lockTab: currentLockTab }));
               } else {
+                console.warn(
+                  `[browser/extension-relay] Relay on ${info.port} lockTab PUT rejected: lockTab field missing or not boolean (received: ${JSON.stringify(data)})`
+                );
                 res.writeHead(400);
                 res.end("Invalid input: lockTab required");
               }
