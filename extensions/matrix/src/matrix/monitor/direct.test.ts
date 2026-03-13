@@ -7,6 +7,8 @@ import { createDirectRoomTracker } from "./direct.js";
 
 type StateEvent = Record<string, unknown>;
 type DmMap = Record<string, boolean>;
+const brokenDmRoomId = "!broken-dm:example.org";
+const defaultBrokenDmMembers = ["@alice:example.org", "@bot:example.org"];
 
 function createMockClient(opts: {
   dmRooms?: DmMap;
@@ -48,6 +50,21 @@ function createMockClient(opts: {
         return ev;
       }),
   };
+}
+
+function createBrokenDmClient(roomNameEvent?: StateEvent) {
+  return createMockClient({
+    dmRooms: {},
+    membersByRoom: {
+      [brokenDmRoomId]: defaultBrokenDmMembers,
+    },
+    stateEvents: {
+      // is_direct not set on either member (e.g. Continuwuity bug)
+      [`${brokenDmRoomId}|m.room.member|@alice:example.org`]: {},
+      [`${brokenDmRoomId}|m.room.member|@bot:example.org`]: {},
+      ...(roomNameEvent ? { [`${brokenDmRoomId}|m.room.name|`]: roomNameEvent } : {}),
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -131,22 +148,11 @@ describe("createDirectRoomTracker", () => {
 
   describe("conservative fallback (memberCount + room name)", () => {
     it("returns true for 2-member room WITHOUT a room name (broken flags)", async () => {
-      const client = createMockClient({
-        dmRooms: {},
-        membersByRoom: {
-          "!broken-dm:example.org": ["@alice:example.org", "@bot:example.org"],
-        },
-        stateEvents: {
-          // is_direct not set on either member (e.g. Continuwuity bug)
-          "!broken-dm:example.org|m.room.member|@alice:example.org": {},
-          "!broken-dm:example.org|m.room.member|@bot:example.org": {},
-          // No m.room.name -> getRoomStateEvent will throw (event not found)
-        },
-      });
+      const client = createBrokenDmClient();
       const tracker = createDirectRoomTracker(client as never);
 
       const result = await tracker.isDirectMessage({
-        roomId: "!broken-dm:example.org",
+        roomId: brokenDmRoomId,
         senderId: "@alice:example.org",
       });
 
@@ -154,21 +160,11 @@ describe("createDirectRoomTracker", () => {
     });
 
     it("returns true for 2-member room with empty room name", async () => {
-      const client = createMockClient({
-        dmRooms: {},
-        membersByRoom: {
-          "!broken-dm:example.org": ["@alice:example.org", "@bot:example.org"],
-        },
-        stateEvents: {
-          "!broken-dm:example.org|m.room.member|@alice:example.org": {},
-          "!broken-dm:example.org|m.room.member|@bot:example.org": {},
-          "!broken-dm:example.org|m.room.name|": { name: "" },
-        },
-      });
+      const client = createBrokenDmClient({ name: "" });
       const tracker = createDirectRoomTracker(client as never);
 
       const result = await tracker.isDirectMessage({
-        roomId: "!broken-dm:example.org",
+        roomId: brokenDmRoomId,
         senderId: "@alice:example.org",
       });
 
