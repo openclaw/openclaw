@@ -215,6 +215,13 @@ export function resolveWindowsSpawnProgramCandidate(
   }
 
   if (ext === ".cmd" || ext === ".bat") {
+    if (!isFilePath(resolvedCommand)) {
+      return {
+        command: resolvedCommand,
+        leadingArgv: [],
+        resolution: "direct",
+      };
+    }
     const entrypoint =
       resolveEntrypointFromCmdShim(resolvedCommand) ??
       resolveEntrypointFromPackageJson(resolvedCommand, params.packageName);
