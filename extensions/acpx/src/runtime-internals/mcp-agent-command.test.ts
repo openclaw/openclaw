@@ -9,7 +9,10 @@ vi.mock("./process.js", () => ({
   spawnAndCollect: spawnAndCollectMock,
 }));
 
-import { resolveAcpxAgentCommand } from "./mcp-agent-command.js";
+import {
+  formatRawAgentCommandForCli,
+  resolveAcpxAgentCommand,
+} from "./mcp-agent-command.js";
 
 describe("resolveAcpxAgentCommand", () => {
   afterEach(() => {
@@ -54,5 +57,19 @@ describe("resolveAcpxAgentCommand", () => {
         agent: "codex",
       }),
     ).resolves.toBe("npx custom-codex-acp");
+  });
+});
+
+describe("formatRawAgentCommandForCli", () => {
+  it("quotes spaced path-like commands without arguments", () => {
+    expect(formatRawAgentCommandForCli("/opt/My Agent/codex-acp")).toBe(
+      '"/opt/My Agent/codex-acp"',
+    );
+  });
+
+  it("preserves trailing args for spaced path-like commands", () => {
+    expect(formatRawAgentCommandForCli("/opt/My Agent/codex-acp --model gpt-5")).toBe(
+      '"/opt/My Agent/codex-acp" --model gpt-5',
+    );
   });
 });

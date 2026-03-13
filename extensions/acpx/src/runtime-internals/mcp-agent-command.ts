@@ -51,9 +51,16 @@ export function formatRawAgentCommandForCli(targetCommand: string): string {
 
   // ACPX accepts `--agent` as a command line string. Quote bare path-like
   // commands so bundled plugin-local binaries remain launchable when the
-  // plugin directory includes spaces.
+  // plugin directory includes spaces. If the override also includes trailing
+  // flags, keep those arguments separate from the executable token.
   if (/^(?:\.{1,2}[\\/]|\/|[A-Za-z]:[\\/])/.test(trimmed)) {
-    return toCommandLine([trimmed]);
+    const argSeparator = trimmed.search(/\s--?[A-Za-z0-9]/);
+    if (argSeparator === -1) {
+      return toCommandLine([trimmed]);
+    }
+    const executable = trimmed.slice(0, argSeparator).trimEnd();
+    const args = trimmed.slice(argSeparator + 1).trimStart();
+    return `${toCommandLine([executable])} ${args}`;
   }
 
   return trimmed;

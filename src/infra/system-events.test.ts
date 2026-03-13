@@ -3,7 +3,13 @@ import { drainFormattedSystemEvents } from "../auto-reply/reply/session-updates.
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { isCronSystemEvent } from "./heartbeat-runner.js";
-import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
+import {
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+  peekSystemEvents,
+  requeueSystemEventEntries,
+  resetSystemEventsForTest,
+} from "./system-events.js";
 
 const cfg = {} as unknown as OpenClawConfig;
 const mainKey = resolveMainSessionKey(cfg);
@@ -54,6 +60,24 @@ describe("system events (session routing)", () => {
 
     expect(first).toBe(true);
     expect(second).toBe(false);
+  });
+
+  it("restores drained events ahead of newer arrivals without replay dedupe", () => {
+    const sessionKey = "agent:main:requeue-order";
+    const drained = [
+      { text: "older one", ts: 1, contextKey: "exec:1" },
+      { text: "older two", ts: 2, contextKey: "exec:2" },
+    ];
+    enqueueSystemEvent("new arrival", { sessionKey, contextKey: "exec:3" });
+
+    requeueSystemEventEntries(sessionKey, drained);
+
+    expect(peekSystemEvents(sessionKey)).toEqual(["older one", "older two", "new arrival"]);
+    expect(peekSystemEventEntries(sessionKey).map((event) => event.contextKey)).toEqual([
+      "exec:1",
+      "exec:2",
+      "exec:3",
+    ]);
   });
 
   it("filters heartbeat/noise lines, returning undefined", async () => {

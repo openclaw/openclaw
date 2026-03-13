@@ -67,4 +67,37 @@ describe("createFeishuWsLifecycleLogger", () => {
       }),
     );
   });
+  it("treats reconnect success info logs as connected", () => {
+    const statusSink = vi.fn();
+    const logger = createFeishuWsLifecycleLogger({
+      accountId: "default",
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+      statusSink,
+    });
+
+    logger.info("[ws]", "reconnect");
+    logger.info("[ws]", "reconnect success");
+
+    expect(statusSink).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        connected: false,
+        reconnectAttempts: 1,
+      }),
+    );
+    expect(statusSink).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        connected: true,
+        reconnectAttempts: 0,
+        lastConnectedAt: expect.any(Number),
+        lastDisconnect: null,
+        lastError: null,
+      }),
+    );
+  });
 });
