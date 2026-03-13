@@ -58,6 +58,8 @@ let reconnectTimer = null
 let activationEpoch = 0
 /** @type {Map<number, number>} */
 const tabAncestry = new Map() // childTabId -> parentTabId
+/** @type {Set<number>} */
+const pendingSwaps = new Set()
 /** @type {Map<number, Array<{method:string, params:any, id:number}>>} */
 const commandBuffers = new Map() // tabId -> list of pending commands during navigation
 /** @type {string|null} */
@@ -1426,6 +1428,38 @@ chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => void whenReady(
   }
 
   updateAllBadges()
+
+  // 6. Identity Refresh: Sync updated Target ID from Chrome
+  pendingSwaps.add(addedTabId)
+  try {
+    const info = /** @type {any} */ (await chrome.debugger.sendCommand({ tabId: addedTabId }, 'Target.getTargetInfo'))
+    const freshTargetId = info?.targetInfo?.targetId
+    if (freshTargetId && freshTargetId !== meta?.targetId) {
+      console.log(`[OpenClaw] Identity Sync: Target ID shifted from ${meta?.targetId} to ${freshTargetId}`)
+      if (meta) meta.targetId = freshTargetId
+      targetToTab.set(freshTargetId, addedTabId)
+      
+      // Re-announce the update to the relay
+      if (meta?.sessionId) {
+        void sendToRelay({
+          method: 'forwardCDPEvent',
+          params: {
+            method: 'Target.attachedToTarget',
+            params: {
+              sessionId: meta.sessionId,
+              targetInfo: { ...info.targetInfo, attached: true },
+              waitingForDebugger: false,
+            },
+          },
+        })
+      }
+    }
+  } catch (err) {
+    console.warn('[OpenClaw] Identity Sync Failed:', err instanceof Error ? err.message : String(err))
+  } finally {
+    pendingSwaps.delete(addedTabId)
+  }
+
   void persistState()
 }))
 
@@ -1443,7 +1477,8 @@ chrome.webNavigation.onCompleted.addListener(({ tabId, frameId }) => void whenRe
 }))
 
 chrome.tabs.onActivated.addListener(({ tabId }) => void whenReady(async () => {
-  if (extensionIsDisabled) return // No noise when disabled
+  // No noise when disabled, and yield to concurrent prerender swaps
+  if (extensionIsDisabled || pendingSwaps.has(tabId)) return 
   
   const currentEpoch = ++activationEpoch
   
@@ -1462,6 +1497,10 @@ chrome.tabs.onActivated.addListener(({ tabId }) => void whenReady(async () => {
           console.log(`[OpenClaw] Auto-attaching to active tab ${tabId} for tracking continuity`)
           await attachTab(tabId)
           tab = tabs.get(tabId) // Refresh local reference
+        } catch (err) {
+          // Log specific attachment failures to SW console
+          console.warn(`[OpenClaw] Auto-attach failed for tab ${tabId} (${tabInfo.url}):`, err instanceof Error ? err.message : String(err))
+          throw err
         } finally {
           tabOperationLocks.delete(tabId)
         }
