@@ -1,0 +1,13 @@
+[2026-03-13T00:56:13.971Z] 🚀 OpenClaw Agent Team Coordinator 启动
+[2026-03-13T00:56:13.974Z] 🎯 目标: 完成 10 个PR
+[2026-03-13T00:56:13.975Z] 📊 当前进度: 0/10 PRs
+[2026-03-13T00:56:13.976Z] 📊 已处理issues: 无
+[2026-03-13T00:56:13.978Z] 🔍 Issue Finder: 搜索合适的issue...
+[2026-03-13T00:56:16.045Z] ✅ 找到issue #44490: [Bug]: openclaw gateway restart fails to restart service (SIGTERM instead of SIGUSR1)
+[2026-03-13T00:56:16.049Z] 🔧 Issue Fixer: 开始修复issue #44490...
+[2026-03-13T00:56:20.289Z] ✅ 创建分支: fix/issue-44490--bug-openclaw-gateway-restart-fails-to-r
+[2026-03-13T00:56:20.291Z] 🔧 处理通用issue...
+[2026-03-13T00:56:20.293Z] 🔍 搜索关键词: openclaw, gateway, restart, fails, restart, service, sigterm, instead, sigusr1
+[2026-03-13T00:56:20.656Z] 📁 找到相关文件: src/version.ts, src/test-utils/temp-home.test.ts, src/test-utils/exec-assertions.ts, src/test-utils/temp-home.ts, src/telegram/draft-stream.ts
+[2026-03-13T00:56:20.662Z] ⚠️ 无法自动修复issue #44490，需要手动处理
+[2026-03-13T00:56:21.360Z] ❌ 修复issue #44490 失败，跳过

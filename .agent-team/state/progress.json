@@ -1,0 +1,13 @@
+{
+  "completedPRs": 0,
+  "processedIssues": [
+    44490
+  ],
+  "currentIssue": null,
+  "branchName": "fix/issue-44490--bug-openclaw-gateway-restart-fails-to-r",
+  "status": "idle",
+  "logs": [
+    "[2026-03-13T00:56:13.971Z] 🚀 OpenClaw Agent Team Coordinator 启动",
+    "[2026-03-13T00:56:13.974Z] 🎯 目标: 完成 10 个PR"
+  ]
+}
