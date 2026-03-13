@@ -20,14 +20,23 @@ export async function twilioApiRequest<T = unknown>(params: {
           return acc;
         }, new URLSearchParams());
 
-  const response = await fetch(`${params.baseUrl}${params.endpoint}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${Buffer.from(`${params.accountSid}:${params.authToken}`).toString("base64")}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: bodyParams,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${params.baseUrl}${params.endpoint}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${params.accountSid}:${params.authToken}`).toString("base64")}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: bodyParams,
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (err) {
+    throw new Error(
+      `Twilio API request failed: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
 
   if (!response.ok) {
     if (params.allowNotFound && response.status === 404) {
@@ -37,6 +46,14 @@ export async function twilioApiRequest<T = unknown>(params: {
     throw new Error(`Twilio API error: ${response.status} ${errorText}`);
   }
 
-  const text = await response.text();
+  let text: string;
+  try {
+    text = await response.text();
+  } catch (err) {
+    throw new Error(
+      `Twilio API response read failed: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
   return text ? (JSON.parse(text) as T) : (undefined as T);
 }
