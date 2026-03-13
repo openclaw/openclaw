@@ -309,6 +309,29 @@ describe("processDiscordMessage ack reactions", () => {
     expect(sendMocks.reactMessageDiscord).not.toHaveBeenCalled();
   });
 
+  it("does not emit thinking reactions before run-start in deferred mode", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onReasoningStream?.();
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createBaseContext({
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+          ackReactionTiming: "run-start",
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+      shouldRequireMention: true,
+      effectiveWasMentioned: true,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(sendMocks.reactMessageDiscord).not.toHaveBeenCalled();
+  });
+
   it("uses preflight-resolved messageChannelId when message.channelId is missing", async () => {
     const ctx = await createBaseContext({
       message: {

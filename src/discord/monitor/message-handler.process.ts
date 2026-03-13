@@ -193,12 +193,24 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     },
   });
   let statusReactionLifecycleStarted = false;
-  const ensureStatusReactionLifecycleStarted = async (): Promise<void> => {
-    if (!statusReactionsEnabled || statusReactionLifecycleStarted) {
-      return;
+  let statusReactionLifecycleStartPromise: Promise<void> | null = null;
+  const ensureStatusReactionLifecycleStarted = (): Promise<void> => {
+    if (!statusReactionsEnabled) {
+      return Promise.resolve();
+    }
+    if (statusReactionLifecycleStartPromise) {
+      return statusReactionLifecycleStartPromise;
     }
     statusReactionLifecycleStarted = true;
-    await statusReactions.setQueued();
+    statusReactionLifecycleStartPromise = Promise.resolve(statusReactions.setQueued());
+    return statusReactionLifecycleStartPromise;
+  };
+  const runStatusReactionTransition = async (transition: () => Promise<void> | void) => {
+    if (!statusReactionLifecycleStarted) {
+      return;
+    }
+    await ensureStatusReactionLifecycleStarted();
+    await transition();
   };
   if (ackReactionTiming === "received") {
     void ensureStatusReactionLifecycleStarted();
@@ -720,7 +732,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           return;
         }
         await typingCallbacks.onReplyStart();
-        await statusReactions.setThinking();
+        await runStatusReactionTransition(() => statusReactions.setThinking());
       },
     });
 
@@ -773,26 +785,28 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         },
         onModelSelected,
         onReasoningStream: async () => {
-          await statusReactions.setThinking();
+          await runStatusReactionTransition(() => statusReactions.setThinking());
         },
         onToolStart: async (payload) => {
           if (isProcessAborted(abortSignal)) {
             return;
           }
-          await statusReactions.setTool(payload.name);
+          await runStatusReactionTransition(() => statusReactions.setTool(payload.name));
         },
         onCompactionStart: async () => {
           if (isProcessAborted(abortSignal)) {
             return;
           }
-          await statusReactions.setCompacting();
+          await runStatusReactionTransition(() => statusReactions.setCompacting());
         },
         onCompactionEnd: async () => {
           if (isProcessAborted(abortSignal)) {
             return;
           }
-          statusReactions.cancelPending();
-          await statusReactions.setThinking();
+          await runStatusReactionTransition(async () => {
+            statusReactions.cancelPending();
+            await statusReactions.setThinking();
+          });
         },
       },
     });
@@ -822,6 +836,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       markDispatchIdle();
     }
     if (statusReactionLifecycleStarted) {
+      await ensureStatusReactionLifecycleStarted();
       if (dispatchAborted) {
         if (removeAckAfterReply) {
           void statusReactions.clear();
