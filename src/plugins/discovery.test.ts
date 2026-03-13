@@ -200,6 +200,29 @@ describe("discoverOpenClawPlugins", () => {
     expect(ids).toContain("voice-call");
   });
 
+  it("normalizes bundled provider package ids to canonical plugin ids", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions", "ollama-provider-pack");
+    mkdirSafe(path.join(globalExt, "src"));
+
+    writePluginPackageManifest({
+      packageDir: globalExt,
+      packageName: "@openclaw/ollama-provider",
+      extensions: ["./src/index.ts"],
+    });
+    fs.writeFileSync(
+      path.join(globalExt, "src", "index.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+
+    const ids = candidates.map((c) => c.idHint);
+    expect(ids).toContain("ollama");
+    expect(ids).not.toContain("ollama-provider");
+  });
+
   it("treats configured directory paths as plugin packages", async () => {
     const stateDir = makeTempDir();
     const packDir = path.join(stateDir, "packs", "demo-plugin-dir");
