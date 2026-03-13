@@ -820,7 +820,8 @@ describe("preflightDiscordMessage", () => {
         }),
       );
 
-      // Should be dropped: empty content
+      // Should be dropped: requireMention is true but no bot mention detected
+      // (empty content → no text-based mention fallback → mention gating fails)
       expect(result).toBeNull();
     });
   });
