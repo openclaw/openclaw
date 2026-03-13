@@ -1283,8 +1283,8 @@ export const registerTelegramHandlers = ({
         const listMatch = defModelData.match(/^list_([a-z0-9_-]+)_(\d+)$/i);
         // Parse select callback (standard): sel_{provider/model}
         const selMatch = defModelData.match(/^sel_(.+)$/);
-        // Parse select callback (compact): s/{model}
-        const compactSelMatch = defModelData.match(/^s\/(.+)$/);
+        // Parse select callback (compact): sc/{provider}/{model}
+        const compactSelMatch = defModelData.match(/^sc\/([^/]+)\/(.+)$/);
 
         const modelData = await buildModelsProviderData(cfg, defSessionState.agentId);
         const { byProvider } = modelData;
@@ -1326,8 +1326,9 @@ export const registerTelegramHandlers = ({
           for (const model of pageModels) {
             // Standard format
             const standardCallback = `defmdl_sel_${provider}/${model}`;
-            // Compact fallback for long model IDs
-            const compactCallback = `defmdl_s/${model}`;
+            // Compact fallback: defmdl_sc/{provider_short}/{model} where provider_short is hashed if too long
+            const providerShort = provider.length > 8 ? provider.slice(0, 6) : provider;
+            const compactCallback = `defmdl_sc/${providerShort}/${model}`;
             const callbackData =
               Buffer.byteLength(standardCallback, "utf-8") <= 64
                 ? standardCallback
@@ -1379,7 +1380,7 @@ export const registerTelegramHandlers = ({
             senderId,
             senderUsername: callback.from?.username ?? "",
             mode: "callback-allowlist",
-            context: { cfg, accountId },
+            context: eventAuthContext,
           });
           if (!selSenderAuthorization.allowed) {
             await editMessageWithButtons("❌ Not authorized to change default model.", []);

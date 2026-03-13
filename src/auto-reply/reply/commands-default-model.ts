@@ -21,8 +21,8 @@ export const handleDefaultModelCommand: CommandHandler = async (params, allowTex
     return null;
   }
 
-  const commandBody = params.command.commandBodyNormalized.trim().toLowerCase();
-  if (!commandBody.startsWith("/default_model")) {
+  const commandBody = params.command.commandBodyNormalized.trim();
+  if (!commandBody.toLowerCase().startsWith("/default_model")) {
     return null;
   }
 
@@ -31,7 +31,7 @@ export const handleDefaultModelCommand: CommandHandler = async (params, allowTex
     return unauthorized;
   }
 
-  // Extract model argument (everything after /default_model)
+  // Extract model argument (everything after /default_model), preserving case
   const modelArg = commandBody.slice("/default_model".length).trim();
 
   // Read current config
