@@ -25,6 +25,7 @@ import {
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { wrapUntrustedPromptDataBlock } from "./sanitize-for-prompt.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 export {
@@ -46,6 +47,27 @@ const MAX_ADAPTIVE_READ_MAX_BYTES = 512 * 1024;
 const ADAPTIVE_READ_CONTEXT_SHARE = 0.2;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 const MAX_ADAPTIVE_READ_PAGES = 8;
+
+/**
+ * Path segment that identifies user-sent inbound media files staged into the sandbox.
+ * Files under this directory are untrusted external content and must be wrapped
+ * with prompt-injection guards before being returned to the LLM.
+ */
+const INBOUND_MEDIA_PATH_SEGMENT = "media/inbound";
+
+/**
+ * Returns true if the given file path is inside the inbound media staging directory.
+ * These files originate from external senders (WhatsApp, Telegram, Slack, etc.)
+ * and must be treated as untrusted data.
+ */
+export function isInboundMediaPath(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, "/");
+  return (
+    normalized.includes(`/${INBOUND_MEDIA_PATH_SEGMENT}/`) ||
+    normalized.startsWith(`${INBOUND_MEDIA_PATH_SEGMENT}/`) ||
+    normalized === INBOUND_MEDIA_PATH_SEGMENT
+  );
+}
 
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
@@ -659,12 +681,50 @@ export function createOpenClawReadTool(
       const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
       const strippedDetailsResult = stripReadTruncationContentDetails(result);
       const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
-      return sanitizeToolResultImages(
+      const sanitizedResult = await sanitizeToolResultImages(
         normalizedResult,
         `read:${filePath}`,
         options?.imageSanitization,
       );
+      // Wrap inbound media file content to prevent prompt injection.
+      // Files staged under media/inbound/ originate from external senders and
+      // must be treated as untrusted data, not as agent instructions.
+      if (isInboundMediaPath(filePath)) {
+        return wrapInboundFileResult(sanitizedResult, filePath);
+      }
+      return sanitizedResult;
     },
+  };
+}
+
+/**
+ * Wraps the text content of a tool result with untrusted-data markers to
+ * prevent prompt injection from inbound media files.
+ */
+function wrapInboundFileResult(
+  result: AgentToolResult<unknown>,
+  filePath: string,
+): AgentToolResult<unknown> {
+  const content = Array.isArray(result.content) ? result.content : [];
+  const wrappedContent = content.map((block) => {
+    if (
+      block &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "text" &&
+      typeof (block as { text?: unknown }).text === "string"
+    ) {
+      const text = (block as { text: string }).text;
+      const wrapped = wrapUntrustedPromptDataBlock({
+        label: `File: ${filePath}`,
+        text,
+      });
+      return { ...(block as object), text: wrapped || text };
+    }
+    return block;
+  });
+  return {
+    ...result,
+    content: wrappedContent as unknown as AgentToolResult<unknown>["content"],
   };
 }
 
