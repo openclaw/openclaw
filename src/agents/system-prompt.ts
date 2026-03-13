@@ -782,27 +782,22 @@ export function buildAgentSystemPrompt(params: {
     lines.push("## Reasoning Format", reasoningHint, "");
   }
 
-  // Tool Manifest: BEFORE GroupChat — plugin set changes RARELY (far less often than
-  // per-conversation group chat switches). Being here keeps ~2,000 chars of tool listing
-  // in the stable prefix for every conversation switch.
+  // Tool Manifest: BEFORE GroupChat — plugin set changes RARELY vs per-conv every session.
   if (toolLines.length > 0) {
     lines.push("## Tool Manifest", toolLines.join("\n"), "");
   }
 
-  if (extraSystemPrompt) {
-    // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
-    const contextHeader =
-      promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
-    lines.push(contextHeader, extraSystemPrompt, "");
-  }
-
   // ── Post-conversation dynamic tail ────────────────────────────────────────────
-  // Sections ordered by change frequency (least frequent = FIRST). Deployment config
-  // is before the runtime dynamic line. Tool Manifest is before GroupChat. Remaining:
-  //   1. Model Aliases — QUARTERLY changes (user updates model preferences)
-  //   2. Skills (mandatory) — MONTHLY changes (user installs new skills)
-  //   3. Project Notes (workspaceNotes) — WEEKLY changes (sprint updates)
-  //   4. MEMORY.md — DAILY changes (daily notes update)
+  // Ordering: frequency ascending (least frequent = FIRST, most frequent = LAST).
+  // GroupChat (per-conversation, multiple times/day) goes ABSOLUTELY LAST so that the
+  // entire prompt — workspace files, config, tools, skills, notes, MEMORY.md — is in
+  // the KV-cache stable prefix for every conversation switch.
+  //
+  //   1. Model Aliases — QUARTERLY
+  //   2. Skills (mandatory) — MONTHLY
+  //   3. Project Notes (workspaceNotes) — WEEKLY
+  //   4. MEMORY.md — DAILY
+  //   5. GroupChat / SubagentContext — PER-CONVERSATION (multiple times/day, goes LAST)
 
   // 1. Model aliases: quarterly changes (model preference updates).
   if (!isMinimal && params.modelAliasLines && params.modelAliasLines.length > 0) {
@@ -829,12 +824,19 @@ export function buildAgentSystemPrompt(params: {
     lines.push("");
   }
 
-  // 6. Memory files (MEMORY.md / memory.md) are injected LAST — after all per-conversation
-  // dynamic context and workspaceNotes. This maximises the stable prefix for the most
-  // common change pattern: daily notes update while session config stays constant.
-  // When only MEMORY.md changes between sessions, everything above this point is KV-cached.
+  // 4. Memory files (MEMORY.md / memory.md) — DAILY changes.
   for (const file of memoryContextFiles) {
     lines.push(`## ${file.path}`, "", file.content, "");
+  }
+
+  // 5. Group Chat / Subagent Context — ABSOLUTELY LAST (most frequent: per-conversation).
+  // Placing GroupChat last ensures the entire prompt above (workspace files, deployment config,
+  // tools, model aliases, skills, workspace notes, MEMORY.md) is KV-cached between
+  // conversation switches — even when daily notes or other sections update.
+  if (extraSystemPrompt) {
+    const contextHeader =
+      promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
+    lines.push(contextHeader, extraSystemPrompt, "");
   }
 
   return lines.filter(Boolean).join("\n");
