@@ -185,6 +185,21 @@ describe("resolvePreferredOpenClawTmpDir", () => {
     expect(tmpdir).toHaveBeenCalled();
   });
 
+  it("falls back when /tmp/openclaw exists but is not writable", () => {
+    const accessSync = vi.fn((target: string) => {
+      if (target === POSIX_OPENCLAW_TMP_DIR) {
+        throw new Error("not writable");
+      }
+    });
+    const { resolved, tmpdir } = resolveWithMocks({
+      accessSync,
+      lstatSync: vi.fn(() => secureDirStat()),
+    });
+
+    expect(resolved).toBe(fallbackTmp());
+    expect(tmpdir).toHaveBeenCalled();
+  });
+
   it("falls back when /tmp/openclaw is a symlink", () => {
     expectFallsBackToOsTmpDir({ lstatSync: symlinkTmpDirLstat() });
   });
@@ -213,6 +228,43 @@ describe("resolvePreferredOpenClawTmpDir", () => {
     });
 
     expect(resolved).toBe(POSIX_OPENCLAW_TMP_DIR);
+    expect(chmodSync).toHaveBeenCalledWith(POSIX_OPENCLAW_TMP_DIR, 0o700);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("tightened permissions on temp dir"));
+    expect(tmpdir).not.toHaveBeenCalled();
+  });
+
+  it("repairs /tmp/openclaw after create when the initial mode stays too broad", () => {
+    let preferredMode = 0o40775;
+    let chmodCalls = 0;
+    const lstatSync = vi
+      .fn<NonNullable<TmpDirOptions["lstatSync"]>>()
+      .mockImplementationOnce(() => {
+        throw nodeErrorWithCode("ENOENT");
+      })
+      .mockImplementation(() =>
+        makeDirStat({
+          mode: preferredMode,
+        }),
+      );
+    const chmodSync = vi.fn((target: string, mode: number) => {
+      chmodCalls += 1;
+      if (target === POSIX_OPENCLAW_TMP_DIR && mode === 0o700 && chmodCalls > 1) {
+        preferredMode = 0o40700;
+      }
+    });
+    const warn = vi.fn();
+
+    const { resolved, mkdirSync, tmpdir } = resolveWithMocks({
+      lstatSync,
+      chmodSync,
+      warn,
+    });
+
+    expect(resolved).toBe(POSIX_OPENCLAW_TMP_DIR);
+    expect(mkdirSync).toHaveBeenCalledWith(POSIX_OPENCLAW_TMP_DIR, {
+      recursive: true,
+      mode: 0o700,
+    });
     expect(chmodSync).toHaveBeenCalledWith(POSIX_OPENCLAW_TMP_DIR, 0o700);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("tightened permissions on temp dir"));
     expect(tmpdir).not.toHaveBeenCalled();
