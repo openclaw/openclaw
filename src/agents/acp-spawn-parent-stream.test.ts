@@ -102,9 +102,11 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
 
     vi.advanceTimersByTime(1_500);
-    expect(collectedTexts().some((text) => text.includes("has produced no output for 1s"))).toBe(
-      true,
-    );
+    expect(
+      collectedTexts().some((text) =>
+        text.includes("has not reported that the ACP prompt was sent yet"),
+      ),
+    ).toBe(true);
 
     emitAgentEvent({
       runId: "run-2",
@@ -128,6 +130,113 @@ describe("startAcpSpawnParentStreamRelay", () => {
       },
     });
     expect(collectedTexts().some((text) => text.includes("run failed: boom"))).toBe(true);
+    relay.dispose();
+  });
+
+  it("classifies prompt-sent stalls as no assistant response after prompt", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-prompt-stall",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-prompt-stall",
+      agentId: "codex",
+      streamFlushMs: 1,
+      noOutputNoticeMs: 1_000,
+      noOutputPollMs: 250,
+    });
+
+    emitAgentEvent({
+      runId: "run-prompt-stall",
+      stream: "lifecycle",
+      data: {
+        phase: "start",
+        promptDispatched: true,
+        source: "acp",
+      },
+    });
+
+    vi.advanceTimersByTime(1_500);
+
+    expect(
+      collectedTexts().some((text) =>
+        text.includes("has not produced any assistant output for 1s after the prompt was sent"),
+      ),
+    ).toBe(true);
+    expect(collectedTexts().some((text) => text.includes("interactive input"))).toBe(false);
+    relay.dispose();
+  });
+
+  it("does not treat generic status activity as prompt confirmation", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-status-only",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-status-only",
+      agentId: "codex",
+      streamFlushMs: 1,
+      noOutputNoticeMs: 1_000,
+      noOutputPollMs: 250,
+    });
+
+    emitAgentEvent({
+      runId: "run-status-only",
+      stream: "status",
+      data: {
+        text: "runtime connected",
+        tag: "session_info_update",
+      },
+    });
+
+    vi.advanceTimersByTime(1_500);
+
+    expect(
+      collectedTexts().some((text) =>
+        text.includes("has not reported that the ACP prompt was sent yet"),
+      ),
+    ).toBe(true);
+    relay.dispose();
+  });
+
+  it("treats tool activity after prompt as runtime progress for stall timing", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-tool-activity",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-tool-activity",
+      agentId: "codex",
+      streamFlushMs: 1,
+      noOutputNoticeMs: 1_000,
+      noOutputPollMs: 250,
+    });
+
+    emitAgentEvent({
+      runId: "run-tool-activity",
+      stream: "lifecycle",
+      data: {
+        phase: "start",
+        promptDispatched: true,
+        source: "acp",
+      },
+    });
+
+    vi.advanceTimersByTime(750);
+    emitAgentEvent({
+      runId: "run-tool-activity",
+      stream: "tool",
+      data: {
+        phase: "start",
+        name: "check-network",
+        toolCallId: "tool-1",
+        status: "in_progress",
+      },
+    });
+
+    vi.advanceTimersByTime(300);
+    expect(
+      collectedTexts().some((text) => text.includes("no assistant output for 1s after the prompt")),
+    ).toBe(false);
+
+    vi.advanceTimersByTime(800);
+    expect(
+      collectedTexts().some((text) => text.includes("reported runtime activity, but no assistant")),
+    ).toBe(true);
     relay.dispose();
   });
 

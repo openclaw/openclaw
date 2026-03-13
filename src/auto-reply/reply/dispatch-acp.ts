@@ -10,9 +10,11 @@ import {
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
 import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
+import type { AcpRuntimeEvent } from "../../acp/runtime/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
@@ -40,6 +42,8 @@ type DispatchProcessedRecorder = (
     error?: string;
   },
 ) => void;
+
+const ACP_TERMINAL_TOOL_STATUSES = new Set(["completed", "failed", "cancelled", "done", "error"]);
 
 function resolveFirstContextText(
   ctx: FinalizedMsgContext,
@@ -146,6 +150,137 @@ function resolveAcpRequestId(ctx: FinalizedMsgContext): string {
   return generateSecureUuid();
 }
 
+type AcpAgentEventBridgeState = {
+  assistantText: string;
+  stopReason?: string;
+};
+
+function emitAcpLifecycleAgentEvent(params: {
+  runId?: string;
+  sessionKey: string;
+  phase: "start" | "prompt" | "end" | "error";
+  startedAt: number;
+  endedAt?: number;
+  stopReason?: string;
+  error?: string;
+  code?: string;
+  text?: string;
+  tag?: string;
+  promptDispatched?: boolean;
+}) {
+  if (!params.runId) {
+    return;
+  }
+  emitAgentEvent({
+    runId: params.runId,
+    sessionKey: params.sessionKey,
+    stream: "lifecycle",
+    data: {
+      phase: params.phase,
+      startedAt: params.startedAt,
+      ...(params.endedAt != null ? { endedAt: params.endedAt } : {}),
+      ...(params.stopReason ? { stopReason: params.stopReason } : {}),
+      ...(params.error ? { error: params.error } : {}),
+      ...(params.code ? { code: params.code } : {}),
+      ...(params.text ? { text: params.text } : {}),
+      ...(params.tag ? { tag: params.tag } : {}),
+      source: "acp",
+      ...(params.promptDispatched === true ? { promptDispatched: true } : {}),
+    },
+  });
+}
+
+function emitAcpRuntimeAgentEvent(params: {
+  runId?: string;
+  sessionKey: string;
+  event: AcpRuntimeEvent;
+  bridgeState: AcpAgentEventBridgeState;
+}) {
+  if (!params.runId) {
+    return;
+  }
+
+  const { event } = params;
+  if (event.type === "text_delta") {
+    if (event.stream !== "output" || !event.text) {
+      return;
+    }
+    params.bridgeState.assistantText += event.text;
+    emitAgentEvent({
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      stream: "assistant",
+      data: {
+        text: params.bridgeState.assistantText,
+        delta: event.text,
+        ...(event.tag ? { tag: event.tag } : {}),
+        source: "acp",
+      },
+    });
+    return;
+  }
+
+  if (event.type === "status") {
+    if (!event.text?.trim()) {
+      return;
+    }
+    if (event.tag === "session/prompt") {
+      emitAcpLifecycleAgentEvent({
+        runId: params.runId,
+        sessionKey: params.sessionKey,
+        phase: "prompt",
+        startedAt: Date.now(),
+        text: event.text,
+        tag: event.tag,
+        promptDispatched: true,
+      });
+      return;
+    }
+    emitAgentEvent({
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      stream: "status",
+      data: {
+        text: event.text,
+        ...(event.tag ? { tag: event.tag } : {}),
+        ...(event.used != null ? { used: event.used } : {}),
+        ...(event.size != null ? { size: event.size } : {}),
+        source: "acp",
+      },
+    });
+    return;
+  }
+
+  if (event.type === "tool_call") {
+    const normalizedStatus = event.status?.trim().toLowerCase();
+    const phase =
+      normalizedStatus && ACP_TERMINAL_TOOL_STATUSES.has(normalizedStatus)
+        ? "end"
+        : event.tag === "tool_call"
+          ? "start"
+          : "update";
+    emitAgentEvent({
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      stream: "tool",
+      data: {
+        phase,
+        name: event.title?.trim() || "tool_call",
+        ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+        ...(event.status ? { status: event.status } : {}),
+        ...(event.text?.trim() ? { text: event.text } : {}),
+        ...(event.tag ? { tag: event.tag } : {}),
+        source: "acp",
+      },
+    });
+    return;
+  }
+
+  if (event.type === "done") {
+    params.bridgeState.stopReason = event.stopReason?.trim() || undefined;
+  }
+}
+
 function hasBoundConversationForSession(params: {
   sessionKey: string;
   channelRaw: string | undefined;
@@ -188,6 +323,7 @@ export async function tryDispatchAcpReply(params: {
   ctx: FinalizedMsgContext;
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
+  runId?: string;
   sessionKey?: string;
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
@@ -258,6 +394,9 @@ export async function tryDispatchAcpReply(params: {
   });
 
   const acpDispatchStartedAt = Date.now();
+  const agentEventBridgeState: AcpAgentEventBridgeState = {
+    assistantText: "",
+  };
   try {
     const dispatchPolicyError = resolveAcpDispatchPolicyError(params.cfg);
     if (dispatchPolicyError) {
@@ -301,6 +440,13 @@ export async function tryDispatchAcpReply(params: {
       );
     }
 
+    emitAcpLifecycleAgentEvent({
+      runId: params.runId,
+      sessionKey,
+      phase: "start",
+      startedAt: acpDispatchStartedAt,
+    });
+
     await acpManager.runTurn({
       cfg: params.cfg,
       sessionKey,
@@ -308,7 +454,24 @@ export async function tryDispatchAcpReply(params: {
       attachments: attachments.length > 0 ? attachments : undefined,
       mode: "prompt",
       requestId: resolveAcpRequestId(params.ctx),
-      onEvent: async (event) => await projector.onEvent(event),
+      onEvent: async (event) => {
+        emitAcpRuntimeAgentEvent({
+          runId: params.runId,
+          sessionKey,
+          event,
+          bridgeState: agentEventBridgeState,
+        });
+        await projector.onEvent(event);
+      },
+    });
+
+    emitAcpLifecycleAgentEvent({
+      runId: params.runId,
+      sessionKey,
+      phase: "end",
+      startedAt: acpDispatchStartedAt,
+      endedAt: Date.now(),
+      stopReason: agentEventBridgeState.stopReason,
     });
 
     await projector.flush(true);
@@ -373,6 +536,15 @@ export async function tryDispatchAcpReply(params: {
       error: err,
       fallbackCode: "ACP_TURN_FAILED",
       fallbackMessage: "ACP turn failed before completion.",
+    });
+    emitAcpLifecycleAgentEvent({
+      runId: params.runId,
+      sessionKey,
+      phase: "error",
+      startedAt: acpDispatchStartedAt,
+      endedAt: Date.now(),
+      error: acpError.message,
+      code: acpError.code,
     });
     const delivered = await delivery.deliver("final", {
       text: formatAcpRuntimeErrorText(acpError),

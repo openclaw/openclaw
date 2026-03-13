@@ -4,6 +4,7 @@ import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { hasEnvHttpProxyConfigured } from "../infra/net/proxy-env.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 
@@ -38,6 +39,65 @@ function toTrimmedString(value: unknown): string | undefined {
 
 function toFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+type RelayActivityKind = "assistant" | "prompt" | "status" | "tool";
+
+function hasConfiguredEnvKey(env: NodeJS.ProcessEnv, key: string): boolean {
+  const value = env[key];
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function resolveChildProxyEnvSummary(
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, boolean> {
+  return {
+    httpProxyConfigured: hasEnvHttpProxyConfigured("http", env),
+    httpsProxyConfigured: hasEnvHttpProxyConfigured("https", env),
+    allProxyConfigured:
+      hasConfiguredEnvKey(env, "ALL_PROXY") || hasConfiguredEnvKey(env, "all_proxy"),
+    noProxyConfigured: hasConfiguredEnvKey(env, "NO_PROXY") || hasConfiguredEnvKey(env, "no_proxy"),
+  };
+}
+
+function resolveNoOutputNotice(params: {
+  relayLabel: string;
+  noOutputNoticeMs: number;
+  sawPromptDispatched: boolean;
+  sawAssistantOutput: boolean;
+  sawRuntimeActivityAfterPrompt: boolean;
+}): { text: string; classification: string } {
+  const seconds = Math.round(params.noOutputNoticeMs / 1000);
+  if (!params.sawPromptDispatched) {
+    return {
+      classification: "before-prompt-dispatch",
+      text:
+        `${params.relayLabel} has not produced output for ${seconds}s and has not reported ` +
+        "that the ACP prompt was sent yet. It may still be starting or waiting on runtime setup.",
+    };
+  }
+  if (!params.sawAssistantOutput && params.sawRuntimeActivityAfterPrompt) {
+    return {
+      classification: "after-prompt-runtime-activity",
+      text:
+        `${params.relayLabel} has not produced assistant output for ${seconds}s after the prompt ` +
+        "was sent. The child session reported runtime activity, but no assistant reply has arrived yet.",
+    };
+  }
+  if (!params.sawAssistantOutput) {
+    return {
+      classification: "after-prompt-no-response",
+      text:
+        `${params.relayLabel} has not produced any assistant output for ${seconds}s after the ` +
+        "prompt was sent. The ACP runtime may be stalled or unable to reach its upstream or proxy/network path.",
+    };
+  }
+  return {
+    classification: "after-assistant-output",
+    text:
+      `${params.relayLabel} has not produced additional assistant output for ${seconds}s. The ` +
+      "run may still be in progress.",
+  };
 }
 
 function resolveAcpStreamLogPathFromSessionFile(sessionFile: string, sessionId: string): string {
@@ -200,11 +260,17 @@ export function startAcpSpawnParentStreamRelay(params: {
       `${contextPrefix}:start`,
     );
   };
+  logEvent("relay_started", {
+    proxyEnv: resolveChildProxyEnvSummary(),
+  });
 
   let disposed = false;
   let pendingText = "";
-  let lastProgressAt = Date.now();
+  let lastActivityAt = Date.now();
   let stallNotified = false;
+  let sawPromptDispatched = false;
+  let sawAssistantOutput = false;
+  let sawRuntimeActivityAfterPrompt = false;
   let flushTimer: NodeJS.Timeout | undefined;
   let relayLifetimeTimer: NodeJS.Timeout | undefined;
 
@@ -245,6 +311,35 @@ export function startAcpSpawnParentStreamRelay(params: {
     }, streamFlushMs);
     flushTimer.unref?.();
   };
+  const markActivity = (
+    kind: RelayActivityKind,
+    options?: {
+      confirmPrompt?: boolean;
+    },
+  ) => {
+    const confirmPrompt =
+      options?.confirmPrompt ?? (kind === "assistant" || kind === "prompt" || kind === "tool");
+    lastActivityAt = Date.now();
+    if (kind === "prompt") {
+      sawPromptDispatched = true;
+    } else if (kind === "assistant") {
+      sawPromptDispatched = true;
+      sawAssistantOutput = true;
+      sawRuntimeActivityAfterPrompt = true;
+    } else if (confirmPrompt) {
+      sawPromptDispatched = true;
+      sawRuntimeActivityAfterPrompt = true;
+    }
+    if (!stallNotified) {
+      return;
+    }
+    stallNotified = false;
+    if (kind === "assistant") {
+      emit(`${relayLabel} resumed output.`, `${contextPrefix}:resumed`);
+      return;
+    }
+    emit(`${relayLabel} reported activity again.`, `${contextPrefix}:resumed`);
+  };
 
   const noOutputWatcherTimer = setInterval(() => {
     if (disposed || noOutputNoticeMs <= 0) {
@@ -253,14 +348,24 @@ export function startAcpSpawnParentStreamRelay(params: {
     if (stallNotified) {
       return;
     }
-    if (Date.now() - lastProgressAt < noOutputNoticeMs) {
+    if (Date.now() - lastActivityAt < noOutputNoticeMs) {
       return;
     }
     stallNotified = true;
-    emit(
-      `${relayLabel} has produced no output for ${Math.round(noOutputNoticeMs / 1000)}s. It may be waiting for interactive input.`,
-      `${contextPrefix}:stall`,
-    );
+    const notice = resolveNoOutputNotice({
+      relayLabel,
+      noOutputNoticeMs,
+      sawPromptDispatched,
+      sawAssistantOutput,
+      sawRuntimeActivityAfterPrompt,
+    });
+    logEvent("stall_notice", {
+      classification: notice.classification,
+      sawPromptDispatched,
+      sawAssistantOutput,
+      sawRuntimeActivityAfterPrompt,
+    });
+    emit(notice.text, `${contextPrefix}:stall`);
   }, noOutputPollMs);
   noOutputWatcherTimer.unref?.();
 
@@ -295,13 +400,7 @@ export function startAcpSpawnParentStreamRelay(params: {
         return;
       }
       logEvent("assistant_delta", { delta });
-
-      if (stallNotified) {
-        stallNotified = false;
-        emit(`${relayLabel} resumed output.`, `${contextPrefix}:resumed`);
-      }
-
-      lastProgressAt = Date.now();
+      markActivity("assistant");
       pendingText += delta;
       if (pendingText.length > STREAM_BUFFER_MAX_CHARS) {
         pendingText = pendingText.slice(-STREAM_BUFFER_MAX_CHARS);
@@ -314,12 +413,57 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
 
+    if (event.stream === "status") {
+      const text = toTrimmedString((event.data as { text?: unknown } | undefined)?.text);
+      const tag = toTrimmedString((event.data as { tag?: unknown } | undefined)?.tag);
+      logEvent("status", {
+        text,
+        tag,
+      });
+      markActivity("status", {
+        confirmPrompt: tag === "session/prompt" || sawPromptDispatched,
+      });
+      return;
+    }
+
+    if (event.stream === "tool") {
+      const phase = toTrimmedString((event.data as { phase?: unknown } | undefined)?.phase);
+      const name = toTrimmedString((event.data as { name?: unknown } | undefined)?.name);
+      const status = toTrimmedString((event.data as { status?: unknown } | undefined)?.status);
+      const text = toTrimmedString((event.data as { text?: unknown } | undefined)?.text);
+      logEvent("tool", {
+        phase: phase ?? "unknown",
+        name,
+        status,
+        text,
+      });
+      markActivity("tool");
+      return;
+    }
+
     if (event.stream !== "lifecycle") {
       return;
     }
 
     const phase = toTrimmedString((event.data as { phase?: unknown } | undefined)?.phase);
     logEvent("lifecycle", { phase: phase ?? "unknown", data: event.data });
+    const promptDispatched =
+      (event.data as { promptDispatched?: unknown } | undefined)?.promptDispatched === true;
+    if (phase === "start" && promptDispatched) {
+      markActivity("prompt");
+      return;
+    }
+    if (phase === "prompt") {
+      markActivity("prompt");
+      return;
+    }
+    if (phase === "status") {
+      const tag = toTrimmedString((event.data as { tag?: unknown } | undefined)?.tag);
+      markActivity("status", {
+        confirmPrompt: tag === "session/prompt" || sawPromptDispatched,
+      });
+      return;
+    }
     if (phase === "end") {
       flushPending();
       const startedAt = toFiniteNumber(

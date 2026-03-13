@@ -65,6 +65,16 @@ function resolveStructuredPromptPayload(parsed: Record<string, unknown>): {
     }
   }
 
+  if (method === "session/prompt") {
+    const params = parsed.params;
+    const payload = isRecord(params) ? params : parsed;
+    return {
+      type: "session/prompt",
+      payload,
+      tag: "session/prompt",
+    };
+  }
+
   const sessionUpdate = asOptionalString(parsed.sessionUpdate) as AcpSessionUpdateTag | undefined;
   if (sessionUpdate) {
     return {
@@ -279,6 +289,13 @@ export function parsePromptEventLine(line: string): AcpRuntimeEvent | null {
         type: "status",
         text,
         tag: type as AcpSessionUpdateTag,
+      };
+    }
+    case "session/prompt": {
+      return {
+        type: "status",
+        text: "ACP prompt sent to runtime session",
+        tag: "session/prompt",
       };
     }
     case "client_operation": {

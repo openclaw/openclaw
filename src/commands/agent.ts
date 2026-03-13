@@ -766,6 +766,32 @@ async function agentCommandInternal(
               stopReason = event.stopReason;
               return;
             }
+            if (event.type === "status") {
+              emitAgentEvent({
+                runId,
+                stream: "lifecycle",
+                data: {
+                  phase: event.tag === "session/prompt" ? "prompt" : "status",
+                  text: event.text,
+                  ...(event.tag ? { tag: event.tag } : {}),
+                },
+              });
+              return;
+            }
+            if (event.type === "tool_call") {
+              emitAgentEvent({
+                runId,
+                stream: "tool",
+                data: {
+                  phase: event.tag === "tool_call_update" ? "update" : "start",
+                  text: event.text,
+                  ...(event.title ? { name: event.title } : {}),
+                  ...(event.status ? { status: event.status } : {}),
+                  ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+                },
+              });
+              return;
+            }
             if (event.type !== "text_delta") {
               return;
             }

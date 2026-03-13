@@ -157,6 +157,21 @@ function createRunTurnFromTextDeltas(chunks: string[]) {
   });
 }
 
+function createRunTurnFromEvents(
+  events: Array<Record<string, unknown> & { type: string }>,
+  stopReason = "stop",
+) {
+  return vi.fn(async (paramsUnknown: unknown) => {
+    const params = paramsUnknown as {
+      onEvent?: (event: Record<string, unknown> & { type: string }) => Promise<void>;
+    };
+    for (const event of events) {
+      await params.onEvent?.(event);
+    }
+    await params.onEvent?.({ type: "done", stopReason });
+  });
+}
+
 function subscribeAssistantEvents() {
   const assistantEvents: Array<{ text?: string; delta?: string }> = [];
   const stop = onAgentEvent((evt) => {
@@ -169,6 +184,44 @@ function subscribeAssistantEvents() {
     });
   });
   return { assistantEvents, stop };
+}
+
+function subscribeLifecycleEvents() {
+  const lifecycleEvents: Array<{ phase?: string; tag?: string; text?: string }> = [];
+  const stop = onAgentEvent((evt) => {
+    if (evt.stream !== "lifecycle") {
+      return;
+    }
+    lifecycleEvents.push({
+      phase: typeof evt.data?.phase === "string" ? evt.data.phase : undefined,
+      tag: typeof evt.data?.tag === "string" ? evt.data.tag : undefined,
+      text: typeof evt.data?.text === "string" ? evt.data.text : undefined,
+    });
+  });
+  return { lifecycleEvents, stop };
+}
+
+function subscribeToolEvents() {
+  const toolEvents: Array<{
+    phase?: string;
+    name?: string;
+    toolCallId?: string;
+    status?: string;
+    text?: string;
+  }> = [];
+  const stop = onAgentEvent((evt) => {
+    if (evt.stream !== "tool") {
+      return;
+    }
+    toolEvents.push({
+      phase: typeof evt.data?.phase === "string" ? evt.data.phase : undefined,
+      name: typeof evt.data?.name === "string" ? evt.data.name : undefined,
+      toolCallId: typeof evt.data?.toolCallId === "string" ? evt.data.toolCallId : undefined,
+      status: typeof evt.data?.status === "string" ? evt.data.status : undefined,
+      text: typeof evt.data?.text === "string" ? evt.data.text : undefined,
+    });
+  });
+  return { toolEvents, stop };
 }
 
 async function runAcpSessionWithPolicyOverrides(params: {
@@ -395,6 +448,58 @@ describe("agentCommand ACP runtime routing", () => {
 
       const logLines = vi.mocked(runtime.log).mock.calls.map(([first]) => String(first));
       expect(logLines.some((line) => line.includes("NOW"))).toBe(true);
+    });
+  });
+
+  it("forwards ACP prompt-status and tool-call events into agent event streams", async () => {
+    await withAcpSessionEnv(async () => {
+      const { lifecycleEvents, stop: stopLifecycle } = subscribeLifecycleEvents();
+      const { toolEvents, stop: stopTool } = subscribeToolEvents();
+      const runTurn = createRunTurnFromEvents([
+        {
+          type: "status",
+          tag: "session/prompt",
+          text: "ACP prompt sent to runtime session",
+        },
+        {
+          type: "tool_call",
+          tag: "tool_call",
+          text: "check-network (in_progress)",
+          title: "check-network",
+          toolCallId: "tool-1",
+          status: "in_progress",
+        },
+      ]);
+
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      try {
+        await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
+      } finally {
+        stopLifecycle();
+        stopTool();
+      }
+
+      expect(lifecycleEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            phase: "prompt",
+            tag: "session/prompt",
+            text: "ACP prompt sent to runtime session",
+          }),
+        ]),
+      );
+      expect(toolEvents).toEqual([
+        {
+          phase: "start",
+          name: "check-network",
+          toolCallId: "tool-1",
+          status: "in_progress",
+          text: "check-network (in_progress)",
+        },
+      ]);
     });
   });
 

@@ -52,6 +52,10 @@ const bindingServiceMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
 }));
 
+const agentEventMocks = vi.hoisted(() => ({
+  emitAgentEvent: vi.fn(),
+}));
+
 vi.mock("../../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => managerMocks,
 }));
@@ -85,6 +89,10 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => ({
   getSessionBindingService: () => ({
     listBySession: (sessionKey: string) => bindingServiceMocks.listBySession(sessionKey),
   }),
+}));
+
+vi.mock("../../infra/agent-events.js", () => ({
+  emitAgentEvent: (event: unknown) => agentEventMocks.emitAgentEvent(event),
 }));
 
 const { tryDispatchAcpReply } = await import("./dispatch-acp.js");
@@ -132,6 +140,7 @@ async function runDispatch(params: {
   bodyForAgent: string;
   cfg?: OpenClawConfig;
   dispatcher?: ReplyDispatcher;
+  runId?: string;
   shouldRouteToOriginating?: boolean;
   onReplyStart?: () => void;
   ctxOverrides?: Record<string, unknown>;
@@ -146,6 +155,7 @@ async function runDispatch(params: {
     }),
     cfg: params.cfg ?? createAcpTestConfig(),
     dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
+    runId: params.runId,
     sessionKey,
     inboundAudio: false,
     shouldRouteToOriginating: params.shouldRouteToOriginating ?? false,
@@ -232,6 +242,7 @@ describe("tryDispatchAcpReply", () => {
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue(null);
     bindingServiceMocks.listBySession.mockReset();
     bindingServiceMocks.listBySession.mockReturnValue([]);
+    agentEventMocks.emitAgentEvent.mockReset();
   });
 
   it("routes ACP block output to originating channel", async () => {
@@ -356,6 +367,144 @@ describe("tryDispatchAcpReply", () => {
 
     expect(managerMocks.runTurn).not.toHaveBeenCalled();
     expect(onReplyStart).not.toHaveBeenCalled();
+  });
+
+  it("bridges ACP lifecycle and runtime activity into agent events", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({
+          type: "status",
+          tag: "session/prompt",
+          text: "ACP prompt sent to runtime session",
+        });
+        await onEvent({
+          type: "status",
+          tag: "session_info_update",
+          text: "runtime connected",
+        });
+        await onEvent({
+          type: "tool_call",
+          tag: "tool_call",
+          toolCallId: "tool-1",
+          status: "in_progress",
+          title: "Check network",
+          text: "Check network (in_progress)",
+        });
+        await onEvent({
+          type: "text_delta",
+          text: "hello from acp",
+          stream: "output",
+          tag: "agent_message_chunk",
+        });
+        await onEvent({ type: "done", stopReason: "end_turn" });
+      },
+    );
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      runId: "run-acp-bridge",
+    });
+
+    const emitted = agentEventMocks.emitAgentEvent.mock.calls.map((call) => call[0]);
+    expect(emitted).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          runId: "run-acp-bridge",
+          stream: "lifecycle",
+          data: expect.objectContaining({
+            phase: "start",
+            source: "acp",
+          }),
+        }),
+        expect.objectContaining({
+          runId: "run-acp-bridge",
+          stream: "lifecycle",
+          data: expect.objectContaining({
+            phase: "prompt",
+            text: "ACP prompt sent to runtime session",
+            tag: "session/prompt",
+            source: "acp",
+            promptDispatched: true,
+          }),
+        }),
+        expect.objectContaining({
+          runId: "run-acp-bridge",
+          stream: "status",
+          data: expect.objectContaining({
+            text: "runtime connected",
+            tag: "session_info_update",
+            source: "acp",
+          }),
+        }),
+        expect.objectContaining({
+          runId: "run-acp-bridge",
+          stream: "tool",
+          data: expect.objectContaining({
+            phase: "start",
+            name: "Check network",
+            toolCallId: "tool-1",
+            status: "in_progress",
+            source: "acp",
+          }),
+        }),
+        expect.objectContaining({
+          runId: "run-acp-bridge",
+          stream: "assistant",
+          data: expect.objectContaining({
+            text: "hello from acp",
+            delta: "hello from acp",
+            tag: "agent_message_chunk",
+            source: "acp",
+          }),
+        }),
+        expect.objectContaining({
+          runId: "run-acp-bridge",
+          stream: "lifecycle",
+          data: expect.objectContaining({
+            phase: "end",
+            stopReason: "end_turn",
+            source: "acp",
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("emits ACP lifecycle errors into agent events", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockRejectedValueOnce(
+      new AcpRuntimeError("ACP_TURN_FAILED", "network unreachable"),
+    );
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      runId: "run-acp-error",
+    });
+
+    const emitted = agentEventMocks.emitAgentEvent.mock.calls.map((call) => call[0]);
+    expect(emitted).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          runId: "run-acp-error",
+          stream: "lifecycle",
+          data: expect.objectContaining({
+            phase: "start",
+            source: "acp",
+          }),
+        }),
+        expect.objectContaining({
+          runId: "run-acp-error",
+          stream: "lifecycle",
+          data: expect.objectContaining({
+            phase: "error",
+            error: "network unreachable",
+            code: "ACP_TURN_FAILED",
+            source: "acp",
+          }),
+        }),
+      ]),
+    );
   });
 
   it("forwards normalized image attachments into ACP turns", async () => {
