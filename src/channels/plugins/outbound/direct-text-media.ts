@@ -39,8 +39,20 @@ export async function sendTextMediaPayload(params: {
     : params.ctx.payload.mediaUrl
       ? [params.ctx.payload.mediaUrl]
       : [];
-  if (!text && urls.length === 0) {
+  if (!text && urls.length === 0 && !params.ctx.buffer) {
     return { channel: params.channel, messageId: "" };
+  }
+  // Handle direct buffer attachment upload.
+  // Note: In the current pipeline, buffer uploads and mediaUrl(s) are mutually exclusive.
+  // If both are ever present, we intentionally prioritize the explicit buffer upload.
+  if (params.ctx.buffer) {
+    return await params.adapter.sendMedia!({
+      ...params.ctx,
+      text,
+      buffer: params.ctx.buffer,
+      filename: params.ctx.filename,
+      contentType: params.ctx.contentType,
+    });
   }
   if (urls.length > 0) {
     let lastResult = await params.adapter.sendMedia!({
