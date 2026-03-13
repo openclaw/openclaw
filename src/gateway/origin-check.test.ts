@@ -31,9 +31,21 @@ describe("checkBrowserOrigin", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("rejects loopback origin mismatches when request is not local", () => {
+  it("accepts exact loopback origins for localhost hosts even when the socket is not detected as local", () => {
     const result = checkBrowserOrigin({
       requestHost: "127.0.0.1:18789",
+      origin: "http://127.0.0.1:18789",
+      isLocalClient: false,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.matchedBy).toBe("local-loopback");
+    }
+  });
+
+  it("rejects non-matching loopback dev origins when request is not local", () => {
+    const result = checkBrowserOrigin({
+      requestHost: "gateway.example.com:18789",
       origin: "http://localhost:5173",
       isLocalClient: false,
     });

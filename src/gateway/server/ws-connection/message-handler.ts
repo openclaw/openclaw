@@ -411,6 +411,7 @@ export function attachGatewayWsMessageHandler(params: {
             origin: requestOrigin,
             allowedOrigins: configSnapshot.gateway?.controlUi?.allowedOrigins,
             allowHostHeaderOriginFallback: hostHeaderOriginFallbackEnabled,
+            allowLoopbackHostOriginFallback: !hasProxyHeaders,
             isLocalClient,
           });
           if (!originCheck.ok) {

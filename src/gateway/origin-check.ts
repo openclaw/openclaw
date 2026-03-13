@@ -1,4 +1,4 @@
-import { isLoopbackHost, normalizeHostHeader } from "./net.js";
+import { isLoopbackHost, normalizeHostHeader, resolveHostName } from "./net.js";
 
 type OriginCheckResult =
   | {
@@ -31,6 +31,7 @@ export function checkBrowserOrigin(params: {
   origin?: string;
   allowedOrigins?: string[];
   allowHostHeaderOriginFallback?: boolean;
+  allowLoopbackHostOriginFallback?: boolean;
   isLocalClient?: boolean;
 }): OriginCheckResult {
   const parsedOrigin = parseOrigin(params.origin);
@@ -52,6 +53,20 @@ export function checkBrowserOrigin(params: {
     parsedOrigin.host === requestHost
   ) {
     return { ok: true, matchedBy: "host-header-fallback" };
+  }
+
+  const requestHostname = resolveHostName(params.requestHost);
+
+  // Accept true loopback browser origins for localhost-hosted Control UI, even when
+  // the TCP peer itself is not detected as loopback (for example SSH local port
+  // forwarding, where the browser origin is still 127.0.0.1 but the remote socket
+  // may not appear as a direct loopback client to the gateway).
+  if (
+    params.allowLoopbackHostOriginFallback !== false &&
+    isLoopbackHost(parsedOrigin.hostname) &&
+    isLoopbackHost(requestHostname)
+  ) {
+    return { ok: true, matchedBy: "local-loopback" };
   }
 
   // Dev fallback only for genuinely local socket clients, not Host-header claims.
