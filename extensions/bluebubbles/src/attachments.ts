@@ -56,16 +56,18 @@ function ensureExtension(filename: string, extension: string, fallbackBase: stri
 function resolveVoiceInfo(filename: string, contentType?: string) {
   const normalizedType = contentType?.trim().toLowerCase();
   const extension = path.extname(filename).toLowerCase();
-  const isMp3 =
-    extension === ".mp3" || (normalizedType ? AUDIO_MIME_MP3.has(normalizedType) : false);
   const isCaf =
     extension === ".caf" || (normalizedType ? AUDIO_MIME_CAF.has(normalizedType) : false);
-  const isOpus =
+  const isAudio =
+    isCaf ||
+    extension === ".mp3" ||
     extension === ".ogg" ||
     extension === ".opus" ||
-    (normalizedType ? AUDIO_MIME_OPUS.has(normalizedType) : false);
-  const isAudio = isMp3 || isCaf || isOpus || Boolean(normalizedType?.startsWith("audio/"));
-  return { isAudio, isMp3, isCaf, isOpus };
+    Boolean(normalizedType?.startsWith("audio/")) ||
+    (normalizedType
+      ? AUDIO_MIME_MP3.has(normalizedType) || AUDIO_MIME_OPUS.has(normalizedType)
+      : false);
+  return { isAudio, isCaf };
 }
 
 function resolveVoiceInputExtension(filename: string, contentType?: string): string {
