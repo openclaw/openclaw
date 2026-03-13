@@ -26,6 +26,7 @@ import {
   detectGlobalInstallManagerForRoot,
   globalInstallArgs,
   globalInstallFallbackArgs,
+  resolveGlobalInstallSpec,
 } from "./update-global.js";
 
 export type UpdateStepResult = {
@@ -872,9 +873,13 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     });
     const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
     const tag = normalizeTag(opts.tag ?? channelToNpmTag(channel));
-    const spec = `${packageName}@${tag}`;
     const steps: UpdateStepResult[] = [];
     const globalInstallEnv = await createGlobalInstallEnv();
+    const spec = resolveGlobalInstallSpec({
+      packageName,
+      tag,
+      env: globalInstallEnv,
+    });
     const updateStep = await runStep({
       runCommand,
       name: "global update",
