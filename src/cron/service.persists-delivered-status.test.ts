@@ -151,14 +151,17 @@ describe("CronService persists delivered status", () => {
     expect(updated?.state.lastDeliveryError).toBeUndefined();
   });
 
-  it("persists lastDelivered=false when isolated job explicitly reports not delivered", async () => {
+  it("persists not-requested when delivery.mode=none and runner reports delivered=false", async () => {
+    // When delivery was never requested (mode: "none"), delivered=false from
+    // the runner should resolve to "not-requested", not "not-delivered".
+    // See: https://github.com/openclaw/openclaw/issues/44533
     const updated = await runIsolatedJobAndReadState({
       job: buildIsolatedAgentTurnJob("delivered-false"),
       delivered: false,
     });
     expectSuccessfulCronRun(updated);
     expect(updated?.state.lastDelivered).toBe(false);
-    expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
+    expect(updated?.state.lastDeliveryStatus).toBe("not-requested");
     expect(updated?.state.lastDeliveryError).toBeUndefined();
   });
 
@@ -167,6 +170,34 @@ describe("CronService persists delivered status", () => {
       job: buildIsolatedAgentTurnJob("no-delivery"),
     });
     expectDeliveryNotRequested(updated);
+  });
+
+  it("persists not-delivered when delivery.mode=announce and runner reports delivered=false", async () => {
+    const updated = await runIsolatedJobAndReadState({
+      job: {
+        ...buildIsolatedAgentTurnJob("announce-delivered-false"),
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      },
+      delivered: false,
+    });
+    expectSuccessfulCronRun(updated);
+    expect(updated?.state.lastDelivered).toBe(false);
+    expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
+    expect(updated?.state.lastDeliveryError).toBeUndefined();
+  });
+
+  it("persists not-delivered when delivery.mode=webhook and runner reports delivered=false", async () => {
+    const updated = await runIsolatedJobAndReadState({
+      job: {
+        ...buildIsolatedAgentTurnJob("webhook-delivered-false"),
+        delivery: { mode: "webhook", to: "https://example.com/webhook" },
+      },
+      delivered: false,
+    });
+    expectSuccessfulCronRun(updated);
+    expect(updated?.state.lastDelivered).toBe(false);
+    expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
+    expect(updated?.state.lastDeliveryError).toBeUndefined();
   });
 
   it("persists unknown delivery state when delivery is requested but the runner omits delivered", async () => {
