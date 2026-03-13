@@ -43,4 +43,19 @@ export function collectTtsApiKeyAssignments(params: {
       },
     });
   }
+  const bailian = params.tts.bailian;
+  if (isRecord(bailian)) {
+    collectSecretInputAssignment({
+      value: bailian.apiKey,
+      path: `${params.pathPrefix}.bailian.apiKey`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: params.active,
+      inactiveReason: params.inactiveReason,
+      apply: (value) => {
+        bailian.apiKey = value;
+      },
+    });
+  }
 }

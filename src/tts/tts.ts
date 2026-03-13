@@ -23,10 +23,14 @@ import type {
   TtsModelOverrideConfig,
 } from "../config/types.tts.js";
 import { logVerbose } from "../globals.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
+import { runFfmpeg } from "../media/ffmpeg-exec.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import {
   DEFAULT_OPENAI_BASE_URL,
   edgeTTS,
@@ -55,6 +59,9 @@ const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
 const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini-tts";
 const DEFAULT_OPENAI_VOICE = "alloy";
+const DEFAULT_BAILIAN_BASE_URL = "https://dashscope.aliyuncs.com/api/v1";
+const DEFAULT_BAILIAN_MODEL = "qwen3-tts-flash";
+const DEFAULT_BAILIAN_VOICE = "Cherry";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
@@ -120,6 +127,13 @@ export type ResolvedTtsConfig = {
     voice: string;
     speed?: number;
     instructions?: string;
+  };
+  bailian: {
+    apiKey?: string;
+    baseUrl: string;
+    model: string;
+    voice: string;
+    languageType?: string;
   };
   edge: {
     enabled: boolean;
@@ -217,6 +231,158 @@ type TtsStatusEntry = {
 
 let lastTtsAttempt: TtsStatusEntry | undefined;
 
+type BailianTtsResponse = {
+  output?: {
+    audio?: {
+      url?: string;
+    };
+  };
+};
+
+function normalizeBailianBaseUrl(baseUrl?: string): string {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return DEFAULT_BAILIAN_BASE_URL;
+  }
+  return trimmed.replace(/\/+$/, "");
+}
+
+function resolveBailianAudioDownloadSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
+  const normalizedBaseUrl = normalizeBailianBaseUrl(baseUrl);
+  if (normalizedBaseUrl === DEFAULT_BAILIAN_BASE_URL) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(normalizedBaseUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    // Custom/operator-controlled endpoints may legitimately live on private hosts.
+    // Keep the second hop pinned to the configured host instead of disabling the guard.
+    return { allowedHostnames: [parsed.hostname] };
+  } catch {
+    return undefined;
+  }
+}
+
+async function readTtsErrorResponse(res: Response): Promise<string | undefined> {
+  try {
+    const text = (await res.text()).replace(/\s+/g, " ").trim();
+    if (!text) {
+      return undefined;
+    }
+    return text.slice(0, 300);
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveDownloadedAudioExtension(audioUrl: string, contentType?: string | null): string {
+  const normalizedType = contentType?.toLowerCase() ?? "";
+  if (normalizedType.includes("mpeg") || normalizedType.includes("mp3")) {
+    return ".mp3";
+  }
+  if (normalizedType.includes("ogg") || normalizedType.includes("opus")) {
+    return ".ogg";
+  }
+  if (normalizedType.includes("wav") || normalizedType.includes("wave")) {
+    return ".wav";
+  }
+  try {
+    const pathname = new URL(audioUrl).pathname.toLowerCase();
+    if (pathname.endsWith(".mp3")) {
+      return ".mp3";
+    }
+    if (pathname.endsWith(".ogg") || pathname.endsWith(".opus")) {
+      return ".ogg";
+    }
+    if (pathname.endsWith(".wav")) {
+      return ".wav";
+    }
+  } catch {
+    // Fall back to the documented default output type.
+  }
+  return ".wav";
+}
+
+function resolveRemainingTimeoutMs(startedAtMs: number, totalTimeoutMs: number): number {
+  const elapsedMs = Date.now() - startedAtMs;
+  return Math.max(1, totalTimeoutMs - elapsedMs);
+}
+
+async function bailianTTS(params: {
+  text: string;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  voice: string;
+  languageType?: string;
+  timeoutMs: number;
+}): Promise<{ audioBuffer: Buffer; outputFormat: string; extension: string }> {
+  const startedAtMs = Date.now();
+  const url = `${normalizeBailianBaseUrl(params.baseUrl)}/services/aigc/multimodal-generation/generation`;
+  const body = {
+    model: params.model,
+    input: {
+      text: params.text,
+      voice: params.voice,
+      ...(params.languageType?.trim() ? { language_type: params.languageType.trim() } : undefined),
+    },
+  };
+
+  const res = await fetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${params.apiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    },
+    params.timeoutMs,
+  );
+
+  if (!res.ok) {
+    const detail = await readTtsErrorResponse(res);
+    throw new Error(`request failed (HTTP ${res.status})${detail ? `: ${detail}` : ""}`);
+  }
+
+  const payload = (await res.json()) as BailianTtsResponse;
+  const audioUrl = payload.output?.audio?.url?.trim();
+  if (!audioUrl) {
+    throw new Error("response missing output.audio.url");
+  }
+
+  const { response: audioRes, release } = await fetchWithSsrFGuard({
+    url: audioUrl,
+    timeoutMs: resolveRemainingTimeoutMs(startedAtMs, params.timeoutMs),
+    policy: resolveBailianAudioDownloadSsrFPolicy(params.baseUrl),
+    auditContext: "tts-bailian-audio-download",
+  });
+  try {
+    if (!audioRes.ok) {
+      const detail = await readTtsErrorResponse(audioRes);
+      throw new Error(
+        `audio download failed (HTTP ${audioRes.status})${detail ? `: ${detail}` : ""}`,
+      );
+    }
+
+    const extension = resolveDownloadedAudioExtension(
+      audioUrl,
+      audioRes.headers.get("content-type"),
+    );
+    const audioBuffer = Buffer.from(await audioRes.arrayBuffer());
+    return {
+      audioBuffer,
+      outputFormat: extension.replace(/^\./, ""),
+      extension,
+    };
+  } finally {
+    await release();
+  }
+}
+
 export function normalizeTtsAutoMode(value: unknown): TtsAutoMode | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -309,6 +475,16 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
       speed: raw.openai?.speed,
       instructions: raw.openai?.instructions?.trim() || undefined,
+    },
+    bailian: {
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.bailian?.apiKey,
+        path: "messages.tts.bailian.apiKey",
+      }),
+      baseUrl: normalizeBailianBaseUrl(raw.bailian?.baseUrl),
+      model: raw.bailian?.model?.trim() || DEFAULT_BAILIAN_MODEL,
+      voice: raw.bailian?.voice?.trim() || DEFAULT_BAILIAN_VOICE,
+      languageType: raw.bailian?.languageType?.trim() || undefined,
     },
     edge: {
       enabled: raw.edge?.enabled ?? true,
@@ -461,6 +637,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  if (resolveTtsApiKey(config, "bailian")) {
+    return "bailian";
+  }
   return "edge";
 }
 
@@ -528,10 +707,13 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (provider === "bailian") {
+    return config.bailian.apiKey || process.env.DASHSCOPE_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "bailian", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -557,6 +739,69 @@ function buildTtsFailureResult(errors: string[]): { success: false; error: strin
     success: false,
     error: `TTS conversion failed: ${errors.join("; ") || "no providers available"}`,
   };
+}
+
+function stripLeadingDotExtension(extension: string): string {
+  return extension.replace(/^\./, "");
+}
+
+async function maybePrepareBailianAudioForChannel(params: {
+  audioPath: string;
+  extension: string;
+  output: ReturnType<typeof resolveOutputFormat>;
+  timeoutMs: number;
+}): Promise<{ audioPath: string; outputFormat: string; voiceCompatible: boolean }> {
+  const currentOutputFormat = stripLeadingDotExtension(params.extension);
+  const currentVoiceCompatible = isVoiceCompatibleAudio({ fileName: params.audioPath });
+
+  if (!params.output.voiceCompatible || currentVoiceCompatible) {
+    return {
+      audioPath: params.audioPath,
+      outputFormat: currentOutputFormat,
+      voiceCompatible: currentVoiceCompatible,
+    };
+  }
+
+  const parsedPath = path.parse(params.audioPath);
+  const opusPath = path.join(parsedPath.dir, `${parsedPath.name}.ogg`);
+
+  try {
+    // Resample provider WAV output to mono Ogg/Opus so Telegram-family clients
+    // receive a real voice-note compatible asset instead of a looping audio file.
+    await runFfmpeg(
+      [
+        "-y",
+        "-i",
+        params.audioPath,
+        "-vn",
+        "-sn",
+        "-dn",
+        "-ac",
+        "1",
+        "-ar",
+        "48000",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "64k",
+        opusPath,
+      ],
+      { timeoutMs: params.timeoutMs },
+    );
+    return {
+      audioPath: opusPath,
+      outputFormat: "opus",
+      voiceCompatible: true,
+    };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    logVerbose(`TTS: Bailian voice transcode failed; keeping original audio (${error}).`);
+    return {
+      audioPath: params.audioPath,
+      outputFormat: currentOutputFormat,
+      voiceCompatible: currentVoiceCompatible,
+    };
+  }
 }
 
 export async function textToSpeech(params: {
@@ -664,6 +909,40 @@ export async function textToSpeech(params: {
         continue;
       }
 
+      if (provider === "bailian") {
+        const bailianResult = await bailianTTS({
+          text: params.text,
+          apiKey,
+          baseUrl: config.bailian.baseUrl,
+          model: config.bailian.model,
+          voice: config.bailian.voice,
+          languageType: config.bailian.languageType,
+          timeoutMs: config.timeoutMs,
+        });
+
+        const tempRoot = resolvePreferredOpenClawTmpDir();
+        mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+        const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
+        const audioPath = path.join(tempDir, `voice-${Date.now()}${bailianResult.extension}`);
+        writeFileSync(audioPath, bailianResult.audioBuffer);
+        scheduleCleanup(tempDir);
+        const preparedAudio = await maybePrepareBailianAudioForChannel({
+          audioPath,
+          extension: bailianResult.extension,
+          output,
+          timeoutMs: config.timeoutMs,
+        });
+
+        return {
+          success: true,
+          audioPath: preparedAudio.audioPath,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: preparedAudio.outputFormat,
+          voiceCompatible: preparedAudio.voiceCompatible,
+        };
+      }
+
       let audioBuffer: Buffer;
       if (provider === "elevenlabs") {
         const voiceIdOverride = params.overrides?.elevenlabs?.voiceId;
@@ -754,6 +1033,11 @@ export async function textToSpeechTelephony(params: {
     try {
       if (provider === "edge") {
         errors.push("edge: unsupported for telephony");
+        continue;
+      }
+
+      if (provider === "bailian") {
+        errors.push("bailian: unsupported for telephony");
         continue;
       }
 
