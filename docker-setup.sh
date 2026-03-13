@@ -144,9 +144,13 @@ validate_mount_path_value() {
   if contains_disallowed_chars "$value"; then
     fail "$label contains unsupported control characters."
   fi
-  if [[ "$value" =~ [[:space:]] ]]; then
-    fail "$label cannot contain whitespace."
-  fi
+  # NOTE: Do NOT reject whitespace here.
+  #
+  # On Windows (Git Bash/MSYS/Cygwin) the default $HOME path often contains
+  # spaces (e.g. 'C:\\Users\\John Doe'). Docker bind mounts support such paths
+  # as long as the compose YAML and environment substitution remain intact.
+  #
+  # We still reject control characters to prevent YAML/CLI injection.
 }
 
 validate_named_volume() {
