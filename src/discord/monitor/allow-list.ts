@@ -19,34 +19,7 @@ export type DiscordAllowListMatch = AllowlistMatch<"wildcard" | "id" | "name" | 
 
 const DISCORD_OWNER_ALLOWLIST_PREFIXES = ["discord:", "user:", "pk:"];
 
-export type DiscordGuildEntryResolved = {
-  id?: string;
-  slug?: string;
-  requireMention?: boolean;
-  ignoreOtherMentions?: boolean;
-  reactionNotifications?: "off" | "own" | "all" | "allowlist";
-  users?: string[];
-  roles?: string[];
-  channels?: Record<
-    string,
-    {
-      allow?: boolean;
-      requireMention?: boolean;
-      ignoreOtherMentions?: boolean;
-      skills?: string[];
-      enabled?: boolean;
-      users?: string[];
-      roles?: string[];
-      systemPrompt?: string;
-      includeThreadStarter?: boolean;
-      autoThread?: boolean;
-      autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
-    }
-  >;
-};
-
-export type DiscordChannelConfigResolved = {
-  allowed: boolean;
+type DiscordChannelOverrideConfig = {
   requireMention?: boolean;
   ignoreOtherMentions?: boolean;
   skills?: string[];
@@ -57,6 +30,21 @@ export type DiscordChannelConfigResolved = {
   includeThreadStarter?: boolean;
   autoThread?: boolean;
   autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
+};
+
+export type DiscordGuildEntryResolved = {
+  id?: string;
+  slug?: string;
+  requireMention?: boolean;
+  ignoreOtherMentions?: boolean;
+  reactionNotifications?: "off" | "own" | "all" | "allowlist";
+  users?: string[];
+  roles?: string[];
+  channels?: Record<string, { allow?: boolean } & DiscordChannelOverrideConfig>;
+};
+
+export type DiscordChannelConfigResolved = DiscordChannelOverrideConfig & {
+  allowed: boolean;
   matchKey?: string;
   matchSource?: ChannelMatchSource;
 };
