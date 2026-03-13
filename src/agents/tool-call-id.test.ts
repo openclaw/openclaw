@@ -223,6 +223,68 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
         "toolu_01SXMu62t9tRFYEty5r2QfzL",
       );
     });
+
+    it("preserves every matching tool result id for a replay-protected multi-tool continuation", () => {
+      const firstToolId = "toolu_01Vuv1fh8z3i9UWRb3jRPQox";
+      const secondToolId = "toolu_01SXMu62t9tRFYEty5r2QfzL";
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call|older:1", name: "read", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call|older:1",
+          toolName: "read",
+          content: [{ type: "text", text: "older ok" }],
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "internal", thinkingSignature: "sig" },
+            {
+              type: "toolCall",
+              id: firstToolId,
+              name: "memory_search",
+              arguments: {},
+            },
+            {
+              type: "toolCall",
+              id: secondToolId,
+              name: "memory_search",
+              arguments: {},
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: firstToolId,
+          toolName: "memory_search",
+          content: [{ type: "text", text: "latest ok 1" }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: secondToolId,
+          toolName: "memory_search",
+          content: [{ type: "text", text: "latest ok 2" }],
+        },
+      ]);
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict", {
+        preserveLatestAssistantMessage: true,
+      });
+
+      expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(
+        "callolder1",
+      );
+      expect(out[2]).toBe(input[2]);
+      expect((out[3] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(
+        firstToolId,
+      );
+      expect((out[4] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(
+        secondToolId,
+      );
+    });
   });
 
   describe("strict mode (alphanumeric only)", () => {

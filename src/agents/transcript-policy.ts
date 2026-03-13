@@ -89,14 +89,9 @@ export function resolveTranscriptPolicy(params: {
     isGoogle || isAnthropic || isMistral || shouldSanitizeGeminiThoughtSignaturesForProvider;
 
   const sanitizeToolCallIds =
-    isGoogle || isMistral || isAnthropic || requiresOpenAiCompatibleToolIdSanitization;
-  const toolCallIdMode: ToolCallIdMode | undefined = providerToolCallIdMode
-    ? providerToolCallIdMode
-    : isMistral
-      ? "strict9"
-      : sanitizeToolCallIds
-        ? "strict"
-        : undefined;
+    isGoogle || providerToolCallIdMode !== undefined || requiresOpenAiCompatibleToolIdSanitization;
+  const toolCallIdMode: ToolCallIdMode | undefined =
+    providerToolCallIdMode ?? (sanitizeToolCallIds ? "strict" : undefined);
   // All providers need orphaned tool_result repair after history truncation.
   // OpenAI rejects function_call_output items whose call_id has no matching
   // function_call in the conversation, so the repair must run universally.

@@ -15,6 +15,7 @@ import {
   wrapStreamFnDropThinkingBlocks,
   wrapOllamaCompatNumCtx,
   wrapStreamFnRepairMalformedToolCallArguments,
+  wrapStreamFnSanitizeToolCallIds,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
 
@@ -750,6 +751,77 @@ describe("wrapStreamFnDropThinkingBlocks", () => {
     expect(baseFn).toHaveBeenCalledTimes(1);
     expect(forwarded[0]?.content).toEqual([{ type: "text", text: "older" }]);
     expect(forwarded[1]?.content).toEqual(latestAssistant.content);
+  });
+});
+
+describe("wrapStreamFnSanitizeToolCallIds", () => {
+  function createFakeStream(params: { resultMessage: unknown }): {
+    result: () => Promise<unknown>;
+    [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
+  } {
+    return {
+      async result() {
+        return params.resultMessage;
+      },
+      [Symbol.asyncIterator]() {
+        return (async function* () {})();
+      },
+    };
+  }
+
+  it("preserves replay-protected Anthropic tool ids across continuation tool results", async () => {
+    const firstToolId = "toolu_01Vuv1fh8z3i9UWRb3jRPQox";
+    const secondToolId = "toolu_01SXMu62t9tRFYEty5r2QfzL";
+    const context = {
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: [{ type: "text", text: "hello" }] },
+        { role: "user", content: "send work to bobby" },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "searching", thinkingSignature: "sig" },
+            {
+              type: "toolCall",
+              id: firstToolId,
+              name: "memory_search",
+              arguments: { query: "bobby handoff status" },
+            },
+            {
+              type: "toolCall",
+              id: secondToolId,
+              name: "memory_search",
+              arguments: { query: "dispatch constraints" },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: firstToolId,
+          toolName: "memory_search",
+          content: [{ type: "text", text: "status" }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: secondToolId,
+          toolName: "memory_search",
+          content: [{ type: "text", text: "constraints" }],
+        },
+      ],
+    };
+    const baseFn = vi.fn((_model, nextContext) => createFakeStream({ resultMessage: nextContext }));
+
+    const wrappedFn = wrapStreamFnSanitizeToolCallIds(baseFn as never, "strict");
+    const stream = await wrappedFn({} as never, context as never, {} as never);
+    const result = await stream.result();
+    const forwarded = result as {
+      messages: Array<{ role: string; content?: unknown[]; toolCallId?: string }>;
+    };
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    expect(forwarded.messages[3]?.content).toEqual(context.messages[3]?.content);
+    expect(forwarded.messages[4]?.toolCallId).toBe(firstToolId);
+    expect(forwarded.messages[5]?.toolCallId).toBe(secondToolId);
   });
 });
 

@@ -89,7 +89,7 @@ import {
 } from "../../skills.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
-import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
+import { sanitizeToolCallIdsForCloudCodeAssist, type ToolCallIdMode } from "../../tool-call-id.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
@@ -790,6 +790,28 @@ export function wrapStreamFnDropThinkingBlocks(baseFn: StreamFn): StreamFn {
     }
     const typedMessages = messages as unknown as AgentMessage[];
     const sanitized = dropThinkingBlocks(typedMessages, {
+      preserveLatestAssistantMessage: latestAssistantMessageHasReplayProtectedBlocks(typedMessages),
+    }) as unknown;
+    if (sanitized === messages) {
+      return baseFn(model, context, options);
+    }
+    const nextContext = {
+      ...(context as unknown as Record<string, unknown>),
+      messages: sanitized,
+    } as unknown;
+    return baseFn(model, nextContext as typeof context, options);
+  };
+}
+
+export function wrapStreamFnSanitizeToolCallIds(baseFn: StreamFn, mode: ToolCallIdMode): StreamFn {
+  return (model, context, options) => {
+    const ctx = context as unknown as { messages?: unknown };
+    const messages = ctx?.messages;
+    if (!Array.isArray(messages)) {
+      return baseFn(model, context, options);
+    }
+    const typedMessages = messages as AgentMessage[];
+    const sanitized = sanitizeToolCallIdsForCloudCodeAssist(typedMessages, mode, {
       preserveLatestAssistantMessage: latestAssistantMessageHasReplayProtectedBlocks(typedMessages),
     }) as unknown;
     if (sanitized === messages) {
@@ -1981,32 +2003,10 @@ export async function runEmbeddedAttempt(
       // tool result cycles bypass that path. Wrap streamFn so every outbound request
       // sees sanitized tool call IDs.
       if (transcriptPolicy.sanitizeToolCallIds && transcriptPolicy.toolCallIdMode) {
-        const inner = activeSession.agent.streamFn;
-        const mode = transcriptPolicy.toolCallIdMode;
-        activeSession.agent.streamFn = (model, context, options) => {
-          const ctx = context as unknown as { messages?: unknown };
-          const messages = ctx?.messages;
-          if (!Array.isArray(messages)) {
-            return inner(model, context, options);
-          }
-          const sanitized = sanitizeToolCallIdsForCloudCodeAssist(
-            messages as AgentMessage[],
-            mode,
-            {
-              preserveLatestAssistantMessage: latestAssistantMessageHasReplayProtectedBlocks(
-                messages as AgentMessage[],
-              ),
-            },
-          );
-          if (sanitized === messages) {
-            return inner(model, context, options);
-          }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
-          } as unknown;
-          return inner(model, nextContext as typeof context, options);
-        };
+        activeSession.agent.streamFn = wrapStreamFnSanitizeToolCallIds(
+          activeSession.agent.streamFn,
+          transcriptPolicy.toolCallIdMode,
+        );
       }
 
       if (

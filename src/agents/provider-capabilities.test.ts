@@ -19,7 +19,7 @@ describe("resolveProviderCapabilities", () => {
       preserveAnthropicThinkingSignatures: true,
       openAiCompatTurnValidation: true,
       geminiThoughtSignatureSanitization: false,
-      transcriptToolCallIdMode: "default",
+      transcriptToolCallIdMode: undefined,
       transcriptToolCallIdModelHints: [],
       geminiThoughtSignatureModelHints: [],
       dropThinkingBlockModelHints: [],
@@ -37,12 +37,27 @@ describe("resolveProviderCapabilities", () => {
       preserveAnthropicThinkingSignatures: false,
       openAiCompatTurnValidation: true,
       geminiThoughtSignatureSanitization: false,
-      transcriptToolCallIdMode: "default",
+      transcriptToolCallIdMode: undefined,
       transcriptToolCallIdModelHints: [],
       geminiThoughtSignatureModelHints: [],
       dropThinkingBlockModelHints: [],
     });
   });
+
+  it.each([
+    ["anthropic", "claude-opus-4-5"],
+    ["amazon-bedrock", "us.anthropic.claude-opus-4-6-v1"],
+    ["kimi-coding", "k2p5"],
+    ["minimax", "MiniMax-M2.5"],
+    ["minimax-portal", "MiniMax-M2.5"],
+    ["xiaomi", "MiMo-VL-2B"],
+    ["synthetic", "sonnet-4"],
+  ])(
+    "does not opt native Anthropic route %s into transcript tool id rewriting",
+    (provider, modelId) => {
+      expect(resolveTranscriptToolCallIdMode(provider, modelId)).toBeUndefined();
+    },
+  );
 
   it("flags providers that opt out of OpenAI-compatible turn validation", () => {
     expect(supportsOpenAiCompatTurnValidation("openrouter")).toBe(false);

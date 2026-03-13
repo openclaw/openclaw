@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest";
 import { resolveTranscriptPolicy } from "./transcript-policy.js";
 
 describe("resolveTranscriptPolicy", () => {
-  it("enables sanitizeToolCallIds for Anthropic provider", () => {
+  it("preserves native tool call ids for Anthropic provider", () => {
     const policy = resolveTranscriptPolicy({
       provider: "anthropic",
       modelId: "claude-opus-4-5",
       modelApi: "anthropic-messages",
     });
-    expect(policy.sanitizeToolCallIds).toBe(true);
-    expect(policy.toolCallIdMode).toBe("strict");
+    expect(policy.sanitizeToolCallIds).toBe(false);
+    expect(policy.toolCallIdMode).toBeUndefined();
   });
 
   it("enables sanitizeToolCallIds for Google provider", () => {
@@ -74,8 +74,57 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.repairToolUseResultPairing).toBe(true);
     expect(policy.validateAnthropicTurns).toBe(true);
     expect(policy.allowSyntheticToolResults).toBe(true);
-    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.sanitizeToolCallIds).toBe(false);
+    expect(policy.toolCallIdMode).toBeUndefined();
     expect(policy.sanitizeMode).toBe("full");
+  });
+
+  it.each([
+    {
+      provider: "anthropic",
+      modelId: "claude-opus-4-5",
+      modelApi: "anthropic-messages" as const,
+    },
+    {
+      provider: "amazon-bedrock",
+      modelId: "us.anthropic.claude-opus-4-6-v1",
+      modelApi: "bedrock-converse-stream" as const,
+    },
+    {
+      provider: "kimi-coding",
+      modelId: "k2p5",
+      modelApi: "anthropic-messages" as const,
+    },
+    {
+      provider: "kimi-code",
+      modelId: "k2p5",
+      modelApi: "anthropic-messages" as const,
+    },
+    {
+      provider: "minimax",
+      modelId: "MiniMax-M2.5",
+      modelApi: "anthropic-messages" as const,
+    },
+    {
+      provider: "minimax-portal",
+      modelId: "MiniMax-M2.5",
+      modelApi: "anthropic-messages" as const,
+    },
+    {
+      provider: "xiaomi",
+      modelId: "MiMo-VL-2B",
+      modelApi: "anthropic-messages" as const,
+    },
+    {
+      provider: "synthetic",
+      modelId: "sonnet-4",
+      modelApi: "anthropic-messages" as const,
+    },
+  ])("does not force strict tool id sanitization for native Anthropic route $provider", (input) => {
+    const policy = resolveTranscriptPolicy(input);
+    expect(policy.sanitizeToolCallIds).toBe(false);
+    expect(policy.toolCallIdMode).toBeUndefined();
+    expect(policy.validateAnthropicTurns).toBe(true);
   });
 
   it.each([

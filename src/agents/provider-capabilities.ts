@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "./model-selection.js";
+import type { ToolCallIdMode } from "./tool-call-id.js";
 
 export type ProviderCapabilities = {
   anthropicToolSchemaMode: "native" | "openai-functions";
@@ -7,7 +8,7 @@ export type ProviderCapabilities = {
   preserveAnthropicThinkingSignatures: boolean;
   openAiCompatTurnValidation: boolean;
   geminiThoughtSignatureSanitization: boolean;
-  transcriptToolCallIdMode: "default" | "strict9";
+  transcriptToolCallIdMode: ToolCallIdMode | undefined;
   transcriptToolCallIdModelHints: string[];
   geminiThoughtSignatureModelHints: string[];
   dropThinkingBlockModelHints: string[];
@@ -20,7 +21,7 @@ const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
   preserveAnthropicThinkingSignatures: true,
   openAiCompatTurnValidation: true,
   geminiThoughtSignatureSanitization: false,
-  transcriptToolCallIdMode: "default",
+  transcriptToolCallIdMode: undefined,
   transcriptToolCallIdModelHints: [],
   geminiThoughtSignatureModelHints: [],
   dropThinkingBlockModelHints: [],
@@ -163,10 +164,10 @@ export function shouldSanitizeGeminiThoughtSignaturesForModel(params: {
 export function resolveTranscriptToolCallIdMode(
   provider?: string | null,
   modelId?: string | null,
-): "strict9" | undefined {
+): ToolCallIdMode | undefined {
   const capabilities = resolveProviderCapabilities(provider);
   const mode = capabilities.transcriptToolCallIdMode;
-  if (mode === "strict9") {
+  if (mode) {
     return mode;
   }
   if (modelIncludesAnyHint(modelId, capabilities.transcriptToolCallIdModelHints)) {
