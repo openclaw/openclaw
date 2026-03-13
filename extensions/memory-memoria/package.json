@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/memory-memoria",
+  "version": "2026.3.12",
+  "private": true,
+  "description": "OpenClaw Memoria-backed memory plugin (HTTP first; embedded advanced mode)",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
