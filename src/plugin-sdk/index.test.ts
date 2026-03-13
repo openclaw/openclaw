@@ -1,5 +1,57 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { build } from "tsdown";
 import { describe, expect, it } from "vitest";
 import * as sdk from "./index.js";
+
+const pluginSdkEntrypoints = [
+  "index",
+  "core",
+  "compat",
+  "telegram",
+  "discord",
+  "slack",
+  "signal",
+  "imessage",
+  "whatsapp",
+  "line",
+  "msteams",
+  "acpx",
+  "bluebubbles",
+  "copilot-proxy",
+  "device-pair",
+  "diagnostics-otel",
+  "diffs",
+  "feishu",
+  "google-gemini-cli-auth",
+  "googlechat",
+  "irc",
+  "llm-task",
+  "lobster",
+  "matrix",
+  "mattermost",
+  "memory-core",
+  "memory-lancedb",
+  "minimax-portal-auth",
+  "nextcloud-talk",
+  "nostr",
+  "open-prose",
+  "phone-control",
+  "qwen-portal-auth",
+  "synology-chat",
+  "talk-voice",
+  "test-utils",
+  "thread-ownership",
+  "tlon",
+  "twitch",
+  "voice-call",
+  "zalo",
+  "zalouser",
+  "account-id",
+  "keyed-async-queue",
+] as const;
 
 describe("plugin-sdk exports", () => {
   it("does not expose runtime modules", () => {
@@ -102,6 +154,33 @@ describe("plugin-sdk exports", () => {
 
     for (const key of requiredConstants) {
       expect(sdk).toHaveProperty(key);
+    }
+  });
+
+  it("emits importable bundled subpath entries", { timeout: 240_000 }, async () => {
+    const outDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-sdk-build-"));
+
+    try {
+      await build({
+        clean: true,
+        config: false,
+        dts: false,
+        entry: Object.fromEntries(
+          pluginSdkEntrypoints.map((entry) => [entry, `src/plugin-sdk/${entry}.ts`]),
+        ),
+        env: { NODE_ENV: "production" },
+        fixedExtension: false,
+        logLevel: "error",
+        outDir,
+        platform: "node",
+      });
+
+      for (const entry of pluginSdkEntrypoints) {
+        const module = await import(pathToFileURL(path.join(outDir, `${entry}.js`)).href);
+        expect(module).toBeTypeOf("object");
+      }
+    } finally {
+      await fs.rm(outDir, { recursive: true, force: true });
     }
   });
 });
