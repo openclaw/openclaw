@@ -147,14 +147,18 @@ describe("node exec events", () => {
         exitCode: 0,
         timedOut: false,
         output: "done",
+        sessionKey: "agent:test:main",
       }),
     });
 
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Exec finished (node=node-2 id=run-2, code 0)\ndone",
-      { sessionKey: "node-node-2", contextKey: "exec:run-2" },
+      { sessionKey: "agent:test:main", contextKey: "exec:run-2" },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:test:main",
+    });
   });
 
   it("suppresses noisy exec.finished success events with empty output", async () => {
@@ -182,6 +186,7 @@ describe("node exec events", () => {
         exitCode: 0,
         timedOut: false,
         output: "x".repeat(600),
+        sessionKey: "agent:test:main",
       }),
     });
 
@@ -190,7 +195,10 @@ describe("node exec events", () => {
     expect(text.startsWith("Exec finished (node=node-2 id=run-long, code 0)\n")).toBe(true);
     expect(text.endsWith("…")).toBe(true);
     expect(text.length).toBeLessThan(280);
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:test:main",
+    });
   });
 
   it("enqueues exec.denied events with reason", async () => {

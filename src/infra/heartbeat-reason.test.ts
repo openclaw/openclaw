@@ -18,6 +18,8 @@ describe("heartbeat-reason", () => {
     expect(resolveHeartbeatReasonKind("interval")).toBe("interval");
     expect(resolveHeartbeatReasonKind("manual")).toBe("manual");
     expect(resolveHeartbeatReasonKind("exec-event")).toBe("exec-event");
+    // maybeNotifyOnExit backgrounded exec path: exec:<sessionId>:exit
+    expect(resolveHeartbeatReasonKind("exec:abc12345abc12345:exit")).toBe("exec-event");
     expect(resolveHeartbeatReasonKind("wake")).toBe("wake");
     expect(resolveHeartbeatReasonKind("acp:spawn:stream")).toBe("wake");
     expect(resolveHeartbeatReasonKind("cron:job-1")).toBe("cron");
@@ -34,6 +36,7 @@ describe("heartbeat-reason", () => {
 
   it("matches event-driven behavior used by heartbeat preflight", () => {
     expect(isHeartbeatEventDrivenReason("exec-event")).toBe(true);
+    expect(isHeartbeatEventDrivenReason("exec:abc123:exit")).toBe(true);
     expect(isHeartbeatEventDrivenReason("cron:job-1")).toBe(true);
     expect(isHeartbeatEventDrivenReason("wake")).toBe(true);
     expect(isHeartbeatEventDrivenReason("acp:spawn:stream")).toBe(true);
@@ -46,6 +49,7 @@ describe("heartbeat-reason", () => {
   it("matches action-priority wake behavior", () => {
     expect(isHeartbeatActionWakeReason("manual")).toBe(true);
     expect(isHeartbeatActionWakeReason("exec-event")).toBe(true);
+    expect(isHeartbeatActionWakeReason("exec:abc123:exit")).toBe(true);
     expect(isHeartbeatActionWakeReason("hook:wake")).toBe(true);
     expect(isHeartbeatActionWakeReason("interval")).toBe(false);
     expect(isHeartbeatActionWakeReason("cron:job-1")).toBe(false);

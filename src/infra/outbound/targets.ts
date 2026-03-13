@@ -241,9 +241,11 @@ export function resolveHeartbeatDeliveryTarget(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;
   heartbeat?: AgentDefaultsConfig["heartbeat"];
+  forceLastTargetWhenNone?: boolean;
 }): OutboundTarget {
   const { cfg, entry } = params;
   const heartbeat = params.heartbeat ?? cfg.agents?.defaults?.heartbeat;
+  const forceLastTargetWhenNone = params.forceLastTargetWhenNone === true;
   const rawTarget = heartbeat?.target;
   let target: HeartbeatTarget = "none";
   if (rawTarget === "none" || rawTarget === "last") {
@@ -255,13 +257,19 @@ export function resolveHeartbeatDeliveryTarget(params: {
     }
   }
 
-  if (target === "none") {
+  if (target === "none" && !forceLastTargetWhenNone) {
     const base = resolveSessionDeliveryTarget({ entry });
     return buildNoHeartbeatDeliveryTarget({
       reason: "target-none",
       lastChannel: base.lastChannel,
       lastAccountId: base.lastAccountId,
     });
+  }
+
+  // For async exec completion events, always fall back to the session's last
+  // delivery target even when heartbeat target is explicitly set to "none".
+  if (target === "none" && forceLastTargetWhenNone) {
+    target = "last";
   }
 
   const resolvedTarget = resolveSessionDeliveryTarget({
