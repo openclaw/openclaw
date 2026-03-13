@@ -195,10 +195,9 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const pageModels = models.slice(startIndex, endIndex);
 
   // Model buttons - one per row
-  const currentModelId = currentModel?.includes("/")
-    ? currentModel.split("/").slice(1).join("/")
-    : currentModel;
-
+  // currentModel may be `provider/modelId` (fully-qualified, set by #35476) or
+  // a bare model id (legacy configs/sessions that never stored a provider prefix).
+  // Match both forms so the checkmark still appears for older sessions.
   for (const model of pageModels) {
     const callbackData = buildModelSelectionCallbackData({ provider, model });
     // Skip models that still exceed Telegram's callback_data limit.
@@ -206,7 +205,11 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
       continue;
     }
 
-    const isCurrentModel = model === currentModelId;
+    const fullKey = `${provider}/${model}`;
+    const isCurrentModel =
+      fullKey === currentModel ||
+      // Bare model id fallback: currentModel has no "/" — match by model name alone.
+      (!!currentModel && !currentModel.includes("/") && model === currentModel);
     const displayText = truncateModelId(model, 38);
     const text = isCurrentModel ? `${displayText} ✓` : displayText;
 
