@@ -219,6 +219,7 @@ describe("getReplyFromConfig before_agent_run hook", () => {
         sessionKey: "agent:main:telegram:-100123",
         sessionId: "session-1",
         workspaceDir: "/tmp/workspace",
+        messageProvider: "telegram",
         channelId: "telegram",
       }),
     );
@@ -246,6 +247,7 @@ describe("getReplyFromConfig before_agent_run hook", () => {
     expect(mocks.runBeforeAgentRun).toHaveBeenCalledWith(
       { prompt: "hello team" },
       expect.objectContaining({
+        messageProvider: "telegram",
         trigger: "heartbeat",
       }),
     );

@@ -63,6 +63,17 @@ function resolveBeforeAgentRunTrigger(opts?: GetReplyOptions): PluginHookAgentCo
   return "user";
 }
 
+function resolveBeforeAgentRunMessageProvider(
+  ctx: MsgContext,
+  sessionEntry: { origin?: { provider?: string } },
+): string | undefined {
+  return (
+    sessionEntry.origin?.provider ??
+    (typeof ctx.OriginatingChannel === "string" ? ctx.OriginatingChannel : undefined) ??
+    ctx.Provider
+  );
+}
+
 export async function getReplyFromConfig(
   ctx: MsgContext,
   opts?: GetReplyOptions,
@@ -374,6 +385,7 @@ export async function getReplyFromConfig(
         sessionKey,
         sessionId,
         workspaceDir,
+        messageProvider: resolveBeforeAgentRunMessageProvider(finalized, sessionEntry),
         trigger: resolveBeforeAgentRunTrigger(opts),
         channelId:
           groupResolution?.channel ??
