@@ -15,9 +15,83 @@ import {
 import type { OnboardOptions } from "../onboard-types.js";
 import { inferAuthChoiceFromFlags } from "./local/auth-choice-inference.js";
 import { applyNonInteractiveGatewayConfig } from "./local/gateway-config.js";
-import { logNonInteractiveOnboardingJson } from "./local/output.js";
+import {
+  logNonInteractiveOnboardingFailure,
+  logNonInteractiveOnboardingJson,
+} from "./local/output.js";
 import { applyNonInteractiveSkillsConfig } from "./local/skills-config.js";
 import { resolveNonInteractiveWorkspaceDir } from "./local/workspace.js";
+
+const INSTALL_DAEMON_HEALTH_DEADLINE_MS = 45_000;
+const ATTACH_EXISTING_GATEWAY_HEALTH_DEADLINE_MS = 15_000;
+
+async function collectGatewayHealthFailureDiagnostics(): Promise<
+  | {
+      service?: {
+        label: string;
+        loaded: boolean;
+        loadedText: string;
+        runtimeStatus?: string;
+        state?: string;
+        pid?: number;
+        lastExitStatus?: number;
+        lastExitReason?: string;
+      };
+      lastGatewayError?: string;
+      inspectError?: string;
+    }
+  | undefined
+> {
+  const diagnostics: {
+    service?: {
+      label: string;
+      loaded: boolean;
+      loadedText: string;
+      runtimeStatus?: string;
+      state?: string;
+      pid?: number;
+      lastExitStatus?: number;
+      lastExitReason?: string;
+    };
+    lastGatewayError?: string;
+    inspectError?: string;
+  } = {};
+
+  try {
+    const { resolveGatewayService } = await import("../../daemon/service.js");
+    const service = resolveGatewayService();
+    const env = process.env as Record<string, string | undefined>;
+    const [loaded, runtime] = await Promise.all([
+      service.isLoaded({ env }).catch(() => false),
+      service.readRuntime(env).catch(() => undefined),
+    ]);
+    diagnostics.service = {
+      label: service.label,
+      loaded,
+      loadedText: service.loadedText,
+      runtimeStatus: runtime?.status,
+      state: runtime?.state,
+      pid: runtime?.pid,
+      lastExitStatus: runtime?.lastExitStatus,
+      lastExitReason: runtime?.lastExitReason,
+    };
+  } catch (err) {
+    diagnostics.inspectError = `service diagnostics failed: ${String(err)}`;
+  }
+
+  try {
+    const { readLastGatewayErrorLine } = await import("../../daemon/diagnostics.js");
+    diagnostics.lastGatewayError = (await readLastGatewayErrorLine(process.env)) ?? undefined;
+  } catch (err) {
+    diagnostics.inspectError = diagnostics.inspectError
+      ? `${diagnostics.inspectError}; log diagnostics failed: ${String(err)}`
+      : `log diagnostics failed: ${String(err)}`;
+  }
+
+  return diagnostics.service || diagnostics.lastGatewayError || diagnostics.inspectError
+    ? diagnostics
+    : undefined;
+}
 
 export async function runNonInteractiveOnboardingLocal(params: {
   opts: OnboardOptions;
@@ -104,11 +178,44 @@ export async function runNonInteractiveOnboardingLocal(params: {
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: undefined,
     });
-    await waitForGatewayReachable({
+    const probe = await waitForGatewayReachable({
       url: links.wsUrl,
       token: gatewayResult.gatewayToken,
-      deadlineMs: 15_000,
+      deadlineMs: opts.installDaemon
+        ? INSTALL_DAEMON_HEALTH_DEADLINE_MS
+        : ATTACH_EXISTING_GATEWAY_HEALTH_DEADLINE_MS,
     });
+    if (!probe.ok) {
+      const diagnostics = opts.installDaemon
+        ? await collectGatewayHealthFailureDiagnostics()
+        : undefined;
+      logNonInteractiveOnboardingFailure({
+        opts,
+        runtime,
+        mode,
+        phase: "gateway-health",
+        message: `Gateway did not become reachable at ${links.wsUrl}.`,
+        detail: probe.detail,
+        gateway: {
+          wsUrl: links.wsUrl,
+          httpUrl: links.httpUrl,
+        },
+        installDaemon: Boolean(opts.installDaemon),
+        daemonRuntime: opts.installDaemon ? daemonRuntimeRaw : undefined,
+        diagnostics,
+        hints: !opts.installDaemon
+          ? [
+              "Non-interactive local onboarding only waits for an already-running gateway unless you pass --install-daemon.",
+              `Fix: start \`${formatCliCommand("openclaw gateway run")}\`, re-run with \`--install-daemon\`, or use \`--skip-health\`.`,
+              process.platform === "win32"
+                ? "Native Windows managed gateway install tries Scheduled Tasks first and falls back to a per-user Startup-folder login item when task creation is denied."
+                : undefined,
+            ].filter((value): value is string => Boolean(value))
+          : [`Run \`${formatCliCommand("openclaw gateway status --deep")}\` for more detail.`],
+      });
+      runtime.exit(1);
+      return;
+    }
     await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
   }
 
