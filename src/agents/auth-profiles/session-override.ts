@@ -5,7 +5,7 @@ import {
   isProfileInCooldown,
   resolveAuthProfileOrder,
 } from "../auth-profiles.js";
-import { normalizeProviderId } from "../model-selection.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 
 function isProfileForProvider(params: {
   provider: string;
@@ -85,14 +85,13 @@ export async function resolveSessionAuthProfileOverride(params: {
     return undefined;
   }
 
-  const providerKey = normalizeProviderId(provider);
-
   /**
    * Prefer the last successful profile to avoid repeatedly retrying
    * a known-bad first entry when order[0] has hit quota/rate limits.
+   * Accept normalized and legacy alias keys from lastGood.
    */
   const pickPreferredAvailableProfile = () => {
-    const lastGoodProfile = store.lastGood?.[providerKey];
+    const lastGoodProfile = findNormalizedProviderValue(store.lastGood, provider);
     if (
       lastGoodProfile &&
       order.includes(lastGoodProfile) &&
