@@ -644,7 +644,7 @@ describe("tts", () => {
 
     it("defaults to built-in model and voice when no minimax config given", () => {
       const config = resolveTtsConfig(baseCfg);
-      expect(config.minimax.model).toBe("speech-02-hd");
+      expect(config.minimax.model).toBe("speech-2.8-hd");
       expect(config.minimax.voice).toBe("male-qn-qingse");
       expect(config.minimax.apiKey).toBeUndefined();
     });

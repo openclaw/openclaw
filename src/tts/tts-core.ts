@@ -745,7 +745,7 @@ export async function edgeTTS(params: {
 }
 
 const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.chat/v1";
-export const DEFAULT_MINIMAX_MODEL = "speech-02-hd";
+export const DEFAULT_MINIMAX_MODEL = "speech-2.8-hd";
 export const DEFAULT_MINIMAX_VOICE = "male-qn-qingse";
 export const MINIMAX_OUTPUT_FORMATS = ["mp3", "pcm", "flac", "wav"] as const;
 export const MINIMAX_EMOTIONS = [
