@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  evaluateChromeMcpScript,
   listChromeMcpTabs,
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
@@ -44,6 +45,16 @@ function createFakeSession(): ChromeMcpSession {
               "2: https://github.com/openclaw/openclaw/pull/45318",
               "3: https://example.com/ [selected]",
             ].join("\n"),
+          },
+        ],
+      };
+    }
+    if (name === "evaluate_script") {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "```json\n123\n```",
           },
         ],
       };
@@ -104,5 +115,18 @@ describe("chrome MCP page parsing", () => {
       url: "https://example.com/",
       type: "page",
     });
+  });
+
+  it("parses evaluate_script text responses when structuredContent is missing", async () => {
+    const factory: ChromeMcpSessionFactory = async () => createFakeSession();
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const result = await evaluateChromeMcpScript({
+      profileName: "chrome-live",
+      targetId: "1",
+      fn: "() => 123",
+    });
+
+    expect(result).toBe(123);
   });
 });
