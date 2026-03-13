@@ -189,7 +189,6 @@ describe.skipIf(process.platform === "win32")("collectSkillShellScriptExecutable
     }
   });
 });
-
 describe("collectForbiddenPackPaths", () => {
   it("flags nested node_modules leaking into npm pack output", () => {
     expect(
