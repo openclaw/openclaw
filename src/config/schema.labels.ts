@@ -370,6 +370,8 @@ export const FIELD_LABELS: Record<string, string> = {
     "Memory Search Temporal Decay Half-life (Days)",
   "agents.defaults.memorySearch.cache.enabled": "Memory Search Embedding Cache",
   "agents.defaults.memorySearch.cache.maxEntries": "Memory Search Embedding Cache Max Entries",
+  usage: "Usage",
+  "usage.cacheTtlMs": "Provider Usage Cache TTL (ms)",
   memory: "Memory",
   "memory.backend": "Memory Backend",
   "memory.citations": "Memory Citations Mode",

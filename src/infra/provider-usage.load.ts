@@ -1,3 +1,4 @@
+import { loadConfig } from "../config/config.js";
 import { resolveFetch } from "./fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
@@ -21,6 +22,33 @@ import type {
   UsageSummary,
 } from "./provider-usage.types.js";
 
+const DEFAULT_CACHE_TTL_MS = 300_000; // 5 min
+
+type CacheEntry = { value: UsageSummary; expiresAt: number };
+const usageCache = new Map<string, CacheEntry>();
+
+function cacheKey(opts: UsageSummaryOptions): string {
+  return opts.agentDir ?? "";
+}
+
+function getCached(key: string, now: number, ttlMs: number): UsageSummary | undefined {
+  if (ttlMs <= 0) {
+    return undefined;
+  }
+  const entry = usageCache.get(key);
+  if (!entry || now >= entry.expiresAt) {
+    return undefined;
+  }
+  return entry.value;
+}
+
+function setCached(key: string, value: UsageSummary, ttlMs: number): void {
+  if (ttlMs <= 0) {
+    return;
+  }
+  usageCache.set(key, { value, expiresAt: Date.now() + ttlMs });
+}
+
 type UsageSummaryOptions = {
   now?: number;
   timeoutMs?: number;
@@ -28,6 +56,8 @@ type UsageSummaryOptions = {
   auth?: ProviderAuth[];
   agentDir?: string;
   fetch?: typeof fetch;
+  /** Override config cache TTL (0 = disable). When undefined, uses usage.cacheTtlMs from config. */
+  cacheTtlMs?: number;
 };
 
 export async function loadProviderUsageSummary(
@@ -38,6 +68,21 @@ export async function loadProviderUsageSummary(
   const fetchFn = resolveFetch(opts.fetch);
   if (!fetchFn) {
     throw new Error("fetch is not available");
+  }
+
+  const cfg = loadConfig();
+  const ttlMs =
+    opts.cacheTtlMs !== undefined
+      ? opts.cacheTtlMs
+      : (cfg.usage?.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS);
+
+  // Skip cache when explicit auth is passed (tests/mock scenarios).
+  const key = opts.auth ? null : cacheKey(opts);
+  if (key !== null) {
+    const cached = getCached(key, now, ttlMs);
+    if (cached !== undefined) {
+      return cached;
+    }
   }
 
   const auths = await resolveProviderAuths({
@@ -101,5 +146,9 @@ export async function loadProviderUsageSummary(
     return !ignoredErrors.has(entry.error);
   });
 
-  return { updatedAt: now, providers };
+  const result = { updatedAt: now, providers };
+  if (key !== null) {
+    setCached(key, result, ttlMs);
+  }
+  return result;
 }

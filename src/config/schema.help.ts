@@ -860,6 +860,8 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.cache.enabled":
     "Caches computed chunk embeddings in SQLite so reindexing and incremental updates run faster (default: true). Keep this enabled unless investigating cache correctness or minimizing disk usage.",
   memory: "Memory backend configuration (global).",
+  "usage.cacheTtlMs":
+    "Cache TTL in ms for provider usage summaries (e.g. Anthropic OAuth usage). Reduces API calls when status/heartbeats run frequently. Default: 300000 (5 min). Set to 0 to disable caching.",
   "memory.backend":
     'Selects the global memory engine: "builtin" uses OpenClaw memory internals, while "qmd" uses the QMD sidecar pipeline. Keep "builtin" unless you intentionally operate QMD.',
   "memory.citations":
