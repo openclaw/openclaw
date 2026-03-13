@@ -7,6 +7,14 @@ import type { ChatImageContent } from "../chat-attachments.js";
 
 const MEDIA_FILE_MODE = 0o644;
 
+/**
+ * Sanitize runId to prevent path traversal attacks.
+ * Only allows alphanumeric characters, hyphens, and underscores.
+ */
+function sanitizeRunId(runId: string): string {
+  return runId.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
 type StageWebchatMediaLog = {
   warn: (message: string) => void;
 };
@@ -25,10 +33,11 @@ export async function stageWebchatImageAttachments(params: {
   await fs.mkdir(inboundDir, { recursive: true, mode: 0o700 });
 
   const staged: Array<{ contentType?: string; path: string }> = [];
+  const safeRunId = sanitizeRunId(params.runId);
   for (const [index, image] of params.images.entries()) {
     try {
       const ext = extensionForMime(image.mimeType) ?? ".bin";
-      const filePath = path.join(inboundDir, `webchat-${params.runId}-${index + 1}${ext}`);
+      const filePath = path.join(inboundDir, `webchat-${safeRunId}-${index + 1}${ext}`);
       const bytes = Buffer.from(image.data, "base64");
       await fs.writeFile(filePath, bytes, { mode: MEDIA_FILE_MODE });
       staged.push({ path: filePath, contentType: image.mimeType });

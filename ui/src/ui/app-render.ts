@@ -1322,6 +1322,7 @@ export function renderApp(state: AppViewState) {
                   state.sessionKey = next;
                   state.chatMessage = "";
                   state.chatAttachments = [];
+                  state.chatBufferedAttachments = [];
                   state.chatStream = null;
                   state.chatStreamStartedAt = null;
                   state.chatRunId = null;

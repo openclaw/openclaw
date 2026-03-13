@@ -310,7 +310,9 @@ function readFilesIntoAttachments(files: File[], props: ChatProps) {
   if (files.length === 0 || !props.onAttachmentsChange) {
     return;
   }
-  const base = [
+  // Capture current attachments at each load event, not just once at the start,
+  // to avoid reintroducing files the user removed while async reads were in-flight.
+  const getCurrentBase = () => [
     ...((props.attachments?.length ? props.attachments : props.bufferedAttachments) ?? []),
   ];
   const additions: ChatAttachment[] = [];
@@ -327,7 +329,8 @@ function readFilesIntoAttachments(files: File[], props: ChatProps) {
         dataUrl: reader.result as string,
         mimeType: file.type,
       });
-      syncBufferedAttachments(props, [...base, ...additions]);
+      // Use getCurrentBase() to get fresh state at load time, not stale base
+      syncBufferedAttachments(props, [...getCurrentBase(), ...additions]);
       settle();
     });
     reader.addEventListener("error", settle);
