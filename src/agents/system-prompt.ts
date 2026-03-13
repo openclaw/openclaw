@@ -628,10 +628,24 @@ export function buildAgentSystemPrompt(params: {
   const validContextFiles = contextFiles.filter(
     (file) => typeof file.path === "string" && file.path.trim().length > 0,
   );
-  if (validContextFiles.length > 0 || bootstrapTruncationWarningLines.length > 0) {
+
+  // Separate memory files (MEMORY.md / memory.md) from standard workspace files.
+  // Memory files change daily (updated notes) while standard files change rarely.
+  // By injecting memory files AFTER the per-conversation dynamic tail, we ensure the
+  // stable prefix includes all standard workspace files + AGENTS.md + the full dynamic
+  // tail — so that a daily notes update only invalidates the very end of the prompt.
+  const isMemoryFile = (file: { path: string }) => {
+    const p = file.path.trim().replace(/\\/g, "/");
+    const base = (p.split("/").pop() ?? p).toLowerCase();
+    return base === "memory.md";
+  };
+  const standardContextFiles = validContextFiles.filter((f) => !isMemoryFile(f));
+  const memoryContextFiles = validContextFiles.filter(isMemoryFile);
+
+  if (standardContextFiles.length > 0 || bootstrapTruncationWarningLines.length > 0) {
     lines.push("# Project Context", "");
-    if (validContextFiles.length > 0) {
-      const hasSoulFile = validContextFiles.some((file) => {
+    if (standardContextFiles.length > 0) {
+      const hasSoulFile = standardContextFiles.some((file) => {
         const normalizedPath = file.path.trim().replace(/\\/g, "/");
         const baseName = normalizedPath.split("/").pop() ?? normalizedPath;
         return baseName.toLowerCase() === "soul.md";
@@ -662,7 +676,7 @@ export function buildAgentSystemPrompt(params: {
       }
       lines.push("");
     }
-    for (const file of validContextFiles) {
+    for (const file of standardContextFiles) {
       lines.push(`## ${file.path}`, "", file.content, "");
     }
   }
@@ -742,6 +756,14 @@ export function buildAgentSystemPrompt(params: {
   }
   if (reasoningHint) {
     lines.push("## Reasoning Format", reasoningHint, "");
+  }
+
+  // Memory files (MEMORY.md / memory.md) are injected LAST — after all per-conversation
+  // dynamic context (group chat, reactions, reasoning). This maximises the stable prefix
+  // for the most common change pattern: daily notes update while session config stays constant.
+  // When only MEMORY.md changes between sessions, everything above this point is KV-cached.
+  for (const file of memoryContextFiles) {
+    lines.push(`## ${file.path}`, "", file.content, "");
   }
 
   return lines.filter(Boolean).join("\n");
