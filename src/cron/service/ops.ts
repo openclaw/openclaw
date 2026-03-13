@@ -403,7 +403,10 @@ async function inspectManualRunDisposition(
   mode?: "due" | "force",
 ): Promise<ManualRunDisposition | { ok: false }> {
   const result = await inspectManualRunPreflight(state, id, mode);
-  if (!result.ok || !result.runnable) {
+  if (!result.ok) {
+    return result;
+  }
+  if ("reason" in result) {
     return result;
   }
   return { ok: true, runnable: true } as const;
@@ -415,8 +418,15 @@ async function prepareManualRun(
   mode?: "due" | "force",
 ): Promise<PreparedManualRun> {
   const preflight = await inspectManualRunPreflight(state, id, mode);
-  if (!preflight.ok || !preflight.runnable) {
+  if (!preflight.ok) {
     return preflight;
+  }
+  if ("reason" in preflight) {
+    return {
+      ok: true,
+      ran: false,
+      reason: preflight.reason,
+    } as const;
   }
   return await locked(state, async () => {
     // Reserve this run under lock, then execute outside lock so read ops
