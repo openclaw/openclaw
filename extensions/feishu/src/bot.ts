@@ -1324,13 +1324,16 @@ export async function handleFeishuMessage(params: {
           // Skip thread history injection when the current user has already
           // participated in this thread — the session will already contain the
           // prior turns, so re-injecting would be redundant token waste.
-          // The root message is excluded from this check because posting the
-          // thread-starting message does not count as a prior session turn.
+          // The root/starter message is excluded from this check because posting
+          // it does not count as a prior session turn.  When ctx.rootId is
+          // unavailable (thread_id-only events), fall back to the first message
+          // in the chronologically-sorted list, which is the thread starter.
+          const starterMessageId = ctx.rootId ?? relevantMessages[0]?.messageId;
           const hasPriorUserMessage = relevantMessages.some(
             (msg) =>
               msg.senderId === ctx.senderOpenId &&
               msg.senderType !== "app" &&
-              msg.messageId !== ctx.rootId,
+              msg.messageId !== starterMessageId,
           );
           if (hasPriorUserMessage) {
             log(
