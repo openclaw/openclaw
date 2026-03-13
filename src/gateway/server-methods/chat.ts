@@ -647,6 +647,7 @@ function appendAssistantTranscriptMessage(params: {
   message: string;
   label?: string;
   sessionId: string;
+  sessionKey?: string;
   storePath: string | undefined;
   sessionFile?: string;
   agentId?: string;
@@ -691,6 +692,8 @@ function appendAssistantTranscriptMessage(params: {
     label: params.label,
     idempotencyKey: params.idempotencyKey,
     abortMeta: params.abortMeta,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
   });
 }
 
@@ -727,12 +730,15 @@ function persistAbortedPartials(params: {
   if (params.snapshots.length === 0) {
     return;
   }
-  const { storePath, entry } = loadSessionEntry(params.sessionKey);
+  const { storePath, entry, cfg } = loadSessionEntry(params.sessionKey);
+  const agentId = resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg });
   for (const snapshot of params.snapshots) {
     const sessionId = entry?.sessionId ?? snapshot.sessionId ?? snapshot.runId;
     const appended = appendAssistantTranscriptMessage({
       message: snapshot.text,
       sessionId,
+      sessionKey: params.sessionKey,
+      agentId,
       storePath,
       sessionFile: entry?.sessionFile,
       createIfMissing: true,
@@ -1348,6 +1354,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               const appended = appendAssistantTranscriptMessage({
                 message: combinedReply,
                 sessionId,
+                sessionKey,
                 storePath: latestStorePath,
                 sessionFile: latestEntry?.sessionFile,
                 agentId,
@@ -1468,6 +1475,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       message: p.message,
       label: p.label,
       sessionId,
+      sessionKey: rawSessionKey,
       storePath,
       sessionFile: entry?.sessionFile,
       agentId: resolveSessionAgentId({ sessionKey: rawSessionKey, config: cfg }),

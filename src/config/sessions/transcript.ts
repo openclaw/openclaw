@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { parseSessionThreadInfo } from "./delivery-info.js";
 import {
@@ -180,7 +183,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
 
   const sessionManager = SessionManager.open(sessionFile);
-  sessionManager.appendMessage({
+  const message: Parameters<typeof sessionManager.appendMessage>[0] = {
     role: "assistant",
     content: [{ type: "text", text: mirrorText }],
     api: "openai-responses",
@@ -202,7 +205,25 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     },
     stopReason: "stop",
     timestamp: Date.now(),
-  });
+  };
+  sessionManager.appendMessage(message);
+
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("after_message_write")) {
+    fireAndForgetHook(
+      hookRunner.runAfterMessageWrite(
+        {
+          message: message as AgentMessage,
+          sessionFile,
+        },
+        {
+          sessionKey,
+          agentId: params.agentId,
+        },
+      ),
+      "appendAssistantMessageToSessionTranscript: after_message_write hook failed",
+    );
+  }
 
   emitSessionTranscriptUpdate(sessionFile);
   return { ok: true, sessionFile };
