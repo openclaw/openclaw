@@ -2,15 +2,12 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuBoardSchema, type FeishuBoardParams } from "./board-schema.js";
-import { createFeishuClient } from "./client.js";
-import { resolveToolsConfig } from "./tools-config.js";
-
-function json(data: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-    details: data,
-  };
-}
+import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
+import {
+  jsonToolResult,
+  toolExecutionErrorResult,
+  unknownToolActionResult,
+} from "./tool-result.js";
 
 async function createWhiteboard(client: Lark.Client, params: FeishuBoardParams) {
   // The Lark SDK doesn't expose whiteboard.create; use raw HTTP request.
@@ -172,9 +169,19 @@ async function downloadImage(client: Lark.Client, params: FeishuBoardParams) {
     throw new Error(res.msg);
   }
 
+  // The downloadAsImage endpoint returns binary image data in res.data.
+  // Convert to base64 if we got a Buffer, otherwise return as-is.
+  let imageData: string | undefined;
+  if (Buffer.isBuffer(res.data)) {
+    imageData = res.data.toString("base64");
+  } else if (res.data?.image) {
+    imageData = res.data.image;
+  }
+
   return {
     whiteboard_id: params.whiteboard_id,
-    downloaded: true,
+    image_base64: imageData,
+    downloaded: !!imageData,
   };
 }
 
@@ -190,50 +197,54 @@ export function registerFeishuBoardTools(api: OpenClawPluginApi) {
     return;
   }
 
-  const firstAccount = accounts[0];
-  const toolsCfg = resolveToolsConfig(firstAccount.config.tools);
+  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
   if (!toolsCfg.board) {
     api.logger.debug?.("feishu_board: board tool disabled in config");
     return;
   }
 
-  const getClient = () => createFeishuClient(firstAccount);
+  type FeishuBoardExecuteParams = FeishuBoardParams & { accountId?: string };
 
   api.registerTool(
-    {
-      name: "feishu_board",
-      label: "Feishu Board",
-      description:
-        "Feishu whiteboard/board operations. Actions: create_whiteboard (create a new whiteboard), create_node (create nodes in a whiteboard), create_plantuml (create PlantUML diagrams including mind maps, flowcharts, sequence diagrams), list_nodes (list all nodes), get_theme, update_theme, download_image",
-      parameters: FeishuBoardSchema,
-      async execute(_toolCallId, params) {
-        const p = params as FeishuBoardParams;
-        try {
-          const client = getClient();
-          switch (p.action) {
-            case "create_whiteboard":
-              return json(await createWhiteboard(client, p));
-            case "create_node":
-              return json(await createNode(client, p));
-            case "create_plantuml":
-              return json(await createPlantuml(client, p));
-            case "list_nodes":
-              return json(await listNodes(client, p));
-            case "get_theme":
-              return json(await getTheme(client, p));
-            case "update_theme":
-              return json(await updateTheme(client, p));
-            case "download_image":
-              return json(await downloadImage(client, p));
-            default:
-              return json({ error: `Unknown action: ${String(p.action)}` });
+    (ctx) => {
+      const defaultAccountId = ctx.agentAccountId;
+      return {
+        name: "feishu_board",
+        label: "Feishu Board",
+        description:
+          "Feishu whiteboard/board operations. Actions: create_whiteboard (create a new whiteboard), create_node (create nodes in a whiteboard), create_plantuml (create PlantUML diagrams including mind maps, flowcharts, sequence diagrams), list_nodes (list all nodes), get_theme, update_theme, download_image",
+        parameters: FeishuBoardSchema,
+        async execute(_toolCallId, params) {
+          const p = params as FeishuBoardExecuteParams;
+          try {
+            const client = createFeishuToolClient({
+              api,
+              executeParams: p,
+              defaultAccountId,
+            });
+            switch (p.action) {
+              case "create_whiteboard":
+                return jsonToolResult(await createWhiteboard(client, p));
+              case "create_node":
+                return jsonToolResult(await createNode(client, p));
+              case "create_plantuml":
+                return jsonToolResult(await createPlantuml(client, p));
+              case "list_nodes":
+                return jsonToolResult(await listNodes(client, p));
+              case "get_theme":
+                return jsonToolResult(await getTheme(client, p));
+              case "update_theme":
+                return jsonToolResult(await updateTheme(client, p));
+              case "download_image":
+                return jsonToolResult(await downloadImage(client, p));
+              default:
+                return unknownToolActionResult((p as { action?: unknown }).action);
+            }
+          } catch (err) {
+            return toolExecutionErrorResult(err);
           }
-        } catch (err) {
-          return json({
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      },
+        },
+      };
     },
     { name: "feishu_board" },
   );
