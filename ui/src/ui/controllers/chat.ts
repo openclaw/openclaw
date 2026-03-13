@@ -74,6 +74,7 @@ export async function loadChatHistory(state: ChatState) {
   state.lastError = null;
   try {
     const targetSession = state.sessionKey;
+    const _originalMessageCount = state.chatMessages.length;
     const requestPromise = state.client.request<{
       messages?: Array<unknown>;
       thinkingLevel?: string;
