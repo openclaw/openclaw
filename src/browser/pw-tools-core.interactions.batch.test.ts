@@ -82,4 +82,23 @@ describe("batchViaPlaywright", () => {
       targetId: "tab-1",
     });
   });
+
+  it("propagates nested batch failures to the parent batch result", async () => {
+    const result = await batchViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      actions: [
+        {
+          kind: "batch",
+          actions: [{ kind: "evaluate", fn: "() => 1" }],
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      results: [
+        { ok: false, error: "act:evaluate is disabled by config (browser.evaluateEnabled=false)" },
+      ],
+    });
+  });
 });

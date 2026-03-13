@@ -287,6 +287,22 @@ describe("browser control server", () => {
     slowTimeoutMs,
   );
 
+  it(
+    "rejects oversized top-level batches before dispatch",
+    async () => {
+      const base = await startServerAndBase();
+
+      const batchRes = await postJson<{ error?: string }>(`${base}/act`, {
+        kind: "batch",
+        actions: Array.from({ length: 101 }, () => ({ kind: "press", key: "Enter" })),
+      });
+
+      expect(batchRes.error).toContain("batch exceeds maximum of 100 actions");
+      expect(pwMocks.batchViaPlaywright).not.toHaveBeenCalled();
+    },
+    slowTimeoutMs,
+  );
+
   it("agent contract: hooks + response + downloads + screenshot", async () => {
     const base = await startServerAndBase();
 
