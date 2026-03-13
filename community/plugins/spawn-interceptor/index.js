@@ -1,5 +1,5 @@
 /**
- * spawn-interceptor v2.5 — OpenClaw plugin for automatic ACP task tracking.
+ * spawn-interceptor v2.5.1 — OpenClaw plugin for automatic ACP task tracking.
  *
  * Completion detection (layered, in priority order):
  *   1. subagent_ended hook — works for runtime=subagent only
@@ -17,6 +17,9 @@
  *   - Fallback "no open sessions" status changed from completed to assumed_complete
  *   - Added unregister() for proper timer cleanup on plugin hot-reload
  *   - Version synced between package.json and index.js
+ *
+ * v2.5.1 fixes:
+ *   - consumedAcpSessionIds persisted across poll iterations (previously recreated each tick)
  */
 
 import fs from "fs";
@@ -38,6 +41,7 @@ let pendingTasks = new Map();
 let reaperTimer = null;
 let acpPollerTimer = null;
 let pluginLogger = null;
+let consumedAcpSessionIds = new Set();
 
 function loadPending() {
   try {
@@ -141,15 +145,13 @@ function pollAcpSessions() {
     }
   }
 
-  // Track consumed sessions so one closed session cannot match multiple tasks
-  const consumedSessionIds = new Set();
 
   for (const [taskId, task] of acpPending) {
     const spawnTs = new Date(task.spawnedAt).getTime();
 
     let matched = false;
     for (const session of closedSessions) {
-      if (consumedSessionIds.has(session.acpxRecordId)) continue;
+      if (consumedAcpSessionIds.has(session.acpxRecordId)) continue;
 
       let sessionDetail = null;
       try {
@@ -172,7 +174,7 @@ function pollAcpSessions() {
         const sessionName = sessionDetail?.name || session.name || "?";
 
         pendingTasks.delete(taskId);
-        consumedSessionIds.add(session.acpxRecordId);
+        consumedAcpSessionIds.add(session.acpxRecordId);
         appendLog({
           taskId,
           agentId: task.agentId,
@@ -242,12 +244,12 @@ const spawnInterceptorPlugin = {
   id: "spawn-interceptor",
   name: "Spawn Interceptor",
   description: "Auto-tracks sessions_spawn and detects ACP completion via session polling",
-  version: "2.5.0",
+  version: "2.5.1",
 
   register(api) {
     pluginLogger = api.logger;
     api.logger.info(
-      "spawn-interceptor v2.5: registering (subagent_ended + ACP session poller + stale reaper)",
+      "spawn-interceptor v2.5.1: registering (subagent_ended + ACP session poller + stale reaper)",
     );
 
     loadPending();
@@ -374,7 +376,7 @@ const spawnInterceptorPlugin = {
       }
     });
 
-    api.logger.info("spawn-interceptor v2.5: all hooks registered, ACP poller interval=15s");
+    api.logger.info("spawn-interceptor v2.5.1: all hooks registered, ACP poller interval=15s");
   },
 
   unregister() {
@@ -386,6 +388,7 @@ const spawnInterceptorPlugin = {
       clearInterval(acpPollerTimer);
       acpPollerTimer = null;
     }
+    consumedAcpSessionIds.clear();
     pluginLogger = null;
   },
 };

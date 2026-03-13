@@ -1,6 +1,6 @@
 {
   "name": "spawn-interceptor",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "type": "module",
   "description": "Auto-tracks sessions_spawn and detects ACP completion via session polling",
   "main": "index.js",
