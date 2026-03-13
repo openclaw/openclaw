@@ -362,7 +362,7 @@ export async function finalizeOnboardingWizard(
         `Generate token: ${formatCliCommand("openclaw doctor --generate-gateway-token")}`,
         "Web UI keeps dashboard URL tokens in memory for the current tab and strips them from the URL after load.",
         `Open the dashboard anytime: ${formatCliCommand("openclaw dashboard --no-open")}`,
-        "If prompted: paste the token in Navigation > Overview > Gateway Access (or use the tokenized dashboard URL).",
+        "If prompted: paste the token into Navigation > Overview > Gateway Access (or use the tokenized dashboard URL).",
       ].join("\n"),
       "Token",
     );

@@ -78,8 +78,8 @@ Optional env vars:
 
 After it finishes:
 
-- Open `http://127.0.0.1:18789/` in your browser.
-- Paste the token in Navigation > Overview > Gateway Access.
+- Open `http://127.0.0.1:18789/overview` in your browser.
+- Paste the token in the token field located in the Gateway Access section.
 - Need the URL again? Run `docker compose run --rm openclaw-cli dashboard --no-open`.
 
 ### Enable agent sandbox for Docker gateway (opt-in)
