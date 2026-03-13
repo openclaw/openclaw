@@ -163,6 +163,30 @@ describe("models list/status", () => {
     baseUrl: "https://api.openai.com/v1",
     contextWindow: 128000,
   };
+  const OPENAI_SPARK_MODEL = {
+    provider: "openai",
+    id: "gpt-5.3-codex-spark",
+    name: "GPT-5.3 Codex Spark",
+    input: ["text", "image"],
+    baseUrl: "https://api.openai.com/v1",
+    contextWindow: 128000,
+  };
+  const OPENAI_CODEX_SPARK_MODEL = {
+    provider: "openai-codex",
+    id: "gpt-5.3-codex-spark",
+    name: "GPT-5.3 Codex Spark",
+    input: ["text"],
+    baseUrl: "https://chatgpt.com/backend-api",
+    contextWindow: 128000,
+  };
+  const AZURE_OPENAI_SPARK_MODEL = {
+    provider: "azure-openai-responses",
+    id: "gpt-5.3-codex-spark",
+    name: "GPT-5.3 Codex Spark",
+    input: ["text", "image"],
+    baseUrl: "https://example.openai.azure.com/openai/v1",
+    contextWindow: 128000,
+  };
   const GOOGLE_ANTIGRAVITY_TEMPLATE_BASE = {
     provider: "google-antigravity",
     api: "google-gemini-cli",
@@ -361,6 +385,34 @@ describe("models list/status", () => {
     await loadModelRegistry(resolvedConfig as never);
 
     expect(ensureOpenClawModelsJson).not.toHaveBeenCalled();
+  });
+
+  it("filters stale direct OpenAI spark rows from models list and registry views", async () => {
+    setDefaultModel("openai-codex/gpt-5.3-codex-spark");
+    modelRegistryState.models = [
+      OPENAI_SPARK_MODEL,
+      AZURE_OPENAI_SPARK_MODEL,
+      OPENAI_CODEX_SPARK_MODEL,
+    ];
+    modelRegistryState.available = [
+      OPENAI_SPARK_MODEL,
+      AZURE_OPENAI_SPARK_MODEL,
+      OPENAI_CODEX_SPARK_MODEL,
+    ];
+    const runtime = makeRuntime();
+
+    await modelsListCommand({ all: true, json: true }, runtime);
+
+    const payload = parseJsonLog(runtime);
+    expect(payload.models.map((model: { key: string }) => model.key)).toEqual([
+      "openai-codex/gpt-5.3-codex-spark",
+    ]);
+
+    const loaded = await loadModelRegistry({} as never);
+    expect(loaded.models.map((model) => `${model.provider}/${model.id}`)).toEqual([
+      "openai-codex/gpt-5.3-codex-spark",
+    ]);
+    expect(Array.from(loaded.availableKeys ?? [])).toEqual(["openai-codex/gpt-5.3-codex-spark"]);
   });
 
   it("modelsListCommand persists using the write snapshot config when provided", async () => {
