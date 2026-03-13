@@ -255,6 +255,38 @@ describe("browser control server", () => {
     slowTimeoutMs,
   );
 
+  it(
+    "rejects batched action targetId overrides before dispatch",
+    async () => {
+      const base = await startServerAndBase();
+
+      const batchRes = await postJson<{ error?: string }>(`${base}/act`, {
+        kind: "batch",
+        actions: [{ kind: "click", ref: "5", targetId: "other-tab" }],
+      });
+
+      expect(batchRes.error).toContain("batched action targetId must match request targetId");
+      expect(pwMocks.batchViaPlaywright).not.toHaveBeenCalled();
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "rejects oversized batch delays before dispatch",
+    async () => {
+      const base = await startServerAndBase();
+
+      const batchRes = await postJson<{ error?: string }>(`${base}/act`, {
+        kind: "batch",
+        actions: [{ kind: "click", selector: "button.save", delayMs: 5001 }],
+      });
+
+      expect(batchRes.error).toContain("click delayMs exceeds maximum of 5000ms");
+      expect(pwMocks.batchViaPlaywright).not.toHaveBeenCalled();
+    },
+    slowTimeoutMs,
+  );
+
   it("agent contract: hooks + response + downloads + screenshot", async () => {
     const base = await startServerAndBase();
 
