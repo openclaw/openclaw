@@ -41,8 +41,14 @@ describe("fetchWithSsrFGuard hardening", () => {
   async function runProxyModeDispatcherTest(params: {
     mode: (typeof GUARDED_FETCH_MODE)[keyof typeof GUARDED_FETCH_MODE];
     expectEnvProxy: boolean;
+    url?: string;
+    env?: Record<string, string>;
   }): Promise<void> {
-    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    for (const [key, value] of Object.entries(
+      params.env ?? { HTTP_PROXY: "http://127.0.0.1:7890" },
+    )) {
+      vi.stubEnv(key, value);
+    }
     const lookupFn = createPublicLookup();
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
@@ -56,7 +62,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     });
 
     const result = await fetchWithSsrFGuard({
-      url: "https://public.example/resource",
+      url: params.url ?? "https://public.example/resource",
       fetchImpl,
       lookupFn,
       mode: params.mode,
@@ -222,6 +228,15 @@ describe("fetchWithSsrFGuard hardening", () => {
     await runProxyModeDispatcherTest({
       mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
       expectEnvProxy: true,
+    });
+  });
+
+  it("keeps pinned DNS dispatcher for HTTP targets when only HTTPS proxy env vars are set", async () => {
+    await runProxyModeDispatcherTest({
+      mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+      expectEnvProxy: false,
+      url: "http://public.example/resource",
+      env: { HTTPS_PROXY: "http://127.0.0.1:7890" },
     });
   });
 });
