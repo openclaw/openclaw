@@ -14,7 +14,7 @@ function extractTextContent(content: unknown): string {
     return content;
   }
   if (Array.isArray(content)) {
-    return content.map((c: { text?: string }) => c.text ?? "").join("");
+    return content.map((c: { text?: string }) => c.text ?? "").join(" ");
   }
   return "";
 }
