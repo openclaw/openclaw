@@ -577,12 +577,12 @@ export async function runEmbeddedPiAgent(
           profileIds: profileCandidates,
         });
         throw new FailoverError(message, {
-            reason,
-            provider,
-            model: modelId,
-            status: resolveFailoverStatus(reason),
-            cause: params.error,
-          });
+          reason,
+          provider,
+          model: modelId,
+          status: resolveFailoverStatus(reason),
+          cause: params.error,
+        });
       };
 
       const resolveApiKeyForCandidate = async (candidate?: string) => {
@@ -1440,42 +1440,40 @@ export async function runEmbeddedPiAgent(
             // loop can try the next candidate. Previously gated on
             // fallbackConfigured, which could be stale from a FollowupRun
             // config snapshot taken before hot-reload applied fallbacks.
-            {
-              await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
-              const message =
-                (lastAssistant
-                  ? formatAssistantErrorText(lastAssistant, {
-                      cfg: params.config,
-                      sessionKey: params.sessionKey ?? params.sessionId,
-                      provider: activeErrorContext.provider,
-                      model: activeErrorContext.model,
-                    })
-                  : undefined) ||
-                lastAssistant?.errorMessage?.trim() ||
-                (timedOut
-                  ? "LLM request timed out."
-                  : rateLimitFailure
-                    ? "LLM request rate limited."
-                    : billingFailure
-                      ? formatBillingErrorMessage(
-                          activeErrorContext.provider,
-                          activeErrorContext.model,
-                        )
-                      : authFailure
-                        ? "LLM request unauthorized."
-                        : "LLM request failed.");
-              const status =
-                resolveFailoverStatus(assistantFailoverReason ?? "unknown") ??
-                (isTimeoutErrorMessage(message) ? 408 : undefined);
-              logAssistantFailoverDecision("fallback_model", { status });
-              throw new FailoverError(message, {
-                reason: assistantFailoverReason ?? "unknown",
-                provider: activeErrorContext.provider,
-                model: activeErrorContext.model,
-                profileId: lastProfileId,
-                status,
-              });
-            }
+            await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
+            const failoverMessage =
+              (lastAssistant
+                ? formatAssistantErrorText(lastAssistant, {
+                    cfg: params.config,
+                    sessionKey: params.sessionKey ?? params.sessionId,
+                    provider: activeErrorContext.provider,
+                    model: activeErrorContext.model,
+                  })
+                : undefined) ||
+              lastAssistant?.errorMessage?.trim() ||
+              (timedOut
+                ? "LLM request timed out."
+                : rateLimitFailure
+                  ? "LLM request rate limited."
+                  : billingFailure
+                    ? formatBillingErrorMessage(
+                        activeErrorContext.provider,
+                        activeErrorContext.model,
+                      )
+                    : authFailure
+                      ? "LLM request unauthorized."
+                      : "LLM request failed.");
+            const failoverStatus =
+              resolveFailoverStatus(assistantFailoverReason ?? "unknown") ??
+              (isTimeoutErrorMessage(failoverMessage) ? 408 : undefined);
+            logAssistantFailoverDecision("fallback_model", { status: failoverStatus });
+            throw new FailoverError(failoverMessage, {
+              reason: assistantFailoverReason ?? "unknown",
+              provider: activeErrorContext.provider,
+              model: activeErrorContext.model,
+              profileId: lastProfileId,
+              status: failoverStatus,
+            });
           }
 
           const usage = toNormalizedUsage(usageAccumulator);
