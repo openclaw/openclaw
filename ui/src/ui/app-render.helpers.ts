@@ -49,10 +49,10 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   });
 }
 
-export function renderTab(state: AppViewState, tab: Tab) {
+export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: boolean }) {
   const href = pathForTab(tab, state.basePath);
   const isActive = state.tab === tab;
-  const collapsed = state.settings.navCollapsed;
+  const collapsed = opts?.collapsed ?? state.settings.navCollapsed;
   return html`
     <a
       href=${href}
@@ -431,6 +431,7 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
     return;
   }
   const targetSessionKey = state.sessionKey;
+  const prevOverride = state.chatModelOverrides[targetSessionKey];
   state.lastError = null;
   // Write the override cache immediately so the picker stays in sync during the RPC round-trip.
   state.chatModelOverrides = {
@@ -444,6 +445,8 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
     });
     await refreshSessionOptions(state);
   } catch (err) {
+    // Roll back so the picker reflects the actual server model.
+    state.chatModelOverrides = { ...state.chatModelOverrides, [targetSessionKey]: prevOverride };
     state.lastError = `Failed to set model: ${String(err)}`;
   }
 }

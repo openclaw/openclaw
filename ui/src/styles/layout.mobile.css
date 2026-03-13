@@ -239,16 +239,13 @@
     min-width: 0;
     flex: 1 1 auto;
     justify-content: space-between;
+    gap: 10px;
+    align-items: stretch;
   }
 
   .topnav-shell__content {
     order: 3;
     width: 100%;
-  }
-
-  .topnav-shell__actions {
-    gap: 10px;
-    align-items: stretch;
   }
 
   .topbar-nav-toggle {

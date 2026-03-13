@@ -507,7 +507,7 @@ export function renderApp(state: AppViewState) {
                           : nothing
                       }
                       <div class="nav-section__items">
-                        ${group.tabs.map((tab) => renderTab(state, tab))}
+                        ${group.tabs.map((tab) => renderTab(state, tab, { collapsed: navCollapsed }))}
                       </div>
                     </section>
                   `;
