@@ -70,6 +70,7 @@ export async function loadChatHistory(state: ChatState) {
   state.chatLoading = true;
   state.lastError = null;
   try {
+    const targetSession = state.sessionKey;
     const requestPromise = state.client.request<{
       messages?: Array<unknown>;
       thinkingLevel?: string;
@@ -89,7 +90,7 @@ export async function loadChatHistory(state: ChatState) {
     // Auto-apply late successfully resolved history to recover from transient timeouts
     void requestPromise
       .then((res) => {
-        if (hasTimedOut) {
+        if (hasTimedOut && state.sessionKey === targetSession) {
           state.lastError = null;
           const messages = Array.isArray(res.messages) ? res.messages : [];
           state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
