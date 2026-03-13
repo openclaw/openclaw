@@ -89,6 +89,13 @@ Full setup walkthrough (28m) by VelvetShark.
 
 <CardGroup cols={2}>
 
+<Card title="sanwan.ai — AI-Operated Website" icon="globe" href="https://sanwan.ai">
+  **@neofusheng** • `feishu` `multi-agent` `heartbeat`
+
+A website entirely operated by OpenClaw agents for 34+ days. 9 specialized agents handle diary writing, content publishing, SEO, and user engagement 24/7 via HEARTBEAT.md scheduling. The agents even respond to every user comment individually.
+
+</Card>
+
 <Card title="PR Review → Telegram Feedback" icon="code-pull-request" href="https://x.com/i/status/2010878524543131691">
   **@bangnokia** • `review` `github` `telegram`
 
