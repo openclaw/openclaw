@@ -349,14 +349,7 @@ async function rehydrateState() {
     for (const entry of entries) {
       const valid = await validateAttachedTab(entry.tabId)
       if (!valid) {
-        tabs.delete(entry.tabId)
-        tabBySession.delete(entry.sessionId)
-        if (lockedTabId === entry.tabId) {
-          lockedTabId = null
-          relayIsLocked = false
-          void setLockOnRelay(false).catch(() => {})
-        }
-        setBadge(entry.tabId, 'off')
+        await detachTab(entry.tabId, 'rehydration_failed', 'Tab stale after restart')
       }
     }
 
@@ -892,7 +885,8 @@ async function attachTab(tabId, opts = {}) {
 async function detachTab(tabId, reason, displayError) {
   // 1. Atomic Snapshot: ensures idempotency by returning if identity is already gone.
   const meta = tabs.get(tabId) || reattachingTabs.get(tabId)
-  if (!meta) return
+  const hasDanglingState = commandBuffers.has(tabId) || tabAncestry.has(tabId) || [...tabAncestry.values()].includes(tabId)
+  if (!meta && !hasDanglingState && lockedTabId !== tabId) return
 
   const wasAttached = tabs.has(tabId)
   const sessionId = meta.sessionId
@@ -1462,7 +1456,8 @@ chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => void whenReady(
       }
     } catch (err) {
       console.warn('[OpenClaw] Identity Sync Failed - Triggering Emergency Re-attach:', err instanceof Error ? err.message : String(err))
-      void detachTab(addedTabId, 'sync_failed') // Force a healthy reconnect
+      await detachTab(addedTabId, 'sync_failed', 'Identity synchronization failed') // Force a healthy reconnect
+      return
     }
 
     // 9. Authoritative Status Sync (Epoch Synchronization)
