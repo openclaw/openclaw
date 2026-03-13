@@ -10,6 +10,25 @@ export function extractTextFromChatContent(
   const joinWith = opts?.joinWith ?? " ";
 
   if (typeof content === "string") {
+    // Detect JSON-stringified arrays of content blocks (e.g. from vLLM openai-completions).
+    // Without this guard the string would be returned as-is and later double-serialized.
+    if (content.startsWith("[") && content.endsWith("]")) {
+      try {
+        const parsed: unknown = JSON.parse(content);
+        if (
+          Array.isArray(parsed) &&
+          parsed.length > 0 &&
+          parsed.every(
+            (item) => item && typeof item === "object" && "type" in item && "text" in item,
+          )
+        ) {
+          return extractTextFromChatContent(parsed, opts);
+        }
+      } catch {
+        // Not valid JSON – fall through and treat as plain text.
+      }
+    }
+
     const value = opts?.sanitizeText ? opts.sanitizeText(content) : content;
     const normalized = normalize(value);
     return normalized ? normalized : null;
