@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentUserTimezone } from "../../agents/agent-scope.js";
+import { resolveAgentUserTimezone, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -19,7 +19,6 @@ import {
 } from "../../infra/format-time/format-datetime.ts";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { drainSystemEventEntries } from "../../infra/system-events.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 
 /** Drain queued system events, format as `System:` lines, return the block (or undefined). */
 export async function drainFormattedSystemEvents(params: {
@@ -94,7 +93,7 @@ export async function drainFormattedSystemEvents(params: {
 
   const systemLines: string[] = [];
   const queued = drainSystemEventEntries(params.sessionKey);
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const agentId = resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
   systemLines.push(
     ...queued
       .map((event) => {
