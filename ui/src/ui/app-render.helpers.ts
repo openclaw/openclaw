@@ -669,22 +669,24 @@ function resolveSessionScopedOptionLabel(
   row?: SessionsListResult["sessions"][number],
   rest?: string,
 ) {
-  const base = rest?.trim() || key;
   if (!row) {
-    return base;
+    return rest?.trim() || key;
+  }
+  // Priority: label > displayName > key
+  const label = typeof row.label === "string" && row.label.trim().length > 0
+    ? row.label.trim()
+    : null;
+  if (label) {
+    return label;
   }
   const displayName =
     typeof row.displayName === "string" && row.displayName.trim().length > 0
       ? row.displayName.trim()
       : null;
-  const label = typeof row.label === "string" ? row.label.trim() : "";
-  const showDisplayName = Boolean(
-    displayName && displayName !== key && displayName !== label && displayName !== base,
-  );
-  if (!showDisplayName) {
-    return base;
+  if (displayName && displayName !== key) {
+    return displayName;
   }
-  return `${base} · ${displayName}`;
+  return key;
 }
 
 type ThemeOption = { id: ThemeName; label: string; icon: string };
