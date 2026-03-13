@@ -4,6 +4,7 @@ import { formatRuntimeStatusWithDetails } from "./runtime-status.js";
 describe("formatRuntimeStatusWithDetails", () => {
   it("falls back to unknown when status is missing", () => {
     expect(formatRuntimeStatusWithDetails({})).toBe("unknown");
+    expect(formatRuntimeStatusWithDetails({ status: "   " })).toBe("unknown");
   });
 
   it("includes pid, distinct state, and non-empty details", () => {
@@ -26,5 +27,12 @@ describe("formatRuntimeStatusWithDetails", () => {
         details: [],
       }),
     ).toBe("running");
+    expect(
+      formatRuntimeStatusWithDetails({
+        status: " RUNNING ",
+        state: "running",
+        details: [],
+      }),
+    ).toBe("RUNNING");
   });
 });
