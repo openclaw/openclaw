@@ -7,7 +7,7 @@ import {
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
-import { writeConfigFile } from "../config/config.js";
+import { updateConfigFile, writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -104,30 +104,73 @@ export async function agentsAddCommand(
       ? resolveUserPath(opts.agentDir.trim())
       : resolveAgentDir(cfg, agentId);
     const model = opts.model?.trim();
-    const nextConfig = applyAgentConfig(cfg, {
-      agentId,
-      name: nameInput,
-      workspace: workspaceDir,
-      agentDir,
-      ...(model ? { model } : {}),
-    });
 
-    const bindingParse = parseBindingSpecs({
+    // Validate binding specs early (against the pre-read config) so we can
+    // surface parse errors before acquiring the write lock.
+    const bindingSpecCheck = parseBindingSpecs({
       agentId,
       specs: opts.bind,
-      config: nextConfig,
+      config: applyAgentConfig(cfg, {
+        agentId,
+        name: nameInput,
+        workspace: workspaceDir,
+        agentDir,
+        ...(model ? { model } : {}),
+      }),
     });
-    if (bindingParse.errors.length > 0) {
-      runtime.error(bindingParse.errors.join("\n"));
+    if (bindingSpecCheck.errors.length > 0) {
+      runtime.error(bindingSpecCheck.errors.join("\n"));
       runtime.exit(1);
       return;
     }
-    const bindingResult =
-      bindingParse.bindings.length > 0
-        ? applyAgentBindings(nextConfig, bindingParse.bindings)
-        : { config: nextConfig, added: [], updated: [], skipped: [], conflicts: [] };
 
-    await writeConfigFile(bindingResult.config);
+    // Capture the binding result from inside the transform so it is available
+    // for the output payload below.
+    let bindingResult:
+      | ReturnType<typeof applyAgentBindings>
+      | {
+          config: typeof cfg;
+          added: never[];
+          updated: never[];
+          skipped: never[];
+          conflicts: never[];
+        } = { config: cfg, added: [], updated: [], skipped: [], conflicts: [] };
+
+    // Use updateConfigFile so the transform reads the freshest on-disk config
+    // inside the advisory lock, preventing lost-update races on agents.list
+    // when multiple `agents add` commands run concurrently.
+    await updateConfigFile((current) => {
+      // Re-check existence against the freshly-read state.
+      if (findAgentEntryIndex(listAgentEntries(current), agentId) >= 0) {
+        throw new Error(`Agent "${agentId}" already exists.`);
+      }
+      const freshNextConfig = applyAgentConfig(current, {
+        agentId,
+        name: nameInput,
+        workspace: workspaceDir,
+        agentDir,
+        ...(model ? { model } : {}),
+      });
+      // Re-apply bindings against the fresh config so conflict detection is
+      // accurate even when another agent was added concurrently.
+      const freshBindingParse = parseBindingSpecs({
+        agentId,
+        specs: opts.bind,
+        config: freshNextConfig,
+      });
+      const freshBindingResult =
+        freshBindingParse.bindings.length > 0
+          ? applyAgentBindings(freshNextConfig, freshBindingParse.bindings)
+          : {
+              config: freshNextConfig,
+              added: [] as never[],
+              updated: [] as never[],
+              skipped: [] as never[],
+              conflicts: [] as never[],
+            };
+      bindingResult = freshBindingResult;
+      return freshBindingResult.config;
+    });
     if (!opts.json) {
       logConfigUpdated(runtime);
     }
