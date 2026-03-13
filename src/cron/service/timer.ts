@@ -21,6 +21,7 @@ import {
   resolveJobPayloadTextForMain,
 } from "./jobs.js";
 import { locked } from "./locked.js";
+import { runPreHooks } from "./pre-hooks.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
 import { DEFAULT_JOB_TIMEOUT_MS, resolveCronJobTimeoutMs } from "./timeout-policy.js";
@@ -630,6 +631,30 @@ export async function onTimer(state: CronServiceState) {
       job.state.runningAtMs = startedAt;
       emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
       const jobTimeoutMs = resolveCronJobTimeoutMs(job);
+
+      // Run pre-hooks (if any). Non-zero exit skips the job without API call.
+      if (job.hooks?.pre?.length) {
+        const hookResult = await runPreHooks({
+          hooks: job.hooks.pre,
+          jobId: job.id,
+          jobName: job.name,
+          schedule: job.schedule,
+          log: state.deps.log,
+        });
+        if (!hookResult.proceed) {
+          state.deps.log.info(
+            { jobId: id, jobName: job.name },
+            `cron: pre-hook skipped job: ${hookResult.reason}`,
+          );
+          return {
+            jobId: id,
+            status: "skipped",
+            error: `pre-hook: ${hookResult.reason}`,
+            startedAt,
+            endedAt: state.deps.nowMs(),
+          };
+        }
+      }
 
       try {
         const result = await executeJobCoreWithTimeout(state, job);

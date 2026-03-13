@@ -65,12 +65,29 @@ const CronFailoverReasonSchema = Type.Union([
   Type.Literal("model_not_found"),
   Type.Literal("unknown"),
 ]);
+const CronPreHookSchema = Type.Object(
+  {
+    kind: Type.Literal("shell"),
+    command: NonEmptyString,
+    timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+  },
+  { additionalProperties: false },
+);
+
+const CronJobHooksSchema = Type.Object(
+  {
+    pre: Type.Optional(Type.Array(CronPreHookSchema)),
+  },
+  { additionalProperties: false },
+);
+
 const CronCommonOptionalFields = {
   agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   sessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   description: Type.Optional(Type.String()),
   enabled: Type.Optional(Type.Boolean()),
   deleteAfterRun: Type.Optional(Type.Boolean()),
+  hooks: Type.Optional(CronJobHooksSchema),
 };
 
 function cronIdOrJobIdParams(extraFields: Record<string, TSchema>) {
@@ -256,6 +273,7 @@ export const CronJobSchema = Type.Object(
     payload: CronPayloadSchema,
     delivery: Type.Optional(CronDeliverySchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
+    hooks: Type.Optional(CronJobHooksSchema),
     state: CronJobStateSchema,
   },
   { additionalProperties: false },
