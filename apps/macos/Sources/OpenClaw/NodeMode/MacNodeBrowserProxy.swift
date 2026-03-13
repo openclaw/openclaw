@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import OpenClawProtocol
 import UniformTypeIdentifiers
 
@@ -20,21 +21,15 @@ actor MacNodeBrowserProxy {
         let profile: String?
     }
 
-    private struct ProxyFilePayload {
+    private struct ProxyFilePayload: Encodable {
         let path: String
         let base64: String
         let mimeType: String?
+    }
 
-        func asJSON() -> [String: Any] {
-            var json: [String: Any] = [
-                "path": self.path,
-                "base64": self.base64,
-            ]
-            if let mimeType = self.mimeType {
-                json["mimeType"] = mimeType
-            }
-            return json
-        }
+    private struct ProxyResponse: Encodable {
+        let result: OpenClawProtocol.AnyCodable
+        let files: [ProxyFilePayload]?
     }
 
     private static let maxProxyFileBytes = 10 * 1024 * 1024
@@ -63,13 +58,10 @@ actor MacNodeBrowserProxy {
             ])
         }
 
-        let result = try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
-        let files = try Self.loadProxyFiles(from: result)
-        var payload: [String: Any] = ["result": result]
-        if !files.isEmpty {
-            payload["files"] = files.map { $0.asJSON() }
-        }
-        let payloadData = try JSONSerialization.data(withJSONObject: payload)
+        let result = try JSONDecoder().decode(OpenClawProtocol.AnyCodable.self, from: data)
+        let files = try Self.loadProxyFiles(from: result.foundationValue)
+        let payload = ProxyResponse(result: result, files: files.isEmpty ? nil : files)
+        let payloadData = try JSONEncoder().encode(payload)
         guard let payloadJSON = String(data: payloadData, encoding: .utf8) else {
             throw NSError(domain: "MacNodeBrowserProxy", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "browser proxy returned invalid UTF-8",
@@ -147,7 +139,7 @@ actor MacNodeBrowserProxy {
         }
 
         if method != "GET", let body = params.body {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body.foundationValue, options: [.fragmentsAllowed])
+            request.httpBody = try JSONEncoder().encode(body)
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
 
