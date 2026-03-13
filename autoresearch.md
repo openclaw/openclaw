@@ -4,9 +4,7 @@
 
 Maximise Anthropic KV cache hit rate for the OpenClaw bootstrap system prompt pipeline.
 
-**Metric:** `system_prompt_stable_chars` — characters before the AGENTS.md file header
-(the most-frequently-edited workspace file, injected last). Higher is better.
-Larger stable prefix = more content eligible for Anthropic KV caching.
+**Metric:** `system_prompt_stable_chars` — characters before the most-dynamic workspace file header (AGENTS.md if no MEMORY.md; MEMORY.md if present). Higher is better. Larger stable prefix = more content eligible for Anthropic KV caching.
 
 **Secondary metric:** `system_prompt_total_chars` — total assembled system prompt length. Lower is better.
 
@@ -20,88 +18,70 @@ Larger stable prefix = more content eligible for Anthropic KV caching.
 - `src/agents/bootstrap-files.ts` — file loading + filter pipeline
 - `src/agents/pi-embedded-helpers/bootstrap.ts` — `buildBootstrapContextFiles`, truncation logic
 - `scripts/autoresearch-benchmark.ts` — benchmark runner (bun TypeScript, no build step)
+- `autoresearch.sh` — benchmark entry point
 
-## Current best
+## Current best (CONVERGED)
 
 `system_prompt_stable_chars=28213` / `total=29802` → **94.7% stable**
+`boundary=agents-md-header` (AGENTS.md injected last among standard files)
 
-The stable prefix includes:
+**Theoretical maximum**: ~29,777 (if model= line removed — would break agent self-awareness).
+**Practical maximum**: 28,213 ✓
 
-- All boilerplate (Tooling, Safety, Skills, Memory, etc.) — ~10,987 chars
-- Silent Replies + Heartbeats (moved before Project Context) — ~722 chars
-- Time Zone + Runtime + Reasoning — ~235 chars
-- Project Context preamble (file manifest) — ~305 chars
-- SOUL.md content (rarely changes) — ~8,804 chars
-- IDENTITY.md, USER.md, TOOLS.md, HEARTBEAT.md, BOOTSTRAP.md — ~8,125 chars
+## Key wins (this session)
 
-Remaining dynamic: AGENTS.md header + content (~1,566 chars) + model line (~25 chars) = ~1,591 chars
+| #   | Change                                                   | stable_chars | gain        | file             |
+| --- | -------------------------------------------------------- | ------------ | ----------- | ---------------- |
+| 1   | Fixed benchmark: `# Project Context` as dynamic boundary | 9,680        | —           | benchmark        |
+| 2   | Moved Project Context after Heartbeats/Runtime           | 10,678       | +998        | system-prompt.ts |
+| 3   | Added stable file manifest to Project Context preamble   | 10,987       | +86         | system-prompt.ts |
+| 4   | Reordered workspace files: AGENTS.md last                | **28,213**   | **+17,226** | workspace.ts     |
 
-## What's been tried
-
-### ✅ Key wins (this session)
-
-1. **Refined benchmark metric**: measure stable_chars before AGENTS.md header (not model= line). AGENTS.md is the most frequently-edited workspace file. Everything before it stays in the Anthropic KV cache even when AGENTS.md changes.
-
-2. **Moved Project Context to last position** (+998 stable chars): Previously Silent Replies, Heartbeats, Time Zone, Runtime came AFTER workspace file injection. Moved all those sections BEFORE Project Context so they remain in the cached stable prefix even when workspace files change.
-
-3. **Added stable file manifest to Project Context preamble** (+86 stable chars): `Files: AGENTS.md, SOUL.md, ...` line before the first file header. File names are fixed by the loader — stable content.
-
-4. **Reordered workspace file injection** (+17,226 stable chars, **+158.8%**): Changed file order from [AGENTS.md first] to [SOUL.md, IDENTITY.md, USER.md, TOOLS.md, HEARTBEAT.md, BOOTSTRAP.md, AGENTS.md last]. SOUL.md (8,804 chars) and other rarely-edited files now come before AGENTS.md, so they remain in the Anthropic KV cache even when AGENTS.md is updated.
-
-### ✅ Key wins (previous session)
-
-5. **Moved model/agentId to separate final line after Reasoning**: Dynamic per-session fields (model, agentId) on their own final line after Reasoning. Reasoning now in stable prefix.
-
-6. **Fixed benchmark** to use bun+TypeScript directly (no build step, no hashed dist chunks).
-
-7. **Moved model/agentId to end of Runtime line** (stable fields first).
-
-### ❌ Dead ends
-
-- Compressing boilerplate text reduces stable_chars (primary metric) by the same amount. Equal regression.
-- Skipping missing files reduces total_chars but also reduces stable_chars (BOOTSTRAP.md is before AGENTS.md). Net: primary regression.
-- Using relative file paths reduces total_chars but doesn't change stable_chars boundary position.
-
-## Prompt structure (current)
+## Prompt structure (current — optimised for KV caching)
 
 ```
-[Boilerplate: Tooling, Safety, Skills, Memory, etc.] ← stable
-## Workspace Files (injected) ← stable
-[Reply Tags, Messaging, Voice] ← stable
-## Silent Replies ← stable (MOVED before Project Context)
-## Heartbeats ← stable (MOVED before Project Context)
-## Time Zone ← stable
-## Runtime ← stable (model= line moved to separate dynamic line)
-Reasoning: off (...) ← stable
+[Boilerplate: Tooling, Safety, Skills, Memory, etc.]   ← stable (~10,987 ch)
+## Silent Replies                                        ← stable (moved before Project Context)
+## Heartbeats                                            ← stable (moved before Project Context)
+## Time Zone                                             ← stable
+## Runtime                                               ← stable (model= moved to separate line)
+Reasoning: off (...)                                     ← stable
 
-# Project Context ← stable preamble
-Files: SOUL.md, IDENTITY.md, ... ← stable file manifest
-If SOUL.md is present, embody its persona... ← stable
+# Project Context
+Files: SOUL.md, IDENTITY.md, ...                        ← stable file manifest
+If SOUL.md is present, embody its persona...
 
-## /path/workspace/SOUL.md ← stable (rarely changes)
-[SOUL.md content 8804 chars] ← stable
-## /path/workspace/IDENTITY.md ← stable
-[...] ← stable
-## /path/workspace/TOOLS.md ← stable
-[...]
-## /path/workspace/HEARTBEAT.md ← stable
-## /path/workspace/BOOTSTRAP.md ← stable (missing placeholder)
+## /workspace/SOUL.md     ← stable (rarely edited, ~8804 ch)
+[SOUL.md content]
+## /workspace/IDENTITY.md ← stable (rarely edited, ~1186 ch)
+## /workspace/USER.md     ← stable (rarely edited, ~3782 ch)
+## /workspace/TOOLS.md    ← stable (occasionally, ~2915 ch)
+## /workspace/HEARTBEAT.md ← stable (~168 ch)
+## /workspace/BOOTSTRAP.md ← stable/missing (~71 ch)
 
-── AGENTS.md BOUNDARY ──── (most-changed file, injected last)
-## /path/workspace/AGENTS.md ← dynamic (changes frequently)
-[AGENTS.md content 1516 chars] ← dynamic
+── AGENTS.MD BOUNDARY (28,213 chars stable) ────────────────────────────
+## /workspace/AGENTS.md   ← dynamic (session protocol, frequently edited)
+[AGENTS.md content ~1516 ch]
 
-model=<model-name> ← dynamic (per-session model)
+model=<model-name>         ← dynamic (per-session)
 ```
 
-## Ideas to try next
+For workspaces with MEMORY.md (daily notes), MEMORY.md is loaded AFTER AGENTS.md via
+`resolveMemoryBootstrapEntries`. The benchmark then uses MEMORY.md as boundary, and
+AGENTS.md content (~1,516 chars) also enters the stable prefix. Real-world benefit
+for users with active memory files.
 
-1. **Project-specific AGENTS.md** — if a project has its own AGENTS.md loaded via hooks, that might also change frequently. Currently project-level AGENTS.md files are not in the standard file list.
+## Dead ends
 
-2. **Further benchmark refinement** — model the scenario where SOUL.md also changes (e.g., both SOUL.md and AGENTS.md change). In that case stable prefix = boilerplate only (~10,987). The current benchmark assumes only AGENTS.md changes.
+- Compressing boilerplate: reduces stable_chars and total_chars equally → primary regression
+- Removing missing file placeholders (BOOTSTRAP.md): stable_chars falls by ~120 → primary regression
+- Using relative paths in file headers: same stable_chars, lower total_chars → primary "equal" → discard
+- Moving model= line before workspace files: inflates stable_chars with dynamic content (wrong)
+- Removing model= line entirely: stable_chars unchanged (it's after the boundary); breaks agent self-awareness
 
-3. **Cross-session mtime-gated bootstrap cache** — cache file content by mtime. Only re-read files that changed since last session. This doesn't affect the prompt structure but reduces build time.
+## Remaining ideas (in autoresearch.ideas.md)
 
-4. **Skills hash-gated regeneration** — only rebuild skills section when skill files change. Performance improvement.
-
-5. **Separate AGENTS.md into stable/dynamic parts** — split AGENTS.md into a rarely-changed "base config" and a frequently-changed "session notes" section. But this requires user-facing changes.
+- Cross-session mtime-gated bootstrap cache (performance, not content)
+- Skills hash-gated regeneration (performance)
+- Separate AGENTS.md into base+overlay (user-facing design change)
+- Move extraSystemPrompt/reactionGuidance after workspace files (real-world improvement, no benchmark impact)

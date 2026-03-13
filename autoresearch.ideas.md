@@ -1,5 +1,6 @@
-- Cross-session mtime-gated bootstrap cache: track file mtimes, skip re-reading unchanged files on new session. Reduces build time but doesn't change stable_chars metric.
-- Skills hash-gated regeneration: cache skills prompt by content hash, only regenerate when any SKILL.md or skills directory changes.
-- Further benchmark scenario modeling: test case where SOUL.md also changes (both SOUL.md + AGENTS.md updated). Would show stable prefix = boilerplate only (~10,987). Then optimize by separating rarely-changed identity from frequently-changed AGENTS.md guidelines.
-- Separate AGENTS.md into base (rarely changes) + overlay (frequently changes): e.g., AGENTS.md for global protocol, PROJECT_AGENTS.md for project-specific notes injected last. Requires user-facing design.
-- Remove per-file object allocation in trimBootstrapContent for non-truncated files (return original string reference) — performance micro-optimization, no metric impact.
+- Move extraSystemPrompt (Group Chat Context) and reactionGuidance to AFTER workspace files — prevents them from breaking the stable cache prefix when group chat membership/config changes. No benchmark impact (they're not set in the benchmark workspace), but real-world improvement for group chat users.
+- Cross-session mtime-gated bootstrap cache: track file mtimes between sessions, only re-read files that actually changed. Reduces build time, doesn't change stable_chars metric.
+- Skills hash-gated regeneration: cache the skills prompt by content hash of all SKILL.md files; only regenerate when a skill file changes. Performance improvement.
+- Separate AGENTS.md into base (stable global protocol) + project overlay (frequent per-project notes injected last). Needs user-facing design. Would push AGENTS.md base into stable prefix.
+- For workspaces with MEMORY.md: confirm that MEMORY.md is loaded after AGENTS.md (it is, via resolveMemoryBootstrapEntries). In those workspaces, stable_chars = chars before MEMORY.md = includes AGENTS.md content. Already handled by benchmark priority ordering.
+- Remove per-file object allocation in trimBootstrapContent for non-truncated files (return original string reference) — micro-optimization, no metric impact.
