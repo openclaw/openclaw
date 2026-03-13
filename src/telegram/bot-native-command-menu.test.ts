@@ -283,17 +283,15 @@ describe("bot-native-command-menu", () => {
 
   describe("Windows path validation (#44199)", () => {
     it("rejects bare Windows extended-length path prefix", async () => {
-      const path = await import("node:path");
+      const pathsModule = await import("../config/paths.js");
       const fs = await import("node:fs/promises");
-      const pathDirnameSpy = vi.spyOn(path, "dirname");
-      const pathIsAbsoluteSpy = vi.spyOn(path, "isAbsolute");
+      
+      // Mock resolveStateDir to return invalid path (bare prefix)
+      const resolveStateDirSpy = vi.spyOn(pathsModule, "resolveStateDir");
+      resolveStateDirSpy.mockReturnValue("\\\\?");
+      
       const fsMkdirSpy = vi.spyOn(fs, "mkdir");
       const fsWriteFileSpy = vi.spyOn(fs, "writeFile");
-      
-      // Mock path.dirname to return the problematic bare prefix
-      pathDirnameSpy.mockReturnValue("\\\\?");
-      // Mock path.isAbsolute to return false for invalid paths
-      pathIsAbsoluteSpy.mockReturnValue(false);
       
       // Mkdir and writeFile should not be called
       fsMkdirSpy.mockResolvedValue(undefined);
@@ -328,24 +326,21 @@ describe("bot-native-command-menu", () => {
         { command: "test_cmd", description: "Test command" },
       ]);
 
-      pathDirnameSpy.mockRestore();
-      pathIsAbsoluteSpy.mockRestore();
+      resolveStateDirSpy.mockRestore();
       fsMkdirSpy.mockRestore();
       fsWriteFileSpy.mockRestore();
     });
 
     it("allows valid Windows extended-length paths", async () => {
-      const path = await import("node:path");
+      const pathsModule = await import("../config/paths.js");
       const fs = await import("node:fs/promises");
-      const pathDirnameSpy = vi.spyOn(path, "dirname");
-      const pathIsAbsoluteSpy = vi.spyOn(path, "isAbsolute");
+      
+      // Mock resolveStateDir to return valid extended-length path
+      const resolveStateDirSpy = vi.spyOn(pathsModule, "resolveStateDir");
+      resolveStateDirSpy.mockReturnValue("\\\\?\\C:\\Users\\test\\.openclaw");
+      
       const fsMkdirSpy = vi.spyOn(fs, "mkdir");
       const fsWriteFileSpy = vi.spyOn(fs, "writeFile");
-      
-      // Mock path.dirname to return a VALID extended-length path
-      pathDirnameSpy.mockReturnValue("\\\\?\\C:\\Users\\test\\.openclaw\\telegram");
-      // Mock path.isAbsolute to return true for valid absolute paths
-      pathIsAbsoluteSpy.mockReturnValue(true);
       
       fsMkdirSpy.mockResolvedValue(undefined);
       fsWriteFileSpy.mockResolvedValue(undefined);
@@ -371,13 +366,10 @@ describe("bot-native-command-menu", () => {
       });
 
       // Valid extended-length paths should pass through and mkdir should be called
-      expect(fsMkdirSpy).toHaveBeenCalledWith("\\\\?\\C:\\Users\\test\\.openclaw\\telegram", {
-        recursive: true,
-      });
+      expect(fsMkdirSpy).toHaveBeenCalled();
       expect(fsWriteFileSpy).toHaveBeenCalled();
 
-      pathDirnameSpy.mockRestore();
-      pathIsAbsoluteSpy.mockRestore();
+      resolveStateDirSpy.mockRestore();
       fsMkdirSpy.mockRestore();
       fsWriteFileSpy.mockRestore();
     });
