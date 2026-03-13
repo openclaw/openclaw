@@ -753,8 +753,16 @@ export async function runCronIsolatedAgentTurn(params: {
         cronSession.sessionEntry.totalTokens = undefined;
         cronSession.sessionEntry.totalTokensFresh = false;
       }
-      cronSession.sessionEntry.cacheRead = usage.cacheRead ?? 0;
-      cronSession.sessionEntry.cacheWrite = usage.cacheWrite ?? 0;
+      const cacheRead = usage.cacheRead ?? 0;
+      const cacheWrite = usage.cacheWrite ?? 0;
+      cronSession.sessionEntry.cacheRead = cacheRead;
+      cronSession.sessionEntry.cacheWrite = cacheWrite;
+      if (cacheRead > 0) {
+        telemetryUsage.cache_read_tokens = cacheRead;
+      }
+      if (cacheWrite > 0) {
+        telemetryUsage.cache_write_tokens = cacheWrite;
+      }
 
       telemetry = {
         model: modelUsed,
