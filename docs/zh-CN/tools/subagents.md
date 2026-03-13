@@ -170,4 +170,5 @@ x-i18n:
   - `SOUL.md` — 个性和语气指导
   - `IDENTITY.md` — 智能体身份（名称、Emoji、头像）
   - `USER.md` — 用户偏好和上下文
-- **不注入**: `HEARTBEAT.md`、`BOOTSTRAP.md`、`MEMORY.md` 以及额外的匹配模式（以最小化上下文大小）。
+- **不注入**: `HEARTBEAT.md`、`BOOTSTRAP.md`、`MEMORY.md`（以最小化上下文大小）。
+- **额外匹配模式**: 如果启用了 `bootstrap-extra-files` 钩子，匹配 allowlist 名称的额外文件（如 `packages/*/SOUL.md`）仍会在过滤后被注入。
