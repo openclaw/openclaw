@@ -104,9 +104,18 @@ function migrateLegacyNotifyFallback(params: {
     }
 
     if (!params.legacyWebhook) {
-      warnings.push(
-        `Cron job "${jobName}" still uses legacy notify fallback, but cron.webhook is unset so doctor cannot migrate it automatically.`,
-      );
+      // Without a webhook URL, `notify: true` has no effect — it is dead
+      // legacy metadata.  Safe to remove it so doctor doesn't loop on the
+      // same unresolvable warning across runs.
+      if (!mode || mode === "none") {
+        delete raw.notify;
+        changed = true;
+        continue;
+      }
+      // For jobs with existing non-webhook delivery (e.g. announce), the
+      // notify flag is also inert.  Remove it silently.
+      delete raw.notify;
+      changed = true;
       continue;
     }
 
