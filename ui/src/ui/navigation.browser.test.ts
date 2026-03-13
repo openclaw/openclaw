@@ -64,6 +64,59 @@ describe("control UI routing", () => {
     expect(window.location.pathname).toBe("/channels");
   });
 
+  it("renders the refreshed top navigation shell", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    expect(app.querySelector(".topnav-shell")).not.toBeNull();
+    expect(app.querySelector(".topnav-shell__brand")).not.toBeNull();
+    expect(app.querySelector(".topnav-shell__content")).not.toBeNull();
+    expect(app.querySelector(".topnav-shell__actions")).not.toBeNull();
+  });
+
+  it("renders the refreshed sidebar shell structure", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    expect(app.querySelector(".sidebar-shell")).not.toBeNull();
+    expect(app.querySelector(".sidebar-shell__header")).not.toBeNull();
+    expect(app.querySelector(".sidebar-shell__body")).not.toBeNull();
+    expect(app.querySelector(".sidebar-shell__footer")).not.toBeNull();
+  });
+
+  it("does not render a desktop sidebar resizer or inject a custom nav width", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    app.applySettings({ ...app.settings, navWidth: 360 });
+    await app.updateComplete;
+
+    expect(app.querySelector(".sidebar-resizer")).toBeNull();
+    const shell = app.querySelector<HTMLElement>(".shell");
+    expect(shell?.style.getPropertyValue("--shell-nav-width")).toBe("");
+  });
+
+  it("hides section labels in collapsed mode", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    app.applySettings({ ...app.settings, navCollapsed: true });
+    await app.updateComplete;
+
+    expect(app.querySelector(".nav-section__label")).toBeNull();
+  });
+
+  it("keeps footer utilities available in collapsed mode", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    app.applySettings({ ...app.settings, navCollapsed: true });
+    await app.updateComplete;
+
+    expect(app.querySelector(".sidebar-shell__footer")).not.toBeNull();
+    expect(app.querySelector(".sidebar-utility-link")).not.toBeNull();
+  });
+
   it("resets to the main session when opening chat from sidebar navigation", async () => {
     const app = mountApp("/sessions?session=agent:main:subagent:task-123");
     await app.updateComplete;
