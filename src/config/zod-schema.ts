@@ -97,7 +97,18 @@ const McpServerEntrySchema = z
 
 const McpSchema = z
   .object({
-    servers: z.record(z.string().min(1), McpServerEntrySchema).optional(),
+    servers: z
+      .record(
+        z
+          .string()
+          .min(1)
+          .regex(
+            /^[a-zA-Z0-9_-]+$/,
+            "Server names can only contain alphanumeric characters, hyphens, and underscores",
+          ),
+        McpServerEntrySchema,
+      )
+      .optional(),
   })
   .strict()
   .optional();

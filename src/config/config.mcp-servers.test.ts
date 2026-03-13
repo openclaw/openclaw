@@ -55,6 +55,26 @@ describe("mcp servers config schema", () => {
     expect(res.success).toBe(true);
   });
 
+  it("rejects a server name with invalid characters", () => {
+    const res = OpenClawSchema.safeParse({
+      mcp: {
+        servers: {
+          "my__server name!": {
+            command: "/usr/bin/thing",
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(false);
+    if (res.success) {
+      return;
+    }
+
+    const paths = res.error.issues.map((i) => i.path.join("."));
+    expect(paths.some((p) => p.includes("my__server name!"))).toBe(true);
+  });
+
   it("rejects a server entry missing command", () => {
     const res = OpenClawSchema.safeParse({
       mcp: {
