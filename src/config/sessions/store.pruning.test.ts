@@ -79,19 +79,55 @@ describe("rotateSessionFile", () => {
     storePath = path.join(testDir, "sessions.json");
   });
 
-  it("file over maxBytes: renamed to .bak.{timestamp}, returns true", async () => {
+  it("file over maxBytes: copied to .bak.{timestamp}, original preserved, returns true", async () => {
     const bigContent = "x".repeat(200);
     await fs.writeFile(storePath, bigContent, "utf-8");
 
     const rotated = await rotateSessionFile(storePath, 100);
 
     expect(rotated).toBe(true);
-    await expect(fs.stat(storePath)).rejects.toThrow();
+    // Original file must still exist so concurrent readers never see a missing
+    // file (issue #18572: rename caused a race window that wiped session memory).
+    await expect(fs.stat(storePath)).resolves.toBeTruthy();
+    const originalContent = await fs.readFile(storePath, "utf-8");
+    expect(originalContent).toBe(bigContent);
+    // Backup must also exist with the same content.
     const files = await fs.readdir(testDir);
     const bakFiles = files.filter((f) => f.startsWith("sessions.json.bak."));
     expect(bakFiles).toHaveLength(1);
     const bakContent = await fs.readFile(path.join(testDir, bakFiles[0]), "utf-8");
     expect(bakContent).toBe(bigContent);
+  });
+
+  it("race-condition regression: sessions.json readable throughout rotation (issue #18572)", async () => {
+    // With the old rename-based approach, sessions.json disappeared between
+    // rename and the subsequent atomic write.  Any inbound message processed
+    // during that window would find the file missing, fall back to {}, and
+    // generate a new sessionId — a "memory wipe".  copyFile keeps the
+    // original present so concurrent readers always see valid data.
+    const content = JSON.stringify({ "user:123": { sessionId: "sess-abc", updatedAt: Date.now() } });
+    await fs.writeFile(storePath, content, "utf-8");
+
+    let contentDuringRotation: string | undefined;
+    const realCopyFile = (fs.copyFile as typeof fs.copyFile).bind(fs);
+    const spy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
+      // Simulate a concurrent reader at the exact moment the backup is written.
+      try {
+        contentDuringRotation = await fs.readFile(storePath, "utf-8");
+      } catch {
+        contentDuringRotation = "(missing)";
+      }
+      return realCopyFile(...(args as Parameters<typeof fs.copyFile>));
+    });
+
+    try {
+      await rotateSessionFile(storePath, 10);
+    } finally {
+      spy.mockRestore();
+    }
+
+    // Concurrent reader must have seen valid JSON, not a missing/empty file.
+    expect(contentDuringRotation).toBe(content);
   });
 
   it("multiple rotations: only keeps 3 most recent .bak files", async () => {
