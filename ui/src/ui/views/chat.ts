@@ -255,7 +255,9 @@ function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
 ) {
-  const used = session?.inputTokens ?? 0;
+  // totalTokens = context tokens used in the most recent turn (comparable to contextTokens window).
+  // inputTokens is cumulative across all turns and can exceed the context window size — do not use it.
+  const used = session?.totalTokens ?? 0;
   const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
   if (!used || !limit) {
     return nothing;
