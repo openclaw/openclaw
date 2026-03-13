@@ -205,6 +205,8 @@
 - Parallels macOS smoke playbook:
   - `prlctl exec` is fine for deterministic repo commands, but it can misrepresent interactive shell behavior (`PATH`, `HOME`, `curl | bash`, shebang resolution). For installer parity or shell-sensitive repros, prefer the guest Terminal or `prlctl enter`.
   - Fresh Tahoe snapshot current reality: `brew` exists, `node` may not be on `PATH` in noninteractive guest exec. Use absolute `/opt/homebrew/bin/node` for repo/CLI runs when needed.
+  - Preferred automation entrypoint: `pnpm test:parallels:macos`. It restores the snapshot most closely matching `macOS 26.3.1 fresh`, serves the current `main` tarball from the host, then runs fresh-install and latest-release-to-main smoke lanes.
+  - Harness output: pass `--json` for machine-readable summary; per-phase logs land under `/tmp/openclaw-parallels-smoke.*`.
   - Fresh host-served tgz install: restore fresh snapshot, install tgz as guest root with `HOME=/var/root`, then run onboarding as the desktop user via `prlctl exec --current-user`.
   - For `openclaw onboard --non-interactive --secret-input-mode ref --install-daemon`, expect env-backed auth-profile refs (for example `OPENAI_API_KEY`) to be copied into the service env at install time; this path was fixed and should stay green.
   - Don’t run local + gateway agent turns in parallel on the same fresh workspace/session; they can collide on the session lock. Run sequentially.
