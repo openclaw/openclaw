@@ -1,13 +1,31 @@
+type MemoryMultimodalSpec = {
+  labelPrefix: string;
+  extensions: string[];
+  matchesMimeType: (mimeType: string) => boolean;
+};
+
 const MEMORY_MULTIMODAL_SPECS = {
   image: {
     labelPrefix: "Image file",
     extensions: [".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"],
+    matchesMimeType: (mimeType: string) => mimeType.startsWith("image/"),
   },
   audio: {
     labelPrefix: "Audio file",
     extensions: [".mp3", ".wav", ".ogg", ".opus", ".m4a", ".aac", ".flac"],
+    matchesMimeType: (mimeType: string) => mimeType.startsWith("audio/"),
   },
-} as const;
+  video: {
+    labelPrefix: "Video file",
+    extensions: [".mp4", ".mov"],
+    matchesMimeType: (mimeType: string) => mimeType.startsWith("video/"),
+  },
+  pdf: {
+    labelPrefix: "PDF file",
+    extensions: [".pdf"],
+    matchesMimeType: (mimeType: string) => mimeType === "application/pdf",
+  },
+} satisfies Record<string, MemoryMultimodalSpec>;
 
 export type MemoryMultimodalModality = keyof typeof MEMORY_MULTIMODAL_SPECS;
 export const MEMORY_MULTIMODAL_MODALITIES = Object.keys(
@@ -31,7 +49,7 @@ export function normalizeMemoryMultimodalModalities(
   }
   const normalized = new Set<MemoryMultimodalModality>();
   for (const value of raw) {
-    if (value === "image" || value === "audio") {
+    if (value !== "all" && value in MEMORY_MULTIMODAL_SPECS) {
       normalized.add(value);
     }
   }
@@ -70,6 +88,13 @@ export function buildMemoryMultimodalLabel(
   normalizedPath: string,
 ): string {
   return `${MEMORY_MULTIMODAL_SPECS[modality].labelPrefix}: ${normalizedPath}`;
+}
+
+export function isSupportedMemoryMultimodalMimeType(
+  modality: MemoryMultimodalModality,
+  mimeType: string,
+): boolean {
+  return MEMORY_MULTIMODAL_SPECS[modality].matchesMimeType(mimeType);
 }
 
 export function buildCaseInsensitiveExtensionGlob(extension: string): string {

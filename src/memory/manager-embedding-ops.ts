@@ -796,8 +796,28 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   private isStructuredInputTooLargeError(message: string): boolean {
-    return /(413|payload too large|request too large|input too large|too many tokens|input limit|request size)/i.test(
+    return /(\b413\b|payload too large|request too large|input too large|too many tokens|input limit|request size|max(?:imum)?\D+\d[\d,]*\D+bytes|\d[\d,]*\D+bytes\D+max|limit\D+\d[\d,]*\D+bytes)/i.test(
       message,
+    );
+  }
+
+  private isMultimodalProviderValidationError(message: string): boolean {
+    return /(page limit|too many pages|mime type|unsupported (file|media|mime|codec|format)|invalid (mime|codec|format|duration|media|file)|media type|file type|(audio|video).*(codec|too long|duration)|(codec|too long|duration).*(audio|video)|max(?:imum)?\D+\d[\d,]*\D+pages|\d[\d,]*\D+pages\D+max|limit\D+\d[\d,]*\D+pages)/i.test(
+      message,
+    );
+  }
+
+  private isSkippableMultimodalInputError(message: string): boolean {
+    if (
+      /(quota|rate[_ ]limit|too many requests|timed? out|timeout|deadline(?: exceeded)?|network|econn|enotfound|service unavailable|upstream unavailable|bad gateway|gateway timeout|internal server error|server error|backend down)/i.test(
+        message,
+      )
+    ) {
+      return false;
+    }
+    return (
+      this.isStructuredInputTooLargeError(message) ||
+      this.isMultimodalProviderValidationError(message)
     );
   }
 
@@ -848,9 +868,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       if (
         "kind" in entry &&
         entry.kind === "multimodal" &&
-        this.isStructuredInputTooLargeError(message)
+        this.isSkippableMultimodalInputError(message)
       ) {
-        log.warn("memory embeddings: skipping multimodal file rejected as too large", {
+        const skipReason = this.isStructuredInputTooLargeError(message)
+          ? "rejected as too large"
+          : "rejected by provider validation";
+        log.warn(`memory embeddings: skipping multimodal file ${skipReason}`, {
           path: entry.path,
           bytes: structuredInputBytes,
           provider: this.provider.id,

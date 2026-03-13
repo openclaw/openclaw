@@ -150,7 +150,7 @@ describe("memory search config", () => {
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expect(resolved?.multimodal).toEqual({
       enabled: true,
-      modalities: ["image", "audio"],
+      modalities: ["image", "audio", "video", "pdf"],
       maxFileBytes: 8192,
     });
   });
