@@ -1030,6 +1030,7 @@ describe("chat view", () => {
 
   it("keeps caret at start after ArrowUp history navigation updates draft", async () => {
     const container = document.createElement("div");
+    document.body.append(container);
     let draft = "newest";
     const renderCurrent = () => {
       render(
@@ -1056,6 +1057,7 @@ describe("chat view", () => {
 
     renderCurrent();
     const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    textarea.focus();
     textarea.selectionStart = 0;
     textarea.selectionEnd = 0;
     const event = new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true });
@@ -1065,6 +1067,7 @@ describe("chat view", () => {
     expect(onHistoryKeydown).toHaveBeenCalledTimes(1);
     expect(textarea.selectionStart).toBe(0);
     expect(textarea.selectionEnd).toBe(0);
+    container.remove();
   });
 
   it("shrinks textarea height after history navigation restores a shorter draft", async () => {
