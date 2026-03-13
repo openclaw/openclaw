@@ -670,6 +670,18 @@
   max-width: 300px;
 }
 
+.chat-controls__session-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.chat-controls__model {
+  min-width: 170px;
+  max-width: 320px;
+}
+
 .chat-controls__thinking {
   display: flex;
   align-items: center;
@@ -760,6 +772,10 @@
   text-overflow: ellipsis;
 }
 
+.chat-controls__model select {
+  max-width: 320px;
+}
+
 .chat-controls__thinking {
   display: flex;
   align-items: center;
@@ -811,6 +827,10 @@
 
   .chat-controls__session {
     min-width: 120px;
+  }
+
+  .chat-controls__model {
+    min-width: 150px;
   }
 }
 

@@ -12,7 +12,7 @@ import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
-import type { SessionsListResult } from "./types.ts";
+import type { ModelCatalogEntry, SessionsListResult } from "./types.ts";
 
 type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
@@ -49,10 +49,10 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   });
 }
 
-export function renderTab(state: AppViewState, tab: Tab) {
+export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: boolean }) {
   const href = pathForTab(tab, state.basePath);
   const isActive = state.tab === tab;
-  const collapsed = state.settings.navCollapsed;
+  const collapsed = opts?.collapsed ?? state.settings.navCollapsed;
   return html`
     <a
       href=${href}
@@ -128,6 +128,7 @@ function renderCronFilterIcon(hiddenCount: number) {
 
 export function renderChatSessionSelect(state: AppViewState) {
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
+  const modelSelect = renderChatModelSelect(state);
   return html`
     <div class="chat-controls__session-row">
       <label class="field chat-controls__session">
@@ -159,6 +160,7 @@ export function renderChatSessionSelect(state: AppViewState) {
           )}
         </select>
       </label>
+      ${modelSelect}
     </div>
   `;
 }
@@ -316,9 +318,137 @@ async function refreshSessionOptions(state: AppViewState) {
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
     activeMinutes: 0,
     limit: 0,
-    includeGlobal: false,
-    includeUnknown: false,
+    includeGlobal: true,
+    includeUnknown: true,
   });
+}
+
+function resolveActiveSessionRow(state: AppViewState) {
+  return state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
+}
+
+function resolveModelOverrideValue(state: AppViewState): string {
+  // Prefer the local cache — it reflects in-flight patches before sessionsResult refreshes.
+  const cached = state.chatModelOverrides[state.sessionKey];
+  if (typeof cached === "string") {
+    return cached.trim();
+  }
+  // cached === null means explicitly cleared to default.
+  if (cached === null) {
+    return "";
+  }
+  // No local override recorded yet — fall back to server data.
+  const activeRow = resolveActiveSessionRow(state);
+  if (activeRow) {
+    return typeof activeRow.model === "string" ? activeRow.model.trim() : "";
+  }
+  return "";
+}
+
+function resolveDefaultModelValue(state: AppViewState): string {
+  const model = state.sessionsResult?.defaults?.model;
+  return typeof model === "string" ? model.trim() : "";
+}
+
+function buildChatModelOptions(
+  catalog: ModelCatalogEntry[],
+  currentOverride: string,
+  defaultModel: string,
+): Array<{ value: string; label: string }> {
+  const seen = new Set<string>();
+  const options: Array<{ value: string; label: string }> = [];
+  const addOption = (value: string, label?: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return;
+    }
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    options.push({ value: trimmed, label: label ?? trimmed });
+  };
+
+  for (const entry of catalog) {
+    const provider = entry.provider?.trim();
+    addOption(entry.id, provider ? `${entry.id} · ${provider}` : entry.id);
+  }
+
+  if (currentOverride) {
+    addOption(currentOverride);
+  }
+  if (defaultModel) {
+    addOption(defaultModel);
+  }
+  return options;
+}
+
+function renderChatModelSelect(state: AppViewState) {
+  const currentOverride = resolveModelOverrideValue(state);
+  const defaultModel = resolveDefaultModelValue(state);
+  const options = buildChatModelOptions(
+    state.chatModelCatalog ?? [],
+    currentOverride,
+    defaultModel,
+  );
+  const defaultLabel = defaultModel ? `Default (${defaultModel})` : "Default model";
+  const busy =
+    state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
+  const disabled =
+    !state.connected || busy || (state.chatModelsLoading && options.length === 0) || !state.client;
+  return html`
+    <label class="field chat-controls__session chat-controls__model">
+      <select
+        data-chat-model-select="true"
+        aria-label="Chat model"
+        ?disabled=${disabled}
+        @change=${async (e: Event) => {
+          const next = (e.target as HTMLSelectElement).value.trim();
+          await switchChatModel(state, next);
+        }}
+      >
+        <option value="" ?selected=${currentOverride === ""}>${defaultLabel}</option>
+        ${repeat(
+          options,
+          (entry) => entry.value,
+          (entry) =>
+            html`<option value=${entry.value} ?selected=${entry.value === currentOverride}>
+              ${entry.label}
+            </option>`,
+        )}
+      </select>
+    </label>
+  `;
+}
+
+async function switchChatModel(state: AppViewState, nextModel: string) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const currentOverride = resolveModelOverrideValue(state);
+  if (currentOverride === nextModel) {
+    return;
+  }
+  const targetSessionKey = state.sessionKey;
+  const prevOverride = state.chatModelOverrides[targetSessionKey];
+  state.lastError = null;
+  // Write the override cache immediately so the picker stays in sync during the RPC round-trip.
+  state.chatModelOverrides = {
+    ...state.chatModelOverrides,
+    [targetSessionKey]: nextModel || null,
+  };
+  try {
+    await state.client.request("sessions.patch", {
+      key: targetSessionKey,
+      model: nextModel || null,
+    });
+    await refreshSessionOptions(state);
+  } catch (err) {
+    // Roll back so the picker reflects the actual server model.
+    state.chatModelOverrides = { ...state.chatModelOverrides, [targetSessionKey]: prevOverride };
+    state.lastError = `Failed to set model: ${String(err)}`;
+  }
 }
 
 /* ── Channel display labels ────────────────────────────── */
@@ -504,6 +634,9 @@ export function resolveSessionOptionGroups(
   };
 
   for (const row of rows) {
+    if (row.key !== sessionKey && (row.kind === "global" || row.kind === "unknown")) {
+      continue;
+    }
     if (hideCron && row.key !== sessionKey && isCronSessionKey(row.key)) {
       continue;
     }

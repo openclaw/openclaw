@@ -33,6 +33,10 @@ export type SlashCommandResult = {
     | "clear"
     | "toggle-focus"
     | "navigate-usage";
+  /** Optional session-level directive changes that the caller should mirror locally. */
+  sessionPatch?: {
+    model?: string | null;
+  };
 };
 
 export async function executeSlashCommand(
@@ -141,7 +145,11 @@ async function executeModel(
 
   try {
     await client.request("sessions.patch", { key: sessionKey, model: args.trim() });
-    return { content: `Model set to \`${args.trim()}\`.`, action: "refresh" };
+    return {
+      content: `Model set to \`${args.trim()}\`.`,
+      action: "refresh",
+      sessionPatch: { model: args.trim() },
+    };
   } catch (err) {
     return { content: `Failed to set model: ${String(err)}` };
   }
