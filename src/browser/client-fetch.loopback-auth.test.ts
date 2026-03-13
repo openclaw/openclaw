@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import type { BrowserDispatchResponse } from "./routes/dispatcher.js";
 
 function okDispatchResponse(): BrowserDispatchResponse {
@@ -6,13 +7,7 @@ function okDispatchResponse(): BrowserDispatchResponse {
 }
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({
-    gateway: {
-      auth: {
-        token: "loopback-token",
-      },
-    },
-  })),
+  loadConfig: vi.fn<() => OpenClawConfig>(),
   startBrowserControlServiceFromConfig: vi.fn(async () => ({ ok: true })),
   dispatch: vi.fn(async (): Promise<BrowserDispatchResponse> => okDispatchResponse()),
 }));
@@ -134,6 +129,30 @@ describe("fetchBrowserJson loopback auth", () => {
       throw new Error(`Expected Error, got ${String(thrown)}`);
     }
     expect(thrown.message).toContain("Chrome CDP handshake timeout");
+    expect(thrown.message).toContain("Do NOT retry the browser tool");
+    expect(thrown.message).toContain("Restart the OpenClaw gateway");
+    expect(thrown.message).not.toContain("Can't reach the OpenClaw browser control service");
+  });
+
+  it("avoids restart-gateway guidance for attachOnly profile timeout", async () => {
+    mocks.loadConfig.mockReturnValue({
+      browser: {
+        attachOnly: true,
+      },
+    });
+    mocks.dispatch.mockRejectedValueOnce(new Error("timed out"));
+
+    const thrown = await fetchBrowserJson<{ ok: boolean }>("/tabs?profile=openclaw").catch(
+      (err: unknown) => err,
+    );
+
+    expect(thrown).toBeInstanceOf(Error);
+    if (!(thrown instanceof Error)) {
+      throw new Error(`Expected Error, got ${String(thrown)}`);
+    }
+    expect(thrown.message).toContain("Browser CDP is not reachable for attachOnly profiles");
+    expect(thrown.message).toContain("Restarting the OpenClaw gateway will not help");
+    expect(thrown.message).not.toContain("Restart the OpenClaw gateway");
     expect(thrown.message).toContain("Do NOT retry the browser tool");
     expect(thrown.message).not.toContain("Can't reach the OpenClaw browser control service");
   });
