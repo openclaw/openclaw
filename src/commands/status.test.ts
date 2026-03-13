@@ -451,7 +451,7 @@ describe("statusCommand", () => {
       "Memory",
       "Channels",
       "WhatsApp",
-      "bootstrap files",
+      "bootstrapping",
       "Sessions",
       "+1000",
       "50%",
