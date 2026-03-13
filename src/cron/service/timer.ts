@@ -48,6 +48,7 @@ type TimedCronRunOutcome = CronRunOutcome &
     jobId: string;
     delivered?: boolean;
     deliveryAttempted?: boolean;
+    outputText?: string;
     startedAt: number;
     endedAt: number;
   };
@@ -299,6 +300,7 @@ export function applyJobResult(
     status: CronRunStatus;
     error?: string;
     delivered?: boolean;
+    outputText?: string;
     startedAt: number;
     endedAt: number;
   },
@@ -492,6 +494,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     status: result.status,
     error: result.error,
     delivered: result.delivered,
+    outputText: result.outputText,
     startedAt: result.startedAt,
     endedAt: result.endedAt,
   });
@@ -1007,7 +1010,8 @@ export async function executeJobCore(
   job: CronJob,
   abortSignal?: AbortSignal,
 ): Promise<
-  CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
+  CronRunOutcome &
+    CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean; outputText?: string }
 > {
   const resolveAbortError = () => ({
     status: "error" as const,
@@ -1146,6 +1150,7 @@ export async function executeJobCore(
     summary: res.summary,
     delivered: res.delivered,
     deliveryAttempted: res.deliveryAttempted,
+    outputText: res.outputText,
     sessionId: res.sessionId,
     sessionKey: res.sessionKey,
     model: res.model,
@@ -1175,6 +1180,7 @@ export async function executeJob(
   let coreResult: {
     status: CronRunStatus;
     delivered?: boolean;
+    outputText?: string;
   } & CronRunOutcome &
     CronRunTelemetry;
   try {
@@ -1188,6 +1194,7 @@ export async function executeJob(
     status: coreResult.status,
     error: coreResult.error,
     delivered: coreResult.delivered,
+    outputText: coreResult.outputText,
     startedAt,
     endedAt,
   });
