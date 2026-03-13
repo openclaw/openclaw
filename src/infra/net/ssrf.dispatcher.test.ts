@@ -115,6 +115,7 @@ describe("createPinnedDispatcher", () => {
     expect(envHttpProxyAgentCtor).toHaveBeenCalledWith({
       connect: {
         autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 300, // Default applied by withPinnedLookup
         lookup,
       },
       proxyTls: {
