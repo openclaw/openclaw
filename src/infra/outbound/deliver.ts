@@ -30,6 +30,7 @@ import type { sendMessageIMessage } from "../../imessage/send.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { MessageSendingAgentContext } from "../../plugins/types.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import type { sendMessageSlack } from "../../slack/send.js";
@@ -237,6 +238,8 @@ type DeliverOutboundPayloadsCoreParams = {
   onPayload?: (payload: NormalizedOutboundPayload) => void;
   /** Session/agent context used for hooks and media local-root scoping. */
   session?: OutboundSessionContext;
+  /** Agent reasoning context threaded from the embedded runner for `message_sending` hooks. */
+  agentContext?: MessageSendingAgentContext;
   mirror?: {
     sessionKey: string;
     agentId?: string;
@@ -403,6 +406,7 @@ async function applyMessageSendingHook(params: {
   to: string;
   channel: Exclude<OutboundChannel, "none">;
   accountId?: string;
+  agentContext?: MessageSendingAgentContext;
 }): Promise<{
   cancelled: boolean;
   payload: ReplyPayload;
@@ -425,6 +429,7 @@ async function applyMessageSendingHook(params: {
           accountId: params.accountId,
           mediaUrls: params.payloadSummary.mediaUrls,
         },
+        agentContext: params.agentContext,
       },
       {
         channelId: params.channel,
@@ -713,6 +718,7 @@ async function deliverOutboundPayloadsCore(
         to,
         channel,
         accountId,
+        agentContext: params.agentContext,
       });
       if (hookResult.cancelled) {
         continue;

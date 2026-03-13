@@ -33,6 +33,8 @@ export type EmbeddedPiAgentMeta = {
 export type EmbeddedPiRunMeta = {
   durationMs: number;
   agentMeta?: EmbeddedPiAgentMeta;
+  /** Tool invocations from this run, for delivery-layer hooks. */
+  toolMetas?: Array<{ toolName: string; meta?: string }>;
   aborted?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
   error?: {
