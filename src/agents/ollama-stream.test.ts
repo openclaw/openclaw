@@ -340,6 +340,7 @@ async function createOllamaTestStream(params: {
     maxTokens?: number;
     signal?: AbortSignal;
     headers?: Record<string, string>;
+    onPayload?: (payload: unknown, model: unknown) => unknown;
   };
 }) {
   const streamFn = createOllamaStreamFn(params.baseUrl, params.defaultHeaders);
@@ -395,6 +396,45 @@ describe("createOllamaStreamFn", () => {
         };
         expect(requestBody.options.num_ctx).toBe(131072);
         expect(requestBody.options.num_predict).toBe(123);
+      },
+    );
+  });
+
+  it("allows payload hooks to override num_ctx for native Ollama requests", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          options: {
+            onPayload: (payload) => {
+              if (!payload || typeof payload !== "object") {
+                return;
+              }
+              const payloadRecord = payload as Record<string, unknown>;
+              if (!payloadRecord.options || typeof payloadRecord.options !== "object") {
+                payloadRecord.options = {};
+              }
+              (payloadRecord.options as Record<string, unknown>).num_ctx = 8192;
+            },
+          },
+        });
+
+        const events = await collectStreamEvents(stream);
+        expect(events.at(-1)?.type).toBe("done");
+
+        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+
+        const requestBody = JSON.parse(requestInit.body) as {
+          options: { num_ctx?: number };
+        };
+        expect(requestBody.options.num_ctx).toBe(8192);
       },
     );
   });

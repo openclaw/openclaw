@@ -925,7 +925,49 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
-  it("does not rewrite tool schema for Kimi (native Anthropic format)", () => {
+  it("injects configured num_ctx for native Ollama models", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        options: { temperature: 0.1 },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "ollama/qwen2.5:14b-8k": {
+              params: {
+                num_ctx: 8192,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "ollama", "qwen2.5:14b-8k");
+
+    const model = {
+      api: "ollama",
+      provider: "ollama",
+      id: "qwen2.5:14b-8k",
+    } as unknown as Model<"ollama">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.options).toEqual({
+      temperature: 0.1,
+      num_ctx: 8192,
+    });
+  });
+
+  it("does not rewrite tool schema for kimi-coding (native Anthropic format)", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {

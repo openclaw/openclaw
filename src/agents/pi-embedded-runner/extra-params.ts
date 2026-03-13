@@ -3,6 +3,7 @@ import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeProviderId } from "../model-selection.js";
 import {
   prepareProviderExtraParams,
   wrapProviderStreamFn,
@@ -74,6 +75,19 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   openaiWsWarmup?: boolean;
 };
 
+function resolvePositiveAliasedParamValue(
+  source: Record<string, unknown> | undefined,
+  snakeCaseKey: string,
+  camelCaseKey: string,
+): number | undefined {
+  const rawValue = resolveAliasedParamValue([source], snakeCaseKey, camelCaseKey);
+  if (typeof rawValue !== "number" || !Number.isFinite(rawValue)) {
+    return undefined;
+  }
+  const floored = Math.floor(rawValue);
+  return floored > 0 ? floored : undefined;
+}
+
 function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
@@ -105,17 +119,61 @@ function createStreamFnWithExtraParams(
     streamParams.cacheRetention = cacheRetention;
   }
 
-  if (Object.keys(streamParams).length === 0) {
+  // Extract OpenRouter provider routing preferences from extraParams.provider.
+  // Injected into model.compat.openRouterRouting so pi-ai's buildParams sets
+  // params.provider in the API request body (openai-completions.js L359-362).
+  // pi-ai's OpenRouterRouting type only declares { only?, order? }, but at
+  // runtime the full object is forwarded — enabling allow_fallbacks,
+  // data_collection, ignore, sort, quantizations, etc.
+  const providerRouting =
+    provider === "openrouter" &&
+    extraParams.provider != null &&
+    typeof extraParams.provider === "object"
+      ? (extraParams.provider as Record<string, unknown>)
+      : undefined;
+  const explicitNumCtx = resolvePositiveAliasedParamValue(extraParams, "num_ctx", "numCtx");
+
+  if (Object.keys(streamParams).length === 0 && !providerRouting && explicitNumCtx === undefined) {
     return undefined;
   }
 
   log.debug(`creating streamFn wrapper with params: ${JSON.stringify(streamParams)}`);
+  if (providerRouting) {
+    log.debug(`OpenRouter provider routing: ${JSON.stringify(providerRouting)}`);
+  }
 
   const underlying = baseStreamFn ?? streamSimple;
   const wrappedStreamFn: StreamFn = (model, context, options) => {
-    return underlying(model, context, {
+    // When provider routing is configured, inject it into model.compat so
+    // pi-ai picks it up via model.compat.openRouterRouting.
+    const effectiveModel = providerRouting
+      ? ({
+          ...model,
+          compat: { ...model.compat, openRouterRouting: providerRouting },
+        } as unknown as typeof model)
+      : model;
+    const shouldInjectNativeOllamaNumCtx =
+      explicitNumCtx !== undefined &&
+      normalizeProviderId(provider) === "ollama" &&
+      effectiveModel.api === "ollama";
+    const originalOnPayload = options?.onPayload;
+    return underlying(effectiveModel, context, {
       ...streamParams,
       ...options,
+      ...(shouldInjectNativeOllamaNumCtx
+        ? {
+            onPayload: (payload: unknown) => {
+              if (payload && typeof payload === "object") {
+                const payloadRecord = payload as Record<string, unknown>;
+                if (!payloadRecord.options || typeof payloadRecord.options !== "object") {
+                  payloadRecord.options = {};
+                }
+                (payloadRecord.options as Record<string, unknown>).num_ctx = explicitNumCtx;
+              }
+              return originalOnPayload?.(payload, effectiveModel);
+            },
+          }
+        : {}),
     });
   };
 
