@@ -86,6 +86,14 @@ openclaw browser create-profile \
   - 附加时徽章显示 `ON`。
 - 再次点击以分离。
 
+**常见坑：** 扩展会绑定**当前正在激活的标签页**。
+如果你是在 OpenClaw Control 控制台页面（或其他页面）里点了扩展图标，就会把那个页面附加上，而不是你原本想控制的页面。
+
+如何确认当前附加了哪个标签页：
+
+- CLI：`openclaw browser --browser-profile chrome tabs`
+- 工具调用：`browser` 传 `profile="chrome"` → `tabs`
+
 ## 它控制哪个标签页？
 
 - 它**不会**自动控制"你正在查看的任何标签页"。
