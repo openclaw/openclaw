@@ -114,8 +114,10 @@ class LegacySessionKeyStrictEngine implements ContextEngine {
     id: "legacy-sessionkey-strict",
     name: "Legacy SessionKey Strict Engine",
   };
+  readonly ingestCalls: Array<Record<string, unknown>> = [];
   readonly assembleCalls: Array<Record<string, unknown>> = [];
   readonly compactCalls: Array<Record<string, unknown>> = [];
+  readonly ingestedMessages: AgentMessage[] = [];
 
   private rejectSessionKey(params: { sessionKey?: string }): void {
     if (Object.prototype.hasOwnProperty.call(params, "sessionKey")) {
@@ -123,12 +125,15 @@ class LegacySessionKeyStrictEngine implements ContextEngine {
     }
   }
 
-  async ingest(_params: {
+  async ingest(params: {
     sessionId: string;
     sessionKey?: string;
     message: AgentMessage;
     isHeartbeat?: boolean;
   }): Promise<IngestResult> {
+    this.ingestCalls.push({ ...params });
+    this.rejectSessionKey(params);
+    this.ingestedMessages.push(params.message);
     return { ingested: true };
   }
 
@@ -427,13 +432,13 @@ describe("Registry tests", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("Legacy sessionKey compatibility", () => {
-  it("retries strict legacy engines without sessionKey", async () => {
+  it("memoizes legacy mode after the first strict compatibility retry", async () => {
     const engineId = `legacy-sessionkey-${Date.now().toString(36)}`;
     const strictEngine = new LegacySessionKeyStrictEngine();
     registerContextEngine(engineId, () => strictEngine);
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
-    const assembled = await engine.assemble({
+    const firstAssembled = await engine.assemble({
       sessionId: "s1",
       sessionKey: "agent:main:test",
       messages: [makeMockMessage()],
@@ -444,14 +449,40 @@ describe("Legacy sessionKey compatibility", () => {
       sessionFile: "/tmp/session.json",
     });
 
-    expect(assembled.estimatedTokens).toBe(7);
+    expect(firstAssembled.estimatedTokens).toBe(7);
     expect(compacted.compacted).toBe(true);
     expect(strictEngine.assembleCalls).toHaveLength(2);
     expect(strictEngine.assembleCalls[0]).toHaveProperty("sessionKey", "agent:main:test");
     expect(strictEngine.assembleCalls[1]).not.toHaveProperty("sessionKey");
-    expect(strictEngine.compactCalls).toHaveLength(2);
-    expect(strictEngine.compactCalls[0]).toHaveProperty("sessionKey", "agent:main:test");
-    expect(strictEngine.compactCalls[1]).not.toHaveProperty("sessionKey");
+    expect(strictEngine.compactCalls).toHaveLength(1);
+    expect(strictEngine.compactCalls[0]).not.toHaveProperty("sessionKey");
+  });
+
+  it("retries strict ingest once and ingests each message only once", async () => {
+    const engineId = `legacy-sessionkey-ingest-${Date.now().toString(36)}`;
+    const strictEngine = new LegacySessionKeyStrictEngine();
+    registerContextEngine(engineId, () => strictEngine);
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    const firstMessage = makeMockMessage("user", "first");
+    const secondMessage = makeMockMessage("assistant", "second");
+
+    await engine.ingest({
+      sessionId: "s1",
+      sessionKey: "agent:main:test",
+      message: firstMessage,
+    });
+    await engine.ingest({
+      sessionId: "s1",
+      sessionKey: "agent:main:test",
+      message: secondMessage,
+    });
+
+    expect(strictEngine.ingestCalls).toHaveLength(3);
+    expect(strictEngine.ingestCalls[0]).toHaveProperty("sessionKey", "agent:main:test");
+    expect(strictEngine.ingestCalls[1]).not.toHaveProperty("sessionKey");
+    expect(strictEngine.ingestCalls[2]).not.toHaveProperty("sessionKey");
+    expect(strictEngine.ingestedMessages).toEqual([firstMessage, secondMessage]);
   });
 
   it("does not retry non-compat runtime errors", async () => {

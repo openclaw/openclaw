@@ -69,7 +69,7 @@ function issueRejectsSessionKeyStrictly(issue: unknown): boolean {
   return isSessionKeyCompatibilityError(issueRecord.message);
 }
 
-function* iterateErrorChain(error: unknown): Generator<unknown> {
+function* iterateErrorChain(error: unknown) {
   let current = error;
   const seen = new Set<unknown>();
   while (current !== undefined && current !== null && !seen.has(current)) {
@@ -141,6 +141,9 @@ function isSessionKeyCompatibilityError(error: unknown): boolean {
 async function invokeWithLegacySessionKeyCompat<TResult, TParams extends SessionKeyCompatParams>(
   method: (params: TParams) => Promise<TResult> | TResult,
   params: TParams,
+  opts?: {
+    onLegacyModeDetected?: () => void;
+  },
 ): Promise<TResult> {
   if (!hasOwnSessionKey(params)) {
     return await method(params);
@@ -152,6 +155,7 @@ async function invokeWithLegacySessionKeyCompat<TResult, TParams extends Session
     if (!isSessionKeyCompatibilityError(error)) {
       throw error;
     }
+    opts?.onLegacyModeDetected?.();
     return await method(withoutSessionKey(params));
   }
 }
@@ -164,7 +168,8 @@ function wrapContextEngineWithSessionKeyCompat(engine: ContextEngine): ContextEn
     return engine;
   }
 
-  return new Proxy(engine, {
+  let isLegacy = false;
+  const proxy: ContextEngine = new Proxy(engine, {
     get(target, property, receiver) {
       if (property === LEGACY_SESSION_KEY_COMPAT) {
         return true;
@@ -179,10 +184,20 @@ function wrapContextEngineWithSessionKeyCompat(engine: ContextEngine): ContextEn
         return value.bind(target);
       }
 
-      return (params: SessionKeyCompatParams) =>
-        invokeWithLegacySessionKeyCompat(value.bind(target), params);
+      return (params: SessionKeyCompatParams) => {
+        const method = value.bind(target) as (params: SessionKeyCompatParams) => unknown;
+        if (isLegacy && hasOwnSessionKey(params)) {
+          return method(withoutSessionKey(params));
+        }
+        return invokeWithLegacySessionKeyCompat(method, params, {
+          onLegacyModeDetected: () => {
+            isLegacy = true;
+          },
+        });
+      };
     },
-  }) as ContextEngine;
+  });
+  return proxy;
 }
 
 // ---------------------------------------------------------------------------
