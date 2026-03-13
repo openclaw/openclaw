@@ -30,9 +30,17 @@ type UsageSummaryOptions = {
   fetch?: typeof fetch;
 };
 
-export async function loadProviderUsageSummary(
-  opts: UsageSummaryOptions = {},
-): Promise<UsageSummary> {
+const USAGE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+type UsageCacheEntry = {
+  summary?: UsageSummary;
+  updatedAt?: number;
+  inFlight?: Promise<UsageSummary>;
+};
+
+const usageCache: UsageCacheEntry = {};
+
+async function fetchProviderUsageSummary(opts: UsageSummaryOptions = {}): Promise<UsageSummary> {
   const now = opts.now ?? Date.now();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const fetchFn = resolveFetch(opts.fetch);
@@ -103,3 +111,48 @@ export async function loadProviderUsageSummary(
 
   return { updatedAt: now, providers };
 }
+
+export async function loadProviderUsageSummary(
+  opts: UsageSummaryOptions = {},
+): Promise<UsageSummary> {
+  const now = Date.now();
+  if (
+    usageCache.summary &&
+    usageCache.updatedAt &&
+    now - usageCache.updatedAt < USAGE_CACHE_TTL_MS
+  ) {
+    return usageCache.summary;
+  }
+
+  if (usageCache.inFlight) {
+    if (usageCache.summary) {
+      return usageCache.summary;
+    }
+    return await usageCache.inFlight;
+  }
+
+  const inFlight = fetchProviderUsageSummary(opts)
+    .then((summary) => {
+      usageCache.summary = summary;
+      usageCache.updatedAt = Date.now();
+      usageCache.inFlight = undefined;
+      return summary;
+    })
+    .catch((err) => {
+      usageCache.inFlight = undefined;
+      if (usageCache.summary) {
+        return usageCache.summary;
+      }
+      throw err;
+    });
+
+  usageCache.inFlight = inFlight;
+
+  if (usageCache.summary) {
+    return usageCache.summary;
+  }
+  return await inFlight;
+}
+
+// Exposed for unit tests.
+export const __test = { usageCache, USAGE_CACHE_TTL_MS };
