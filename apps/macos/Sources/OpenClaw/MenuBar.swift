@@ -74,6 +74,8 @@ struct OpenClawApp: App {
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
         }
         .onChange(of: self.state.connectionMode) { _, mode in
+            // Skip coordinator apply during a transient probe flip so we don't disrupt the active local session.
+            guard !self.state.suppressRemoteProbeReset else { return }
             Task { await ConnectionModeCoordinator.shared.apply(mode: mode, paused: self.state.isPaused) }
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
         }

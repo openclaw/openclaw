@@ -172,6 +172,10 @@ final class AppState {
         }
     }
 
+    /// Set to `true` while a remote-probe diagnostic is temporarily flipping `connectionMode`
+    /// so that `MenuBar` can skip triggering `ConnectionModeCoordinator.apply` for that transient flip.
+    var suppressRemoteProbeReset: Bool = false
+
     var remoteTransport: RemoteTransport {
         didSet { self.syncGatewayConfigIfNeeded() }
     }

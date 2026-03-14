@@ -80,7 +80,7 @@ struct OnboardingView: View {
     @State var localGatewayProbe: LocalGatewayProbe?
     @State var remoteProbeState: RemoteProbeState = .idle
     @State var remoteAuthIssue: RemoteGatewayAuthIssue? = nil
-    @State var suppressRemoteProbeReset: Bool = false
+
     @Bindable var state: AppState
     var permissionMonitor: PermissionMonitor
 

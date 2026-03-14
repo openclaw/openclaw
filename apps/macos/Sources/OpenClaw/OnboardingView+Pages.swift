@@ -118,7 +118,7 @@ extension OnboardingView {
         .onChange(of: self.state.connectionMode) { _, newValue in
             guard Self.shouldResetRemoteProbeFeedback(
                 for: newValue,
-                suppressReset: self.suppressRemoteProbeReset)
+                suppressReset: self.state.suppressRemoteProbeReset)
             else { return }
             self.resetRemoteProbeFeedback()
         }
@@ -474,9 +474,9 @@ extension OnboardingView {
         self.remoteAuthIssue = nil
         defer {
             if shouldRestoreMode {
-                self.suppressRemoteProbeReset = true
+                self.state.suppressRemoteProbeReset = true
                 self.state.connectionMode = originalMode
-                self.suppressRemoteProbeReset = false
+                self.state.suppressRemoteProbeReset = false
             }
         }
 
