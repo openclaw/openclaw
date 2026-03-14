@@ -304,7 +304,7 @@ YAML
 
   for mount in "$@"; do
     validate_mount_spec "$mount"
-    printf '      - %s\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - "%s"\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
   done
 
   cat >>"$EXTRA_COMPOSE_FILE" <<'YAML'
@@ -320,7 +320,7 @@ YAML
 
   for mount in "$@"; do
     validate_mount_spec "$mount"
-    printf '      - %s\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - "%s"\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
   done
 
   if [[ -n "$home_volume" && "$home_volume" != *"/"* ]]; then
