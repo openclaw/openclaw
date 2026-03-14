@@ -179,6 +179,22 @@ export class TuiStreamAssembler {
     const streamedDisplayText = state.displayText;
     const streamedTextBlocks = [...state.contentBlocks];
     const streamedSawNonTextContentBlocks = state.sawNonTextContentBlocks;
+
+    // If there was no streamed content (no delta events), just use the final message directly
+    // without any boundary drop logic
+    if (!streamedDisplayText.trim()) {
+      this.updateRunState(state, message, showThinking, {
+        boundaryDropMode: "off",
+      });
+      const finalText = resolveFinalAssistantText({
+        finalText: state.displayText,
+        streamedText: streamedDisplayText,
+      });
+      this.runs.delete(runId);
+      return finalText;
+    }
+
+    // Normal case: there was streamed content, apply boundary drop logic
     this.updateRunState(state, message, showThinking, {
       boundaryDropMode: "streamed-only",
     });

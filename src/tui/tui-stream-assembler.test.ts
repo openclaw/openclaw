@@ -131,4 +131,14 @@ describe("TuiStreamAssembler", () => {
       expect(finalText).toBe(testCase.expected);
     });
   }
+
+  it("displays message when finalize is called with no preceding delta events", () => {
+    const assembler = new TuiStreamAssembler();
+    const finalText = assembler.finalize(
+      "run-no-delta",
+      messageWithContent([text("Hello")]),
+      false,
+    );
+    expect(finalText).toBe("Hello");
+  });
 });
