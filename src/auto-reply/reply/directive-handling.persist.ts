@@ -173,6 +173,14 @@ export async function persistInlineDirectives(params: {
           });
           provider = resolved.ref.provider;
           model = resolved.ref.model;
+          // Update contextTokens to match the new model so session state
+          // reflects the correct context window after a model switch (#35372).
+          const newContextTokens =
+            agentCfg?.contextTokens ?? lookupContextTokens(model) ?? DEFAULT_CONTEXT_TOKENS;
+          if (sessionEntry.contextTokens !== newContextTokens) {
+            sessionEntry.contextTokens = newContextTokens;
+            updated = true;
+          }
           const nextLabel = `${provider}/${model}`;
           if (nextLabel !== initialModelLabel) {
             enqueueSystemEvent(formatModelSwitchEvent(nextLabel, resolved.alias), {
