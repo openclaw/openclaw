@@ -1,4 +1,5 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
 import { listFeishuAccountIds, resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -29,8 +30,9 @@ function readInheritedFeishuAccountId(
   if (!normalized || !config) {
     return undefined;
   }
-  const knownIds = new Set(listFeishuAccountIds(config));
-  return knownIds.has(normalized) ? normalized : undefined;
+  const inheritedAccountId = normalizeAccountId(normalized);
+  const knownIds = new Set(listFeishuAccountIds(config).map((id) => normalizeAccountId(id)));
+  return knownIds.has(inheritedAccountId) ? inheritedAccountId : undefined;
 }
 
 export function resolveFeishuToolAccount(params: {
