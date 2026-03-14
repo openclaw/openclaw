@@ -10,6 +10,8 @@ import { normalizeGoogleModelId } from "./models-config.providers.js";
 
 const log = createSubsystemLogger("model-selection");
 
+const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
+
 export type ModelRef = {
   provider: string;
   model: string;
@@ -122,6 +124,13 @@ function normalizeAnthropicModelId(model: string): string {
     return trimmed;
   }
   const lower = trimmed.toLowerCase();
+  // Define aliases inline to avoid circular dependency issues with defaults.ts
+  const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
+    "opus-4.6": "claude-opus-4-6",
+    "opus-4.5": "claude-opus-4-5",
+    "sonnet-4.6": "claude-sonnet-4-6",
+    "sonnet-4.5": "claude-sonnet-4-5",
+  };
   return ANTHROPIC_MODEL_ALIASES[lower] ?? trimmed;
 }
 
