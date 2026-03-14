@@ -172,19 +172,23 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
   const operatorHint = resolveBrowserFetchOperatorHint(url);
   const msg = String(err);
   const msgLower = msg.toLowerCase();
-  const looksLikeTimeout =
-    msgLower.includes("timed out") ||
-    msgLower.includes("timeout") ||
-    msgLower.includes("aborted") ||
-    msgLower.includes("abort") ||
-    msgLower.includes("aborterror");
+  const looksLikeTimeout = msgLower.includes("timed out") || msgLower.includes("timeout");
+  const looksLikeAbort =
+    msgLower.includes("aborterror") || msgLower.includes("aborted") || msgLower.includes("abort");
+  // Timeouts are often transient (gateway starting up, momentary load spike).
+  // Do not include the no-retry hint — the model should be free to try again.
   if (looksLikeTimeout) {
     return new Error(
-      appendBrowserToolModelHint(
-        `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint}`,
-      ),
+      `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint}`,
     );
   }
+  // Aborts are triggered by the caller (user cancel, upstream signal). The operation
+  // was deliberately stopped — not a persistent failure. No retry hint needed.
+  if (looksLikeAbort) {
+    return new Error("Browser control service request was cancelled.");
+  }
+  // Persistent connection failures (ECONNREFUSED, DNS, etc.) — the service is
+  // genuinely unreachable. Include the no-retry hint to prevent token-wasting loops.
   return new Error(
     appendBrowserToolModelHint(
       `Can't reach the OpenClaw browser control service. ${operatorHint} (${msg})`,
