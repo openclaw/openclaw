@@ -21,6 +21,7 @@ import {
   applySync,
   type ConfigAgentEntry,
 } from "../../config/agent-config-sync.js";
+import { loadAgentFromDir } from "../../config/agent-manifest-validation.js";
 import { syncRegistry, type RegistryEntry } from "../../config/agent-registry-sync.js";
 import { loadBlueprint, deployAgent } from "../../config/agent-workspace-deploy.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
@@ -38,6 +39,9 @@ interface LoadedAgent {
   dir: string;
 }
 
+/** Directories that are not agent folders. */
+const EXCLUDED_DIRS = new Set(["personas", "_archive"]);
+
 async function loadBundledAgents(): Promise<LoadedAgent[]> {
   const agents: LoadedAgent[] = [];
   let entries: { isDirectory(): boolean; name: string }[];
@@ -47,25 +51,14 @@ async function loadBundledAgents(): Promise<LoadedAgent[]> {
     return agents;
   }
   for (const entry of entries) {
-    if (!entry.isDirectory()) {
+    if (!entry.isDirectory() || EXCLUDED_DIRS.has(entry.name) || entry.name.startsWith(".")) {
       continue;
     }
     const agentDir = join(BUNDLED_AGENTS_DIR, entry.name);
-    const yamlPath = join(agentDir, "agent.yaml");
-    let content: string;
-    try {
-      content = await readFile(yamlPath, "utf-8");
-    } catch {
-      continue;
-    }
-    try {
-      const parsed = parseYaml(content);
-      const result = AgentManifestSchema.safeParse(parsed);
-      if (result.success) {
-        agents.push({ manifest: result.data, dir: agentDir });
-      }
-    } catch {
-      // Skip invalid manifests
+    // Use loadAgentFromDir which supports both unified AGENT.md and legacy agent.yaml
+    const result = await loadAgentFromDir(agentDir);
+    if (result.manifest) {
+      agents.push({ manifest: result.manifest, dir: agentDir });
     }
   }
   return agents;

@@ -5,9 +5,8 @@
  * against config agents.list and auto-applies non-destructive sync
  * (adds missing entries, fixes field drift, rebuilds allowAgents).
  */
-import { readdir, readFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { parse as parseYaml } from "yaml";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   deriveAllowAgents,
@@ -15,12 +14,14 @@ import {
   applySync,
   type ConfigAgentEntry,
 } from "../config/agent-config-sync.js";
+import { loadAgentFromDir } from "../config/agent-manifest-validation.js";
 import { loadBlueprint, deployAgent } from "../config/agent-workspace-deploy.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
-import { AgentManifestSchema } from "../config/zod-schema.agent-manifest.js";
 import type { AgentManifest } from "../config/zod-schema.agent-manifest.js";
 
 const BUNDLED_AGENTS_DIR = join(import.meta.dirname, "..", "agents");
+/** Directories that are not agent folders. */
+const EXCLUDED_DIRS = new Set(["personas", "_archive"]);
 
 async function loadManifests(): Promise<AgentManifest[]> {
   const manifests: AgentManifest[] = [];
@@ -31,19 +32,14 @@ async function loadManifests(): Promise<AgentManifest[]> {
     return manifests;
   }
   for (const entry of entries) {
-    if (!entry.isDirectory()) {
+    if (!entry.isDirectory() || EXCLUDED_DIRS.has(entry.name) || entry.name.startsWith(".")) {
       continue;
     }
-    const yamlPath = join(BUNDLED_AGENTS_DIR, entry.name, "agent.yaml");
-    try {
-      const content = await readFile(yamlPath, "utf-8");
-      const parsed = parseYaml(content);
-      const result = AgentManifestSchema.safeParse(parsed);
-      if (result.success) {
-        manifests.push(result.data);
-      }
-    } catch {
-      // Skip invalid/missing manifests
+    const agentDir = join(BUNDLED_AGENTS_DIR, entry.name);
+    // Supports both unified AGENT.md (frontmatter) and legacy agent.yaml
+    const result = await loadAgentFromDir(agentDir);
+    if (result.manifest) {
+      manifests.push(result.manifest);
     }
   }
   return manifests;
