@@ -258,7 +258,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               setRuntime(channelId, id, {
                 accountId: id,
                 restartPending: false,
-                reconnectAttempts: attempt,
+                // Cap at MAX_RESTART_ATTEMPTS so callers see the configured
+                // limit rather than an internal over-count (attempt is already
+                // MAX + 1 at this point).
+                reconnectAttempts: MAX_RESTART_ATTEMPTS,
               });
               log.error?.(`[${id}] giving up after ${MAX_RESTART_ATTEMPTS} restart attempts`);
               return;

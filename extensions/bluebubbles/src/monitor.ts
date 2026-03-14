@@ -269,7 +269,21 @@ export async function monitorBlueBubblesProvider(
   const core = getBlueBubblesRuntime();
   const path = options.webhookPath?.trim() || DEFAULT_WEBHOOK_PATH;
 
-  // Fetch and cache server info (for macOS version detection in action gating)
+  // Register the webhook route immediately so that incoming messages are
+  // accepted as soon as the provider starts (or restarts).  Fetching server
+  // info is async and can take up to 5 s; registering after the fetch would
+  // leave a window where POST /bluebubbles-webhook returns 404.
+  const unregister = registerBlueBubblesWebhookTarget({
+    account,
+    config,
+    runtime,
+    core,
+    path,
+    statusSink,
+  });
+
+  // Fetch and cache server info (for macOS version detection in action gating).
+  // Done after registration so the webhook is already reachable.
   const serverInfo = await fetchBlueBubblesServerInfo({
     baseUrl: account.baseUrl,
     password: account.config.password,
@@ -284,15 +298,6 @@ export async function monitorBlueBubblesProvider(
       `[${account.accountId}] BlueBubbles Private API ${serverInfo.private_api ? "enabled" : "disabled"}`,
     );
   }
-
-  const unregister = registerBlueBubblesWebhookTarget({
-    account,
-    config,
-    runtime,
-    core,
-    path,
-    statusSink,
-  });
 
   return await new Promise((resolve) => {
     const stop = () => {
