@@ -126,8 +126,13 @@ fun ChatScreen(
   val sessionKey by viewModel.sessionKey.collectAsState()
   val sessions by viewModel.sessions.collectAsState()
   val config by viewModel.config.collectAsState()
+  val listState = rememberScalingLazyListState()
+  val menuListState = rememberScalingLazyListState()
+  val pagerState = rememberPagerState(pageCount = { ChatPageCount })
+  val scope = rememberCoroutineScope()
   val speaker = remember(context) { WearReplySpeaker(context) }
   val latestTtsEnabled by rememberUpdatedState(config.nativeTtsEnabled)
+  val latestMessages by rememberUpdatedState(messages)
 
   DisposableEffect(speaker) {
     onDispose { speaker.shutdown() }
@@ -156,13 +161,9 @@ fun ChatScreen(
       }
     }
 
-  LaunchedEffect(viewModel, speaker) {
-    viewModel.assistantReplies.collect { reply ->
-      if (latestTtsEnabled) {
-        speaker.speak(reply)
-      }
-    }
-  }
+  val showEmptyState = messages.isEmpty()
+  val showStatusHeader = showEmptyState || isLoading
+  val latestShowStatusHeader by rememberUpdatedState(showStatusHeader)
 
   val executeReply = {
     launchReplyAction(
@@ -182,14 +183,8 @@ fun ChatScreen(
     )
   }
 
-  val listState = rememberScalingLazyListState()
-  val menuListState = rememberScalingLazyListState()
-  val pagerState = rememberPagerState(pageCount = { ChatPageCount })
-  val scope = rememberCoroutineScope()
   val lifecycleOwner = LocalLifecycleOwner.current
   val needsGatewaySetup = !config.usePhoneProxy && !config.isValid
-  val showEmptyState = messages.isEmpty()
-  val showStatusHeader = showEmptyState || isLoading
   val sessionDisplayName =
     remember(sessions, sessionKey) {
       sessions.firstOrNull { it.key == sessionKey }?.displayName?.takeIf { it.isNotBlank() }
@@ -221,6 +216,22 @@ fun ChatScreen(
     derivedStateOf { lastVisibleIndex >= lastContentItemIndex }
   }
   var pendingInitialScrollToLatest by rememberSaveable(sessionKey) { mutableStateOf(true) }
+
+  LaunchedEffect(viewModel, speaker, listState) {
+    viewModel.assistantReplies.collect { reply ->
+      if (latestTtsEnabled) {
+        speaker.speak(reply)
+      }
+      val latestAssistantIndex =
+        chatLatestAssistantMessageIndex(
+          showHeader = latestShowStatusHeader,
+          messages = latestMessages,
+        ) ?: return@collect
+      followLatest = false
+      pendingInitialScrollToLatest = false
+      listState.scrollToItem(latestAssistantIndex)
+    }
+  }
 
   LaunchedEffect(lastVisibleIndex) {
     followLatest = lastVisibleIndex >= lastContentItemIndex
@@ -1209,4 +1220,13 @@ private fun chatLatestAnchorIndex(
   if (isSending && !hasStreamingText) index += 1
   index += 1
   return index
+}
+
+private fun chatLatestAssistantMessageIndex(
+  showHeader: Boolean,
+  messages: List<WearChatMessage>,
+): Int? {
+  val latestAssistantMessageIndex = messages.indexOfLast { it.role == "assistant" && it.text.isNotBlank() }
+  if (latestAssistantMessageIndex < 0) return null
+  return latestAssistantMessageIndex + if (showHeader) 1 else 0
 }

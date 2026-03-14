@@ -226,6 +226,10 @@ class WearChatControllerTest {
     runCurrent()
 
     assertTrue(controller.isSending.value)
+    assertEquals(
+      listOf("Older question", "Older answer", "New question"),
+      controller.messages.value.map { it.text },
+    )
     assertTrue(replies.isEmpty())
 
     collectJob.cancel()

@@ -1,9 +1,9 @@
 package ai.openclaw.wear
 
-import android.app.RemoteInput
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import androidx.core.app.RemoteInput
 
 class WearNotificationReplyReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
