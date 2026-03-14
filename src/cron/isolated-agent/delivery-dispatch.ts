@@ -546,6 +546,32 @@ export async function dispatchCronDelivery(
       };
     }
 
+    // Suppress SILENT_REPLY_TOKEN before delivery path selection (#45909).
+    // This check previously only lived inside finalizeTextDelivery, so the
+    // direct delivery path (thread-based / structured content) leaked NO_REPLY.
+    if (
+      synthesizedText?.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase() &&
+      deliveryPayloads.every(
+        (p) => !p.text || p.text.trim().toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase(),
+      )
+    ) {
+      return {
+        result: params.withRunSession({
+          status: "ok",
+          summary,
+          outputText,
+          delivered: true,
+          ...params.telemetry,
+        }),
+        delivered: true,
+        deliveryAttempted: true,
+        summary,
+        outputText,
+        synthesizedText,
+        deliveryPayloads,
+      };
+    }
+
     // Finalize descendant/subagent output first for text-only cron runs, then
     // send through the real outbound adapter so delivered=true always reflects
     // an actual channel send instead of internal announce routing.
