@@ -11,6 +11,7 @@ describe("path prepend helpers", () => {
   it("finds the actual PATH key while preserving original casing", () => {
     expect(findPathKey({ PATH: "/usr/bin" })).toBe("PATH");
     expect(findPathKey({ Path: "/usr/bin" })).toBe("Path");
+    expect(findPathKey({ path: "/usr/bin" })).toBe("path");
     expect(findPathKey({ PaTh: "/usr/bin" })).toBe("PaTh");
     expect(findPathKey({ HOME: "/tmp" })).toBe("PATH");
   });
@@ -59,6 +60,10 @@ describe("path prepend helpers", () => {
     const envWithoutPath = { HOME: "/tmp/home" };
     applyPathPrepend(envWithoutPath, ["/custom/bin"], { requireExisting: true });
     expect(envWithoutPath).toEqual({ HOME: "/tmp/home" });
+
+    const envWithBlankPath = { path: "" };
+    applyPathPrepend(envWithBlankPath, ["/custom/bin"], { requireExisting: true });
+    expect(envWithBlankPath).toEqual({ path: "" });
 
     const envWithPath = { PATH: "/usr/bin" };
     applyPathPrepend(envWithPath, [], { requireExisting: true });
