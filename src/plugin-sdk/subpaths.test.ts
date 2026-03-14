@@ -126,5 +126,8 @@ describe("plugin-sdk subpath exports", () => {
     const twitch = await import("openclaw/plugin-sdk/twitch");
     expect(typeof twitch.DEFAULT_ACCOUNT_ID).toBe("string");
     expect(typeof twitch.normalizeAccountId).toBe("function");
+
+    const zalo = await import("openclaw/plugin-sdk/zalo");
+    expect(typeof zalo.resolveClientIp).toBe("function");
   });
 });
