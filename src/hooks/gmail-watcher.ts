@@ -130,6 +130,9 @@ export type GmailWatcherStartResult = {
  * Called automatically by the gateway if hooks.gmail is configured.
  */
 export async function startGmailWatcher(cfg: OpenClawConfig): Promise<GmailWatcherStartResult> {
+  // Clean up any previous watcher before starting a new one (safe on restart)
+  await stopGmailWatcher();
+
   // Check if gmail hooks are configured
   if (!cfg.hooks?.enabled) {
     return { started: false, reason: "hooks not enabled" };
@@ -214,24 +217,22 @@ export async function stopGmailWatcher(): Promise<void> {
 
   if (watcherProcess) {
     log.info("stopping gmail watcher");
-    watcherProcess.kill("SIGTERM");
+    const proc = watcherProcess;
+    watcherProcess = null;
+    proc.kill("SIGTERM");
 
     // Wait a bit for graceful shutdown
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
-        if (watcherProcess) {
-          watcherProcess.kill("SIGKILL");
-        }
+        proc.kill("SIGKILL");
         resolve();
       }, 3000);
 
-      watcherProcess?.on("exit", () => {
+      proc.on("exit", () => {
         clearTimeout(timeout);
         resolve();
       });
     });
-
-    watcherProcess = null;
   }
 
   currentConfig = null;
