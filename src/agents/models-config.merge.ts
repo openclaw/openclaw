@@ -39,8 +39,27 @@ export function mergeProviderModels(
 ): ProviderConfig {
   const implicitModels = Array.isArray(implicit.models) ? implicit.models : [];
   const explicitModels = Array.isArray(explicit.models) ? explicit.models : [];
+  const implicitHeaders =
+    implicit.headers && typeof implicit.headers === "object" && !Array.isArray(implicit.headers)
+      ? implicit.headers
+      : undefined;
+  const explicitHeaders =
+    explicit.headers && typeof explicit.headers === "object" && !Array.isArray(explicit.headers)
+      ? explicit.headers
+      : undefined;
   if (implicitModels.length === 0) {
-    return { ...implicit, ...explicit };
+    return {
+      ...implicit,
+      ...explicit,
+      ...(implicitHeaders || explicitHeaders
+        ? {
+            headers: {
+              ...implicitHeaders,
+              ...explicitHeaders,
+            },
+          }
+        : {}),
+    };
   }
 
   const implicitById = new Map(
@@ -93,6 +112,14 @@ export function mergeProviderModels(
   return {
     ...implicit,
     ...explicit,
+    ...(implicitHeaders || explicitHeaders
+      ? {
+          headers: {
+            ...implicitHeaders,
+            ...explicitHeaders,
+          },
+        }
+      : {}),
     models: mergedModels,
   };
 }
@@ -148,9 +175,14 @@ function resolveProviderApiSurface(
 function shouldPreserveExistingApiKey(params: {
   providerKey: string;
   existing: ExistingProviderConfig;
+  nextEntry: ProviderConfig;
   secretRefManagedProviders: ReadonlySet<string>;
 }): boolean {
-  const { providerKey, existing, secretRefManagedProviders } = params;
+  const { providerKey, existing, nextEntry, secretRefManagedProviders } = params;
+  const nextApiKey = typeof nextEntry.apiKey === "string" ? nextEntry.apiKey : "";
+  if (nextApiKey && isNonSecretApiKeyMarker(nextApiKey)) {
+    return false;
+  }
   return (
     !secretRefManagedProviders.has(providerKey) &&
     typeof existing.apiKey === "string" &&
@@ -198,7 +230,14 @@ export function mergeWithExistingProviderSecrets(params: {
       continue;
     }
     const preserved: Record<string, unknown> = {};
-    if (shouldPreserveExistingApiKey({ providerKey: key, existing, secretRefManagedProviders })) {
+    if (
+      shouldPreserveExistingApiKey({
+        providerKey: key,
+        existing,
+        nextEntry: newEntry,
+        secretRefManagedProviders,
+      })
+    ) {
       preserved.apiKey = existing.apiKey;
     }
     if (

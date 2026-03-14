@@ -7,7 +7,11 @@ import {
   resolveProfileUnusableUntilForDisplay,
 } from "../../agents/auth-profiles.js";
 import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
+import {
+  getCustomProviderApiKey,
+  resolveEnvApiKey,
+  resolveUsableCustomProviderApiKey,
+} from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { shortenHomePath } from "../../utils.js";
 import { maskApiKey } from "./list.format.js";
@@ -99,6 +103,7 @@ export function resolveProviderAuthOverview(params: {
 
   const envKey = resolveEnvApiKey(provider);
   const customKey = getCustomProviderApiKey(cfg, provider);
+  const usableCustomKey = resolveUsableCustomProviderApiKey({ cfg, provider });
 
   const effective: ProviderAuthOverview["effective"] = (() => {
     if (profiles.length > 0) {
@@ -115,8 +120,8 @@ export function resolveProviderAuthOverview(params: {
         detail: isOAuthEnv ? "OAuth (env)" : maskApiKey(envKey.apiKey),
       };
     }
-    if (customKey) {
-      return { kind: "models.json", detail: formatMarkerOrSecret(customKey) };
+    if (usableCustomKey) {
+      return { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
     }
     return { kind: "missing", detail: "missing" };
   })();
