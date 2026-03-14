@@ -1,4 +1,5 @@
 import { runBtwSideQuestion } from "../../agents/btw.js";
+import { extractBtwQuestion } from "./btw-command.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
@@ -8,8 +9,8 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
   if (!allowTextCommands) {
     return null;
   }
-  const match = params.command.commandBodyNormalized.match(/^\/btw(?:\s+(.*))?$/i);
-  if (!match) {
+  const question = extractBtwQuestion(params.command.commandBodyNormalized);
+  if (question === null) {
     return null;
   }
   const unauthorized = rejectUnauthorizedCommand(params, "/btw");
@@ -17,7 +18,6 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
     return unauthorized;
   }
 
-  const question = match[1]?.trim() ?? "";
   if (!question) {
     return {
       shouldContinue: false,
