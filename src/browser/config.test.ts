@@ -27,10 +27,8 @@ describe("browser config", () => {
     expect(user?.cdpPort).toBe(0);
     expect(user?.cdpUrl).toBe("");
     expect(user?.mcpTargetUrl).toBeUndefined();
-    const chromeRelay = resolveProfile(resolved, "chrome-relay");
-    expect(chromeRelay?.driver).toBe("extension");
-    expect(chromeRelay?.cdpPort).toBe(18792);
-    expect(chromeRelay?.cdpUrl).toBe("http://127.0.0.1:18792");
+    // chrome-relay is no longer auto-created
+    expect(resolveProfile(resolved, "chrome-relay")).toBe(null);
     expect(resolved.remoteCdpTimeoutMs).toBe(1500);
     expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(3000);
   });
