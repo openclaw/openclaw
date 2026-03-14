@@ -1,0 +1,13 @@
+# Test cases for skill-creator
+
+- name: "Create a basic skill"
+  prompt: "Create a new skill called my-skill that helps with git operations"
+  expected: ["init_skill.py", "SKILL.md", "scripts"]
+
+- name: "Package a skill"
+  prompt: "How do I package a skill for distribution?"
+  expected: ["package_skill.py", "validate", "distribution"]
+
+- name: "Understand skill anatomy"
+  prompt: "What files are required in a skill folder?"
+  expected: ["SKILL.md", "frontmatter", "YAML", "scripts", "references", "assets"]

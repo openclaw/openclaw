@@ -370,3 +370,93 @@ After testing the skill, users may request improvements. Often this happens righ
 2. Notice struggles or inefficiencies
 3. Identify how SKILL.md or bundled resources should be updated
 4. Implement changes and test again
+
+## Eval/Test Framework
+
+OpenClaw supports a testing framework for skills to ensure quality and reliability. Add test cases to validate skill behavior.
+
+### Test Directory Structure
+
+```
+skill-name/
+├── SKILL.md (required)
+├── tests/
+│   ├── test1.yaml
+│   └── test2.yaml
+├── scripts/
+├── references/
+└── assets/
+```
+
+### Test Case Format
+
+Each test case is a YAML file with the following structure:
+
+```yaml
+- name: "Test name"
+  prompt: "Input prompt to test"
+  expected: "Expected output or keyword"
+  # Optional: additional context files
+  context:
+    file1.md: "Content to include"
+  # Optional: LLM options
+  options:
+    model: "claude-sonnet-4-20250514"
+    temperature: 0.5
+    maxTokens: 1000
+```
+
+**Fields:**
+
+- `name` (required): Descriptive test name
+- `prompt` (required): Input prompt to send to the LLM
+- `expected` (required): Expected output (string or array of strings)
+- `context` (optional): Additional files to include as context
+- `options` (optional): LLM configuration overrides
+
+### CLI Commands
+
+**Run tests:**
+
+```bash
+openclaw skills test <skill-name>
+openclaw skills test <skill-name> --verbose
+openclaw skills test <skill-name> --json
+```
+
+**Run benchmark (all tests with metrics):**
+
+```bash
+openclaw skills bench <skill-name>
+openclaw skills bench <skill-name> --verbose
+openclaw skills bench <skill-name> --json
+```
+
+**Analyze trigger description:**
+
+```bash
+openclaw skills analyze-trigger <skill-name>
+openclaw skills analyze-trigger <skill-name> --verbose
+```
+
+### Example Test Suite
+
+```yaml
+# tests/basic.yaml
+- name: "Generate hello world"
+  prompt: "Write a hello world program in Python"
+  expected: ["print", "hello", "world"]
+
+- name: "Handle error case"
+  prompt: "What happens if the file doesn't exist?"
+  expected: "FileNotFoundError"
+  options:
+    temperature: 0.3
+```
+
+### Why Test?
+
+- **Confidence**: Move from "feels like it works" to "know it works"
+- **Regression detection**: Catch breaking changes before users do
+- **Model evolution**: Know when base models no longer need the skill
+- **Quality**: Higher quality skills for the community
