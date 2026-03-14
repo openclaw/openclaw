@@ -115,4 +115,35 @@ describe("sessions tools visibility", () => {
     });
     expect(denied.details).toMatchObject({ status: "forbidden" });
   });
+
+  it("uses canonical main key for tree visibility when agentSessionKey is not set", async () => {
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: { agentToAgent: { enabled: false } },
+    };
+    const acpChildKey = "agent:main:acp:thread-123";
+    mockGatewayWithHistory((req) => {
+      if (req.method === "sessions.list" && req.params?.spawnedBy === "agent:main:main") {
+        return { sessions: [{ key: acpChildKey }] };
+      }
+      if (req.method === "sessions.resolve") {
+        const key = typeof req.params?.key === "string" ? String(req.params?.key) : "";
+        return { key: key || acpChildKey };
+      }
+      return undefined;
+    });
+
+    const tools = createOpenClawTools({ agentSessionKey: undefined });
+    const tool = tools.find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call5", { sessionKey: acpChildKey });
+    expect(result.details).toMatchObject({
+      sessionKey: acpChildKey,
+      messages: expect.any(Array),
+    });
+  });
 });

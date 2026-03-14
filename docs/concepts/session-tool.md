@@ -75,6 +75,19 @@ Behavior:
 - Returns messages array in the raw transcript format.
 - When given a `sessionId`, OpenClaw resolves it to the corresponding session key (missing ids error).
 
+Result status and observability:
+
+- On success the tool returns `sessionKey`, `messages`, and `historyStatus` (from the gateway). Use `historyStatus` to interpret empty `messages`:
+  - `ok`: transcript has messages (may still be truncated/capped by the tool).
+  - `empty`: transcript file exists but has no messages yet.
+  - `not_persisted`: session entry exists but no transcript file or sessionId (e.g. ACP session not yet persisted).
+  - `not_found`: no store entry for that session key (e.g. wrong key or store not yet updated).
+- When the tool cannot return history, it returns a top-level `status` and `error`:
+  - `forbidden`: visibility or agent-to-agent policy denies access (e.g. `tools.sessions.visibility` or `tools.agentToAgent`).
+  - `not_found`: session resolution failed (invalid sessionId or key not in store).
+
+For ACP thread-bound sessions: if channel thread output exists but `sessions_history` returns `messages: []` and `historyStatus: "empty"` or `not_persisted`, the transcript may not be written yet or may be on a different path; check gateway logs and session store for that session key.
+
 ## sessions_send
 
 Send a message into another session.
