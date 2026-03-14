@@ -64,6 +64,7 @@ Docs: https://docs.openclaw.ai
 - macOS/runtime locator: require Node >=22.16.0 during macOS runtime discovery so the app no longer accepts Node versions that the main runtime guard rejects later. Thanks @sumleo.
 - Agents/custom providers: preserve blank API keys for loopback OpenAI-compatible custom providers by clearing the synthetic Authorization header at runtime, while keeping explicit apiKey and oauth/token config from silently downgrading into fake bearer auth. (#45631) Thanks @xinhuagu.
 - Models/google-vertex Gemini flash-lite normalization: apply existing bare-ID preview normalization to `google-vertex` model refs and provider configs so `google-vertex/gemini-3.1-flash-lite` resolves as `gemini-3.1-flash-lite-preview`. (#42435) thanks @scoootscooob.
+- ACP/parent streaming: backfill missing child assistant output and terminal completion from gateway `chat.history` and `agent.wait` when ACP relay events do not reach the local parent emitter, so `sessions_spawn` with `streamTo: "parent"` no longer gets stuck on start/stall-only updates. (#45205)
 
 ## 2026.3.12
 
