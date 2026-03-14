@@ -9,23 +9,37 @@ import {
   resolveGroupSessionKey,
   resolveStorePath,
 } from "../../../../../src/config/sessions.js";
+import { resolveAccountEntry } from "../../../../../src/routing/account-lookup.js";
 
-export function resolveGroupPolicyFor(cfg: ReturnType<typeof loadConfig>, conversationId: string) {
+export function resolveGroupPolicyFor(
+  cfg: ReturnType<typeof loadConfig>,
+  conversationId: string,
+  accountId?: string | null,
+) {
   const groupId = resolveGroupSessionKey({
     From: conversationId,
     ChatType: "group",
     Provider: "whatsapp",
   })?.id;
   const whatsappCfg = cfg.channels?.whatsapp as
-    | { groupAllowFrom?: string[]; allowFrom?: string[] }
+    | {
+        groupAllowFrom?: string[];
+        allowFrom?: string[];
+        accounts?: Record<string, { groupAllowFrom?: string[]; allowFrom?: string[] }>;
+      }
     | undefined;
+  const accountCfg = accountId ? resolveAccountEntry(whatsappCfg?.accounts, accountId) : undefined;
   const hasGroupAllowFrom = Boolean(
-    whatsappCfg?.groupAllowFrom?.length || whatsappCfg?.allowFrom?.length,
+    accountCfg?.groupAllowFrom?.length ||
+    accountCfg?.allowFrom?.length ||
+    whatsappCfg?.groupAllowFrom?.length ||
+    whatsappCfg?.allowFrom?.length,
   );
   return resolveChannelGroupPolicy({
     cfg,
     channel: "whatsapp",
     groupId: groupId ?? conversationId,
+    accountId,
     hasGroupAllowFrom,
   });
 }
