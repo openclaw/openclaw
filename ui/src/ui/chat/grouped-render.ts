@@ -205,6 +205,9 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
   let cost = 0;
   let model: string | null = null;
   let hasUsage = false;
+  // Track the last assistant message's input tokens (= actual context size
+  // for that turn), rather than the cumulative sum across all turns.
+  let lastInput = 0;
 
   for (const { message } of group.messages) {
     const m = message as Record<string, unknown>;
@@ -218,6 +221,10 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
       output += usage.output ?? usage.outputTokens ?? 0;
       cacheRead += usage.cacheRead ?? usage.cache_read_input_tokens ?? 0;
       cacheWrite += usage.cacheWrite ?? usage.cache_creation_input_tokens ?? 0;
+      const turnInput = usage.input ?? usage.inputTokens ?? 0;
+      if (turnInput > 0) {
+        lastInput = turnInput;
+      }
     }
     const c = m.cost as Record<string, number> | undefined;
     if (c?.total) {
@@ -232,8 +239,13 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
     return null;
   }
 
+  // Use lastInput (single-turn context size) instead of cumulative input
+  // for the context percentage, so the displayed % reflects actual window
+  // utilization rather than the ever-growing sum of all turns.
   const contextPercent =
-    contextWindow && input > 0 ? Math.min(Math.round((input / contextWindow) * 100), 100) : null;
+    contextWindow && lastInput > 0
+      ? Math.min(Math.round((lastInput / contextWindow) * 100), 100)
+      : null;
 
   return { input, output, cacheRead, cacheWrite, cost, model, contextPercent };
 }
