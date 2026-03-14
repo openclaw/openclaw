@@ -162,7 +162,7 @@ describe("block streaming", () => {
     });
   });
 
-  it("trims leading whitespace in block-streamed replies", async () => {
+  it("strips leading blank lines but preserves indentation in block-streamed replies", async () => {
     await withTempHome(async (home) => {
       const seen: string[] = [];
       const onBlockReply = vi.fn(async (payload) => {
@@ -185,7 +185,7 @@ describe("block streaming", () => {
 
       expect(res).toBeUndefined();
       expect(onBlockReply).toHaveBeenCalledTimes(1);
-      expect(seen).toEqual(["Hello from stream"]);
+      expect(seen).toEqual(["  Hello from stream"]);
     });
   });
 

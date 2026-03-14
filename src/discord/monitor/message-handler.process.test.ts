@@ -218,13 +218,8 @@ function createMockDraftStreamForTest() {
   return draftStream;
 }
 
-function expectSinglePreviewEdit() {
-  expect(editMessageDiscord).toHaveBeenCalledWith(
-    "c1",
-    "preview-1",
-    { content: "Hello\nWorld" },
-    { rest: {} },
-  );
+function expectSinglePreviewEdit(content: string = "Hello\nWorld") {
+  expect(editMessageDiscord).toHaveBeenCalledWith("c1", "preview-1", { content }, { rest: {} });
   expect(deliverDiscordReply).not.toHaveBeenCalled();
 }
 
@@ -532,6 +527,23 @@ describe("processDiscordMessage draft streaming", () => {
     expectSinglePreviewEdit();
   });
 
+  it("preserves indentation when finalizing a streamed code block via preview edit", async () => {
+    const codeBlock = '```json\n  {\n    "ok": true\n  }\n```';
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: codeBlock });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createBaseContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 10 },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expectSinglePreviewEdit(codeBlock);
+  });
+
   it("falls back to standard send when final needs multiple chunks", async () => {
     await runSingleChunkFinalScenario({ streamMode: "partial", maxLinesPerMessage: 1 });
 
@@ -653,6 +665,22 @@ describe("processDiscordMessage draft streaming", () => {
     for (const text of updates) {
       expect(text).not.toContain("<thinking>");
     }
+  });
+
+  it("preserves indentation in partial stream updates after leading blank lines", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    const codeBlock = '```json\n  {\n    "ok": true\n  }\n```';
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPartialReply?.({
+        text: `\n\n${codeBlock}`,
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    await runInPartialStreamMode();
+
+    expect(draftStream.update).toHaveBeenCalledWith(codeBlock);
   });
 
   it("skips pure-reasoning partial updates without updating draft", async () => {

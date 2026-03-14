@@ -9,6 +9,10 @@ import type { TypingSignaler } from "./typing-mode.js";
 
 export type ReplyDirectiveParseMode = "always" | "auto" | "never";
 
+function stripLeadingEmptyLines(value: string): string {
+  return value.replace(/^(?:[ \t]*\r?\n)+/, "");
+}
+
 export function normalizeReplyPayloadDirectives(params: {
   payload: ReplyPayload;
   currentMessageId?: string;
@@ -36,7 +40,9 @@ export function normalizeReplyPayloadDirectives(params: {
 
   let text = parsed ? parsed.text || undefined : params.payload.text || undefined;
   if (params.trimLeadingWhitespace && text) {
-    text = text.trimStart() || undefined;
+    // Preserve indentation on the first content line so streamed code blocks
+    // do not lose leading spaces when they start a chunk.
+    text = stripLeadingEmptyLines(text) || undefined;
   }
 
   const mediaUrls = params.payload.mediaUrls ?? parsed?.mediaUrls;
