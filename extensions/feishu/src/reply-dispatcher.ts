@@ -42,7 +42,7 @@ export type CreateFeishuReplyDispatcherParams = {
   runtime: RuntimeEnv;
   chatId: string;
   replyToMessageId?: string;
-  /** When true, preserve typing indicator on reply target but send messages without reply metadata */
+  /** When true, send messages without reply metadata (no reply_in_thread quote). */
   skipReplyToInMessages?: boolean;
   replyInThread?: boolean;
   /** True when inbound message is already inside a thread/topic context */
@@ -53,6 +53,9 @@ export type CreateFeishuReplyDispatcherParams = {
   /** Epoch ms when the inbound message was created. Used to suppress typing
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
+  /** Message ID to add typing indicator reaction to. Defaults to replyToMessageId.
+   *  When replying to a message, this should be the new message ID, not the reply target. */
+  typingTargetMessageId?: string;
 };
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
@@ -68,8 +71,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     rootId,
     mentionTargets,
     accountId,
+    typingTargetMessageId,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
+  const effectiveTypingTargetId = typingTargetMessageId ?? replyToMessageId;
   const threadReplyMode = threadReply === true;
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
   const account = resolveFeishuAccount({ cfg, accountId });
@@ -82,7 +87,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (!(account.config.typingIndicator ?? true)) {
         return;
       }
-      if (!replyToMessageId) {
+      if (!effectiveTypingTargetId) {
         return;
       }
       // Skip typing indicator for old messages — likely replays after context
@@ -102,7 +107,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }
       typingState = await addTypingIndicator({
         cfg,
-        messageId: replyToMessageId,
+        messageId: effectiveTypingTargetId,
         accountId,
         runtime: params.runtime,
       });
