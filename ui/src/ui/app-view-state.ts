@@ -1,3 +1,4 @@
+import type { HandleSendChatOptions } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
@@ -357,7 +358,7 @@ export type AppViewState = {
     setPassword: (next: string) => void;
     setSessionKey: (next: string) => void;
     setChatMessage: (next: string) => void;
-    handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
+    handleSendChat: (messageOverride?: string, opts?: HandleSendChatOptions) => Promise<void>;
     handleAbortChat: () => Promise<void>;
     removeQueuedMessage: (id: string) => void;
     handleChatScroll: (event: Event) => void;

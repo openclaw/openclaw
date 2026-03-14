@@ -73,6 +73,24 @@ describe("handleSendChat", () => {
     vi.unstubAllGlobals();
   });
 
+  it("cancels button-triggered new sessions when the user declines confirmation", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const request = vi.fn();
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "keep this draft",
+    });
+
+    await handleSendChat(host, "/new", { confirmReset: true, restoreDraft: true });
+
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Start a new session?\n\nUnsaved context in the current session will be lost.",
+    );
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("keep this draft");
+    expect(host.chatMessages).toEqual([]);
+  });
+
   it("keeps slash-command model changes in sync with the chat header cache", async () => {
     vi.stubGlobal(
       "fetch",

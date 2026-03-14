@@ -39,6 +39,13 @@ export type ChatHost = {
 };
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
+const CHAT_RESET_CONFIRM_MESSAGE =
+  "Start a new session?\n\nUnsaved context in the current session will be lost.";
+
+export type HandleSendChatOptions = {
+  restoreDraft?: boolean;
+  confirmReset?: boolean;
+};
 
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
@@ -189,7 +196,7 @@ export function removeQueuedMessage(host: ChatHost, id: string) {
 export async function handleSendChat(
   host: ChatHost,
   messageOverride?: string,
-  opts?: { restoreDraft?: boolean },
+  opts?: HandleSendChatOptions,
 ) {
   if (!host.connected) {
     return;
@@ -201,6 +208,14 @@ export async function handleSendChat(
   const hasAttachments = attachmentsToSend.length > 0;
 
   if (!message && !hasAttachments) {
+    return;
+  }
+
+  if (
+    opts?.confirmReset &&
+    isChatResetCommand(message) &&
+    !window.confirm(CHAT_RESET_CONFIRM_MESSAGE)
+  ) {
     return;
   }
 
