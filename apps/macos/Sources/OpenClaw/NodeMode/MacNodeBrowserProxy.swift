@@ -147,7 +147,8 @@ actor MacNodeBrowserProxy {
         }
 
         if method != "GET", let body = params.body {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body.foundationValue, options: [.fragmentsAllowed])
+            let jsonValue = Self.sanitizeForJSON(body.foundationValue)
+            request.httpBody = try JSONSerialization.data(withJSONObject: jsonValue, options: [.fragmentsAllowed])
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
 
@@ -185,6 +186,33 @@ actor MacNodeBrowserProxy {
         if let bool = value as? Bool { return bool ? "true" : "false" }
         if let number = value as? NSNumber { return number.stringValue }
         return String(describing: value)
+    }
+
+    /// Recursively walks a value tree and converts any type that
+    /// `NSJSONSerialization` cannot handle into a `String` representation.
+    /// This prevents crashes when `AnyCodable.foundationValue` produces
+    /// opaque Swift values (e.g. structs/classes) that are not valid JSON.
+    static func sanitizeForJSON(_ value: Any) -> Any {
+        if JSONSerialization.isValidJSONObject([value]) {
+            return value
+        }
+        switch value {
+        case let dict as [String: Any]:
+            return dict.mapValues { sanitizeForJSON($0) }
+        case let array as [Any]:
+            return array.map { sanitizeForJSON($0) }
+        case let codable as AnyCodable:
+            return sanitizeForJSON(codable.foundationValue)
+        case is String, is Int, is Double, is Bool, is NSNull:
+            return value
+        case let number as NSNumber:
+            if CFGetTypeID(number) == CFBooleanGetTypeID() {
+                return number.boolValue
+            }
+            return number
+        default:
+            return String(describing: value)
+        }
     }
 
     private static func loadProxyFiles(from result: Any) throws -> [ProxyFilePayload] {

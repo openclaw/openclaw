@@ -226,6 +226,10 @@ final class GatewayProcessManager {
                     self.lastFailureReason = reason
                     self.appendLog("[gateway] existing listener on port \(port) but attach failed: \(reason)\n")
                     self.logger.warning("gateway attach failed reason=\(reason)")
+                    // Even though our probe failed, a gateway IS listening on the port.
+                    // Give the control channel a chance to connect — it may succeed where
+                    // our quick probe didn't (e.g. gateway was mid-startup during probe).
+                    self.refreshControlChannelIfNeeded(reason: "attach failed but listener present")
                     return true
                 }
 
