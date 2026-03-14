@@ -3,6 +3,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { getChannelDock } from "../../channels/dock.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
+import { parseSessionLabel } from "../../sessions/session-label.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
@@ -98,6 +99,8 @@ export function deriveGroupSessionPatch(params: {
   sessionKey: string;
   existing?: SessionEntry;
   groupResolution?: GroupKeyResolution | null;
+  /** Return true when `label` is already assigned to a *different* session. */
+  isLabelTaken?: (label: string) => boolean;
 }): Partial<SessionEntry> | null {
   const resolution = params.groupResolution ?? resolveGroupSessionKey(params.ctx);
   if (!resolution?.channel) {
@@ -147,6 +150,28 @@ export function deriveGroupSessionPatch(params: {
     patch.displayName = displayName;
   }
 
+  // Auto-label group/channel sessions with a human-friendly name when no
+  // explicit label has been set yet.  This surfaces the channel or group
+  // subject in dashboard label columns (e.g. "#config" or "My Group Chat").
+  //
+  // `labelAutoSet` tracks whether the current label was auto-derived so that
+  // an explicit user clear (`sessions.patch` with `label: null`) is respected:
+  // once we've auto-set, a subsequent falsy label means the user cleared it.
+  //
+  // Limitation: auto-set labels are not refreshed when a channel is renamed;
+  // the label reflects the channel name at the time of first assignment.
+  if (!params.existing?.label && !params.existing?.labelAutoSet) {
+    const autoLabel =
+      nextGroupChannel ?? params.existing?.groupChannel ?? nextSubject ?? params.existing?.subject;
+    if (autoLabel) {
+      const parsed = parseSessionLabel(autoLabel);
+      if (parsed.ok && !params.isLabelTaken?.(parsed.label)) {
+        patch.label = parsed.label;
+        (patch as Record<string, unknown>).labelAutoSet = true;
+      }
+    }
+  }
+
   return patch;
 }
 
@@ -155,6 +180,8 @@ export function deriveSessionMetaPatch(params: {
   sessionKey: string;
   existing?: SessionEntry;
   groupResolution?: GroupKeyResolution | null;
+  /** Return true when `label` is already assigned to a *different* session. */
+  isLabelTaken?: (label: string) => boolean;
 }): Partial<SessionEntry> | null {
   const groupPatch = deriveGroupSessionPatch(params);
   const origin = deriveSessionOrigin(params.ctx);
