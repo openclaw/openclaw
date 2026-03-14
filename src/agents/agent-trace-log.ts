@@ -215,7 +215,7 @@ export function createAgentTraceLogger(params: {
         if (payload && typeof payload === "object") {
           const p = payload as Record<string, unknown>;
 
-          // OpenAI / Anthropic messages array style
+          // OpenAI / Anthropic messages array styles
           if (Array.isArray(p.messages)) {
             const sysMsg = p.messages.find(
               (m: unknown) =>
