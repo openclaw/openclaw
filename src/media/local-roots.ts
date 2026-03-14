@@ -3,6 +3,7 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { resolveIMessageAttachmentRoots } from "./inbound-path-policy.js";
 
 type BuildMediaLocalRootsOptions = {
   preferredTmpDir?: string;
@@ -41,6 +42,11 @@ export function getAgentScopedMediaLocalRoots(
   agentId?: string,
 ): readonly string[] {
   const roots = buildMediaLocalRoots(resolveStateDir());
+  for (const attachmentRoot of resolveIMessageAttachmentRoots({ cfg })) {
+    if (!roots.includes(attachmentRoot)) {
+      roots.push(attachmentRoot);
+    }
+  }
   if (!agentId?.trim()) {
     return roots;
   }

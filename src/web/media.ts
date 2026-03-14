@@ -12,6 +12,7 @@ import {
   optimizeImageToPng,
   resizeToJpeg,
 } from "../media/image-ops.js";
+import { isInboundPathAllowed } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { detectMime, extensionForMime, kindFromMime } from "../media/mime.js";
 import { resolveUserPath } from "../utils.js";
@@ -115,6 +116,12 @@ async function assertLocalMediaAllowed(
     }
   }
   for (const root of roots) {
+    if (root.includes("*")) {
+      if (isInboundPathAllowed({ filePath: resolved, roots: [root] })) {
+        return;
+      }
+      continue;
+    }
     let resolvedRoot: string;
     try {
       resolvedRoot = await fs.realpath(root);

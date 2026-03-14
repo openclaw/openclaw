@@ -488,6 +488,7 @@ const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
 type MessageToolOptions = {
   agentAccountId?: string;
   agentSessionKey?: string;
+  agentId?: string;
   config?: OpenClawConfig;
   currentChannelId?: string;
   currentChannelProvider?: string;
@@ -775,9 +776,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         gateway,
         toolContext,
         sessionKey: options?.agentSessionKey,
-        agentId: options?.agentSessionKey
-          ? resolveSessionAgentId({ sessionKey: options.agentSessionKey, config: cfg })
-          : undefined,
+        agentId:
+          options?.agentId?.trim() ||
+          resolveSessionAgentId({ sessionKey: options?.agentSessionKey, config: cfg }),
         sandboxRoot: options?.sandboxRoot,
         abortSignal: signal,
       });

@@ -1,6 +1,7 @@
 import { type Context, complete } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveUserPath } from "../../utils.js";
 import { loadWebMedia } from "../../web/media.js";
 import { isMinimaxVlmModel, isMinimaxVlmProvider, minimaxUnderstandImage } from "../minimax-vlm.js";
@@ -270,6 +271,7 @@ async function runImagePrompt(params: {
 export function createImageTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
+  agentId?: string;
   workspaceDir?: string;
   sandbox?: ImageSandboxConfig;
   fsPolicy?: ToolFsPolicy;
@@ -298,9 +300,15 @@ export function createImageTool(options?: {
     ? "Analyze one or more images with a vision model. Use image for a single path/URL, or images for multiple (up to 20). Only use this tool when images were NOT already provided in the user's message. Images mentioned in the prompt are automatically visible to you."
     : "Analyze one or more images with the configured image model (agents.defaults.imageModel). Use image for a single path/URL, or images for multiple (up to 20). Provide a prompt describing what to analyze.";
 
-  const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir, {
-    workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
-  });
+  const localRoots =
+    options?.fsPolicy?.workspaceOnly === true
+      ? resolveMediaToolLocalRoots(options?.workspaceDir, { workspaceOnly: true })
+      : Array.from(
+          new Set([
+            ...getAgentScopedMediaLocalRoots(options?.config ?? {}, options?.agentId),
+            ...resolveMediaToolLocalRoots(options?.workspaceDir),
+          ]),
+        );
 
   return {
     label: "Image",

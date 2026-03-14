@@ -116,6 +116,25 @@ describe("message tool agent routing", () => {
     expect(call?.agentId).toBe("alpha");
     expect(call?.sessionKey).toBe("agent:alpha:main");
   });
+
+  it("uses the explicit agentId override when no session key is present", async () => {
+    mockSendResult();
+
+    const tool = createMessageTool({
+      agentId: "cron-agent",
+      config: {} as never,
+    });
+
+    await tool.execute("1", {
+      action: "send",
+      target: "telegram:123",
+      message: "hi",
+    });
+
+    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    expect(call?.agentId).toBe("cron-agent");
+    expect(call?.sessionKey).toBeUndefined();
+  });
 });
 
 describe("message tool path passthrough", () => {
