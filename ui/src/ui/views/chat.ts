@@ -107,6 +107,7 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  onChatWheelIntent?: (event: WheelEvent) => void;
   basePath?: string;
 };
 
@@ -832,6 +833,12 @@ export function renderChat(props: ChatProps) {
 
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
+  const passiveWheelListener = props.onChatWheelIntent
+    ? ({
+        handleEvent: props.onChatWheelIntent,
+        passive: true,
+      } as EventListenerObject & AddEventListenerOptions)
+    : nothing;
 
   const handleCodeBlockCopy = (e: Event) => {
     const btn = (e.target as HTMLElement).closest(".code-block-copy");
@@ -857,6 +864,7 @@ export function renderChat(props: ChatProps) {
       role="log"
       aria-live="polite"
       @scroll=${props.onChatScroll}
+      @wheel=${passiveWheelListener}
       @click=${handleCodeBlockCopy}
     >
       <div class="chat-thread-inner">
