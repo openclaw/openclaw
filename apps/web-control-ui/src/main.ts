@@ -7,6 +7,22 @@ import {
   type GatewayHelloOk,
 } from "../../../ui/src/ui/gateway.ts";
 import type { HealthSummary, StatusSummary } from "../../../ui/src/ui/types.ts";
+import {
+  buildFrontendAgentBrief,
+  fromDraft,
+  toDraft,
+  type FeatureRecommendation,
+  type PreferenceMemory,
+  type PreferenceMemoryDraft,
+} from "./product/agent-contract";
+import {
+  defaultPreferenceMemory,
+  defaultRecommendations,
+  frontendAgentProtocol,
+  upstreamWatchItems,
+  workflowStages,
+} from "./product/defaults";
+import { loadPreferenceMemory, savePreferenceMemory } from "./product/storage";
 
 type ConnectionState = "idle" | "connecting" | "connected" | "disconnected" | "error";
 
@@ -23,30 +39,6 @@ type ChatEventPayload = {
   message?: unknown;
   errorMessage?: string;
 };
-
-type PreferenceMemory = {
-  visualStyle: string[];
-  layout: string[];
-  modules: string[];
-  dislikes: string[];
-  currentGoal: string;
-};
-
-type PreferenceMemoryDraft = {
-  visualStyle: string;
-  layout: string;
-  modules: string;
-  dislikes: string;
-  currentGoal: string;
-};
-
-type FeatureRecommendation = {
-  title: string;
-  reason: string;
-  action: string;
-};
-
-const PREFERENCE_MEMORY_STORAGE_KEY = "openclaw.web-control-ui.preference-memory";
 
 function defaultGatewayUrl(): string {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -79,66 +71,6 @@ function extractText(message: unknown): string {
     }
   }
   return "";
-}
-
-function defaultPreferenceMemory(): PreferenceMemory {
-  return {
-    visualStyle: ["深色", "卡片式", "玻璃感", "高信息密度"],
-    layout: ["左侧导航", "主聊天区", "右侧记忆/推荐面板"],
-    modules: ["聊天改页面", "偏好记忆", "功能推荐"],
-    dislikes: ["纯调试风", "每次都要重复说明偏好"],
-    currentGoal: "把独立前端做成能通过对话共创页面的专属 agent 产品",
-  };
-}
-
-function toDraft(memory: PreferenceMemory): PreferenceMemoryDraft {
-  return {
-    visualStyle: memory.visualStyle.join("、"),
-    layout: memory.layout.join("、"),
-    modules: memory.modules.join("、"),
-    dislikes: memory.dislikes.join("、"),
-    currentGoal: memory.currentGoal,
-  };
-}
-
-function splitTags(value: string): string[] {
-  return value
-    .split(/[、,，\n]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function fromDraft(draft: PreferenceMemoryDraft): PreferenceMemory {
-  return {
-    visualStyle: splitTags(draft.visualStyle),
-    layout: splitTags(draft.layout),
-    modules: splitTags(draft.modules),
-    dislikes: splitTags(draft.dislikes),
-    currentGoal: draft.currentGoal.trim(),
-  };
-}
-
-function loadPreferenceMemory(): PreferenceMemory {
-  try {
-    const raw = window.localStorage.getItem(PREFERENCE_MEMORY_STORAGE_KEY);
-    if (!raw) {
-      return defaultPreferenceMemory();
-    }
-    const parsed = JSON.parse(raw) as Partial<PreferenceMemory>;
-    return {
-      visualStyle: Array.isArray(parsed.visualStyle) ? parsed.visualStyle.filter((v): v is string => typeof v === "string") : defaultPreferenceMemory().visualStyle,
-      layout: Array.isArray(parsed.layout) ? parsed.layout.filter((v): v is string => typeof v === "string") : defaultPreferenceMemory().layout,
-      modules: Array.isArray(parsed.modules) ? parsed.modules.filter((v): v is string => typeof v === "string") : defaultPreferenceMemory().modules,
-      dislikes: Array.isArray(parsed.dislikes) ? parsed.dislikes.filter((v): v is string => typeof v === "string") : defaultPreferenceMemory().dislikes,
-      currentGoal: typeof parsed.currentGoal === "string" && parsed.currentGoal.trim() ? parsed.currentGoal : defaultPreferenceMemory().currentGoal,
-    };
-  } catch {
-    return defaultPreferenceMemory();
-  }
-}
-
-function savePreferenceMemory(memory: PreferenceMemory) {
-  window.localStorage.setItem(PREFERENCE_MEMORY_STORAGE_KEY, JSON.stringify(memory));
 }
 
 @customElement("web-control-ui-app")
@@ -202,7 +134,8 @@ class WebControlUiApp extends LitElement {
 
     .hero-grid,
     .product-grid,
-    .grid {
+    .grid,
+    .protocol-grid {
       display: grid;
       gap: 16px;
     }
@@ -215,6 +148,10 @@ class WebControlUiApp extends LitElement {
 
     .product-grid {
       grid-template-columns: 1.3fr 1fr;
+    }
+
+    .protocol-grid {
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     }
 
     .controls {
@@ -277,7 +214,8 @@ class WebControlUiApp extends LitElement {
     .stat,
     .mini-panel,
     .memory-item,
-    .recommendation {
+    .recommendation,
+    .workflow-step {
       border-radius: 16px;
       padding: 16px;
       background: rgba(30, 41, 59, 0.72);
@@ -424,6 +362,12 @@ class WebControlUiApp extends LitElement {
       margin-bottom: 10px;
     }
 
+    .section-stack {
+      display: grid;
+      gap: 20px;
+      margin: 0;
+    }
+
     @media (max-width: 900px) {
       .hero-grid,
       .product-grid,
@@ -453,23 +397,7 @@ class WebControlUiApp extends LitElement {
   @state() preferenceMemory: PreferenceMemory = defaultPreferenceMemory();
   @state() preferenceDraft: PreferenceMemoryDraft = toDraft(defaultPreferenceMemory());
   @state() preferenceSavedAt: string | null = null;
-  @state() recommendations: FeatureRecommendation[] = [
-    {
-      title: "把聊天区升级为‘设计师对话’",
-      reason: "现在已经能发消息，但还缺少‘我理解了什么 / 我准备改哪些文件 / 下一步怎么验证’的设计任务回执。",
-      action: "增加结构化 agent 回复卡片：需求理解、改动计划、目标文件、验证状态。",
-    },
-    {
-      title: "把偏好记忆从展示卡片升级为可写入存档",
-      reason: "当前已经变成可编辑 + localStorage 持久化，下一步要再升级到按用户 profile 长期沉淀。",
-      action: "新增 preference profile 文件与会话绑定，按用户沉淀风格、布局和模块偏好。",
-    },
-    {
-      title: "增加上游版本跟踪面板",
-      reason: "项目目标要求主动推荐 OpenClaw 最新能力，不能只做本地聊天页。",
-      action: "增加 upstream changes / feature watch 区块，把新功能转成可推荐清单。",
-    },
-  ];
+  @state() recommendations: FeatureRecommendation[] = defaultRecommendations;
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -641,6 +569,8 @@ class WebControlUiApp extends LitElement {
     }
     const runId = crypto.randomUUID();
     this.chatMessages = [...this.chatMessages, { role: "user", text, timestamp: Date.now() }];
+    this.chatInput = `${buildFrontendAgentBrief(this.preferenceMemory)}\n\n用户新需求：${text}`;
+    const outbound = this.chatInput;
     this.chatInput = "";
     this.chatRunId = runId;
     this.chatStream = "";
@@ -648,7 +578,7 @@ class WebControlUiApp extends LitElement {
     try {
       await this.client.request("chat.send", {
         sessionKey: this.sessionKey,
-        message: text,
+        message: outbound,
         deliver: false,
         idempotencyKey: runId,
       });
@@ -774,6 +704,47 @@ class WebControlUiApp extends LitElement {
           </section>
 
           <section class="panel">
+            <h2>Agent Protocol</h2>
+            <p class="subtitle">先把“专属前端 agent”要接什么输入、吐什么输出、遵守什么约束说清楚，后面接真实改代码闭环时就不用重搭结构。</p>
+            <div class="protocol-grid">
+              <article class="mini-panel">
+                <span class="label">角色</span>
+                <div class="value">${frontendAgentProtocol.role}</div>
+                <p style="margin-top: 12px;">${frontendAgentProtocol.mission}</p>
+              </article>
+              <article class="mini-panel">
+                <span class="label">输入</span>
+                <ul class="checklist">${frontendAgentProtocol.inputs.map((item) => html`<li>${item}</li>`)}</ul>
+              </article>
+              <article class="mini-panel">
+                <span class="label">输出</span>
+                <ul class="checklist">${frontendAgentProtocol.outputs.map((item) => html`<li>${item}</li>`)}</ul>
+              </article>
+              <article class="mini-panel">
+                <span class="label">约束</span>
+                <ul class="checklist">${frontendAgentProtocol.constraints.map((item) => html`<li>${item}</li>`)}</ul>
+              </article>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>Workflow Backbone</h2>
+            <p class="subtitle">这条链路就是后面真正接进 coding agent / build 验证的工作流骨架。</p>
+            <div class="grid">
+              ${workflowStages.map(
+                (stage, index) => html`
+                  <article class="workflow-step">
+                    <span class="label">Step ${index + 1}</span>
+                    <h3>${stage.title}</h3>
+                    <p>${stage.description}</p>
+                    <p style="margin-top: 10px;"><strong>输出：</strong>${stage.output}</p>
+                  </article>
+                `,
+              )}
+            </div>
+          </section>
+
+          <section class="panel">
             <div class="grid">
               <article class="stat">
                 <span class="label">连接状态</span>
@@ -808,7 +779,7 @@ class WebControlUiApp extends LitElement {
           <section class="product-grid">
             <section class="panel">
               <h2>Designer Chat</h2>
-              <p class="subtitle">专属前端 agent 的对话入口。后续会从“普通聊天”升级为“理解需求 → 计划改动 → 修改代码 → 验证结果”的工作流。</p>
+              <p class="subtitle">现在的发送已经会自动带上“专属前端 agent brief”，下一步再把回复结构升级成真正的计划/改动/验证卡片。</p>
               <div class="chat-log">
                 ${this.chatMessages.map(
                   (message) => html`<div class="bubble ${message.role}">${message.text}</div>`,
@@ -824,6 +795,10 @@ class WebControlUiApp extends LitElement {
                   }}
                   placeholder="例如：把首页做成左侧导航 + 主聊天区 + 右侧推荐面板，整体更像 Notion，但保留深色玻璃感。"
                 ></textarea>
+                <div class="mini-panel">
+                  <span class="label">本次会注入的 Agent Brief</span>
+                  <pre>${buildFrontendAgentBrief(this.preferenceMemory)}</pre>
+                </div>
                 <div class="chat-actions">
                   <button class="secondary" type="button" @click=${() => this.loadChatHistory()}>刷新历史</button>
                   <button type="button" @click=${() => this.sendChat()} ?disabled=${this.chatSending}>${this.chatSending ? "发送中..." : "发送"}</button>
@@ -831,7 +806,7 @@ class WebControlUiApp extends LitElement {
               </div>
             </section>
 
-            <div class="stack" style="gap: 20px; margin: 0;">
+            <div class="section-stack">
               <section class="panel">
                 <h2>Preference Memory</h2>
                 <p class="subtitle">现在已经从静态展示升级为：可编辑 + localStorage 本地持久化。下一步会再接真正的用户级 profile 存档。</p>
@@ -920,6 +895,23 @@ class WebControlUiApp extends LitElement {
                   `,
                 )}
               </section>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>Upstream Watch</h2>
+            <p class="subtitle">先把“为什么要跟踪上游、跟踪什么、怎么转成用户价值”落成可见结构。</p>
+            <div class="grid">
+              ${upstreamWatchItems.map(
+                (item) => html`
+                  <article class="recommendation">
+                    <h3>${item.area}</h3>
+                    <p><strong>信号：</strong>${item.signal}</p>
+                    <p style="margin-top: 8px;"><strong>用户价值：</strong>${item.userValue}</p>
+                    <p style="margin-top: 8px;"><strong>下一步：</strong>${item.nextAction}</p>
+                  </article>
+                `,
+              )}
             </div>
           </section>
 
