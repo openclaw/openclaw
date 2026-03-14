@@ -2,6 +2,8 @@ import Foundation
 
 enum TalkModePhase: String {
     case idle
+    /// Shown while the Voxtral/ExecuTorch model is loading (e.g. 20–30 s).
+    case loading
     case listening
     case thinking
     case speaking

@@ -26,4 +26,12 @@ final class TalkPromptBuilderTests: XCTestCase {
         XCTAssertFalse(prompt.contains("ElevenLabs voice"))
         XCTAssertTrue(prompt.contains("Talk Mode active."))
     }
+
+    func testBuildIncludesSttBackendWhenProvided() {
+        let prompt = TalkPromptBuilder.build(
+            transcript: "Hi",
+            interruptedAtSeconds: nil,
+            sttBackendName: "ExecuTorch Voxtral")
+        XCTAssertTrue(prompt.contains("STT: ExecuTorch Voxtral."))
+    }
 }

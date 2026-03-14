@@ -440,3 +440,47 @@ defaults write ai.openclaw.mac openclaw.talkSttBackend executorch
 #    - no subprocess runner launch
 #    - transcript tokens arrive while speaking
 ```
+
+---
+
+## Phase 8: Talk Mode latency and handoff (2026-03)
+
+### Completed work
+
+- **Offline poll tuning (ExecuTorchSTTBridge, TalkModeRuntime)**
+  - Replaced fixed 2 s poll interval with adaptive cadence: bootstrap 280 ms, active 400 ms, idle 800 ms.
+  - Immediate first poll when min samples (1 s) are available; decode window reduced to 2 s (was 6 s); adaptive `maxNewTokens` (24 then 16).
+  - VAD/energy gate: skip decode when rolling RMS below threshold, with periodic probe so quiet speech is still decoded.
+- **Emission gating**
+  - Capture stays running during TTS; transcript emission is turned off (`setEmissionEnabled(false)`) to avoid echo/TTS loop. On resume, emission is re-enabled without tearing down the bridge.
+- **Lifecycle**
+  - `prepareForPlayback` (ExecuTorch) only mutes emission; `startRecognition` short-circuits when bridge is already listening and just re-enables emission.
+  - `stopSpeaking(reason: .speech | .userTap)` calls `startRecognition()` so recognition is re-enabled after interrupt.
+- **Ring buffer**
+  - Replaced `rollingSamples` append + `removeFirst` with fixed-capacity `AudioRingBuffer` in `ExecuTorchSTTBridge.swift` to avoid O(n) shifts.
+- **Metrics**
+  - Latency markers and p50/p90 for first-token and finalize; `recordFinalizeLatency()` called from `TalkModeRuntime.finalizeTranscript`; stats logged in bridge.
+- **Logging**
+  - Per-token and per-feed FFI logs gated by `OPENCLAW_EXECUTORCH_DEBUG=1`; bridge poll/delta logs also gated to reduce hot-path cost.
+- **Streaming strategy**
+  - README and bridge comment document streaming callback issue and guarded reintroduction (`OPENCLAW_EXECUTORCH_USE_STREAMING=1` when runtime is fixed, with fallback to offline poll on error).
+
+**Files touched (repo-relative):** `apps/macos/Sources/OpenClaw/ExecuTorchSTTBridge.swift`, `ExecuTorchRuntimeFFI.swift`, `TalkModeRuntime.swift`; `extensions/executorch/README.md`, `extensions/executorch/IMPLEMENTATION_LOG.md`, `extensions/executorch/src/cli.ts`; plus `AppState.swift`, `PermissionManager.swift`, `TalkModeTypes.swift`, `TalkOverlayView.swift`, `TalkPromptBuilder.swift` and tests as needed for STT backend and prompts.
+
+### Handoff checklist for next agent
+
+1. **Verify first**
+   - `pnpm build` and `pnpm check` pass.
+   - Talk Mode with ExecuTorch: say a short phrase and confirm transcript appears and finalize sends one message (no TTS loop).
+   - Optional: set `OPENCLAW_EXECUTORCH_DEBUG=1` and inspect `executorch.stt` / `executorch.ffi` logs for poll timing and latency lines.
+
+2. **Where to look**
+   - STT bridge and poll loop: `apps/macos/Sources/OpenClaw/ExecuTorchSTTBridge.swift`.
+   - Talk lifecycle and emission gating: `apps/macos/Sources/OpenClaw/TalkModeRuntime.swift` (`prepareForPlayback`, `startRecognition`, `finalizeTranscript`).
+   - FFI and token callback: `apps/macos/Sources/OpenClaw/ExecuTorchRuntimeFFI.swift`.
+   - Docs and env toggles: `extensions/executorch/README.md` (sections 6 and “Current Talk Mode runtime state”, “Known limitations and next steps”).
+
+3. **Intentionally deferred**
+   - Re-enabling streaming path until runtime dylib fixes callback lifetime.
+   - Continuous capture without stopping on finalize (always-on listening + finalize-after-silence) and final flush decode to reduce tail-word miss.
+   - ExecuTorch-specific longer silence window and two-stage finalize to improve endpointing.

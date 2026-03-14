@@ -144,18 +144,25 @@ private struct TalkOrbView: View {
                 let t = context.date.timeIntervalSinceReferenceDate
                 let listenScale = self.phase == .listening ? (1 + CGFloat(self.level) * 0.12) : 1
                 let pulse = self.phase == .speaking ? (1 + 0.06 * sin(t * 6)) : 1
+                let loadingPulse = self.phase == .loading ? (1 + 0.04 * sin(t * 2.5)) : 1
 
                 ZStack {
                     Circle()
                         .fill(self.orbGradient)
                         .overlay(Circle().stroke(Color.white.opacity(0.45), lineWidth: 1))
                         .shadow(color: Color.black.opacity(0.22), radius: 10, x: 0, y: 5)
-                        .scaleEffect(pulse * listenScale)
+                        .scaleEffect(pulse * listenScale * loadingPulse)
 
                     TalkWaveRings(phase: self.phase, level: self.level, time: t, accent: self.accent)
 
                     if self.phase == .thinking {
                         TalkOrbitArcs(time: t)
+                    }
+                    if self.phase == .loading {
+                        TalkOrbitArcs(time: t)
+                        ProgressView()
+                            .scaleEffect(0.9)
+                            .tint(.white)
                     }
                 }
             }
@@ -180,12 +187,11 @@ private struct TalkWaveRings: View {
     var body: some View {
         ZStack {
             ForEach(0..<3, id: \.self) { idx in
-                let speed = self.phase == .speaking ? 1.4 : self.phase == .listening ? 0.9 : 0.6
+                let speed: Double = self.phase == .speaking ? 1.4 : self.phase == .listening ? 0.9 : self.phase == .loading ? 0.5 : 0.6
                 let progress = (time * speed + Double(idx) * 0.28).truncatingRemainder(dividingBy: 1)
-                let amplitude = self.phase == .speaking ? 0.95 : self.phase == .listening ? 0.5 + self
-                    .level * 0.7 : 0.35
+                let amplitude: Double = self.phase == .speaking ? 0.95 : self.phase == .listening ? 0.5 + self.level * 0.7 : self.phase == .loading ? 0.5 : 0.35
                 let scale = 0.75 + progress * amplitude + (self.phase == .listening ? self.level * 0.15 : 0)
-                let alpha = self.phase == .speaking ? 0.72 : self.phase == .listening ? 0.58 + self.level * 0.28 : 0.4
+                let alpha = self.phase == .speaking ? 0.72 : self.phase == .listening ? 0.58 + self.level * 0.28 : self.phase == .loading ? 0.5 : 0.4
                 Circle()
                     .stroke(self.accent.opacity(alpha - progress * 0.3), lineWidth: 1.6)
                     .scaleEffect(scale)

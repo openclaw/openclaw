@@ -284,7 +284,14 @@ final class AppState {
         self.voicePushToTalkEnabled = UserDefaults.standard
             .object(forKey: voicePushToTalkEnabledKey) as? Bool ?? false
         self.talkEnabled = UserDefaults.standard.bool(forKey: talkEnabledKey)
-        let sttRaw = UserDefaults.standard.string(forKey: talkSttBackendKey) ?? TalkSttBackend.appleSpeech.rawValue
+        var sttRaw = UserDefaults.standard.string(forKey: talkSttBackendKey) ?? TalkSttBackend.appleSpeech.rawValue
+        // When running as raw executable (e.g. from Xcode), bundle ID is nil; fall back to "OpenClaw" domain.
+        if Bundle.main.bundleIdentifier == nil,
+           let domain = UserDefaults.standard.persistentDomain(forName: "OpenClaw"),
+           let raw = domain[talkSttBackendKey] as? String
+        {
+            sttRaw = raw
+        }
         self.talkSttBackend = TalkSttBackend(rawValue: sttRaw) ?? .appleSpeech
         self.seamColorHex = nil
         if let storedHeartbeats = UserDefaults.standard.object(forKey: heartbeatsEnabledKey) as? Bool {

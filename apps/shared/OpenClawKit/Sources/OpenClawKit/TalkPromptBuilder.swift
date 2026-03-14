@@ -2,11 +2,20 @@ public enum TalkPromptBuilder: Sendable {
     public static func build(
         transcript: String,
         interruptedAtSeconds: Double?,
-        includeVoiceDirectiveHint: Bool = true
+        includeVoiceDirectiveHint: Bool = true,
+        sttBackendName: String? = nil,
+        sttBackendDebugHint: String? = nil
     ) -> String {
         var lines: [String] = [
             "Talk Mode active. Reply in a concise, spoken tone.",
         ]
+
+        if let sttBackendName {
+            lines.append("STT: \(sttBackendName).")
+        }
+        if let sttBackendDebugHint, !sttBackendDebugHint.isEmpty {
+            lines.append("(\(sttBackendDebugHint))")
+        }
 
         if includeVoiceDirectiveHint {
             lines.append(

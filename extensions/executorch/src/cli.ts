@@ -42,17 +42,17 @@ const REQUIRED_SETUP_FILE_GROUPS: Record<RunnerBackend, SetupFileGroup[]> = {
     {
       label: "model",
       candidates: [
-        "model-metal-fpa4w.pte",
         "model-metal-fpa4w-streaming.pte",
-        "model-metal-int4.pte",
+        "model-metal-fpa4w.pte",
         "model-metal-int4-streaming.pte",
-        "model.pte",
+        "model-metal-int4.pte",
         "model-streaming.pte",
+        "model.pte",
       ],
     },
     {
       label: "preprocessor",
-      candidates: ["preprocessor.pte", "preprocessor-streaming.pte"],
+      candidates: ["preprocessor-streaming.pte", "preprocessor.pte"],
     },
     {
       label: "tokenizer",
@@ -63,15 +63,15 @@ const REQUIRED_SETUP_FILE_GROUPS: Record<RunnerBackend, SetupFileGroup[]> = {
     {
       label: "model",
       candidates: [
-        "model-xnnpack-8da4w.pte",
         "model-xnnpack-8da4w-streaming.pte",
-        "model.pte",
+        "model-xnnpack-8da4w.pte",
         "model-streaming.pte",
+        "model.pte",
       ],
     },
     {
       label: "preprocessor",
-      candidates: ["preprocessor.pte", "preprocessor-streaming.pte"],
+      candidates: ["preprocessor-streaming.pte", "preprocessor.pte"],
     },
     {
       label: "tokenizer",
@@ -82,15 +82,15 @@ const REQUIRED_SETUP_FILE_GROUPS: Record<RunnerBackend, SetupFileGroup[]> = {
     {
       label: "model",
       candidates: [
-        "model-cuda.pte",
         "model-cuda-streaming.pte",
-        "model.pte",
+        "model-cuda.pte",
         "model-streaming.pte",
+        "model.pte",
       ],
     },
     {
       label: "preprocessor",
-      candidates: ["preprocessor.pte", "preprocessor-streaming.pte"],
+      candidates: ["preprocessor-streaming.pte", "preprocessor.pte"],
     },
     {
       label: "tokenizer",
@@ -114,9 +114,10 @@ const MAC_TALK_MODE_FILE_GROUPS: SetupFileGroup[] = [
       "model-streaming.pte",
     ],
   },
+  // Only accept streaming preprocessor so we download it even when preprocessor.pte exists.
   {
     label: "Talk Mode preprocessor",
-    candidates: ["preprocessor-streaming.pte", "preprocessor.pte"],
+    candidates: ["preprocessor-streaming.pte"],
   },
 ];
 
