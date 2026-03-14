@@ -71,6 +71,8 @@ internal class StreamingMediaDataSource : MediaDataSource() {
           index++
         }
       }
+      // Advance cache so the next sequential read resumes near where we left off
+      lastReadIndex = index
 
       return toRead - remaining
     }
@@ -87,6 +89,10 @@ internal class StreamingMediaDataSource : MediaDataSource() {
 
   private fun findChunkIndex(position: Long): Int {
     var index = lastReadIndex
+    // Reset to linear scan when seeking backward past the cached chunk
+    if (index < chunks.size && position < chunks[index].start) {
+      index = 0
+    }
     while (index < chunks.size) {
       val chunk = chunks[index]
       if (position < chunk.start + chunk.data.size) break
