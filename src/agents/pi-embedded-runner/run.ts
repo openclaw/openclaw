@@ -1047,8 +1047,14 @@ export async function runEmbeddedPiAgent(
           // When the LLM times out with high context usage, compact before
           // retrying to break the death spiral of repeated timeouts.
           if (timedOut && !aborted && !timedOutDuringCompaction) {
+            // Only consider prompt-side tokens here. API totals include output
+            // tokens, which can make a long generation look like high context
+            // pressure even when the prompt itself was small.
+            const lastTurnPromptTokens = derivePromptTokens(lastRunPromptUsage);
             const tokenUsedRatio =
-              lastTurnTotal != null && ctxInfo.tokens > 0 ? lastTurnTotal / ctxInfo.tokens : 0;
+              lastTurnPromptTokens != null && ctxInfo.tokens > 0
+                ? lastTurnPromptTokens / ctxInfo.tokens
+                : 0;
             if (timeoutCompactionAttempts >= MAX_TIMEOUT_COMPACTION_ATTEMPTS) {
               log.warn(
                 `[timeout-compaction] already compacted ${timeoutCompactionAttempts} time(s) for timeouts; falling through to failover rotation`,

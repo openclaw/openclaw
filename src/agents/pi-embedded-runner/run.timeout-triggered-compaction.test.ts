@@ -59,13 +59,13 @@ describe("timeout-triggered compaction", () => {
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
 
-  it("attempts compaction when LLM times out with high context usage (>65%)", async () => {
-    // First attempt: timeout with high usage (150k / 200k = 75%)
+  it("attempts compaction when LLM times out with high prompt usage (>65%)", async () => {
+    // First attempt: timeout with high prompt usage (150k / 200k = 75%)
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
         lastAssistant: {
-          usage: { total: 150000 },
+          usage: { input: 150000, output: 20000, total: 170000 },
         } as never,
       }),
     );
@@ -102,12 +102,12 @@ describe("timeout-triggered compaction", () => {
   });
 
   it("retries the prompt after successful timeout compaction", async () => {
-    // First attempt: timeout with high usage
+    // First attempt: timeout with high prompt usage carried by cache reads
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
         lastAssistant: {
-          usage: { total: 160000 },
+          usage: { input: 20000, cacheRead: 120000, output: 15000, total: 155000 },
         } as never,
       }),
     );
@@ -130,12 +130,12 @@ describe("timeout-triggered compaction", () => {
   });
 
   it("falls through to normal handling when timeout compaction fails", async () => {
-    // Timeout with high usage
+    // Timeout with high prompt usage
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
         lastAssistant: {
-          usage: { total: 150000 },
+          usage: { input: 150000, output: 10000, total: 160000 },
         } as never,
       }),
     );
@@ -155,12 +155,12 @@ describe("timeout-triggered compaction", () => {
   });
 
   it("does not attempt compaction when context usage is low", async () => {
-    // Timeout with low usage (20k / 200k = 10%)
+    // Timeout with low prompt usage (20k / 200k = 10%)
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
         lastAssistant: {
-          usage: { total: 20000 },
+          usage: { input: 20000, output: 5000, total: 25000 },
         } as never,
       }),
     );
@@ -185,7 +185,7 @@ describe("timeout-triggered compaction", () => {
         makeAttemptResult({
           timedOut: true,
           lastAssistant: {
-            usage: { total: 20000 },
+            usage: { input: 20000, output: 5000, total: 25000 },
           } as never,
         }),
       );
@@ -204,7 +204,7 @@ describe("timeout-triggered compaction", () => {
         timedOut: true,
         aborted: true,
         lastAssistant: {
-          usage: { total: 180000 },
+          usage: { input: 180000, output: 5000, total: 185000 },
         } as never,
       }),
     );
@@ -220,7 +220,7 @@ describe("timeout-triggered compaction", () => {
         timedOut: true,
         timedOutDuringCompaction: true,
         lastAssistant: {
-          usage: { total: 180000 },
+          usage: { input: 180000, output: 5000, total: 185000 },
         } as never,
       }),
     );
@@ -232,12 +232,12 @@ describe("timeout-triggered compaction", () => {
   });
 
   it("falls through to failover rotation after max timeout compaction attempts", async () => {
-    // First attempt: timeout with high usage (150k / 200k = 75%)
+    // First attempt: timeout with high prompt usage (150k / 200k = 75%)
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
         lastAssistant: {
-          usage: { total: 150000 },
+          usage: { input: 150000, output: 10000, total: 160000 },
         } as never,
       }),
     );
@@ -249,12 +249,12 @@ describe("timeout-triggered compaction", () => {
         tokensAfter: 80000,
       }),
     );
-    // Second attempt after compaction: also times out with high usage
+    // Second attempt after compaction: also times out with high prompt usage
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
         lastAssistant: {
-          usage: { total: 140000 },
+          usage: { input: 140000, output: 12000, total: 152000 },
         } as never,
       }),
     );
@@ -271,12 +271,12 @@ describe("timeout-triggered compaction", () => {
   });
 
   it("catches thrown errors from contextEngine.compact during timeout recovery", async () => {
-    // Timeout with high usage
+    // Timeout with high prompt usage
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
         lastAssistant: {
-          usage: { total: 150000 },
+          usage: { input: 150000, output: 10000, total: 160000 },
         } as never,
       }),
     );
@@ -301,7 +301,7 @@ describe("timeout-triggered compaction", () => {
         makeAttemptResult({
           timedOut: true,
           lastAssistant: {
-            usage: { total: 160000 },
+            usage: { input: 160000, output: 10000, total: 170000 },
           } as never,
         }),
       )
@@ -334,5 +334,22 @@ describe("timeout-triggered compaction", () => {
         sessionKey: "test-key",
       }),
     );
+  });
+
+  it("does not attempt compaction when only output tokens are high", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        timedOut: true,
+        lastAssistant: {
+          usage: { input: 20000, output: 170000, total: 190000 },
+        } as never,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 });
