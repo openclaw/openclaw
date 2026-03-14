@@ -296,6 +296,70 @@ describe("web_fetch extraction fallbacks", () => {
   // NOTE: Test for wrapping url/finalUrl/warning fields requires DNS mocking.
   // The sanitization of these fields is verified by external-content.test.ts tests.
 
+  it("returns a verification-blocked payload for WeChat verification pages", async () => {
+    installMockFetch((input: RequestInfo | URL) =>
+      Promise.resolve(
+        htmlResponse(
+          "<!doctype html><html><body><h2>环境异常</h2><a id='js_verify'>去验证</a><script>var PAGE_MID='mmbizwap:secitptpage/verify.html';</script></body></html>",
+          requestUrl(input),
+        ),
+      ) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    const result = await tool?.execute?.("call", { url: "https://mp.weixin.qq.com/s/abc" });
+    const details = result?.details as {
+      extractor?: string;
+      warning?: string;
+      text?: string;
+    };
+
+    expect(details.extractor).toBe("blocked-verification");
+    expect(details.warning).toContain("interactive verification page");
+    expect(details.text).toContain("Open the article in a real browser/WeChat app");
+  });
+
+  it("returns a verification-blocked payload for generic challenge pages", async () => {
+    installMockFetch((input: RequestInfo | URL) =>
+      Promise.resolve(
+        htmlResponse(
+          "<!doctype html><html><head><title>Attention Required! | Cloudflare</title></head><body><div>Security check</div><script src='/cdn-cgi/challenge-platform/h/b/orchestrate/jsch/v1?ray=123'></script><div class='cf-chl-widget'></div></body></html>",
+          requestUrl(input),
+        ),
+      ) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    const result = await tool?.execute?.("call", { url: "https://example.com/protected" });
+    const details = result?.details as {
+      extractor?: string;
+      warning?: string;
+      text?: string;
+    };
+
+    expect(details.extractor).toBe("blocked-verification");
+    expect(details.warning).toContain("interactive verification");
+    expect(details.text).toContain("complete verification before retrying");
+  });
+
+  it("does not classify normal pages mentioning captcha as blocked verification", async () => {
+    installMockFetch((input: RequestInfo | URL) =>
+      Promise.resolve(
+        htmlResponse(
+          "<!doctype html><html><head><title>How to add captcha in forms</title></head><body><article>This guide explains captcha UX patterns for signup forms.</article></body></html>",
+          requestUrl(input),
+        ),
+      ) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    const result = await tool?.execute?.("call", { url: "https://example.com/blog" });
+    const details = result?.details as { extractor?: string; text?: string };
+
+    expect(details.extractor).not.toBe("blocked-verification");
+    expect(details.text).toContain("captcha UX patterns");
+  });
+
   it("falls back to firecrawl when readability returns no content", async () => {
     installMockFetch((input: RequestInfo | URL) => {
       const url = requestUrl(input);
