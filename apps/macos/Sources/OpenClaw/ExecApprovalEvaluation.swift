@@ -45,8 +45,8 @@ enum ExecApprovalEvaluator {
 
         let skillAllow: Bool
         if approvals.agent.autoAllowSkills, !allowlistResolutions.isEmpty {
-            let bins = await SkillBinsCache.shared.currentBins()
-            skillAllow = allowlistResolutions.allSatisfy { bins.contains($0.executableName) }
+            let bins = await SkillBinsCache.shared.currentTrust()
+            skillAllow = self.isSkillAutoAllowed(allowlistResolutions, trustedBinsByName: bins)
         } else {
             skillAllow = false
         }
@@ -64,5 +64,27 @@ enum ExecApprovalEvaluator {
             allowlistSatisfied: allowlistSatisfied,
             allowlistMatch: allowlistSatisfied ? allowlistMatches.first : nil,
             skillAllow: skillAllow)
+    }
+
+    static func isSkillAutoAllowed(
+        _ resolutions: [ExecCommandResolution],
+        trustedBinsByName: [String: Set<String>]) -> Bool
+    {
+        guard !resolutions.isEmpty, !trustedBinsByName.isEmpty else { return false }
+        return resolutions.allSatisfy { resolution in
+            guard let executableName = SkillBinsCache.normalizeSkillBinName(resolution.executableName),
+                  let resolvedPath = SkillBinsCache.normalizeResolvedPath(resolution.resolvedPath)
+            else {
+                return false
+            }
+            return trustedBinsByName[executableName]?.contains(resolvedPath) == true
+        }
+    }
+
+    static func _testIsSkillAutoAllowed(
+        _ resolutions: [ExecCommandResolution],
+        trustedBinsByName: [String: Set<String>]) -> Bool
+    {
+        self.isSkillAutoAllowed(resolutions, trustedBinsByName: trustedBinsByName)
     }
 }

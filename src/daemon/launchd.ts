@@ -120,6 +120,58 @@ function resolveGuiDomain(): string {
   return `gui/${process.getuid()}`;
 }
 
+function throwBootstrapGuiSessionError(params: {
+  detail: string;
+  domain: string;
+  actionHint: string;
+}) {
+  throw new Error(
+    [
+      `launchctl bootstrap failed: ${params.detail}`,
+      `LaunchAgent ${params.actionHint} requires a logged-in macOS GUI session for this user (${params.domain}).`,
+      "This usually means you are running from SSH/headless context or as the wrong user (including sudo).",
+      `Fix: sign in to the macOS desktop as the target user and rerun \`${params.actionHint}\`.`,
+      "Headless deployments should use a dedicated logged-in user session or a custom LaunchDaemon (not shipped): https://docs.openclaw.ai/gateway",
+    ].join("\n"),
+  );
+}
+
+function writeLaunchAgentActionLine(
+  stdout: NodeJS.WritableStream,
+  label: string,
+  value: string,
+): void {
+  try {
+    stdout.write(`${formatLine(label, value)}\n`);
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException)?.code !== "EPIPE") {
+      throw err;
+    }
+  }
+}
+
+async function bootstrapLaunchAgentOrThrow(params: {
+  domain: string;
+  serviceTarget: string;
+  plistPath: string;
+  actionHint: string;
+}) {
+  await execLaunchctl(["enable", params.serviceTarget]);
+  const boot = await execLaunchctl(["bootstrap", params.domain, params.plistPath]);
+  if (boot.code === 0) {
+    return;
+  }
+  const detail = (boot.stderr || boot.stdout).trim();
+  if (isUnsupportedGuiDomain(detail)) {
+    throwBootstrapGuiSessionError({
+      detail,
+      domain: params.domain,
+      actionHint: params.actionHint,
+    });
+  }
+  throw new Error(`launchctl bootstrap failed: ${detail}`);
+}
+
 async function ensureSecureDirectory(targetPath: string): Promise<void> {
   await fs.mkdir(targetPath, { recursive: true, mode: LAUNCH_AGENT_DIR_MODE });
   try {
@@ -374,24 +426,6 @@ export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs
   stdout.write(`${formatLine("Stopped LaunchAgent", `${domain}/${label}`)}\n`);
 }
 
-// DRY helper: formats a launchctl bootstrap failure for the install context.
-// Produces actionable guidance for unsupported GUI-domain errors; falls back
-// to a plain error message for other failures.
-function formatLaunchctlBootstrapFailure(rawOutput: string): string {
-  const domain = resolveGuiDomain();
-  const detail = rawOutput.trim();
-  if (isUnsupportedGuiDomain(detail)) {
-    return [
-      `launchctl bootstrap failed: ${detail}`,
-      `LaunchAgent install requires a logged-in macOS GUI session for this user (${domain}).`,
-      "This usually means you are running from SSH/headless context or as the wrong user (including sudo).",
-      "Fix: sign in to the macOS desktop as the target user and rerun `openclaw gateway install --force`.",
-      "Headless deployments should use a dedicated logged-in user session or a custom LaunchDaemon (not shipped): https://docs.openclaw.ai/gateway",
-    ].join("\n");
-  }
-  return `launchctl bootstrap failed: ${detail}`;
-}
-
 export async function installLaunchAgent({
   env,
   stdout,
@@ -439,12 +473,15 @@ export async function installLaunchAgent({
   await execLaunchctl(["bootout", domain, plistPath]);
   await execLaunchctl(["unload", plistPath]);
   // launchd can persist "disabled" state even after bootout + plist removal; clear it before bootstrap.
-  await execLaunchctl(["enable", `${domain}/${label}`]);
-  const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
-  if (boot.code !== 0) {
-    throw new Error(formatLaunchctlBootstrapFailure(boot.stderr || boot.stdout));
-  }
-  await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
+  await bootstrapLaunchAgentOrThrow({
+    domain,
+    serviceTarget: `${domain}/${label}`,
+    plistPath,
+    actionHint: "openclaw gateway install --force",
+  });
+  // `bootstrap` already loads RunAtLoad agents. Avoid `kickstart -k` here:
+  // on slow macOS guests it SIGTERMs the freshly booted gateway and pushes the
+  // real listener startup past onboarding's health deadline.
 
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
   stdout.write("\n");
@@ -475,25 +512,13 @@ export async function restartLaunchAgent({
     if (!handoff.ok) {
       throw new Error(`launchd restart handoff failed: ${handoff.detail ?? "unknown error"}`);
     }
-    try {
-      stdout.write(`${formatLine("Scheduled LaunchAgent restart", serviceTarget)}\n`);
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException)?.code !== "EPIPE") {
-        throw err;
-      }
-    }
+    writeLaunchAgentActionLine(stdout, "Scheduled LaunchAgent restart", serviceTarget);
     return { outcome: "scheduled" };
   }
 
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (start.code === 0) {
-    try {
-      stdout.write(`${formatLine("Restarted LaunchAgent", serviceTarget)}\n`);
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException)?.code !== "EPIPE") {
-        throw err;
-      }
-    }
+    writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
     return { outcome: "completed" };
   }
 
@@ -502,34 +527,17 @@ export async function restartLaunchAgent({
   }
 
   // If the service was previously booted out, re-register the plist and retry.
-  await execLaunchctl(["enable", serviceTarget]);
-  const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
-  if (boot.code !== 0) {
-    const detail = (boot.stderr || boot.stdout).trim();
-    if (isUnsupportedGuiDomain(detail)) {
-      throw new Error(
-        [
-          `launchctl bootstrap failed: ${detail}`,
-          `LaunchAgent restart requires a logged-in macOS GUI session for this user (${domain}).`,
-          "This usually means you are running from SSH/headless context or as the wrong user (including sudo).",
-          "Fix: sign in to the macOS desktop as the target user and rerun `openclaw gateway restart`.",
-          "Headless deployments should use a dedicated logged-in user session or a custom LaunchDaemon (not shipped): https://docs.openclaw.ai/gateway",
-        ].join("\n"),
-      );
-    }
-    throw new Error(`launchctl bootstrap failed: ${detail}`);
-  }
+  await bootstrapLaunchAgentOrThrow({
+    domain,
+    serviceTarget,
+    plistPath,
+    actionHint: "openclaw gateway restart",
+  });
 
   const retry = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (retry.code !== 0) {
     throw new Error(`launchctl kickstart failed: ${retry.stderr || retry.stdout}`.trim());
   }
-  try {
-    stdout.write(`${formatLine("Restarted LaunchAgent", serviceTarget)}\n`);
-  } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException)?.code !== "EPIPE") {
-      throw err;
-    }
-  }
+  writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
   return { outcome: "completed" };
 }

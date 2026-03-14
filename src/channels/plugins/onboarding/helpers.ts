@@ -164,11 +164,11 @@ export function setAccountAllowFromForChannel(params: {
   });
 }
 
-export function setTopLevelChannelAllowFrom(params: {
+function patchTopLevelChannelConfig(params: {
   cfg: OpenClawConfig;
   channel: string;
-  allowFrom: string[];
   enabled?: boolean;
+  patch: Record<string, unknown>;
 }): OpenClawConfig {
   const channelConfig =
     (params.cfg.channels?.[params.channel] as Record<string, unknown> | undefined) ?? {};
@@ -179,10 +179,24 @@ export function setTopLevelChannelAllowFrom(params: {
       [params.channel]: {
         ...channelConfig,
         ...(params.enabled ? { enabled: true } : {}),
-        allowFrom: params.allowFrom,
+        ...params.patch,
       },
     },
   };
+}
+
+export function setTopLevelChannelAllowFrom(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  allowFrom: string[];
+  enabled?: boolean;
+}): OpenClawConfig {
+  return patchTopLevelChannelConfig({
+    cfg: params.cfg,
+    channel: params.channel,
+    enabled: params.enabled,
+    patch: { allowFrom: params.allowFrom },
+  });
 }
 
 export function setTopLevelChannelDmPolicyWithAllowFrom(params: {
@@ -199,17 +213,14 @@ export function setTopLevelChannelDmPolicyWithAllowFrom(params: {
     undefined;
   const allowFrom =
     params.dmPolicy === "open" ? addWildcardAllowFrom(existingAllowFrom) : undefined;
-  return {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      [params.channel]: {
-        ...channelConfig,
-        dmPolicy: params.dmPolicy,
-        ...(allowFrom ? { allowFrom } : {}),
-      },
+  return patchTopLevelChannelConfig({
+    cfg: params.cfg,
+    channel: params.channel,
+    patch: {
+      dmPolicy: params.dmPolicy,
+      ...(allowFrom ? { allowFrom } : {}),
     },
-  };
+  });
 }
 
 export function setTopLevelChannelGroupPolicy(params: {
@@ -218,19 +229,12 @@ export function setTopLevelChannelGroupPolicy(params: {
   groupPolicy: GroupPolicy;
   enabled?: boolean;
 }): OpenClawConfig {
-  const channelConfig =
-    (params.cfg.channels?.[params.channel] as Record<string, unknown> | undefined) ?? {};
-  return {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      [params.channel]: {
-        ...channelConfig,
-        ...(params.enabled ? { enabled: true } : {}),
-        groupPolicy: params.groupPolicy,
-      },
-    },
-  };
+  return patchTopLevelChannelConfig({
+    cfg: params.cfg,
+    channel: params.channel,
+    enabled: params.enabled,
+    patch: { groupPolicy: params.groupPolicy },
+  });
 }
 
 export function setChannelDmPolicyWithAllowFrom(params: {

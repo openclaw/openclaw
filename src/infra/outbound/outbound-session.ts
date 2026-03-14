@@ -535,6 +535,21 @@ function resolveMatrixSession(
   };
 }
 
+function buildSimpleBaseSession(params: {
+  route: ResolveOutboundSessionRouteParams;
+  channel: string;
+  peer: RoutePeer;
+}) {
+  const baseSessionKey = buildBaseSessionKey({
+    cfg: params.route.cfg,
+    agentId: params.route.agentId,
+    channel: params.channel,
+    accountId: params.route.accountId,
+    peer: params.peer,
+  });
+  return { baseSessionKey, peer: params.peer };
+}
+
 function resolveMSTeamsSession(
   params: ResolveOutboundSessionRouteParams,
 ): OutboundSessionRoute | null {
@@ -599,13 +614,10 @@ function resolveMattermostSession(
   if (!rawId) {
     return null;
   }
-  const peer: RoutePeer = { kind: isUser ? "direct" : "channel", id: rawId };
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
+  const { baseSessionKey, peer } = buildSimpleBaseSession({
+    route: params,
     channel: "mattermost",
-    accountId: params.accountId,
-    peer,
+    peer: { kind: isUser ? "direct" : "channel", id: rawId },
   });
   const threadId = normalizeThreadId(params.replyToId ?? params.threadId);
   const threadKeys = resolveThreadSessionKeys({

@@ -5,11 +5,14 @@ import { fileURLToPath } from "node:url";
 
 const CORE_PACKAGE_NAMES = new Set(["openclaw", "qverisbot", "@qverisai/qverisbot"]);
 
+function parsePackageName(raw: string): string | null {
+  const parsed = JSON.parse(raw) as { name?: unknown };
+  return typeof parsed.name === "string" ? parsed.name : null;
+}
+
 async function readPackageName(dir: string): Promise<string | null> {
   try {
-    const raw = await fs.readFile(path.join(dir, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { name?: unknown };
-    return typeof parsed.name === "string" ? parsed.name : null;
+    return parsePackageName(await fs.readFile(path.join(dir, "package.json"), "utf-8"));
   } catch {
     return null;
   }
@@ -17,9 +20,7 @@ async function readPackageName(dir: string): Promise<string | null> {
 
 function readPackageNameSync(dir: string): string | null {
   try {
-    const raw = fsSync.readFileSync(path.join(dir, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { name?: unknown };
-    return typeof parsed.name === "string" ? parsed.name : null;
+    return parsePackageName(fsSync.readFileSync(path.join(dir, "package.json"), "utf-8"));
   } catch {
     return null;
   }

@@ -1,3 +1,4 @@
+import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.js";
 import {
@@ -22,7 +23,7 @@ import {
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
-import { normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
+import { normalizeFastMode, normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
 import { isDiscordSurface, isTelegramSurface, resolveChannelAccountId } from "./channel-context.js";
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
 import { persistSessionEntry } from "./commands-session-store.js";
@@ -288,6 +289,57 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     reply: {
       text: `⚙️ Usage footer: ${next}.`,
     },
+  };
+};
+
+export const handleFastCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const normalized = params.command.commandBodyNormalized;
+  if (normalized !== "/fast" && !normalized.startsWith("/fast ")) {
+    return null;
+  }
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /fast from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+
+  const rawArgs = normalized === "/fast" ? "" : normalized.slice("/fast".length).trim();
+  const rawMode = rawArgs.toLowerCase();
+  if (!rawMode || rawMode === "status") {
+    const state = resolveFastModeState({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+      sessionEntry: params.sessionEntry,
+    });
+    const suffix =
+      state.source === "config" ? " (config)" : state.source === "default" ? " (default)" : "";
+    return {
+      shouldContinue: false,
+      reply: { text: `⚙️ Current fast mode: ${state.enabled ? "on" : "off"}${suffix}.` },
+    };
+  }
+
+  const nextMode = normalizeFastMode(rawMode);
+  if (nextMode === undefined) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Usage: /fast status|on|off" },
+    };
+  }
+
+  if (params.sessionEntry && params.sessionStore && params.sessionKey) {
+    params.sessionEntry.fastMode = nextMode;
+    await persistSessionEntry(params);
+  }
+
+  return {
+    shouldContinue: false,
+    reply: { text: `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.` },
   };
 };
 

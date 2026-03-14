@@ -22,9 +22,11 @@ import {
 import { compareSemverStrings } from "./update-check.js";
 import {
   cleanupGlobalRenameDirs,
+  createGlobalInstallEnv,
   detectGlobalInstallManagerForRoot,
   globalInstallArgs,
   globalInstallFallbackArgs,
+  resolveGlobalInstallSpec,
 } from "./update-global.js";
 
 export type UpdateStepResult = {
@@ -207,7 +209,10 @@ async function resolveGitRoot(
   for (const dir of candidates) {
     const res = await runCommand(["git", "-C", dir, "rev-parse", "--show-toplevel"], {
       timeoutMs,
-    });
+    }).catch(() => null);
+    if (!res) {
+      continue;
+    }
     if (res.code === 0) {
       const root = res.stdout.trim();
       if (root) {
@@ -880,14 +885,20 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     });
     const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
     const tag = normalizeTag(opts.tag ?? channelToNpmTag(channel));
-    const spec = `${packageName}@${tag}`;
     const steps: UpdateStepResult[] = [];
+    const globalInstallEnv = await createGlobalInstallEnv();
+    const spec = resolveGlobalInstallSpec({
+      packageName,
+      tag,
+      env: globalInstallEnv,
+    });
     const updateStep = await runStep({
       runCommand,
       name: "global update",
       argv: globalInstallArgs(globalManager, spec),
       cwd: pkgRoot,
       timeoutMs,
+      env: globalInstallEnv,
       progress,
       stepIndex: 0,
       totalSteps: 1,
@@ -904,6 +915,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           argv: fallbackArgv,
           cwd: pkgRoot,
           timeoutMs,
+          env: globalInstallEnv,
           progress,
           stepIndex: 0,
           totalSteps: 1,

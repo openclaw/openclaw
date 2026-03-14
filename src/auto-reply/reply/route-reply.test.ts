@@ -105,6 +105,23 @@ const createMSTeamsPlugin = (params: { outbound: ChannelOutboundAdapter }): Chan
   outbound: params.outbound,
 });
 
+async function expectSlackNoSend(
+  payload: Parameters<typeof routeReply>[0]["payload"],
+  overrides: Partial<Parameters<typeof routeReply>[0]> = {},
+) {
+  mocks.sendMessageSlack.mockClear();
+  const res = await routeReply({
+    payload,
+    channel: "slack",
+    to: "channel:C123",
+    cfg: {} as never,
+    ...overrides,
+  });
+  expect(res.ok).toBe(true);
+  expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
+  return res;
+}
+
 describe("routeReply", () => {
   beforeEach(() => {
     setActivePluginRegistry(defaultRegistry);
@@ -132,39 +149,15 @@ describe("routeReply", () => {
   });
 
   it("no-ops on empty payload", async () => {
-    mocks.sendMessageSlack.mockClear();
-    const res = await routeReply({
-      payload: {},
-      channel: "slack",
-      to: "channel:C123",
-      cfg: {} as never,
-    });
-    expect(res.ok).toBe(true);
-    expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
+    await expectSlackNoSend({});
   });
 
   it("suppresses reasoning payloads", async () => {
-    mocks.sendMessageSlack.mockClear();
-    const res = await routeReply({
-      payload: { text: "Reasoning:\n_step_", isReasoning: true },
-      channel: "slack",
-      to: "channel:C123",
-      cfg: {} as never,
-    });
-    expect(res.ok).toBe(true);
-    expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
+    await expectSlackNoSend({ text: "Reasoning:\n_step_", isReasoning: true });
   });
 
   it("drops silent token payloads", async () => {
-    mocks.sendMessageSlack.mockClear();
-    const res = await routeReply({
-      payload: { text: SILENT_REPLY_TOKEN },
-      channel: "slack",
-      to: "channel:C123",
-      cfg: {} as never,
-    });
-    expect(res.ok).toBe(true);
-    expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
+    await expectSlackNoSend({ text: SILENT_REPLY_TOKEN });
   });
 
   it("does not drop payloads that merely start with the silent token", async () => {
@@ -199,6 +192,46 @@ describe("routeReply", () => {
       "[openclaw] hi",
       expect.any(Object),
     );
+  });
+
+  it("routes directive-only Slack replies when interactive replies are enabled", async () => {
+    mocks.sendMessageSlack.mockClear();
+    const cfg = {
+      channels: {
+        slack: {
+          capabilities: { interactiveReplies: true },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await routeReply({
+      payload: { text: "[[slack_select: Choose one | Alpha:alpha]]" },
+      channel: "slack",
+      to: "channel:C123",
+      cfg,
+    });
+    expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
+      "channel:C123",
+      "",
+      expect.objectContaining({
+        blocks: [
+          expect.objectContaining({
+            type: "actions",
+            block_id: "openclaw_reply_select_1",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("does not bypass the empty-reply guard for invalid Slack blocks", async () => {
+    await expectSlackNoSend({
+      text: " ",
+      channelData: {
+        slack: {
+          blocks: " ",
+        },
+      },
+    });
   });
 
   it("does not derive responsePrefix from agent identity when routing", async () => {

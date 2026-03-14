@@ -20,6 +20,7 @@ import {
 } from "../agents/live-auth-keys.js";
 import { isModernModelRef } from "../agents/live-model-filter.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
+import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { isRateLimitErrorMessage } from "../agents/pi-embedded-helpers/errors.js";
 import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discovery.js";
@@ -1340,6 +1341,9 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       const providerProfileCache = new Map<string, boolean>();
       const candidates: Array<Model<Api>> = [];
       for (const model of wanted) {
+        if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
+          continue;
+        }
         if (PROVIDERS && !PROVIDERS.has(model.provider)) {
           continue;
         }

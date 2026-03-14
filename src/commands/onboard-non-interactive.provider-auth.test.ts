@@ -17,7 +17,7 @@ type OnboardEnv = {
   runtime: NonInteractiveRuntime;
 };
 
-const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
+const ensureWorkspaceAndSessionsMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => {}));
 
 vi.mock("./onboard-helpers.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./onboard-helpers.js")>();
@@ -183,16 +183,16 @@ describe("onboard (non-interactive): provider auth", () => {
   it("stores MiniMax API key and uses global baseUrl by default", async () => {
     await withOnboardEnv("openclaw-onboard-minimax-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
-        authChoice: "minimax-api",
+        authChoice: "minimax-global-api",
         minimaxApiKey: "sk-minimax-test", // pragma: allowlist secret
       });
 
-      expect(cfg.auth?.profiles?.["minimax:default"]?.provider).toBe("minimax");
-      expect(cfg.auth?.profiles?.["minimax:default"]?.mode).toBe("api_key");
+      expect(cfg.auth?.profiles?.["minimax:global"]?.provider).toBe("minimax");
+      expect(cfg.auth?.profiles?.["minimax:global"]?.mode).toBe("api_key");
       expect(cfg.models?.providers?.minimax?.baseUrl).toBe(MINIMAX_API_BASE_URL);
       expect(cfg.agents?.defaults?.model?.primary).toBe("minimax/MiniMax-M2.5");
       await expectApiKeyProfile({
-        profileId: "minimax:default",
+        profileId: "minimax:global",
         provider: "minimax",
         key: "sk-minimax-test",
       });
@@ -202,17 +202,17 @@ describe("onboard (non-interactive): provider auth", () => {
   it("supports MiniMax CN API endpoint auth choice", async () => {
     await withOnboardEnv("openclaw-onboard-minimax-cn-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
-        authChoice: "minimax-api-key-cn",
+        authChoice: "minimax-cn-api",
         minimaxApiKey: "sk-minimax-test", // pragma: allowlist secret
       });
 
-      expect(cfg.auth?.profiles?.["minimax-cn:default"]?.provider).toBe("minimax-cn");
-      expect(cfg.auth?.profiles?.["minimax-cn:default"]?.mode).toBe("api_key");
-      expect(cfg.models?.providers?.["minimax-cn"]?.baseUrl).toBe(MINIMAX_CN_API_BASE_URL);
-      expect(cfg.agents?.defaults?.model?.primary).toBe("minimax-cn/MiniMax-M2.5");
+      expect(cfg.auth?.profiles?.["minimax:cn"]?.provider).toBe("minimax");
+      expect(cfg.auth?.profiles?.["minimax:cn"]?.mode).toBe("api_key");
+      expect(cfg.models?.providers?.minimax?.baseUrl).toBe(MINIMAX_CN_API_BASE_URL);
+      expect(cfg.agents?.defaults?.model?.primary).toBe("minimax/MiniMax-M2.5");
       await expectApiKeyProfile({
-        profileId: "minimax-cn:default",
-        provider: "minimax-cn",
+        profileId: "minimax:cn",
+        provider: "minimax",
         key: "sk-minimax-test",
       });
     });
@@ -474,14 +474,63 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
-  it("rejects vLLM auth choice in non-interactive mode", async () => {
-    await withOnboardEnv("openclaw-onboard-vllm-non-interactive-", async ({ runtime }) => {
-      await expect(
-        runNonInteractiveOnboardingWithDefaults(runtime, {
-          authChoice: "vllm",
-          skipSkills: true,
-        }),
-      ).rejects.toThrow('Auth choice "vllm" requires interactive mode.');
+  it("configures vLLM via the provider plugin in non-interactive mode", async () => {
+    await withOnboardEnv("openclaw-onboard-vllm-non-interactive-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        authChoice: "vllm",
+        customBaseUrl: "http://127.0.0.1:8100/v1",
+        customApiKey: "vllm-test-key", // pragma: allowlist secret
+        customModelId: "Qwen/Qwen3-8B",
+      });
+
+      expect(cfg.auth?.profiles?.["vllm:default"]?.provider).toBe("vllm");
+      expect(cfg.auth?.profiles?.["vllm:default"]?.mode).toBe("api_key");
+      expect(cfg.models?.providers?.vllm).toEqual({
+        baseUrl: "http://127.0.0.1:8100/v1",
+        api: "openai-completions",
+        apiKey: "VLLM_API_KEY",
+        models: [
+          expect.objectContaining({
+            id: "Qwen/Qwen3-8B",
+          }),
+        ],
+      });
+      expect(cfg.agents?.defaults?.model?.primary).toBe("vllm/Qwen/Qwen3-8B");
+      await expectApiKeyProfile({
+        profileId: "vllm:default",
+        provider: "vllm",
+        key: "vllm-test-key",
+      });
+    });
+  });
+
+  it("configures SGLang via the provider plugin in non-interactive mode", async () => {
+    await withOnboardEnv("openclaw-onboard-sglang-non-interactive-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        authChoice: "sglang",
+        customBaseUrl: "http://127.0.0.1:31000/v1",
+        customApiKey: "sglang-test-key", // pragma: allowlist secret
+        customModelId: "Qwen/Qwen3-32B",
+      });
+
+      expect(cfg.auth?.profiles?.["sglang:default"]?.provider).toBe("sglang");
+      expect(cfg.auth?.profiles?.["sglang:default"]?.mode).toBe("api_key");
+      expect(cfg.models?.providers?.sglang).toEqual({
+        baseUrl: "http://127.0.0.1:31000/v1",
+        api: "openai-completions",
+        apiKey: "SGLANG_API_KEY",
+        models: [
+          expect.objectContaining({
+            id: "Qwen/Qwen3-32B",
+          }),
+        ],
+      });
+      expect(cfg.agents?.defaults?.model?.primary).toBe("sglang/Qwen/Qwen3-32B");
+      await expectApiKeyProfile({
+        profileId: "sglang:default",
+        provider: "sglang",
+        key: "sglang-test-key",
+      });
     });
   });
 

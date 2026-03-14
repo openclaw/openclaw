@@ -11,6 +11,8 @@ type PackageJson = {
   license?: string;
   repository?: { url?: string } | string;
   bin?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>;
 };
 
 export type ParsedReleaseVersion = {
@@ -139,6 +141,16 @@ export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] 
     errors.push(
       `package.json bin.openclaw must be "openclaw.mjs"; found "${pkg.bin?.openclaw ?? ""}".`,
     );
+  }
+  if (pkg.peerDependencies?.["node-llama-cpp"] !== "3.16.2") {
+    errors.push(
+      `package.json peerDependencies["node-llama-cpp"] must be "3.16.2"; found "${
+        pkg.peerDependencies?.["node-llama-cpp"] ?? ""
+      }".`,
+    );
+  }
+  if (pkg.peerDependenciesMeta?.["node-llama-cpp"]?.optional !== true) {
+    errors.push('package.json peerDependenciesMeta["node-llama-cpp"].optional must be true.');
   }
 
   return errors;

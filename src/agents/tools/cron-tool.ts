@@ -237,10 +237,21 @@ JOB SCHEMA (for add action):
   "name": "string (optional)",
   "schedule": { ... },      // Required: when to run
   "payload": { ... },       // Required: what to execute
-  "delivery": { ... },      // Optional: announce summary or webhook POST
-  "sessionTarget": "main" | "isolated",  // Required
+  "delivery": { ... },      // Optional: announce summary (isolated/current/session:xxx only) or webhook POST
+  "sessionTarget": "main" | "isolated" | "current" | "session:<custom-id>",  // Optional, defaults based on context
   "enabled": true | false   // Optional, default true
 }
+
+SESSION TARGET OPTIONS:
+- "main": Run in the main session (requires payload.kind="systemEvent")
+- "isolated": Run in an ephemeral isolated session (requires payload.kind="agentTurn")
+- "current": Bind to the current session where the cron is created (resolved at creation time)
+- "session:<custom-id>": Run in a persistent named session (e.g., "session:project-alpha-daily")
+
+DEFAULT BEHAVIOR (unchanged for backward compatibility):
+- payload.kind="systemEvent" → defaults to "main"
+- payload.kind="agentTurn" → defaults to "isolated"
+To use current session binding, explicitly set sessionTarget="current".
 
 SCHEDULE TYPES (schedule.kind):
 - "at": One-shot at absolute time
@@ -267,9 +278,9 @@ DELIVERY (top-level):
 
 CRITICAL CONSTRAINTS:
 - sessionTarget="main" REQUIRES payload.kind="systemEvent"
-- sessionTarget="isolated" REQUIRES payload.kind="agentTurn"
+- sessionTarget="isolated" | "current" | "session:xxx" REQUIRES payload.kind="agentTurn"
 - For webhook callbacks, use delivery.mode="webhook" with delivery.to set to a URL.
-Default: prefer isolated agentTurn jobs unless the user explicitly wants a main-session system event.
+Default: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.
 
 WAKE MODES (for wake action):
 - "next-heartbeat" (default): Wake on next heartbeat
@@ -353,7 +364,10 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           if (!params.job || typeof params.job !== "object") {
             throw new Error("job required");
           }
-          const job = normalizeCronJobCreate(params.job) ?? params.job;
+          const job =
+            normalizeCronJobCreate(params.job, {
+              sessionContext: { sessionKey: opts?.agentSessionKey },
+            }) ?? params.job;
           if (job && typeof job === "object") {
             const cfg = loadConfig();
             const { mainKey, alias } = resolveMainSessionAlias(cfg);

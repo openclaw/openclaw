@@ -287,6 +287,13 @@ export function buildGatewayCronService(params: {
     },
     runIsolatedAgentJob: async ({ job, message, abortSignal }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+      let sessionKey = `cron:${job.id}`;
+      if (job.sessionTarget.startsWith("session:")) {
+        const customSessionId = job.sessionTarget.slice(8).trim();
+        if (customSessionId) {
+          sessionKey = customSessionId;
+        }
+      }
       return await runCronIsolatedAgentTurn({
         cfg: runtimeConfig,
         deps: params.deps,
@@ -294,7 +301,7 @@ export function buildGatewayCronService(params: {
         message,
         abortSignal,
         agentId,
-        sessionKey: `cron:${job.id}`,
+        sessionKey,
         lane: "cron",
       });
     },
