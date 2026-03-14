@@ -692,6 +692,18 @@ export const dispatchTelegramMessage = async ({
                   retainPreviewOnCleanupByLane.answer = false;
                   return;
                 }
+                if (answerLane.hasStreamedMessage) {
+                  const outgoingPreviewMessageId = answerLane.stream?.messageId();
+                  if (
+                    typeof outgoingPreviewMessageId === "number" &&
+                    !finalizedPreviewByLane.answer
+                  ) {
+                    // Eagerly remove the outgoing preview at the tool-use boundary
+                    // so users don't briefly see it as a settled intermediate
+                    // message before the next round starts streaming.
+                    bot.api.deleteMessage(chatId, outgoingPreviewMessageId).catch(() => {});
+                  }
+                }
                 await rotateAnswerLaneForNewAssistantMessage();
                 // Message-start is an explicit assistant-message boundary.
                 // Even when no forceNewMessage happened (e.g. prior answer had no
