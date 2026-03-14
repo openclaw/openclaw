@@ -1955,13 +1955,17 @@ export async function runEmbeddedAttempt(
       // outbound request sees sanitized messages.
       if (transcriptPolicy.dropThinkingBlocks) {
         const inner = activeSession.agent.streamFn;
+        const dropOpts = { preserveLatestSignature: transcriptPolicy.preserveSignatures };
         activeSession.agent.streamFn = (model, context, options) => {
           const ctx = context as unknown as { messages?: unknown };
           const messages = ctx?.messages;
           if (!Array.isArray(messages)) {
             return inner(model, context, options);
           }
-          const sanitized = dropThinkingBlocks(messages as unknown as AgentMessage[]) as unknown;
+          const sanitized = dropThinkingBlocks(
+            messages as unknown as AgentMessage[],
+            dropOpts,
+          ) as unknown;
           if (sanitized === messages) {
             return inner(model, context, options);
           }

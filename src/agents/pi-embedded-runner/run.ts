@@ -58,9 +58,11 @@ import {
   parseImageDimensionError,
   isRateLimitAssistantError,
   isTimeoutErrorMessage,
+  isThinkingBlockErrorMessage,
   pickFallbackThinkingLevel,
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
+import { shouldDropThinkingBlocksForModel } from "../provider-capabilities.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -747,6 +749,7 @@ export async function runEmbeddedPiAgent(
       const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;
+      let thinkingBlockRecoveryAttempted = false;
       let bootstrapPromptWarningSignaturesSeen =
         params.bootstrapPromptWarningSignaturesSeen ??
         (params.bootstrapPromptWarningSignature ? [params.bootstrapPromptWarningSignature] : []);
@@ -1295,6 +1298,21 @@ export async function runEmbeddedPiAgent(
                   error: { kind: "image_size", message: errorText },
                 },
               };
+            }
+            // Handle thinking block errors with auto-recovery (#44679).
+            // Providers can reject replayed thinking blocks with modified or missing
+            // signatures. Retry the turn so the dropThinkingBlocks wrapper can
+            // sanitize the outbound request.
+            if (
+              isThinkingBlockErrorMessage(errorText) &&
+              !thinkingBlockRecoveryAttempted &&
+              shouldDropThinkingBlocksForModel({ provider, modelId })
+            ) {
+              thinkingBlockRecoveryAttempted = true;
+              log.warn(
+                `Thinking block error detected for ${provider}/${modelId}; retrying with session recovery`,
+              );
+              continue;
             }
             const promptFailoverReason =
               promptErrorDetails.reason ?? classifyFailoverReason(errorText);

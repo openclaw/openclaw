@@ -550,7 +550,9 @@ export async function sanitizeSessionHistory(params: {
     },
   );
   const droppedThinking = policy.dropThinkingBlocks
-    ? dropThinkingBlocks(sanitizedImages)
+    ? dropThinkingBlocks(sanitizedImages, {
+        preserveLatestSignature: policy.preserveSignatures,
+      })
     : sanitizedImages;
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
     allowedToolNames: params.allowedToolNames,

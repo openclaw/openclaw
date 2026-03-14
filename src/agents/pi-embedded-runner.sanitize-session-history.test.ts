@@ -763,7 +763,7 @@ describe("sanitizeSessionHistory", () => {
     expect(types).not.toContain("thinking");
   });
 
-  it("drops assistant thinking blocks for anthropic replay", async () => {
+  it("preserves thinking signature on latest assistant for anthropic replay (#44679)", async () => {
     setNonGoogleModelApi();
 
     const messages = makeThinkingAndTextAssistantMessages();
@@ -771,10 +771,13 @@ describe("sanitizeSessionHistory", () => {
     const result = await sanitizeAnthropicHistory({ messages });
 
     const assistant = getAssistantMessage(result);
-    expect(assistant.content).toEqual([{ type: "text", text: "hi" }]);
+    expect(assistant.content).toEqual([
+      { type: "thinking", thinking: "", thinkingSignature: "some_sig" },
+      { type: "text", text: "hi" },
+    ]);
   });
 
-  it("drops assistant thinking blocks for amazon-bedrock replay", async () => {
+  it("preserves thinking signature on latest assistant for amazon-bedrock replay (#44679)", async () => {
     setNonGoogleModelApi();
 
     const messages = makeThinkingAndTextAssistantMessages();
@@ -786,7 +789,10 @@ describe("sanitizeSessionHistory", () => {
     });
 
     const assistant = getAssistantMessage(result);
-    expect(assistant.content).toEqual([{ type: "text", text: "hi" }]);
+    expect(assistant.content).toEqual([
+      { type: "thinking", thinking: "", thinkingSignature: "some_sig" },
+      { type: "text", text: "hi" },
+    ]);
   });
 
   it("does not drop thinking blocks for non-claude copilot models", async () => {

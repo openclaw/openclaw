@@ -10,6 +10,7 @@ import {
   isOverloadedErrorMessage,
   isPeriodicUsageLimitErrorMessage,
   isRateLimitErrorMessage,
+  isThinkingBlockErrorMessage,
   isTimeoutErrorMessage,
   matchesFormatErrorPattern,
 } from "./failover-matches.js";
@@ -21,6 +22,7 @@ export {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
+  isThinkingBlockErrorMessage,
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
 
