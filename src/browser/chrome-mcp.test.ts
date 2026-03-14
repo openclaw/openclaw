@@ -129,4 +129,82 @@ describe("chrome MCP page parsing", () => {
 
     expect(result).toBe(123);
   });
+
+  it("surfaces MCP tool errors instead of JSON parse noise", async () => {
+    const factory: ChromeMcpSessionFactory = async () => {
+      const session = createFakeSession();
+      const callTool = vi.fn(async ({ name }: ToolCall) => {
+        if (name === "evaluate_script") {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Cannot read properties of null (reading 'value')",
+              },
+            ],
+            isError: true,
+          };
+        }
+        throw new Error(`unexpected tool ${name}`);
+      });
+      session.client.callTool = callTool as typeof session.client.callTool;
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(
+      evaluateChromeMcpScript({
+        profileName: "chrome-live",
+        targetId: "1",
+        fn: "() => document.getElementById('missing').value",
+      }),
+    ).rejects.toThrow(/Cannot read properties of null/);
+  });
+
+  it("reuses a single pending session for concurrent requests", async () => {
+    let factoryCalls = 0;
+    let releaseFactory!: () => void;
+    const factoryGate = new Promise<void>((resolve) => {
+      releaseFactory = resolve;
+    });
+
+    const factory: ChromeMcpSessionFactory = async () => {
+      factoryCalls += 1;
+      await factoryGate;
+      return createFakeSession();
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const tabsPromise = listChromeMcpTabs("chrome-live");
+    const evalPromise = evaluateChromeMcpScript({
+      profileName: "chrome-live",
+      targetId: "1",
+      fn: "() => 123",
+    });
+
+    releaseFactory();
+    const [tabs, result] = await Promise.all([tabsPromise, evalPromise]);
+
+    expect(factoryCalls).toBe(1);
+    expect(tabs).toHaveLength(2);
+    expect(result).toBe(123);
+  });
+
+  it("clears failed pending sessions so the next call can retry", async () => {
+    let factoryCalls = 0;
+    const factory: ChromeMcpSessionFactory = async () => {
+      factoryCalls += 1;
+      if (factoryCalls === 1) {
+        throw new Error("attach failed");
+      }
+      return createFakeSession();
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/attach failed/);
+
+    const tabs = await listChromeMcpTabs("chrome-live");
+    expect(factoryCalls).toBe(2);
+    expect(tabs).toHaveLength(2);
+  });
 });

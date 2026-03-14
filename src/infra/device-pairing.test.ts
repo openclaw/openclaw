@@ -2,6 +2,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
 import {
   approveDevicePairing,
   clearDevicePairing,
@@ -144,6 +145,49 @@ describe("device pairing tokens", () => {
     const paired = await getPairedDevice("device-1", baseDir);
     expect(paired?.roles).toEqual(["node", "operator"]);
     expect(paired?.scopes).toEqual(["operator.read", "operator.write"]);
+  });
+
+  test("rejects bootstrap token replay before pending scope escalation can be approved", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    const issued = await issueDeviceBootstrapToken({ baseDir });
+
+    await expect(
+      verifyDeviceBootstrapToken({
+        token: issued.token,
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.read"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    const first = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.read"],
+      },
+      baseDir,
+    );
+
+    await expect(
+      verifyDeviceBootstrapToken({
+        token: issued.token,
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.admin"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
+
+    await approveDevicePairing(first.request.requestId, baseDir);
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired?.scopes).toEqual(["operator.read"]);
+    expect(paired?.approvedScopes).toEqual(["operator.read"]);
+    expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read"]);
   });
 
   test("generates base64url device tokens with 256-bit entropy output length", async () => {

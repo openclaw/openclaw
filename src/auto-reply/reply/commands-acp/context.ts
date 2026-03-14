@@ -5,8 +5,8 @@ import {
 } from "../../../acp/conversation-id.js";
 import { DISCORD_THREAD_BINDING_CHANNEL } from "../../../channels/thread-bindings-policy.js";
 import { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
-import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import type { HandleCommandsParams } from "../commands-types.js";
+import { parseDiscordParentChannelFromSessionKey } from "../discord-parent-channel.js";
 import { resolveTelegramConversationId } from "../telegram-context.js";
 
 export function resolveAcpCommandChannel(params: HandleCommandsParams): string {
@@ -62,19 +62,6 @@ export function resolveAcpCommandConversationId(params: HandleCommandsParams): s
     threadId: params.ctx.MessageThreadId,
     targets: [params.ctx.OriginatingTo, params.command.to, params.ctx.To],
   });
-}
-
-function parseDiscordParentChannelFromSessionKey(raw: unknown): string | undefined {
-  const sessionKey = normalizeConversationText(raw);
-  if (!sessionKey) {
-    return undefined;
-  }
-  const scoped = parseAgentSessionKey(sessionKey)?.rest ?? sessionKey.toLowerCase();
-  const match = scoped.match(/(?:^|:)channel:([^:]+)$/);
-  if (!match?.[1]) {
-    return undefined;
-  }
-  return match[1];
 }
 
 function parseDiscordParentChannelFromContext(raw: unknown): string | undefined {

@@ -398,6 +398,10 @@ Notes:
   session only.
 - OpenClaw uses the official Chrome DevTools MCP `--autoConnect` flow here, not
   the legacy default-profile remote debugging port workflow.
+- Existing-session screenshots support page captures and `--ref` element
+  captures from snapshots, but not CSS `--element` selectors.
+- Existing-session `wait --url` supports exact, substring, and glob patterns
+  like other browser drivers. `wait --load networkidle` is not supported yet.
 - Some features still require the extension relay or managed browser path, such
   as PDF export and download interception.
 - Leave the relay loopback-only by default. If the relay must be reachable from a different network namespace (for example Gateway in WSL2, Chrome on Windows), set `browser.relayBindHost` to an explicit bind address such as `0.0.0.0` while keeping the surrounding network private and authenticated.
