@@ -499,6 +499,28 @@ async function finishPreparedManualRun(
           afterRunEntries,
         );
       }
+      // Clear runningAtMs so the job isn't stuck as "running" after abort.
+      await locked(state, async () => {
+        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+        const job = state.store?.jobs.find((entry) => entry.id === jobId);
+        if (job) {
+          job.state.runningAtMs = undefined;
+          applyJobResult(
+            state,
+            job,
+            {
+              status: "skipped",
+              error: `hook aborted: ${beforeResult.reason ?? "unknown"}`,
+              startedAt,
+              endedAt: abortEndedAt,
+            },
+            { preserveSchedule: mode === "force" },
+          );
+        }
+        recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+        await persist(state);
+        armTimer(state);
+      });
       return;
     }
   }
