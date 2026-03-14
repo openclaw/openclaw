@@ -56,6 +56,7 @@ import {
   buildTelegramParentPeer,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
+  resolveTelegramInboundThreadId,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramConversationRoute } from "./conversation-route.js";
@@ -279,7 +280,7 @@ export const registerTelegramHandlers = ({
       runtime.error?.(danger(`telegram debounce flush failed: ${String(err)}`));
       const chatId = items[0]?.msg.chat.id;
       if (chatId != null) {
-        const threadId = items[0]?.msg.message_thread_id;
+        const threadId = resolveTelegramInboundThreadId(items[0]?.msg);
         void bot.api
           .sendMessage(
             chatId,
@@ -1166,7 +1167,7 @@ export const registerTelegramHandlers = ({
         }
       }
 
-      const messageThreadId = callbackMessage.message_thread_id;
+      const messageThreadId = resolveTelegramInboundThreadId(callbackMessage);
       const isForum = callbackMessage.chat.is_forum === true;
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
         chatId,
@@ -1614,7 +1615,7 @@ export const registerTelegramHandlers = ({
       chatId: msg.chat.id,
       isGroup: msg.chat.type === "group" || msg.chat.type === "supergroup",
       isForum: msg.chat.is_forum === true,
-      messageThreadId: msg.message_thread_id,
+      messageThreadId: resolveTelegramInboundThreadId(msg),
       senderId: msg.from?.id != null ? String(msg.from.id) : "",
       senderUsername: msg.from?.username ?? "",
       requireConfiguredGroup: false,

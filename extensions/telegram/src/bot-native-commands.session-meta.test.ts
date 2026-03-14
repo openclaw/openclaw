@@ -165,6 +165,19 @@ function buildStatusCommandContext() {
   };
 }
 
+function buildStatusDmTopicCommandContext() {
+  return {
+    match: "",
+    message: {
+      message_id: 3,
+      date: Math.floor(Date.now() / 1000),
+      chat: { id: 100, type: "private" as const },
+      direct_messages_topic: { topic_id: 42 },
+      from: { id: 200, username: "bob" },
+    },
+  };
+}
+
 function buildStatusTopicCommandContext() {
   return {
     match: "",
@@ -347,6 +360,20 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(call?.ctx?.OriginatingChannel).toBe("telegram");
     expect(call?.ctx?.Provider).toBe("telegram");
     expect(call?.sessionKey).toBe("agent:main:telegram:slash:200");
+  });
+
+  it("routes DM topic slash commands when only direct_messages_topic is present", async () => {
+    const cfg: OpenClawConfig = {};
+    const { handler } = registerAndResolveStatusHandler({ cfg, allowFrom: ["200"] });
+    await handler(buildStatusDmTopicCommandContext());
+
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [{ ctx?: { CommandTargetSessionKey?: string; MessageThreadId?: number } }]
+      >
+    )[0]?.[0];
+    expect(dispatchCall?.ctx?.MessageThreadId).toBe(42);
+    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe("agent:main:main:thread:100:42");
   });
 
   it("awaits session metadata persistence before dispatch", async () => {

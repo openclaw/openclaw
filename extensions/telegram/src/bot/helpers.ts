@@ -18,6 +18,89 @@ export type TelegramThreadSpec = {
   scope: "dm" | "forum" | "none";
 };
 
+type TelegramDirectMessagesTopicPayload = {
+  topic_id?: number | string | null;
+} | null;
+
+type TelegramReplyHeaderPayload = {
+  forum_topic?: boolean;
+  reply_to_top_id?: number | string | null;
+} | null;
+
+type TelegramInboundThreadCarrier = {
+  message_thread_id?: number | string | null;
+  direct_messages_topic?: TelegramDirectMessagesTopicPayload;
+  reply_to_message?: {
+    message_thread_id?: number | string | null;
+    direct_messages_topic?: TelegramDirectMessagesTopicPayload;
+  } | null;
+  reply_to?: TelegramReplyHeaderPayload;
+};
+
+function normalizeTelegramInboundThreadId(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      return undefined;
+    }
+    const normalized = Math.trunc(value);
+    return normalized > 0 ? normalized : undefined;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) {
+      return undefined;
+    }
+    const normalized = Math.trunc(parsed);
+    return normalized > 0 ? normalized : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Resolve the inbound Telegram thread id across Bot API and MTProto-like payload variants.
+ *
+ * Bot API normally sets `message_thread_id`, but private-topic deliveries can expose
+ * `direct_messages_topic.topic_id` instead. Some relayed payloads only preserve reply
+ * header metadata (`reply_to.forum_topic` + `reply_to_top_id`), so we accept that too.
+ */
+export function resolveTelegramInboundThreadId(
+  message?: Pick<Message, "message_thread_id" | "reply_to_message"> & TelegramInboundThreadCarrier,
+) {
+  if (!message) {
+    return undefined;
+  }
+  const directThreadId = normalizeTelegramInboundThreadId(message.message_thread_id);
+  if (directThreadId != null) {
+    return directThreadId;
+  }
+  const dmTopicThreadId = normalizeTelegramInboundThreadId(message.direct_messages_topic?.topic_id);
+  if (dmTopicThreadId != null) {
+    return dmTopicThreadId;
+  }
+  const replyThreadId = normalizeTelegramInboundThreadId(
+    message.reply_to_message?.message_thread_id,
+  );
+  if (replyThreadId != null) {
+    return replyThreadId;
+  }
+  const replyDmTopicThreadId = normalizeTelegramInboundThreadId(
+    message.reply_to_message?.direct_messages_topic?.topic_id,
+  );
+  if (replyDmTopicThreadId != null) {
+    return replyDmTopicThreadId;
+  }
+  // Some MTProto-originated payloads surface only reply header metadata.
+  const fallbackReplyTopId =
+    message.reply_to?.forum_topic === true
+      ? normalizeTelegramInboundThreadId(message.reply_to?.reply_to_top_id)
+      : undefined;
+  return fallbackReplyTopId;
+}
+
 export async function resolveTelegramGroupAllowFromContext(params: {
   chatId: string | number;
   accountId?: string;

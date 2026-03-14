@@ -20,6 +20,7 @@ import type { BuildTelegramMessageContextParams } from "./bot-message-context.ty
 import {
   buildTypingThreadParams,
   resolveTelegramDirectPeerId,
+  resolveTelegramInboundThreadId,
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import { resolveTelegramConversationRoute } from "./conversation-route.js";
@@ -62,7 +63,7 @@ export const buildTelegramMessageContext = async ({
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const senderId = msg.from?.id ? String(msg.from.id) : "";
-  const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
+  const messageThreadId = resolveTelegramInboundThreadId(msg);
   const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
   const threadSpec = resolveTelegramThreadSpec({
     isGroup,

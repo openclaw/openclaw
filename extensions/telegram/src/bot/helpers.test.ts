@@ -9,6 +9,7 @@ import {
   normalizeForwardedContext,
   resolveTelegramDirectPeerId,
   resolveTelegramForumThreadId,
+  resolveTelegramInboundThreadId,
 } from "./helpers.js";
 
 describe("resolveTelegramForumThreadId", () => {
@@ -27,6 +28,41 @@ describe("resolveTelegramForumThreadId", () => {
     { isForum: true, messageThreadId: 99, expected: 99 },
   ])("resolves forum topic ids", ({ expected, ...params }) => {
     expect(resolveTelegramForumThreadId(params)).toBe(expected);
+  });
+});
+
+describe("resolveTelegramInboundThreadId", () => {
+  it.each([
+    {
+      message: { message_thread_id: 42 },
+      expected: 42,
+    },
+    {
+      message: { direct_messages_topic: { topic_id: 77 } },
+      expected: 77,
+    },
+    {
+      message: { reply_to_message: { message_thread_id: 88 } },
+      expected: 88,
+    },
+    {
+      message: { reply_to_message: { direct_messages_topic: { topic_id: 99 } } },
+      expected: 99,
+    },
+    {
+      message: { reply_to: { forum_topic: true, reply_to_top_id: 123 } },
+      expected: 123,
+    },
+    {
+      message: { reply_to: { forum_topic: false, reply_to_top_id: 123 } },
+      expected: undefined,
+    },
+    {
+      message: { direct_messages_topic: { topic_id: 0 } },
+      expected: undefined,
+    },
+  ])("resolves inbound thread id %#", ({ message, expected }) => {
+    expect(resolveTelegramInboundThreadId(message as never)).toBe(expected);
   });
 });
 

@@ -26,6 +26,21 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main:thread:1234:42");
   });
 
+  it("uses dm topic session key when Telegram sends direct_messages_topic only", async () => {
+    const ctx = await buildContext({
+      message_id: 10,
+      chat: { id: 1234, type: "private" },
+      date: 1700000010,
+      text: "hello",
+      direct_messages_topic: { topic_id: 314 },
+      from: { id: 42, first_name: "Alice" },
+    });
+
+    expect(ctx).not.toBeNull();
+    expect(ctx?.ctxPayload?.MessageThreadId).toBe(314);
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main:thread:1234:314");
+  });
+
   it("keeps legacy dm session key when no thread id", async () => {
     const ctx = await buildContext({
       message_id: 2,

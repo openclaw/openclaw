@@ -60,6 +60,7 @@ import {
   buildSenderName,
   buildTelegramGroupFrom,
   resolveTelegramGroupAllowFromContext,
+  resolveTelegramInboundThreadId,
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
@@ -173,7 +174,7 @@ async function resolveTelegramCommandAuth(params: {
   } = params;
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
-  const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
+  const messageThreadId = resolveTelegramInboundThreadId(msg);
   const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
   const threadSpec = resolveTelegramThreadSpec({
     isGroup,
@@ -469,7 +470,7 @@ export const registerTelegramNativeCommands = ({
   } | null> => {
     const { msg, isGroup, isForum, resolvedThreadId, senderId, topicAgentId } = params;
     const chatId = msg.chat.id;
-    const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
+    const messageThreadId = resolveTelegramInboundThreadId(msg);
     const threadSpec = resolveTelegramThreadSpec({
       isGroup,
       isForum,

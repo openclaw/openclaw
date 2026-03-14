@@ -26,6 +26,18 @@ describe("getTelegramSequentialKey", () => {
     [
       {
         message: mockMessage({
+          chat: mockChat({ id: 123, type: "private" }),
+          direct_messages_topic: {
+            topic_id: 11,
+            user: { id: 11, is_bot: false, first_name: "Topic" },
+          },
+        }),
+      },
+      "telegram:123:topic:11",
+    ],
+    [
+      {
+        message: mockMessage({
           chat: mockChat({ id: 123, type: "supergroup" }),
           message_thread_id: 9,
         }),

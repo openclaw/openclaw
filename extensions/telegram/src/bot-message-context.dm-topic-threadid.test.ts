@@ -47,6 +47,23 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     expect(updateLastRoute?.threadId).toBe("42");
   });
 
+  it("passes threadId to updateLastRoute when only direct_messages_topic is present", async () => {
+    const ctx = await buildCtx({
+      message: {
+        chat: { id: 1234, type: "private" },
+        direct_messages_topic: { topic_id: 55 },
+      },
+    });
+
+    expect(ctx).not.toBeNull();
+    expect(recordInboundSessionMock).toHaveBeenCalled();
+
+    const updateLastRoute = getUpdateLastRoute() as { threadId?: string; to?: string } | undefined;
+    expect(updateLastRoute).toBeDefined();
+    expect(updateLastRoute?.to).toBe("telegram:1234");
+    expect(updateLastRoute?.threadId).toBe("55");
+  });
+
   it("does not pass threadId for regular DM without topic", async () => {
     const ctx = await buildCtx({
       message: {

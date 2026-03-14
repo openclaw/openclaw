@@ -1,6 +1,6 @@
 import { type Message, type UserFromGetMe } from "@grammyjs/types";
 import { isAbortRequestText } from "../../../src/auto-reply/reply/abort.js";
-import { resolveTelegramForumThreadId } from "./bot/helpers.js";
+import { resolveTelegramForumThreadId, resolveTelegramInboundThreadId } from "./bot/helpers.js";
 
 export type TelegramSequentialKeyContext = {
   chat?: { id?: number };
@@ -42,7 +42,7 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     return "telegram:control";
   }
   const isGroup = msg?.chat?.type === "group" || msg?.chat?.type === "supergroup";
-  const messageThreadId = msg?.message_thread_id;
+  const messageThreadId = resolveTelegramInboundThreadId(msg);
   const isForum = msg?.chat?.is_forum;
   const threadId = isGroup
     ? resolveTelegramForumThreadId({ isForum, messageThreadId })
