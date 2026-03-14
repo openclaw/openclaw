@@ -253,7 +253,12 @@ export async function resolveTelegramInboundBody(params: {
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
   if (isGroup && requireMention && canDetectMention && mentionGate.shouldSkip) {
-    logger.info({ chatId, reason: "no-mention" }, "skipping group message");
+    logInboundDrop({
+      log: logVerbose,
+      channel: "telegram",
+      reason: `mention-gating (chat=${chatId}${resolvedThreadId ? ` topic=${resolvedThreadId}` : ""} requireMention=true wasMentioned=${wasMentioned})`,
+      target: senderId ?? "unknown",
+    });
     recordPendingHistoryEntryIfEnabled({
       historyMap: groupHistories,
       historyKey: historyKey ?? "",
