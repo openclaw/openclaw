@@ -18,6 +18,13 @@ function createQmdConfig(agents: OpenClawConfig["agents"]): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function createBuiltinConfig(agents: OpenClawConfig["agents"]): OpenClawConfig {
+  return {
+    agents,
+    memory: { backend: "builtin" },
+  } as OpenClawConfig;
+}
+
 function createGatewayLogMock() {
   return { info: vi.fn(), warn: vi.fn() };
 }
@@ -27,17 +34,18 @@ describe("startGatewayMemoryBackend", () => {
     getMemorySearchManagerMock.mockClear();
   });
 
-  it("skips initialization when memory backend is not qmd", async () => {
-    const cfg = {
-      agents: { list: [{ id: "main", default: true }] },
-      memory: { backend: "builtin" },
-    } as OpenClawConfig;
-    const log = { info: vi.fn(), warn: vi.fn() };
+  it("initializes builtin backend for each configured agent", async () => {
+    const cfg = createBuiltinConfig({ list: [{ id: "main", default: true }] });
+    const log = createGatewayLogMock();
+    getMemorySearchManagerMock.mockResolvedValue({ manager: { search: vi.fn() } });
 
     await startGatewayMemoryBackend({ cfg, log });
 
-    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
-    expect(log.info).not.toHaveBeenCalled();
+    expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1);
+    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
+    expect(log.info).toHaveBeenCalledWith(
+      'builtin memory startup initialization armed for agent "main"',
+    );
     expect(log.warn).not.toHaveBeenCalled();
   });
 
@@ -62,7 +70,7 @@ describe("startGatewayMemoryBackend", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it("logs a warning when qmd manager init fails and continues with other agents", async () => {
+  it("logs a warning when manager init fails and continues with other agents", async () => {
     const cfg = createQmdConfig({ list: [{ id: "main", default: true }, { id: "ops" }] });
     const log = createGatewayLogMock();
     getMemorySearchManagerMock
@@ -77,6 +85,19 @@ describe("startGatewayMemoryBackend", () => {
     expect(log.info).toHaveBeenCalledWith(
       'qmd memory startup initialization armed for agent "ops"',
     );
+  });
+
+  it("logs a warning when builtin manager init fails", async () => {
+    const cfg = createBuiltinConfig({ list: [{ id: "main", default: true }] });
+    const log = createGatewayLogMock();
+    getMemorySearchManagerMock.mockResolvedValue({ manager: null, error: "sqlite error" });
+
+    await startGatewayMemoryBackend({ cfg, log });
+
+    expect(log.warn).toHaveBeenCalledWith(
+      'builtin memory startup initialization failed for agent "main": sqlite error',
+    );
+    expect(log.info).not.toHaveBeenCalled();
   });
 
   it("skips agents with memory search disabled", async () => {
