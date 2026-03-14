@@ -322,7 +322,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     extraSystemPrompt?: string;
     onAgentEvent?: (evt: {
       stream?: string;
-      data?: { phase?: string; willRetry?: boolean };
+      data?: { phase?: string; willRetry?: boolean; completed?: boolean };
     }) => void;
   };
 
