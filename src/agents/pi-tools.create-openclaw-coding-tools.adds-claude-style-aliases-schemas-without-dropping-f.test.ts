@@ -7,7 +7,7 @@ import { createOpenClawCodingTools } from "./pi-tools.js";
 import { expectReadWriteEditTools } from "./test-helpers/pi-tools-fs-helpers.js";
 
 describe("createOpenClawCodingTools", () => {
-  it("accepts Claude Code parameter aliases for read/write/edit", async () => {
+  it("accepts Claude Code and snake_case parameter aliases for read/write/edit", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-alias-"));
     try {
       const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
@@ -21,8 +21,8 @@ describe("createOpenClawCodingTools", () => {
 
       await editTool?.execute("tool-alias-2", {
         file_path: filePath,
-        old_string: "world",
-        new_string: "universe",
+        old_text: "world",
+        new_text: "universe",
       });
 
       const result = await readTool?.execute("tool-alias-3", {
@@ -63,7 +63,7 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
-  it("coerces structured old/new text blocks for edit", async () => {
+  it("coerces structured old/new text blocks for edit across alias styles", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-structured-edit-"));
     try {
       const filePath = path.join(tmpDir, "structured-edit.js");
@@ -75,8 +75,8 @@ describe("createOpenClawCodingTools", () => {
 
       await editTool?.execute("tool-structured-edit", {
         file_path: "structured-edit.js",
-        old_string: [{ type: "text", text: "old" }],
-        new_string: [{ kind: "text", value: "new" }],
+        old_text: [{ type: "text", text: "old" }],
+        new_text: [{ kind: "text", value: "new" }],
       });
 
       const edited = await fs.readFile(filePath, "utf8");
