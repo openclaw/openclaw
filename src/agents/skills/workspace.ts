@@ -198,6 +198,20 @@ function warnEscapedSkillPath(params: {
   });
 }
 
+/**
+ * Determine whether realpath boundary enforcement should apply to a given skill source.
+ *
+ * Only workspace/extra/project sources are untrusted and need containment checks.
+ * Managed/personal/bundled roots are user-owned shared roots and should not be restricted.
+ */
+function shouldEnforceContainedSkillPaths(source: string): boolean {
+  return (
+    source === "openclaw-workspace" ||
+    source === "openclaw-extra" ||
+    source === "agents-skills-project"
+  );
+}
+
 function resolveContainedSkillPath(params: {
   source: string;
   rootDir: string;
@@ -207,6 +221,11 @@ function resolveContainedSkillPath(params: {
   const candidateRealPath = tryRealpath(params.candidatePath);
   if (!candidateRealPath) {
     return null;
+  }
+  // Only enforce containment for untrusted sources (workspace/extra/project).
+  // Managed/personal/bundled roots are trusted and may use symlinks.
+  if (!shouldEnforceContainedSkillPaths(params.source)) {
+    return candidateRealPath;
   }
   if (isPathInside(params.rootRealPath, candidateRealPath)) {
     return candidateRealPath;
