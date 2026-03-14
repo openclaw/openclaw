@@ -1,3 +1,4 @@
+import os from "node:os";
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -21,9 +22,19 @@ const state = vi.hoisted(() => ({
   kickstartError: "",
   kickstartFailuresRemaining: 0,
   dirs: new Set<string>(),
+  symlinks: new Set<string>(),
   dirModes: new Map<string, number>(),
   files: new Map<string, string>(),
   fileModes: new Map<string, number>(),
+}));
+
+vi.mock("node:os", () => ({
+  default: {
+    homedir: vi.fn(() => "/Users/test"),
+    userInfo: vi.fn(() => ({ homedir: "/Users/test" })),
+  },
+  homedir: vi.fn(() => "/Users/test"),
+  userInfo: vi.fn(() => ({ homedir: "/Users/test" })),
 }));
 const launchdRestartHandoffState = vi.hoisted(() => ({
   isCurrentProcessLaunchdServiceLabel: vi.fn<(label: string) => boolean>(() => false),
@@ -109,8 +120,40 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     }),
     mkdir: vi.fn(async (p: string, opts?: { mode?: number }) => {
       const key = String(p);
+      if (state.symlinks.has(key)) {
+        return;
+      }
       state.dirs.add(key);
       state.dirModes.set(key, opts?.mode ?? 0o777);
+    }),
+    lstat: vi.fn(async (p: string) => {
+      const key = String(p);
+      if (state.symlinks.has(key)) {
+        return {
+          mode: 0o777,
+          isDirectory: () => false,
+          isSymbolicLink: () => true,
+        };
+      }
+      if (state.dirs.has(key)) {
+        return {
+          mode: state.dirModes.get(key) ?? 0o777,
+          isDirectory: () => true,
+          isSymbolicLink: () => false,
+        };
+      }
+      if (state.files.has(key)) {
+        return {
+          mode: state.fileModes.get(key) ?? 0o666,
+          isDirectory: () => false,
+          isSymbolicLink: () => false,
+        };
+      }
+      const error = new Error(
+        `ENOENT: no such file or directory, lstat '${key}'`,
+      ) as NodeJS.ErrnoException;
+      error.code = "ENOENT";
+      throw error;
     }),
     stat: vi.fn(async (p: string) => {
       const key = String(p);
@@ -134,8 +177,41 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       }
       throw new Error(`ENOENT: no such file or directory, chmod '${key}'`);
     }),
+    open: vi.fn(async (p: string, _flags?: number, mode?: number) => {
+      const key = String(p);
+      if (state.symlinks.has(key)) {
+        const error = new Error(
+          `ELOOP: too many symbolic links encountered, open '${key}'`,
+        ) as NodeJS.ErrnoException;
+        error.code = "ELOOP";
+        throw error;
+      }
+      state.fileModes.set(key, typeof mode === "number" ? mode : 0o666);
+      return {
+        writeFile: async (data: string) => {
+          state.files.set(key, data);
+          state.fileModes.set(key, typeof mode === "number" ? mode : 0o666);
+        },
+        close: async () => {},
+      };
+    }),
+    rename: vi.fn(async (from: string, to: string) => {
+      const fromKey = String(from);
+      const toKey = String(to);
+      const content = state.files.get(fromKey);
+      if (content === undefined) {
+        throw new Error(`ENOENT: no such file or directory, rename '${fromKey}'`);
+      }
+      state.files.set(toKey, content);
+      state.fileModes.set(toKey, state.fileModes.get(fromKey) ?? 0o666);
+      state.files.delete(fromKey);
+      state.fileModes.delete(fromKey);
+      state.symlinks.delete(toKey);
+    }),
     unlink: vi.fn(async (p: string) => {
-      state.files.delete(String(p));
+      const key = String(p);
+      state.files.delete(key);
+      state.symlinks.delete(key);
     }),
     writeFile: vi.fn(async (p: string, data: string, opts?: { mode?: number }) => {
       const key = String(p);
@@ -155,6 +231,7 @@ beforeEach(() => {
   state.kickstartError = "";
   state.kickstartFailuresRemaining = 0;
   state.dirs.clear();
+  state.symlinks.clear();
   state.dirModes.clear();
   state.files.clear();
   state.fileModes.clear();
@@ -251,7 +328,6 @@ describe("launchd bootstrap repair", () => {
     const kickstartIndex = state.launchctlCalls.findIndex(
       (c) => c[0] === "kickstart" && c[1] === "-k" && c[2] === serviceId,
     );
-
     expect(kickstartIndex).toBeGreaterThanOrEqual(0);
     expect(bootstrapIndex).toBeLessThan(kickstartIndex);
   });
@@ -297,6 +373,54 @@ describe("launchd install", () => {
     expect(plist).toContain(`<string>${tmpDir}</string>`);
   });
 
+  it("uses the process homedir instead of a conflicting HOME override for plist paths", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      HOME: "/tmp/attacker-home",
+    };
+
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+    });
+
+    expect(resolveLaunchAgentPlistPath(env)).toBe(
+      "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
+    );
+    expect(
+      state.files.has("/tmp/attacker-home/Library/LaunchAgents/ai.openclaw.gateway.plist"),
+    ).toBe(false);
+  });
+
+  it("falls back to os.homedir when userInfo lookup is unavailable", () => {
+    vi.mocked(os.userInfo).mockImplementationOnce(() => {
+      throw new Error("user lookup failed");
+    });
+    vi.mocked(os.homedir).mockReturnValueOnce("/Users/fallback-home");
+
+    expect(
+      resolveLaunchAgentPlistPath({
+        ...createDefaultLaunchdEnv(),
+        HOME: "/tmp/attacker-home",
+      }),
+    ).toBe("/Users/fallback-home/Library/LaunchAgents/ai.openclaw.gateway.plist");
+  });
+
+  it("fails closed when trusted homedir cannot be resolved", () => {
+    vi.mocked(os.userInfo).mockImplementationOnce(() => {
+      throw new Error("user lookup failed");
+    });
+    vi.mocked(os.homedir).mockReturnValueOnce("   ");
+
+    expect(() =>
+      resolveLaunchAgentPlistPath({
+        ...createDefaultLaunchdEnv(),
+        HOME: "/tmp/attacker-home",
+      }),
+    ).toThrow("Unable to resolve trusted user home for launchd operations.");
+  });
+
   it("writes KeepAlive=true policy with restrictive umask", async () => {
     const env = createDefaultLaunchdEnv();
     await installLaunchAgent({
@@ -318,8 +442,6 @@ describe("launchd install", () => {
 
   it("tightens writable bits on launch agent dirs and plist", async () => {
     const env = createDefaultLaunchdEnv();
-    state.dirs.add(env.HOME!);
-    state.dirModes.set(env.HOME!, 0o777);
     state.dirs.add("/Users/test/Library");
     state.dirModes.set("/Users/test/Library", 0o777);
 
@@ -330,10 +452,44 @@ describe("launchd install", () => {
     });
 
     const plistPath = resolveLaunchAgentPlistPath(env);
-    expect(state.dirModes.get(env.HOME!)).toBe(0o755);
-    expect(state.dirModes.get("/Users/test/Library")).toBe(0o755);
+    expect(state.dirModes.get("/Users/test/Library")).toBe(0o777);
     expect(state.dirModes.get("/Users/test/Library/LaunchAgents")).toBe(0o755);
-    expect(state.fileModes.get(plistPath)).toBe(0o644);
+    expect(state.fileModes.get(plistPath)).toBe(0o600);
+  });
+
+  it("rejects symlinked launch agent directories", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.dirs.add("/Users/test/Library");
+    state.dirModes.set("/Users/test/Library", 0o755);
+    state.symlinks.add("/Users/test/Library/LaunchAgents");
+
+    await expect(
+      installLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+        programArguments: defaultProgramArguments,
+      }),
+    ).rejects.toThrow(
+      "Refusing to use symlinked LaunchAgent path: /Users/test/Library/LaunchAgents",
+    );
+  });
+
+  it("rejects symlinked launch agent plist targets", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.dirs.add("/Users/test/Library");
+    state.dirModes.set("/Users/test/Library", 0o755);
+    state.dirs.add("/Users/test/Library/LaunchAgents");
+    state.dirModes.set("/Users/test/Library/LaunchAgents", 0o755);
+    state.symlinks.add(plistPath);
+
+    await expect(
+      installLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+        programArguments: defaultProgramArguments,
+      }),
+    ).rejects.toThrow(`Refusing to use symlinked LaunchAgent path: ${plistPath}`);
   });
 
   it("restarts LaunchAgent with kickstart and no bootout", async () => {
