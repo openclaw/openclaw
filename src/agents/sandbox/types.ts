@@ -1,3 +1,5 @@
+import type { SandboxBackendKind, SandboxOpenSandboxSettings } from "../../config/types.sandbox.js";
+import type { SandboxBackend } from "./backend.js";
 import type { SandboxFsBridge } from "./fs-bridge.js";
 import type { SandboxDockerConfig } from "./types.docker.js";
 
@@ -57,7 +59,11 @@ export type SandboxConfig = {
   scope: SandboxScope;
   workspaceAccess: SandboxWorkspaceAccess;
   workspaceRoot: string;
+  /** Sandbox backend kind (default: "docker"). */
+  backendKind?: SandboxBackendKind;
   docker: SandboxDockerConfig;
+  /** OpenSandbox-specific settings (only used when backendKind is "opensandbox"). */
+  opensandbox?: SandboxOpenSandboxSettings;
   browser: SandboxBrowserConfig;
   tools: SandboxToolPolicy;
   prune: SandboxPruneConfig;
@@ -77,7 +83,11 @@ export type SandboxContext = {
   workspaceAccess: SandboxWorkspaceAccess;
   containerName: string;
   containerWorkdir: string;
+  /** Sandbox backend kind (default: "docker"). */
+  backendKind?: SandboxBackendKind;
   docker: SandboxDockerConfig;
+  /** Pluggable backend for command execution (present when backendKind is "opensandbox"). */
+  backend?: SandboxBackend;
   tools: SandboxToolPolicy;
   browserAllowHostControl: boolean;
   browser?: SandboxBrowserContext;
