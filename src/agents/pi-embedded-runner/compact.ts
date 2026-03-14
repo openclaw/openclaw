@@ -47,6 +47,7 @@ import {
   resolveBedrockBearerToken,
   resolveModelAuthMode,
 } from "../model-auth.js";
+import { normalizeProviderId } from "../model-selection.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { createConfiguredOllamaStreamFn } from "../ollama-stream.js";
@@ -762,7 +763,7 @@ export async function compactEmbeddedPiSessionDirect(
       // The main run flow applies this via applyExtraParamsToAgent, but
       // compaction creates its session directly — without the wrapper,
       // compaction calls would fail when only bearer token auth is set.
-      if (provider === "amazon-bedrock") {
+      if (normalizeProviderId(provider) === "amazon-bedrock") {
         const bearerToken = resolveBedrockBearerToken();
         if (bearerToken) {
           log.debug(
