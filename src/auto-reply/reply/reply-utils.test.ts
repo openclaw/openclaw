@@ -291,6 +291,17 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).toContain("This is an example of leaked orchestration text.");
   });
 
+  it("keeps single-line JSON examples when prose follows on the same line", () => {
+    const result = normalizeReplyPayload({
+      text: [
+        "assistant to=functions.exec",
+        '{"command":"ls","yieldMs":1000} is an example payload.',
+      ].join("\n"),
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toContain('{"command":"ls","yieldMs":1000} is an example payload.');
+  });
+
   it("suppresses suspicious leakage when using a custom silent token", () => {
     const reasons: string[] = [];
     const result = normalizeReplyPayload(
@@ -363,6 +374,17 @@ describe("normalizeReplyPayload", () => {
           '"yieldMs":1000',
           "}",
           "This is an example of leaked orchestration text.",
+        ].join("\n"),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not flag route-marker examples when prose follows single-line JSON", () => {
+    expect(
+      hasSuspiciousReplyLeakage(
+        [
+          "assistant to=functions.exec",
+          '{"command":"ls","yieldMs":1000} is an example payload.',
         ].join("\n"),
       ),
     ).toBe(false);

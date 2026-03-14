@@ -42,7 +42,7 @@ function isStructuredRouteMarkerLine(line: string): boolean {
 
 function isStructuredToolJsonLine(line: string): boolean {
   const trimmed = line.trim();
-  return trimmed.startsWith("{") && TOOL_JSON_KEY_RE.test(trimmed);
+  return trimmed.startsWith("{") && trimmed.endsWith("}") && TOOL_JSON_KEY_RE.test(trimmed);
 }
 
 function isJsonBlockLine(line: string): boolean {
@@ -54,7 +54,7 @@ function isJsonBlockLine(line: string): boolean {
     trimmed === "]" ||
     trimmed === "}," ||
     trimmed === "]," ||
-    /^"(?:\\.|[^"])+\"\s*:/.test(trimmed)
+    /^"(?:\\.|[^"])+"\s*:/.test(trimmed)
   );
 }
 
