@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const installPluginFromNpmSpecMock = vi.fn();
+const resolveBundledPluginSourcesMock = vi.fn();
 
 vi.mock("./install.js", () => ({
   installPluginFromNpmSpec: (...args: unknown[]) => installPluginFromNpmSpecMock(...args),
@@ -10,9 +11,14 @@ vi.mock("./install.js", () => ({
   },
 }));
 
+vi.mock("./bundled-sources.js", () => ({
+  resolveBundledPluginSources: (...args: unknown[]) => resolveBundledPluginSourcesMock(...args),
+}));
+
 describe("updateNpmInstalledPlugins", () => {
   beforeEach(() => {
     installPluginFromNpmSpecMock.mockReset();
+    resolveBundledPluginSourcesMock.mockReset();
   });
 
   it("skips integrity drift checks for unpinned npm specs during dry-run updates", async () => {
@@ -149,5 +155,169 @@ describe("updateNpmInstalledPlugins", () => {
         message: "Failed to check bad: unsupported npm spec: github:evil/evil",
       },
     ]);
+  });
+});
+
+describe("syncPluginsForUpdateChannel", () => {
+  beforeEach(() => {
+    installPluginFromNpmSpecMock.mockReset();
+    resolveBundledPluginSourcesMock.mockReset();
+  });
+
+  it("keeps bundled path installs on beta without reinstalling from npm", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(
+      new Map([
+        [
+          "feishu",
+          {
+            pluginId: "feishu",
+            localPath: "/app/extensions/feishu",
+            npmSpec: "@openclaw/feishu",
+          },
+        ],
+      ]),
+    );
+
+    const { syncPluginsForUpdateChannel } = await import("./update.js");
+    const result = await syncPluginsForUpdateChannel({
+      channel: "beta",
+      config: {
+        plugins: {
+          load: { paths: ["/app/extensions/feishu"] },
+          installs: {
+            feishu: {
+              source: "path",
+              sourcePath: "/app/extensions/feishu",
+              installPath: "/app/extensions/feishu",
+              spec: "@openclaw/feishu",
+            },
+          },
+        },
+      },
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.summary.switchedToNpm).toEqual([]);
+    expect(result.config.plugins?.load?.paths).toEqual(["/app/extensions/feishu"]);
+    expect(result.config.plugins?.installs?.feishu?.source).toBe("path");
+  });
+
+  it("repairs bundled install metadata when the load path is re-added", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(
+      new Map([
+        [
+          "feishu",
+          {
+            pluginId: "feishu",
+            localPath: "/app/extensions/feishu",
+            npmSpec: "@openclaw/feishu",
+          },
+        ],
+      ]),
+    );
+
+    const { syncPluginsForUpdateChannel } = await import("./update.js");
+    const result = await syncPluginsForUpdateChannel({
+      channel: "beta",
+      config: {
+        plugins: {
+          load: { paths: [] },
+          installs: {
+            feishu: {
+              source: "path",
+              sourcePath: "/app/extensions/feishu",
+              installPath: "/tmp/old-feishu",
+              spec: "@openclaw/feishu",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.load?.paths).toEqual(["/app/extensions/feishu"]);
+    expect(result.config.plugins?.installs?.feishu).toMatchObject({
+      source: "path",
+      sourcePath: "/app/extensions/feishu",
+      installPath: "/app/extensions/feishu",
+      spec: "@openclaw/feishu",
+    });
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards an explicit env to bundled plugin source resolution", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+    const env = { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv;
+
+    const { syncPluginsForUpdateChannel } = await import("./update.js");
+    await syncPluginsForUpdateChannel({
+      channel: "beta",
+      config: {},
+      workspaceDir: "/workspace",
+      env,
+    });
+
+    expect(resolveBundledPluginSourcesMock).toHaveBeenCalledWith({
+      workspaceDir: "/workspace",
+      env,
+    });
+  });
+
+  it("uses the provided env when matching bundled load and install paths", async () => {
+    const bundledHome = "/tmp/openclaw-home";
+    resolveBundledPluginSourcesMock.mockReturnValue(
+      new Map([
+        [
+          "feishu",
+          {
+            pluginId: "feishu",
+            localPath: `${bundledHome}/plugins/feishu`,
+            npmSpec: "@openclaw/feishu",
+          },
+        ],
+      ]),
+    );
+
+    const previousHome = process.env.HOME;
+    process.env.HOME = "/tmp/process-home";
+    try {
+      const { syncPluginsForUpdateChannel } = await import("./update.js");
+      const result = await syncPluginsForUpdateChannel({
+        channel: "beta",
+        env: {
+          ...process.env,
+          OPENCLAW_HOME: bundledHome,
+          HOME: "/tmp/ignored-home",
+        },
+        config: {
+          plugins: {
+            load: { paths: ["~/plugins/feishu"] },
+            installs: {
+              feishu: {
+                source: "path",
+                sourcePath: "~/plugins/feishu",
+                installPath: "~/plugins/feishu",
+                spec: "@openclaw/feishu",
+              },
+            },
+          },
+        },
+      });
+
+      expect(result.changed).toBe(false);
+      expect(result.config.plugins?.load?.paths).toEqual(["~/plugins/feishu"]);
+      expect(result.config.plugins?.installs?.feishu).toMatchObject({
+        source: "path",
+        sourcePath: "~/plugins/feishu",
+        installPath: "~/plugins/feishu",
+      });
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+    }
   });
 });

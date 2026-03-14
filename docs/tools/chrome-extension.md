@@ -13,6 +13,13 @@ The OpenClaw Chrome extension lets the agent control your **existing Chrome tabs
 
 Attach/detach happens via a **single Chrome toolbar button**.
 
+If you want Chrome’s official DevTools MCP attach flow instead of the OpenClaw
+extension relay, use an `existing-session` browser profile instead. See
+[Browser](/tools/browser#chrome-existing-session-via-mcp). For Chrome’s own
+setup docs, see [Chrome for Developers: Use Chrome DevTools MCP with your
+browser session](https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session)
+and the [Chrome DevTools MCP README](https://github.com/ChromeDevTools/chrome-devtools-mcp).
+
 ## What it is (concept)
 
 There are three parts:
@@ -55,7 +62,7 @@ After upgrading OpenClaw:
 
 ## Use it (set gateway token once)
 
-OpenClaw ships with a built-in browser profile named `chrome` that targets the extension relay on the default port.
+OpenClaw ships with a built-in browser profile named `chrome-relay` that targets the extension relay on the default port.
 
 Before first attach, open extension Options and set:
 
@@ -64,8 +71,8 @@ Before first attach, open extension Options and set:
 
 Use it:
 
-- CLI: `openclaw browser --browser-profile chrome tabs`
-- Agent tool: `browser` with `profile="chrome"`
+- CLI: `openclaw browser --browser-profile chrome-relay tabs`
+- Agent tool: `browser` with `profile="chrome-relay"`
 
 If you want a different name or a different relay port, create your own profile:
 
@@ -161,6 +168,7 @@ Debugging: `openclaw sandbox explain`
 
 - Keep the Gateway and node host on the same tailnet; avoid exposing relay ports to LAN or public Internet.
 - Pair nodes intentionally; disable browser proxy routing if you don’t want remote control (`gateway.nodes.browser.mode="off"`).
+- Leave the relay on loopback unless you have a real cross-namespace need. For WSL2 or similar split-host setups, set `browser.relayBindHost` to an explicit bind address such as `0.0.0.0`, then keep access constrained with Gateway auth, node pairing, and a private network.
 
 ## How “extension path” works
 

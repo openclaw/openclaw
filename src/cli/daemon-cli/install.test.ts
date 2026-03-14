@@ -52,6 +52,7 @@ const service = vi.hoisted(() => ({
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: loadConfigMock,
+  readBestEffortConfig: loadConfigMock,
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   resolveGatewayPort: resolveGatewayPortMock,
   writeConfigFile: writeConfigFileMock,
@@ -83,8 +84,28 @@ vi.mock("../../commands/daemon-install-helpers.js", () => ({
 
 vi.mock("./shared.js", () => ({
   parsePort: parsePortMock,
+  createDaemonInstallActionContext: (jsonFlag: unknown) => {
+    const json = Boolean(jsonFlag);
+    return {
+      json,
+      stdout: process.stdout,
+      warnings: actionState.warnings,
+      emit: (payload: DaemonActionResponse) => {
+        actionState.emitted.push(payload);
+      },
+      fail: (message: string, hints?: string[]) => {
+        actionState.failed.push({ message, hints });
+      },
+    };
+  },
+  failIfNixDaemonInstallMode: (fail: (message: string, hints?: string[]) => void) => {
+    if (!resolveIsNixModeMock()) {
+      return false;
+    }
+    fail("Nix mode detected; service install is disabled.");
+    return true;
+  },
 }));
-
 vi.mock("../../commands/daemon-runtime.js", () => ({
   DEFAULT_GATEWAY_DAEMON_RUNTIME: "node",
   isGatewayDaemonRuntime: isGatewayDaemonRuntimeMock,
@@ -96,16 +117,6 @@ vi.mock("../../daemon/service.js", () => ({
 
 vi.mock("./response.js", () => ({
   buildDaemonServiceSnapshot: vi.fn(),
-  createDaemonActionContext: vi.fn(() => ({
-    stdout: process.stdout,
-    warnings: actionState.warnings,
-    emit: (payload: DaemonActionResponse) => {
-      actionState.emitted.push(payload);
-    },
-    fail: (message: string, hints?: string[]) => {
-      actionState.failed.push({ message, hints });
-    },
-  })),
   installDaemonServiceAndEmit: installDaemonServiceAndEmitMock,
 }));
 
@@ -117,6 +128,22 @@ vi.mock("../../runtime.js", () => ({
     exit: vi.fn(),
   },
 }));
+
+function expectFirstInstallPlanCallOmitsToken() {
+  const [firstArg] =
+    (buildGatewayInstallPlanMock.mock.calls.at(0) as [Record<string, unknown>] | undefined) ?? [];
+  expect(firstArg).toBeDefined();
+  expect(firstArg && "token" in firstArg).toBe(false);
+}
+
+function mockResolvedGatewayTokenSecretRef() {
+  resolveSecretInputRefMock.mockReturnValue({
+    ref: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
+  });
+  resolveSecretRefValuesMock.mockResolvedValue(
+    new Map([["env:default:OPENCLAW_GATEWAY_TOKEN", "resolved-from-secretref"]]),
+  );
+}
 
 const { runDaemonInstall } = await import("./install.js");
 const envSnapshot = captureFullEnv();
@@ -187,21 +214,13 @@ describe("runDaemonInstall", () => {
   });
 
   it("validates token SecretRef but does not serialize resolved token into service env", async () => {
-    resolveSecretInputRefMock.mockReturnValue({
-      ref: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
-    });
-    resolveSecretRefValuesMock.mockResolvedValue(
-      new Map([["env:default:OPENCLAW_GATEWAY_TOKEN", "resolved-from-secretref"]]),
-    );
+    mockResolvedGatewayTokenSecretRef();
 
     await runDaemonInstall({ json: true });
 
     expect(actionState.failed).toEqual([]);
-    expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        token: undefined,
-      }),
-    );
+    expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
+    expectFirstInstallPlanCallOmitsToken();
     expect(writeConfigFileMock).not.toHaveBeenCalled();
     expect(
       actionState.warnings.some((warning) =>
@@ -214,22 +233,14 @@ describe("runDaemonInstall", () => {
     loadConfigMock.mockReturnValue({
       gateway: { auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" } },
     });
-    resolveSecretInputRefMock.mockReturnValue({
-      ref: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
-    });
-    resolveSecretRefValuesMock.mockResolvedValue(
-      new Map([["env:default:OPENCLAW_GATEWAY_TOKEN", "resolved-from-secretref"]]),
-    );
+    mockResolvedGatewayTokenSecretRef();
 
     await runDaemonInstall({ json: true });
 
     expect(actionState.failed).toEqual([]);
     expect(resolveSecretRefValuesMock).toHaveBeenCalledTimes(1);
-    expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        token: undefined,
-      }),
-    );
+    expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
+    expectFirstInstallPlanCallOmitsToken();
   });
 
   it("auto-mints and persists token when no source exists", async () => {
@@ -249,9 +260,33 @@ describe("runDaemonInstall", () => {
     };
     expect(writtenConfig.gateway?.auth?.token).toBe("minted-token");
     expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
-      expect.objectContaining({ token: "minted-token", port: 18789 }),
+      expect.objectContaining({ port: 18789 }),
     );
+    expectFirstInstallPlanCallOmitsToken();
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
     expect(actionState.warnings.some((warning) => warning.includes("Auto-generated"))).toBe(true);
+  });
+
+  it("continues Linux install when service probe hits a non-fatal systemd bus failure", async () => {
+    service.isLoaded.mockRejectedValueOnce(
+      new Error("systemctl is-enabled unavailable: Failed to connect to bus"),
+    );
+
+    await runDaemonInstall({ json: true });
+
+    expect(actionState.failed).toEqual([]);
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails install when service probe reports an unrelated error", async () => {
+    service.isLoaded.mockRejectedValueOnce(
+      new Error("systemctl is-enabled unavailable: read-only file system"),
+    );
+
+    await runDaemonInstall({ json: true });
+
+    expect(actionState.failed[0]?.message).toContain("Gateway service check failed");
+    expect(actionState.failed[0]?.message).toContain("read-only file system");
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
 });

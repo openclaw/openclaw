@@ -20,7 +20,7 @@ export type PluginRuntimeCore = {
     formatNativeDependencyHint: typeof import("./native-deps.js").formatNativeDependencyHint;
   };
   media: {
-    loadWebMedia: typeof import("../../web/media.js").loadWebMedia;
+    loadWebMedia: typeof import("../../../extensions/whatsapp/src/media.js").loadWebMedia;
     detectMime: typeof import("../../media/mime.js").detectMime;
     mediaKindFromMime: typeof import("../../media/constants.js").mediaKindFromMime;
     isVoiceCompatibleAudio: typeof import("../../media/audio.js").isVoiceCompatibleAudio;
@@ -51,5 +51,17 @@ export type PluginRuntimeCore = {
   };
   state: {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
+  };
+  modelAuth: {
+    /** Resolve auth for a model. Only provider/model and optional cfg are used. */
+    getApiKeyForModel: (params: {
+      model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
+      cfg?: import("../../config/config.js").OpenClawConfig;
+    }) => Promise<import("../../agents/model-auth.js").ResolvedProviderAuth>;
+    /** Resolve auth for a provider by name. Only provider and optional cfg are used. */
+    resolveApiKeyForProvider: (params: {
+      provider: string;
+      cfg?: import("../../config/config.js").OpenClawConfig;
+    }) => Promise<import("../../agents/model-auth.js").ResolvedProviderAuth>;
   };
 };

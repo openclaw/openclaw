@@ -49,12 +49,21 @@ const DiscordIdSchema = z
 const DiscordIdListSchema = z.array(DiscordIdSchema);
 
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
+const TelegramIdListSchema = z.array(z.union([z.string(), z.number()]));
 
 const TelegramCapabilitiesSchema = z.union([
   z.array(z.string()),
   z
     .object({
       inlineButtons: TelegramInlineButtonsScopeSchema.optional(),
+    })
+    .strict(),
+]);
+const SlackCapabilitiesSchema = z.union([
+  z.array(z.string()),
+  z
+    .object({
+      interactiveReplies: z.boolean().optional(),
     })
     .strict(),
 ]);
@@ -103,8 +112,8 @@ export const TelegramDirectSchema = z
 
 const TelegramCustomCommandSchema = z
   .object({
-    command: z.string().transform(normalizeTelegramCommandName),
-    description: z.string().transform(normalizeTelegramCommandDescription),
+    command: z.string().overwrite(normalizeTelegramCommandName),
+    description: z.string().overwrite(normalizeTelegramCommandDescription),
   })
   .strict();
 
@@ -153,6 +162,16 @@ export const TelegramAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     capabilities: TelegramCapabilitiesSchema.optional(),
+    execApprovals: z
+      .object({
+        enabled: z.boolean().optional(),
+        approvers: TelegramIdListSchema.optional(),
+        agentFilter: z.array(z.string()).optional(),
+        sessionFilter: z.array(z.string()).optional(),
+        target: z.enum(["dm", "channel", "both"]).optional(),
+      })
+      .strict()
+      .optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,
@@ -221,13 +240,21 @@ export const TelegramAccountSchemaBase = z
       .describe(
         "Local bind port for the webhook listener. Defaults to 8787; set to 0 to let the OS assign an ephemeral port.",
       ),
+    webhookCertPath: z
+      .string()
+      .optional()
+      .describe(
+        "Path to the self-signed certificate (PEM) to upload to Telegram during webhook registration. Required for self-signed certs (direct IP or no domain).",
+      ),
     actions: z
       .object({
         reactions: z.boolean().optional(),
         sendMessage: z.boolean().optional(),
         poll: z.boolean().optional(),
         deleteMessage: z.boolean().optional(),
+        editMessage: z.boolean().optional(),
         sticker: z.boolean().optional(),
+        createForumTopic: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -367,6 +394,16 @@ export const DiscordGuildChannelSchema = z
     systemPrompt: z.string().optional(),
     includeThreadStarter: z.boolean().optional(),
     autoThread: z.boolean().optional(),
+    /** Archive duration for auto-created threads in minutes. Discord supports 60, 1440 (1 day), 4320 (3 days), 10080 (1 week). Default: 60. */
+    autoArchiveDuration: z
+      .union([
+        z.enum(["60", "1440", "4320", "10080"]),
+        z.literal(60),
+        z.literal(1440),
+        z.literal(4320),
+        z.literal(10080),
+      ])
+      .optional(),
   })
   .strict();
 
@@ -482,6 +519,12 @@ export const DiscordAccountSchema = z
         sessionFilter: z.array(z.string()).optional(),
         cleanupAfterResolve: z.boolean().optional(),
         target: z.enum(["dm", "channel", "both"]).optional(),
+      })
+      .strict()
+      .optional(),
+    agentComponents: z
+      .object({
+        enabled: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -796,7 +839,7 @@ export const SlackAccountSchema = z
     mode: z.enum(["socket", "http"]).optional(),
     signingSecret: SecretInputSchema.optional().register(sensitive),
     webhookPath: z.string().optional(),
-    capabilities: z.array(z.string()).optional(),
+    capabilities: SlackCapabilitiesSchema.optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,
@@ -936,6 +979,16 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   validateSlackSigningSecretRequirements(value, ctx);
 });
 
+const SignalGroupEntrySchema = z
+  .object({
+    requireMention: z.boolean().optional(),
+    tools: ToolPolicySchema,
+    toolsBySender: ToolPolicyBySenderSchema,
+  })
+  .strict();
+
+const SignalGroupsSchema = z.record(z.string(), SignalGroupEntrySchema.optional()).optional();
+
 export const SignalAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -944,6 +997,7 @@ export const SignalAccountSchemaBase = z
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
     account: z.string().optional(),
+    accountUuid: z.string().optional(),
     httpUrl: z.string().optional(),
     httpHost: z.string().optional(),
     httpPort: z.number().int().positive().optional(),
@@ -959,6 +1013,7 @@ export const SignalAccountSchemaBase = z
     defaultTo: z.string().optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    groups: SignalGroupsSchema,
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),

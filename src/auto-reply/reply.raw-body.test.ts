@@ -14,7 +14,7 @@ vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: agentMocks.loadModelCatalog,
 }));
 
-vi.mock("../web/session.js", () => ({
+vi.mock("../../extensions/whatsapp/src/session.js", () => ({
   webAuthExists: agentMocks.webAuthExists,
   getWebAuthAgeMs: agentMocks.getWebAuthAgeMs,
   readWebSelfId: agentMocks.readWebSelfId,

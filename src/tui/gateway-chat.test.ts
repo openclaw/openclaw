@@ -4,8 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   loadConfigMock as loadConfig,
-  pickPrimaryLanIPv4Mock as pickPrimaryLanIPv4,
-  pickPrimaryTailnetIPv4Mock as pickPrimaryTailnetIPv4,
   resolveGatewayPortMock as resolveGatewayPort,
 } from "../gateway/gateway-connection.test-mocks.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
@@ -86,16 +84,19 @@ describe("resolveGatewayConnection", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
+    envSnapshot = captureEnv([
+      "OPENCLAW_GATEWAY_URL",
+      "OPENCLAW_GATEWAY_TOKEN",
+      "OPENCLAW_GATEWAY_PASSWORD",
+      "CLAWDBOT_GATEWAY_URL",
+    ]);
     loadConfig.mockClear();
     resolveGatewayPort.mockClear();
-    pickPrimaryTailnetIPv4.mockClear();
-    pickPrimaryLanIPv4.mockClear();
     resolveGatewayPort.mockReturnValue(18789);
-    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
-    pickPrimaryLanIPv4.mockReturnValue(undefined);
+    delete process.env.OPENCLAW_GATEWAY_URL;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.CLAWDBOT_GATEWAY_URL;
   });
 
   afterEach(() => {
@@ -134,44 +135,22 @@ describe("resolveGatewayConnection", () => {
       ...expected,
     });
   });
+  it("uses config auth token for local mode when both config and env tokens are set", async () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", auth: { token: "config-token" } } });
 
-  it.each([
-    {
-      label: "tailnet",
-      bind: "tailnet",
-      setup: () => pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.1"),
-    },
-    {
-      label: "lan",
-      bind: "lan",
-      setup: () => pickPrimaryLanIPv4.mockReturnValue("192.168.1.42"),
-    },
-  ])("uses loopback host when local bind is $label", async ({ bind, setup }) => {
-    loadConfig.mockReturnValue({ gateway: { mode: "local", bind } });
-    resolveGatewayPort.mockReturnValue(18800);
-    setup();
-
-    const result = await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "env-token" }, async () => {
-      return await resolveGatewayConnection({});
+    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "env-token" }, async () => {
+      const result = await resolveGatewayConnection({});
+      expect(result.token).toBe("config-token");
     });
-
-    expect(result.url).toBe("ws://127.0.0.1:18800");
   });
 
-  it("uses OPENCLAW_GATEWAY_TOKEN for local mode", async () => {
+  it("falls back to OPENCLAW_GATEWAY_TOKEN when config token is missing", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local" } });
 
     await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "env-token" }, async () => {
       const result = await resolveGatewayConnection({});
       expect(result.token).toBe("env-token");
     });
-  });
-
-  it("falls back to config auth token when env token is missing", async () => {
-    loadConfig.mockReturnValue({ gateway: { mode: "local", auth: { token: "config-token" } } });
-
-    const result = await resolveGatewayConnection({});
-    expect(result.token).toBe("config-token");
   });
 
   it("uses local password auth when gateway.auth.mode is unset and password-only is configured", async () => {

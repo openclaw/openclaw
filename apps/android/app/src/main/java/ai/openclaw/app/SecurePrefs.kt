@@ -15,10 +15,14 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import java.util.UUID
 
-class SecurePrefs(context: Context) {
+class SecurePrefs(
+  context: Context,
+  private val securePrefsOverride: SharedPreferences? = null,
+) {
   companion object {
     val defaultWakeWords: List<String> = listOf("openclaw", "claude")
     private const val displayNameKey = "node.displayName"
+    private const val locationModeKey = "location.enabledMode"
     private const val voiceWakeModeKey = "voiceWake.mode"
     private const val plainPrefsName = "openclaw.node"
     private const val securePrefsName = "openclaw.node.secure"
@@ -34,7 +38,7 @@ class SecurePrefs(context: Context) {
       .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
       .build()
   }
-  private val securePrefs: SharedPreferences by lazy { createSecurePrefs(appContext, securePrefsName) }
+  private val securePrefs: SharedPreferences by lazy { securePrefsOverride ?: createSecurePrefs(appContext, securePrefsName) }
 
   private val _instanceId = MutableStateFlow(loadOrCreateInstanceId())
   val instanceId: StateFlow<String> = _instanceId
@@ -46,8 +50,7 @@ class SecurePrefs(context: Context) {
   private val _cameraEnabled = MutableStateFlow(plainPrefs.getBoolean("camera.enabled", true))
   val cameraEnabled: StateFlow<Boolean> = _cameraEnabled
 
-  private val _locationMode =
-    MutableStateFlow(LocationMode.fromRawValue(plainPrefs.getString("location.enabledMode", "off")))
+  private val _locationMode = MutableStateFlow(loadLocationMode())
   val locationMode: StateFlow<LocationMode> = _locationMode
 
   private val _locationPreciseEnabled =
@@ -75,6 +78,9 @@ class SecurePrefs(context: Context) {
 
   private val _gatewayToken = MutableStateFlow("")
   val gatewayToken: StateFlow<String> = _gatewayToken
+
+  private val _gatewayBootstrapToken = MutableStateFlow("")
+  val gatewayBootstrapToken: StateFlow<String> = _gatewayBootstrapToken
 
   private val _onboardingCompleted =
     MutableStateFlow(plainPrefs.getBoolean("onboarding.completed", false))
@@ -120,7 +126,7 @@ class SecurePrefs(context: Context) {
   }
 
   fun setLocationMode(mode: LocationMode) {
-    plainPrefs.edit { putString("location.enabledMode", mode.rawValue) }
+    plainPrefs.edit { putString(locationModeKey, mode.rawValue) }
     _locationMode.value = mode
   }
 
@@ -165,6 +171,10 @@ class SecurePrefs(context: Context) {
     saveGatewayPassword(value)
   }
 
+  fun setGatewayBootstrapToken(value: String) {
+    saveGatewayBootstrapToken(value)
+  }
+
   fun setOnboardingCompleted(value: Boolean) {
     plainPrefs.edit { putBoolean("onboarding.completed", value) }
     _onboardingCompleted.value = value
@@ -191,6 +201,26 @@ class SecurePrefs(context: Context) {
   fun saveGatewayToken(token: String) {
     val key = "gateway.token.${_instanceId.value}"
     securePrefs.edit { putString(key, token.trim()) }
+  }
+
+  fun loadGatewayBootstrapToken(): String? {
+    val key = "gateway.bootstrapToken.${_instanceId.value}"
+    val stored =
+      _gatewayBootstrapToken.value.trim().ifEmpty {
+        val persisted = securePrefs.getString(key, null)?.trim().orEmpty()
+        if (persisted.isNotEmpty()) {
+          _gatewayBootstrapToken.value = persisted
+        }
+        persisted
+      }
+    return stored.takeIf { it.isNotEmpty() }
+  }
+
+  fun saveGatewayBootstrapToken(token: String) {
+    val key = "gateway.bootstrapToken.${_instanceId.value}"
+    val trimmed = token.trim()
+    securePrefs.edit { putString(key, trimmed) }
+    _gatewayBootstrapToken.value = trimmed
   }
 
   fun loadGatewayPassword(): String? {
@@ -287,6 +317,15 @@ class SecurePrefs(context: Context) {
       plainPrefs.edit { putString(voiceWakeModeKey, resolved.rawValue) }
     }
 
+    return resolved
+  }
+
+  private fun loadLocationMode(): LocationMode {
+    val raw = plainPrefs.getString(locationModeKey, "off")
+    val resolved = LocationMode.fromRawValue(raw)
+    if (raw?.trim()?.lowercase() == "always") {
+      plainPrefs.edit { putString(locationModeKey, resolved.rawValue) }
+    }
     return resolved
   }
 

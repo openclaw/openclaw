@@ -4,12 +4,17 @@ import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const triggerOpenClawRestartMock = vi.hoisted(() => vi.fn());
+const scheduleDetachedLaunchdRestartHandoffMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 vi.mock("./restart.js", () => ({
   triggerOpenClawRestart: (...args: unknown[]) => triggerOpenClawRestartMock(...args),
+}));
+vi.mock("../daemon/launchd-restart-handoff.js", () => ({
+  scheduleDetachedLaunchdRestartHandoff: (...args: unknown[]) =>
+    scheduleDetachedLaunchdRestartHandoffMock(...args),
 }));
 
 import { restartGatewayProcessWithFreshPid } from "./process-respawn.js";
@@ -35,6 +40,8 @@ afterEach(() => {
   process.execArgv = [...originalExecArgv];
   spawnMock.mockClear();
   triggerOpenClawRestartMock.mockClear();
+  scheduleDetachedLaunchdRestartHandoffMock.mockReset();
+  scheduleDetachedLaunchdRestartHandoffMock.mockReturnValue({ ok: true, pid: 8123 });
   if (originalPlatformDescriptor) {
     Object.defineProperty(process, "platform", originalPlatformDescriptor);
   }
@@ -46,16 +53,26 @@ function clearSupervisorHints() {
   }
 }
 
-function expectLaunchdKickstartSupervised(params?: { launchJobLabel?: string }) {
+function expectLaunchdSupervisedWithoutKickstart(params?: {
+  launchJobLabel?: string;
+  detailContains?: string;
+}) {
   setPlatform("darwin");
   if (params?.launchJobLabel) {
     process.env.LAUNCH_JOB_LABEL = params.launchJobLabel;
   }
   process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
-  triggerOpenClawRestartMock.mockReturnValue({ ok: true, method: "launchctl" });
   const result = restartGatewayProcessWithFreshPid();
   expect(result.mode).toBe("supervised");
-  expect(triggerOpenClawRestartMock).toHaveBeenCalledOnce();
+  if (params?.detailContains) {
+    expect(result.detail).toContain(params.detailContains);
+  }
+  expect(scheduleDetachedLaunchdRestartHandoffMock).toHaveBeenCalledWith({
+    env: process.env,
+    mode: "start-after-exit",
+    waitForPid: process.pid,
+  });
+  expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
   expect(spawnMock).not.toHaveBeenCalled();
 }
 
@@ -67,35 +84,51 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("returns supervised when launchd hints are present on macOS", () => {
+  it("returns supervised when launchd hints are present on macOS (no kickstart)", () => {
+    clearSupervisorHints();
+    expectLaunchdSupervisedWithoutKickstart({
+      launchJobLabel: "ai.openclaw.gateway",
+      detailContains: "launchd restart handoff",
+    });
+  });
+
+  it("returns supervised on macOS when launchd label is set (no kickstart)", () => {
+    expectLaunchdSupervisedWithoutKickstart({ launchJobLabel: "ai.openclaw.gateway" });
+  });
+
+  it("launchd supervisor never returns failed regardless of triggerOpenClawRestart outcome", () => {
     clearSupervisorHints();
     setPlatform("darwin");
-    process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
-    triggerOpenClawRestartMock.mockReturnValue({ ok: true, method: "launchctl" });
-    const result = restartGatewayProcessWithFreshPid();
-    expect(result.mode).toBe("supervised");
-    expect(triggerOpenClawRestartMock).toHaveBeenCalledOnce();
-    expect(spawnMock).not.toHaveBeenCalled();
-  });
-
-  it("runs launchd kickstart helper on macOS when launchd label is set", () => {
-    expectLaunchdKickstartSupervised({ launchJobLabel: "ai.openclaw.gateway" });
-  });
-
-  it("returns failed when launchd kickstart helper fails", () => {
-    setPlatform("darwin");
-    process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
     process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+    // Even if triggerOpenClawRestart *would* fail, launchd path must not call it.
     triggerOpenClawRestartMock.mockReturnValue({
       ok: false,
       method: "launchctl",
+      detail: "Bootstrap failed: 5: Input/output error",
+    });
+    const result = restartGatewayProcessWithFreshPid();
+    expect(result.mode).toBe("supervised");
+    expect(result.mode).not.toBe("failed");
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to plain supervised exit when launchd handoff scheduling fails", () => {
+    clearSupervisorHints();
+    setPlatform("darwin");
+    process.env.XPC_SERVICE_NAME = "ai.openclaw.gateway";
+    scheduleDetachedLaunchdRestartHandoffMock.mockReturnValue({
+      ok: false,
       detail: "spawn failed",
     });
 
     const result = restartGatewayProcessWithFreshPid();
 
-    expect(result.mode).toBe("failed");
-    expect(result.detail).toContain("spawn failed");
+    expect(result).toEqual({
+      mode: "supervised",
+      detail: "launchd exit fallback (spawn failed)",
+    });
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("does not schedule kickstart on non-darwin platforms", () => {
@@ -105,6 +138,16 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
     const result = restartGatewayProcessWithFreshPid();
 
+    expect(result.mode).toBe("supervised");
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("returns supervised when XPC_SERVICE_NAME is set by launchd", () => {
+    clearSupervisorHints();
+    setPlatform("darwin");
+    process.env.XPC_SERVICE_NAME = "ai.openclaw.gateway";
+    const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
@@ -133,7 +176,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
   it("returns supervised when OPENCLAW_LAUNCHD_LABEL is set (stock launchd plist)", () => {
     clearSupervisorHints();
-    expectLaunchdKickstartSupervised();
+    expectLaunchdSupervisedWithoutKickstart();
   });
 
   it("returns supervised when OPENCLAW_SYSTEMD_UNIT is set", () => {

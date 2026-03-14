@@ -1,5 +1,8 @@
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { registerLogTransport, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
@@ -28,6 +31,7 @@ const mockedResolveProfilesUnavailableReason = vi.mocked(resolveProfilesUnavaila
 const mockedResolveAuthProfileOrder = vi.mocked(resolveAuthProfileOrder);
 
 const makeCfg = makeModelFallbackCfg;
+let unregisterLogTransport: (() => void) | undefined;
 
 function expectFallbackUsed(
   result: { result: unknown; attempts: Array<{ reason?: string }> },
@@ -40,6 +44,20 @@ function expectFallbackUsed(
   expect(run).toHaveBeenCalledTimes(1);
   expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
   expect(result.attempts[0]?.reason).toBe("rate_limit");
+}
+
+function expectPrimarySkippedForReason(
+  result: { result: unknown; attempts: Array<{ reason?: string }> },
+  run: {
+    (...args: unknown[]): unknown;
+    mock: { calls: unknown[][] };
+  },
+  reason: string,
+) {
+  expect(result.result).toBe("ok");
+  expect(run).toHaveBeenCalledTimes(1);
+  expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
+  expect(result.attempts[0]?.reason).toBe(reason);
 }
 
 function expectPrimaryProbeSuccess(
@@ -149,6 +167,10 @@ describe("runWithModelFallback – probe logic", () => {
 
   afterEach(() => {
     Date.now = realDateNow;
+    unregisterLogTransport?.();
+    unregisterLogTransport = undefined;
+    setLoggerOverride(null);
+    resetLogger();
     vi.restoreAllMocks();
   });
 
@@ -175,11 +197,7 @@ describe("runWithModelFallback – probe logic", () => {
     const run = vi.fn().mockResolvedValue("ok");
 
     const result = await runPrimaryCandidate(cfg, run);
-
-    expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
-    expect(result.attempts[0]?.reason).toBe("billing");
+    expectPrimarySkippedForReason(result, run, "billing");
   });
 
   it("probes primary model when within 2-min margin of cooldown expiry", async () => {
@@ -192,6 +210,99 @@ describe("runWithModelFallback – probe logic", () => {
 
     const result = await runPrimaryCandidate(cfg, run);
     expectPrimaryProbeSuccess(result, run, "probed-ok");
+  });
+
+  it("logs primary metadata on probe success and failure fallback decisions", async () => {
+    const cfg = makeCfg();
+    const records: Array<Record<string, unknown>> = [];
+    mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 60 * 1000);
+    setLoggerOverride({
+      level: "trace",
+      consoleLevel: "silent",
+      file: path.join(os.tmpdir(), `openclaw-model-fallback-probe-${Date.now()}.log`),
+    });
+    unregisterLogTransport = registerLogTransport((record) => {
+      records.push(record);
+    });
+
+    const run = vi.fn().mockResolvedValue("probed-ok");
+
+    const result = await runPrimaryCandidate(cfg, run);
+
+    expectPrimaryProbeSuccess(result, run, "probed-ok");
+
+    _probeThrottleInternals.lastProbeAttempt.clear();
+
+    const fallbackCfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5", "google/gemini-2-flash"],
+          },
+        },
+      },
+    } as Partial<OpenClawConfig>);
+    mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 60 * 1000);
+    const fallbackRun = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
+      .mockResolvedValueOnce("fallback-ok");
+
+    const fallbackResult = await runPrimaryCandidate(fallbackCfg, fallbackRun);
+
+    expect(fallbackResult.result).toBe("fallback-ok");
+    expect(fallbackRun).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
+    expect(fallbackRun).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5");
+
+    const decisionPayloads = records
+      .filter(
+        (record) =>
+          record["2"] === "model fallback decision" &&
+          record["1"] &&
+          typeof record["1"] === "object",
+      )
+      .map((record) => record["1"] as Record<string, unknown>);
+
+    expect(decisionPayloads).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "model_fallback_decision",
+          decision: "probe_cooldown_candidate",
+          candidateProvider: "openai",
+          candidateModel: "gpt-4.1-mini",
+          allowTransientCooldownProbe: true,
+        }),
+        expect.objectContaining({
+          event: "model_fallback_decision",
+          decision: "candidate_succeeded",
+          candidateProvider: "openai",
+          candidateModel: "gpt-4.1-mini",
+          isPrimary: true,
+          requestedModelMatched: true,
+        }),
+        expect.objectContaining({
+          event: "model_fallback_decision",
+          decision: "candidate_failed",
+          candidateProvider: "openai",
+          candidateModel: "gpt-4.1-mini",
+          isPrimary: true,
+          requestedModelMatched: true,
+          nextCandidateProvider: "anthropic",
+          nextCandidateModel: "claude-haiku-3-5",
+        }),
+        expect.objectContaining({
+          event: "model_fallback_decision",
+          decision: "candidate_succeeded",
+          candidateProvider: "anthropic",
+          candidateModel: "claude-haiku-3-5",
+          isPrimary: false,
+          requestedModelMatched: false,
+        }),
+      ]),
+    );
   });
 
   it("probes primary model when cooldown already expired", async () => {
@@ -218,6 +329,77 @@ describe("runWithModelFallback – probe logic", () => {
       reason: "overloaded",
       probeError: Object.assign(new Error("service overloaded"), { status: 503 }),
     });
+  });
+
+  it("keeps walking remaining fallbacks after an abort-wrapped RESOURCE_EXHAUSTED probe failure", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "google/gemini-3-flash-preview",
+            fallbacks: ["anthropic/claude-haiku-3-5", "deepseek/deepseek-chat"],
+          },
+        },
+      },
+    } as Partial<OpenClawConfig>);
+
+    mockedResolveAuthProfileOrder.mockImplementation(({ provider }: { provider: string }) => {
+      if (provider === "google") {
+        return ["google-profile-1"];
+      }
+      if (provider === "anthropic") {
+        return ["anthropic-profile-1"];
+      }
+      if (provider === "deepseek") {
+        return ["deepseek-profile-1"];
+      }
+      return [];
+    });
+    mockedIsProfileInCooldown.mockImplementation((_store, profileId: string) =>
+      profileId.startsWith("google"),
+    );
+    mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 30 * 1000);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("rate_limit");
+
+    // Simulate Google Vertex abort-wrapped RESOURCE_EXHAUSTED (the shape that was
+    // previously swallowed by shouldRethrowAbort before the fallback loop could continue)
+    const primaryAbort = Object.assign(new Error("request aborted"), {
+      name: "AbortError",
+      cause: {
+        error: {
+          code: 429,
+          message: "Resource has been exhausted (e.g. check quota).",
+          status: "RESOURCE_EXHAUSTED",
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(primaryAbort)
+      .mockRejectedValueOnce(
+        Object.assign(new Error("fallback still rate limited"), { status: 429 }),
+      )
+      .mockRejectedValueOnce(
+        Object.assign(new Error("final fallback still rate limited"), { status: 429 }),
+      );
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        run,
+      }),
+    ).rejects.toThrow(/All models failed \(3\)/);
+
+    // All three candidates must be attempted — the abort must not short-circuit
+    expect(run).toHaveBeenCalledTimes(3);
+
+    expect(run).toHaveBeenNthCalledWith(1, "google", "gemini-3-flash-preview", {
+      allowTransientCooldownProbe: true,
+    });
+    expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5");
+    expect(run).toHaveBeenNthCalledWith(3, "deepseek", "deepseek-chat");
   });
 
   it("throttles probe when called within 30s interval", async () => {
@@ -249,6 +431,36 @@ describe("runWithModelFallback – probe logic", () => {
 
     const result = await runPrimaryCandidate(cfg, run);
     expectPrimaryProbeSuccess(result, run, "probed-ok");
+  });
+
+  it("prunes stale probe throttle entries before checking eligibility", () => {
+    _probeThrottleInternals.lastProbeAttempt.set(
+      "stale",
+      NOW - _probeThrottleInternals.PROBE_STATE_TTL_MS - 1,
+    );
+    _probeThrottleInternals.lastProbeAttempt.set("fresh", NOW - 5_000);
+
+    expect(_probeThrottleInternals.lastProbeAttempt.has("stale")).toBe(true);
+
+    expect(_probeThrottleInternals.isProbeThrottleOpen(NOW, "fresh")).toBe(false);
+
+    expect(_probeThrottleInternals.lastProbeAttempt.has("stale")).toBe(false);
+    expect(_probeThrottleInternals.lastProbeAttempt.has("fresh")).toBe(true);
+  });
+
+  it("caps probe throttle state by evicting the oldest entries", () => {
+    for (let i = 0; i < _probeThrottleInternals.MAX_PROBE_KEYS; i += 1) {
+      _probeThrottleInternals.lastProbeAttempt.set(`key-${i}`, NOW - (i + 1));
+    }
+
+    _probeThrottleInternals.markProbeAttempt(NOW, "freshest");
+
+    expect(_probeThrottleInternals.lastProbeAttempt.size).toBe(
+      _probeThrottleInternals.MAX_PROBE_KEYS,
+    );
+    expect(_probeThrottleInternals.lastProbeAttempt.has("freshest")).toBe(true);
+    expect(_probeThrottleInternals.lastProbeAttempt.has("key-255")).toBe(false);
+    expect(_probeThrottleInternals.lastProbeAttempt.has("key-0")).toBe(true);
   });
 
   it("handles non-finite soonest safely (treats as probe-worthy)", async () => {
@@ -344,5 +556,71 @@ describe("runWithModelFallback – probe logic", () => {
     expect(run).toHaveBeenNthCalledWith(2, "openai", "gpt-4.1-mini", {
       allowTransientCooldownProbe: true,
     });
+  });
+
+  it("probes billing-cooldowned primary when no fallback candidates exist", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: [],
+          },
+        },
+      },
+    } as Partial<OpenClawConfig>);
+
+    // Single-provider setups need periodic probes even when the billing
+    // cooldown is far from expiry, otherwise topping up credits never recovers
+    // without a restart.
+    const expiresIn30Min = NOW + 30 * 60 * 1000;
+    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
+
+    const run = vi.fn().mockResolvedValue("billing-recovered");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      fallbacksOverride: [],
+      run,
+    });
+
+    expect(result.result).toBe("billing-recovered");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
+  });
+
+  it("probes billing-cooldowned primary with fallbacks when near cooldown expiry", async () => {
+    const cfg = makeCfg();
+    // Cooldown expires in 1 minute — within 2-min probe margin
+    const expiresIn1Min = NOW + 60 * 1000;
+    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn1Min);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
+
+    const run = vi.fn().mockResolvedValue("billing-probe-ok");
+
+    const result = await runPrimaryCandidate(cfg, run);
+
+    expect(result.result).toBe("billing-probe-ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
+  });
+
+  it("skips billing-cooldowned primary with fallbacks when far from cooldown expiry", async () => {
+    const cfg = makeCfg();
+    const expiresIn30Min = NOW + 30 * 60 * 1000;
+    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
+
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await runPrimaryCandidate(cfg, run);
+    expectPrimarySkippedForReason(result, run, "billing");
   });
 });
