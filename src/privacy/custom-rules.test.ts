@@ -239,6 +239,35 @@ describe("custom-rules", () => {
       expect(errors.some((e) => e.field === "pattern")).toBe(true);
     });
 
+    it("rejects non-string pattern values", () => {
+      const rule = {
+        type: "test_rule",
+        description: "test",
+        riskLevel: "low",
+        pattern: 123,
+      } as unknown as UserDefinedRule;
+      const errors = validateUserRule(rule, 0);
+      expect(
+        errors.some((e) => e.field === "pattern" && e.message.includes("must be a string")),
+      ).toBe(true);
+    });
+
+    it("rejects non-string replacementTemplate values", () => {
+      const rule = {
+        type: "test_rule",
+        description: "test",
+        riskLevel: "low",
+        pattern: "abc",
+        replacementTemplate: 42,
+      } as unknown as UserDefinedRule;
+      const errors = validateUserRule(rule, 0);
+      expect(
+        errors.some(
+          (e) => e.field === "replacementTemplate" && e.message.includes("must be a string"),
+        ),
+      ).toBe(true);
+    });
+
     it("rejects unknown validateFn", () => {
       const rule: UserDefinedRule = {
         type: "test_rule",

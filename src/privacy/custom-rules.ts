@@ -167,7 +167,9 @@ export function validateUserRule(rule: UserDefinedRule, index: number): RuleVali
   const type = rule.type ?? "";
   const keywords = rule.keywords;
   const hasKeywordsField = keywords !== undefined;
+  const hasPatternField = rule.pattern !== undefined;
   const keywordsIsArray = Array.isArray(keywords);
+  const patternIsString = typeof rule.pattern === "string";
 
   if (!type || typeof type !== "string") {
     errors.push({
@@ -212,6 +214,15 @@ export function validateUserRule(rule: UserDefinedRule, index: number): RuleVali
     });
   }
 
+  if (hasPatternField && !patternIsString) {
+    errors.push({
+      ruleIndex: index,
+      type,
+      field: "pattern",
+      message: "pattern must be a string",
+    });
+  }
+
   if (!rule.pattern && (!keywordsIsArray || keywords.length === 0)) {
     errors.push({
       ruleIndex: index,
@@ -245,11 +256,20 @@ export function validateUserRule(rule: UserDefinedRule, index: number): RuleVali
     }
   }
 
-  if (rule.pattern) {
+  if (patternIsString && rule.pattern) {
     const regexError = validateRegexSafety(rule.pattern);
     if (regexError) {
       errors.push({ ruleIndex: index, type, field: "pattern", message: regexError });
     }
+  }
+
+  if (rule.replacementTemplate !== undefined && typeof rule.replacementTemplate !== "string") {
+    errors.push({
+      ruleIndex: index,
+      type,
+      field: "replacementTemplate",
+      message: "replacementTemplate must be a string",
+    });
   }
 
   if (rule.validateFn && !NAMED_VALIDATORS[rule.validateFn]) {
@@ -358,7 +378,7 @@ function convertToPrivacyRule(userRule: UserDefinedRule): PrivacyRule {
   if (userRule.validateFn) {
     rule.validate = NAMED_VALIDATORS[userRule.validateFn];
   }
-  if (userRule.replacementTemplate) {
+  if (typeof userRule.replacementTemplate === "string" && userRule.replacementTemplate) {
     rule.replacementTemplate = userRule.replacementTemplate;
   }
 
