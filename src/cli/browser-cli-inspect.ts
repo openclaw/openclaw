@@ -43,6 +43,14 @@ export function registerBrowserInspectCommands(
           return;
         }
         defaultRuntime.log(`MEDIA:${shortenHomePath(result.path)}`);
+        // 如果配置了 autoVisualInput，输出 VISUAL_INPUT 标记
+        const config = loadConfig();
+        if (config?.browser?.autoVisualInput) {
+          const fs = await import("node:fs/promises");
+          const buffer = await fs.readFile(result.path);
+          const base64 = buffer.toString("base64");
+          defaultRuntime.log(`VISUAL_INPUT:image/png;base64,${base64}`);
+        }
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
