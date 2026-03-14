@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
-import { appendFileWithinRoot } from "../infra/fs-safe.js";
+import { appendFileWithinRoot, writeFileWithinRoot } from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -743,14 +743,13 @@ function createHostWriteOperations(
   // When workspaceOnly is true, enforce workspace boundary (with optional allowedRoots)
   return {
     mkdir: async (dir: string) => {
-      const resolved = path.resolve(dir);
-      await assertSandboxPath({
-        filePath: resolved,
+      const sandboxResult = await assertSandboxPath({
+        filePath: dir,
         cwd: root,
         root,
         additionalRoots: allowedRoots,
       });
-      await fs.mkdir(resolved, { recursive: true });
+      await fs.mkdir(sandboxResult.resolved, { recursive: true });
     },
     writeFile: async (absolutePath: string, content: string) => {
       const sandboxResult = await assertSandboxPath({
@@ -759,9 +758,13 @@ function createHostWriteOperations(
         root,
         additionalRoots: allowedRoots,
       });
-      const resolvedPath = sandboxResult.resolved;
-      await fs.mkdir(path.dirname(resolvedPath), { recursive: true });
-      await fs.writeFile(resolvedPath, content, "utf-8");
+      await writeFileWithinRoot({
+        rootDir: sandboxResult.matchedRoot,
+        relativePath: sandboxResult.relative || path.basename(sandboxResult.resolved),
+        data: content,
+        encoding: "utf-8",
+        mkdir: true,
+      });
     },
   } as const;
 }
@@ -806,13 +809,18 @@ function createHostEditOperations(
         root,
         additionalRoots: allowedRoots,
       });
-      const resolvedPath = sandboxResult.resolved;
-      await fs.mkdir(path.dirname(resolvedPath), { recursive: true });
-      await fs.writeFile(resolvedPath, content, "utf-8");
+      await writeFileWithinRoot({
+        rootDir: sandboxResult.matchedRoot,
+        relativePath: sandboxResult.relative || path.basename(sandboxResult.resolved),
+        data: content,
+        encoding: "utf-8",
+        mkdir: true,
+      });
     },
     access: async (absolutePath: string) => {
+      let sandboxResult;
       try {
-        await assertSandboxPath({
+        sandboxResult = await assertSandboxPath({
           filePath: absolutePath,
           cwd: root,
           root,
@@ -825,9 +833,8 @@ function createHostEditOperations(
         // propagates the original message.
         return;
       }
-      const resolved = path.resolve(absolutePath);
       try {
-        await fs.access(resolved);
+        await fs.access(sandboxResult.resolved);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
           throw createFsAccessError("ENOENT", absolutePath);
