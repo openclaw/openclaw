@@ -36,7 +36,9 @@ describe("syncExternalCliCredentials", () => {
     const mutated = syncExternalCliCredentials(store);
 
     expect(mutated).toBe(true);
-    expect(mocks.readCodexCliCredentialsCached).toHaveBeenCalled();
+    expect(mocks.readCodexCliCredentialsCached).toHaveBeenCalledWith(
+      expect.objectContaining({ ttlMs: expect.any(Number) }),
+    );
     expect(store.profiles[CODEX_CLI_PROFILE_ID]).toMatchObject({
       type: "oauth",
       provider: "openai-codex",
