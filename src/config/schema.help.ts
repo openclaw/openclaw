@@ -670,8 +670,12 @@ export const FIELD_HELP: Record<string, string> = {
     'Brave Search mode: "web" (URL results) or "llm-context" (pre-extracted page content for LLM grounding).',
   "tools.web.search.gemini.apiKey":
     "Gemini API key for Google Search grounding (fallback: GEMINI_API_KEY env var).",
+  "tools.web.search.gemini.baseUrl":
+    'Gemini base URL override (default: "https://generativelanguage.googleapis.com/v1beta"). Useful for compatible proxies.',
   "tools.web.search.gemini.model": 'Gemini model override (default: "gemini-2.5-flash").',
   "tools.web.search.grok.apiKey": "Grok (xAI) API key (fallback: XAI_API_KEY env var).", // pragma: allowlist secret
+  "tools.web.search.grok.baseUrl":
+    'Grok base URL override (default: "https://api.x.ai/v1"). Useful for compatible proxies.',
   "tools.web.search.grok.model": 'Grok model override (default: "grok-4-1-fast").',
   "tools.web.search.kimi.apiKey":
     "Moonshot/Kimi API key (fallback: KIMI_API_KEY or MOONSHOT_API_KEY env var).",

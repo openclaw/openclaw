@@ -35,7 +35,7 @@ const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
 const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
 const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
-const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
+const DEFAULT_GROK_BASE_URL = "https://api.x.ai/v1";
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";
 const DEFAULT_KIMI_BASE_URL = "https://api.moonshot.ai/v1";
 const DEFAULT_KIMI_MODEL = "moonshot-v1-128k";
@@ -323,6 +323,7 @@ type PerplexityBaseUrlHint = "direct" | "openrouter";
 
 type GrokConfig = {
   apiKey?: string;
+  baseUrl?: string;
   model?: string;
   inlineCitations?: boolean;
 };
@@ -497,6 +498,7 @@ function extractGrokContent(data: GrokSearchResponse): {
 
 type GeminiConfig = {
   apiKey?: string;
+  baseUrl?: string;
   model?: string;
 };
 
@@ -853,6 +855,12 @@ function resolveGrokInlineCitations(grok?: GrokConfig): boolean {
   return grok?.inlineCitations === true;
 }
 
+function resolveGrokBaseUrl(grok?: GrokConfig): string {
+  const fromConfig =
+    grok && "baseUrl" in grok && typeof grok.baseUrl === "string" ? grok.baseUrl.trim() : "";
+  return fromConfig || DEFAULT_GROK_BASE_URL;
+}
+
 function resolveKimiConfig(search?: WebSearchConfig): KimiConfig {
   if (!search || typeof search !== "object") {
     return {};
@@ -909,6 +917,14 @@ function resolveGeminiApiKey(gemini?: GeminiConfig): string | undefined {
   return fromEnv || undefined;
 }
 
+function resolveGeminiBaseUrl(gemini?: GeminiConfig): string {
+  const fromConfig =
+    gemini && "baseUrl" in gemini && typeof gemini.baseUrl === "string"
+      ? gemini.baseUrl.trim()
+      : "";
+  return fromConfig || GEMINI_API_BASE;
+}
+
 function resolveGeminiModel(gemini?: GeminiConfig): string {
   const fromConfig =
     gemini && "model" in gemini && typeof gemini.model === "string" ? gemini.model.trim() : "";
@@ -936,10 +952,12 @@ async function withTrustedWebSearchEndpoint<T>(
 async function runGeminiSearch(params: {
   query: string;
   apiKey: string;
+  baseUrl: string;
   model: string;
   timeoutSeconds: number;
 }): Promise<{ content: string; citations: Array<{ url: string; title?: string }> }> {
-  const endpoint = `${GEMINI_API_BASE}/models/${params.model}:generateContent`;
+  const base = params.baseUrl.trim().replace(/\/$/, "");
+  const endpoint = `${base}/models/${params.model}:generateContent`;
 
   return withTrustedWebSearchEndpoint(
     {
@@ -1305,6 +1323,7 @@ async function runPerplexitySearch(params: {
 async function runGrokSearch(params: {
   query: string;
   apiKey: string;
+  baseUrl: string;
   model: string;
   timeoutSeconds: number;
   inlineCitations: boolean;
@@ -1329,9 +1348,10 @@ async function runGrokSearch(params: {
   // citations are returned automatically when available — we just parse
   // them from the response without requesting them explicitly (#12910).
 
+  const endpoint = `${params.baseUrl.trim().replace(/\/$/, "")}/responses`;
   return withTrustedWebSearchEndpoint(
     {
-      url: XAI_API_ENDPOINT,
+      url: endpoint,
       timeoutSeconds: params.timeoutSeconds,
       init: {
         method: "POST",
@@ -1597,8 +1617,10 @@ async function runWebSearch(params: {
   perplexityBaseUrl?: string;
   perplexityModel?: string;
   perplexityTransport?: PerplexityTransport;
+  grokBaseUrl?: string;
   grokModel?: string;
   grokInlineCitations?: boolean;
+  geminiBaseUrl?: string;
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
@@ -1609,9 +1631,9 @@ async function runWebSearch(params: {
     params.provider === "perplexity"
       ? `${params.perplexityTransport ?? "search_api"}:${params.perplexityBaseUrl ?? PERPLEXITY_DIRECT_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}`
       : params.provider === "grok"
-        ? `${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`
+        ? `${params.grokBaseUrl ?? DEFAULT_GROK_BASE_URL}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`
         : params.provider === "gemini"
-          ? (params.geminiModel ?? DEFAULT_GEMINI_MODEL)
+          ? `${params.geminiBaseUrl ?? GEMINI_API_BASE}:${params.geminiModel ?? DEFAULT_GEMINI_MODEL}`
           : params.provider === "kimi"
             ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
             : "";
@@ -1692,6 +1714,7 @@ async function runWebSearch(params: {
     const { content, citations, inlineCitations } = await runGrokSearch({
       query: params.query,
       apiKey: params.apiKey,
+      baseUrl: params.grokBaseUrl ?? DEFAULT_GROK_BASE_URL,
       model: params.grokModel ?? DEFAULT_GROK_MODEL,
       timeoutSeconds: params.timeoutSeconds,
       inlineCitations: params.grokInlineCitations ?? false,
@@ -1747,6 +1770,7 @@ async function runWebSearch(params: {
     const geminiResult = await runGeminiSearch({
       query: params.query,
       apiKey: params.apiKey,
+      baseUrl: params.geminiBaseUrl ?? GEMINI_API_BASE,
       model: params.geminiModel ?? DEFAULT_GEMINI_MODEL,
       timeoutSeconds: params.timeoutSeconds,
     });
@@ -2180,8 +2204,10 @@ export function createWebSearchTool(options?: {
         perplexityBaseUrl: perplexityRuntime?.baseUrl,
         perplexityModel: perplexityRuntime?.model,
         perplexityTransport: perplexityRuntime?.transport,
+        grokBaseUrl: resolveGrokBaseUrl(grokConfig),
         grokModel: resolveGrokModel(grokConfig),
         grokInlineCitations: resolveGrokInlineCitations(grokConfig),
+        geminiBaseUrl: resolveGeminiBaseUrl(geminiConfig),
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
@@ -2209,9 +2235,11 @@ export const __testing = {
   FRESHNESS_TO_RECENCY,
   RECENCY_TO_FRESHNESS,
   resolveGrokApiKey,
+  resolveGrokBaseUrl,
   resolveGrokModel,
   resolveGrokInlineCitations,
   extractGrokContent,
+  resolveGeminiBaseUrl,
   resolveKimiApiKey,
   resolveKimiModel,
   resolveKimiBaseUrl,

@@ -16,8 +16,10 @@ const {
   isoToPerplexityDate,
   resolveGrokApiKey,
   resolveGrokModel,
+  resolveGrokBaseUrl,
   resolveGrokInlineCitations,
   extractGrokContent,
+  resolveGeminiBaseUrl,
   resolveKimiApiKey,
   resolveKimiModel,
   resolveKimiBaseUrl,
@@ -228,6 +230,42 @@ describe("web_search grok config resolution", () => {
   it("respects inlineCitations config", () => {
     expect(resolveGrokInlineCitations({ inlineCitations: true })).toBe(true);
     expect(resolveGrokInlineCitations({ inlineCitations: false })).toBe(false);
+  });
+
+  describe("resolveGrokBaseUrl", () => {
+    it("returns default when not configured", () => {
+      expect(resolveGrokBaseUrl({})).toBe("https://api.x.ai/v1");
+      expect(resolveGrokBaseUrl(undefined)).toBe("https://api.x.ai/v1");
+    });
+    it("returns configured baseUrl", () => {
+      expect(resolveGrokBaseUrl({ baseUrl: "https://proxy.example.com/v1" })).toBe(
+        "https://proxy.example.com/v1",
+      );
+    });
+    it("trims whitespace", () => {
+      expect(resolveGrokBaseUrl({ baseUrl: "  https://proxy.example.com/v1  " })).toBe(
+        "https://proxy.example.com/v1",
+      );
+    });
+  });
+});
+
+describe("web_search gemini config resolution", () => {
+  it("returns default baseUrl when not configured", () => {
+    expect(resolveGeminiBaseUrl({})).toBe("https://generativelanguage.googleapis.com/v1beta");
+    expect(resolveGeminiBaseUrl(undefined)).toBe(
+      "https://generativelanguage.googleapis.com/v1beta",
+    );
+  });
+  it("returns configured baseUrl", () => {
+    expect(resolveGeminiBaseUrl({ baseUrl: "https://proxy.example.com/gemini" })).toBe(
+      "https://proxy.example.com/gemini",
+    );
+  });
+  it("trims whitespace", () => {
+    expect(resolveGeminiBaseUrl({ baseUrl: "  https://proxy.example.com/gemini  " })).toBe(
+      "https://proxy.example.com/gemini",
+    );
   });
 });
 

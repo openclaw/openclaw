@@ -309,7 +309,7 @@ const LOCAL_PROVIDER_HINTS: Record<string, string> = {
     "See: https://docs.openclaw.ai/providers/vllm",
 };
 
-function buildUnknownModelError(provider: string, modelId: string): string {
+export function buildUnknownModelError(provider: string, modelId: string): string {
   const suppressed = buildSuppressedBuiltInModelError({ provider, id: modelId });
   if (suppressed) {
     return suppressed;

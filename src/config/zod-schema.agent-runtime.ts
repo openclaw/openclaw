@@ -288,6 +288,7 @@ export const ToolsWebSearchSchema = z
     grok: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
         model: z.string().optional(),
         inlineCitations: z.boolean().optional(),
       })
@@ -296,6 +297,7 @@ export const ToolsWebSearchSchema = z
     gemini: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
         model: z.string().optional(),
       })
       .strict()
