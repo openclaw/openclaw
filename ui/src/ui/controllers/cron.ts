@@ -157,14 +157,14 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     if (afterRaw) {
       const after = toNumber(afterRaw, 0);
       if (!Number.isFinite(after) || after <= 0) {
-        errors.failureAlertAfter = "Failure alert threshold must be greater than 0.";
+        errors.failureAlertAfter = "cron.errors.failureAlertAfterInvalid";
       }
     }
     const cooldownRaw = form.failureAlertCooldownSeconds.trim();
     if (cooldownRaw) {
       const cooldown = toNumber(cooldownRaw, -1);
       if (!Number.isFinite(cooldown) || cooldown < 0) {
-        errors.failureAlertCooldownSeconds = "Cooldown must be 0 or greater.";
+        errors.failureAlertCooldownSeconds = "cron.errors.failureAlertCooldownInvalid";
       }
     }
   }
