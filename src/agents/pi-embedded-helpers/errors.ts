@@ -859,9 +859,20 @@ function isJsonApiInternalServerError(raw: string): boolean {
     return true;
   }
   // OpenAI/Codex wraps transient 500s as:
-  // {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred..."}}
-  if (value.includes('"type":"server_error"') && value.includes('"code":"server_error"')) {
-    return true;
+  // {"type":"error","error":{"type":"server_error","code":"server_error","message":"..."}}
+  // Use JSON.parse to safely handle pretty-printed or spaced JSON.
+  try {
+    const parsed = JSON.parse(raw);
+    const errType = parsed?.error?.type;
+    const errCode = parsed?.error?.code;
+    if (errType === "server_error" && errCode === "server_error") {
+      return true;
+    }
+  } catch {
+    // Not valid JSON — fall through to substring check for compact format
+    if (value.includes('"type":"server_error"') && value.includes('"code":"server_error"')) {
+      return true;
+    }
   }
   return false;
 }
