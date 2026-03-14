@@ -10,6 +10,7 @@ import { saveAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import { isAnthropicBillingError } from "./live-auth-keys.js";
 import { runWithImageModelFallback, runWithModelFallback } from "./model-fallback.js";
+import { FailoverError } from "./failover-error.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
 const makeCfg = makeModelFallbackCfg;
@@ -1400,6 +1401,54 @@ describe("runWithModelFallback", () => {
     });
   });
 });
+
+  describe("FailoverError single-candidate rethrow", () => {
+    it("rethrows the original FailoverError on single-candidate runs", async () => {
+      const cfg = makeCfg();
+      const failoverError = new FailoverError("LLM request timed out.", {
+        reason: "timeout",
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        status: 408,
+      });
+      const run = vi.fn().mockRejectedValueOnce(failoverError);
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          run,
+          fallbacksOverride: [],
+        }),
+      ).rejects.toThrow(failoverError);
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back to the next candidate when FailoverError is thrown with multiple candidates", async () => {
+      const cfg = makeCfg();
+      const failoverError = new FailoverError("LLM request timed out.", {
+        reason: "timeout",
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        status: 408,
+      });
+      const run = vi.fn().mockRejectedValueOnce(failoverError).mockResolvedValueOnce("ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run.mock.calls[1]?.[0]).toBe("anthropic");
+      expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
+    });
+  });
+
 
 describe("runWithImageModelFallback", () => {
   it("keeps explicit image fallbacks reachable when models allowlist is present", async () => {

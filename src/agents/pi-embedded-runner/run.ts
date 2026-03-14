@@ -1436,44 +1436,48 @@ export async function runEmbeddedPiAgent(
               continue;
             }
 
-            // Always throw FailoverError so the outer runWithModelFallback
-            // loop can try the next candidate. Previously gated on
-            // fallbackConfigured, which could be stale from a FollowupRun
-            // config snapshot taken before hot-reload applied fallbacks.
-            await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
-            const failoverMessage =
-              (lastAssistant
-                ? formatAssistantErrorText(lastAssistant, {
-                    cfg: params.config,
-                    sessionKey: params.sessionKey ?? params.sessionId,
-                    provider: activeErrorContext.provider,
-                    model: activeErrorContext.model,
-                  })
-                : undefined) ||
-              lastAssistant?.errorMessage?.trim() ||
-              (timedOut
-                ? "LLM request timed out."
-                : rateLimitFailure
-                  ? "LLM request rate limited."
-                  : billingFailure
-                    ? formatBillingErrorMessage(
-                        activeErrorContext.provider,
-                        activeErrorContext.model,
-                      )
-                    : authFailure
-                      ? "LLM request unauthorized."
-                      : "LLM request failed.");
-            const failoverStatus =
-              resolveFailoverStatus(assistantFailoverReason ?? "unknown") ??
-              (isTimeoutErrorMessage(failoverMessage) ? 408 : undefined);
-            logAssistantFailoverDecision("fallback_model", { status: failoverStatus });
-            throw new FailoverError(failoverMessage, {
-              reason: assistantFailoverReason ?? "unknown",
-              provider: activeErrorContext.provider,
-              model: activeErrorContext.model,
-              profileId: lastProfileId,
-              status: failoverStatus,
-            });
+            // Throw FailoverError when fallbacks are configured so the outer
+            // runWithModelFallback loop can try the next candidate.  When no
+            // fallbacks exist, fall through to the normal payload-return path
+            // so callers still receive the isError payload instead of an
+            // unhandled exception (see model-fallback.ts:187-189).
+            if (fallbackConfigured) {
+              await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
+              const failoverMessage =
+                (lastAssistant
+                  ? formatAssistantErrorText(lastAssistant, {
+                      cfg: params.config,
+                      sessionKey: params.sessionKey ?? params.sessionId,
+                      provider: activeErrorContext.provider,
+                      model: activeErrorContext.model,
+                    })
+                  : undefined) ||
+                lastAssistant?.errorMessage?.trim() ||
+                (timedOut
+                  ? "LLM request timed out."
+                  : rateLimitFailure
+                    ? "LLM request rate limited."
+                    : billingFailure
+                      ? formatBillingErrorMessage(
+                          activeErrorContext.provider,
+                          activeErrorContext.model,
+                        )
+                      : authFailure
+                        ? "LLM request unauthorized."
+                        : "LLM request failed.");
+              const failoverStatus =
+                resolveFailoverStatus(assistantFailoverReason ?? "unknown") ??
+                (isTimeoutErrorMessage(failoverMessage) ? 408 : undefined);
+              logAssistantFailoverDecision("fallback_model", { status: failoverStatus });
+              throw new FailoverError(failoverMessage, {
+                reason: assistantFailoverReason ?? "unknown",
+                provider: activeErrorContext.provider,
+                model: activeErrorContext.model,
+                profileId: lastProfileId,
+                status: failoverStatus,
+              });
+            }
+            logAssistantFailoverDecision("surface_error");
           }
 
           const usage = toNormalizedUsage(usageAccumulator);
