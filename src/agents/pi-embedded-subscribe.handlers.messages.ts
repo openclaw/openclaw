@@ -16,6 +16,7 @@ import {
   extractThinkingFromTaggedText,
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
+  stripThinkingTagsFromText,
 } from "./pi-embedded-utils.js";
 
 const stripTrailingDirective = (text: string): string => {
@@ -298,9 +299,13 @@ export function handleMessageEnd(
     const rawTrimmed = rawText.trim();
     const rawStrippedFinal = rawTrimmed.replace(/<\s*\/?\s*final\s*>/gi, "").trim();
     const rawCandidate = rawStrippedFinal || rawTrimmed;
-    if (rawCandidate) {
-      const parsedFallback = parseReplyDirectives(stripTrailingDirective(rawCandidate));
-      cleanedText = parsedFallback.text ?? rawCandidate;
+    // Strip thinking tags from fallback content to prevent reasoning tokens
+    // from being used as response content. This mirrors the Ollama fix (#45330)
+    // which ensures reasoning visibility is controlled elsewhere, not as fallback.
+    const rawCandidateWithoutThinking = stripThinkingTagsFromText(rawCandidate);
+    if (rawCandidateWithoutThinking) {
+      const parsedFallback = parseReplyDirectives(stripTrailingDirective(rawCandidateWithoutThinking));
+      cleanedText = parsedFallback.text ?? rawCandidateWithoutThinking;
       mediaUrls = parsedFallback.mediaUrls;
       hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
     }
