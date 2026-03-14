@@ -441,6 +441,24 @@ function formatSubMessageContent(content: string, contentType: string): string {
         return "[Video]";
       case "sticker":
         return "[Sticker]";
+      case "interactive": {
+        // Parse interactive card to extract readable content
+        const card = parsed;
+        const title = card.header?.title?.content || "";
+        const elements = card.elements || card.body?.elements || [];
+        const texts: string[] = [];
+        for (const el of elements) {
+          if (el.tag === "div" && el.text?.content) {
+            texts.push(el.text.content);
+          } else if (el.tag === "markdown" && el.content) {
+            texts.push(el.content);
+          } else if (el.tag === "plain_text" && el.content) {
+            texts.push(el.content);
+          }
+        }
+        const body = texts.join(" ").trim();
+        return title ? `[Card: ${title}] ${body}`.trim() : body || "[Interactive Card]";
+      }
       case "merge_forward":
         return "[Nested Merged Forward]";
       default:
