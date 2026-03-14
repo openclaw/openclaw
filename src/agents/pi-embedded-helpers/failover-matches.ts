@@ -61,6 +61,9 @@ const ERROR_PATTERNS = {
     "insufficient balance",
     "insufficient usd or diem balance",
     /requires?\s+more\s+credits/i,
+    // Third-party proxies may use "purchase a subscription" instead of
+    // "payment required" or "insufficient credits" (#45774).
+    /\bpurchase\s+(?:a\s+)?subscription\b/i,
   ],
   authPermanent: [
     /api[_ ]?key[_ ]?(?:revoked|invalid|deactivated|deleted)/i,
@@ -153,7 +156,9 @@ export function isBillingErrorMessage(raw: string): boolean {
     value.includes("upgrade") ||
     value.includes("credits") ||
     value.includes("payment") ||
-    value.includes("plan")
+    value.includes("plan") ||
+    value.includes("purchase") ||
+    value.includes("subscription")
   );
 }
 

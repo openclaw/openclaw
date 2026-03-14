@@ -122,6 +122,8 @@ describe("isBillingErrorMessage", () => {
         "Insufficient USD or Diem balance to complete request. Visit https://venice.ai/settings/api to add credits.",
         "This model requires more credits to use",
         "This endpoint require more credits",
+        // Third-party proxy 402 with "purchase a subscription" (#45774)
+        "402 No available asset for API access, please purchase a subscription",
       ],
       expected: true,
     },
@@ -744,6 +746,12 @@ describe("classifyFailoverReason", () => {
     ).toBe("billing");
     // OpenRouter "requires more credits" billing text
     expect(classifyFailoverReason("This model requires more credits to use")).toBe("billing");
+    // Third-party proxy 402 with "purchase a subscription" (#45774)
+    expect(
+      classifyFailoverReason(
+        "402 No available asset for API access, please purchase a subscription",
+      ),
+    ).toBe("billing");
   });
 
   it("classifies internal and compatibility error messages", () => {
