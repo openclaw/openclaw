@@ -47,6 +47,7 @@ describe("handleQuotaCommand", () => {
   it("fetches all configured providers (no hardcoded filter)", async () => {
     const cfg = { commands: { text: true } } as OpenClawConfig;
     const params = buildQuotaParams("/quota", cfg);
+    params.agentDir = "/tmp/openclaw-agent-custom";
 
     mockLoadProviderUsageSummary.mockResolvedValueOnce({
       updatedAt: Date.now(),
@@ -60,6 +61,7 @@ describe("handleQuotaCommand", () => {
     const callArg = mockLoadProviderUsageSummary.mock.calls[0]?.[0];
 
     expect(callArg.providers).toBeUndefined();
+    expect(callArg.agentDir).toBe("/tmp/openclaw-agent-custom");
   });
 
   it("formats and returns quota data", async () => {
