@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/diffs";
 import { describe, expect, it, vi } from "vitest";
 import { createMockServerResponse } from "../../src/test-utils/mock-http-response.js";
 import { createTestPluginApi } from "../test-utils/plugin-api.js";
@@ -42,48 +43,46 @@ describe("diffs plugin registration", () => {
   });
 
   it("applies plugin-config defaults through registered tool and viewer handler", async () => {
-    let registeredTool:
-      | { execute?: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown> }
-      | undefined;
-    let registeredHttpRouteHandler:
-      | ((
-          req: IncomingMessage,
-          res: ReturnType<typeof createMockServerResponse>,
-        ) => Promise<boolean>)
-      | undefined;
+    type RegisteredTool = {
+      execute?: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
+    };
+    type RegisteredHttpRouteParams = Parameters<OpenClawPluginApi["registerHttpRoute"]>[0];
 
-    plugin.register?.(
-      createTestPluginApi({
-        id: "diffs",
-        name: "Diffs",
-        description: "Diffs",
-        source: "test",
-        config: {
-          gateway: {
-            port: 18789,
-            bind: "loopback",
-          },
+    let registeredTool: RegisteredTool | undefined;
+    let registeredHttpRouteHandler: RegisteredHttpRouteParams["handler"] | undefined;
+
+    const api = createTestPluginApi({
+      id: "diffs",
+      name: "Diffs",
+      description: "Diffs",
+      source: "test",
+      config: {
+        gateway: {
+          port: 18789,
+          bind: "loopback",
         },
-        pluginConfig: {
-          defaults: {
-            mode: "view",
-            theme: "light",
-            background: false,
-            layout: "split",
-            showLineNumbers: false,
-            diffIndicators: "classic",
-            lineSpacing: 2,
-          },
+      },
+      pluginConfig: {
+        defaults: {
+          mode: "view",
+          theme: "light",
+          background: false,
+          layout: "split",
+          showLineNumbers: false,
+          diffIndicators: "classic",
+          lineSpacing: 2,
         },
-        runtime: {} as never,
-        registerTool(tool) {
-          registeredTool = typeof tool === "function" ? undefined : tool;
-        },
-        registerHttpRoute(params) {
-          registeredHttpRouteHandler = params.handler as typeof registeredHttpRouteHandler;
-        },
-      }),
-    );
+      },
+      runtime: {} as never,
+      registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
+        registeredTool = typeof tool === "function" ? undefined : tool;
+      },
+      registerHttpRoute(params: RegisteredHttpRouteParams) {
+        registeredHttpRouteHandler = params.handler;
+      },
+    });
+
+    plugin.register?.(api as unknown as OpenClawPluginApi);
 
     const result = await registeredTool?.execute?.("tool-1", {
       before: "one\n",
