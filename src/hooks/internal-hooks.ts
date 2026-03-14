@@ -8,9 +8,16 @@
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { CronDeliveryStatus, CronRunStatus, CronUsageSummary } from "../cron/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
+export type InternalHookEventType =
+  | "command"
+  | "session"
+  | "agent"
+  | "gateway"
+  | "message"
+  | "cron";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -37,6 +44,34 @@ export type GatewayStartupHookEvent = InternalHookEvent & {
   type: "gateway";
   action: "startup";
   context: GatewayStartupHookContext;
+};
+
+// ============================================================================
+// Cron Hook Events
+// ============================================================================
+
+export type CronHookContext = {
+  jobId: string;
+  status?: CronRunStatus;
+  error?: string;
+  summary?: string;
+  nextRunAtMs?: number;
+  runAtMs?: number;
+  durationMs?: number;
+  delivered?: boolean;
+  deliveryStatus?: CronDeliveryStatus;
+  deliveryError?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  model?: string;
+  provider?: string;
+  usage?: CronUsageSummary;
+};
+
+export type CronHookEvent = InternalHookEvent & {
+  type: "cron";
+  action: "added" | "updated" | "removed" | "started" | "finished";
+  context: CronHookContext;
 };
 
 // ============================================================================
@@ -418,4 +453,27 @@ export function isMessagePreprocessedEvent(
     return false;
   }
   return hasStringContextField(context, "channelId");
+}
+
+// Cron events have multiple valid actions, so we validate type + action set
+// rather than using isHookEventTypeAndAction (which accepts a single action).
+export function isCronEvent(event: InternalHookEvent): event is CronHookEvent {
+  if (event.type !== "cron") {
+    return false;
+  }
+  const validActions: CronHookEvent["action"][] = [
+    "added",
+    "updated",
+    "removed",
+    "started",
+    "finished",
+  ];
+  if (!validActions.includes(event.action as CronHookEvent["action"])) {
+    return false;
+  }
+  const context = getHookContext<CronHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return hasStringContextField(context, "jobId");
 }
