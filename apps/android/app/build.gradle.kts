@@ -80,6 +80,9 @@ android {
             }
             isMinifyEnabled = true
             isShrinkResources = true
+            ndk {
+                debugSymbolLevel = "SYMBOL_TABLE"
+            }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
         debug {
@@ -106,6 +109,10 @@ android {
                     "/META-INF/LICENSE*.txt",
                     "DebugProbesKt.bin",
                     "kotlin-tooling-metadata.json",
+                    "org/bouncycastle/pqc/crypto/picnic/lowmcL1.bin.properties",
+                    "org/bouncycastle/pqc/crypto/picnic/lowmcL3.bin.properties",
+                    "org/bouncycastle/pqc/crypto/picnic/lowmcL5.bin.properties",
+                    "org/bouncycastle/x509/CertPathReviewerMessages*.properties",
                 )
         }
     }
@@ -170,7 +177,6 @@ dependencies {
     // material-icons-extended pulled in full icon set (~20 MB DEX). Only ~18 icons used.
     // R8 will tree-shake unused icons when minify is enabled on release builds.
     implementation("androidx.compose.material:material-icons-extended")
-    implementation("androidx.navigation:navigation-compose:2.9.7")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 
@@ -195,7 +201,6 @@ dependencies {
     implementation("androidx.camera:camera-camera2:1.5.2")
     implementation("androidx.camera:camera-lifecycle:1.5.2")
     implementation("androidx.camera:camera-video:1.5.2")
-    implementation("androidx.camera:camera-view:1.5.2")
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
 
     // Unicast DNS-SD (Wide-Area Bonjour) for tailnet discovery domains.

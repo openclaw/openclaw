@@ -7,6 +7,9 @@ import {
   estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import { resolveSignalReactionLevel } from "../../../extensions/signal/src/reaction-level.js";
+import { resolveTelegramInlineButtonsScope } from "../../../extensions/telegram/src/inline-buttons.js";
+import { resolveTelegramReactionLevel } from "../../../extensions/telegram/src/reaction-level.js";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
@@ -23,9 +26,6 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { resolveSignalReactionLevel } from "../../signal/reaction-level.js";
-import { resolveTelegramInlineButtonsScope } from "../../telegram/inline-buttons.js";
-import { resolveTelegramReactionLevel } from "../../telegram/reaction-level.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
