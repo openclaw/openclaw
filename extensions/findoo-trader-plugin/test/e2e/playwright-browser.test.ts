@@ -1139,7 +1139,7 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
       await page.goto(`${baseUrl}/plugins/findoo-trader/dashboard/overview`);
       await page.waitForLoadState("domcontentloaded");
 
-      expect(await page.locator("#riskStatus").isVisible()).toBe(true);
+      expect(await page.locator("#riskBadge").isVisible()).toBe(true);
       const riskLabel = await page.locator("#riskLabel").textContent();
       expect(riskLabel).toBe("NORMAL");
     });

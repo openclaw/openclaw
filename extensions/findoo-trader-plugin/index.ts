@@ -50,6 +50,7 @@ import { OrderTracker } from "./src/execution/order-tracker.js";
 import { registerTradingTools } from "./src/execution/trading-tools.js";
 import { CapitalFlowStore } from "./src/fund/capital-flow-store.js";
 import { ColdStartSeeder } from "./src/fund/cold-start-seeder.js";
+import { FundLaunchOrchestrator } from "./src/fund/fund-launch-orchestrator.js";
 import { FundManager } from "./src/fund/fund-manager.js";
 import { PerformanceSnapshotStore } from "./src/fund/performance-snapshot-store.js";
 import { registerPackRoutes } from "./src/fund/routes-packs.js";
@@ -112,6 +113,7 @@ export { CorrelationMonitor } from "./src/fund/correlation-monitor.js";
 export { CapitalFlowStore } from "./src/fund/capital-flow-store.js";
 export { PerformanceSnapshotStore } from "./src/fund/performance-snapshot-store.js";
 export { ColdStartSeeder } from "./src/fund/cold-start-seeder.js";
+export { FundLaunchOrchestrator } from "./src/fund/fund-launch-orchestrator.js";
 export { ActivityLogStore } from "./src/core/activity-log-store.js";
 export { AgentWakeBridge } from "./src/core/agent-wake-bridge.js";
 export { LifecycleEngine } from "./src/core/lifecycle-engine.js";
@@ -321,6 +323,9 @@ const findooTraderPlugin = {
       runtime,
       pluginEntries,
       liveExecutor,
+      get fundLaunchOrchestrator() {
+        return launchRef.orchestrator;
+      },
     };
 
     // ── Backtest Progress Store (created early for SSE + tools wiring) ──
@@ -337,6 +342,9 @@ const findooTraderPlugin = {
     // ideationScheduler is created later — use a lazy reference
     const ideationRef: { scheduler?: InstanceType<typeof IdeationScheduler> } = {};
 
+    // fundLaunchOrchestrator is created after strategyRegistry + paperEngine — lazy reference
+    const launchRef: { orchestrator?: InstanceType<typeof FundLaunchOrchestrator> } = {};
+
     registerHttpRoutes({
       api,
       gatherDeps,
@@ -351,6 +359,9 @@ const findooTraderPlugin = {
       },
       get ideationScheduler() {
         return ideationRef.scheduler;
+      },
+      get fundLaunchOrchestrator() {
+        return launchRef.orchestrator;
       },
     });
 
@@ -421,6 +432,17 @@ const findooTraderPlugin = {
       paperEngine,
       progressStore,
     );
+
+    // ── Fund Launch Orchestrator (one-click 30s experience) ──
+
+    const fundLaunchOrchestrator = new FundLaunchOrchestrator({
+      eventStore,
+      strategyRegistry,
+      paperEngine,
+      exchangeRegistry: registry,
+      liveExecutor,
+    });
+    launchRef.orchestrator = fundLaunchOrchestrator;
 
     // ── Fund Manager ──
 

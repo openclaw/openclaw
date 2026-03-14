@@ -17,48 +17,69 @@
 <div class="risk-halo" id="riskHalo"></div>
 <div class="scanline"></div>
 
-<!-- Top Bar -->
+<!-- Top Bar (unified structure — matches strategy/trader/flow/setting) -->
 <header class="topbar">
   <span class="topbar__logo">OPENFINCLAW</span>
   <div class="topbar__sep"></div>
-  <nav class="topbar__nav">
-    <a class="topbar__tab topbar__tab--active" href="overview">Overview</a>
-    <a class="topbar__tab" href="strategy">Strategy</a>
-    <a class="topbar__tab" href="trader">Trader</a>
-    <a class="topbar__tab" href="setting">Setting</a>
-  </nav>
-  <div class="topbar__spacer"></div>
-  <div class="topbar__dots">
-    <span><span class="topbar__dot topbar__dot--g" id="dotGw"></span>Gateway</span>
-    <span><span class="topbar__dot topbar__dot--g" id="dotHb"></span>Heartbeat</span>
-    <span><span class="topbar__dot topbar__dot--y" id="dotPaper"></span>Paper</span>
-  </div>
+  <div class="topbar__eq"><span class="topbar__eq-val num" id="eqVal">--</span><span class="topbar__eq-chg num" id="eqChg"></span></div>
   <div class="topbar__sep"></div>
-  <span class="topbar__risk" id="riskLabel">NORMAL</span>
+  <nav class="topbar__nav">
+    <a class="topbar__nav-item active" href="/plugins/findoo-trader/dashboard/overview">Overview</a>
+    <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/strategy">Strategy</a>
+    <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/trader">Trader</a>
+    <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/flow">Flow</a>
+    <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/setting">Setting</a>
+  </nav>
+  <div class="topbar__fill"></div>
+  <div class="topbar__sep"></div>
+  <span class="topbar__risk" id="riskBadge">NORMAL</span>
+  <div class="topbar__sse" id="sseDots" title="SSE"><span class="sse-dot" id="sseEvents"></span><span class="sse-dot" id="sseTrading"></span></div>
   <span class="topbar__clock num" id="clock">--:--</span>
-  <button class="topbar__estop" id="btnEstop">E-STOP</button>
+  <button class="btn-estop" id="estopBtn">&#9632; STOP</button>
 </header>
+
+<!-- E-STOP Modal -->
+<div class="estop-modal" id="estopModal">
+  <div class="estop-modal__box">
+    <h3>&#x26D4; &#x7D27;&#x6025;&#x505C;&#x6B62;</h3>
+    <p>&#x6682;&#x505C;&#x6240;&#x6709;&#x4EA4;&#x6613;&#x6D3B;&#x52A8;&#xFF1F;</p>
+    <div class="estop-modal__actions">
+      <button class="estop-modal__confirm" id="estopConfirm">&#x786E;&#x8BA4;&#x505C;&#x6B62;</button>
+      <button class="estop-modal__cancel" id="estopCancel">&#x53D6;&#x6D88;</button>
+    </div>
+  </div>
+</div>
+
+<!-- Launch Hero (first-run or replay) -->
+<div class="launch-hero" id="launchHero" style="display:none">
+  <div class="launch-hero__lobster">&#x1F99E;</div>
+  <h2 class="launch-hero__title">&#x4F60;&#x7684; AI &#x91CF;&#x5316;&#x57FA;&#x91D1;</h2>
+  <p class="launch-hero__desc">30 &#x79D2;&#x4F53;&#x9A8C;&#x5168;&#x81EA;&#x52A8;&#x751F;&#x547D;&#x5468;&#x671F;</p>
+  <button class="launch-btn" id="launchBtn">&#x1F680; &#x4E00;&#x952E;&#x542F;&#x52A8;</button>
+</div>
 
 <!-- Main Layout: Soul + Data -->
 <div class="layout">
   <!-- SOUL PANEL -->
   <aside class="soul soul--desktop" id="soulDesktop">
     <div class="soul__header">
-      <div class="soul__top">
+      <!-- Row 1: Avatar + Name + Equity (all one line) -->
+      <div class="soul__row1">
         <div class="lobster">
           <div class="lobster__glow"></div>
           <span class="lobster__face" id="lobsterFace">&#x1F99E;</span>
           <span class="lobster__mood" id="lobsterMood">&#x1F60A;</span>
         </div>
         <div class="soul__identity">
-          <div class="soul__name">&#x91D1;&#x878D;&#x9F99;&#x867E; <span class="heartbeat"></span></div>
+          <div class="soul__name">&#x91D1;&#x878D;&#x9F99;&#x867E; <span class="heartbeat"></span> <button class="launch-btn--replay" id="replayBtn" style="display:none">&#x25B6; &#x91CD;&#x64AD;</button></div>
           <div class="soul__last" id="lastAction">&#x6700;&#x8FD1;&#x64CD;&#x4F5C;: --</div>
         </div>
+        <div class="soul__eq-block">
+          <span class="soul__equity num" id="eqMiniVal">$0</span>
+          <span class="soul__pnl num" id="soulPnl">--</span>
+        </div>
       </div>
-      <div>
-        <span class="soul__equity num" id="soulEq">$0</span>
-        <span class="soul__pnl num" id="soulPnl">--</span>
-      </div>
+      <!-- Row 2: Compact badges -->
       <div class="soul__badges">
         <span class="sbadge sbadge--regime" id="regimeBadge">--</span>
         <span class="sbadge sbadge--matrix" id="matrixBadge">
@@ -76,6 +97,14 @@
 
   <!-- DATA PANEL -->
   <main class="data">
+    <!-- Stats Capsule (positions, strategies, win rate, sharpe) -->
+    <div class="stats-capsule">
+      <div class="stat-pill"><div class="stat-pill__l">Positions</div><div class="stat-pill__v num" id="spPositions">0</div></div>
+      <div class="stat-pill"><div class="stat-pill__l">Strategies</div><div class="stat-pill__v num" id="spStrategies">0</div></div>
+      <div class="stat-pill"><div class="stat-pill__l">Win Rate</div><div class="stat-pill__v num" id="spWinRate">--</div></div>
+      <div class="stat-pill"><div class="stat-pill__l">Avg Sharpe</div><div class="stat-pill__v num" id="spAvgSharpe">--</div></div>
+    </div>
+
     <!-- 4 Metric Cards -->
     <div class="metrics" id="metricsRow">
       <div class="metric-card"><div class="metric-card__label">&#x603B;&#x6743;&#x76CA;</div><div class="metric-card__value num" id="metricEq">$0</div><div class="metric-card__sub num" id="metricEqSub">--</div></div>
@@ -84,27 +113,49 @@
       <div class="metric-card"><div class="metric-card__label">Sharpe</div><div class="metric-card__value num" id="metricSharpe">--</div><div class="metric-card__sub" id="metricSharpeSub">--</div></div>
     </div>
 
-    <!-- Equity Chart + Strategy Matrix -->
-    <div class="row2">
-      <div class="section">
+    <!-- Config Status + Risk -->
+    <div class="config-status">
+      <div class="config-row"><span class="config-row__l">Trading</span><span class="config-row__v" id="cfgTrading">--</span></div>
+      <div class="config-row"><span class="config-row__l">Exchanges</span><span class="config-row__v" id="cfgExchanges">--</span></div>
+      <div class="config-row"><span class="config-row__l">Plugins</span><span class="config-row__v" id="cfgPlugins">--</span></div>
+      <div class="config-row"><span class="config-row__l">Risk Level</span><span class="config-row__v" id="riskLabel">NORMAL</span></div>
+    </div>
+
+    <!-- Pipeline Level Counts -->
+    <div class="pipeline-counts" style="display:flex;gap:12px;margin-bottom:12px">
+      <span class="pipe-count" data-level="L0"><span class="pipe-count__label" style="color:var(--l0)">L0</span> <span class="pipe-count__val num" id="pipeL0">0</span></span>
+      <span class="pipe-count" data-level="L1"><span class="pipe-count__label" style="color:var(--l1)">L1</span> <span class="pipe-count__val num" id="pipeL1">0</span></span>
+      <span class="pipe-count" data-level="L2"><span class="pipe-count__label" style="color:var(--l2)">L2</span> <span class="pipe-count__val num" id="pipeL2">0</span></span>
+      <span class="pipe-count" data-level="L3"><span class="pipe-count__label" style="color:var(--l3)">L3</span> <span class="pipe-count__val num" id="pipeL3">0</span></span>
+    </div>
+
+    <!-- Equity Chart + Strategy Matrix (side by side) -->
+    <div class="row2 row2--chart">
+      <div class="section section--chart">
         <div class="section__head"><span class="section__title">&#x6743;&#x76CA;&#x66F2;&#x7EBF;</span><span class="section__badge num" id="eqBadge">--</span></div>
         <div class="section__body"><div class="chart-wrap" id="eqChart"></div></div>
       </div>
-      <div class="section">
-        <div class="section__head"><span class="section__title">&#x7B56;&#x7565;&#x77E9;&#x9635;</span></div>
+      <div class="section section--matrix">
+        <div class="section__head"><span class="section__title">&#x7B56;&#x7565;&#x77E9;&#x9635;</span><span class="section__badge num" id="stratTotal">--</span></div>
         <div class="section__body" id="stratMatrix"></div>
       </div>
+    </div>
+
+    <!-- Alerts -->
+    <div class="section">
+      <div class="section__head"><span class="section__title">&#x544A;&#x8B66;</span><span class="section__badge num" id="alertCount">0</span></div>
+      <div class="section__body" id="alertsList"></div>
     </div>
 
     <!-- Positions + Orders -->
     <div class="row2">
       <div class="section">
         <div class="section__head"><span class="section__title">&#x6D3B;&#x8DC3;&#x6301;&#x4ED3;</span><span class="section__badge num" id="posBadge">0</span></div>
-        <div class="section__body"><table><thead><tr><th>&#x6807;&#x7684;</th><th>&#x65B9;&#x5411;</th><th>&#x6570;&#x91CF;</th><th>P&amp;L</th></tr></thead><tbody id="posTable"></tbody></table></div>
+        <div class="section__body" style="padding:0"><table class="fin-table"><thead><tr><th>&#x6807;&#x7684;</th><th>&#x65B9;&#x5411;</th><th class="right">&#x6570;&#x91CF;</th><th class="right">&#x5F00;&#x4ED3;</th><th class="right">&#x73B0;&#x4EF7;</th><th class="right">P&amp;L</th><th>&#x7B56;&#x7565;</th></tr></thead><tbody id="posTable"></tbody></table></div>
       </div>
       <div class="section">
         <div class="section__head"><span class="section__title">&#x8FD1;&#x671F;&#x8BA2;&#x5355;</span><span class="section__badge num" id="ordBadge">0</span></div>
-        <div class="section__body"><table><thead><tr><th>&#x65F6;&#x95F4;</th><th>&#x6807;&#x7684;</th><th>&#x65B9;&#x5411;</th><th>&#x72B6;&#x6001;</th></tr></thead><tbody id="ordTable"></tbody></table></div>
+        <div class="section__body" style="padding:0"><table class="fin-table"><thead><tr><th>&#x65F6;&#x95F4;</th><th>&#x6807;&#x7684;</th><th>&#x65B9;&#x5411;</th><th class="right">&#x6570;&#x91CF;</th><th class="right">&#x4EF7;&#x683C;</th><th>&#x72B6;&#x6001;</th></tr></thead><tbody id="ordTable"></tbody></table></div>
       </div>
     </div>
   </main>
@@ -116,7 +167,7 @@
     <span><span class="botbar__dot botbar__dot--g" id="sseDot"></span>SSE <span id="sseStatus">--</span></span>
     <span>Heartbeat: <span id="hbAge">--</span></span>
   </div>
-  <div class="botbar__right"><span id="version">v2026.3.13</span></div>
+  <div class="botbar__right"><span id="version">v2026.3.14</span></div>
 </footer>
 
 <!-- Mobile FAB -->
@@ -134,7 +185,9 @@
   var d = pageData || {};
   var trading = d.trading || {};
   var summary = trading.summary || {};
+  var config = d.config || {};
   var events = (d.events || {}).events || [];
+  var alerts = d.alerts || [];
   var pendingCount = (d.events || {}).pendingCount || 0;
   var pipeline = d.pipeline || {};
   var topStrategies = d.topStrategies || [];
@@ -147,11 +200,22 @@
   function fmtUsd(n){ return typeof n==='number' ? '$'+n.toLocaleString(undefined,{maximumFractionDigits:0}) : '$0'; }
   function timeStr(ts){ var d=new Date(ts); return (d.getHours()+'').padStart(2,'0')+':'+(d.getMinutes()+'').padStart(2,'0'); }
 
-  // ── Metrics ──
-  $('metricEq').textContent = fmtUsd(summary.totalEquity);
-  $('soulEq').textContent = fmtUsd(summary.totalEquity);
+  // ── Top Bar Equity ──
+  $('eqVal').textContent = fmtUsd(summary.totalEquity);
   var pnl = summary.dailyPnl || 0;
   var pnlPct = summary.dailyPnlPct || 0;
+  $('eqChg').textContent = fmt(pnlPct);
+  $('eqChg').className = 'topbar__eq-chg num ' + (pnl>=0?'topbar__eq-chg--up':'topbar__eq-chg--down');
+
+  // ── Stats Capsule ──
+  $('spPositions').textContent = positions.length;
+  $('spStrategies').textContent = pipeline.total || ((pipeline.l0||0)+(pipeline.l1||0)+(pipeline.l2||0)+(pipeline.l3||0));
+  $('spWinRate').textContent = summary.winRate!=null ? (summary.winRate*100).toFixed(0)+'%' : '--';
+  $('spAvgSharpe').textContent = summary.avgSharpe!=null ? summary.avgSharpe.toFixed(2) : '--';
+
+  // ── Metric Cards ──
+  $('metricEq').textContent = fmtUsd(summary.totalEquity);
+  $('eqMiniVal').textContent = fmtUsd(summary.totalEquity);
   $('metricPnl').textContent = fmtUsd(pnl);
   $('metricPnlSub').textContent = fmt(pnlPct);
   $('metricPnlSub').className = 'metric-card__sub num ' + (pnl>=0?'metric-card__sub--g':'metric-card__sub--r');
@@ -159,44 +223,105 @@
   $('soulPnl').className = 'soul__pnl num ' + (pnl>=0?'soul__pnl--up':'soul__pnl--down');
   $('metricEqSub').textContent = fmt(pnlPct);
   $('metricEqSub').className = 'metric-card__sub num ' + (pnl>=0?'metric-card__sub--g':'metric-card__sub--r');
-  $('metricStrat').textContent = (pipeline.total || 0);
+  var totalStrat = pipeline.total || ((pipeline.l0||0)+(pipeline.l1||0)+(pipeline.l2||0)+(pipeline.l3||0));
+  $('metricStrat').textContent = totalStrat;
   $('metricStratSub').textContent = 'L3:' + (pipeline.l3||0) + ' L2:' + (pipeline.l2||0);
   var sharpe = summary.avgSharpe;
   $('metricSharpe').textContent = sharpe!=null ? sharpe.toFixed(2) : '--';
   $('metricSharpeSub').textContent = summary.winRate!=null ? 'Win ' + (summary.winRate*100).toFixed(0) + '%' : '--';
 
-  // ── Strategy Matrix ──
-  var levels = [
-    { label: 'L3 \u5B9E\u76D8', color: 'var(--l3)', items: topStrategies.filter(function(s){return s.level==='L3_LIVE'}) },
-    { label: 'L2 \u6A21\u62DF', color: 'var(--l2)', items: topStrategies.filter(function(s){return s.level==='L2_PAPER'}) },
-    { label: 'L1 \u56DE\u6D4B', color: 'var(--l1)', items: topStrategies.filter(function(s){return s.level==='L1_BACKTEST'}) },
-    { label: 'L0 \u5B75\u5316', color: 'var(--l0)', items: topStrategies.filter(function(s){return s.level==='L0_INCUBATE'}) },
-  ];
-  var matrixHtml = '';
-  levels.forEach(function(lv){
-    matrixHtml += '<div class="strat-level"><div class="strat-level__label" style="color:'+lv.color+'">'+lv.label+'</div><div class="strat-level__bar">';
-    if(lv.items.length===0) matrixHtml += '<span style="font-size:10px;color:var(--text-muted)">\u2014</span>';
-    lv.items.forEach(function(s){ matrixHtml += '<span class="strat-pill" data-level="'+s.level.split('_')[0]+'">'+s.name+'</span>'; });
-    matrixHtml += '</div></div>';
+  // ── Config Status ──
+  var cfgTrading = (config.trading || {});
+  $('cfgTrading').textContent = cfgTrading.enabled ? 'Enabled' : 'Disabled';
+  $('cfgExchanges').textContent = (config.exchanges || []).length + ' connected';
+  var cfgPlugins = (config.plugins || {});
+  $('cfgPlugins').textContent = (cfgPlugins.enabled || cfgPlugins.total || 0) + ' active';
+
+  // ── Risk ──
+  var riskData = d.risk || {};
+  var riskLevel = riskData.level || (riskData.enabled===false ? 'DISABLED' : 'NORMAL');
+  $('riskBadge').textContent = riskLevel.toUpperCase();
+  $('riskLabel').textContent = riskLevel.toUpperCase();
+
+  // ── Pipeline Counts ──
+  $('pipeL0').textContent = pipeline.l0 || 0;
+  $('pipeL1').textContent = pipeline.l1 || 0;
+  $('pipeL2').textContent = pipeline.l2 || 0;
+  $('pipeL3').textContent = pipeline.l3 || 0;
+
+  // ── Strategy Matrix (inline pill rows) ──
+  var allStrats = (trading.strategies || topStrategies || []);
+  var levelMap = {'L0_INCUBATE':'l0','L1_BACKTEST':'l1','L2_PAPER':'l2','L3_LIVE':'l3','KILLED':'killed',0:'l0',1:'l1',2:'l2',3:'l3'};
+  var buckets = {l3:[],l2:[],l1:[],l0:[],killed:[]};
+  allStrats.forEach(function(s){
+    var k = levelMap[s.level];
+    if(k && buckets[k]) buckets[k].push(s);
   });
-  $('stratMatrix').innerHTML = matrixHtml;
+  var matrixRows = [
+    {key:'l3', label:'L3 \u5B9E\u76D8', cls:'sm-lv--l3'},
+    {key:'l2', label:'L2 \u6A21\u62DF', cls:'sm-lv--l2'},
+    {key:'l1', label:'L1 \u56DE\u6D4B', cls:'sm-lv--l1'},
+    {key:'l0', label:'L0 \u5B75\u5316', cls:'sm-lv--l0'},
+    {key:'killed', label:'KILLED', cls:'sm-lv--killed'},
+  ];
+  var mHtml = '';
+  matrixRows.forEach(function(r){
+    var items = buckets[r.key] || [];
+    mHtml += '<div class="sm-row"><span class="sm-lv '+r.cls+'">'+r.label+'</span><div class="sm-pills">';
+    if(!items.length){ mHtml += '<span class="sm-empty">\u2014</span>'; }
+    items.forEach(function(s){
+      mHtml += '<span class="sm-pill sm-pill--'+r.key+'">'+(s.name||s.id)+'</span>';
+    });
+    if(r.key==='l0' && items.length) mHtml += '<span class="sm-pill sm-pill--ghost">\u7B5B\u9009 +'+items.length+'</span>';
+    mHtml += '</div></div>';
+  });
+  $('stratMatrix').innerHTML = mHtml;
+  $('stratTotal').textContent = allStrats.length + ' \u7B56\u7565';
   $('matrixText').textContent = (pipeline.l3||0)+'\xB7'+(pipeline.l2||0)+'\xB7'+((pipeline.l1||0)+(pipeline.l0||0));
 
-  // ── Positions Table ──
-  var posHtml = '';
-  positions.slice(0,8).forEach(function(p){
-    var pnlVal = p.unrealizedPnl || p.pnl || 0;
-    posHtml += '<tr><td>'+(p.symbol||'--')+'</td><td>'+(p.side||'--')+'</td><td class="num">'+(p.amount||p.qty||'--')+'</td><td class="num '+(pnlVal>=0?'g':'r')+'">'+fmtUsd(pnlVal)+'</td></tr>';
+  // ── Alerts ──
+  $('alertCount').textContent = alerts.length;
+  var alertHtml = '';
+  alerts.slice(0,5).forEach(function(a){
+    alertHtml += '<div class="alert-row"><span class="alert-row__icon">\uD83D\uDD34</span><span class="alert-row__msg">'+(a.message||a.title||'--')+'</span><span class="alert-row__time num">'+timeStr(a.timestamp||Date.now())+'</span></div>';
   });
-  $('posTable').innerHTML = posHtml || '<tr><td colspan="4" style="color:var(--text-muted);text-align:center">\u6682\u65E0\u6301\u4ED3</td></tr>';
-  $('posBadge').textContent = positions.length;
+  $('alertsList').innerHTML = alertHtml || '<div style="color:var(--text-muted);font-size:12px;padding:8px">\u6682\u65E0\u544A\u8B66</div>';
 
-  // ── Orders Table ──
-  var ordHtml = '';
-  orders.slice(0,8).forEach(function(o){
-    ordHtml += '<tr><td class="num">'+timeStr(o.createdAt||o.timestamp||Date.now())+'</td><td>'+(o.symbol||'--')+'</td><td>'+(o.side||'--')+'</td><td><span class="tag tag--'+(o.status==='filled'?'filled':'open')+'">'+(o.status||'--')+'</span></td></tr>';
+  // ── Positions Table (enhanced) ──
+  var openPos = positions.filter(function(p){ return p.status!=='closed'; });
+  var posHtml = '';
+  openPos.slice(0,8).forEach(function(p){
+    var pnlVal = p.unrealizedPnl || p.pnl || 0;
+    var pnlPctVal = p.pnlPct || (p.entryPrice ? ((p.currentPrice||p.markPrice||p.entryPrice)-p.entryPrice)/p.entryPrice*100 : 0);
+    var side = (p.side||'long').toUpperCase();
+    var sideCls = side==='LONG'||side==='BUY'?'tag--long':'tag--short';
+    posHtml += '<tr><td style="color:var(--text-hi)">'+(p.symbol||'--')+'</td>'
+      +'<td><span class="tag '+sideCls+'">'+side+'</span></td>'
+      +'<td class="right num">'+(p.amount||p.qty||p.quantity||'--')+'</td>'
+      +'<td class="right num">'+fmtUsd(p.entryPrice||p.avgEntry)+'</td>'
+      +'<td class="right num">'+fmtUsd(p.currentPrice||p.markPrice)+'</td>'
+      +'<td class="right num '+(pnlVal>=0?'g':'r')+'">'+fmtUsd(pnlVal)+' <small>('+fmt(pnlPctVal)+')</small></td>'
+      +'<td style="font-size:10px;color:var(--text-dim)">'+(p.strategyName||p.strategy||'--')+'</td></tr>';
   });
-  $('ordTable').innerHTML = ordHtml || '<tr><td colspan="4" style="color:var(--text-muted);text-align:center">\u6682\u65E0\u8BA2\u5355</td></tr>';
+  $('posTable').innerHTML = posHtml || '<tr><td colspan="7" style="color:var(--text-muted);text-align:center;padding:12px">\u6682\u65E0\u6301\u4ED3</td></tr>';
+  var openCount = openPos.length;
+  $('posBadge').textContent = openCount + (openCount>0?' OPEN':'');
+
+  // ── Orders Table (enhanced) ──
+  var ordHtml = '';
+  orders.slice(0,10).forEach(function(o){
+    var side = (o.side||'buy').toUpperCase();
+    var sideCls = side==='BUY'?'tag--long':side==='SELL'?'tag--short':'tag--sl';
+    var st = o.status||'filled';
+    var stIcon = st==='filled'?'\u2705':st==='open'||st==='pending'?'\uD83D\uDFE1':'\u274C';
+    ordHtml += '<tr><td class="num">'+timeStr(o.createdAt||o.timestamp||Date.now())+'</td>'
+      +'<td style="color:var(--text-hi)">'+(o.symbol||'--')+'</td>'
+      +'<td><span class="tag '+sideCls+'">'+side+'</span></td>'
+      +'<td class="right num">'+(o.quantity||o.amount||'--')+'</td>'
+      +'<td class="right num">'+fmtUsd(o.price)+'</td>'
+      +'<td>'+stIcon+' <span class="tag tag--'+(st==='filled'?'filled':st==='rejected'?'rejected':'open')+'">'+st.charAt(0).toUpperCase()+st.slice(1)+'</span></td></tr>';
+  });
+  $('ordTable').innerHTML = ordHtml || '<tr><td colspan="6" style="color:var(--text-muted);text-align:center;padding:12px">\u6682\u65E0\u8BA2\u5355</td></tr>';
   $('ordBadge').textContent = orders.length;
 
   // ── Equity Chart (SVG polyline) ──
@@ -253,7 +378,12 @@
   function connectSSE(){
     try {
       var es = new EventSource('/api/v1/finance/events/stream');
-      es.onopen = function(){ $('sseDot').className='botbar__dot botbar__dot--g'; $('sseStatus').textContent='Connected'; };
+      es.onopen = function(){
+        $('sseDot').className='botbar__dot botbar__dot--g';
+        $('sseStatus').textContent='Connected';
+        var dots=document.querySelectorAll('.sse-dot');
+        dots.forEach(function(dot){dot.classList.add('connected');});
+      };
       es.onmessage = function(e){
         try {
           var msg = JSON.parse(e.data);
@@ -262,17 +392,31 @@
           }
         } catch(ex){}
       };
-      es.onerror = function(){ $('sseDot').className='botbar__dot botbar__dot--y'; $('sseStatus').textContent='Reconnecting...'; };
+      es.onerror = function(){
+        $('sseDot').className='botbar__dot botbar__dot--y';
+        $('sseStatus').textContent='Reconnecting...';
+        var dots=document.querySelectorAll('.sse-dot');
+        dots.forEach(function(dot){dot.classList.remove('connected');});
+      };
     } catch(ex){ $('sseStatus').textContent='Unavailable'; }
   }
   connectSSE();
 
   // ── E-STOP ──
-  $('btnEstop').onclick = function(){
-    if(!confirm('\u26D4 \u7D27\u6025\u505C\u6B62\uFF1A\u6682\u505C\u6240\u6709\u4EA4\u6613\u6D3B\u52A8\uFF1F')) return;
+  $('estopBtn').onclick = function(){
+    $('estopModal').classList.add('open');
+  };
+  $('estopConfirm').onclick = function(){
+    $('estopModal').classList.remove('open');
     fetch('/api/v1/finance/emergency-stop', {method:'POST'}).then(function(r){ return r.json(); }).then(function(){
+      $('riskHalo').className='risk-halo risk-halo--danger';
+      $('riskBadge').textContent='STOPPED';
+      $('riskBadge').className='topbar__risk topbar__risk--danger';
       showToast('\u26D4 \u7D27\u6025\u505C\u6B62\u5DF2\u6267\u884C');
     }).catch(function(){ showToast('\u26D4 \u7D27\u6025\u505C\u6B62\u8BF7\u6C42\u5931\u8D25'); });
+  };
+  $('estopCancel').onclick = function(){
+    $('estopModal').classList.remove('open');
   };
 
   // ── Approve/Reject ──
@@ -296,6 +440,28 @@
 
   // ── Toast ──
   window.showToast = function(msg){ var t=$('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(function(){t.classList.remove('show');},3000); };
+
+  // ── Fund Launch ──
+  var launch = d.launch || {};
+  if(launch.isFirstRun && !launch.activePhase){
+    $('launchHero').style.display = 'flex';
+  } else {
+    $('replayBtn').style.display = 'inline-block';
+  }
+
+  window.doLaunch = function(mode){
+    $('launchHero').style.display = 'none';
+    fetch('/api/v1/finance/fund/launch', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({mode: mode})
+    }).then(function(r){ return r.json(); }).then(function(){
+      showToast('\uD83D\uDE80 \u542F\u52A8\u5E8F\u5217\u5DF2\u5F00\u59CB');
+    }).catch(function(){ showToast('\u542F\u52A8\u5931\u8D25'); });
+  };
+
+  $('launchBtn').onclick = function(){ doLaunch('firstRun'); };
+  $('replayBtn').onclick = function(){ doLaunch('demo'); };
 
   // ── Mobile overlay ──
   window.openSoulOverlay = function(){ $('soulMobile').innerHTML=$('soulDesktop').innerHTML; $('soulOverlay').classList.add('open'); };

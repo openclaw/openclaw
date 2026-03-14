@@ -58,6 +58,44 @@
 .fc--appr .fc__btn--ok{background:linear-gradient(135deg,var(--gain) 0%,#16a34a 100%);color:#052e16;font-size:10px;padding:4px 10px;border-radius:var(--r-sm);font-weight:600;cursor:pointer;border:none}
 .fc--appr .fc__btn--no{background:var(--soul-surface-hi);color:var(--text-dim);font-size:10px;padding:4px 10px;border-radius:var(--r-sm);border:1px solid var(--border);cursor:pointer}
 
+/* Stats capsule + Action buttons */
+.stats-capsule{display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.stat-pill{display:flex;align-items:center;gap:6px;padding:4px 12px;font-size:11px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:20px}
+.stat-pill__l{color:var(--text-dim);font-size:10px;text-transform:uppercase;letter-spacing:0.5px}
+.stat-pill__v{color:var(--text-hi);font-weight:600}
+.btn-action{padding:6px 14px;font-size:11px;font-weight:600;color:var(--text-hi);background:var(--card);border:1px solid var(--border);border-radius:6px;cursor:pointer;transition:all .15s}
+.btn-action:hover{background:var(--card-hover);border-color:var(--border-hi)}
+.btn-action--secondary{color:var(--text-dim);background:transparent}
+.lb-row{display:flex;justify-content:space-between;padding:4px 8px;font-size:11px;border-bottom:1px solid var(--border)}
+
+/* Slide-over panel */
+.slide-over{position:fixed;inset:0;z-index:3000;opacity:0;pointer-events:none;transition:opacity .2s;background:rgba(0,0,0,0.5)}
+.slide-over.open{opacity:1;pointer-events:auto}
+.slide-over__box{position:absolute;right:0;top:0;bottom:0;width:360px;max-width:90vw;background:var(--bg);border-left:1px solid var(--border);padding:20px;overflow-y:auto;transform:translateX(100%);transition:transform .25s}
+.slide-over.open .slide-over__box{transform:translateX(0)}
+.slide-over__head{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+.slide-over__title{font-size:16px;font-weight:600;color:var(--text-hi)}
+.slide-over__close{background:none;border:none;color:var(--text-dim);font-size:20px;cursor:pointer}
+.form-group{margin-bottom:12px}
+.form-group label{display:block;font-size:10px;font-weight:600;color:var(--text-dim);text-transform:uppercase;margin-bottom:4px}
+.form-group input,.form-group select{width:100%;padding:8px 10px;font-size:12px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text-hi);font-family:var(--mono)}
+.form-group input:focus,.form-group select:focus{outline:none;border-color:var(--purple)}
+
+/* Modal (E-STOP) */
+.modal-bg{position:fixed;inset:0;z-index:3000;opacity:0;pointer-events:none;transition:opacity .2s;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center}
+.modal-bg.open{opacity:1;pointer-events:auto}
+.modal-box{background:var(--card);border:1px solid rgba(255,60,60,0.3);border-radius:12px;padding:24px 32px;text-align:center;max-width:360px;transform:scale(0.9);transition:transform .2s}
+.modal-bg.open .modal-box{transform:scale(1)}
+.modal-box__icon{font-size:32px;margin-bottom:8px}
+.modal-box__title{font-size:18px;font-weight:700;color:var(--loss);margin-bottom:8px}
+.modal-box__desc{font-size:13px;color:var(--text-dim);margin-bottom:20px;line-height:1.5}
+.modal-box__actions{display:flex;gap:12px;justify-content:center}
+.modal-btn{padding:8px 20px;font-size:13px;border-radius:8px;cursor:pointer;border:none}
+.modal-btn--cancel{background:transparent;border:1px solid var(--border);color:var(--text-dim)}
+.modal-btn--cancel:hover{border-color:var(--border-hi);color:var(--text)}
+.modal-btn--danger{background:#dc2626;color:#fff;font-weight:600}
+.modal-btn--danger:hover{background:#ef4444}
+
 /* Strategy-specific responsive */
 @media(max-width:1024px){
   .filter-chips{padding:0}

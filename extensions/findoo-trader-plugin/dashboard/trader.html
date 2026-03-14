@@ -42,7 +42,7 @@
 <div class="domain-bar">
   <a class="domain-tab" href="?domain=live" id="domLive">&#128308; 实盘</a>
   <a class="domain-tab" href="?domain=paper" id="domPaper">&#128221; 模拟</a>
-  <a class="domain-tab" href="?domain=backtest" id="domBt">&#128202; 回测</a>
+  <a class="domain-tab" href="?domain=backtest" id="domBacktest">&#128202; 回测</a>
 </div>
 
 <!-- LAYOUT: soul + data -->
@@ -58,7 +58,7 @@
         </div>
       </div>
       <div><span class="soul__equity num" id="soulEquity">--</span><span class="soul__pnl soul__pnl--up num" id="soulPnl"></span></div>
-      <div class="soul__badges"><span class="sbadge sbadge--regime" id="domainBadge">PAPER</span></div>
+      <div class="soul__badges"><span class="sbadge sbadge--regime" id="domainBadge">PAPER</span><span class="sbadge" id="domainLabel" style="display:none">PAPER</span></div>
     </div>
     <div class="soul__feed" id="soulFeed">
       <div class="soul__sep">&#9889; 待处理</div>
@@ -77,9 +77,37 @@
       <div class="metric-card"><div class="metric-card__label">胜率</div><div class="metric-card__value num" id="mWinRate">--</div><div class="metric-card__sub num" id="mSharpe"></div></div>
     </div>
 
-    <div class="section fade-up d1">
+    <!-- K-line + Orderbook + Quick Order -->
+    <div class="row2 fade-up d05">
+      <div class="section">
+        <div class="section__head"><span class="section__title">K线图表</span></div>
+        <div class="section__body"><div id="klineChartContainer" style="min-height:200px;display:flex;align-items:center;justify-content:center;color:var(--text-dim);font-size:12px">图表加载中...</div></div>
+      </div>
+      <div class="section">
+        <div class="section__head"><span class="section__title">订单簿</span></div>
+        <div class="section__body" id="orderbookPanel">
+          <div id="obAsks" style="font-size:11px;color:var(--loss)"></div>
+          <div style="border-top:1px solid var(--border);margin:4px 0"></div>
+          <div id="obBids" style="font-size:11px;color:var(--gain)"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick Order Panel -->
+    <div class="section fade-up d08" id="quickOrderPanel">
+      <div class="section__head"><span class="section__title">快速下单</span></div>
+      <div class="section__body" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="qo-side qo-side--buy" id="qoBuy">Buy</button>
+        <button class="qo-side qo-side--sell" id="qoSell">Sell</button>
+        <input type="number" class="qo-input" id="qoAmount" placeholder="数量" step="any">
+        <input type="number" class="qo-input" id="qoPrice" placeholder="价格 (limit)" step="any">
+        <button class="btn-action" id="qoSubmit" onclick="submitQuickOrder()">提交</button>
+      </div>
+    </div>
+
+    <div class="section fade-up d1" id="positionsSection">
       <div class="section__head"><span class="section__title">活跃持仓</span><span class="section__badge num" id="posCount" style="background:var(--info-dim);color:var(--info)">0</span></div>
-      <div class="section__body" id="positionCards"><div class="empty-state"><div class="empty-state__icon">&#128230;</div><div class="empty-state__text">暂无活跃持仓</div></div></div>
+      <div class="section__body" id="positionCards"><div id="positionsList"><div class="empty-state"><div class="empty-state__icon">&#128230;</div><div class="empty-state__text">暂无活跃持仓</div></div></div></div>
     </div>
 
     <div class="section fade-up d2">
@@ -89,11 +117,15 @@
       </div>
     </div>
 
+    <div class="section fade-up d3" style="display:flex;gap:8px">
+      <button class="btn-action qa-btn--danger" id="estopTrigger" onclick="document.getElementById('estopModal').classList.add('open')" style="background:rgba(239,68,68,0.12);color:var(--loss);border:1px solid rgba(239,68,68,0.2)">Emergency Stop</button>
+    </div>
+
     <div class="section fade-up d3" id="alertSection" style="display:none">
       <div class="section__head"><span class="section__title">活跃告警</span></div>
       <div class="section__body" id="alertList"></div>
     </div>
-    <div id="btSection" style="display:none"></div>
+    <div id="backtestSection" style="display:none"></div>
   </main>
 </div>
 
@@ -107,13 +139,15 @@
 <!-- BOTTOM BAR -->
 <footer class="botbar"><div class="botbar__avatar"></div><div class="botbar__msg" id="botMsg">Loading Trader...</div><div class="botbar__sse" id="botSse"></div></footer>
 <div class="toast" id="toast"></div>
+<!-- ESTOP MODAL -->
+<div class="modal-bg" id="estopModal"><div class="modal-box"><div class="modal-box__icon">&#9632;</div><div class="modal-box__title">Emergency Stop</div><div class="modal-box__desc">Cancel all orders, pause all strategies, freeze trading.<br/><br/><strong style="color:var(--text-hi)">Are you sure?</strong></div><div class="modal-box__actions"><button class="modal-btn modal-btn--cancel" id="estopCancel">Cancel</button><button class="modal-btn modal-btn--danger" id="estopConfirm">CONFIRM STOP</button></div></div></div>
 
 <script>
 const D=pageData, domain=D.domain||"paper", AP="/plugins/findoo-trader/api";
 const TD={openSoul(){const o=document.getElementById("soulOverlay"),m=document.getElementById("soulMobile");m.innerHTML=document.getElementById("soulDesktop").innerHTML;o.classList.add("open")},closeSoul(){document.getElementById("soulOverlay").classList.remove("open")}};
 
 /* Domain init */
-(function(){const id=domain==="live"?"domLive":domain==="backtest"?"domBt":"domPaper";const el=document.getElementById(id);if(el)el.classList.add("domain-tab--active");const db=document.getElementById("domainBadge");if(db){db.textContent={live:"LIVE",paper:"PAPER",backtest:"BACKTEST"}[domain]||"PAPER";if(domain==="live"){db.style.background="var(--gain-dim)";db.style.color="var(--gain)"}else if(domain==="backtest"){db.className="sbadge";db.style.background="rgba(255,255,255,0.04)";db.style.color="var(--text-dim)"}}})();
+(function(){const id=domain==="live"?"domLive":domain==="backtest"?"domBacktest":"domPaper";const el=document.getElementById(id);if(el)el.classList.add("domain-tab--active");const domText={live:"LIVE",paper:"PAPER",backtest:"BACKTEST"}[domain]||"PAPER";const db=document.getElementById("domainBadge"),dl=document.getElementById("domainLabel");if(db){db.textContent=domText;if(domain==="live"){db.style.background="var(--gain-dim)";db.style.color="var(--gain)"}else if(domain==="backtest"){db.className="sbadge";db.style.background="rgba(255,255,255,0.04)";db.style.color="var(--text-dim)"}}if(dl)dl.textContent=domText})();
 
 /* Helpers */
 function $(s){return document.getElementById(s)}
@@ -136,7 +170,7 @@ function renderMetrics(){
 
 /* Positions */
 function renderPositions(){
-  const pos=D.trading?.positions??[];$("posCount").textContent=pos.length;const el=$("positionCards");
+  const pos=D.trading?.positions??[];$("posCount").textContent=pos.length;const el=$("positionsList")||$("positionCards");
   if(!pos.length){el.innerHTML='<div class="empty-state"><div class="empty-state__icon">&#128230;</div><div class="empty-state__text">暂无活跃持仓</div></div>';return}
   el.innerHTML=pos.map(p=>{const s=(p.side||"long").toLowerCase(),pnl=p.unrealizedPnl??p.pnl??0;
     return`<div class="pos-card"><div class="pos-card__top"><span class="pos-card__symbol">${p.symbol}</span><span class="pos-card__side pos-card__side--${s}">${s.toUpperCase()}</span><span class="pos-card__pnl ${pc(pnl)}">${pnl>=0?"+":""}$${fmt(Math.abs(pnl))}</span></div><div class="pos-card__row"><span>数量 <em>${fmt(p.quantity||p.qty,4)}</em></span><span>入场 <em>$${fmt(p.entryPrice||p.avgEntry)}</em></span><span>现价 <em>$${fmt(p.currentPrice||p.markPrice)}</em></span></div><div class="pos-card__actions"><button class="pos-card__btn pos-card__btn--close" onclick="closePos('${p.symbol}')">平仓</button><button class="pos-card__btn pos-card__btn--tp">止盈</button><button class="pos-card__btn pos-card__btn--sl">止损</button></div></div>`}).join("");
@@ -160,8 +194,8 @@ function renderFeed(){
 
 /* Backtest domain */
 function renderBacktest(){
-  if(domain!=="backtest")return;$("metricsRow").style.display="none";$("btSection").style.display="block";
-  const r=D.backtestResults??[];$("btSection").innerHTML=r.length?`<div class="section fade-up"><div class="section__head"><span class="section__title">回测结果</span></div><div class="section__body">${r.map(b=>`<div class="bt-card"><div class="bt-card__head"><span class="bt-card__name">${b.strategyName||b.strategyId}</span></div><div class="bt-card__metrics"><span>收益 <em class="${pc(b.totalReturn)}">${fmt(b.totalReturn,2)}%</em></span><span>Sharpe <em>${fmt(b.sharpe,2)}</em></span><span>最大回撤 <em class="loss">${fmt(b.maxDrawdown,2)}%</em></span><span>胜率 <em>${fmt(b.winRate,1)}%</em></span></div></div>`).join("")}</div></div>`:'<div class="section fade-up"><div class="section__body"><div class="empty-state"><div class="empty-state__icon">&#128202;</div><div class="empty-state__text">暂无回测数据</div></div></div></div>';
+  if(domain!=="backtest")return;$("metricsRow").style.display="none";$("backtestSection").style.display="block";
+  const r=D.backtestResults??[];$("backtestSection").innerHTML=r.length?`<div class="section fade-up"><div class="section__head"><span class="section__title">回测结果</span></div><div class="section__body">${r.map(b=>`<div class="bt-card"><div class="bt-card__head"><span class="bt-card__name">${b.strategyName||b.strategyId}</span></div><div class="bt-card__metrics"><span>收益 <em class="${pc(b.totalReturn)}">${fmt(b.totalReturn,2)}%</em></span><span>Sharpe <em>${fmt(b.sharpe,2)}</em></span><span>最大回撤 <em class="loss">${fmt(b.maxDrawdown,2)}%</em></span><span>胜率 <em>${fmt(b.winRate,1)}%</em></span></div></div>`).join("")}</div></div>`:'<div class="section fade-up"><div class="section__body"><div class="empty-state"><div class="empty-state__icon">&#128202;</div><div class="empty-state__text">暂无回测数据</div></div></div></div>';
 }
 
 /* Alerts (live) */
@@ -180,8 +214,13 @@ async function closePos(sym){if(!confirm("确认平仓 "+sym+"？"))return;try{c
 async function approveEvent(id){try{const r=await fetch(AP+"/events/"+id+"/approve",{method:"POST"});toast(r.ok?"已批准":"操作失败",r.ok);if(r.ok)setTimeout(()=>location.reload(),800)}catch{toast("网络错误",false)}}
 async function rejectEvent(id){try{const r=await fetch(AP+"/events/"+id+"/reject",{method:"POST"});toast(r.ok?"已拒绝":"操作失败",r.ok);if(r.ok)setTimeout(()=>location.reload(),800)}catch{toast("网络错误",false)}}
 
-/* E-STOP */
-$("estopBtn").onclick=async()=>{if(!confirm("紧急停止将平掉所有持仓并暂停交易，确认？"))return;try{const r=await fetch(AP+"/emergency-stop",{method:"POST"});toast(r.ok?"已触发紧急停止":"停止失败",r.ok)}catch{toast("网络错误",false)}};
+/* E-STOP (modal-based) */
+$("estopBtn").onclick=()=>{$("estopModal").classList.add("open")};
+$("estopCancel").onclick=()=>{$("estopModal").classList.remove("open")};
+$("estopConfirm").onclick=async()=>{$("estopModal").classList.remove("open");try{const r=await fetch(AP+"/emergency-stop",{method:"POST"});toast(r.ok?"已触发紧急停止":"停止失败",r.ok)}catch{toast("网络错误",false)}};
+
+/* Quick Order */
+async function submitQuickOrder(){const amt=$("qoAmount").value,price=$("qoPrice").value;if(!amt){toast("请输入数量",false);return}try{const r=await fetch(AP+"/quick-order",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({amount:Number(amt),price:price?Number(price):undefined,domain})});toast(r.ok?"订单已提交":"下单失败",r.ok)}catch{toast("网络错误",false)}}
 
 /* SSE */
 (function(){const src=new EventSource(AP+"/sse/trading"),dot=$("sseTrade");

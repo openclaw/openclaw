@@ -58,10 +58,18 @@
       <div class="metric-card fade-up d2"><div class="metric-card__label">平均 Sharpe</div><div class="metric-card__value" id="mSharpe">--</div><div class="metric-card__sub dim">all strategies</div></div>
       <div class="metric-card fade-up d3"><div class="metric-card__label">平均适应度</div><div class="metric-card__value" id="mFitness">--</div><div class="metric-card__sub dim">fitness score</div></div>
     </div>
+    <div class="stats-capsule">
+      <div class="stat-pill"><div class="stat-pill__l">Active</div><div class="stat-pill__v num" id="spActive">0</div></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <button class="btn-action" id="btnNewStrategy" onclick="ST.showCreateStrategy()">+ New Strategy</button>
+      <button class="btn-action btn-action--secondary" id="btnBacktestAll" onclick="ST.backtestAll()">Backtest All</button>
+    </div>
     <div class="filter-chips" id="filterChips">
       <span class="chip chip--active" data-market="all">All</span><span class="chip" data-market="crypto">Crypto</span><span class="chip" data-market="us-stock">US</span><span class="chip" data-market="hk-stock">HK</span><span class="chip" data-market="a-share">A股</span>
     </div>
     <div id="pipeline"></div>
+    <div id="lbBody"></div>
   </main>
 </div>
 <!-- BOTTOM BAR -->
@@ -74,6 +82,19 @@
 <button class="soul-fab" id="soulFab" onclick="document.getElementById('soulOverlay').classList.add('open')"><div class="soul-fab__pulse"></div>&#129438;</button>
 <div class="soul-overlay" id="soulOverlay"><button class="soul-overlay__close" onclick="this.parentElement.classList.remove('open')">&times;</button><aside class="soul" id="soulMobile"></aside></div>
 <div class="toast-container" id="toastContainer"></div>
+<!-- CREATE STRATEGY SLIDE-OVER -->
+<div class="slide-over" id="slideCreate">
+  <div class="slide-over__box">
+    <div class="slide-over__head"><span class="slide-over__title">New Strategy</span><button class="slide-over__close" onclick="$('slideCreate').classList.remove('open')">&times;</button></div>
+    <form id="createForm" onsubmit="ST.submitCreate(event)">
+      <div class="form-group"><label>Name</label><input type="text" name="stratName" required placeholder="e.g. momentum-1h"></div>
+      <div class="form-group"><label>Market</label><select name="stratMarket"><option value="crypto">Crypto</option><option value="us-stock">US Stock</option><option value="hk-stock">HK Stock</option><option value="a-share">A股</option></select></div>
+      <div class="form-group"><label>Timeframe</label><select name="stratTimeframe"><option value="1h">1h</option><option value="4h">4h</option><option value="1d">1D</option><option value="15m">15m</option></select></div>
+      <div class="form-group"><label>Symbols</label><input type="text" name="stratSymbols" placeholder="BTC/USDT, ETH/USDT"></div>
+      <button type="submit" class="btn-action" style="width:100%;margin-top:12px">Create</button>
+    </form>
+  </div>
+</div>
 <!-- ESTOP MODAL -->
 <div class="modal-bg" id="estopModal"><div class="modal-box"><div class="modal-box__icon">&#9632;</div><div class="modal-box__title">Emergency Stop</div><div class="modal-box__desc">Cancel all orders, pause all strategies, freeze trading.<br/><br/><strong style="color:var(--text-hi)">Are you sure?</strong></div><div class="modal-box__actions"><button class="modal-btn modal-btn--cancel" onclick="ST.closeEstop()">Cancel</button><button class="modal-btn modal-btn--danger" onclick="ST.confirmEstop()">CONFIRM STOP</button></div></div></div>
 <div style="display:none"><span id="pipeL0">0</span><span id="pipeL1">0</span><span id="pipeL2">0</span><span id="pipeL3">0</span></div>
@@ -118,6 +139,11 @@ function renderMetrics(){
   var sh=st.filter(function(s){return s.sharpe!=null}).map(function(s){return s.sharpe}),as=sh.length?sh.reduce(function(a,b){return a+b},0)/sh.length:0;$('mSharpe').textContent=as.toFixed(2);
   var fi=st.filter(function(s){return s.fitness!=null}).map(function(s){return s.fitness}),af=fi.length?fi.reduce(function(a,b){return a+b},0)/fi.length:0;$('mFitness').textContent=af.toFixed(3);
   $('pipeL0').textContent=p.l0||0;$('pipeL1').textContent=p.l1||0;$('pipeL2').textContent=p.l2||0;$('pipeL3').textContent=p.l3||0;
+  var active=st.filter(function(s){return sLvl(s)>=0}).length;$('spActive').textContent=active;
+  /* Leaderboard body: top 10 by fitness */
+  var top=st.filter(function(s){return sLvl(s)>=0}).sort(function(a,b){return(b.fitness||0)-(a.fitness||0)}).slice(0,10);
+  var lbH='';top.forEach(function(s){lbH+='<div class="lb-row"><span>'+esc(s.name||s.id)+'</span><span class="num">'+((s.fitness||0).toFixed(3))+'</span></div>'});
+  $('lbBody').innerHTML=lbH;
 }
 function renderPipeline(){
   var st=S.strategies||[],mf=S.mf,bk={3:[],2:[],1:[],0:[],killed:[]};
@@ -185,7 +211,10 @@ window.ST={
   closeEstop:function(){$('estopModal').classList.remove('open')},
   confirmEstop:function(){ST.closeEstop();postApi('/api/v1/finance/emergency-stop',{}).then(function(){$('riskHalo').className='risk-halo risk-halo--danger';$('riskBadge').textContent='STOPPED';$('riskBadge').className='topbar__risk topbar__risk--danger';$('botMsg').innerHTML='<em style="color:var(--loss)">EMERGENCY STOP activated.</em>'}).catch(function(e){$('botMsg').textContent='Stop failed: '+e.message})},
   stratAction:function(id,a){postApi('/api/v1/finance/strategies/'+a,{id:id}).then(function(){toast(id+' '+a+' OK','success')}).catch(function(e){toast('Failed: '+e.message,'error')})},
-  approveEvent:function(id,ok){postApi('/api/v1/finance/events/approve',{eventId:id,approved:ok}).then(function(){toast('Event '+(ok?'approved':'rejected'),'success');sched()}).catch(function(e){toast('Failed: '+e.message,'error')})}
+  approveEvent:function(id,ok){postApi('/api/v1/finance/events/approve',{eventId:id,approved:ok}).then(function(){toast('Event '+(ok?'approved':'rejected'),'success');sched()}).catch(function(e){toast('Failed: '+e.message,'error')})},
+  showCreateStrategy:function(){$('slideCreate').classList.add('open')},
+  submitCreate:function(e){e.preventDefault();var f=new FormData(e.target);var body={name:f.get('stratName'),market:f.get('stratMarket'),timeframe:f.get('stratTimeframe'),symbols:(f.get('stratSymbols')||'').split(',').map(function(s){return s.trim()}).filter(Boolean)};postApi('/api/v1/finance/strategies/create',body).then(function(){toast('Strategy created','success');$('slideCreate').classList.remove('open');sched()}).catch(function(e){toast('Create failed: '+e.message,'error')})},
+  backtestAll:function(){postApi('/api/v1/finance/strategies/backtest-all',{}).then(function(){toast('Backtest All triggered','success')}).catch(function(e){toast('Backtest failed: '+e.message,'error')})}
 };
 
 renderAll();

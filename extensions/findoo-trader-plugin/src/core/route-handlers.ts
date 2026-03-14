@@ -6,6 +6,7 @@
 
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
 import type { LiveExecutor } from "../execution/live-executor.js";
+import type { FundLaunchOrchestrator } from "../fund/fund-launch-orchestrator.js";
 import type { PerformanceSnapshotStore } from "../fund/performance-snapshot-store.js";
 import { submitOrderSchema } from "../schemas.js";
 import type {
@@ -76,6 +77,7 @@ export type RouteHandlerDeps = {
   perfStore?: PerformanceSnapshotStore;
   lifecycleEngine?: LifecycleEngineLike;
   ideationScheduler?: IdeationSchedulerLike;
+  fundLaunchOrchestrator?: FundLaunchOrchestrator;
 };
 
 export function registerHttpRoutes(deps: RouteHandlerDeps): void {
@@ -584,6 +586,11 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
           }
         }
 
+        // Post-approval action: fund launch L3 promotion
+        if (event?.actionParams?.action === "fund_launch_l3") {
+          deps.fundLaunchOrchestrator?.onApproval(id!);
+        }
+
         jsonResponse(res, 200, { status: "approved", event });
       } catch (err) {
         errorResponse(res, 500, (err as Error).message);
@@ -1021,6 +1028,58 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
       },
     });
   }
+
+  // ── Fund Launch (one-click 30s experience) ──
+
+  api.registerHttpRoute({
+    auth: "plugin",
+    path: "/api/v1/finance/fund/launch",
+    handler: async (req: HttpReq, res: HttpRes) => {
+      const orchestrator = deps.fundLaunchOrchestrator;
+      if (!orchestrator) {
+        errorResponse(res, 503, "Fund launch orchestrator not available");
+        return;
+      }
+      try {
+        const body = await parseJsonBody(req);
+        const mode = (body as { mode?: string }).mode;
+        if (mode !== "firstRun" && mode !== "demo" && mode !== "production") {
+          errorResponse(res, 400, 'Invalid mode. Use "firstRun", "demo", or "production"');
+          return;
+        }
+        const state = await orchestrator.launch(mode);
+        jsonResponse(res, 200, state);
+      } catch (err) {
+        errorResponse(res, 500, (err as Error).message);
+      }
+    },
+  });
+
+  api.registerHttpRoute({
+    auth: "plugin",
+    path: "/api/v1/finance/fund/status",
+    handler: async (_req: unknown, res: HttpRes) => {
+      const orchestrator = deps.fundLaunchOrchestrator;
+      if (!orchestrator) {
+        jsonResponse(res, 200, { phase: "idle", mode: null, runId: null });
+        return;
+      }
+      jsonResponse(res, 200, orchestrator.getState());
+    },
+  });
+
+  api.registerHttpRoute({
+    auth: "plugin",
+    path: "/api/v1/finance/fund/cleanup",
+    handler: async (_req: unknown, res: HttpRes) => {
+      const orchestrator = deps.fundLaunchOrchestrator;
+      if (!orchestrator) {
+        errorResponse(res, 503, "Fund launch orchestrator not available");
+        return;
+      }
+      jsonResponse(res, 200, orchestrator.cleanup());
+    },
+  });
 
   // ── Backward-compat: /dashboard/* → /plugins/findoo-trader/dashboard/* ──
   for (const page of [

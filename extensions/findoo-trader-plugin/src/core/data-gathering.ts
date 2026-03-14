@@ -36,6 +36,7 @@ export type DataGatheringDeps = {
   runtime: RuntimeServices;
   pluginEntries: Record<string, { enabled?: boolean; config?: Record<string, unknown> }>;
   liveExecutor?: LiveExecutor;
+  fundLaunchOrchestrator?: import("../fund/fund-launch-orchestrator.js").FundLaunchOrchestrator;
 };
 
 /** Gather finance configuration overview (exchanges, trading limits, plugin status). */
@@ -363,6 +364,15 @@ export function gatherOverviewData(deps: DataGatheringDeps) {
   // Feed events: most recent 20 events (with narration for v0.2 Feed Cards)
   const feedEvents = deps.eventStore.listEvents().slice(0, 20);
 
+  // Fund launch state
+  const launchOrch = deps.fundLaunchOrchestrator;
+  const launchState = launchOrch?.getState();
+  const launch = {
+    isFirstRun: strategies.length === 0,
+    hasExchange: (deps.registry?.listExchanges?.()?.length ?? 0) > 0,
+    activePhase: launchState?.phase !== "idle" ? (launchState?.phase ?? null) : null,
+  };
+
   return {
     ...mc,
     config,
@@ -372,6 +382,7 @@ export function gatherOverviewData(deps: DataGatheringDeps) {
     pipeline,
     alphaFactory,
     feedEvents,
+    launch,
   };
 }
 
