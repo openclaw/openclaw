@@ -19,6 +19,7 @@ import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
+import type { ResponsePrefixContext } from "./response-prefix-template.js";
 
 let deliverRuntimePromise: Promise<
   typeof import("../../infra/outbound/deliver-runtime.js")
@@ -52,6 +53,12 @@ export type RouteReplyParams = {
   isGroup?: boolean;
   /** Group or channel identifier for correlation with received events */
   groupId?: string;
+  /**
+   * Optional context for interpolating template variables in responsePrefix.
+   * When provided, placeholders like `{model}` and `{thinkingLevel}` in
+   * responsePrefix are replaced with the supplied values.
+   */
+  responsePrefixContext?: ResponsePrefixContext;
 };
 
 export type RouteReplyResult = {
@@ -96,6 +103,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       : cfg.messages?.responsePrefix;
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
+    responsePrefixContext: params.responsePrefixContext,
     enableSlackInteractiveReplies:
       channel === "slack" ? isSlackInteractiveRepliesEnabled({ cfg, accountId }) : false,
   });

@@ -1906,3 +1906,52 @@ describe("dispatchReplyFromConfig", () => {
     expect(blockReplySentTexts).toContain("The answer is 42");
   });
 });
+
+describe("Response Prefix Template Interpolation", () => {
+  it("calls onModelSelected with session fallback for command replies like /stop", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValueOnce({ handled: false, aborted: false });
+
+    const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+    const sessionStore = await import("../../config/sessions.js");
+    vi.spyOn(sessionStore, "loadSessionStore").mockReturnValueOnce({
+      "test-session-key": {
+        sessionId: "sid",
+        createdAt: 123,
+        modelOverride: "kimi-k2.5",
+        providerOverride: "kimi",
+        thinkingLevel: "off",
+      },
+    });
+
+    const ctx = {
+      ...buildTestCtx(),
+      SessionKey: "test-session-key",
+    };
+
+    const replyResolver = vi.fn().mockResolvedValue([{ text: "⚙️ Agent was aborted." }]);
+    const onModelSelected = vi.fn();
+
+    const dispatcher = {
+      sendFinalReply: vi.fn().mockReturnValue(true),
+      sendBlockReply: vi.fn().mockReturnValue(true),
+      sendToolResult: vi.fn().mockReturnValue(true),
+      getQueuedCounts: vi.fn().mockReturnValue({ final: 0, block: 0, tool: 0 }),
+      markComplete: vi.fn(),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {},
+      dispatcher,
+      replyResolver,
+      replyOptions: { onModelSelected },
+    });
+
+    expect(onModelSelected).toHaveBeenCalledWith({
+      provider: "kimi",
+      model: "kimi-k2.5",
+      thinkLevel: "off",
+    });
+  });
+});

@@ -1,4 +1,5 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveIdentityName } from "../../agents/identity.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -34,6 +35,7 @@ import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispat
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
+import { extractShortModelName, type ResponsePrefixContext } from "./response-prefix-template.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
@@ -103,6 +105,35 @@ export type DispatchFromConfigResult = {
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
 };
+
+/**
+ * Build a ResponsePrefixContext for an abort reply from the session entry and
+ * config. Template variables like `{model}` and `{thinkingLevel}` in
+ * responsePrefix are resolved from the session's persisted overrides so the
+ * abort message is prefixed consistently with normal replies.
+ */
+function buildAbortPrefixContext(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string | undefined;
+  sessionEntry: SessionEntry | undefined;
+}): ResponsePrefixContext {
+  const { cfg, sessionKey, sessionEntry } = params;
+  const agentId = sessionKey
+    ? resolveSessionAgentId({ sessionKey, config: cfg })
+    : resolveSessionAgentId({ config: cfg });
+  const identityName = resolveIdentityName(cfg, agentId);
+
+  const rawModel = sessionEntry?.modelOverride?.trim();
+  const rawProvider = sessionEntry?.providerOverride?.trim();
+
+  return {
+    identityName,
+    model: rawModel ? extractShortModelName(rawModel) : undefined,
+    modelFull: rawModel && rawProvider ? `${rawProvider}/${rawModel}` : undefined,
+    provider: rawProvider,
+    thinkingLevel: sessionEntry?.thinkingLevel ?? "off",
+  };
+}
 
 export async function dispatchReplyFromConfig(params: {
   ctx: FinalizedMsgContext;
@@ -277,6 +308,17 @@ export async function dispatchReplyFromConfig(params: {
   try {
     const fastAbort = await tryFastAbortFromMessage({ ctx, cfg });
     if (fastAbort.handled) {
+      // For fast aborts, model selection never happens. Populate the dispatcher's context
+      // from session overrides so responsePrefix templates like {model} can interpolate.
+      const rawModel = sessionStoreEntry.entry?.modelOverride?.trim();
+      if (rawModel && params.replyOptions?.onModelSelected) {
+        params.replyOptions.onModelSelected({
+          provider: sessionStoreEntry.entry?.providerOverride?.trim() ?? "unknown",
+          model: rawModel,
+          thinkLevel: sessionStoreEntry.entry?.thinkingLevel ?? "off",
+        });
+      }
+
       const payload = {
         text: formatAbortReplyText(fastAbort.stoppedSubagents),
       } satisfies ReplyPayload;
@@ -293,6 +335,11 @@ export async function dispatchReplyFromConfig(params: {
           cfg,
           isGroup,
           groupId,
+          responsePrefixContext: buildAbortPrefixContext({
+            cfg,
+            sessionKey: ctx.SessionKey,
+            sessionEntry: sessionStoreEntry.entry,
+          }),
         });
         queuedFinal = result.ok;
         if (result.ok) {
@@ -403,10 +450,20 @@ export async function dispatchReplyFromConfig(params: {
       systemEvent: shouldRouteToOriginating,
     });
 
+    // Wrap onModelSelected to track whether the run actually picked a model.
+    // If it didn't (e.g. commands like /stop or /status), we provide a fallback
+    // so responsePrefix templates like {model} still resolve.
+    let modelSelected = false;
+    const trackedOnModelSelected = (mctx: import("../types.js").ModelSelectedContext) => {
+      modelSelected = true;
+      params.replyOptions?.onModelSelected?.(mctx);
+    };
+
     const replyResult = await (params.replyResolver ?? getReplyFromConfig)(
       ctx,
       {
         ...params.replyOptions,
+        onModelSelected: trackedOnModelSelected,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
@@ -493,6 +550,17 @@ export async function dispatchReplyFromConfig(params: {
       }
     }
 
+    if (!modelSelected && params.replyOptions?.onModelSelected) {
+      const rawModel = sessionStoreEntry.entry?.modelOverride?.trim();
+      if (rawModel) {
+        params.replyOptions.onModelSelected({
+          provider: sessionStoreEntry.entry?.providerOverride?.trim() ?? "unknown",
+          model: rawModel,
+          thinkLevel: sessionStoreEntry.entry?.thinkingLevel ?? "off",
+        });
+      }
+    }
+
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
 
     let queuedFinal = false;
@@ -523,6 +591,13 @@ export async function dispatchReplyFromConfig(params: {
           cfg,
           isGroup,
           groupId,
+          // Ensure we provide prefix context for replies bypassing the dispatcher
+          // (like /stop command aborts) so {model} templates interpolate correctly
+          responsePrefixContext: buildAbortPrefixContext({
+            cfg,
+            sessionKey: ctx.SessionKey,
+            sessionEntry: sessionStoreEntry.entry,
+          }),
         });
         if (!result.ok) {
           logVerbose(
