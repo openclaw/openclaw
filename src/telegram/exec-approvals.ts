@@ -2,8 +2,9 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { TelegramExecApprovalConfig } from "../config/types.telegram.js";
 import { getExecApprovalReplyMetadata } from "../infra/exec-approval-reply.js";
+import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveTelegramAccount } from "./accounts.js";
-import { resolveTelegramTargetChatType } from "./targets.js";
+import { isNumericTelegramChatId, resolveTelegramTargetChatType } from "./targets.js";
 
 function normalizeApproverId(value: string | number): string {
   return String(value).trim();
@@ -44,6 +45,40 @@ export function isTelegramExecApprovalApprover(params: {
   }
   const approvers = getTelegramExecApprovalApprovers(params);
   return approvers.includes(senderId);
+}
+
+/**
+ * Check if a sender is an implicit approver by being the DM recipient
+ * of an exec approval forwarding target (approvals.exec.targets).
+ *
+ * When approvals.exec.targets routes to a Telegram DM, the recipient
+ * receives inline approval buttons but may not have explicit
+ * channels.telegram.execApprovals configured. This function allows
+ * those recipients to act on the buttons they were sent.
+ */
+export function isTelegramExecApprovalTargetRecipient(params: {
+  cfg: OpenClawConfig;
+  senderId?: string | null;
+}): boolean {
+  const senderId = params.senderId?.trim();
+  if (!senderId) {
+    return false;
+  }
+  const targets = params.cfg.approvals?.exec?.targets;
+  if (!targets || !Array.isArray(targets)) {
+    return false;
+  }
+  return targets.some((target) => {
+    const channel = normalizeMessageChannel(target.channel) ?? target.channel?.trim().toLowerCase();
+    if (channel !== "telegram") {
+      return false;
+    }
+    const to = target.to?.trim();
+    if (!to || !isNumericTelegramChatId(to) || to.startsWith("-")) {
+      return false;
+    }
+    return to === senderId;
+  });
 }
 
 export function resolveTelegramExecApprovalTarget(params: {
