@@ -8,6 +8,7 @@ import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import type { RunOutputActivity } from "../process/supervisor/types.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import {
@@ -27,7 +28,7 @@ import {
   normalizeCliModel,
   parseCliJson,
   parseCliJsonl,
-  resolveCliNoOutputTimeoutMs,
+  resolveCliWatchdog,
   resolvePromptInput,
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
@@ -47,6 +48,32 @@ import { buildSystemPromptReport } from "./system-prompt-report.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js";
 
 const log = createSubsystemLogger("agent/claude-cli");
+
+function formatOutputActivitySummary(outputActivity?: RunOutputActivity): string {
+  if (!outputActivity) {
+    return "";
+  }
+  const silenceSeconds = Math.max(0, Math.round(outputActivity.silenceMs / 1000));
+  return [
+    " Output activity summary:",
+    `silence=${silenceSeconds}s,`,
+    `stdout=${outputActivity.stdoutBytes}B/${outputActivity.stdoutChunks} chunks,`,
+    `stderr=${outputActivity.stderrBytes}B/${outputActivity.stderrChunks} chunks.`,
+  ].join(" ");
+}
+
+function formatOutputTail(outputActivity?: RunOutputActivity): string {
+  const lines = outputActivity?.tail.lines ?? [];
+  if (lines.length === 0) {
+    return "";
+  }
+  const truncated = outputActivity?.tail.truncated ? " (truncated)" : "";
+  return `\nRecent output tail${truncated}:\n${lines.join("\n")}`;
+}
+
+function appendTimeoutEvidence(message: string, outputActivity?: RunOutputActivity): string {
+  return `${message}${formatOutputActivitySummary(outputActivity)}${formatOutputTail(outputActivity)}`;
+}
 
 export async function runCliAgent(params: {
   sessionId: string;
@@ -292,11 +319,12 @@ export async function runCliAgent(params: {
           }
           return next;
         })();
-        const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
+        const watchdog = resolveCliWatchdog({
           backend,
           timeoutMs: params.timeoutMs,
           useResume,
         });
+        const noOutputTimeoutMs = watchdog.noOutputTimeoutMs;
         const supervisor = getProcessSupervisor();
         const scopeKey = buildCliSupervisorScopeKey({
           backend,
@@ -312,7 +340,11 @@ export async function runCliAgent(params: {
           mode: "child",
           argv: [backend.command, ...args],
           timeoutMs: params.timeoutMs,
+          overallTimeoutPolicy: watchdog.overallPolicy,
+          overallMaxMs: watchdog.overallMaxMs,
           noOutputTimeoutMs,
+          outputTailLines: watchdog.evidenceTailLines,
+          outputTailMaxChars: watchdog.evidenceMaxChars,
           cwd: workspaceDir,
           env,
           input: stdinPayload,
@@ -340,9 +372,12 @@ export async function runCliAgent(params: {
 
         if (result.exitCode !== 0 || result.reason !== "exit") {
           if (result.reason === "no-output-timeout" || result.noOutputTimedOut) {
-            const timeoutReason = `CLI produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`;
+            const timeoutReason = appendTimeoutEvidence(
+              `CLI produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`,
+              result.outputActivity,
+            );
             log.warn(
-              `cli watchdog timeout: provider=${params.provider} model=${modelId} session=${resolvedSessionId ?? params.sessionId} noOutputTimeoutMs=${noOutputTimeoutMs} pid=${managedRun.pid ?? "unknown"}`,
+              `cli watchdog timeout: provider=${params.provider} model=${modelId} session=${resolvedSessionId ?? params.sessionId} noOutputTimeoutMs=${noOutputTimeoutMs} policy=${watchdog.overallPolicy} pid=${managedRun.pid ?? "unknown"}`,
             );
             if (params.sessionKey) {
               const stallNotice = [
@@ -363,7 +398,12 @@ export async function runCliAgent(params: {
             });
           }
           if (result.reason === "overall-timeout") {
-            const timeoutReason = `CLI exceeded timeout (${Math.round(params.timeoutMs / 1000)}s) and was terminated.`;
+            const timeoutReason = appendTimeoutEvidence(
+              watchdog.overallPolicy === "extend-on-output"
+                ? `CLI reached execution hard cap (${Math.round((watchdog.overallMaxMs ?? params.timeoutMs) / 1000)}s) and was terminated.`
+                : `CLI exceeded timeout (${Math.round(params.timeoutMs / 1000)}s) and was terminated.`,
+              result.outputActivity,
+            );
             throw new FailoverError(timeoutReason, {
               reason: "timeout",
               provider: params.provider,

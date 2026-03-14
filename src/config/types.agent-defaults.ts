@@ -97,10 +97,21 @@ export type CliBackendConfig = {
         noOutputTimeoutMs?: number;
         /** Fraction of overall timeout used when fixed timeout is not set. */
         noOutputTimeoutRatio?: number;
+        /** Overall timeout policy: fixed deadline or extended on each output chunk. */
+        overallPolicy?: "fixed" | "extend-on-output";
+        /** Hard execution cap in ms (always enforced when set). */
+        overallMaxMs?: number;
         /** Lower bound for computed watchdog timeout. */
         minMs?: number;
         /** Upper bound for computed watchdog timeout. */
         maxMs?: number;
+        /** Timeout evidence settings surfaced in error messages. */
+        evidence?: {
+          /** Number of tail lines to retain from stdout/stderr. */
+          tailLines?: number;
+          /** Maximum characters to retain across tail lines. */
+          maxChars?: number;
+        };
       };
       /** Resume sessions. */
       resume?: {
@@ -108,10 +119,21 @@ export type CliBackendConfig = {
         noOutputTimeoutMs?: number;
         /** Fraction of overall timeout used when fixed timeout is not set. */
         noOutputTimeoutRatio?: number;
+        /** Overall timeout policy: fixed deadline or extended on each output chunk. */
+        overallPolicy?: "fixed" | "extend-on-output";
+        /** Hard execution cap in ms (always enforced when set). */
+        overallMaxMs?: number;
         /** Lower bound for computed watchdog timeout. */
         minMs?: number;
         /** Upper bound for computed watchdog timeout. */
         maxMs?: number;
+        /** Timeout evidence settings surfaced in error messages. */
+        evidence?: {
+          /** Number of tail lines to retain from stdout/stderr. */
+          tailLines?: number;
+          /** Maximum characters to retain across tail lines. */
+          maxChars?: number;
+        };
       };
     };
   };

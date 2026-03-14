@@ -443,8 +443,17 @@ const CliBackendWatchdogModeSchema = z
   .object({
     noOutputTimeoutMs: z.number().int().min(1000).optional(),
     noOutputTimeoutRatio: z.number().min(0.05).max(0.95).optional(),
+    overallPolicy: z.union([z.literal("fixed"), z.literal("extend-on-output")]).optional(),
+    overallMaxMs: z.number().int().min(1000).optional(),
     minMs: z.number().int().min(1000).optional(),
     maxMs: z.number().int().min(1000).optional(),
+    evidence: z
+      .object({
+        tailLines: z.number().int().min(1).max(200).optional(),
+        maxChars: z.number().int().min(200).max(40000).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
