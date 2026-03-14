@@ -110,7 +110,12 @@ function normalizeSchemaNode(
     type !== "boolean" &&
     !normalized.enum
   ) {
-    unsupported.add(pathLabel);
+    // Fallback: empty schema (e.g. from .transform()) -> treat as string for UI.
+    if (isAnySchema(schema)) {
+      normalized.type = "string";
+    } else {
+      unsupported.add(pathLabel);
+    }
   }
 
   return {
@@ -171,6 +176,55 @@ function normalizeSecretInputUnion(
   );
 }
 
+/** Normalize unions of primitives + a single object to the object variant. */
+function normalizePrimitiveObjectUnion(
+  schema: JsonSchema,
+  path: Array<string | number>,
+  remaining: JsonSchema[],
+  nullable: boolean,
+): ConfigSchemaAnalysis | null {
+  // Need at least one primitive AND one object (so at least 2 entries in remaining).
+  if (remaining.length < 2) {
+    return null;
+  }
+
+  const primitiveTypes = new Set(["string", "number", "integer", "boolean"]);
+  const objects: JsonSchema[] = [];
+  const primitives: JsonSchema[] = [];
+
+  for (const entry of remaining) {
+    const t = schemaType(entry);
+    if (t && primitiveTypes.has(t)) {
+      primitives.push(entry);
+    } else if (t === "object" || entry.properties) {
+      objects.push(entry);
+    } else {
+      return null;
+    }
+  }
+
+  if (objects.length !== 1 || primitives.length === 0) {
+    return null;
+  }
+
+  const objectSchema = objects[0];
+  const res = normalizeSchemaNode(objectSchema, path);
+
+  if (!res.schema || res.unsupportedPaths.length > 0) {
+    return null;
+  }
+
+  return {
+    schema: {
+      ...res.schema,
+      title: schema.title ?? res.schema.title,
+      description: schema.description ?? res.schema.description,
+      nullable: nullable || res.schema.nullable,
+    },
+    unsupportedPaths: [],
+  };
+}
+
 function normalizeUnion(
   schema: JsonSchema,
   path: Array<string | number>,
@@ -219,6 +273,13 @@ function normalizeUnion(
   const secretInput = normalizeSecretInputUnion(schema, path, remaining, nullable);
   if (secretInput) {
     return secretInput;
+  }
+
+  // Unions of primitives + a single object: normalize to the object variant.
+  // Covers AgentModelSchema (string | {primary?, fallbacks?}), docker ulimits, etc.
+  const objectUnion = normalizePrimitiveObjectUnion(schema, path, remaining, nullable);
+  if (objectUnion) {
+    return objectUnion;
   }
 
   if (literals.length > 0 && remaining.length === 0) {
@@ -272,6 +333,68 @@ function normalizeUnion(
       },
       unsupportedPaths: [],
     };
+  }
+
+  // Primitives + literals mixed (e.g. string | number | false): preserve anyOf for renderer.
+  if (
+    remaining.length > 0 &&
+    literals.length > 0 &&
+    remaining.every((entry) => schemaType(entry) && primitiveTypes.has(schemaType(entry)!))
+  ) {
+    const literalVariants = literals.map((l) => ({ const: l }) as JsonSchema);
+    return {
+      schema: {
+        ...schema,
+        anyOf: [...literalVariants, ...remaining],
+        oneOf: undefined,
+        allOf: undefined,
+        nullable,
+      },
+      unsupportedPaths: [],
+    };
+  }
+
+  // Multi-object discriminated union: fallback to first variant that normalizes successfully.
+  // Only consider object variants, not primitives mixed with objects.
+  const objectCandidates = remaining.filter(
+    (entry) => schemaType(entry) === "object" || !!entry.properties,
+  );
+  if (objectCandidates.length > 1) {
+    let best: ConfigSchemaAnalysis | null = null;
+    for (const entry of objectCandidates) {
+      const res = normalizeSchemaNode(entry, path);
+      if (res.schema && res.unsupportedPaths.length === 0) {
+        return {
+          schema: {
+            ...res.schema,
+            title: schema.title ?? res.schema.title,
+            description: schema.description ?? res.schema.description,
+            nullable: nullable || res.schema.nullable,
+            anyOf: undefined,
+            oneOf: undefined,
+            allOf: undefined,
+          },
+          unsupportedPaths: [],
+        };
+      }
+      if (!best || (res.schema && res.unsupportedPaths.length < best.unsupportedPaths.length)) {
+        best = res.schema ? { ...res, unsupportedPaths: res.unsupportedPaths } : null;
+      }
+    }
+    if (best?.schema) {
+      return {
+        schema: {
+          ...best.schema,
+          title: schema.title ?? best.schema.title,
+          description: schema.description ?? best.schema.description,
+          nullable: nullable || best.schema.nullable,
+          anyOf: undefined,
+          oneOf: undefined,
+          allOf: undefined,
+        },
+        unsupportedPaths: best.unsupportedPaths,
+      };
+    }
   }
 
   return null;

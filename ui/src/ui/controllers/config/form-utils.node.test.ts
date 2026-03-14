@@ -127,6 +127,30 @@ describe("form-utils preserves numeric types", () => {
     expect(typeof first.cost).toBe("object");
     expect(typeof (first.cost as Record<string, unknown>).input).toBe("number");
   });
+
+  it("preserves primitive when setting nested path (AgentModelSchema-style)", () => {
+    const form = { model: "gpt-4" } as Record<string, unknown>;
+    const cloned = cloneConfigObject(form);
+    setPathValue(cloned, ["model", "primary"], "gpt-4o");
+    expect(cloned.model).toEqual({ primary: "gpt-4o" });
+  });
+
+  it("preserves primitive when setting nested path at depth", () => {
+    const form = { agents: { defaults: { model: "gpt-4" } } } as Record<string, unknown>;
+    const cloned = cloneConfigObject(form);
+    setPathValue(cloned, ["agents", "defaults", "model", "primary"], "gpt-4o");
+    const defaults = cloned.agents as Record<string, unknown>;
+    const model = defaults.defaults as Record<string, unknown>;
+    expect(model.model).toEqual({ primary: "gpt-4o" });
+  });
+
+  it("promotes primitive to array when setting path with numeric index", () => {
+    const form = { model: { fallbacks: "gpt-4" } } as Record<string, unknown>;
+    const cloned = cloneConfigObject(form);
+    setPathValue(cloned, ["model", "fallbacks", 0], "gpt-3.5");
+    const model = cloned.model as Record<string, unknown>;
+    expect(model.fallbacks).toEqual(["gpt-3.5"]);
+  });
 });
 
 describe("coerceFormValues", () => {
