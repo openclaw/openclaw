@@ -192,7 +192,7 @@ async function resolveCronDeliveryContext(params: {
 function appendCronDeliveryInstruction(params: {
   commandBody: string;
   deliveryRequested: boolean;
-  messageToolDisabled: boolean;
+  disableMessageTool: boolean;
 }) {
   if (!params.deliveryRequested) {
     return params.commandBody;
@@ -201,7 +201,7 @@ function appendCronDeliveryInstruction(params: {
   // explicit so skills that reference the message tool do not confuse the
   // agent into producing empty or error output.
   // See: https://github.com/openclaw/openclaw/issues/42244
-  const instruction = params.messageToolDisabled
+  const instruction = params.disableMessageTool
     ? "IMPORTANT: The message/send tool is not available for this run. Do NOT attempt to send messages directly. Return your complete output as plain text — it will be delivered to the user automatically."
     : "Return your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.";
   return `${params.commandBody}\n\n${instruction}`.trim();
@@ -489,7 +489,7 @@ export async function runCronIsolatedAgentTurn(params: {
   commandBody = appendCronDeliveryInstruction({
     commandBody,
     deliveryRequested,
-    messageToolDisabled: toolPolicy.messageToolDisabled,
+    disableMessageTool: toolPolicy.disableMessageTool,
   });
 
   const existingSkillsSnapshot = cronSession.sessionEntry.skillsSnapshot;
@@ -846,7 +846,7 @@ export async function runCronIsolatedAgentTurn(params: {
   const skipMessagingToolDelivery =
     deliveryContract === "shared" &&
     deliveryRequested &&
-    !toolPolicy.messageToolDisabled &&
+    !toolPolicy.disableMessageTool &&
     finalRunResult.didSendViaMessagingTool === true &&
     (finalRunResult.messagingToolSentTargets ?? []).some((target) =>
       matchesMessagingToolDeliveryTarget(target, {
