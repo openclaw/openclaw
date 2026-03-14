@@ -158,6 +158,20 @@ function collectText(value: unknown): string {
   return "";
 }
 
+/**
+ * Real session IDs (UUIDs, thread IDs, etc.) are structured identifiers that
+ * contain at least one digit and are at least 8 characters long. Error
+ * sentinels like "rate-limited", "error", or "none" fail this check.
+ *
+ * Note: this heuristic is intentionally simple. Error sentinels that happen to
+ * contain a digit (e.g. "rate-limited-2", "error-404") would still pass.
+ * If a backend is known to emit such values, a stricter pattern (e.g. UUID
+ * or prefix validation) should be added via sessionIdFields config.
+ */
+function looksLikeSessionId(value: string): boolean {
+  return value.length >= 8 && /\d/.test(value);
+}
+
 function pickSessionId(
   parsed: Record<string, unknown>,
   backend: CliBackendConfig,
@@ -171,7 +185,10 @@ function pickSessionId(
   for (const field of fields) {
     const value = parsed[field];
     if (typeof value === "string" && value.trim()) {
-      return value.trim();
+      const trimmed = value.trim();
+      if (looksLikeSessionId(trimmed)) {
+        return trimmed;
+      }
     }
   }
   return undefined;
@@ -226,7 +243,10 @@ export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput
       sessionId = pickSessionId(parsed, backend);
     }
     if (!sessionId && typeof parsed.thread_id === "string") {
-      sessionId = parsed.thread_id.trim();
+      const tid = parsed.thread_id.trim();
+      if (looksLikeSessionId(tid)) {
+        sessionId = tid;
+      }
     }
     if (isRecord(parsed.usage)) {
       usage = toUsage(parsed.usage) ?? usage;
