@@ -39,6 +39,7 @@ export {
   isRawApiErrorPayload,
   isRateLimitAssistantError,
   isRateLimitErrorMessage,
+  extractRetryAfterMs,
   isTransientHttpError,
   isTimeoutErrorMessage,
   parseImageDimensionError,
