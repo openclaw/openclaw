@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
 
@@ -28,9 +29,11 @@ describe("matchesExecAllowlistPattern", () => {
     const prevHome = process.env.HOME;
     process.env.OPENCLAW_HOME = "/srv/openclaw-home";
     process.env.HOME = "/home/other";
+    const openClawHome = path.join(path.resolve("/srv/openclaw-home"), "bin", "tool");
+    const fallbackHome = path.join(path.resolve("/home/other"), "bin", "tool");
     try {
-      expect(matchesExecAllowlistPattern("~/bin/tool", "/srv/openclaw-home/bin/tool")).toBe(true);
-      expect(matchesExecAllowlistPattern("~/bin/tool", "/home/other/bin/tool")).toBe(false);
+      expect(matchesExecAllowlistPattern("~/bin/tool", openClawHome)).toBe(true);
+      expect(matchesExecAllowlistPattern("~/bin/tool", fallbackHome)).toBe(false);
     } finally {
       if (prevOpenClawHome === undefined) {
         delete process.env.OPENCLAW_HOME;

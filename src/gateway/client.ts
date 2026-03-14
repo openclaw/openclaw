@@ -44,6 +44,7 @@ type Pending = {
   resolve: (value: unknown) => void;
   reject: (err: unknown) => void;
   expectFinal: boolean;
+  timeout: NodeJS.Timeout | null;
 };
 
 type GatewayClientErrorShape = {
@@ -78,6 +79,7 @@ export type GatewayClientOptions = {
   url?: string; // ws://127.0.0.1:18789
   connectDelayMs?: number;
   tickWatchMinIntervalMs?: number;
+  requestTimeoutMs?: number;
   token?: string;
   bootstrapToken?: string;
   deviceToken?: string;
@@ -136,6 +138,7 @@ export class GatewayClient {
   private lastTick: number | null = null;
   private tickIntervalMs = 30_000;
   private tickTimer: NodeJS.Timeout | null = null;
+  private readonly requestTimeoutMs: number;
 
   constructor(opts: GatewayClientOptions) {
     this.opts = {
@@ -145,6 +148,10 @@ export class GatewayClient {
           ? undefined
           : (opts.deviceIdentity ?? loadOrCreateDeviceIdentity()),
     };
+    this.requestTimeoutMs =
+      typeof opts.requestTimeoutMs === "number" && Number.isFinite(opts.requestTimeoutMs)
+        ? Math.max(1, Math.min(Math.floor(opts.requestTimeoutMs), 2_147_483_647))
+        : 30_000;
   }
 
   start() {
@@ -586,6 +593,9 @@ export class GatewayClient {
           return;
         }
         this.pending.delete(parsed.id);
+        if (pending.timeout) {
+          clearTimeout(pending.timeout);
+        }
         if (parsed.ok) {
           pending.resolve(parsed.payload);
         } else {
@@ -638,6 +648,9 @@ export class GatewayClient {
 
   private flushPendingErrors(err: Error) {
     for (const [, p] of this.pending) {
+      if (p.timeout) {
+        clearTimeout(p.timeout);
+      }
       p.reject(err);
     }
     this.pending.clear();
@@ -697,7 +710,7 @@ export class GatewayClient {
   async request<T = Record<string, unknown>>(
     method: string,
     params?: unknown,
-    opts?: { expectFinal?: boolean },
+    opts?: { expectFinal?: boolean; timeoutMs?: number | null },
   ): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("gateway not connected");
@@ -710,11 +723,27 @@ export class GatewayClient {
       );
     }
     const expectFinal = opts?.expectFinal === true;
+    const timeoutMs =
+      opts?.timeoutMs === null
+        ? null
+        : typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+          ? Math.max(1, Math.min(Math.floor(opts.timeoutMs), 2_147_483_647))
+          : expectFinal
+            ? null
+            : this.requestTimeoutMs;
     const p = new Promise<T>((resolve, reject) => {
+      const timeout =
+        timeoutMs === null
+          ? null
+          : setTimeout(() => {
+              this.pending.delete(id);
+              reject(new Error(`gateway request timeout for ${method}`));
+            }, timeoutMs);
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
         reject,
         expectFinal,
+        timeout,
       });
     });
     this.ws.send(JSON.stringify(frame));

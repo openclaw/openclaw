@@ -109,7 +109,7 @@ describe("expandHomePrefix", () => {
       name: "expands exact ~ using explicit home",
       input: "~",
       opts: { home: " /srv/openclaw-home " },
-      expected: path.resolve("/srv/openclaw-home"),
+      expected: "/srv/openclaw-home",
     },
     {
       name: "expands ~\\\\ using resolved env home",
