@@ -163,6 +163,10 @@ export function handleChatWheelIntent(host: ScrollHost, event: WheelEvent) {
   if (event.deltaY >= 0) {
     return;
   }
+  const container = event.currentTarget as HTMLElement | null;
+  if (!container || container.scrollHeight - container.clientHeight <= 1) {
+    return;
+  }
   if (!host.chatUserNearBottom && host.chatFollowLocked) {
     return;
   }

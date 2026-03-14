@@ -146,7 +146,13 @@ describe("handleChatWheelIntent", () => {
     host.chatScrollFrame = 99;
     host.chatScrollTimeout = window.setTimeout(() => {}, 1000);
 
-    handleChatWheelIntent(host, { deltaY: -120 } as WheelEvent);
+    handleChatWheelIntent(
+      host,
+      {
+        deltaY: -120,
+        currentTarget: { scrollHeight: 2000, clientHeight: 500 },
+      } as unknown as WheelEvent,
+    );
 
     expect(host.chatUserNearBottom).toBe(false);
     expect(host.chatFollowLocked).toBe(true);
@@ -158,7 +164,32 @@ describe("handleChatWheelIntent", () => {
     const { host } = createScrollHost({});
     host.chatUserNearBottom = true;
 
-    handleChatWheelIntent(host, { deltaY: 120 } as WheelEvent);
+    handleChatWheelIntent(
+      host,
+      {
+        deltaY: 120,
+        currentTarget: { scrollHeight: 2000, clientHeight: 500 },
+      } as unknown as WheelEvent,
+    );
+
+    expect(host.chatUserNearBottom).toBe(true);
+    expect(host.chatFollowLocked).toBe(false);
+  });
+
+  it("does not disengage follow when the chat cannot actually scroll", () => {
+    const { host } = createScrollHost({
+      scrollHeight: 400,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+
+    handleChatWheelIntent(
+      host,
+      {
+        deltaY: -120,
+        currentTarget: { scrollHeight: 400, clientHeight: 400 },
+      } as unknown as WheelEvent,
+    );
 
     expect(host.chatUserNearBottom).toBe(true);
     expect(host.chatFollowLocked).toBe(false);
@@ -292,7 +323,13 @@ describe("scheduleChatScroll", () => {
     host.chatFollowLocked = false;
     host.chatLastScrollTop = 2000;
 
-    handleChatWheelIntent(host, { deltaY: -120 } as WheelEvent);
+    handleChatWheelIntent(
+      host,
+      {
+        deltaY: -120,
+        currentTarget: { scrollHeight: 2000, clientHeight: 400 },
+      } as unknown as WheelEvent,
+    );
     handleChatScroll(host, createScrollEvent(2000, 1540, 400));
 
     expect(host.chatUserNearBottom).toBe(false);
