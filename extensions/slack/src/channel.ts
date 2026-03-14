@@ -74,6 +74,35 @@ function isSlackAccountConfigured(account: ResolvedSlackAccount): boolean {
 
 type SlackSendFn = ReturnType<typeof getSlackRuntime>["channel"]["slack"]["sendMessageSlack"];
 
+/**
+ * Maps an OutboundIdentity (name/avatarUrl/emoji) to the SlackSendIdentity
+ * shape (username/iconUrl/iconEmoji) expected by sendMessageSlack.
+ *
+ * When the agent has `identity.name` and/or `identity.emoji` configured,
+ * these are passed as `username` and `icon_emoji` in chat.postMessage calls,
+ * enabling per-agent display names via the `chat:write.customize` Slack scope.
+ * Falls back gracefully if the scope is missing (handled in send.ts).
+ */
+export function mapOutboundIdentityToSlack(identity?: {
+  name?: string;
+  avatarUrl?: string;
+  emoji?: string;
+}): { username?: string; iconUrl?: string; iconEmoji?: string } | undefined {
+  if (!identity) {
+    return undefined;
+  }
+  const username = identity.name?.trim() || undefined;
+  const iconUrl = identity.avatarUrl?.trim() || undefined;
+  // Only use emoji as icon when no avatar URL is present and the emoji is in
+  // Slack's colon-wrapped format (e.g. ":robot_face:").
+  const rawEmoji = identity.emoji?.trim();
+  const iconEmoji = !iconUrl && rawEmoji && /^:[^:\s]+:$/.test(rawEmoji) ? rawEmoji : undefined;
+  if (!username && !iconUrl && !iconEmoji) {
+    return undefined;
+  }
+  return { username, iconUrl, iconEmoji };
+}
+
 function resolveSlackSendContext(params: {
   cfg: Parameters<typeof resolveSlackAccount>[0]["cfg"];
   accountId?: string;
@@ -369,7 +398,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     deliveryMode: "direct",
     chunker: null,
     textChunkLimit: 4000,
-    sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg }) => {
+    sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg, identity }) => {
       const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({
         cfg,
         accountId: accountId ?? undefined,
@@ -377,11 +406,13 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         replyToId,
         threadId,
       });
+      const slackIdentity = mapOutboundIdentityToSlack(identity);
       const result = await send(to, text, {
         cfg,
         threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
         accountId: accountId ?? undefined,
         ...(tokenOverride ? { token: tokenOverride } : {}),
+        ...(slackIdentity ? { identity: slackIdentity } : {}),
       });
       return { channel: "slack", ...result };
     },
@@ -395,6 +426,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       replyToId,
       threadId,
       cfg,
+      identity,
     }) => {
       const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({
         cfg,
@@ -403,6 +435,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         replyToId,
         threadId,
       });
+      const slackIdentity = mapOutboundIdentityToSlack(identity);
       const result = await send(to, text, {
         cfg,
         mediaUrl,
@@ -410,6 +443,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
         accountId: accountId ?? undefined,
         ...(tokenOverride ? { token: tokenOverride } : {}),
+        ...(slackIdentity ? { identity: slackIdentity } : {}),
       });
       return { channel: "slack", ...result };
     },

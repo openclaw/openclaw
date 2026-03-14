@@ -13,7 +13,7 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-import { slackPlugin } from "./channel.js";
+import { slackPlugin, mapOutboundIdentityToSlack } from "./channel.js";
 
 async function getSlackConfiguredState(cfg: OpenClawConfig) {
   const account = slackPlugin.config.resolveAccount(cfg, "default");
@@ -270,5 +270,162 @@ describe("slackPlugin config", () => {
     expect(snapshot?.configured).toBe(true);
     expect(snapshot?.botTokenStatus).toBe("available");
     expect(snapshot?.signingSecretStatus).toBe("configured_unavailable");
+  });
+});
+
+describe("mapOutboundIdentityToSlack", () => {
+  it("returns undefined for undefined identity", () => {
+    expect(mapOutboundIdentityToSlack(undefined)).toBeUndefined();
+  });
+
+  it("returns undefined for empty identity object", () => {
+    expect(mapOutboundIdentityToSlack({})).toBeUndefined();
+  });
+
+  it("returns undefined for whitespace-only fields", () => {
+    expect(mapOutboundIdentityToSlack({ name: "  ", emoji: "  " })).toBeUndefined();
+  });
+
+  it("maps name to username", () => {
+    expect(mapOutboundIdentityToSlack({ name: "Levy" })).toEqual({
+      username: "Levy",
+      iconUrl: undefined,
+      iconEmoji: undefined,
+    });
+  });
+
+  it("trims name whitespace", () => {
+    expect(mapOutboundIdentityToSlack({ name: "  Levy  " })).toEqual({
+      username: "Levy",
+      iconUrl: undefined,
+      iconEmoji: undefined,
+    });
+  });
+
+  it("maps avatarUrl to iconUrl", () => {
+    expect(mapOutboundIdentityToSlack({ avatarUrl: "https://example.com/avatar.png" })).toEqual({
+      username: undefined,
+      iconUrl: "https://example.com/avatar.png",
+      iconEmoji: undefined,
+    });
+  });
+
+  it("maps colon-wrapped emoji to iconEmoji", () => {
+    expect(mapOutboundIdentityToSlack({ emoji: ":robot_face:" })).toEqual({
+      username: undefined,
+      iconUrl: undefined,
+      iconEmoji: ":robot_face:",
+    });
+  });
+
+  it("ignores emoji without colon wrapping", () => {
+    expect(mapOutboundIdentityToSlack({ emoji: "🤖" })).toBeUndefined();
+  });
+
+  it("ignores emoji with spaces inside colons", () => {
+    expect(mapOutboundIdentityToSlack({ emoji: ":robot face:" })).toBeUndefined();
+  });
+
+  it("prefers avatarUrl over emoji when both present", () => {
+    expect(
+      mapOutboundIdentityToSlack({
+        name: "Bot",
+        avatarUrl: "https://example.com/avatar.png",
+        emoji: ":robot_face:",
+      }),
+    ).toEqual({
+      username: "Bot",
+      iconUrl: "https://example.com/avatar.png",
+      iconEmoji: undefined,
+    });
+  });
+
+  it("uses emoji when avatarUrl is absent", () => {
+    expect(
+      mapOutboundIdentityToSlack({
+        name: "Bot",
+        emoji: ":robot_face:",
+      }),
+    ).toEqual({
+      username: "Bot",
+      iconUrl: undefined,
+      iconEmoji: ":robot_face:",
+    });
+  });
+});
+
+describe("slackPlugin outbound identity forwarding", () => {
+  const cfg = {
+    channels: {
+      slack: {
+        botToken: "xoxb-test",
+        appToken: "xapp-test",
+      },
+    },
+  };
+
+  it("forwards identity as Slack identity fields in sendText", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-id" });
+    const sendText = slackPlugin.outbound?.sendText;
+
+    await sendText!({
+      cfg,
+      to: "C123",
+      text: "hello",
+      accountId: "default",
+      identity: { name: "Levy", emoji: ":tophat:" },
+      deps: { sendSlack },
+    });
+
+    expect(sendSlack).toHaveBeenCalledWith(
+      "C123",
+      "hello",
+      expect.objectContaining({
+        identity: { username: "Levy", iconUrl: undefined, iconEmoji: ":tophat:" },
+      }),
+    );
+  });
+
+  it("forwards identity as Slack identity fields in sendMedia", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-id" });
+    const sendMedia = slackPlugin.outbound?.sendMedia;
+
+    await sendMedia!({
+      cfg,
+      to: "C123",
+      text: "caption",
+      mediaUrl: "https://example.com/img.png",
+      accountId: "default",
+      identity: { name: "Byte", avatarUrl: "https://example.com/byte.png" },
+      deps: { sendSlack },
+    });
+
+    expect(sendSlack).toHaveBeenCalledWith(
+      "C123",
+      "caption",
+      expect.objectContaining({
+        identity: {
+          username: "Byte",
+          iconUrl: "https://example.com/byte.png",
+          iconEmoji: undefined,
+        },
+      }),
+    );
+  });
+
+  it("does not include identity key when identity is undefined", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-id" });
+    const sendText = slackPlugin.outbound?.sendText;
+
+    await sendText!({
+      cfg,
+      to: "C123",
+      text: "no identity",
+      accountId: "default",
+      deps: { sendSlack },
+    });
+
+    const callArgs = sendSlack.mock.calls[0][2];
+    expect(callArgs).not.toHaveProperty("identity");
   });
 });
