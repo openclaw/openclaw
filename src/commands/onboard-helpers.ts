@@ -549,12 +549,3 @@ export async function backupInterruptedConfig(): Promise<string | undefined> {
     return undefined;
   }
 }
-```
-
-Commit message 填：
-```
-fix(onboard): add interrupted-onboarding recovery helpers
-```
-选 **Create a new branch**，分支名：
-```
-fix/onboard-interrupted-recovery
