@@ -87,7 +87,7 @@ async function resolveLockPath(normalizedTarget: string, kind: WorkspaceLockKind
   const lockBaseDir =
     kind === "dir"
       ? normalizedTarget
-      : path.join(os.tmpdir(), `openclaw-${resolveLockOwnerScope()}`);
+      : path.join(os.tmpdir(), "openclaw-" + resolveLockOwnerScope());
   const lockDir = path.join(lockBaseDir, ".openclaw.workspace-locks");
   const digest = createHash("sha256")
     .update(`${kind}:${normalizedTarget}`)
