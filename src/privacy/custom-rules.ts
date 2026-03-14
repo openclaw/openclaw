@@ -9,7 +9,7 @@ import { resolveConfigPath } from "../config/paths.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
 import { validateBarePassword, validateHighEntropy } from "./detector.js";
 import { BASIC_RULES, EXTENDED_RULES } from "./rules.js";
-import type { CustomRulesConfig, PrivacyRule, RiskLevel, UserDefinedRule } from "./types.js";
+import type { PrivacyRule, RiskLevel, UserDefinedRule } from "./types.js";
 
 /** Registry of named validator functions that JSON configs can reference. */
 const NAMED_VALIDATORS: Record<string, (s: string) => boolean> = {
@@ -94,14 +94,14 @@ export function loadCustomRules(filePath: string): CustomRulesResult {
     };
   }
 
-  return processCustomRulesConfig(parsed as CustomRulesConfig);
+  return processCustomRulesConfig(parsed);
 }
 
 /**
  * Process a CustomRulesConfig object (already parsed).
  * Validates rules, resolves base preset, merges, and returns final rule set.
  */
-export function processCustomRulesConfig(config: CustomRulesConfig): CustomRulesResult {
+export function processCustomRulesConfig(config: unknown): CustomRulesResult {
   const errors: RuleValidationError[] = [];
   const warnings: string[] = [];
   const rawConfig: Record<string, unknown> = isRecord(config) ? config : {};
