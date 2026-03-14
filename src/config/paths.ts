@@ -21,6 +21,12 @@ export const isNixMode = resolveIsNixMode();
 const LEGACY_STATE_DIRNAMES = [".clawdbot", ".moldbot"] as const;
 const NEW_STATE_DIRNAME = ".openclaw";
 const CONFIG_FILENAME = "openclaw.json";
+
+/** All recognized state directory basenames (for nesting guard). */
+export const ALL_STATE_DIRNAMES: ReadonlySet<string> = new Set([
+  NEW_STATE_DIRNAME,
+  ...LEGACY_STATE_DIRNAMES,
+]);
 const LEGACY_CONFIG_FILENAMES = ["clawdbot.json", "moldbot.json"] as const;
 
 function resolveDefaultHomeDir(): string {
@@ -65,6 +71,15 @@ export function resolveStateDir(
   const override = env.OPENCLAW_STATE_DIR?.trim();
   if (override) {
     return resolveUserPath(override, env, effectiveHomedir);
+  }
+  // Nesting guard: when OPENCLAW_HOME is explicitly set and its basename is
+  // already a known state directory name, use it directly without appending.
+  const explicitHome = env.OPENCLAW_HOME?.trim();
+  if (explicitHome) {
+    const resolvedHome = effectiveHomedir();
+    if (ALL_STATE_DIRNAMES.has(path.basename(resolvedHome))) {
+      return resolvedHome;
+    }
   }
   const newDir = newStateDir(effectiveHomedir);
   if (env.OPENCLAW_TEST_FAST === "1") {
