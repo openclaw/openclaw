@@ -306,12 +306,15 @@ export async function ensureAgentWorkspace(params?: {
   const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
   const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
   const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
+  const memoryTemplate = await loadTemplate(DEFAULT_MEMORY_FILENAME);
   await writeFileIfMissing(agentsPath, agentsTemplate);
   await writeFileIfMissing(soulPath, soulTemplate);
   await writeFileIfMissing(toolsPath, toolsTemplate);
   await writeFileIfMissing(identityPath, identityTemplate);
   await writeFileIfMissing(userPath, userTemplate);
   await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
+  const memoryPath = path.join(dir, DEFAULT_MEMORY_FILENAME);
+  await writeFileIfMissing(memoryPath, memoryTemplate);
 
   let state = await readWorkspaceOnboardingState(statePath);
   let stateDirty = false;
@@ -369,6 +372,7 @@ export async function ensureAgentWorkspace(params?: {
     userPath,
     heartbeatPath,
     bootstrapPath,
+    memoryPath,
   };
 }
 
