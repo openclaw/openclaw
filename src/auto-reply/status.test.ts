@@ -258,6 +258,74 @@ describe("buildStatusMessage", () => {
     expect(text).toContain("elevated");
   });
 
+  it("shows workspace path and capability hints for sandboxed discord sessions", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            sandbox: { mode: "all", scope: "agent" },
+          },
+          list: [{ id: "trinity" }],
+        },
+      } as unknown as OpenClawConfig,
+      agent: {},
+      sessionEntry: {
+        sessionId: "trinity-discord",
+        updatedAt: 0,
+        channel: "discord",
+      },
+      agentId: "trinity",
+      sessionKey: "agent:trinity:discord:channel:123",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Paths: file memory/... ↔ shell /workspace/memory/...");
+    expect(normalized).toContain("Lane: discord · workspace-only lane");
+    expect(normalized).toContain(
+      "Capability: workspace tools active; host exec is not configured for this agent/session",
+    );
+    expect(normalized).toContain(
+      "Blocking layers: sandbox | policy | permissions | bridge | delivery",
+    );
+  });
+
+  it("shows host lane capability hints for high-power discord sessions", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          list: [
+            {
+              id: "morpheus",
+              tools: {
+                elevated: {
+                  enabled: true,
+                },
+              },
+            },
+          ],
+        },
+      } as unknown as OpenClawConfig,
+      agent: {},
+      sessionEntry: {
+        sessionId: "morpheus-discord",
+        updatedAt: 0,
+        channel: "discord",
+      },
+      agentId: "morpheus",
+      sessionKey: "agent:morpheus:discord:channel:456",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Lane: discord · host lane configured");
+    expect(normalized).toContain(
+      "Capability: host/runtime authority configured; a Discord session or channel policy may still gate elevated exec on this turn",
+    );
+  });
+
   it("includes media understanding decisions when present", () => {
     const text = buildStatusMessage({
       agent: { model: "anthropic/claude-opus-4-5" },

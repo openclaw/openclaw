@@ -108,8 +108,10 @@ describe("sandbox explain helpers", () => {
       toolName: "browser",
     });
     expect(msg).toBeTruthy();
-    expect(msg).toContain('Tool "browser" blocked by sandbox tool policy');
+    expect(msg).toContain('blocked by sandbox: tool "browser" is not allowed in this session');
     expect(msg).toContain("mode=non-main");
+    expect(msg).toContain("Next:");
+    expect(msg).toContain("/workspace/memory/...");
     expect(msg).toContain("tools.sandbox.tools.deny");
     expect(msg).toContain("agents.defaults.sandbox.mode=off");
     expect(msg).toContain("Use main session key (direct): agent:main:main");

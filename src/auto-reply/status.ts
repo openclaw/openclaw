@@ -520,6 +520,23 @@ export function buildStatusMessage(args: StatusArgs): string {
     "on";
 
   const runtime = { label: resolveRuntimeLabel(args) };
+  const runtimeStatus =
+    args.config && args.sessionKey
+      ? resolveSandboxRuntimeStatus({
+          cfg: args.config,
+          sessionKey: args.sessionKey,
+        })
+      : null;
+  const resolvedAgentId =
+    args.agentId ?? (args.sessionKey ? resolveAgentIdFromSessionKey(args.sessionKey) : undefined);
+  const agentRecord =
+    resolvedAgentId && Array.isArray(args.config?.agents?.list)
+      ? args.config.agents.list.find((record) => record?.id === resolvedAgentId)
+      : null;
+  const agentElevatedEnabled = agentRecord?.tools?.elevated?.enabled === true;
+  const deliveryChannel = entry?.channel ?? entry?.origin?.provider ?? "unknown";
+  const isDiscordSession =
+    deliveryChannel === "discord" || Boolean(args.sessionKey?.includes(":discord:"));
 
   const updatedAt = entry?.updatedAt;
   const sessionLine = [
@@ -569,6 +586,18 @@ export function buildStatusMessage(args: StatusArgs): string {
     `🪢 Queue: ${queueMode}${queueDetails}`,
   ];
   const activationLine = activationParts.filter(Boolean).join(" · ");
+  const pathLine = `🗂️ Paths: file memory/... ↔ shell /workspace/memory/...`;
+  const laneLine = `📮 Lane: ${deliveryChannel}${isDiscordSession ? ` · ${agentElevatedEnabled ? "host lane configured" : "workspace-only lane"}` : ""}`;
+  const capabilityLine = `🔐 Capability: ${
+    agentElevatedEnabled
+      ? isDiscordSession
+        ? "host/runtime authority configured; a Discord session or channel policy may still gate elevated exec on this turn"
+        : "host/runtime authority configured for this agent"
+      : runtimeStatus?.sandboxed
+        ? "workspace tools active; host exec is not configured for this agent/session"
+        : "workspace tools active; host exec is not configured for this agent"
+  }`;
+  const blockHintLine = `🚧 Blocking layers: sandbox | policy | permissions | bridge | delivery`;
 
   const selectedAuthMode =
     normalizeAuthMode(args.modelAuth) ?? resolveModelAuthMode(selectedProvider, args.config);
@@ -679,6 +708,10 @@ export function buildStatusMessage(args: StatusArgs): string {
     mediaLine,
     args.usageLine,
     `🧵 ${sessionLine}`,
+    pathLine,
+    laneLine,
+    capabilityLine,
+    blockHintLine,
     args.subagentsLine,
     `⚙️ ${optionsLine}`,
     voiceLine,
