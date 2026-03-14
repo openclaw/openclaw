@@ -46,7 +46,7 @@ When tagging each story, map to one or more of the above categories:
 Search Gmail for new subscription notification emails from narwal.one in the last 7 days:
 
 ```
-gmail_search_messages query="from:narwal.one OR subject:\"New Subscriber\" OR subject:\"newsletter subscription\" newer_than:7d" max=20
+gmail_search_messages query="to:ss.dash7@gmail.com from:narwal.one newer_than:7d" max=20
 ```
 
 For each result:
