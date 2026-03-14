@@ -180,8 +180,16 @@ export function createExecApprovalHandlers(
         { dropIfSlow: true },
       );
       const hasExecApprovalClients = context.hasExecApprovalClients?.() ?? false;
+      const bypassSocket = ((): boolean => {
+        try {
+          const { loadConfig } = require("../../config/config.js");
+          return loadConfig().approvals?.exec?.bypassSocket ?? false;
+        } catch {
+          return false;
+        }
+      })();
       let forwarded = false;
-      if (opts?.forwarder) {
+      if (opts?.forwarder && !bypassSocket) {
         try {
           forwarded = await opts.forwarder.handleRequested({
             id: record.id,
