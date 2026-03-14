@@ -1,0 +1,11 @@
+{
+  "name": "@openclaw/tracing",
+  "version": "2026.3.9",
+  "description": "Agent execution tracing with tree-view CLI",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
