@@ -23,6 +23,7 @@ import {
 } from "./moonshot-stream-wrappers.js";
 import {
   createCodexDefaultTransportWrapper,
+  createOpenAICompletionsStripStoreWrapper,
   createOpenAIDefaultTransportWrapper,
   createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
@@ -463,6 +464,12 @@ export function applyExtraParamsToAgent(
   // Force `store=true` for direct OpenAI Responses models and auto-enable
   // server-side compaction for compatible OpenAI Responses payloads.
   agent.streamFn = createOpenAIResponsesContextManagementWrapper(agent.streamFn, merged);
+
+  // Strip `store` from openai-completions payloads when compat.supportsStore is
+  // explicitly false. Google AI's OpenAI-compatible endpoint rejects requests that
+  // include the `store` field with a 400 INVALID_ARGUMENT error.
+  // See: openclaw/openclaw#43086
+  agent.streamFn = createOpenAICompletionsStripStoreWrapper(agent.streamFn);
 
   const rawParallelToolCalls = resolveAliasedParamValue(
     [resolvedExtraParams, override],
