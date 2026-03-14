@@ -57,7 +57,10 @@ export function readSessionStoreCache(params: {
     invalidateSessionStoreCache(params.storePath);
     return null;
   }
-  return structuredClone(cached.store);
+  if (cached.serialized) {
+    return JSON.parse(cached.serialized);
+  }
+  return JSON.parse(JSON.stringify(cached.store));
 }
 
 export function writeSessionStoreCache(params: {
@@ -68,7 +71,7 @@ export function writeSessionStoreCache(params: {
   serialized?: string;
 }): void {
   SESSION_STORE_CACHE.set(params.storePath, {
-    store: structuredClone(params.store),
+    store: JSON.parse(JSON.stringify(params.store)),
     loadedAt: Date.now(),
     storePath: params.storePath,
     mtimeMs: params.mtimeMs,
