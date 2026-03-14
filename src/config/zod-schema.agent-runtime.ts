@@ -427,6 +427,7 @@ const ToolExecBaseShape = {
   notifyOnExit: z.boolean().optional(),
   notifyOnExitEmptySuccess: z.boolean().optional(),
   applyPatch: ToolExecApplyPatchSchema,
+  shell: z.string().optional(),
 } as const;
 
 const AgentToolExecSchema = z

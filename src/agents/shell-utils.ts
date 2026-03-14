@@ -39,7 +39,33 @@ export function resolvePowerShellPath(): string {
   return "powershell.exe";
 }
 
-export function getShellConfig(): { shell: string; args: string[] } {
+export function getShellConfig(configuredShell?: string): { shell: string; args: string[] } {
+  if (configuredShell) {
+    if (process.platform === "win32") {
+      const base = path.basename(configuredShell, path.extname(configuredShell)).toLowerCase();
+      if (base === "pwsh" || base === "powershell") {
+        return {
+          shell: configuredShell,
+          args: ["-NoProfile", "-NonInteractive", "-Command"],
+        };
+      }
+      if (base === "cmd") {
+        return {
+          shell: configuredShell,
+          args: ["/d", "/s", "/c"],
+        };
+      }
+      return {
+        shell: configuredShell,
+        args: ["-c"],
+      };
+    }
+    return {
+      shell: configuredShell,
+      args: ["-c"],
+    };
+  }
+
   if (process.platform === "win32") {
     // Use PowerShell instead of cmd.exe on Windows.
     // Problem: Many Windows system utilities (ipconfig, systeminfo, etc.) write

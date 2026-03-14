@@ -271,6 +271,8 @@ export type ExecToolConfig = {
      * Accepts either raw ids (e.g. "gpt-5.2") or full ids (e.g. "openai/gpt-5.2").
      */
     allowModels?: string[];
+    /** Custom shell path to use for executing commands. */
+    shell?: string;
   };
 };
 
