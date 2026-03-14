@@ -536,8 +536,12 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const configPath = createConfigIO().configPath;
     const platform = process.platform;
-    const cmd = platform === "darwin" ? "open" : platform === "win32" ? "start" : "xdg-open";
-    execFile(cmd, [configPath], (err) => {
+    // Windows `start` is a shell built-in (not a standalone binary), so we
+    // must use `cmd /c start` there.  On other platforms `open`/`xdg-open`
+    // are real executables and execFile (shell: false) avoids injection.
+    const cmd = platform === "win32" ? "cmd" : platform === "darwin" ? "open" : "xdg-open";
+    const args = platform === "win32" ? ["/c", "start", "", configPath] : [configPath];
+    execFile(cmd, args, (err) => {
       if (err) {
         respond(true, { ok: false, path: configPath, error: err.message }, undefined);
         return;
