@@ -37,13 +37,11 @@ export function createInMemorySessionStore(options: AcpSessionStoreOptions = {})
     if (!session) {
       return false;
     }
-    if (session.activeRunId) {
-      runIdToSessionId.delete(session.activeRunId);
-    }
-    // Sweep any stale runId mappings that still reference this session.
-    // This can happen when a run is cleared (clearActiveRun) but the
-    // runIdToSessionId entry is not removed due to a timing edge case,
-    // or when the session is reaped while no activeRunId is set.
+    // Sweep all runId → sessionId entries that still reference this session.
+    // Stale entries can accumulate when setActiveRun is called multiple times
+    // for the same session without an intervening clearActiveRun: the previous
+    // runId is silently overwritten in session.activeRunId, leaving its map
+    // entry orphaned.
     for (const [runId, sid] of runIdToSessionId) {
       if (sid === sessionId) {
         runIdToSessionId.delete(runId);
