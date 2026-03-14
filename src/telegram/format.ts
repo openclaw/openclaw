@@ -523,7 +523,33 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
   const chunks: MarkdownIR[] = [];
   let cursor = 0;
   while (cursor < ir.text.length) {
-    const end = Math.min(ir.text.length, cursor + normalizedLimit);
+    const naiveEnd = Math.min(ir.text.length, cursor + normalizedLimit);
+
+    // If we reached the end of the text, take the rest as-is
+    if (naiveEnd >= ir.text.length) {
+      chunks.push({
+        text: ir.text.slice(cursor, naiveEnd),
+        styles: sliceStyleSpans(ir.styles, cursor, naiveEnd),
+        links: sliceLinkSpans(ir.links, cursor, naiveEnd),
+      });
+      break;
+    }
+
+    // Look backward from naiveEnd for a word boundary.
+    // Don't search back more than 25% of the chunk to avoid tiny fragments.
+    const searchFloor = Math.max(cursor + 1, naiveEnd - Math.floor(normalizedLimit * 0.25));
+    let splitAt = -1;
+
+    for (let i = naiveEnd - 1; i >= searchFloor; i--) {
+      const ch = ir.text[i];
+      if (ch === " " || ch === "\n" || ch === "\t" || ch === "\r") {
+        splitAt = i + 1; // split after the whitespace character
+        break;
+      }
+    }
+
+    const end = splitAt > 0 ? splitAt : naiveEnd;
+
     chunks.push({
       text: ir.text.slice(cursor, end),
       styles: sliceStyleSpans(ir.styles, cursor, end),
