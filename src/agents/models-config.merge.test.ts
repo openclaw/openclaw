@@ -26,21 +26,6 @@ describe("models-config merge helpers", () => {
       models: params.models,
     };
   }
-  const kimiModel: ProviderConfig["models"][number] = {
-    id: "k2p5",
-    name: "Kimi for Coding",
-    input: ["text", "image"],
-    reasoning: true,
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
-    contextWindow: 128_000,
-    maxTokens: 8_000,
-  };
-
   it("refreshes implicit model metadata while preserving explicit reasoning overrides", () => {
     const merged = mergeProviderModels(
       providerFixture({
