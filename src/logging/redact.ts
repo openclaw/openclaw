@@ -214,9 +214,14 @@ export function redactWithPrivacyFilter(
     if (detected.hasPrivacyRisk) {
       // Apply mask-style redaction (not replacement) for log output.
       const sorted = [...detected.matches].toSorted((a, b) => b.start - a.start);
+      let processedStart = Infinity;
       for (const match of sorted) {
+        if (match.end > processedStart) {
+          continue;
+        }
         const masked = maskToken(match.content);
         result = result.slice(0, match.start) + masked + result.slice(match.end);
+        processedStart = match.start;
       }
     }
   } catch {

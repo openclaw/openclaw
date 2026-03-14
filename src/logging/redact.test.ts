@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { getDefaultRedactPatterns, redactSensitiveText, redactToolDetail } from "./redact.js";
+import { describe, expect, it, vi } from "vitest";
+import { PrivacyDetector } from "../privacy/detector.js";
+import {
+  getDefaultRedactPatterns,
+  redactSensitiveText,
+  redactToolDetail,
+  redactWithPrivacyFilter,
+} from "./redact.js";
 
 const defaults = getDefaultRedactPatterns();
 
@@ -128,5 +134,42 @@ describe("redactToolDetail", () => {
     expect(output).toContain("***");
     expect(output).not.toContain("admin@company.com");
     expect(output).not.toContain("backup@example.org");
+  });
+
+  it("handles overlapping detector matches without truncating trailing content", () => {
+    const detectSpy = vi.spyOn(PrivacyDetector.prototype, "detect").mockReturnValue({
+      hasPrivacyRisk: true,
+      matches: [
+        {
+          type: "outer",
+          content: "SECRET12",
+          start: 7,
+          end: 15,
+          riskLevel: "high",
+          description: "outer match",
+        },
+        {
+          type: "inner",
+          content: "CRET",
+          start: 9,
+          end: 13,
+          riskLevel: "medium",
+          description: "inner match",
+        },
+      ],
+      riskCount: { outer: 1, inner: 1 },
+      highestRiskLevel: "high",
+    });
+
+    try {
+      const output = redactWithPrivacyFilter(
+        "prefix SECRET12 tail=SAFE_MARKER",
+        { mode: "tools", patterns: [] },
+        true,
+      );
+      expect(output).toContain("tail=SAFE_MARKER");
+    } finally {
+      detectSpy.mockRestore();
+    }
   });
 });

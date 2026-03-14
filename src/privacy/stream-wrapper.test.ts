@@ -250,5 +250,34 @@ describe("stream-wrapper integration", () => {
       }
       expect(deltas.join("")).toBe(original);
     });
+
+    it("preserves stream result method after wrapping", async () => {
+      const ctx = createPrivacyFilterContext("test-session");
+      const finalMessage = assistantMessage([{ type: "text", text: "done" }]);
+
+      const baseFn: StreamFn = () =>
+        ({
+          async *[Symbol.asyncIterator]() {
+            yield { type: "text_delta", delta: "ok" };
+          },
+          async result() {
+            return finalMessage;
+          },
+        }) as unknown as ReturnType<StreamFn>;
+
+      const wrapped = wrapStreamFnPrivacyFilter(baseFn, ctx);
+      const stream = wrapped(
+        {
+          api: "openai-completions",
+          provider: "openai",
+          id: "gpt-test",
+        } as Parameters<StreamFn>[0],
+        { messages: [] },
+      );
+
+      const streamWithResult = stream as { result?: () => Promise<AssistantMessage> };
+      expect(typeof streamWithResult.result).toBe("function");
+      await expect(streamWithResult.result?.()).resolves.toEqual(finalMessage);
+    });
   });
 });
