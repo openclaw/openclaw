@@ -18,6 +18,11 @@ let lastClientOptions: {
   onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
   onClose?: (code: number, reason: string) => void;
 } | null = null;
+let lastRequestOptions: {
+  method?: string;
+  params?: unknown;
+  opts?: { expectFinal?: boolean; timeoutMs?: number | null };
+} | null = null;
 type StartMode = "hello" | "close" | "silent";
 let startMode: StartMode = "hello";
 let closeCode = 1006;
@@ -45,7 +50,12 @@ vi.mock("./client.js", () => ({
     }) {
       lastClientOptions = opts;
     }
-    async request() {
+    async request(
+      method: string,
+      params: unknown,
+      opts?: { expectFinal?: boolean; timeoutMs?: number | null },
+    ) {
+      lastRequestOptions = { method, params, opts };
       return { ok: true };
     }
     start() {
@@ -72,6 +82,7 @@ function resetGatewayCallMocks() {
   pickPrimaryTailnetIPv4.mockClear();
   pickPrimaryLanIPv4.mockClear();
   lastClientOptions = null;
+  lastRequestOptions = null;
   startMode = "hello";
   closeCode = 1006;
   closeReason = "";
@@ -572,6 +583,25 @@ describe("callGateway error details", () => {
     await promise;
 
     expect(errMessage).toContain("gateway closed (1006");
+  });
+
+  it("forwards caller timeout to client requests", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({ method: "health", timeoutMs: 45_000 });
+
+    expect(lastRequestOptions?.method).toBe("health");
+    expect(lastRequestOptions?.opts?.timeoutMs).toBe(45_000);
+  });
+
+  it("does not inject wrapper timeout defaults into expectFinal requests", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({ method: "health", expectFinal: true });
+
+    expect(lastRequestOptions?.method).toBe("health");
+    expect(lastRequestOptions?.opts?.expectFinal).toBe(true);
+    expect(lastRequestOptions?.opts?.timeoutMs).toBeUndefined();
   });
 
   it("fails fast when remote mode is missing remote url", async () => {
