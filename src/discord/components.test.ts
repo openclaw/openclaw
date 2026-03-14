@@ -1,5 +1,5 @@
 import { MessageFlags } from "discord-api-types/v10";
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, vi } from "vitest";
 import {
   clearDiscordComponentEntries,
   registerDiscordComponentEntries,
@@ -94,5 +94,25 @@ describe("discord component registry", () => {
     const consumed = resolveDiscordComponentEntry({ id: "btn_1" });
     expect(consumed?.id).toBe("btn_1");
     expect(resolveDiscordComponentEntry({ id: "btn_1" })).toBeNull();
+  });
+
+  it("shares the component registry across fresh module instances", async () => {
+    registerDiscordComponentEntries({
+      entries: [{ id: "btn_global", kind: "button", label: "Confirm" }],
+      modals: [{ id: "mdl_global", title: "Details", fields: [] }],
+      ttlMs: 1000,
+    });
+
+    vi.resetModules();
+    const freshRegistry = await import("./components-registry.js");
+
+    expect(
+      freshRegistry.resolveDiscordComponentEntry({ id: "btn_global", consume: false })?.id,
+    ).toBe("btn_global");
+    expect(freshRegistry.resolveDiscordModalEntry({ id: "mdl_global", consume: false })?.id).toBe(
+      "mdl_global",
+    );
+
+    freshRegistry.clearDiscordComponentEntries();
   });
 });

@@ -1,9 +1,33 @@
 import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 
 const DEFAULT_COMPONENT_TTL_MS = 30 * 60 * 1000;
+const DISCORD_COMPONENT_REGISTRY_STATE_KEY = "__openclawDiscordComponentRegistryState";
 
-const componentEntries = new Map<string, DiscordComponentEntry>();
-const modalEntries = new Map<string, DiscordModalEntry>();
+type DiscordComponentRegistryState = {
+  componentEntries: Map<string, DiscordComponentEntry>;
+  modalEntries: Map<string, DiscordModalEntry>;
+};
+
+function createDiscordComponentRegistryState(): DiscordComponentRegistryState {
+  return {
+    componentEntries: new Map<string, DiscordComponentEntry>(),
+    modalEntries: new Map<string, DiscordModalEntry>(),
+  };
+}
+
+function resolveDiscordComponentRegistryState(): DiscordComponentRegistryState {
+  const runtimeGlobal = globalThis as typeof globalThis & {
+    [DISCORD_COMPONENT_REGISTRY_STATE_KEY]?: DiscordComponentRegistryState;
+  };
+  if (!runtimeGlobal[DISCORD_COMPONENT_REGISTRY_STATE_KEY]) {
+    runtimeGlobal[DISCORD_COMPONENT_REGISTRY_STATE_KEY] = createDiscordComponentRegistryState();
+  }
+  return runtimeGlobal[DISCORD_COMPONENT_REGISTRY_STATE_KEY];
+}
+
+const DISCORD_COMPONENT_REGISTRY_STATE = resolveDiscordComponentRegistryState();
+const componentEntries = DISCORD_COMPONENT_REGISTRY_STATE.componentEntries;
+const modalEntries = DISCORD_COMPONENT_REGISTRY_STATE.modalEntries;
 
 function isExpired(entry: { expiresAt?: number }, now: number) {
   return typeof entry.expiresAt === "number" && entry.expiresAt <= now;
