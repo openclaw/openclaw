@@ -3,16 +3,14 @@ import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { AgentSideConnection, ndJsonStream } from "@agentclientprotocol/sdk";
 import { loadConfig } from "../config/config.js";
-import {
-  buildGatewayConnectionDetails,
-  resolveGatewayCredentialsWithSecretInputs,
-} from "../gateway/call.js";
+import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { GatewayClient } from "../gateway/client.js";
+import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
 import { isMainModule } from "../infra/is-main.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
-import type { AcpServerOptions } from "./types.js";
+import { normalizeAcpProvenanceMode, type AcpServerOptions } from "./types.js";
 
 export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
   const cfg = loadConfig();
@@ -20,13 +18,21 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     config: cfg,
     url: opts.gatewayUrl,
   });
-  const creds = await resolveGatewayCredentialsWithSecretInputs({
+  const gatewayUrlOverrideSource =
+    connection.urlSource === "cli --url"
+      ? "cli"
+      : connection.urlSource === "env OPENCLAW_GATEWAY_URL"
+        ? "env"
+        : undefined;
+  const creds = await resolveGatewayConnectionAuth({
     config: cfg,
     explicitAuth: {
       token: opts.gatewayToken,
       password: opts.gatewayPassword,
     },
     env: process.env,
+    urlOverride: gatewayUrlOverrideSource ? connection.url : undefined,
+    urlOverrideSource: gatewayUrlOverrideSource,
   });
 
   let agent: AcpGatewayAgent | null = null;
@@ -180,6 +186,15 @@ function parseArgs(args: string[]): AcpServerOptions {
       opts.prefixCwd = false;
       continue;
     }
+    if (arg === "--provenance") {
+      const provenanceMode = normalizeAcpProvenanceMode(args[i + 1]);
+      if (!provenanceMode) {
+        throw new Error("Invalid --provenance value. Use off, meta, or meta+receipt.");
+      }
+      opts.provenanceMode = provenanceMode;
+      i += 1;
+      continue;
+    }
     if (arg === "--verbose" || arg === "-v") {
       opts.verbose = true;
       continue;
@@ -220,6 +235,7 @@ Options:
   --require-existing      Fail if the session key/label does not exist
   --reset-session         Reset the session key before first use
   --no-prefix-cwd         Do not prefix prompts with the working directory
+  --provenance <mode>     ACP provenance mode: off, meta, or meta+receipt
   --verbose, -v           Verbose logging to stderr
   --help, -h              Show this help message
 `);

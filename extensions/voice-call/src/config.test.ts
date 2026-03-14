@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { validateProviderConfig, resolveVoiceCallConfig, type VoiceCallConfig } from "./config.js";
+import {
+  validateProviderConfig,
+  normalizeVoiceCallConfig,
+  resolveVoiceCallConfig,
+  type VoiceCallConfig,
+} from "./config.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
 function createBaseConfig(provider: "telnyx" | "twilio" | "plivo" | "mock"): VoiceCallConfig {
@@ -164,5 +169,50 @@ describe("validateProviderConfig", () => {
       expect(result.valid).toBe(true);
       expect(result.errors).toEqual([]);
     });
+  });
+});
+
+describe("normalizeVoiceCallConfig", () => {
+  it("fills nested runtime defaults from a partial config boundary", () => {
+    const normalized = normalizeVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      streaming: {
+        enabled: true,
+        streamPath: "/custom-stream",
+      },
+    });
+
+    expect(normalized.serve.path).toBe("/voice/webhook");
+    expect(normalized.streaming.streamPath).toBe("/custom-stream");
+    expect(normalized.streaming.sttModel).toBe("gpt-4o-transcribe");
+    expect(normalized.tunnel.provider).toBe("none");
+    expect(normalized.webhookSecurity.allowedHosts).toEqual([]);
+  });
+
+  it("accepts partial nested TTS overrides and preserves nested objects", () => {
+    const normalized = normalizeVoiceCallConfig({
+      tts: {
+        provider: "elevenlabs",
+        elevenlabs: {
+          apiKey: {
+            source: "env",
+            provider: "elevenlabs",
+            id: "ELEVENLABS_API_KEY",
+          },
+          voiceSettings: {
+            speed: 1.1,
+          },
+        },
+      },
+    });
+
+    expect(normalized.tts?.provider).toBe("elevenlabs");
+    expect(normalized.tts?.elevenlabs?.apiKey).toEqual({
+      source: "env",
+      provider: "elevenlabs",
+      id: "ELEVENLABS_API_KEY",
+    });
+    expect(normalized.tts?.elevenlabs?.voiceSettings).toEqual({ speed: 1.1 });
   });
 });

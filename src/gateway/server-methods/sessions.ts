@@ -1,29 +1,13 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
-import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../../agents/pi-embedded.js";
-import { stopSubagentsForRequester } from "../../auto-reply/reply/abort.js";
-import { clearSessionQueues } from "../../auto-reply/reply/queue.js";
-import { closeTrackedBrowserTabsForSessions } from "../../browser/session-tab-registry.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
-  snapshotSessionOrigin,
   resolveMainSessionKey,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { unbindThreadBindingsBySessionKey } from "../../discord/monitor/thread-bindings.js";
-import { logVerbose } from "../../globals.js";
-import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import {
-  isSubagentSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
@@ -37,12 +21,17 @@ import {
   validateSessionsResolveParams,
 } from "../protocol/index.js";
 import {
+  archiveSessionTranscriptsForSession,
+  cleanupSessionBeforeMutation,
+  emitSessionUnboundLifecycleEvent,
+  performGatewaySessionReset,
+} from "../session-reset-service.js";
+import {
   archiveFileOnDisk,
-  archiveSessionTranscripts,
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
-  pruneLegacyStoreKeys,
+  migrateAndPruneGatewaySessionStoreKey,
   readSessionPreviewItemsFromTranscript,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
@@ -101,230 +90,6 @@ function rejectWebchatSessionMutation(params: {
     ),
   );
   return true;
-}
-
-function migrateAndPruneSessionStoreKey(params: {
-  cfg: ReturnType<typeof loadConfig>;
-  key: string;
-  store: Record<string, SessionEntry>;
-}) {
-  const target = resolveGatewaySessionStoreTarget({
-    cfg: params.cfg,
-    key: params.key,
-    store: params.store,
-  });
-  const primaryKey = target.canonicalKey;
-  if (!params.store[primaryKey]) {
-    const existingKey = target.storeKeys.find((candidate) => Boolean(params.store[candidate]));
-    if (existingKey) {
-      params.store[primaryKey] = params.store[existingKey];
-    }
-  }
-  pruneLegacyStoreKeys({
-    store: params.store,
-    canonicalKey: primaryKey,
-    candidates: target.storeKeys,
-  });
-  return { target, primaryKey, entry: params.store[primaryKey] };
-}
-
-function archiveSessionTranscriptsForSession(params: {
-  sessionId: string | undefined;
-  storePath: string;
-  sessionFile?: string;
-  agentId?: string;
-  reason: "reset" | "deleted";
-}): string[] {
-  if (!params.sessionId) {
-    return [];
-  }
-  return archiveSessionTranscripts({
-    sessionId: params.sessionId,
-    storePath: params.storePath,
-    sessionFile: params.sessionFile,
-    agentId: params.agentId,
-    reason: params.reason,
-  });
-}
-
-async function emitSessionUnboundLifecycleEvent(params: {
-  targetSessionKey: string;
-  reason: "session-reset" | "session-delete";
-  emitHooks?: boolean;
-}) {
-  const targetKind = isSubagentSessionKey(params.targetSessionKey) ? "subagent" : "acp";
-  unbindThreadBindingsBySessionKey({
-    targetSessionKey: params.targetSessionKey,
-    targetKind,
-    reason: params.reason,
-    sendFarewell: true,
-  });
-
-  if (params.emitHooks === false) {
-    return;
-  }
-
-  const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("subagent_ended")) {
-    return;
-  }
-  await hookRunner.runSubagentEnded(
-    {
-      targetSessionKey: params.targetSessionKey,
-      targetKind,
-      reason: params.reason,
-      sendFarewell: true,
-      outcome: params.reason === "session-reset" ? "reset" : "deleted",
-    },
-    {
-      childSessionKey: params.targetSessionKey,
-    },
-  );
-}
-
-async function ensureSessionRuntimeCleanup(params: {
-  cfg: ReturnType<typeof loadConfig>;
-  key: string;
-  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
-  sessionId?: string;
-}) {
-  const closeTrackedBrowserTabs = async () => {
-    const closeKeys = new Set<string>([
-      params.key,
-      params.target.canonicalKey,
-      ...params.target.storeKeys,
-      params.sessionId ?? "",
-    ]);
-    return await closeTrackedBrowserTabsForSessions({
-      sessionKeys: [...closeKeys],
-      onWarn: (message) => logVerbose(message),
-    });
-  };
-
-  const queueKeys = new Set<string>(params.target.storeKeys);
-  queueKeys.add(params.target.canonicalKey);
-  if (params.sessionId) {
-    queueKeys.add(params.sessionId);
-  }
-  clearSessionQueues([...queueKeys]);
-  clearBootstrapSnapshot(params.target.canonicalKey);
-  stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
-  if (!params.sessionId) {
-    await closeTrackedBrowserTabs();
-    return undefined;
-  }
-  abortEmbeddedPiRun(params.sessionId);
-  const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
-  if (ended) {
-    await closeTrackedBrowserTabs();
-    return undefined;
-  }
-  return errorShape(
-    ErrorCodes.UNAVAILABLE,
-    `Session ${params.key} is still active; try again in a moment.`,
-  );
-}
-
-const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
-
-async function runAcpCleanupStep(params: {
-  op: () => Promise<void>;
-}): Promise<{ status: "ok" } | { status: "timeout" } | { status: "error"; error: unknown }> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeoutPromise = new Promise<{ status: "timeout" }>((resolve) => {
-    timer = setTimeout(() => resolve({ status: "timeout" }), ACP_RUNTIME_CLEANUP_TIMEOUT_MS);
-  });
-  const opPromise = params
-    .op()
-    .then(() => ({ status: "ok" as const }))
-    .catch((error: unknown) => ({ status: "error" as const, error }));
-  const outcome = await Promise.race([opPromise, timeoutPromise]);
-  if (timer) {
-    clearTimeout(timer);
-  }
-  return outcome;
-}
-
-async function closeAcpRuntimeForSession(params: {
-  cfg: ReturnType<typeof loadConfig>;
-  sessionKey: string;
-  entry?: SessionEntry;
-  reason: "session-reset" | "session-delete";
-}) {
-  if (!params.entry?.acp) {
-    return undefined;
-  }
-  const acpManager = getAcpSessionManager();
-  const cancelOutcome = await runAcpCleanupStep({
-    op: async () => {
-      await acpManager.cancelSession({
-        cfg: params.cfg,
-        sessionKey: params.sessionKey,
-        reason: params.reason,
-      });
-    },
-  });
-  if (cancelOutcome.status === "timeout") {
-    return errorShape(
-      ErrorCodes.UNAVAILABLE,
-      `Session ${params.sessionKey} is still active; try again in a moment.`,
-    );
-  }
-  if (cancelOutcome.status === "error") {
-    logVerbose(
-      `sessions.${params.reason}: ACP cancel failed for ${params.sessionKey}: ${String(cancelOutcome.error)}`,
-    );
-  }
-
-  const closeOutcome = await runAcpCleanupStep({
-    op: async () => {
-      await acpManager.closeSession({
-        cfg: params.cfg,
-        sessionKey: params.sessionKey,
-        reason: params.reason,
-        requireAcpSession: false,
-        allowBackendUnavailable: true,
-      });
-    },
-  });
-  if (closeOutcome.status === "timeout") {
-    return errorShape(
-      ErrorCodes.UNAVAILABLE,
-      `Session ${params.sessionKey} is still active; try again in a moment.`,
-    );
-  }
-  if (closeOutcome.status === "error") {
-    logVerbose(
-      `sessions.${params.reason}: ACP runtime close failed for ${params.sessionKey}: ${String(closeOutcome.error)}`,
-    );
-  }
-  return undefined;
-}
-
-async function cleanupSessionBeforeMutation(params: {
-  cfg: ReturnType<typeof loadConfig>;
-  key: string;
-  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
-  entry: SessionEntry | undefined;
-  legacyKey?: string;
-  canonicalKey?: string;
-  reason: "session-reset" | "session-delete";
-}) {
-  const cleanupError = await ensureSessionRuntimeCleanup({
-    cfg: params.cfg,
-    key: params.key,
-    target: params.target,
-    sessionId: params.entry?.sessionId,
-  });
-  if (cleanupError) {
-    return cleanupError;
-  }
-  return await closeAcpRuntimeForSession({
-    cfg: params.cfg,
-    sessionKey: params.legacyKey ?? params.canonicalKey ?? params.target.canonicalKey ?? params.key,
-    entry: params.entry,
-    reason: params.reason,
-  });
 }
 
 export const sessionsHandlers: GatewayRequestHandlers = {
@@ -434,7 +199,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(key);
     const applied = await updateSessionStore(storePath, async (store) => {
-      const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
+      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
       return await applySessionsPatchToStore({
         cfg,
         store,
@@ -472,88 +237,17 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(key);
-    const { entry, legacyKey, canonicalKey } = loadSessionEntry(key);
-    const hadExistingEntry = Boolean(entry);
-    const commandReason = p.reason === "new" ? "new" : "reset";
-    const hookEvent = createInternalHookEvent(
-      "command",
-      commandReason,
-      target.canonicalKey ?? key,
-      {
-        sessionEntry: entry,
-        previousSessionEntry: entry,
-        commandSource: "gateway:sessions.reset",
-        cfg,
-      },
-    );
-    await triggerInternalHook(hookEvent);
-    const mutationCleanupError = await cleanupSessionBeforeMutation({
-      cfg,
+    const reason = p.reason === "new" ? "new" : "reset";
+    const result = await performGatewaySessionReset({
       key,
-      target,
-      entry,
-      legacyKey,
-      canonicalKey,
-      reason: "session-reset",
+      reason,
+      commandSource: "gateway:sessions.reset",
     });
-    if (mutationCleanupError) {
-      respond(false, undefined, mutationCleanupError);
+    if (!result.ok) {
+      respond(false, undefined, result.error);
       return;
     }
-    let oldSessionId: string | undefined;
-    let oldSessionFile: string | undefined;
-    const next = await updateSessionStore(storePath, (store) => {
-      const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
-      const entry = store[primaryKey];
-      const parsed = parseAgentSessionKey(primaryKey);
-      const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
-      const resolvedModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
-      oldSessionId = entry?.sessionId;
-      oldSessionFile = entry?.sessionFile;
-      const now = Date.now();
-      const nextEntry: SessionEntry = {
-        sessionId: randomUUID(),
-        updatedAt: now,
-        systemSent: false,
-        abortedLastRun: false,
-        thinkingLevel: entry?.thinkingLevel,
-        verboseLevel: entry?.verboseLevel,
-        reasoningLevel: entry?.reasoningLevel,
-        responseUsage: entry?.responseUsage,
-        model: resolvedModel.model,
-        modelProvider: resolvedModel.provider,
-        contextTokens: entry?.contextTokens,
-        sendPolicy: entry?.sendPolicy,
-        label: entry?.label,
-        origin: snapshotSessionOrigin(entry),
-        lastChannel: entry?.lastChannel,
-        lastTo: entry?.lastTo,
-        skillsSnapshot: entry?.skillsSnapshot,
-        // Reset token counts to 0 on session reset (#1523)
-        inputTokens: 0,
-        outputTokens: 0,
-        totalTokens: 0,
-        totalTokensFresh: true,
-      };
-      store[primaryKey] = nextEntry;
-      return nextEntry;
-    });
-    // Archive old transcript so it doesn't accumulate on disk (#14869).
-    archiveSessionTranscriptsForSession({
-      sessionId: oldSessionId,
-      storePath,
-      sessionFile: oldSessionFile,
-      agentId: target.agentId,
-      reason: "reset",
-    });
-    if (hadExistingEntry) {
-      await emitSessionUnboundLifecycleEvent({
-        targetSessionKey: target.canonicalKey ?? key,
-        reason: "session-reset",
-      });
-    }
-    respond(true, { ok: true, key: target.canonicalKey, entry: next }, undefined);
+    respond(true, { ok: true, key: result.key, entry: result.entry }, undefined);
   },
   "sessions.delete": async ({ params, respond, client, isWebchatConnect }) => {
     if (!assertValidParams(params, validateSessionsDeleteParams, "sessions.delete", respond)) {
@@ -597,7 +291,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const sessionId = entry?.sessionId;
     const deleted = await updateSessionStore(storePath, (store) => {
-      const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
+      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
       const hadEntry = Boolean(store[primaryKey]);
       if (hadEntry) {
         delete store[primaryKey];
@@ -666,7 +360,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(key);
     // Lock + read in a short critical section; transcript work happens outside.
     const compactTarget = await updateSessionStore(storePath, (store) => {
-      const { entry, primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
+      const { entry, primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
       return { entry, primaryKey };
     });
     const entry = compactTarget.entry;

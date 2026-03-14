@@ -32,6 +32,37 @@ function respondJsonRoute(res: ServerResponse, route: string): true {
   return true;
 }
 
+function createHealthzPluginHandler() {
+  return vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+    const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+    if (pathname !== "/healthz") {
+      return false;
+    }
+    return respondJsonRoute(res, "plugin-health");
+  });
+}
+
+async function expectHealthzPluginShadow(params: {
+  server: Parameters<typeof sendRequest>[0];
+  handlePluginRequest: ReturnType<typeof createHealthzPluginHandler>;
+}) {
+  const response = await sendRequest(params.server, { path: "/healthz" });
+  expect(response.res.statusCode).toBe(200);
+  expect(response.getBody()).toBe(JSON.stringify({ ok: true, route: "plugin-health" }));
+  expect(params.handlePluginRequest).toHaveBeenCalledTimes(1);
+}
+
+function createMattermostCallbackConfig(callbackPath: string) {
+  return {
+    gateway: { trustedProxies: [] },
+    channels: {
+      mattermost: {
+        commands: { callbackPath },
+      },
+    },
+  };
+}
+
 function createRootMountedControlUiOverrides(handlePluginRequest: PluginRequestHandler) {
   return {
     controlUiEnabled: true,
@@ -55,6 +86,23 @@ const withRootMountedControlUiServer = (params: {
 
 const withPluginGatewayServer = (params: Parameters<typeof withGatewayServer>[0]) =>
   withGatewayServer(params);
+
+const PROBE_CASES = [
+  { path: "/health", status: "live" },
+  { path: "/healthz", status: "live" },
+  { path: "/ready", status: "ready" },
+  { path: "/readyz", status: "ready" },
+] as const;
+
+async function expectProbeRoutesHealthy(server: Parameters<typeof sendRequest>[0]) {
+  for (const probeCase of PROBE_CASES) {
+    const response = await sendRequest(server, { path: probeCase.path });
+    expect(response.res.statusCode, probeCase.path).toBe(200);
+    expect(response.getBody(), probeCase.path).toBe(
+      JSON.stringify({ ok: true, status: probeCase.status }),
+    );
+  }
+}
 
 function createProtectedPluginAuthOverrides(handlePluginRequest: PluginRequestHandler) {
   return {
@@ -98,45 +146,20 @@ describe("gateway plugin HTTP auth boundary", () => {
       prefix: "openclaw-plugin-http-probes-test-",
       resolvedAuth: AUTH_TOKEN,
       run: async (server) => {
-        const probeCases = [
-          { path: "/health", status: "live" },
-          { path: "/healthz", status: "live" },
-          { path: "/ready", status: "ready" },
-          { path: "/readyz", status: "ready" },
-        ] as const;
-
-        for (const probeCase of probeCases) {
-          const response = await sendRequest(server, { path: probeCase.path });
-          expect(response.res.statusCode, probeCase.path).toBe(200);
-          expect(response.getBody(), probeCase.path).toBe(
-            JSON.stringify({ ok: true, status: probeCase.status }),
-          );
-        }
+        await expectProbeRoutesHealthy(server);
       },
     });
   });
 
   test("does not shadow plugin routes mounted on probe paths", async () => {
-    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
-      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (pathname === "/healthz") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ ok: true, route: "plugin-health" }));
-        return true;
-      }
-      return false;
-    });
+    const handlePluginRequest = createHealthzPluginHandler();
 
     await withGatewayServer({
       prefix: "openclaw-plugin-http-probes-shadow-test-",
       resolvedAuth: AUTH_NONE,
       overrides: { handlePluginRequest },
       run: async (server) => {
-        const response = await sendRequest(server, { path: "/healthz" });
-        expect(response.res.statusCode).toBe(200);
-        expect(response.getBody()).toBe(JSON.stringify({ ok: true, route: "plugin-health" }));
-        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+        await expectHealthzPluginShadow({ server, handlePluginRequest });
       },
     });
   });
@@ -234,14 +257,7 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
 
     await withTempConfig({
-      cfg: {
-        gateway: { trustedProxies: [] },
-        channels: {
-          mattermost: {
-            commands: { callbackPath: "/api/channels/mattermost/command" },
-          },
-        },
-      },
+      cfg: createMattermostCallbackConfig("/api/channels/mattermost/command"),
       prefix: "openclaw-plugin-http-auth-mm-callback-",
       run: async () => {
         const server = createTestGatewayServer({
@@ -277,14 +293,7 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
 
     await withTempConfig({
-      cfg: {
-        gateway: { trustedProxies: [] },
-        channels: {
-          mattermost: {
-            commands: { callbackPath: "/api/channels/nostr/default/profile" },
-          },
-        },
-      },
+      cfg: createMattermostCallbackConfig("/api/channels/nostr/default/profile"),
       prefix: "openclaw-plugin-http-auth-mm-misconfig-",
       run: async () => {
         const server = createTestGatewayServer({
@@ -501,47 +510,20 @@ describe("gateway plugin HTTP auth boundary", () => {
       prefix: "openclaw-plugin-http-control-ui-probes-test-",
       handlePluginRequest,
       run: async (server) => {
-        const probeCases = [
-          { path: "/health", status: "live" },
-          { path: "/healthz", status: "live" },
-          { path: "/ready", status: "ready" },
-          { path: "/readyz", status: "ready" },
-        ] as const;
-
-        for (const probeCase of probeCases) {
-          const response = await sendRequest(server, { path: probeCase.path });
-          expect(response.res.statusCode, probeCase.path).toBe(200);
-          expect(response.getBody(), probeCase.path).toBe(
-            JSON.stringify({ ok: true, status: probeCase.status }),
-          );
-        }
-
-        expect(handlePluginRequest).toHaveBeenCalledTimes(probeCases.length);
+        await expectProbeRoutesHealthy(server);
+        expect(handlePluginRequest).toHaveBeenCalledTimes(PROBE_CASES.length);
       },
     });
   });
 
   test("root-mounted control ui still lets plugins claim probe paths first", async () => {
-    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
-      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (pathname !== "/healthz") {
-        return false;
-      }
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(JSON.stringify({ ok: true, route: "plugin-health" }));
-      return true;
-    });
+    const handlePluginRequest = createHealthzPluginHandler();
 
     await withRootMountedControlUiServer({
       prefix: "openclaw-plugin-http-control-ui-probe-shadow-test-",
       handlePluginRequest,
       run: async (server) => {
-        const response = await sendRequest(server, { path: "/healthz" });
-
-        expect(response.res.statusCode).toBe(200);
-        expect(response.getBody()).toBe(JSON.stringify({ ok: true, route: "plugin-health" }));
-        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+        await expectHealthzPluginShadow({ server, handlePluginRequest });
       },
     });
   });

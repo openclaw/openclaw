@@ -1,9 +1,11 @@
+import { inspectDiscordAccount } from "../../../extensions/discord/src/account-inspect.js";
+import { inspectSlackAccount } from "../../../extensions/slack/src/account-inspect.js";
+import { inspectTelegramAccount } from "../../../extensions/telegram/src/account-inspect.js";
+import { resolveWhatsAppAccount } from "../../../extensions/whatsapp/src/accounts.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import { inspectDiscordAccount } from "../../discord/account-inspect.js";
-import { inspectSlackAccount } from "../../slack/account-inspect.js";
-import { inspectTelegramAccount } from "../../telegram/account-inspect.js";
-import { resolveWhatsAppAccount } from "../../web/accounts.js";
+import { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
+import { applyDirectoryQueryAndLimit, toDirectoryEntries } from "./directory-config-helpers.js";
 import { normalizeSlackMessagingTarget } from "./normalize/slack.js";
 import type { ChannelDirectoryEntry } from "./types.js";
 
@@ -51,25 +53,6 @@ function normalizeTrimmedSet(
     .filter(Boolean)
     .map((raw) => normalize(raw))
     .filter((id): id is string => Boolean(id));
-}
-
-function resolveDirectoryQuery(query?: string | null): string {
-  return query?.trim().toLowerCase() || "";
-}
-
-function resolveDirectoryLimit(limit?: number | null): number | undefined {
-  return typeof limit === "number" && limit > 0 ? limit : undefined;
-}
-
-function applyDirectoryQueryAndLimit(ids: string[], params: DirectoryConfigParams): string[] {
-  const q = resolveDirectoryQuery(params.query);
-  const limit = resolveDirectoryLimit(params.limit);
-  const filtered = ids.filter((id) => (q ? id.toLowerCase().includes(q) : true));
-  return typeof limit === "number" ? filtered.slice(0, limit) : filtered;
-}
-
-function toDirectoryEntries(kind: "user" | "group", ids: string[]): ChannelDirectoryEntry[] {
-  return ids.map((id) => ({ kind, id }) as const);
 }
 
 export async function listSlackDirectoryPeersFromConfig(
@@ -161,7 +144,7 @@ export async function listTelegramDirectoryPeersFromConfig(
 ): Promise<ChannelDirectoryEntry[]> {
   const account = inspectTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
   const raw = [
-    ...(account.config.allowFrom ?? []).map((entry) => String(entry)),
+    ...mapAllowFromEntries(account.config.allowFrom),
     ...Object.keys(account.config.dms ?? {}),
   ];
   const ids = Array.from(

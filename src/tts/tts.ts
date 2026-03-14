@@ -37,6 +37,7 @@ import {
   isValidVoiceId,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
+  resolveOpenAITtsInstructions,
   openaiTTS,
   parseTtsDirectives,
   scheduleCleanup,
@@ -117,6 +118,8 @@ export type ResolvedTtsConfig = {
     baseUrl: string;
     model: string;
     voice: string;
+    speed?: number;
+    instructions?: string;
   };
   edge: {
     enabled: boolean;
@@ -304,6 +307,8 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       ).replace(/\/+$/, ""),
       model: raw.openai?.model ?? DEFAULT_OPENAI_MODEL,
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
+      speed: raw.openai?.speed,
+      instructions: raw.openai?.instructions?.trim() || undefined,
     },
     edge: {
       enabled: raw.edge?.enabled ?? true,
@@ -554,6 +559,35 @@ function buildTtsFailureResult(errors: string[]): { success: false; error: strin
   };
 }
 
+function resolveTtsRequestSetup(params: {
+  text: string;
+  cfg: OpenClawConfig;
+  prefsPath?: string;
+  providerOverride?: TtsProvider;
+}):
+  | {
+      config: ResolvedTtsConfig;
+      providers: TtsProvider[];
+    }
+  | {
+      error: string;
+    } {
+  const config = resolveTtsConfig(params.cfg);
+  const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
+  if (params.text.length > config.maxTextLength) {
+    return {
+      error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,
+    };
+  }
+
+  const userProvider = getTtsProvider(config, prefsPath);
+  const provider = params.providerOverride ?? userProvider;
+  return {
+    config,
+    providers: resolveTtsProviderOrder(provider),
+  };
+}
+
 export async function textToSpeech(params: {
   text: string;
   cfg: OpenClawConfig;
@@ -561,22 +595,19 @@ export async function textToSpeech(params: {
   channel?: string;
   overrides?: TtsDirectiveOverrides;
 }): Promise<TtsResult> {
-  const config = resolveTtsConfig(params.cfg);
-  const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
-  const channelId = resolveChannelId(params.channel);
-  const output = resolveOutputFormat(channelId);
-
-  if (params.text.length > config.maxTextLength) {
-    return {
-      success: false,
-      error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,
-    };
+  const setup = resolveTtsRequestSetup({
+    text: params.text,
+    cfg: params.cfg,
+    prefsPath: params.prefsPath,
+    providerOverride: params.overrides?.provider,
+  });
+  if ("error" in setup) {
+    return { success: false, error: setup.error };
   }
 
-  const userProvider = getTtsProvider(config, prefsPath);
-  const overrideProvider = params.overrides?.provider;
-  const provider = overrideProvider ?? userProvider;
-  const providers = resolveTtsProviderOrder(provider);
+  const { config, providers } = setup;
+  const channelId = resolveChannelId(params.channel);
+  const output = resolveOutputFormat(channelId);
 
   const errors: string[] = [];
 
@@ -692,6 +723,8 @@ export async function textToSpeech(params: {
           baseUrl: config.openai.baseUrl,
           model: openaiModelOverride ?? config.openai.model,
           voice: openaiVoiceOverride ?? config.openai.voice,
+          speed: config.openai.speed,
+          instructions: config.openai.instructions,
           responseFormat: output.openai,
           timeoutMs: config.timeoutMs,
         });
@@ -727,18 +760,16 @@ export async function textToSpeechTelephony(params: {
   cfg: OpenClawConfig;
   prefsPath?: string;
 }): Promise<TtsTelephonyResult> {
-  const config = resolveTtsConfig(params.cfg);
-  const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
-
-  if (params.text.length > config.maxTextLength) {
-    return {
-      success: false,
-      error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,
-    };
+  const setup = resolveTtsRequestSetup({
+    text: params.text,
+    cfg: params.cfg,
+    prefsPath: params.prefsPath,
+  });
+  if ("error" in setup) {
+    return { success: false, error: setup.error };
   }
 
-  const userProvider = getTtsProvider(config, prefsPath);
-  const providers = resolveTtsProviderOrder(userProvider);
+  const { config, providers } = setup;
 
   const errors: string[] = [];
 
@@ -789,6 +820,8 @@ export async function textToSpeechTelephony(params: {
         baseUrl: config.openai.baseUrl,
         model: config.openai.model,
         voice: config.openai.voice,
+        speed: config.openai.speed,
+        instructions: config.openai.instructions,
         responseFormat: output.format,
         timeoutMs: config.timeoutMs,
       });
@@ -961,6 +994,7 @@ export const _test = {
   isValidOpenAIModel,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
+  resolveOpenAITtsInstructions,
   parseTtsDirectives,
   resolveModelOverridePolicy,
   summarizeText,

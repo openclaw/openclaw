@@ -27,7 +27,7 @@ Auth is supplied during the WebSocket handshake via:
 
 - `connect.params.auth.token`
 - `connect.params.auth.password`
-  The dashboard settings panel lets you store a token; passwords are not persisted.
+  The dashboard settings panel keeps a token for the current browser tab session and selected gateway URL; passwords are not persisted.
   The onboarding wizard generates a gateway token by default, so paste it here on first connect.
 
 ## Device pairing (first connection)
@@ -75,7 +75,7 @@ The Control UI can localize itself on first load based on your browser locale, a
 - Stream tool calls + live tool output cards in Chat (agent events)
 - Channels: WhatsApp/Telegram/Discord/Slack + plugin channels (Mattermost, etc.) status + QR login + per-channel config (`channels.status`, `web.login.*`, `config.patch`)
 - Instances: presence list + refresh (`system-presence`)
-- Sessions: list + per-session thinking/verbose overrides (`sessions.list`, `sessions.patch`)
+- Sessions: list + per-session thinking/fast/verbose/reasoning overrides (`sessions.list`, `sessions.patch`)
 - Cron jobs: list/add/edit/run/enable/disable + run history (`cron.*`)
 - Skills: status, enable/disable, install, API key updates (`skills.*`)
 - Nodes: list + caps (`node.list`)
@@ -174,7 +174,12 @@ OpenClaw **blocks** Control UI connections without device identity.
 }
 ```
 
-`allowInsecureAuth` does not bypass Control UI device identity or pairing checks.
+`allowInsecureAuth` is a local compatibility toggle only:
+
+- It allows localhost Control UI sessions to proceed without device identity in
+  non-secure HTTP contexts.
+- It does not bypass pairing checks.
+- It does not relax remote (non-localhost) device identity requirements.
 
 **Break-glass only:**
 
@@ -231,13 +236,14 @@ http://localhost:5173/?gatewayUrl=ws://<gateway-host>:18789
 Optional one-time auth (if needed):
 
 ```text
-http://localhost:5173/?gatewayUrl=wss://<gateway-host>:18789&token=<gateway-token>
+http://localhost:5173/?gatewayUrl=wss://<gateway-host>:18789#token=<gateway-token>
 ```
 
 Notes:
 
 - `gatewayUrl` is stored in localStorage after load and removed from the URL.
-- `token` is stored in localStorage; `password` is kept in memory only.
+- `token` is imported from the URL fragment, stored in sessionStorage for the current browser tab session and selected gateway URL, and stripped from the URL; it is not stored in localStorage.
+- `password` is kept in memory only.
 - When `gatewayUrl` is set, the UI does not fall back to config or environment credentials.
   Provide `token` (or `password`) explicitly. Missing explicit credentials is an error.
 - Use `wss://` when the Gateway is behind TLS (Tailscale Serve, HTTPS proxy, etc.).

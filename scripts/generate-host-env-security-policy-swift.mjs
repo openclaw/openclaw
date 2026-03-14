@@ -24,7 +24,7 @@ const outputPath = path.join(
   "HostEnvSecurityPolicy.generated.swift",
 );
 
-/** @type {{blockedKeys: string[]; blockedOverrideKeys?: string[]; blockedPrefixes: string[]}} */
+/** @type {{blockedKeys: string[]; blockedOverrideKeys?: string[]; blockedOverridePrefixes?: string[]; blockedPrefixes: string[]}} */
 const policy = JSON.parse(fs.readFileSync(policyPath, "utf8"));
 
 const renderSwiftStringArray = (items) => items.map((item) => `        "${item}"`).join(",\n");
@@ -42,6 +42,10 @@ ${renderSwiftStringArray(policy.blockedKeys)}
 
     static let blockedOverrideKeys: Set<String> = [
 ${renderSwiftStringArray(policy.blockedOverrideKeys ?? [])}
+    ]
+
+    static let blockedOverridePrefixes: [String] = [
+${renderSwiftStringArray(policy.blockedOverridePrefixes ?? [])}
     ]
 
     static let blockedPrefixes: [String] = [

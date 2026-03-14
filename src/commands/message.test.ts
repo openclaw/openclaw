@@ -34,7 +34,7 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 const webAuthExists = vi.fn(async () => false);
-vi.mock("../web/session.js", () => ({
+vi.mock("../../extensions/whatsapp/src/session.js", () => ({
   webAuthExists,
 }));
 
@@ -190,7 +190,7 @@ function createTelegramSecretRawConfig() {
   return {
     channels: {
       telegram: {
-        token: { $secret: "vault://telegram/token" },
+        token: { $secret: "vault://telegram/token" }, // pragma: allowlist secret
       },
     },
   };

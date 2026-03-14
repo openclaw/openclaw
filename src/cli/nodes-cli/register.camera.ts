@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
-import { renderTable } from "../../terminal/table.js";
+import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
 import { shortenHomePath } from "../../utils.js";
 import {
   type CameraFacing,
@@ -30,6 +30,12 @@ const parseFacing = (value: string): CameraFacing => {
   }
   throw new Error(`invalid facing: ${value} (expected front|back)`);
 };
+
+function getGatewayInvokePayload(raw: unknown): unknown {
+  return typeof raw === "object" && raw !== null
+    ? (raw as { payload?: unknown }).payload
+    : undefined;
+}
 
 export function registerNodesCameraCommands(nodes: Command) {
   const camera = nodes.command("camera").description("Capture camera media from a paired node");
@@ -71,7 +77,7 @@ export function registerNodesCameraCommands(nodes: Command) {
           }
 
           const { heading, muted } = getNodesTheme();
-          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          const tableWidth = getTerminalTableWidth();
           const rows = devices.map((device) => ({
             Name: typeof device.name === "string" ? device.name : "Unknown Camera",
             Position: typeof device.position === "string" ? device.position : muted("unspecified"),
@@ -157,9 +163,7 @@ export function registerNodesCameraCommands(nodes: Command) {
             });
 
             const raw = await callGatewayCli("node.invoke", opts, invokeParams);
-            const res =
-              typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
-            const payload = parseCameraSnapPayload(res.payload);
+            const payload = parseCameraSnapPayload(getGatewayInvokePayload(raw));
             const filePath = cameraTempPath({
               kind: "snap",
               facing,
@@ -229,8 +233,7 @@ export function registerNodesCameraCommands(nodes: Command) {
           });
 
           const raw = await callGatewayCli("node.invoke", opts, invokeParams);
-          const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
-          const payload = parseCameraClipPayload(res.payload);
+          const payload = parseCameraClipPayload(getGatewayInvokePayload(raw));
           const filePath = await writeCameraClipPayloadToFile({
             payload,
             facing,

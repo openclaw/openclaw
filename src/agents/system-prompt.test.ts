@@ -73,14 +73,14 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       ownerNumbers: ["+123"],
       ownerDisplay: "hash",
-      ownerDisplaySecret: "secret-key-A",
+      ownerDisplaySecret: "secret-key-A", // pragma: allowlist secret
     });
 
     const secretB = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       ownerNumbers: ["+123"],
       ownerDisplay: "hash",
-      ownerDisplaySecret: "secret-key-B",
+      ownerDisplaySecret: "secret-key-B", // pragma: allowlist secret
     });
 
     const lineA = secretA.split("## Authorized Senders")[1]?.split("\n")[1];

@@ -105,7 +105,7 @@ vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal
 });
 
 // Prevent transitive import chain from reaching discord/monitor which needs https-proxy-agent.
-vi.mock("../../discord/monitor/gateway-plugin.js", () => ({
+vi.mock("../../../extensions/discord/src/monitor/gateway-plugin.js", () => ({
   createDiscordGatewayPlugin: () => ({}),
 }));
 
@@ -590,6 +590,25 @@ describe("/acp command", () => {
     expect(hoisted.callGatewayMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ method: "sessions.patch" }),
     );
+  });
+
+  it("forbids /acp spawn from sandboxed requester sessions", async () => {
+    const cfg = {
+      ...baseCfg,
+      agents: {
+        defaults: {
+          sandbox: { mode: "all" },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await runDiscordAcpCommand("/acp spawn codex", cfg);
+
+    expect(result?.reply?.text).toContain("Sandboxed sessions cannot spawn ACP sessions");
+    expect(hoisted.requireAcpRuntimeBackendMock).not.toHaveBeenCalled();
+    expect(hoisted.ensureSessionMock).not.toHaveBeenCalled();
+    expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("cancels the ACP session bound to the current thread", async () => {
