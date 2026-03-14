@@ -1,6 +1,6 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
-import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
+import { formatUtcTimestamp } from "../../infra/format-time/format-datetime.js";
 import type { TemplateContext } from "../templating.js";
 
 function safeTrim(value: unknown): string | undefined {
@@ -19,12 +19,16 @@ function formatConversationTimestamp(value: unknown): string | undefined {
   if (Number.isNaN(date.getTime())) {
     return undefined;
   }
-  const formatted = formatZonedTimestamp(date);
+  // Keep conversation metadata timezone-stable across app/gateway deployments by
+  // normalizing to UTC instead of host-local timezone.
+  const formatted = formatUtcTimestamp(date);
   if (!formatted) {
     return undefined;
   }
   try {
-    const weekday = new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date);
+    const weekday = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" }).format(
+      date,
+    );
     return weekday ? `${weekday} ${formatted}` : formatted;
   } catch {
     return formatted;
