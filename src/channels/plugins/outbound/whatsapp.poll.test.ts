@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/config.js";
+import {
+  createWhatsAppPollFixture,
+  expectWhatsAppPollSent,
+} from "../../../test-helpers/whatsapp-outbound.js";
 
 const hoisted = vi.hoisted(() => ({
   sendPollWhatsApp: vi.fn(async () => ({ messageId: "poll-1", toJid: "1555@s.whatsapp.net" })),
@@ -17,25 +20,16 @@ import { whatsappOutbound } from "./whatsapp.js";
 
 describe("whatsappOutbound sendPoll", () => {
   it("threads cfg through poll send options", async () => {
-    const cfg = { marker: "resolved-cfg" } as OpenClawConfig;
-    const poll = {
-      question: "Lunch?",
-      options: ["Pizza", "Sushi"],
-      maxSelections: 1,
-    };
+    const { cfg, poll, to, accountId } = createWhatsAppPollFixture();
 
     const result = await whatsappOutbound.sendPoll!({
       cfg,
-      to: "+1555",
+      to,
       poll,
-      accountId: "work",
+      accountId,
     });
 
-    expect(hoisted.sendPollWhatsApp).toHaveBeenCalledWith("+1555", poll, {
-      verbose: false,
-      accountId: "work",
-      cfg,
-    });
+    expectWhatsAppPollSent(hoisted.sendPollWhatsApp, { cfg, poll, to, accountId });
     expect(result).toEqual({ messageId: "poll-1", toJid: "1555@s.whatsapp.net" });
   });
 });

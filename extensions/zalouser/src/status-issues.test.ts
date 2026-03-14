@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { expectOpenDmPolicyConfigIssue } from "../../test-utils/status-issues.js";
 import { collectZalouserStatusIssues } from "./status-issues.js";
 
 describe("collectZalouserStatusIssues", () => {
@@ -17,16 +18,15 @@ describe("collectZalouserStatusIssues", () => {
   });
 
   it("warns when dmPolicy is open", () => {
-    const issues = collectZalouserStatusIssues([
-      {
+    expectOpenDmPolicyConfigIssue({
+      collectIssues: collectZalouserStatusIssues,
+      account: {
         accountId: "default",
         enabled: true,
         configured: true,
         dmPolicy: "open",
       },
-    ]);
-    expect(issues).toHaveLength(1);
-    expect(issues[0]?.kind).toBe("config");
+    });
   });
 
   it("skips disabled accounts", () => {

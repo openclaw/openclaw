@@ -7,6 +7,7 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
+import { resolveHomeDir } from "./paths.js";
 import { execSchtasks } from "./schtasks-exec.js";
 
 export type ExtraGatewayService = {
@@ -47,14 +48,6 @@ export function renderGatewayServiceCleanupHints(
     default:
       return [];
   }
-}
-
-function resolveHomeDir(env: Record<string, string | undefined>): string {
-  const home = env.HOME?.trim() || env.USERPROFILE?.trim();
-  if (!home) {
-    throw new Error("Missing HOME");
-  }
-  return home;
 }
 
 type Marker = (typeof EXTRA_MARKERS)[number];

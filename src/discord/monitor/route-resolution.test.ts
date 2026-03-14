@@ -2,11 +2,32 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import {
-  resolveDiscordBoundConversationRoute,
   buildDiscordRoutePeer,
+  resolveDiscordBoundConversationRoute,
   resolveDiscordConversationRoute,
   resolveDiscordEffectiveRoute,
 } from "./route-resolution.js";
+
+function buildWorkerBindingConfig(peer: {
+  kind: "channel" | "direct";
+  id: string;
+}): OpenClawConfig {
+  return {
+    agents: {
+      list: [{ id: "worker" }],
+    },
+    bindings: [
+      {
+        agentId: "worker",
+        match: {
+          channel: "discord",
+          accountId: "default",
+          peer,
+        },
+      },
+    ],
+  };
+}
 
 describe("discord route resolution helpers", () => {
   it("builds a direct peer from DM metadata", () => {
@@ -78,21 +99,7 @@ describe("discord route resolution helpers", () => {
   });
 
   it("resolves the same route shape as the inline Discord route inputs", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        list: [{ id: "worker" }],
-      },
-      bindings: [
-        {
-          agentId: "worker",
-          match: {
-            channel: "discord",
-            accountId: "default",
-            peer: { kind: "channel", id: "c1" },
-          },
-        },
-      ],
-    };
+    const cfg = buildWorkerBindingConfig({ kind: "channel", id: "c1" });
 
     expect(
       resolveDiscordConversationRoute({
@@ -110,21 +117,7 @@ describe("discord route resolution helpers", () => {
   });
 
   it("composes route building with effective-route overrides", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        list: [{ id: "worker" }],
-      },
-      bindings: [
-        {
-          agentId: "worker",
-          match: {
-            channel: "discord",
-            accountId: "default",
-            peer: { kind: "direct", id: "user-1" },
-          },
-        },
-      ],
-    };
+    const cfg = buildWorkerBindingConfig({ kind: "direct", id: "user-1" });
 
     expect(
       resolveDiscordBoundConversationRoute({

@@ -6,9 +6,13 @@ import type { TelegramContext } from "./types.js";
 const saveMediaBuffer = vi.fn();
 const fetchRemoteMedia = vi.fn();
 
-vi.mock("../../media/store.js", () => ({
-  saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
-}));
+vi.mock("../../media/store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../media/store.js")>();
+  return {
+    ...actual,
+    saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
+  };
+});
 
 vi.mock("../../media/fetch.js", () => ({
   fetchRemoteMedia: (...args: unknown[]) => fetchRemoteMedia(...args),
@@ -297,6 +301,7 @@ describe("resolveMedia getFile retry", () => {
   it("uses caller-provided fetch impl for file downloads", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
     const callerFetch = vi.fn() as unknown as typeof fetch;
+    const callerTransport = { fetch: callerFetch, sourceFetch: callerFetch };
     fetchRemoteMedia.mockResolvedValueOnce({
       buffer: Buffer.from("pdf-data"),
       contentType: "application/pdf",
@@ -311,7 +316,7 @@ describe("resolveMedia getFile retry", () => {
       makeCtx("document", getFile),
       MAX_MEDIA_BYTES,
       BOT_TOKEN,
-      callerFetch,
+      callerTransport,
     );
 
     expect(result).not.toBeNull();
@@ -325,6 +330,7 @@ describe("resolveMedia getFile retry", () => {
   it("uses caller-provided fetch impl for sticker downloads", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "stickers/file_0.webp" });
     const callerFetch = vi.fn() as unknown as typeof fetch;
+    const callerTransport = { fetch: callerFetch, sourceFetch: callerFetch };
     fetchRemoteMedia.mockResolvedValueOnce({
       buffer: Buffer.from("sticker-data"),
       contentType: "image/webp",
@@ -339,7 +345,7 @@ describe("resolveMedia getFile retry", () => {
       makeCtx("sticker", getFile),
       MAX_MEDIA_BYTES,
       BOT_TOKEN,
-      callerFetch,
+      callerTransport,
     );
 
     expect(result).not.toBeNull();
