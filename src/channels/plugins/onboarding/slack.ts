@@ -72,6 +72,7 @@ function buildSlackManifest(botName: string) {
           "commands",
           "files:read",
           "files:write",
+          "im:write",
         ],
       },
     },
