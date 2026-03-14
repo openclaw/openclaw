@@ -10,6 +10,16 @@ export type BrowserProfileConfig = {
   /** Profile color (hex). Auto-assigned at creation. */
   color: string;
 };
+export type BrowserCdpBridgeConfig = {
+  /** Enable the local CDP bridge that forwards to a remote debug endpoint. Default: true when configured. */
+  enabled?: boolean;
+  /** Upstream remote debug endpoint (http(s) browserUrl or ws(s) wsEndpoint). */
+  upstreamUrl?: string;
+  /** Loopback bind address for the local bridge. Default: 127.0.0.1 */
+  bindHost?: string;
+  /** Local bridge port. Default: derived from browser control port. */
+  port?: number;
+};
 export type BrowserSnapshotDefaults = {
   /** Default snapshot mode (applies when mode is not provided). */
   mode?: "efficient";
@@ -72,4 +82,6 @@ export type BrowserConfig = {
    * the relay must be reachable from a different network namespace.
    */
   relayBindHost?: string;
+  /** Optional local CDP bridge for WSL2/remote-browser topologies. */
+  cdpBridge?: BrowserCdpBridgeConfig;
 };

@@ -1,4 +1,5 @@
 import type { Server } from "node:http";
+import { startLocalCdpBridge } from "./cdp-bridge.js";
 import { isPwAiLoaded } from "./pw-ai-state.js";
 import type { BrowserServerState } from "./server-context.js";
 import { ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } from "./server-lifecycle.js";
@@ -14,7 +15,16 @@ export async function createBrowserRuntimeState(params: {
     port: params.port,
     resolved: params.resolved,
     profiles: new Map(),
+    cdpBridge: null,
   };
+
+  if (params.resolved.cdpBridge?.enabled && params.resolved.cdpBridge.upstreamUrl) {
+    state.cdpBridge = await startLocalCdpBridge({
+      upstreamUrl: params.resolved.cdpBridge.upstreamUrl,
+      bindHost: params.resolved.cdpBridge.bindHost,
+      port: params.resolved.cdpBridge.port,
+    });
+  }
 
   await ensureExtensionRelayForProfiles({
     resolved: params.resolved,
@@ -39,6 +49,12 @@ export async function stopBrowserRuntime(params: {
     getState: params.getState,
     onWarn: params.onWarn,
   });
+
+  try {
+    await params.current.cdpBridge?.stop();
+  } catch (err) {
+    params.onWarn(`Failed to stop local CDP bridge: ${String(err)}`);
+  }
 
   if (params.closeServer && params.current.server) {
     await new Promise<void>((resolve) => {

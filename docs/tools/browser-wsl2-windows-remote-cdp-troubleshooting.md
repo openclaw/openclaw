@@ -145,6 +145,38 @@ Notes:
 - keep `attachOnly: true` for externally managed browsers
 - test the same URL with `curl` before expecting OpenClaw to succeed
 
+Optional: if you want a stable local loopback endpoint inside WSL2, enable the
+CDP bridge and point the profile at the bridge instead of the Windows host
+directly:
+
+```json5
+{
+  browser: {
+    enabled: true,
+    defaultProfile: "remote",
+    cdpBridge: {
+      upstreamUrl: "http://WINDOWS_HOST_OR_IP:9222",
+      bindHost: "127.0.0.1",
+      port: 18794,
+    },
+    profiles: {
+      remote: {
+        cdpUrl: "http://127.0.0.1:18794",
+        attachOnly: true,
+        color: "#00AA00",
+      },
+    },
+  },
+}
+```
+
+Bridge notes:
+
+- `browser.cdpBridge.upstreamUrl` is the Windows-reachable Chrome debug endpoint
+- `browser.profiles.<name>.cdpUrl` stays local and is what MCP connects to
+- use this when the Windows host/IP is annoying to keep track of or you want a
+  single local attach URL inside WSL2
+
 ### Layer 4: If you use the Chrome extension relay instead
 
 If the browser machine and the Gateway are separated by a namespace boundary, the relay may need a non-loopback bind address.
@@ -227,7 +259,8 @@ Treat each message as a layer-specific clue:
 
 1. Windows: does `curl http://127.0.0.1:9222/json/version` work?
 2. WSL2: does `curl http://WINDOWS_HOST_OR_IP:9222/json/version` work?
-3. OpenClaw config: does `browser.profiles.<name>.cdpUrl` use that exact WSL2-reachable address?
+3. OpenClaw config: does `browser.profiles.<name>.cdpUrl` use the right endpoint for your mode
+   (direct Windows address, or the local `browser.cdpBridge.port` endpoint if you enabled the bridge)?
 4. Control UI: are you opening `http://127.0.0.1:18789/` instead of a LAN IP?
 5. Extension relay only: do you actually need `browser.relayBindHost`, and if so is it set explicitly?
 

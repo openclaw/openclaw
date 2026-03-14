@@ -381,6 +381,15 @@ export const OpenClawSchema = z
           .optional(),
         extraArgs: z.array(z.string()).optional(),
         relayBindHost: z.union([z.string().ipv4(), z.string().ipv6()]).optional(),
+        cdpBridge: z
+          .object({
+            enabled: z.boolean().optional(),
+            upstreamUrl: z.string().optional(),
+            bindHost: z.union([z.string().ipv4(), z.string().ipv6()]).optional(),
+            port: z.number().int().min(1).max(65535).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

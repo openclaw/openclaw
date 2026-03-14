@@ -462,6 +462,9 @@ Notes:
 - On desktop, OpenClaw uses MCP `--autoConnect`.
 - In headless mode, OpenClaw can launch Chrome through MCP or connect MCP to a
   configured browser URL/WS endpoint.
+- For split-host setups such as WSL2 Gateway + Windows Chrome, you can keep
+  `browser.profiles.<name>.cdpUrl` local and set `browser.cdpBridge.upstreamUrl`
+  to the remote browser debug endpoint.
 - Existing-session screenshots support page captures and `--ref` element
   captures from snapshots, but not CSS `--element` selectors.
 - Existing-session `wait --url` supports exact, substring, and glob patterns
@@ -478,6 +481,29 @@ WSL2 / cross-namespace example:
     enabled: true,
     relayBindHost: "0.0.0.0",
     defaultProfile: "chrome-relay",
+  },
+}
+```
+
+WSL2 / remote CDP bridge example:
+
+```json5
+{
+  browser: {
+    enabled: true,
+    defaultProfile: "user",
+    cdpBridge: {
+      upstreamUrl: "http://WINDOWS_HOST_OR_IP:9222",
+      bindHost: "127.0.0.1",
+      port: 18794,
+    },
+    profiles: {
+      user: {
+        driver: "existing-session",
+        cdpUrl: "http://127.0.0.1:18794",
+        color: "#00AA00",
+      },
+    },
   },
 }
 ```

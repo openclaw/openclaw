@@ -14,7 +14,7 @@ import {
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
-import { CDP_PORT_RANGE_START } from "./profiles.js";
+import { CDP_PORT_RANGE_START, getUsedPorts } from "./profiles.js";
 
 export type ResolvedBrowserConfig = {
   enabled: boolean;
@@ -37,6 +37,14 @@ export type ResolvedBrowserConfig = {
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
   relayBindHost?: string;
+  cdpBridge?: ResolvedBrowserCdpBridgeConfig;
+};
+
+export type ResolvedBrowserCdpBridgeConfig = {
+  enabled: boolean;
+  upstreamUrl?: string;
+  bindHost: string;
+  port: number;
 };
 
 export type ResolvedBrowserProfile = {
@@ -97,6 +105,50 @@ function normalizeStringList(raw: string[] | undefined): string[] | undefined {
     .map((value) => value.trim())
     .filter((value): value is string => value.length > 0);
   return values.length > 0 ? values : undefined;
+}
+
+function resolveCdpBridgePort(rawPort: number | undefined, controlPort: number): number {
+  const fallback = controlPort + 3;
+  const port =
+    typeof rawPort === "number" && Number.isFinite(rawPort) ? Math.floor(rawPort) : fallback;
+  if (port < 1 || port > 65535) {
+    throw new Error(`browser.cdpBridge.port must be between 1 and 65535, got: ${port}`);
+  }
+  return port;
+}
+
+function resolveCdpBridgeConfig(
+  cfg: BrowserConfig | undefined,
+  controlPort: number,
+): ResolvedBrowserCdpBridgeConfig | undefined {
+  const bridge = cfg?.cdpBridge;
+  if (!bridge) {
+    return undefined;
+  }
+
+  const bindHost = bridge.bindHost?.trim() || "127.0.0.1";
+  if (!isLoopbackHost(bindHost)) {
+    throw new Error(
+      `browser.cdpBridge.bindHost must be a loopback host (got ${bridge.bindHost ?? "(empty)"})`,
+    );
+  }
+
+  const upstreamUrlRaw = bridge.upstreamUrl?.trim() || "";
+  const enabled = bridge.enabled !== false;
+  if (enabled && !upstreamUrlRaw) {
+    throw new Error("browser.cdpBridge.upstreamUrl is required when browser.cdpBridge is enabled");
+  }
+
+  const parsedUpstream = upstreamUrlRaw
+    ? parseHttpUrl(upstreamUrlRaw, "browser.cdpBridge.upstreamUrl")
+    : undefined;
+
+  return {
+    enabled,
+    upstreamUrl: parsedUpstream?.normalized,
+    bindHost,
+    port: resolveCdpBridgePort(bridge.port, controlPort),
+  };
 }
 
 function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
@@ -198,6 +250,36 @@ function ensureDefaultUserBrowserProfile(
   return result;
 }
 
+/**
+ * Ensure a built-in "chrome-relay" profile exists for the Chrome extension relay.
+ *
+ * Note: this is an OpenClaw browser profile (routing config), not a Chrome user profile.
+ * It points at the local relay CDP endpoint (controlPort + 1).
+ */
+function ensureDefaultChromeRelayProfile(
+  profiles: Record<string, BrowserProfileConfig>,
+  controlPort: number,
+): Record<string, BrowserProfileConfig> {
+  const result = { ...profiles };
+  if (result["chrome-relay"]) {
+    return result;
+  }
+  const relayPort = controlPort + 1;
+  if (!Number.isFinite(relayPort) || relayPort <= 0 || relayPort > 65535) {
+    return result;
+  }
+  // Avoid adding the built-in profile if the derived relay port is already used by another profile
+  // (legacy single-profile configs may use controlPort+1 for openclaw/openclaw CDP).
+  if (getUsedPorts(result).has(relayPort)) {
+    return result;
+  }
+  result["chrome-relay"] = {
+    driver: "extension",
+    cdpUrl: `http://127.0.0.1:${relayPort}`,
+    color: "#00AA00",
+  };
+  return result;
+}
 export function resolveBrowserConfig(
   cfg: BrowserConfig | undefined,
   rootConfig?: OpenClawConfig,
@@ -257,14 +339,17 @@ export function resolveBrowserConfig(
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
   const isWsUrl = cdpInfo.parsed.protocol === "ws:" || cdpInfo.parsed.protocol === "wss:";
   const legacyCdpUrl = rawCdpUrl && isWsUrl ? cdpInfo.normalized : undefined;
-  const profiles = ensureDefaultUserBrowserProfile(
-    ensureDefaultProfile(
-      cfg?.profiles,
-      defaultColor,
-      legacyCdpPort,
-      cdpPortRangeStart,
-      legacyCdpUrl,
+  const profiles = ensureDefaultChromeRelayProfile(
+    ensureDefaultUserBrowserProfile(
+      ensureDefaultProfile(
+        cfg?.profiles,
+        defaultColor,
+        legacyCdpPort,
+        cdpPortRangeStart,
+        legacyCdpUrl,
+      ),
     ),
+    controlPort,
   );
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
 
@@ -281,6 +366,7 @@ export function resolveBrowserConfig(
     : [];
   const ssrfPolicy = resolveBrowserSsrFPolicy(cfg);
   const relayBindHost = cfg?.relayBindHost?.trim() || undefined;
+  const cdpBridge = resolveCdpBridgeConfig(cfg, controlPort);
 
   return {
     enabled,
@@ -303,6 +389,7 @@ export function resolveBrowserConfig(
     ssrfPolicy,
     extraArgs,
     relayBindHost,
+    cdpBridge,
   };
 }
 

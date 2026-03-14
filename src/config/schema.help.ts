@@ -252,6 +252,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Default browser profile name selected when callers do not explicitly choose a profile. Use a stable low-privilege profile as the default to reduce accidental cross-context state use.",
   "browser.relayBindHost":
     "Bind IP address for the Chrome extension relay listener. Leave unset for loopback-only access, or set an explicit non-loopback IP such as 0.0.0.0 only when the relay must be reachable across network namespaces (for example WSL2) and the surrounding network is already trusted.",
+  "browser.cdpBridge":
+    "Optional local CDP bridge that forwards Chrome DevTools HTTP/WebSocket traffic to a remote browser debug endpoint. Use this for WSL2 or split-host setups where MCP should attach to a stable local loopback URL while the actual browser runs elsewhere.",
+  "browser.cdpBridge.enabled":
+    "Enables the local CDP bridge when browser.cdpBridge is configured. Leave enabled for stable local attach flows, or disable temporarily while keeping the bridge settings in config for later reuse.",
+  "browser.cdpBridge.upstreamUrl":
+    "Remote browser debug endpoint that the local CDP bridge forwards to. Use an http(s) browser URL when MCP should discover WebSocket targets through /json/version, or a ws(s) endpoint when you want a direct bridged WebSocket path.",
+  "browser.cdpBridge.bindHost":
+    "Loopback bind host for the local CDP bridge listener. Keep this on 127.0.0.1 or ::1 so the bridge is not exposed beyond the local machine or WSL2 namespace.",
+  "browser.cdpBridge.port":
+    "Local port for the CDP bridge listener. Point browser.profiles.<name>.cdpUrl at this local endpoint so existing-session MCP attaches through the bridge instead of the remote host directly.",
   "browser.profiles":
     "Named browser profile connection map used for explicit routing to CDP ports or URLs with optional metadata. Keep profile names consistent and avoid overlapping endpoint definitions.",
   "browser.profiles.*.cdpPort":

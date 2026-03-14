@@ -1,4 +1,5 @@
 import type { Server } from "node:http";
+import type { LocalCdpBridgeServer } from "./cdp-bridge.js";
 import type { RunningChrome } from "./chrome.js";
 import type { BrowserTransport } from "./client.js";
 import type { BrowserTab } from "./client.js";
@@ -25,6 +26,7 @@ export type BrowserServerState = {
   port: number;
   resolved: ResolvedBrowserConfig;
   profiles: Map<string, ProfileRuntimeState>;
+  cdpBridge?: LocalCdpBridgeServer | null;
 };
 
 type BrowserProfileActions = {
