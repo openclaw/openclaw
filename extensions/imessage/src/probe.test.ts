@@ -5,11 +5,11 @@ const detectBinaryMock = vi.hoisted(() => vi.fn());
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 const createIMessageRpcClientMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../commands/onboard-helpers.js", () => ({
+vi.mock("../../../src/commands/onboard-helpers.js", () => ({
   detectBinary: (...args: unknown[]) => detectBinaryMock(...args),
 }));
 
-vi.mock("../process/exec.js", () => ({
+vi.mock("../../../src/process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
 
