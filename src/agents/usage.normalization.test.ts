@@ -34,6 +34,21 @@ describe("normalizeUsage", () => {
     });
   });
 
+  it("normalizes numeric string token fields", () => {
+    const usage = normalizeUsage({
+      prompt_tokens: "987" as unknown as number,
+      completion_tokens: "123" as unknown as number,
+      total_tokens: "1110" as unknown as number,
+    });
+    expect(usage).toEqual({
+      input: 987,
+      output: 123,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 1110,
+    });
+  });
+
   it("returns undefined for empty usage objects", () => {
     expect(normalizeUsage({})).toBeUndefined();
   });
