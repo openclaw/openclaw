@@ -197,6 +197,7 @@ export async function monitorWebChannel(
       sendReadReceipts: account.sendReadReceipts,
       debounceMs: inboundDebounceMs,
       shouldDebounce,
+      reactionNotifications: account.reactionNotifications,
       onMessage: async (msg: WebInboundMsg) => {
         handledMessages += 1;
         lastMessageAt = Date.now();
@@ -205,6 +206,25 @@ export async function monitorWebChannel(
         emitStatus();
         _lastInboundMsg = msg;
         await onMessage(msg);
+      },
+      onReaction: async (event) => {
+        // Resolve routing for this account
+        const route = resolveAgentRoute({
+          cfg,
+          channel: "whatsapp",
+          accountId: event.accountId,
+        });
+
+        // Format the notification text
+        const emojiDisplay = event.action === "removed" ? "(removed)" : event.emoji;
+        const reactorLabel = event.reactorE164 ?? event.reactorJid;
+        const text = `WhatsApp reaction ${event.action}: ${emojiDisplay} by ${reactorLabel} on msg ${event.messageId}`;
+
+        // Emit system event with proper routing
+        enqueueSystemEvent(text, {
+          sessionKey: route.sessionKey,
+          contextKey: `whatsapp:reaction:${event.action}:${event.messageId}:${event.reactorJid}:${event.emoji}`,
+        });
       },
     });
 

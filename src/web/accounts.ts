@@ -27,6 +27,7 @@ export type ResolvedWhatsAppAccount = {
   ackReaction?: WhatsAppAccountConfig["ackReaction"];
   groups?: WhatsAppAccountConfig["groups"];
   debounceMs?: number;
+  reactionNotifications?: "off" | "own" | "all";
 };
 
 function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
@@ -166,6 +167,7 @@ export function resolveWhatsAppAccount(params: {
     ackReaction: accountCfg?.ackReaction ?? rootCfg?.ackReaction,
     groups: accountCfg?.groups ?? rootCfg?.groups,
     debounceMs: accountCfg?.debounceMs ?? rootCfg?.debounceMs,
+    reactionNotifications: accountCfg?.reactionNotifications ?? rootCfg?.reactionNotifications,
   };
 }
 
