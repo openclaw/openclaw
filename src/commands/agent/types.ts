@@ -78,6 +78,8 @@ export type AgentCommandOpts = {
   extraSystemPrompt?: string;
   internalEvents?: AgentInternalEvent[];
   inputProvenance?: InputProvenance;
+  /** If true, omit the message tool from the tool list. */
+  disableMessageTool?: boolean;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
   /** Explicit workspace directory override (for subagents to inherit parent workspace). */
