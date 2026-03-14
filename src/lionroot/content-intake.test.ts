@@ -15,6 +15,7 @@ const mockDispatchInboundMessage = vi.hoisted(() => vi.fn());
 const mockDeliverOutboundPayloads = vi.hoisted(() => vi.fn());
 const mockClassifyContentWithLLM = vi.hoisted(() => vi.fn());
 const mockResolveTwitterContent = vi.hoisted(() => vi.fn());
+const mockMaybeHandleFoodImageCapture = vi.hoisted(() => vi.fn());
 
 vi.mock("../auto-reply/dispatch.js", () => ({
   dispatchInboundMessage: mockDispatchInboundMessage,
@@ -32,6 +33,10 @@ vi.mock("./routing/content-route.js", async (importOriginal) => {
     resolveTwitterContent: mockResolveTwitterContent,
   };
 });
+
+vi.mock("./food-capture.js", () => ({
+  maybeHandleFoodImageCapture: mockMaybeHandleFoodImageCapture,
+}));
 
 import { handleContentIntake, type ContentIntakeParams } from "./content-intake.js";
 
@@ -151,6 +156,7 @@ describe("handleContentIntake forwarded agent routing", () => {
       confidence: "high",
       reason: "LLM classified as Cody",
     });
+    mockMaybeHandleFoodImageCapture.mockReset().mockResolvedValue(false);
     mockDispatchInboundMessage.mockReset().mockImplementation(async ({ dispatcher }) => {
       dispatcher.sendFinalReply({ text: "Looks good for OpenClaw integration." });
       dispatcher.markComplete();
@@ -321,5 +327,27 @@ describe("handleContentIntake forwarded agent routing", () => {
     expect(mockDeliverOutboundPayloads).toHaveBeenCalledTimes(2);
     const [firstForwardCall] = mockDeliverOutboundPayloads.mock.calls;
     expect(firstForwardCall?.[0].to).toContain("08🌱 life-loop");
+  });
+
+  it("short-circuits normal routing when a food image capture is handled", async () => {
+    const params = createParams();
+    params.bodyText = "<media:image>";
+    params.mediaType = "image/jpeg";
+    params.mediaPath = "/tmp/meal.jpg";
+    mockMaybeHandleFoodImageCapture.mockResolvedValueOnce(true);
+
+    const result = await handleContentIntake(params);
+
+    expect(result).toEqual({ handled: true });
+    expect(mockMaybeHandleFoodImageCapture).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bodyText: "<media:image>",
+        mediaType: "image/jpeg",
+        mediaPath: "/tmp/meal.jpg",
+      }),
+    );
+    expect(mockClassifyContentWithLLM).not.toHaveBeenCalled();
+    expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mockDispatchInboundMessage).not.toHaveBeenCalled();
   });
 });

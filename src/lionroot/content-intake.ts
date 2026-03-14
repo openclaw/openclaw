@@ -28,6 +28,7 @@ import type { sendMessageIMessage } from "../imessage/send.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { buildAgentSessionKey, pickFirstExistingAgentId } from "../routing/resolve-route.js";
 import { truncateUtf16Safe } from "../utils.js";
+import { maybeHandleFoodImageCapture } from "./food-capture.js";
 import {
   buildForwardTarget,
   buildTopicSuffix,
@@ -386,6 +387,26 @@ export async function handleContentIntake(
 
   // Resolve Zulip base URL for narrow links in ack messages.
   const zulipBaseUrl = resolveZulipBaseUrl(cfg);
+
+  const foodCaptureHandled = await maybeHandleFoodImageCapture({
+    cfg,
+    bodyText,
+    mediaPath,
+    mediaType,
+    sender,
+    accountId: accountInfo.accountId,
+    isGroup: decision.isGroup,
+    sendMessage,
+    sendOptions: {
+      client,
+      maxBytes: mediaMaxBytes,
+      accountId: accountInfo.accountId,
+      ...(chatId ? { chatId } : {}),
+    },
+  });
+  if (foodCaptureHandled) {
+    return { handled: true };
+  }
 
   if (forwardCfg && contentRoutingCfg && !decision.isGroup) {
     // Follow-up to a recent forward: if the same sender sends a non-URL message
