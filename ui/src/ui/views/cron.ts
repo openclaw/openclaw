@@ -1564,7 +1564,7 @@ function renderJob(job: CronJob, props: CronProps) {
               selectAnd(() => props.onRun(job, "due"));
             }}
           >
-            Run if due
+            ${t("cron.jobList.runIfDue")}
           </button>
           <button
             class="btn"
