@@ -29,6 +29,12 @@ type SnapshotTargetOpts = {
   disconnectReason?: string;
 };
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw signal.reason ?? new Error("aborted");
+  }
+}
+
 async function runAbortableSnapshotWork<T>(
   opts: SnapshotTargetOpts,
   work: () => Promise<T>,
@@ -268,13 +274,16 @@ export async function navigateViaPlaywright(opts: {
     if (!url) {
       throw new Error("url is required");
     }
+    throwIfAborted(opts.signal);
     await assertBrowserNavigationAllowed({
       url,
       ...withBrowserNavigationPolicy(opts.ssrfPolicy),
     });
+    throwIfAborted(opts.signal);
     const timeout = Math.max(1000, Math.min(120_000, opts.timeoutMs ?? 20_000));
     let page = await getPageForTargetId(opts);
     ensurePageState(page);
+    throwIfAborted(opts.signal);
     const navigate = async () => await page.goto(url, { timeout });
     let response;
     try {
@@ -283,9 +292,7 @@ export async function navigateViaPlaywright(opts: {
       if (!isRetryableNavigateError(err)) {
         throw err;
       }
-      if (opts.signal?.aborted) {
-        throw opts.signal.reason ?? new Error("aborted");
-      }
+      throwIfAborted(opts.signal);
       // Extension relays can briefly drop CDP during renderer swaps/navigation.
       // Force a clean reconnect, then retry once on the refreshed page handle.
       await forceDisconnectPlaywrightForTarget({
@@ -293,11 +300,10 @@ export async function navigateViaPlaywright(opts: {
         targetId: opts.targetId,
         reason: "retry navigate after detached frame",
       }).catch(() => {});
-      if (opts.signal?.aborted) {
-        throw opts.signal.reason ?? new Error("aborted");
-      }
+      throwIfAborted(opts.signal);
       page = await getPageForTargetId(opts);
       ensurePageState(page);
+      throwIfAborted(opts.signal);
       response = await navigate();
     }
     await assertBrowserNavigationRedirectChainAllowed({
