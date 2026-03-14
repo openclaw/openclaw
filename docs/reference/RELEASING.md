@@ -94,6 +94,7 @@ Historical note:
 
 - [ ] Confirm git status is clean; commit and push as needed.
 - [ ] Confirm npm trusted publishing is configured for the `openclaw` package.
+- [ ] Do not rely on an `NPM_TOKEN` secret for this workflow; the publish job uses GitHub OIDC trusted publishing.
 - [ ] Push the matching git tag to trigger the preview run in `.github/workflows/openclaw-npm-release.yml`.
 - [ ] Run `OpenClaw NPM Release` manually with the same tag to publish after `npm-release` environment approval.
   - Stable tags publish to npm `latest`.
