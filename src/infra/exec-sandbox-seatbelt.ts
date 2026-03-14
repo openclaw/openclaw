@@ -92,7 +92,12 @@ function expandSbplAliases(pattern: string): string[] {
   return [pattern];
 }
 
-function patternToSbplMatcher(pattern: string, homeDir: string): string | null {
+type SbplMatchResult =
+  | { matcher: string; approximate: false }
+  | { matcher: string; approximate: true } // mid-path wildcard — exec bit must be skipped
+  | null;
+
+function patternToSbplMatcher(pattern: string, homeDir: string, perm?: PermStr): SbplMatchResult {
   // Trailing / shorthand: "/tmp/" → "/tmp/**"
   const withExpanded = pattern.endsWith("/") ? pattern + "**" : pattern;
   const expanded = withExpanded.startsWith("~")
@@ -109,17 +114,25 @@ function patternToSbplMatcher(pattern: string, homeDir: string): string | null {
   // If the original pattern had wildcards, use subpath (recursive match).
   // Otherwise use literal (exact match).
   if (/[*?]/.test(expanded)) {
-    // Guard against mid-path wildcards (e.g. /home/*/workspace/**): stripping from
-    // the first * would produce /home and silently grant access to all of /home.
-    // bwrap skips these patterns too — return null so callers can skip emission.
     const wildcardIdx = expanded.search(/[*?[]/);
     const afterWildcard = expanded.slice(wildcardIdx + 1);
     if (/[/\\]/.test(afterWildcard)) {
-      return null;
+      // Mid-path wildcard (e.g. skills/**/*.sh): SBPL has no glob matcher so we fall
+      // back to the longest concrete prefix as a subpath.
+      // "---" → skip entirely: deny-all on the prefix is too broad.
+      // Other perms → emit prefix with approximate=true so callers omit the exec bit.
+      //   Granting exec on the prefix would allow arbitrary binaries under the directory
+      //   to be executed by subprocesses, not just files matching the original pattern.
+      //   Read/write on the prefix are acceptable approximations; exec is not.
+      //   The exec bit for mid-path patterns is enforced by the tool layer only.
+      if (!perm || perm === "---") {
+        return null;
+      }
+      return { matcher: sbplSubpath(base), approximate: true };
     }
-    return sbplSubpath(base);
+    return { matcher: sbplSubpath(base), approximate: false };
   }
-  return sbplLiteral(base);
+  return { matcher: sbplLiteral(base), approximate: false };
 }
 
 function permToOps(perm: PermStr): string[] {
@@ -208,9 +221,9 @@ export function generateSeatbeltProfile(
     // Allow /tmp only when the policy permits it — mirrors the bwrap logic that
     // skips --tmpfs /tmp in restrictive mode. Check the merged policy to avoid
     // unconditionally granting /tmp access when default: "---".
-    // Use "/tmp/." so glob rules like "/tmp/**" match correctly — findBestRule
-    // on "/tmp" alone would miss "/**"-suffixed patterns that only match descendants.
-    const tmpPerm = findBestRule("/tmp/.", config.rules ?? {}, homeDir) ?? "---";
+    // findBestRule probes both the path and path+"/" internally, so "/tmp" correctly
+    // matches glob rules like "/tmp/**" without needing the "/tmp/." workaround.
+    const tmpPerm = findBestRule("/tmp", config.rules ?? {}, homeDir) ?? "---";
     // Emit read and write allowances independently so a read-only policy like
     // "/tmp/**": "r--" does not accidentally grant write access to /tmp.
     if (tmpPerm[0] === "r") {
@@ -248,15 +261,20 @@ export function generateSeatbeltProfile(
     lines.push("; User-defined path rules (shortest → longest; more specific wins)");
     for (const [pattern, perm] of ruleEntries) {
       for (const expanded of expandSbplAliases(pattern)) {
-        const matcher = patternToSbplMatcher(expanded, homeDir);
-        if (!matcher) {
+        const result = patternToSbplMatcher(expanded, homeDir, perm);
+        if (!result) {
           continue;
-        } // skip mid-path wildcards — prefix would be too broad
-        // First allow the permitted ops, then deny the rest for this path.
-        for (const op of permToOps(perm)) {
+        }
+        const { matcher, approximate } = result;
+        // Mid-path wildcard approximation: omit exec allow/deny entirely.
+        // Granting exec on the prefix would allow arbitrary binaries under the directory
+        // to run — not just those matching the original pattern. Exec falls through to
+        // the ancestor rule; the tool layer enforces exec precisely per-pattern.
+        const filterExec = approximate ? (op: string) => op !== SEATBELT_EXEC_OPS : () => true;
+        for (const op of permToOps(perm).filter(filterExec)) {
           lines.push(`(allow ${op} ${matcher})`);
         }
-        for (const op of deniedOps(perm)) {
+        for (const op of deniedOps(perm).filter(filterExec)) {
           lines.push(`(deny ${op} ${matcher})`);
         }
       }
@@ -274,15 +292,17 @@ export function generateSeatbeltProfile(
     lines.push("; Script-override grants/restrictions — emitted last, win over deny list");
     for (const [pattern, perm] of overrideEntries) {
       for (const expanded of expandSbplAliases(pattern)) {
-        const matcher = patternToSbplMatcher(expanded, homeDir);
-        if (!matcher) {
+        const result = patternToSbplMatcher(expanded, homeDir, perm);
+        if (!result) {
           continue;
         }
-        for (const op of permToOps(perm)) {
+        const { matcher, approximate } = result;
+        const filterExec = approximate ? (op: string) => op !== SEATBELT_EXEC_OPS : () => true;
+        for (const op of permToOps(perm).filter(filterExec)) {
           lines.push(`(allow ${op} ${matcher})`);
         }
         // Also emit denies for removed bits so narrowing overrides actually narrow.
-        for (const op of deniedOps(perm)) {
+        for (const op of deniedOps(perm).filter(filterExec)) {
           lines.push(`(deny ${op} ${matcher})`);
         }
       }

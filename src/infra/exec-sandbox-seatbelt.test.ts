@@ -270,9 +270,26 @@ describe("wrapCommandWithSeatbelt", () => {
 });
 
 describe("generateSeatbeltProfile — mid-path wildcard guard", () => {
-  skipOnWindows("skips mid-path wildcard rules to avoid over-granting parent directory", () => {
-    // /home/*/workspace/** would truncate to /home and grant all of /home — must be skipped.
-    const profile = generateSeatbeltProfile({ rules: { "/home/*/workspace/**": "rwx" } }, HOME);
+  skipOnWindows(
+    "non-deny mid-path wildcard emits prefix subpath for r/w but NOT exec (option B)",
+    () => {
+      // skills/**/*.sh: r-x — mid-path wildcard; OS prefix is /home.
+      // Read is emitted (bounded over-grant). Exec is omitted — granting exec on the
+      // entire prefix would allow arbitrary binaries to run, not just *.sh files.
+      // Exec falls through to ancestor rule; tool layer enforces it precisely.
+      const profile = generateSeatbeltProfile({ rules: { "/home/*/workspace/**": "r-x" } }, HOME);
+      const rulesSection = profile.split("; User-defined path rules")[1] ?? "";
+      expect(rulesSection).toContain("(allow file-read*");
+      expect(rulesSection).toContain('(subpath "/home")');
+      expect(rulesSection).not.toContain("(allow process-exec*");
+      // exec deny also omitted — falls through to ancestor
+      expect(rulesSection).not.toContain("(deny process-exec*");
+    },
+  );
+
+  skipOnWindows("--- mid-path wildcard is skipped (deny-all on prefix would be too broad)", () => {
+    // A deny-all on the /home prefix would block the entire home directory — too broad.
+    const profile = generateSeatbeltProfile({ rules: { "/home/*/workspace/**": "---" } }, HOME);
     expect(profile).not.toContain('(subpath "/home")');
   });
 

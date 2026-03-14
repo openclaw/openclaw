@@ -178,6 +178,17 @@ describe("validateAccessPolicyConfig", () => {
     expect(second.filter((e) => e.includes("mid-path wildcard"))).toHaveLength(0);
   });
 
+  it("non-deny mid-path wildcard emits approximate-prefix diagnostic (not cannot-apply)", () => {
+    _resetMidPathWildcardWarnedForTest();
+    const errs = validateAccessPolicyConfig({
+      rules: { "~/.openclaw/agents/subri/workspace/skills/**/*.sh": "r-x" },
+    });
+    expect(errs).toHaveLength(1);
+    expect(errs[0]).toMatch(/mid-path wildcard/);
+    expect(errs[0]).toMatch(/prefix match/);
+    expect(errs[0]).not.toMatch(/cannot apply/);
+  });
+
   it("does NOT emit mid-path wildcard diagnostic for final-segment wildcards", () => {
     _resetMidPathWildcardWarnedForTest();
     // "/home/user/**" — wildcard is in the final segment, no path separator follows.

@@ -60,9 +60,20 @@ export function validateAccessPolicyConfig(config: AccessPolicyConfig): string[]
       }
       if (hasMidPathWildcard(pattern) && !_midPathWildcardWarned.has(`rules:${pattern}`)) {
         _midPathWildcardWarned.add(`rules:${pattern}`);
-        errors.push(
-          `access-policy.rules["${pattern}"] contains a mid-path wildcard — OS-level (bwrap/Seatbelt) enforcement cannot apply; tool-layer enforcement is still active.`,
-        );
+        if (perm === "---") {
+          // Deny-all on a mid-path wildcard prefix would be too broad at the OS layer
+          // (e.g. "secrets/**/*.env: ---" → deny all of secrets/). Skip OS emission entirely.
+          errors.push(
+            `access-policy.rules["${pattern}"] contains a mid-path wildcard with "---" — OS-level (bwrap/Seatbelt) enforcement cannot apply; tool-layer enforcement is still active.`,
+          );
+        } else {
+          // For non-deny rules the OS layer uses the longest concrete prefix as an
+          // approximate mount/subpath target. The file-type filter (e.g. *.sh) is enforced
+          // precisely by the tool layer only.
+          errors.push(
+            `access-policy.rules["${pattern}"] contains a mid-path wildcard — OS-level enforcement uses prefix match (file-type filter is tool-layer only).`,
+          );
+        }
       }
       // If a bare path (no glob metacharacters, no trailing /) points to a real
       // directory it would match only the directory entry itself, not its
@@ -478,7 +489,10 @@ export function resolveArgv0(command: string, cwd?: string, _depth = 0): string 
  * resolveArgv0 returns the real path "/usr/bin/python3.12".
  */
 export function resolveScriptKey(k: string): string {
-  const expanded = k.startsWith("~") ? k.replace(/^~(?=$|[/\\])/, os.homedir()) : k;
+  // path.normalize converts forward slashes to OS-native separators on Windows so that
+  // a tilde key like "~/bin/script.sh" compares correctly against a resolved argv0
+  // that uses backslashes on Windows.
+  const expanded = k.startsWith("~") ? path.normalize(k.replace(/^~(?=$|[/\\])/, os.homedir())) : k;
   if (!path.isAbsolute(expanded)) {
     return expanded;
   }
@@ -533,6 +547,11 @@ export function applyScriptPolicyOverride(
   if (override.sha256) {
     let actualHash: string;
     try {
+      // Policy-engine internal read: intentionally bypasses checkAccessPolicy.
+      // The policy engine must verify the script's integrity before deciding
+      // whether to grant the script's extra permissions — checking the policy
+      // first would be circular. This read is safe: it never exposes content
+      // to the agent; it only computes a hash for comparison.
       const contents = fs.readFileSync(resolvedArgv0);
       actualHash = crypto.createHash("sha256").update(contents).digest("hex");
     } catch {

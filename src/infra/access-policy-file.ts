@@ -92,6 +92,31 @@ function validateAccessPolicyFileStructure(filePath: string, parsed: unknown): s
   ) {
     errors.push(`${filePath}: "base" must be an object`);
   }
+  // Removed fields: "deny" and "default" were dropped in favour of "---" rules.
+  // A user who configures these fields would receive no protection because the
+  // fields are silently discarded. Reject them explicitly so the file fails-closed.
+  const REMOVED_KEYS = ["deny", "default"] as const;
+  const KNOWN_CONFIG_KEYS = new Set(["rules", "scripts"]);
+
+  function checkRemovedKeys(block: Record<string, unknown>, context: string): void {
+    for (const key of REMOVED_KEYS) {
+      if (block[key] !== undefined) {
+        errors.push(
+          `${filePath}: ${context} "${key}" is no longer supported — use "---" rules instead (e.g. "~/.ssh/**": "---"). Failing closed until removed.`,
+        );
+      }
+    }
+    for (const key of Object.keys(block)) {
+      if (!KNOWN_CONFIG_KEYS.has(key)) {
+        // Only warn for keys that look like removed/misplaced fields, not arbitrary agent data.
+        if (REMOVED_KEYS.includes(key as (typeof REMOVED_KEYS)[number])) {
+          continue;
+        } // already reported above
+        // Unknown keys that are not known config keys — warn but don't fail-close for forward compat.
+      }
+    }
+  }
+
   if (p["agents"] !== undefined) {
     if (typeof p["agents"] !== "object" || p["agents"] === null || Array.isArray(p["agents"])) {
       errors.push(`${filePath}: "agents" must be an object`);
@@ -99,9 +124,15 @@ function validateAccessPolicyFileStructure(filePath: string, parsed: unknown): s
       for (const [agentId, block] of Object.entries(p["agents"] as Record<string, unknown>)) {
         if (typeof block !== "object" || block === null || Array.isArray(block)) {
           errors.push(`${filePath}: agents["${agentId}"] must be an object`);
+        } else {
+          checkRemovedKeys(block as Record<string, unknown>, `agents["${agentId}"]`);
         }
       }
     }
+  }
+
+  if (typeof p["base"] === "object" && p["base"] !== null && !Array.isArray(p["base"])) {
+    checkRemovedKeys(p["base"] as Record<string, unknown>, `base`);
   }
 
   // Catch common mistake: AccessPolicyConfig fields accidentally at top level

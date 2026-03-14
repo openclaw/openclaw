@@ -35,10 +35,10 @@ The file is **optional** — if absent, all operations pass through unchanged (a
       "/**": "r--",
       "/tmp/": "rwx",
       "~/": "rw-",
-      "~/dev/": "rwx"
-    },
-    "deny": ["~/.ssh/", "~/.aws/", "~/.openclaw/credentials/"],
-    "default": "---"
+      "~/dev/": "rwx",
+      "~/.ssh/**": "---",
+      "~/.aws/**": "---"
+    }
   },
   "agents": {
     "myagent": { "rules": { "~/private/": "rw-" } }
@@ -58,6 +58,8 @@ Each rule value is a three-character string — one character per operation:
 
 Examples: `"rwx"` (full access), `"r--"` (read only), `"r-x"` (read + exec), `"---"` (deny all).
 
+Use `"---"` to explicitly deny all access to a path — this is the deny mechanism. A rule with `"---"` always blocks regardless of broader rules, as long as it is the longest (most specific) matching pattern.
+
 ### Pattern syntax
 
 - Patterns are path globs: `*` matches within a segment, `**` matches any depth.
@@ -67,9 +69,19 @@ Examples: `"rwx"` (full access), `"r--"` (read only), `"r-x"` (read + exec), `"-
 
 ### Precedence
 
-1. **`deny`** — always blocks, regardless of rules. Additive across layers — cannot be removed by agent overrides.
-2. **`rules`** — longest matching glob wins (most specific pattern takes priority).
-3. **`default`** — catch-all for unmatched paths. Omitting it is equivalent to `"---"`.
+1. **`rules`** — longest matching glob wins (most specific pattern takes priority).
+2. **Implicit fallback** — `"---"` (deny all) when no rule matches. Use `"/**": "r--"` (or any perm) as an explicit catch-all.
+
+To deny a specific path, add a `"---"` rule that is more specific than any allow rule covering that path:
+
+```json
+"rules": {
+  "/**": "r--",
+  "~/.ssh/**": "---"
+}
+```
+
+`~/.ssh/**` is longer than `/**` so it wins for any path under `~/.ssh/`.
 
 ## Layers
 
@@ -77,9 +89,9 @@ Examples: `"rwx"` (full access), `"r--"` (read only), `"r-x"` (read + exec), `"-
 base → agents["*"] → agents["myagent"]
 ```
 
-- **`base`** — applies to all agents. Deny entries here can never be overridden.
+- **`base`** — applies to all agents.
 - **`agents["*"]`** — wildcard block applied to every agent after `base`, before the agent-specific block. Useful for org-wide rules.
-- **`agents`** — per-agent overrides. Each agent block is merged on top of `base` (and `agents["*"]` if present): deny is additive, rules are shallow-merged (agent wins on collision), default is agent-wins if set.
+- **`agents`** — per-agent overrides. Each agent block is merged on top of `base` (and `agents["*"]` if present): rules are shallow-merged (agent wins on collision).
 
 ## Enforcement
 
@@ -104,9 +116,9 @@ If the file exists but cannot be parsed, or contains structural errors (wrong ne
 
 Common mistakes caught by the validator:
 
-- `rules`, `deny`, or `default` placed at the top level instead of under `base`
+- `rules` or `scripts` placed at the top level instead of under `base`
 - Permission strings that are not exactly 3 characters (`"rwx"`, `"r--"`, `"---"`, etc.)
-- Empty deny entries
+- `deny` or `default` keys inside `base` or agent blocks — these fields were removed; use `"---"` rules instead
 
 ### Bare directory paths
 
@@ -128,9 +140,11 @@ For cross-agent MCP tool delegation (an orchestrator invoking a tool on behalf o
 
 **Metadata leak via directory listing.** `find`, `ls`, and shell globs use `readdir()` to enumerate directory contents, which is allowed. When content access is then denied at `open()`, the filenames are already visible in the error output. Content is protected; filenames are not. This is inherent to how OS-level enforcement works at the syscall level.
 
-**Interpreter bypass of exec bit.** The `x` bit gates `execve()` on the file itself. Running `bash script.sh` executes bash (permitted), which reads the script as text (read permitted if `r` is set). The exec bit on the script is irrelevant for interpreter-based invocations. To prevent execution of a script entirely, place it in the deny list (no read access).
+**Interpreter bypass of exec bit.** The `x` bit gates `execve()` on the file itself. Running `bash script.sh` executes bash (permitted), which reads the script as text (read permitted if `r` is set). The exec bit on the script is irrelevant for interpreter-based invocations. To prevent execution of a script entirely, deny read access to it (`"---"`).
 
-**File-specific `deny[]` entries on Linux (bwrap).** On Linux, `deny[]` entries are enforced at the OS layer using `bwrap --tmpfs` overlays, which only work on directories. When a `deny[]` entry resolves to an existing file (e.g. `deny: ["~/.netrc"]`), the OS-level mount is skipped — bwrap cannot overlay a file with a tmpfs. Tool-layer enforcement still blocks read/write/edit calls for that file. However, exec commands running inside the sandbox can still access the file directly (e.g. `cat ~/.netrc`). A warning is emitted to stderr when this gap is active. To enforce at the OS layer on Linux, deny the parent directory instead (e.g. `deny: ["~/.aws/"]` rather than `deny: ["~/.aws/credentials"]`). On macOS, seatbelt handles file-level denials correctly with `(deny file-read* (literal ...))`.
+**File-level `"---"` rules on Linux (bwrap).** On Linux, `"---"` rules are enforced at the OS layer using `bwrap --tmpfs` overlays, which only work on directories. When a `"---"` rule resolves to an existing file (e.g. `"~/.netrc": "---"`), the OS-level mount is skipped — bwrap cannot overlay a file with a tmpfs. Tool-layer enforcement still blocks read/write/edit calls for that file. However, exec commands running inside the sandbox can still access the file directly (e.g. `cat ~/.netrc`). A warning is emitted to stderr when this gap is active. To enforce at the OS layer on Linux, deny the parent directory instead (e.g. `"~/.aws/**": "---"` rather than `"~/.aws/credentials": "---"`). On macOS, seatbelt handles file-level denials correctly with `(deny file-read* (literal ...))`.
+
+**Mid-path wildcard patterns and OS-level exec enforcement.** Patterns with a wildcard in a non-final segment — such as `skills/**/*.sh` or `logs/*/app.log` — cannot be expressed as OS-level subpath matchers. bwrap and Seatbelt do not understand glob syntax; they work with concrete directory prefixes. For non-deny rules, OpenClaw emits the longest concrete prefix (`skills/`) as an approximate OS-level rule for read and write access, which is bounded and safe. The exec bit is intentionally omitted from the OS approximation: granting exec on the entire prefix directory would allow any binary under that directory to be executed by subprocesses, not just files matching the original pattern. Exec for mid-path wildcard patterns is enforced by the tool layer only. To get OS-level exec enforcement, use a trailing-`**` pattern such as `skills/**` (which covers the directory precisely, with the file-type filter applying at the tool layer only).
 
 **No approval flow.** Access policy is fail-closed: a denied operation returns an error immediately. There is no `ask`/`on-miss` mode equivalent to exec approvals. If an agent hits a denied path, it receives a permission error and must handle it. Interactive approval for filesystem access is planned as a follow-up feature.
 

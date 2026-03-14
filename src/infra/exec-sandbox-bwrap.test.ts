@@ -254,9 +254,9 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
     expect(bindMounts).toContain(`${HOME}/output`);
   });
 
-  it("skips mid-path wildcard patterns — truncated prefix would be too broad", () => {
-    // "/home/*/.ssh/**" truncates to "/home" — far too broad for a bwrap mount.
-    // The pattern must be silently ignored rather than binding /home.
+  it("skips mid-path wildcard --- patterns — deny-all on truncated prefix would be too broad", () => {
+    // "/home/*/.config/**" with "---" truncates to "/home" — applying --tmpfs to /home
+    // would hide the entire home directory. Must be skipped.
     const fakeHome = "/home/testuser";
     const config: AccessPolicyConfig = {
       rules: { "/**": "r--", "/home/*/.config/**": "---" },
@@ -267,8 +267,23 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
         ["--tmpfs", "--bind-try", "--ro-bind-try"].includes(args[i - 1] ?? "") ? a : null,
       )
       .filter(Boolean);
-    // "/home" must NOT appear as a mount target — it's the over-broad truncation.
     expect(allMountTargets).not.toContain("/home");
+  });
+
+  it("non-deny mid-path wildcard emits prefix as approximate mount target", () => {
+    // "scripts/**/*.sh": "r-x" — mid-path wildcard, non-deny perm.
+    // OS layer uses the concrete prefix (/scripts) as an approximate ro-bind-try target;
+    // the tool layer enforces the *.sh filter precisely.
+    const config: AccessPolicyConfig = {
+      rules: { "/scripts/**/*.sh": "r-x" },
+    };
+    const args = generateBwrapArgs(config, "/home/user");
+    const allMountTargets = args
+      .map((a, i) =>
+        ["--tmpfs", "--bind-try", "--ro-bind-try"].includes(args[i - 1] ?? "") ? a : null,
+      )
+      .filter(Boolean);
+    expect(allMountTargets).toContain("/scripts");
   });
 
   it("suffix-glob rule uses parent directory as mount target, not literal prefix", () => {

@@ -82,11 +82,12 @@ function expandPattern(pattern: string, homeDir: string): string {
  * e.g. "/Users/kaveri/**" → "/Users/kaveri"
  *      "/tmp/foo"         → "/tmp/foo"
  *
- * Returns null when a wildcard appears in a non-final segment (e.g. "/home/*\/.ssh/**")
- * because the truncated prefix ("/home") would be far too broad for a bwrap mount
- * and the caller must skip it entirely.
+ * For mid-path wildcards (e.g. "skills/**\/*.sh"), returns the concrete prefix
+ * when perm is not "---" — the prefix is an intentional approximation for bwrap
+ * mounts; the tool layer enforces the file-type filter precisely. For "---" perms
+ * returns null so callers skip emission (a deny-all on the prefix would be too broad).
  */
-function patternToPath(pattern: string, homeDir: string): string | null {
+function patternToPath(pattern: string, homeDir: string, perm?: PermStr): string | null {
   const expanded = expandPattern(pattern, homeDir);
   // Find the first wildcard character in the path.
   const wildcardIdx = expanded.search(/[*?[]/);
@@ -95,11 +96,16 @@ function patternToPath(pattern: string, homeDir: string): string | null {
     return expanded || "/";
   }
   // Check whether there is a path separator AFTER the first wildcard.
-  // If so, the wildcard is in a non-final segment (e.g. /home/*/foo) and the
-  // concrete prefix (/home) is too broad to be a safe mount target.
+  // If so, the wildcard is in a non-final segment (e.g. skills/**/*.sh).
   const afterWildcard = expanded.slice(wildcardIdx);
   if (/[/\\]/.test(afterWildcard)) {
-    return null;
+    // Mid-path wildcard: for "---" perm a deny-all on the prefix is too broad — skip.
+    // For other perms, use the prefix as an approximate mount target; the tool layer
+    // enforces the file-type filter precisely.
+    if (!perm || perm === "---") {
+      return null;
+    }
+    // Fall through to use the concrete prefix below.
   }
   // Wildcard is only in the final segment — use the parent directory.
   // e.g. "/var/log/secret*" → last sep before "*" is at 8 → "/var/log"
@@ -168,7 +174,7 @@ export function generateBwrapArgs(
   // In restrictive mode (default:"---"), /tmp is intentionally omitted so rules
   // control tmpfs access explicitly (e.g. "/tmp/**":"rwx" is handled by the rules loop).
   if (defaultAllowsRead) {
-    const explicitTmpPerm = findBestRule("/tmp/.", config.rules ?? {}, homeDir);
+    const explicitTmpPerm = findBestRule("/tmp", config.rules ?? {}, homeDir);
     if (explicitTmpPerm === null) {
       // Only emit --tmpfs /tmp when there is no explicit rule for /tmp.
       // When an explicit write rule exists, the rules loop below emits --bind-try /tmp /tmp
@@ -190,7 +196,7 @@ export function generateBwrapArgs(
     return (pa?.length ?? 0) - (pb?.length ?? 0);
   });
   for (const [pattern, perm] of ruleEntries) {
-    const p = patternToPath(pattern, homeDir);
+    const p = patternToPath(pattern, homeDir, perm);
     if (!p || p === "/") {
       continue;
     } // root already handled above
@@ -237,7 +243,7 @@ export function generateBwrapArgs(
       return (pa?.length ?? 0) - (pb?.length ?? 0);
     });
     for (const [pattern, perm] of overrideEntries) {
-      const p = patternToPath(pattern, homeDir);
+      const p = patternToPath(pattern, homeDir, perm);
       if (!p || p === "/") {
         continue;
       }
