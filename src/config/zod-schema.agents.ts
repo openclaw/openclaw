@@ -7,6 +7,22 @@ export const AgentsSchema = z
   .object({
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
     list: z.array(AgentEntrySchema).optional(),
+    subagent: z
+      .object({
+        promptHook: z
+          .object({
+            enabled: z.boolean().optional(),
+            mode: z.enum(["prepend", "append", "wrap"]).optional(),
+            prefixPath: z.string().optional(),
+            suffixPath: z.string().optional(),
+            maxBytes: z.number().int().positive().optional(),
+            onMissing: z.enum(["warn", "disable"]).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

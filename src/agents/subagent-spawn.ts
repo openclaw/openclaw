@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
+import path from "node:path";
 import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
@@ -11,6 +12,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { resolveUserPath } from "../utils.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
@@ -193,6 +195,175 @@ function summarizeError(err: unknown): string {
   return "error";
 }
 
+function sha256Hex(value: string): string {
+  return crypto.createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+type SubagentPromptHookMode = "prepend" | "append" | "wrap";
+type SubagentPromptHookOnMissing = "warn" | "disable";
+type SubagentPromptHookConfig = {
+  enabled: boolean;
+  mode: SubagentPromptHookMode;
+  prefixPath: string;
+  suffixPath: string;
+  maxBytes: number;
+  onMissing: SubagentPromptHookOnMissing;
+};
+
+type SubagentPromptHookApplyResult = {
+  task: string;
+  telemetry: {
+    prompt_hook_enabled: boolean;
+    prompt_hook_mode: SubagentPromptHookMode;
+    hook_apply_status: "applied" | "partial" | "skipped";
+    prefix_path?: string;
+    suffix_path?: string;
+    prefix_hash?: string;
+    suffix_hash?: string;
+    hook_warning?: string;
+  };
+};
+
+function resolveSubagentPromptHookConfig(
+  cfg: ReturnType<typeof loadConfig>,
+): SubagentPromptHookConfig {
+  const defaults = {
+    enabled: false,
+    mode: "wrap" as SubagentPromptHookMode,
+    prefixPath: "~/.openclaw/prompts/subagent_hook_prefix.md",
+    suffixPath: "~/.openclaw/prompts/subagent_hook_suffix.md",
+    maxBytes: 64 * 1024,
+    onMissing: "warn" as SubagentPromptHookOnMissing,
+  };
+
+  const configured =
+    (cfg as unknown as { agents?: { subagent?: { promptHook?: Record<string, unknown> } } })?.agents
+      ?.subagent?.promptHook ?? {};
+
+  const mode =
+    configured.mode === "prepend" || configured.mode === "append" || configured.mode === "wrap"
+      ? configured.mode
+      : defaults.mode;
+
+  const onMissing =
+    configured.onMissing === "warn" || configured.onMissing === "disable"
+      ? configured.onMissing
+      : defaults.onMissing;
+
+  const maxBytesRaw = configured.maxBytes;
+  const maxBytes =
+    typeof maxBytesRaw === "number" && Number.isFinite(maxBytesRaw) && maxBytesRaw > 0
+      ? Math.floor(maxBytesRaw)
+      : defaults.maxBytes;
+
+  const envPrefix = process.env.OPENCLAW_SUBAGENT_HOOK_PREFIX_PATH?.trim();
+  const envSuffix = process.env.OPENCLAW_SUBAGENT_HOOK_SUFFIX_PATH?.trim();
+
+  return {
+    enabled: configured.enabled === true,
+    mode,
+    prefixPath:
+      envPrefix || (typeof configured.prefixPath === "string" && configured.prefixPath.trim())
+        ? envPrefix || String(configured.prefixPath).trim()
+        : defaults.prefixPath,
+    suffixPath:
+      envSuffix || (typeof configured.suffixPath === "string" && configured.suffixPath.trim())
+        ? envSuffix || String(configured.suffixPath).trim()
+        : defaults.suffixPath,
+    maxBytes,
+    onMissing,
+  };
+}
+
+async function loadPromptHookSegment(params: {
+  pathHint: string;
+  maxBytes: number;
+}): Promise<{ content?: string; resolvedPath: string; hash?: string; warning?: string }> {
+  const resolvedPath = path.resolve(resolveUserPath(params.pathHint));
+  try {
+    const stat = await fs.stat(resolvedPath);
+    if (!stat.isFile()) {
+      return { resolvedPath, warning: `not a file: ${resolvedPath}` };
+    }
+    if (stat.size > params.maxBytes) {
+      return {
+        resolvedPath,
+        warning: `file exceeds maxBytes (${stat.size} > ${params.maxBytes}) at ${resolvedPath}`,
+      };
+    }
+    const content = await fs.readFile(resolvedPath, "utf8");
+    if (Buffer.byteLength(content, "utf8") > params.maxBytes) {
+      return {
+        resolvedPath,
+        warning: `file exceeds maxBytes after decode at ${resolvedPath}`,
+      };
+    }
+    return { content, resolvedPath, hash: sha256Hex(content) };
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return { resolvedPath, warning: `failed to read ${resolvedPath}: ${detail}` };
+  }
+}
+
+async function applySubagentPromptHook(task: string, cfg: ReturnType<typeof loadConfig>) {
+  const hook = resolveSubagentPromptHookConfig(cfg);
+  const telemetry: SubagentPromptHookApplyResult["telemetry"] = {
+    prompt_hook_enabled: hook.enabled,
+    prompt_hook_mode: hook.mode,
+    hook_apply_status: "skipped",
+  };
+
+  if (!hook.enabled) {
+    return { task, telemetry } satisfies SubagentPromptHookApplyResult;
+  }
+
+  const [prefix, suffix] = await Promise.all([
+    loadPromptHookSegment({ pathHint: hook.prefixPath, maxBytes: hook.maxBytes }),
+    loadPromptHookSegment({ pathHint: hook.suffixPath, maxBytes: hook.maxBytes }),
+  ]);
+
+  telemetry.prefix_path = prefix.resolvedPath;
+  telemetry.suffix_path = suffix.resolvedPath;
+  telemetry.prefix_hash = prefix.hash;
+  telemetry.suffix_hash = suffix.hash;
+
+  const warnings = [prefix.warning, suffix.warning].filter((v): v is string => Boolean(v));
+  if (warnings.length > 0) {
+    telemetry.hook_warning = warnings.join("; ");
+    if (hook.onMissing === "disable") {
+      telemetry.hook_apply_status = "skipped";
+      return { task, telemetry } satisfies SubagentPromptHookApplyResult;
+    }
+  }
+
+  const prefixContent = prefix.content?.trim() ?? "";
+  const suffixContent = suffix.content?.trim() ?? "";
+  let nextTask = task;
+
+  if (hook.mode === "prepend") {
+    if (prefixContent) {
+      nextTask = `${prefixContent}\n\n${task}`;
+    }
+  } else if (hook.mode === "append") {
+    if (suffixContent) {
+      nextTask = `${task}\n\n${suffixContent}`;
+    }
+  } else {
+    const parts = [prefixContent, task, suffixContent].filter((v) => v.length > 0);
+    nextTask = parts.join("\n\n");
+  }
+
+  if (nextTask === task) {
+    telemetry.hook_apply_status = "skipped";
+  } else if (warnings.length > 0 || !prefixContent || !suffixContent) {
+    telemetry.hook_apply_status = "partial";
+  } else {
+    telemetry.hook_apply_status = "applied";
+  }
+
+  return { task: nextTask, telemetry } satisfies SubagentPromptHookApplyResult;
+}
+
 async function ensureThreadBindingForSubagentSpawn(params: {
   hookRunner: ReturnType<typeof getGlobalHookRunner>;
   childSessionKey: string;
@@ -301,6 +472,11 @@ export async function spawnSubagentDirect(
   });
   const hookRunner = getGlobalHookRunner();
   const cfg = loadConfig();
+  const promptHookResult = await applySubagentPromptHook(task, cfg);
+  const wrappedTask = promptHookResult.task;
+  if (promptHookResult.telemetry.prompt_hook_enabled) {
+    console.log("[subagent.prompt_hook]", promptHookResult.telemetry);
+  }
 
   // When agent omits runTimeoutSeconds, use the config default.
   // Falls back to 0 (no timeout) if config key is also unset,
@@ -560,7 +736,7 @@ export async function spawnSubagentDirect(
     spawnMode === "session"
       ? "[Subagent Context] This subagent session is persistent and remains available for thread follow-up messages."
       : undefined,
-    `[Subagent Task]: ${task}`,
+    `[Subagent Task]: ${wrappedTask}`,
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n\n");

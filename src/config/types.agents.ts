@@ -92,4 +92,15 @@ export type AgentConfig = {
 export type AgentsConfig = {
   defaults?: AgentDefaultsConfig;
   list?: AgentConfig[];
+  /** Global subagent runtime settings (applied to sessions_spawn runtime=subagent). */
+  subagent?: {
+    promptHook?: {
+      enabled?: boolean;
+      mode?: "prepend" | "append" | "wrap";
+      prefixPath?: string;
+      suffixPath?: string;
+      maxBytes?: number;
+      onMissing?: "warn" | "disable";
+    };
+  };
 };

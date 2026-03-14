@@ -1317,6 +1317,33 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `subagents.allowAgents`: allowlist of agent ids for `sessions_spawn` (`["*"]` = any; default: same agent only).
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
 
+### `agents.subagent.promptHook` (optional)
+
+Global prompt-hook controls for `sessions_spawn` when `runtime: "subagent"`.
+
+```json5
+{
+  agents: {
+    subagent: {
+      promptHook: {
+        enabled: true,
+        mode: "wrap", // prepend | append | wrap
+        prefixPath: "~/.openclaw/prompts/subagent_hook_prefix.md",
+        suffixPath: "~/.openclaw/prompts/subagent_hook_suffix.md",
+        maxBytes: 65536,
+        onMissing: "warn", // warn | disable
+      },
+    },
+  },
+}
+```
+
+- `enabled`: turns hook injection on/off.
+- `mode`: placement strategy relative to the original task string.
+- `prefixPath` / `suffixPath`: UTF-8 markdown/text files read at spawn time.
+- `maxBytes`: per-file read limit for safety.
+- `onMissing`: behavior when files are missing/unreadable/oversized (`warn` keeps spawn running; `disable` skips hook injection).
+
 ---
 
 ## Multi-agent routing

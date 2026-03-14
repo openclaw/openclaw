@@ -93,6 +93,31 @@ Tool params:
 - `sandbox?` (`inherit|require`, default `inherit`; `require` rejects spawn unless target child runtime is sandboxed)
 - `sessions_spawn` does **not** accept channel-delivery params (`target`, `channel`, `to`, `threadId`, `replyTo`, `transport`). For delivery, use `message`/`sessions_send` from the spawned run.
 
+### Prompt hook (optional)
+
+You can wrap every subagent task body with reusable prompt fragments before dispatch:
+
+```json5
+{
+  agents: {
+    subagent: {
+      promptHook: {
+        enabled: true,
+        mode: "wrap", // prepend | append | wrap
+        prefixPath: "~/.openclaw/prompts/subagent_hook_prefix.md",
+        suffixPath: "~/.openclaw/prompts/subagent_hook_suffix.md",
+        maxBytes: 65536,
+        onMissing: "warn", // warn | disable
+      },
+    },
+  },
+}
+```
+
+- `mode` controls placement around the original `task`.
+- `onMissing: "warn"` keeps spawning when files are missing/unreadable and logs telemetry.
+- `onMissing: "disable"` skips hook injection when any hook file is unavailable.
+
 ## Thread-bound sessions
 
 When thread bindings are enabled for a channel, a sub-agent can stay bound to a thread so follow-up user messages in that thread keep routing to the same sub-agent session.
