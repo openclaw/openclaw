@@ -5,12 +5,7 @@ import type { SecretInput } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
 import type { EmbeddingInput } from "./embedding-inputs.js";
-import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
-import {
-  createGeminiEmbeddingProvider,
-  type GeminiEmbeddingClient,
-  type GeminiTaskType,
-} from "./embeddings-gemini.js";
+import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
 import {
   createMistralEmbeddingProvider,
   type MistralEmbeddingClient,
@@ -19,6 +14,15 @@ import { createOllamaEmbeddingProvider, type OllamaEmbeddingClient } from "./emb
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
 import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embeddings-voyage.js";
 import { importNodeLlamaCpp } from "./node-llama.js";
+
+function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
+  const sanitized = vec.map((value) => (Number.isFinite(value) ? value : 0));
+  const magnitude = Math.sqrt(sanitized.reduce((sum, value) => sum + value * value, 0));
+  if (magnitude < 1e-10) {
+    return sanitized;
+  }
+  return sanitized.map((value) => value / magnitude);
+}
 
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 export type { MistralEmbeddingClient } from "./embeddings-mistral.js";
@@ -61,6 +65,8 @@ export type EmbeddingProviderOptions = {
   config: OpenClawConfig;
   agentDir?: string;
   provider: EmbeddingProviderRequest;
+  outputDimensionality?: number;
+  taskType?: string;
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
@@ -72,10 +78,6 @@ export type EmbeddingProviderOptions = {
     modelPath?: string;
     modelCacheDir?: string;
   };
-  /** Gemini embedding-2: output vector dimensions (768, 1536, or 3072). */
-  outputDimensionality?: number;
-  /** Gemini: override the default task type sent with embedding requests. */
-  taskType?: GeminiTaskType;
 };
 
 export const DEFAULT_LOCAL_MODEL =
@@ -310,7 +312,7 @@ function formatLocalSetupError(err: unknown): string {
         : undefined,
     missing && detail ? `Detail: ${detail}` : null,
     "To enable local embeddings:",
-    "1) Use Node 24 (recommended for installs/updates; Node 22 LTS, currently 22.16+, remains supported)",
+    "1) Use Node 22 LTS (recommended for installs/updates)",
     missing
       ? "2) Reinstall OpenClaw (this should install node-llama-cpp): npm i -g openclaw@latest"
       : null,

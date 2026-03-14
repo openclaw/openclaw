@@ -105,6 +105,72 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
+const previewCortexContextMock = vi.hoisted(() => vi.fn());
+const listCortexMemoryConflictsMock = vi.hoisted(() => vi.fn());
+const resolveCortexMemoryConflictMock = vi.hoisted(() => vi.fn());
+const syncCortexCodingContextMock = vi.hoisted(() => vi.fn());
+const getCortexModeOverrideMock = vi.hoisted(() => vi.fn());
+const setCortexModeOverrideMock = vi.hoisted(() => vi.fn());
+const clearCortexModeOverrideMock = vi.hoisted(() => vi.fn());
+const resolveAgentCortexModeStatusMock = vi.hoisted(() => vi.fn());
+const resolveCortexChannelTargetMock = vi.hoisted(() => vi.fn());
+const getAgentCortexMemoryCaptureStatusWithHistoryMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../memory/cortex.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../memory/cortex.js")>("../../memory/cortex.js");
+  return {
+    ...actual,
+    previewCortexContext: previewCortexContextMock,
+    listCortexMemoryConflicts: listCortexMemoryConflictsMock,
+    resolveCortexMemoryConflict: resolveCortexMemoryConflictMock,
+    syncCortexCodingContext: syncCortexCodingContextMock,
+  };
+});
+
+vi.mock("../../memory/cortex-mode-overrides.js", async () => {
+  const actual = await vi.importActual<typeof import("../../memory/cortex-mode-overrides.js")>(
+    "../../memory/cortex-mode-overrides.js",
+  );
+  return {
+    ...actual,
+    getCortexModeOverride: getCortexModeOverrideMock,
+    setCortexModeOverride: setCortexModeOverrideMock,
+    clearCortexModeOverride: clearCortexModeOverrideMock,
+  };
+});
+
+vi.mock("../../agents/cortex.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../agents/cortex.js")>("../../agents/cortex.js");
+  return {
+    ...actual,
+    getAgentCortexMemoryCaptureStatusWithHistory: getAgentCortexMemoryCaptureStatusWithHistoryMock,
+    resolveAgentCortexModeStatus: resolveAgentCortexModeStatusMock,
+    resolveCortexChannelTarget: resolveCortexChannelTargetMock,
+  };
+});
+
+type ResetAcpSessionInPlaceResult = { ok: true } | { ok: false; skipped?: boolean; error?: string };
+
+const resetAcpSessionInPlaceMock = vi.hoisted(() =>
+  vi.fn(
+    async (_params: unknown): Promise<ResetAcpSessionInPlaceResult> => ({
+      ok: false,
+      skipped: true,
+    }),
+  ),
+);
+vi.mock("../../acp/persistent-bindings.js", async () => {
+  const actual = await vi.importActual<typeof import("../../acp/persistent-bindings.js")>(
+    "../../acp/persistent-bindings.js",
+  );
+  return {
+    ...actual,
+    resetAcpSessionInPlace: (params: unknown) => resetAcpSessionInPlaceMock(params),
+  };
+});
+
 import type { HandleCommandsParams } from "./commands-types.js";
 import { buildCommandContext, handleCommands } from "./commands.js";
 
@@ -162,6 +228,26 @@ function buildParams(commandBody: string, cfg: OpenClawConfig, ctxOverrides?: Pa
   return buildCommandTestParams(commandBody, cfg, ctxOverrides, { workspaceDir: testWorkspaceDir });
 }
 
+beforeEach(() => {
+  resetAcpSessionInPlaceMock.mockReset();
+  resetAcpSessionInPlaceMock.mockResolvedValue({ ok: false, skipped: true } as const);
+  previewCortexContextMock.mockReset();
+  listCortexMemoryConflictsMock.mockReset();
+  resolveCortexMemoryConflictMock.mockReset();
+  syncCortexCodingContextMock.mockReset();
+  getCortexModeOverrideMock.mockReset();
+  setCortexModeOverrideMock.mockReset();
+  clearCortexModeOverrideMock.mockReset();
+  resolveAgentCortexModeStatusMock.mockReset();
+  resolveCortexChannelTargetMock.mockReset();
+  getAgentCortexMemoryCaptureStatusWithHistoryMock.mockReset();
+  resolveAgentCortexModeStatusMock.mockResolvedValue(null);
+  getAgentCortexMemoryCaptureStatusWithHistoryMock.mockResolvedValue(null);
+  resolveCortexChannelTargetMock.mockImplementation(
+    (params: { nativeChannelId?: string; to?: string; channel?: string }) =>
+      params.nativeChannelId ?? params.to ?? params.channel ?? "unknown",
+  );
+});
 describe("handleCommands gating", () => {
   it("blocks gated commands when disabled or not elevated-allowlisted", async () => {
     const cases = typedCases<{
@@ -582,6 +668,402 @@ describe("/compact command", () => {
         agentDir,
       }),
     );
+  });
+});
+
+describe("/cortex command", () => {
+  it("shows help for bare /cortex", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/cortex", cfg);
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Manage Cortex prompt context");
+    expect(result.reply?.text).toContain("/cortex preview");
+    expect(result.reply?.text).toContain("/cortex why");
+    expect(result.reply?.text).toContain("/cortex conflicts");
+  });
+
+  it("previews Cortex context using the active override", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          cortex: {
+            enabled: true,
+            mode: "technical",
+            maxChars: 1500,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    resolveAgentCortexModeStatusMock.mockResolvedValueOnce({
+      enabled: true,
+      mode: "minimal",
+      source: "session-override",
+      maxChars: 1500,
+    });
+    previewCortexContextMock.mockResolvedValueOnce({
+      workspaceDir: testWorkspaceDir,
+      graphPath: path.join(testWorkspaceDir, ".cortex", "context.json"),
+      policy: "minimal",
+      maxChars: 1500,
+      context: "## Cortex Context\n- Minimal",
+    });
+
+    const params = buildParams("/cortex preview", cfg);
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Cortex preview (minimal, session override)");
+    expect(result.reply?.text).toContain("## Cortex Context");
+    expect(resolveAgentCortexModeStatusMock).toHaveBeenCalled();
+    expect(previewCortexContextMock).toHaveBeenCalledWith({
+      workspaceDir: testWorkspaceDir,
+      graphPath: undefined,
+      policy: "minimal",
+      maxChars: 1500,
+    });
+  });
+
+  it("explains why Cortex context affected the reply", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          cortex: {
+            enabled: true,
+            mode: "technical",
+            maxChars: 1500,
+            graphPath: ".cortex/context.json",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    resolveAgentCortexModeStatusMock.mockResolvedValueOnce({
+      enabled: true,
+      mode: "professional",
+      source: "channel-override",
+      maxChars: 1500,
+      graphPath: path.join(testWorkspaceDir, ".cortex", "context.json"),
+    });
+    previewCortexContextMock.mockResolvedValueOnce({
+      workspaceDir: testWorkspaceDir,
+      graphPath: path.join(testWorkspaceDir, ".cortex", "context.json"),
+      policy: "professional",
+      maxChars: 1500,
+      context: "## Cortex Context\n- Work priorities",
+    });
+    getAgentCortexMemoryCaptureStatusWithHistoryMock.mockResolvedValueOnce({
+      captured: true,
+      score: 0.7,
+      reason: "high-signal memory candidate",
+      updatedAt: Date.now(),
+    });
+
+    const params = buildParams("/cortex why", cfg, {
+      NativeChannelId: "C123",
+    });
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Why I answered this way");
+    expect(result.reply?.text).toContain("Mode: professional");
+    expect(result.reply?.text).toContain("Source: channel override");
+    expect(result.reply?.text).toContain(
+      "Last memory capture: stored (high-signal memory candidate, score 0.70)",
+    );
+    expect(result.reply?.text).toContain("Injected Cortex context:");
+  });
+
+  it("keeps /cortex why useful when preview fails", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          cortex: {
+            enabled: true,
+            mode: "technical",
+            maxChars: 1500,
+            graphPath: ".cortex/context.json",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    resolveAgentCortexModeStatusMock.mockResolvedValueOnce({
+      enabled: true,
+      mode: "professional",
+      source: "agent-config",
+      maxChars: 1500,
+      graphPath: path.join(testWorkspaceDir, ".cortex", "context.json"),
+    });
+    previewCortexContextMock.mockRejectedValueOnce(new Error("Cortex graph not found"));
+
+    const params = buildParams("/cortex why", cfg, {
+      NativeChannelId: "C123",
+    });
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Why I answered this way");
+    expect(result.reply?.text).toContain("Mode: professional");
+    expect(result.reply?.text).toContain("Preview error: Cortex graph not found");
+    expect(result.reply?.text).toContain("Injected Cortex context:");
+    expect(result.reply?.text).toContain("No Cortex context is currently being injected.");
+  });
+
+  it("shows continuity details for the active conversation", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          cortex: {
+            enabled: true,
+            mode: "technical",
+            maxChars: 1500,
+            graphPath: ".cortex/context.json",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const params = buildParams("/cortex continuity", cfg, {
+      NativeChannelId: "C123",
+    });
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Cortex continuity");
+    expect(result.reply?.text).toContain("shared Cortex graph");
+    expect(result.reply?.text).toContain("Try /cortex preview from another channel");
+  });
+
+  it("lists Cortex conflicts and suggests a resolve command", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          cortex: {
+            enabled: true,
+            mode: "technical",
+            maxChars: 1500,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    listCortexMemoryConflictsMock.mockResolvedValueOnce([
+      {
+        id: "conf_1",
+        type: "temporal_flip",
+        severity: 0.91,
+        summary: "Hiring status changed from active hiring to not hiring",
+        nodeLabel: "Hiring",
+        oldValue: "active hiring",
+        newValue: "not hiring",
+      },
+    ]);
+
+    const params = buildParams("/cortex conflicts", cfg);
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Cortex conflicts (1)");
+    expect(result.reply?.text).toContain("conf_1 · temporal_flip · severity 0.91");
+    expect(result.reply?.text).toContain("Node: Hiring");
+    expect(result.reply?.text).toContain("Old: active hiring");
+    expect(result.reply?.text).toContain("New: not hiring");
+    expect(result.reply?.text).toContain("/cortex conflict conf_1");
+    expect(result.reply?.text).toContain("/cortex resolve conf_1 accept-new");
+  });
+
+  it("shows a structured Cortex conflict detail view", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          cortex: {
+            enabled: true,
+            mode: "technical",
+            maxChars: 1500,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    listCortexMemoryConflictsMock.mockResolvedValueOnce([
+      {
+        id: "conf_1",
+        type: "temporal_flip",
+        severity: 0.91,
+        summary: "Hiring status changed from active hiring to not hiring",
+        nodeLabel: "Hiring",
+        oldValue: "active hiring",
+        newValue: "not hiring",
+      },
+    ]);
+
+    const params = buildParams("/cortex conflict conf_1", cfg);
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Cortex conflict detail");
+    expect(result.reply?.text).toContain("Node: Hiring");
+    expect(result.reply?.text).toContain("/cortex resolve conf_1 keep-old");
+  });
+
+  it("resolves a Cortex conflict from chat", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          cortex: {
+            enabled: true,
+            mode: "technical",
+            maxChars: 1500,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    resolveCortexMemoryConflictMock.mockResolvedValueOnce({
+      status: "ok",
+      conflictId: "conf_1",
+      action: "accept-new",
+      nodesUpdated: 1,
+      nodesRemoved: 1,
+      commitId: "ver_123",
+    });
+
+    const params = buildParams("/cortex resolve conf_1 accept-new", cfg);
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(resolveCortexMemoryConflictMock).toHaveBeenCalledWith({
+      workspaceDir: testWorkspaceDir,
+      graphPath: undefined,
+      conflictId: "conf_1",
+      action: "accept-new",
+      commitMessage: "openclaw cortex resolve conf_1 accept-new",
+    });
+    expect(result.reply?.text).toContain("Resolved Cortex conflict conf_1.");
+    expect(result.reply?.text).toContain("Commit: ver_123");
+    expect(result.reply?.text).toContain("/cortex preview");
+  });
+
+  it("syncs Cortex coding context from chat", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          cortex: {
+            enabled: true,
+            mode: "technical",
+            maxChars: 1500,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    syncCortexCodingContextMock.mockResolvedValueOnce({
+      workspaceDir: testWorkspaceDir,
+      graphPath: path.join(testWorkspaceDir, ".cortex", "context.json"),
+      policy: "technical",
+      platforms: ["claude-code", "cursor", "copilot"],
+    });
+
+    const params = buildParams("/cortex sync coding", cfg);
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(syncCortexCodingContextMock).toHaveBeenCalledWith({
+      workspaceDir: testWorkspaceDir,
+      graphPath: undefined,
+      policy: "technical",
+      platforms: [],
+    });
+    expect(result.reply?.text).toContain("Synced Cortex coding context.");
+    expect(result.reply?.text).toContain("Platforms: claude-code, cursor, copilot");
+  });
+
+  it("sets Cortex mode for the active session", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/cortex mode set professional", cfg);
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(setCortexModeOverrideMock).toHaveBeenCalledWith({
+      agentId: "main",
+      scope: "session",
+      targetId: "session-1",
+      mode: "professional",
+    });
+    expect(result.reply?.text).toContain("Set Cortex mode for this session to professional.");
+    expect(result.reply?.text).toContain("Use /status or /cortex preview to verify.");
+  });
+
+  it("resets Cortex mode for the active channel when requested", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    clearCortexModeOverrideMock.mockResolvedValueOnce(true);
+    const params = buildParams("/cortex mode reset channel", cfg, {
+      Surface: "slack",
+      Provider: "slack",
+      NativeChannelId: "C123",
+    });
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(resolveCortexChannelTargetMock).toHaveBeenCalled();
+    expect(clearCortexModeOverrideMock).toHaveBeenCalledWith({
+      agentId: "main",
+      scope: "channel",
+      targetId: "C123",
+    });
+    expect(result.reply?.text).toContain("Cleared Cortex mode override for this channel.");
+    expect(result.reply?.text).toContain("Use /status or /cortex preview to verify.");
+  });
+
+  it("shows the active Cortex mode in /status", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    resolveAgentCortexModeStatusMock.mockResolvedValueOnce({
+      enabled: true,
+      mode: "technical",
+      source: "session-override",
+      maxChars: 1500,
+    });
+    const params = buildParams("/status", cfg);
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Cortex: technical (session override)");
   });
 });
 

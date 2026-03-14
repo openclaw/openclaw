@@ -51,6 +51,22 @@ export const AgentDefaultsSchema = z
     contextTokens: z.number().int().positive().optional(),
     cliBackends: z.record(z.string(), CliBackendSchema).optional(),
     memorySearch: MemorySearchSchema,
+    cortex: z
+      .object({
+        enabled: z.boolean().optional(),
+        graphPath: z.string().optional(),
+        mode: z
+          .union([
+            z.literal("full"),
+            z.literal("professional"),
+            z.literal("technical"),
+            z.literal("minimal"),
+          ])
+          .optional(),
+        maxChars: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     contextPruning: z
       .object({
         mode: z.union([z.literal("off"), z.literal("cache-ttl")]).optional(),

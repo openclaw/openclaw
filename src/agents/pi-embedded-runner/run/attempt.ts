@@ -46,6 +46,7 @@ import {
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
 } from "../../channel-tools.js";
+import { resolveAgentCortexPromptContext } from "../../cortex.js";
 import { ensureCustomApiRegistered } from "../../custom-api-registry.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
@@ -2328,11 +2329,22 @@ export async function runEmbeddedAttempt(
           legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
         });
         {
+          const cortexPromptContext = await resolveAgentCortexPromptContext({
+            cfg: params.config,
+            agentId: sessionAgentId,
+            workspaceDir: params.workspaceDir,
+            promptMode,
+            sessionId: params.sessionId,
+            channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+          });
           if (hookResult?.prependContext) {
             effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;
             log.debug(
               `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
             );
+          }
+          if (cortexPromptContext.error) {
+            log.warn(`cortex prompt context unavailable: ${cortexPromptContext.error}`);
           }
           const legacySystemPrompt =
             typeof hookResult?.systemPrompt === "string" ? hookResult.systemPrompt.trim() : "";
@@ -2343,16 +2355,22 @@ export async function runEmbeddedAttempt(
           }
           const prependedOrAppendedSystemPrompt = composeSystemPromptWithHookContext({
             baseSystemPrompt: systemPromptText,
-            prependSystemContext: hookResult?.prependSystemContext,
+            prependSystemContext: joinPresentTextSegments([
+              cortexPromptContext.context,
+              hookResult?.prependSystemContext,
+            ]),
             appendSystemContext: hookResult?.appendSystemContext,
           });
           if (prependedOrAppendedSystemPrompt) {
-            const prependSystemLen = hookResult?.prependSystemContext?.trim().length ?? 0;
+            const prependSystemLen = joinPresentTextSegments([
+              cortexPromptContext.context,
+              hookResult?.prependSystemContext,
+            ])?.trim().length;
             const appendSystemLen = hookResult?.appendSystemContext?.trim().length ?? 0;
             applySystemPromptOverrideToSession(activeSession, prependedOrAppendedSystemPrompt);
             systemPromptText = prependedOrAppendedSystemPrompt;
             log.debug(
-              `hooks: applied prependSystemContext/appendSystemContext (${prependSystemLen}+${appendSystemLen} chars)`,
+              `hooks: applied prependSystemContext/appendSystemContext (${prependSystemLen ?? 0}+${appendSystemLen} chars)`,
             );
           }
         }

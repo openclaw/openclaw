@@ -108,7 +108,7 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
             },
           },
         },
-      },
+      } as unknown as typeof baseToolConfig.config,
       sandboxed: false,
       runtimeFirecrawl: {
         active: false,

@@ -4,9 +4,7 @@ import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import {
-  isMemoryMultimodalEnabled,
   normalizeMemoryMultimodalSettings,
-  supportsMemoryMultimodalEmbeddings,
   type MemoryMultimodalSettings,
 } from "../memory/multimodal.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
@@ -16,7 +14,6 @@ export type ResolvedMemorySearchConfig = {
   enabled: boolean;
   sources: Array<"memory" | "sessions">;
   extraPaths: string[];
-  multimodal: MemoryMultimodalSettings;
   provider: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama" | "auto";
   remote?: {
     baseUrl?: string;
@@ -36,6 +33,7 @@ export type ResolvedMemorySearchConfig = {
   fallback: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
   model: string;
   outputDimensionality?: number;
+  multimodal: MemoryMultimodalSettings;
   local: {
     modelPath?: string;
     modelCacheDir?: string;
@@ -202,21 +200,25 @@ function mergeConfig(
               ? DEFAULT_OLLAMA_MODEL
               : undefined;
   const model = overrides?.model ?? defaults?.model ?? modelDefault ?? "";
-  const outputDimensionality = overrides?.outputDimensionality ?? defaults?.outputDimensionality;
+  const rawOutputDimensionality = overrides?.outputDimensionality ?? defaults?.outputDimensionality;
+  const outputDimensionality =
+    typeof rawOutputDimensionality === "number" && Number.isFinite(rawOutputDimensionality)
+      ? clampInt(rawOutputDimensionality, 1, Number.MAX_SAFE_INTEGER)
+      : undefined;
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
     modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
   };
-  const sources = normalizeSources(overrides?.sources ?? defaults?.sources, sessionMemory);
-  const rawPaths = [...(defaults?.extraPaths ?? []), ...(overrides?.extraPaths ?? [])]
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const extraPaths = Array.from(new Set(rawPaths));
   const multimodal = normalizeMemoryMultimodalSettings({
     enabled: overrides?.multimodal?.enabled ?? defaults?.multimodal?.enabled,
     modalities: overrides?.multimodal?.modalities ?? defaults?.multimodal?.modalities,
     maxFileBytes: overrides?.multimodal?.maxFileBytes ?? defaults?.multimodal?.maxFileBytes,
   });
+  const sources = normalizeSources(overrides?.sources ?? defaults?.sources, sessionMemory);
+  const rawPaths = [...(defaults?.extraPaths ?? []), ...(overrides?.extraPaths ?? [])]
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const extraPaths = Array.from(new Set(rawPaths));
   const vector = {
     enabled: overrides?.store?.vector?.enabled ?? defaults?.store?.vector?.enabled ?? true,
     extensionPath:
@@ -320,12 +322,10 @@ function mergeConfig(
   );
   const deltaBytes = clampInt(sync.sessions.deltaBytes, 0, Number.MAX_SAFE_INTEGER);
   const deltaMessages = clampInt(sync.sessions.deltaMessages, 0, Number.MAX_SAFE_INTEGER);
-  const postCompactionForce = sync.sessions.postCompactionForce;
   return {
     enabled,
     sources,
     extraPaths,
-    multimodal,
     provider,
     remote,
     experimental: {
@@ -334,6 +334,7 @@ function mergeConfig(
     fallback,
     model,
     outputDimensionality,
+    multimodal,
     local,
     store,
     chunking: { tokens: Math.max(1, chunking.tokens), overlap },
@@ -342,7 +343,7 @@ function mergeConfig(
       sessions: {
         deltaBytes,
         deltaMessages,
-        postCompactionForce,
+        postCompactionForce: sync.sessions.postCompactionForce,
       },
     },
     query: {
@@ -384,23 +385,6 @@ export function resolveMemorySearchConfig(
   const resolved = mergeConfig(defaults, overrides, agentId);
   if (!resolved.enabled) {
     return null;
-  }
-  const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
-  if (
-    multimodalActive &&
-    !supportsMemoryMultimodalEmbeddings({
-      provider: resolved.provider,
-      model: resolved.model,
-    })
-  ) {
-    throw new Error(
-      'agents.*.memorySearch.multimodal requires memorySearch.provider = "gemini" and model = "gemini-embedding-2-preview".',
-    );
-  }
-  if (multimodalActive && resolved.fallback !== "none") {
-    throw new Error(
-      'agents.*.memorySearch.multimodal does not support memorySearch.fallback. Set fallback to "none".',
-    );
   }
   return resolved;
 }

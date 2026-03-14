@@ -319,15 +319,6 @@ export type MemorySearchConfig = {
   sources?: Array<"memory" | "sessions">;
   /** Extra paths to include in memory search (directories or .md files). */
   extraPaths?: string[];
-  /** Optional multimodal file indexing for selected extra paths. */
-  multimodal?: {
-    /** Enable image/audio embeddings from extraPaths. */
-    enabled?: boolean;
-    /** Which non-text file types to index. */
-    modalities?: Array<"image" | "audio" | "all">;
-    /** Max bytes allowed per multimodal file before it is skipped. */
-    maxFileBytes?: number;
-  };
   /** Experimental memory search settings. */
   experimental?: {
     /** Enable session transcript indexing (experimental, default: false). */
@@ -356,11 +347,14 @@ export type MemorySearchConfig = {
   fallback?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
   /** Embedding model id (remote) or alias (local). */
   model?: string;
-  /**
-   * Gemini embedding-2 models only: output vector dimensions.
-   * Supported values today are 768, 1536, and 3072.
-   */
+  /** Optional embedding output dimensionality override (for providers that support it). */
   outputDimensionality?: number;
+  /** Optional multimodal indexing for image/audio files in extra paths. */
+  multimodal?: {
+    enabled?: boolean;
+    modalities?: Array<"image" | "audio" | "all">;
+    maxFileBytes?: number;
+  };
   /** Local embedding settings (node-llama-cpp). */
   local?: {
     /** GGUF model path or hf: URI. */
@@ -402,7 +396,7 @@ export type MemorySearchConfig = {
       deltaBytes?: number;
       /** Minimum appended JSONL lines before session transcripts are reindexed. */
       deltaMessages?: number;
-      /** Force session reindex after compaction-triggered transcript updates (default: true). */
+      /** Force session-memory sync after compaction even if deltas are below threshold (default: true). */
       postCompactionForce?: boolean;
     };
   };
@@ -457,8 +451,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "gemini", "grok", "kimi", or "perplexity"). */
-      provider?: "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+      /** Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). */
+      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: SecretInput;
       /** Default search results count (1-10). */
@@ -467,16 +461,13 @@ export type ToolsConfig = {
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
-      /** Brave-specific configuration (used when provider="brave"). */
-      brave?: {
-        /** Brave Search mode: "web" (standard results) or "llm-context" (pre-extracted page content). Default: "web". */
-        mode?: "web" | "llm-context";
-      };
-      /** Gemini-specific configuration (used when provider="gemini"). */
-      gemini?: {
-        /** Gemini API key (defaults to GEMINI_API_KEY env var). */
+      /** Perplexity-specific configuration (used when provider="perplexity"). */
+      perplexity?: {
+        /** API key for Perplexity (defaults to PERPLEXITY_API_KEY env var). */
         apiKey?: SecretInput;
-        /** Model to use for grounded search (defaults to "gemini-2.5-flash"). */
+        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
+        baseUrl?: string;
+        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
         model?: string;
       };
       /** Grok-specific configuration (used when provider="grok"). */
@@ -488,6 +479,13 @@ export type ToolsConfig = {
         /** Include inline citations in response text as markdown links (default: false). */
         inlineCitations?: boolean;
       };
+      /** Gemini-specific configuration (used when provider="gemini"). */
+      gemini?: {
+        /** Gemini API key (defaults to GEMINI_API_KEY env var). */
+        apiKey?: SecretInput;
+        /** Model to use for grounded search (defaults to "gemini-2.5-flash"). */
+        model?: string;
+      };
       /** Kimi-specific configuration (used when provider="kimi"). */
       kimi?: {
         /** Moonshot/Kimi API key (defaults to KIMI_API_KEY or MOONSHOT_API_KEY env var). */
@@ -497,14 +495,10 @@ export type ToolsConfig = {
         /** Model to use (defaults to "moonshot-v1-128k"). */
         model?: string;
       };
-      /** Perplexity-specific configuration (used when provider="perplexity"). */
-      perplexity?: {
-        /** API key for Perplexity (defaults to PERPLEXITY_API_KEY env var). */
-        apiKey?: SecretInput;
-        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
-        baseUrl?: string;
-        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
-        model?: string;
+      /** Brave-specific configuration (used when provider="brave"). */
+      brave?: {
+        /** Brave Search mode: "web" (standard results) or "llm-context" (pre-extracted page content). Default: "web". */
+        mode?: "web" | "llm-context";
       };
     };
     fetch?: {
@@ -528,7 +522,7 @@ export type ToolsConfig = {
         /** Enable Firecrawl fallback (default: true when apiKey is set). */
         enabled?: boolean;
         /** Firecrawl API key (optional; defaults to FIRECRAWL_API_KEY env var). */
-        apiKey?: SecretInput;
+        apiKey?: string;
         /** Firecrawl base URL (default: https://api.firecrawl.dev). */
         baseUrl?: string;
         /** Whether to keep only main content (default: true). */

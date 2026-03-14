@@ -8,6 +8,17 @@ import type {
 } from "./types.base.js";
 import type { MemorySearchConfig } from "./types.tools.js";
 
+export type AgentCortexConfig = {
+  /** Enable Cortex-backed prompt context injection for this agent. */
+  enabled?: boolean;
+  /** Optional Cortex graph path (absolute or relative to the agent workspace). */
+  graphPath?: string;
+  /** Disclosure mode used when exporting Cortex context. */
+  mode?: "full" | "professional" | "technical" | "minimal";
+  /** Max characters exported into the system prompt. */
+  maxChars?: number;
+};
+
 export type AgentModelEntryConfig = {
   alias?: string;
   /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
@@ -183,6 +194,8 @@ export type AgentDefaultsConfig = {
   };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
+  /** Optional Cortex-backed prompt context injection (per-agent overrides supported). */
+  cortex?: AgentCortexConfig;
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
   /** Default verbose level when no /verbose directive is present. */

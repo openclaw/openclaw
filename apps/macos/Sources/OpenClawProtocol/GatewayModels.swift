@@ -304,6 +304,7 @@ public struct Snapshot: Codable, Sendable {
     public let sessiondefaults: [String: AnyCodable]?
     public let authmode: AnyCodable?
     public let updateavailable: [String: AnyCodable]?
+    public let cortex: [String: AnyCodable]?
 
     public init(
         presence: [PresenceEntry],
@@ -314,7 +315,8 @@ public struct Snapshot: Codable, Sendable {
         statedir: String?,
         sessiondefaults: [String: AnyCodable]?,
         authmode: AnyCodable?,
-        updateavailable: [String: AnyCodable]?)
+        updateavailable: [String: AnyCodable]?,
+        cortex: [String: AnyCodable]?)
     {
         self.presence = presence
         self.health = health
@@ -325,6 +327,7 @@ public struct Snapshot: Codable, Sendable {
         self.sessiondefaults = sessiondefaults
         self.authmode = authmode
         self.updateavailable = updateavailable
+        self.cortex = cortex
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -337,6 +340,7 @@ public struct Snapshot: Codable, Sendable {
         case sessiondefaults = "sessionDefaults"
         case authmode = "authMode"
         case updateavailable = "updateAvailable"
+        case cortex
     }
 }
 

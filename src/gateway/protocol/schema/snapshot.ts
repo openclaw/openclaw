@@ -67,6 +67,20 @@ export const SnapshotSchema = Type.Object(
         channel: NonEmptyString,
       }),
     ),
+    cortex: Type.Optional(
+      Type.Object(
+        {
+          enabled: Type.Boolean(),
+          mode: Type.Optional(NonEmptyString),
+          graphPath: Type.Optional(NonEmptyString),
+          lastCaptureAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+          lastCaptureReason: Type.Optional(Type.String()),
+          lastCaptureStored: Type.Optional(Type.Boolean()),
+          lastSyncPlatforms: Type.Optional(Type.Array(NonEmptyString)),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );

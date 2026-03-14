@@ -565,16 +565,6 @@ export const MemorySearchSchema = z
     enabled: z.boolean().optional(),
     sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
     extraPaths: z.array(z.string()).optional(),
-    multimodal: z
-      .object({
-        enabled: z.boolean().optional(),
-        modalities: z
-          .array(z.union([z.literal("image"), z.literal("audio"), z.literal("all")]))
-          .optional(),
-        maxFileBytes: z.number().int().positive().optional(),
-      })
-      .strict()
-      .optional(),
     experimental: z
       .object({
         sessionMemory: z.boolean().optional(),
@@ -622,6 +612,16 @@ export const MemorySearchSchema = z
       .optional(),
     model: z.string().optional(),
     outputDimensionality: z.number().int().positive().optional(),
+    multimodal: z
+      .object({
+        enabled: z.boolean().optional(),
+        modalities: z
+          .array(z.union([z.literal("image"), z.literal("audio"), z.literal("all")]))
+          .optional(),
+        maxFileBytes: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     local: z
       .object({
         modelPath: z.string().optional(),
@@ -746,6 +746,22 @@ export const AgentEntrySchema = z
     model: AgentModelSchema.optional(),
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
+    cortex: z
+      .object({
+        enabled: z.boolean().optional(),
+        graphPath: z.string().optional(),
+        mode: z
+          .union([
+            z.literal("full"),
+            z.literal("professional"),
+            z.literal("technical"),
+            z.literal("minimal"),
+          ])
+          .optional(),
+        maxChars: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     humanDelay: HumanDelaySchema.optional(),
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,

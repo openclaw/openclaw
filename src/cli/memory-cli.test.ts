@@ -5,8 +5,17 @@ import { Command } from "commander";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const getMemorySearchManager = vi.fn();
+const getCortexStatus = vi.fn();
+const previewCortexContext = vi.fn();
+const ensureCortexGraphInitialized = vi.fn();
+const getCortexModeOverride = vi.fn();
+const setCortexModeOverride = vi.fn();
+const clearCortexModeOverride = vi.fn();
 const loadConfig = vi.fn(() => ({}));
+const readConfigFileSnapshot = vi.fn();
+const writeConfigFile = vi.fn(async () => {});
 const resolveDefaultAgentId = vi.fn(() => "main");
+const resolveAgentWorkspaceDir = vi.fn(() => "/tmp/openclaw-workspace");
 const resolveCommandSecretRefsViaGateway = vi.fn(async ({ config }: { config: unknown }) => ({
   resolvedConfig: config,
   diagnostics: [] as string[],
@@ -16,12 +25,27 @@ vi.mock("../memory/index.js", () => ({
   getMemorySearchManager,
 }));
 
+vi.mock("../memory/cortex.js", () => ({
+  ensureCortexGraphInitialized,
+  getCortexStatus,
+  previewCortexContext,
+}));
+
+vi.mock("../memory/cortex-mode-overrides.js", () => ({
+  getCortexModeOverride,
+  setCortexModeOverride,
+  clearCortexModeOverride,
+}));
+
 vi.mock("../config/config.js", () => ({
   loadConfig,
+  readConfigFileSnapshot,
+  writeConfigFile,
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId,
+  resolveAgentWorkspaceDir,
 }));
 
 vi.mock("./command-secret-gateway.js", () => ({
@@ -42,6 +66,14 @@ beforeAll(async () => {
 afterEach(() => {
   vi.restoreAllMocks();
   getMemorySearchManager.mockClear();
+  getCortexStatus.mockClear();
+  previewCortexContext.mockClear();
+  ensureCortexGraphInitialized.mockClear();
+  getCortexModeOverride.mockClear();
+  setCortexModeOverride.mockClear();
+  clearCortexModeOverride.mockClear();
+  readConfigFileSnapshot.mockClear();
+  writeConfigFile.mockClear();
   resolveCommandSecretRefsViaGateway.mockClear();
   process.exitCode = undefined;
   setVerbose(false);
@@ -85,6 +117,21 @@ describe("memory cli", () => {
 
   function mockManager(manager: Record<string, unknown>) {
     getMemorySearchManager.mockResolvedValueOnce({ manager });
+  }
+
+  function mockWritableConfigSnapshot(resolved: Record<string, unknown>) {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      config: resolved,
+      resolved,
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+      path: "/tmp/openclaw.json",
+      raw: JSON.stringify(resolved),
+      parsed: resolved,
+    });
   }
 
   function setupMemoryStatusWithInactiveSecretDiagnostics(close: ReturnType<typeof vi.fn>) {
@@ -252,6 +299,11 @@ describe("memory cli", () => {
     expect(helpText).toContain("Quick search using positional query.");
     expect(helpText).toContain('openclaw memory search --query "deployment" --max-results 20');
     expect(helpText).toContain("Limit results for focused troubleshooting.");
+    expect(helpText).toContain("openclaw memory cortex status");
+    expect(helpText).toContain("Check local Cortex bridge availability.");
+    expect(helpText).toContain("openclaw memory cortex preview --mode technical");
+    expect(helpText).toContain("openclaw memory cortex enable --mode technical");
+    expect(helpText).toContain("openclaw memory cortex mode set minimal --session-id abc123");
   });
 
   it("prints vector error when unavailable", async () => {
@@ -564,5 +616,219 @@ describe("memory cli", () => {
     expect(Array.isArray(payload.results)).toBe(true);
     expect(payload.results as unknown[]).toHaveLength(1);
     expect(close).toHaveBeenCalled();
+  });
+
+  it("prints Cortex bridge status", async () => {
+    getCortexStatus.mockResolvedValueOnce({
+      available: true,
+      workspaceDir: "/tmp/openclaw-workspace",
+      graphPath: "/tmp/openclaw-workspace/.cortex/context.json",
+      graphExists: true,
+    });
+
+    const log = spyRuntimeLogs();
+    await runMemoryCli(["cortex", "status"]);
+
+    expect(getCortexStatus).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/openclaw-workspace",
+      graphPath: undefined,
+    });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Cortex Bridge"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("CLI: ready"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Graph: present"));
+  });
+
+  it("prints Cortex bridge status as json", async () => {
+    getCortexStatus.mockResolvedValueOnce({
+      available: false,
+      workspaceDir: "/tmp/openclaw-workspace",
+      graphPath: "/tmp/openclaw-workspace/.cortex/context.json",
+      graphExists: false,
+      error: "spawn cortex ENOENT",
+    });
+
+    const log = spyRuntimeLogs();
+    await runMemoryCli(["cortex", "status", "--json"]);
+
+    const payload = firstLoggedJson(log);
+    expect(payload.agentId).toBe("main");
+    expect(payload.available).toBe(false);
+    expect(payload.error).toBe("spawn cortex ENOENT");
+  });
+
+  it("prints Cortex preview context", async () => {
+    previewCortexContext.mockResolvedValueOnce({
+      workspaceDir: "/tmp/openclaw-workspace",
+      graphPath: "/tmp/openclaw-workspace/.cortex/context.json",
+      policy: "technical",
+      maxChars: 1500,
+      context: "## Cortex Context\n- Python",
+    });
+
+    const log = spyRuntimeLogs();
+    await runMemoryCli(["cortex", "preview", "--mode", "technical"]);
+
+    expect(previewCortexContext).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/openclaw-workspace",
+      graphPath: undefined,
+      policy: "technical",
+      maxChars: undefined,
+    });
+    expect(log).toHaveBeenCalledWith("## Cortex Context\n- Python");
+  });
+
+  it("fails Cortex preview when bridge errors", async () => {
+    previewCortexContext.mockRejectedValueOnce(new Error("Cortex graph not found"));
+
+    const error = spyRuntimeErrors();
+    await runMemoryCli(["cortex", "preview"]);
+
+    expect(error).toHaveBeenCalledWith("Cortex graph not found");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("enables Cortex prompt bridge in agent defaults", async () => {
+    mockWritableConfigSnapshot({});
+    ensureCortexGraphInitialized.mockResolvedValueOnce({
+      graphPath: "/tmp/openclaw-workspace/.cortex/context.json",
+      created: true,
+    });
+
+    const log = spyRuntimeLogs();
+    await runMemoryCli(["cortex", "enable", "--mode", "professional", "--max-chars", "2200"]);
+
+    expect(writeConfigFile).toHaveBeenCalledWith({
+      agents: {
+        defaults: {
+          cortex: {
+            enabled: true,
+            mode: "professional",
+            maxChars: 2200,
+          },
+        },
+      },
+    });
+    expect(log).toHaveBeenCalledWith(
+      "Enabled Cortex prompt bridge for agent defaults (professional, 2200 chars).",
+    );
+    expect(log).toHaveBeenCalledWith(
+      "Initialized Cortex graph: /tmp/openclaw-workspace/.cortex/context.json",
+    );
+    expect(ensureCortexGraphInitialized).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/openclaw-workspace",
+      graphPath: undefined,
+    });
+  });
+
+  it("initializes a Cortex graph without changing config", async () => {
+    ensureCortexGraphInitialized.mockResolvedValueOnce({
+      graphPath: "/tmp/openclaw-workspace/.cortex/context.json",
+      created: false,
+    });
+
+    const log = spyRuntimeLogs();
+    await runMemoryCli(["cortex", "init"]);
+
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(ensureCortexGraphInitialized).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/openclaw-workspace",
+      graphPath: undefined,
+    });
+    expect(log).toHaveBeenCalledWith(
+      "Cortex graph already present: /tmp/openclaw-workspace/.cortex/context.json",
+    );
+  });
+
+  it("disables Cortex prompt bridge for a specific agent", async () => {
+    mockWritableConfigSnapshot({
+      agents: {
+        list: [{ id: "oracle", cortex: { enabled: true, mode: "technical", maxChars: 1500 } }],
+      },
+    });
+
+    const log = spyRuntimeLogs();
+    await runMemoryCli(["cortex", "disable", "--agent", "oracle"]);
+
+    expect(writeConfigFile).toHaveBeenCalledWith({
+      agents: {
+        list: [{ id: "oracle", cortex: { enabled: false, mode: "technical", maxChars: 1500 } }],
+      },
+    });
+    expect(log).toHaveBeenCalledWith("Disabled Cortex prompt bridge for agent oracle.");
+  });
+
+  it("fails Cortex enable for an unknown agent", async () => {
+    mockWritableConfigSnapshot({
+      agents: {
+        list: [{ id: "main" }],
+      },
+    });
+
+    const error = spyRuntimeErrors();
+    await runMemoryCli(["cortex", "enable", "--agent", "oracle"]);
+
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith("Agent not found: oracle");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("sets a session-level Cortex mode override", async () => {
+    setCortexModeOverride.mockResolvedValueOnce({
+      agentId: "main",
+      scope: "session",
+      targetId: "session-1",
+      mode: "minimal",
+      updatedAt: "2026-03-08T23:00:00.000Z",
+    });
+
+    const log = spyRuntimeLogs();
+    await runMemoryCli(["cortex", "mode", "set", "minimal", "--session-id", "session-1"]);
+
+    expect(setCortexModeOverride).toHaveBeenCalledWith({
+      agentId: "main",
+      scope: "session",
+      targetId: "session-1",
+      mode: "minimal",
+    });
+    expect(log).toHaveBeenCalledWith(
+      "Set Cortex mode override for session session-1 to minimal (main).",
+    );
+  });
+
+  it("shows a stored channel-level Cortex mode override as json", async () => {
+    getCortexModeOverride.mockResolvedValueOnce({
+      agentId: "main",
+      scope: "channel",
+      targetId: "slack",
+      mode: "professional",
+      updatedAt: "2026-03-08T23:00:00.000Z",
+    });
+
+    const log = spyRuntimeLogs();
+    await runMemoryCli(["cortex", "mode", "show", "--channel", "slack", "--json"]);
+
+    const payload = firstLoggedJson(log);
+    expect(payload.agentId).toBe("main");
+    expect(payload.scope).toBe("channel");
+    expect(payload.targetId).toBe("slack");
+    expect(payload.override).toMatchObject({ mode: "professional" });
+  });
+
+  it("rejects ambiguous Cortex mode targets", async () => {
+    const error = spyRuntimeErrors();
+    await runMemoryCli([
+      "cortex",
+      "mode",
+      "set",
+      "technical",
+      "--session-id",
+      "session-1",
+      "--channel",
+      "slack",
+    ]);
+
+    expect(setCortexModeOverride).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith("Choose either --session-id or --channel, not both.");
+    expect(process.exitCode).toBe(1);
   });
 });

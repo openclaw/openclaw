@@ -1,5 +1,11 @@
 import fs from "node:fs";
 import { lookupContextTokens } from "../../agents/context.js";
+import {
+  ingestAgentCortexMemoryCandidate,
+  resolveAgentCortexConflictNotice,
+  resolveAgentTurnCortexContext,
+  resolveCortexChannelTarget,
+} from "../../agents/cortex.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -278,10 +284,6 @@ export async function runReplyAgent(params: {
       updatedAt: Date.now(),
       systemSent: false,
       abortedLastRun: false,
-      modelProvider: undefined,
-      model: undefined,
-      contextTokens: undefined,
-      systemPromptReport: undefined,
       fallbackNoticeSelectedModel: undefined,
       fallbackNoticeActiveModel: undefined,
       fallbackNoticeReason: undefined,
@@ -692,6 +694,71 @@ export async function runReplyAgent(params: {
         const suffix = typeof count === "number" ? ` (count ${count})` : "";
         verboseNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
       }
+    }
+    const cortexAgentId =
+      followupRun.run.agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : "main");
+    const cortexChannelId = resolveCortexChannelTarget({
+      channel: followupRun.run.messageProvider,
+      originatingChannel: String(sessionCtx.OriginatingChannel ?? ""),
+      originatingTo: sessionCtx.OriginatingTo,
+      nativeChannelId: sessionCtx.NativeChannelId,
+      to: sessionCtx.To,
+      from: sessionCtx.From,
+    });
+    const resolvedTurnCortex = cfg
+      ? await resolveAgentTurnCortexContext({
+          cfg,
+          agentId: cortexAgentId,
+          workspaceDir: followupRun.run.workspaceDir,
+          sessionId: followupRun.run.sessionId,
+          channelId: cortexChannelId,
+        })
+      : null;
+    const cortexMemoryCapture = cfg
+      ? await ingestAgentCortexMemoryCandidate({
+          cfg,
+          agentId: cortexAgentId,
+          workspaceDir: followupRun.run.workspaceDir,
+          commandBody,
+          sessionId: followupRun.run.sessionId,
+          channelId: cortexChannelId,
+          provider: followupRun.run.messageProvider,
+          resolved: resolvedTurnCortex,
+        })
+      : null;
+    const cortexConflictNotice = cfg
+      ? await resolveAgentCortexConflictNotice({
+          cfg,
+          agentId: cortexAgentId,
+          workspaceDir: followupRun.run.workspaceDir,
+          sessionId: followupRun.run.sessionId,
+          channelId: cortexChannelId,
+          resolved: resolvedTurnCortex,
+        })
+      : null;
+    if (verboseEnabled && resolvedTurnCortex) {
+      const sourceLabel =
+        resolvedTurnCortex.config.source === "session-override"
+          ? "session override"
+          : resolvedTurnCortex.config.source === "channel-override"
+            ? "channel override"
+            : "agent config";
+      verboseNotices.push({
+        text: `🧠 Cortex: ${resolvedTurnCortex.config.mode} (${sourceLabel})`,
+      });
+    }
+    if (verboseEnabled && cortexMemoryCapture?.captured) {
+      verboseNotices.push({
+        text: `🧠 Cortex memory updated (${cortexMemoryCapture.reason}, score ${cortexMemoryCapture.score.toFixed(2)})`,
+      });
+    }
+    if (verboseEnabled && cortexMemoryCapture?.syncedCodingContext) {
+      verboseNotices.push({
+        text: `🧠 Cortex coding sync updated (${(cortexMemoryCapture.syncPlatforms ?? []).join(", ")})`,
+      });
+    }
+    if (cortexConflictNotice) {
+      finalPayloads = [{ text: cortexConflictNotice.text }, ...finalPayloads];
     }
     if (verboseNotices.length > 0) {
       finalPayloads = [...verboseNotices, ...finalPayloads];

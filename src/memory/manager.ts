@@ -43,19 +43,16 @@ const INDEX_CACHE = new Map<string, MemoryIndexManager>();
 const INDEX_CACHE_PENDING = new Map<string, Promise<MemoryIndexManager>>();
 
 export async function closeAllMemoryIndexManagers(): Promise<void> {
-  const pending = Array.from(INDEX_CACHE_PENDING.values());
-  if (pending.length > 0) {
-    await Promise.allSettled(pending);
-  }
-  const managers = Array.from(INDEX_CACHE.values());
-  INDEX_CACHE.clear();
-  for (const manager of managers) {
-    try {
-      await manager.close();
-    } catch (err) {
-      log.warn(`failed to close memory index manager: ${String(err)}`);
+  const pendingManagers = await Promise.allSettled(Array.from(INDEX_CACHE_PENDING.values()));
+  const managers = new Set<MemoryIndexManager>(INDEX_CACHE.values());
+  for (const result of pendingManagers) {
+    if (result.status === "fulfilled") {
+      managers.add(result.value);
     }
   }
+  INDEX_CACHE.clear();
+  INDEX_CACHE_PENDING.clear();
+  await Promise.allSettled(Array.from(managers, async (manager) => await manager.close()));
 }
 
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
@@ -125,8 +122,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   >();
   private sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
-  private queuedSessionFiles = new Set<string>();
-  private queuedSessionSync: Promise<void> | null = null;
+  private queuedSyncParams: {
+    reason?: string;
+    force?: boolean;
+    sessionFiles?: string[];
+    progress?: (update: MemorySyncProgressUpdate) => void;
+  } | null = null;
   private readonlyRecoveryAttempts = 0;
   private readonlyRecoverySuccesses = 0;
   private readonlyRecoveryFailures = 0;
@@ -157,9 +158,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         config: cfg,
         agentDir: resolveAgentDir(cfg, agentId),
         provider: settings.provider,
+        outputDimensionality: settings.outputDimensionality,
         remote: settings.remote,
         model: settings.model,
-        outputDimensionality: settings.outputDimensionality,
         fallback: settings.fallback,
         local: settings.local,
       });
@@ -461,45 +462,35 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return;
     }
     if (this.syncing) {
-      if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
-        return this.enqueueTargetedSessionSync(params.sessionFiles);
-      }
+      const queued = this.queuedSyncParams;
+      this.queuedSyncParams = {
+        reason: params?.reason ?? queued?.reason,
+        force: params?.force || queued?.force,
+        sessionFiles: Array.from(
+          new Set([
+            ...(queued?.sessionFiles ?? []),
+            ...(params?.sessionFiles?.filter((sessionFile) => sessionFile.trim().length > 0) ?? []),
+          ]),
+        ),
+        progress: params?.progress ?? queued?.progress,
+      };
       return this.syncing;
     }
-    this.syncing = this.runSyncWithReadonlyRecovery(params).finally(() => {
+    this.syncing = (async () => {
+      let nextParams = params;
+      while (!this.closed) {
+        this.queuedSyncParams = null;
+        await this.runSyncWithReadonlyRecovery(nextParams);
+        if (!this.queuedSyncParams) {
+          break;
+        }
+        nextParams = this.queuedSyncParams;
+      }
+    })().finally(() => {
       this.syncing = null;
+      this.queuedSyncParams = null;
     });
     return this.syncing ?? Promise.resolve();
-  }
-
-  private enqueueTargetedSessionSync(sessionFiles?: string[]): Promise<void> {
-    for (const sessionFile of sessionFiles ?? []) {
-      const trimmed = sessionFile.trim();
-      if (trimmed) {
-        this.queuedSessionFiles.add(trimmed);
-      }
-    }
-    if (this.queuedSessionFiles.size === 0) {
-      return this.syncing ?? Promise.resolve();
-    }
-    if (!this.queuedSessionSync) {
-      this.queuedSessionSync = (async () => {
-        try {
-          await this.syncing?.catch(() => undefined);
-          while (!this.closed && this.queuedSessionFiles.size > 0) {
-            const queuedSessionFiles = Array.from(this.queuedSessionFiles);
-            this.queuedSessionFiles.clear();
-            await this.sync({
-              reason: "queued-session-files",
-              sessionFiles: queuedSessionFiles,
-            });
-          }
-        } finally {
-          this.queuedSessionSync = null;
-        }
-      })();
-    }
-    return this.queuedSessionSync;
   }
 
   private isReadonlyDbError(err: unknown): boolean {

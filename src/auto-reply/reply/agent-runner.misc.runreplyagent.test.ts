@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { BILLING_ERROR_USER_MESSAGE } from "../../agents/pi-embedded-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
@@ -68,11 +69,27 @@ vi.mock("./queue.js", async () => {
 });
 
 const loadCronStoreMock = vi.fn();
+const resolveAgentCortexModeStatusMock = vi.hoisted(() => vi.fn());
+const resolveAgentCortexConflictNoticeMock = vi.hoisted(() => vi.fn());
+const ingestAgentCortexMemoryCandidateMock = vi.hoisted(() => vi.fn());
+const resolveCortexChannelTargetMock = vi.hoisted(() => vi.fn());
 vi.mock("../../cron/store.js", async () => {
   const actual = await vi.importActual<typeof import("../../cron/store.js")>("../../cron/store.js");
   return {
     ...actual,
     loadCronStore: (...args: unknown[]) => loadCronStoreMock(...args),
+  };
+});
+
+vi.mock("../../agents/cortex.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../agents/cortex.js")>("../../agents/cortex.js");
+  return {
+    ...actual,
+    ingestAgentCortexMemoryCandidate: ingestAgentCortexMemoryCandidateMock,
+    resolveAgentCortexModeStatus: resolveAgentCortexModeStatusMock,
+    resolveAgentCortexConflictNotice: resolveAgentCortexConflictNoticeMock,
+    resolveCortexChannelTarget: resolveCortexChannelTargetMock,
   };
 });
 
@@ -90,6 +107,21 @@ beforeEach(() => {
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
   loadCronStoreMock.mockClear();
+  resolveAgentCortexModeStatusMock.mockReset();
+  resolveAgentCortexConflictNoticeMock.mockReset();
+  ingestAgentCortexMemoryCandidateMock.mockReset();
+  resolveCortexChannelTargetMock.mockReset();
+  resolveAgentCortexModeStatusMock.mockResolvedValue(null);
+  resolveAgentCortexConflictNoticeMock.mockResolvedValue(null);
+  ingestAgentCortexMemoryCandidateMock.mockResolvedValue({
+    captured: false,
+    score: 0,
+    reason: "below memory threshold",
+  });
+  resolveCortexChannelTargetMock.mockImplementation(
+    (params: { originatingTo?: string; channel?: string }) =>
+      params.originatingTo ?? params.channel ?? "unknown",
+  );
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
   resetSystemEventsForTest();
@@ -193,6 +225,20 @@ describe("runReplyAgent onAgentRunStart", () => {
     });
   });
 
+  it("returns billing message for mixed-signal error", async () => {
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error(
+        "HTTP 402 Payment Required: insufficient credits. Request size exceeds model context window.",
+      ),
+    );
+
+    const result = await createRun();
+    const payload = Array.isArray(result) ? result[0] : result;
+
+    expect(payload?.text).toBe(BILLING_ERROR_USER_MESSAGE);
+    expect(payload?.text).not.toContain("Context overflow");
+  });
+
   it("emits start callback when cli runner starts", async () => {
     runCliAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
@@ -214,6 +260,62 @@ describe("runReplyAgent onAgentRunStart", () => {
     expect(onAgentRunStart).toHaveBeenCalledTimes(1);
     expect(onAgentRunStart).toHaveBeenCalledWith("run-started");
     expect(result).toMatchObject({ text: "ok" });
+  });
+
+  it("prepends a Cortex conflict notice when unresolved conflicts exist", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+        },
+      },
+    });
+    resolveAgentCortexConflictNoticeMock.mockResolvedValueOnce({
+      conflictId: "conf_1",
+      severity: 0.91,
+      text: "⚠️ Cortex conflict detected: Hiring status changed\nResolve with: /cortex resolve conf_1 <accept-new|keep-old|merge|ignore>",
+    });
+
+    const result = await createRun();
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        text: expect.stringContaining("⚠️ Cortex conflict detected"),
+      }),
+      expect.objectContaining({ text: "ok" }),
+    ]);
+  });
+
+  it("captures high-signal user text into Cortex before checking conflicts", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+        },
+      },
+    });
+    ingestAgentCortexMemoryCandidateMock.mockResolvedValueOnce({
+      captured: true,
+      score: 0.7,
+      reason: "high-signal memory candidate",
+    });
+
+    await createRun();
+
+    expect(ingestAgentCortexMemoryCandidateMock).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      workspaceDir: "/tmp",
+      commandBody: "hello",
+      sessionId: "session",
+      channelId: "session:1",
+      provider: "webchat",
+    });
+    expect(resolveAgentCortexConflictNoticeMock).toHaveBeenCalled();
   });
 });
 
@@ -1626,74 +1728,5 @@ describe("runReplyAgent transient HTTP retry", () => {
 
     const payload = Array.isArray(result) ? result[0] : result;
     expect(payload?.text).toContain("Recovered response");
-  });
-});
-
-describe("runReplyAgent billing error classification", () => {
-  // Regression guard for the runner-level catch block in runAgentTurnWithFallback.
-  // Billing errors from providers like OpenRouter can contain token/size wording that
-  // matches context overflow heuristics. This test verifies the final user-visible
-  // message is the billing-specific one, not the "Context overflow" fallback.
-  it("returns billing message for mixed-signal error (billing text + overflow patterns)", async () => {
-    runEmbeddedPiAgentMock.mockRejectedValueOnce(
-      new Error("402 Payment Required: request token limit exceeded for this billing plan"),
-    );
-
-    const typing = createMockTypingController();
-    const sessionCtx = {
-      Provider: "telegram",
-      MessageSid: "msg",
-    } as unknown as TemplateContext;
-    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
-    const followupRun = {
-      prompt: "hello",
-      summaryLine: "hello",
-      enqueuedAt: Date.now(),
-      run: {
-        sessionId: "session",
-        sessionKey: "main",
-        messageProvider: "telegram",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        config: {},
-        skillsSnapshot: {},
-        provider: "anthropic",
-        model: "claude",
-        thinkLevel: "low",
-        verboseLevel: "off",
-        elevatedLevel: "off",
-        bashElevated: {
-          enabled: false,
-          allowed: false,
-          defaultLevel: "off",
-        },
-        timeoutMs: 1_000,
-        blockReplyBreak: "message_end",
-      },
-    } as unknown as FollowupRun;
-
-    const result = await runReplyAgent({
-      commandBody: "hello",
-      followupRun,
-      queueKey: "main",
-      resolvedQueue,
-      shouldSteer: false,
-      shouldFollowup: false,
-      isActive: false,
-      isStreaming: false,
-      typing,
-      sessionCtx,
-      defaultModel: "anthropic/claude",
-      resolvedVerboseLevel: "off",
-      isNewSession: false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      shouldInjectGroupIntro: false,
-      typingMode: "instant",
-    });
-
-    const payload = Array.isArray(result) ? result[0] : result;
-    expect(payload?.text).toContain("billing error");
-    expect(payload?.text).not.toContain("Context overflow");
   });
 });

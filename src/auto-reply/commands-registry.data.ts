@@ -1,5 +1,5 @@
 import { listChannelDocks } from "../channels/dock.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
@@ -124,9 +124,9 @@ function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
 }
 
 let cachedCommands: ChatCommandDefinition[] | null = null;
-let cachedRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 let cachedNativeCommandSurfaces: Set<string> | null = null;
-let cachedNativeRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
+let cachedCommandsPluginRegistryVersion: number | null = null;
+let cachedNativeCommandSurfacesPluginRegistryVersion: number | null = null;
 
 function buildChatCommands(): ChatCommandDefinition[] {
   const commands: ChatCommandDefinition[] = [
@@ -194,6 +194,22 @@ function buildChatCommands(): ChatCommandDefinition[] {
       description: "Explain how context is built and used.",
       textAlias: "/context",
       acceptsArgs: true,
+      category: "status",
+    }),
+    defineChatCommand({
+      key: "fast",
+      description: "Show or change fast mode for this session.",
+      textAlias: "/fast",
+      acceptsArgs: true,
+      scope: "text",
+      category: "status",
+    }),
+    defineChatCommand({
+      key: "cortex",
+      description: "Inspect or override Cortex prompt mode for this conversation.",
+      textAlias: "/cortex",
+      acceptsArgs: true,
+      scope: "text",
       category: "status",
     }),
     defineChatCommand({
@@ -606,22 +622,6 @@ function buildChatCommands(): ChatCommandDefinition[] {
       argsMenu: "auto",
     }),
     defineChatCommand({
-      key: "fast",
-      nativeName: "fast",
-      description: "Toggle fast mode.",
-      textAlias: "/fast",
-      category: "options",
-      args: [
-        {
-          name: "mode",
-          description: "status, on, or off",
-          type: "string",
-          choices: ["status", "on", "off"],
-        },
-      ],
-      argsMenu: "auto",
-    }),
-    defineChatCommand({
       key: "reasoning",
       nativeName: "reasoning",
       description: "Toggle reasoning visibility.",
@@ -775,20 +775,24 @@ function buildChatCommands(): ChatCommandDefinition[] {
 }
 
 export function getChatCommands(): ChatCommandDefinition[] {
-  const registry = getActivePluginRegistry();
-  if (cachedCommands && registry === cachedRegistry) {
+  const registryVersion = getActivePluginRegistryVersion();
+  if (cachedCommands && cachedCommandsPluginRegistryVersion === registryVersion) {
     return cachedCommands;
   }
   const commands = buildChatCommands();
   cachedCommands = commands;
-  cachedRegistry = registry;
   cachedNativeCommandSurfaces = null;
+  cachedCommandsPluginRegistryVersion = registryVersion;
+  cachedNativeCommandSurfacesPluginRegistryVersion = null;
   return commands;
 }
 
 export function getNativeCommandSurfaces(): Set<string> {
-  const registry = getActivePluginRegistry();
-  if (cachedNativeCommandSurfaces && registry === cachedNativeRegistry) {
+  const registryVersion = getActivePluginRegistryVersion();
+  if (
+    cachedNativeCommandSurfaces &&
+    cachedNativeCommandSurfacesPluginRegistryVersion === registryVersion
+  ) {
     return cachedNativeCommandSurfaces;
   }
   cachedNativeCommandSurfaces = new Set(
@@ -796,6 +800,6 @@ export function getNativeCommandSurfaces(): Set<string> {
       .filter((dock) => dock.capabilities.nativeCommands)
       .map((dock) => dock.id),
   );
-  cachedNativeRegistry = registry;
+  cachedNativeCommandSurfacesPluginRegistryVersion = registryVersion;
   return cachedNativeCommandSurfaces;
 }

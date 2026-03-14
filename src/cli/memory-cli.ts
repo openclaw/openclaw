@@ -3,11 +3,23 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Command } from "commander";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { loadConfig } from "../config/config.js";
+import { resolveDefaultAgentId, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { loadConfig, readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { setVerbose } from "../globals.js";
+import {
+  clearCortexModeOverride,
+  getCortexModeOverride,
+  setCortexModeOverride,
+  type CortexModeScope,
+} from "../memory/cortex-mode-overrides.js";
+import {
+  ensureCortexGraphInitialized,
+  getCortexStatus,
+  previewCortexContext,
+  type CortexPolicy,
+} from "../memory/cortex.js";
 import { getMemorySearchManager, type MemorySearchManagerResult } from "../memory/index.js";
 import { listMemoryFiles, normalizeExtraMemoryPaths } from "../memory/internal.js";
 import { defaultRuntime } from "../runtime.js";
@@ -27,6 +39,24 @@ type MemoryCommandOptions = {
   index?: boolean;
   force?: boolean;
   verbose?: boolean;
+};
+
+type CortexCommandOptions = {
+  agent?: string;
+  graph?: string;
+  json?: boolean;
+};
+
+type CortexEnableCommandOptions = CortexCommandOptions & {
+  mode?: CortexPolicy;
+  maxChars?: number;
+};
+
+type CortexModeCommandOptions = {
+  agent?: string;
+  sessionId?: string;
+  channel?: string;
+  json?: boolean;
 };
 
 type MemoryManager = NonNullable<MemorySearchManagerResult["manager"]>;
@@ -305,6 +335,330 @@ async function summarizeQmdIndexArtifact(manager: MemoryManager): Promise<string
     throw new Error(`QMD index file is empty: ${shortenHomePath(dbPath)}`);
   }
   return `QMD index: ${shortenHomePath(dbPath)} (${stat.size} bytes)`;
+}
+
+async function runCortexStatus(opts: CortexCommandOptions): Promise<void> {
+  const cfg = loadConfig();
+  const agentId = resolveAgent(cfg, opts.agent);
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  const status = await getCortexStatus({
+    workspaceDir,
+    graphPath: opts.graph,
+  });
+  if (opts.json) {
+    defaultRuntime.log(JSON.stringify({ agentId, ...status }, null, 2));
+    return;
+  }
+  const rich = isRich();
+  const heading = (text: string) => colorize(rich, theme.heading, text);
+  const muted = (text: string) => colorize(rich, theme.muted, text);
+  const info = (text: string) => colorize(rich, theme.info, text);
+  const success = (text: string) => colorize(rich, theme.success, text);
+  const warn = (text: string) => colorize(rich, theme.warn, text);
+  const label = (text: string) => muted(`${text}:`);
+  const lines = [
+    `${heading("Cortex Bridge")} ${muted(`(${agentId})`)}`,
+    `${label("CLI")} ${status.available ? success("ready") : warn("unavailable")}`,
+    `${label("Graph")} ${status.graphExists ? success("present") : warn("missing")}`,
+    `${label("Path")} ${info(shortenHomePath(status.graphPath))}`,
+    `${label("Workspace")} ${info(shortenHomePath(status.workspaceDir))}`,
+  ];
+  if (status.error) {
+    lines.push(`${label("Error")} ${warn(status.error)}`);
+  }
+  defaultRuntime.log(lines.join("\n"));
+}
+
+async function runCortexPreview(
+  opts: CortexCommandOptions & {
+    mode?: CortexPolicy;
+    maxChars?: number;
+  },
+): Promise<void> {
+  const cfg = loadConfig();
+  const agentId = resolveAgent(cfg, opts.agent);
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  try {
+    const preview = await previewCortexContext({
+      workspaceDir,
+      graphPath: opts.graph,
+      policy: opts.mode,
+      maxChars: opts.maxChars,
+    });
+    if (opts.json) {
+      defaultRuntime.log(JSON.stringify({ agentId, ...preview }, null, 2));
+      return;
+    }
+    if (!preview.context) {
+      defaultRuntime.log("No Cortex context available.");
+      return;
+    }
+    defaultRuntime.log(preview.context);
+  } catch (err) {
+    defaultRuntime.error(formatErrorMessage(err));
+    process.exitCode = 1;
+  }
+}
+
+async function runCortexInit(opts: CortexCommandOptions): Promise<void> {
+  const cfg = loadConfig();
+  const agentId = resolveAgent(cfg, opts.agent);
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  try {
+    const result = await ensureCortexGraphInitialized({
+      workspaceDir,
+      graphPath: opts.graph,
+    });
+    if (opts.json) {
+      defaultRuntime.log(JSON.stringify({ agentId, workspaceDir, ...result }, null, 2));
+      return;
+    }
+    defaultRuntime.log(
+      result.created
+        ? `Initialized Cortex graph: ${shortenHomePath(result.graphPath)}`
+        : `Cortex graph already present: ${shortenHomePath(result.graphPath)}`,
+    );
+  } catch (err) {
+    defaultRuntime.error(formatErrorMessage(err));
+    process.exitCode = 1;
+  }
+}
+
+async function loadWritableMemoryConfig(): Promise<Record<string, unknown> | null> {
+  const snapshot = await readConfigFileSnapshot();
+  if (!snapshot.valid) {
+    defaultRuntime.error(
+      "Config invalid. Run `openclaw config validate` or `openclaw doctor` first.",
+    );
+    process.exitCode = 1;
+    return null;
+  }
+  return structuredClone(snapshot.resolved) as Record<string, unknown>;
+}
+
+function parseCortexMode(mode?: string): CortexPolicy {
+  if (mode === undefined) {
+    return "technical";
+  }
+  if (mode === "full" || mode === "professional" || mode === "technical" || mode === "minimal") {
+    return mode;
+  }
+  throw new Error(`Invalid Cortex mode: ${mode}`);
+}
+
+function normalizeCortexMaxChars(value?: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return 1_500;
+  }
+  return Math.min(8_000, Math.max(1, Math.floor(value)));
+}
+
+function resolveCortexModeTarget(opts: CortexModeCommandOptions): {
+  scope: CortexModeScope;
+  targetId: string;
+} {
+  const sessionId = opts.sessionId?.trim();
+  const channelId = opts.channel?.trim();
+  if (sessionId && channelId) {
+    throw new Error("Choose either --session-id or --channel, not both.");
+  }
+  if (sessionId) {
+    return { scope: "session", targetId: sessionId };
+  }
+  if (channelId) {
+    return { scope: "channel", targetId: channelId };
+  }
+  throw new Error("Missing target. Use --session-id <id> or --channel <id>.");
+}
+
+function updateAgentCortexConfig(params: {
+  root: Record<string, unknown>;
+  agentId?: string;
+  updater: (current: Record<string, unknown>) => Record<string, unknown>;
+}): void {
+  const agents = ((params.root.agents as Record<string, unknown> | undefined) ??= {});
+  if (params.agentId?.trim()) {
+    const list = Array.isArray(agents.list) ? (agents.list as Record<string, unknown>[]) : [];
+    const index = list.findIndex(
+      (entry) => typeof entry.id === "string" && entry.id === params.agentId?.trim(),
+    );
+    if (index === -1) {
+      throw new Error(`Agent not found: ${params.agentId}`);
+    }
+    const entry = list[index] ?? {};
+    list[index] = {
+      ...entry,
+      cortex: params.updater((entry.cortex as Record<string, unknown> | undefined) ?? {}),
+    };
+    agents.list = list;
+    return;
+  }
+
+  const defaults = ((agents.defaults as Record<string, unknown> | undefined) ??= {});
+  defaults.cortex = params.updater((defaults.cortex as Record<string, unknown> | undefined) ?? {});
+}
+
+async function runCortexEnable(opts: CortexEnableCommandOptions): Promise<void> {
+  try {
+    const cfg = loadConfig();
+    const agentId = resolveAgent(cfg, opts.agent);
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const next = await loadWritableMemoryConfig();
+    if (!next) {
+      return;
+    }
+    updateAgentCortexConfig({
+      root: next,
+      agentId: opts.agent,
+      updater: (current) => ({
+        ...current,
+        enabled: true,
+        mode: parseCortexMode(opts.mode),
+        maxChars: normalizeCortexMaxChars(opts.maxChars),
+        ...(opts.graph ? { graphPath: opts.graph } : {}),
+      }),
+    });
+    await writeConfigFile(next);
+    const initResult = await ensureCortexGraphInitialized({
+      workspaceDir,
+      graphPath: opts.graph,
+    });
+
+    const scope = opts.agent?.trim() ? `agent ${opts.agent.trim()}` : "agent defaults";
+    defaultRuntime.log(
+      `Enabled Cortex prompt bridge for ${scope} (${parseCortexMode(opts.mode)}, ${normalizeCortexMaxChars(opts.maxChars)} chars).`,
+    );
+    defaultRuntime.log(
+      initResult.created
+        ? `Initialized Cortex graph: ${shortenHomePath(initResult.graphPath)}`
+        : `Cortex graph ready: ${shortenHomePath(initResult.graphPath)}`,
+    );
+  } catch (err) {
+    defaultRuntime.error(formatErrorMessage(err));
+    process.exitCode = 1;
+  }
+}
+
+async function runCortexDisable(opts: CortexCommandOptions): Promise<void> {
+  try {
+    const next = await loadWritableMemoryConfig();
+    if (!next) {
+      return;
+    }
+    updateAgentCortexConfig({
+      root: next,
+      agentId: opts.agent,
+      updater: (current) => ({
+        ...current,
+        enabled: false,
+      }),
+    });
+    await writeConfigFile(next);
+
+    const scope = opts.agent?.trim() ? `agent ${opts.agent.trim()}` : "agent defaults";
+    defaultRuntime.log(`Disabled Cortex prompt bridge for ${scope}.`);
+  } catch (err) {
+    defaultRuntime.error(formatErrorMessage(err));
+    process.exitCode = 1;
+  }
+}
+
+async function runCortexModeShow(opts: CortexModeCommandOptions): Promise<void> {
+  try {
+    const cfg = loadConfig();
+    const agentId = resolveAgent(cfg, opts.agent);
+    const target = resolveCortexModeTarget(opts);
+    const override = await getCortexModeOverride({
+      agentId,
+      sessionId: target.scope === "session" ? target.targetId : undefined,
+      channelId: target.scope === "channel" ? target.targetId : undefined,
+    });
+    if (opts.json) {
+      defaultRuntime.log(
+        JSON.stringify(
+          {
+            agentId,
+            scope: target.scope,
+            targetId: target.targetId,
+            override,
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
+    if (!override) {
+      defaultRuntime.log(`No Cortex mode override for ${target.scope} ${target.targetId}.`);
+      return;
+    }
+    defaultRuntime.log(
+      `Cortex mode override for ${target.scope} ${target.targetId}: ${override.mode} (${agentId})`,
+    );
+  } catch (err) {
+    defaultRuntime.error(formatErrorMessage(err));
+    process.exitCode = 1;
+  }
+}
+
+async function runCortexModeSet(mode: CortexPolicy, opts: CortexModeCommandOptions): Promise<void> {
+  try {
+    const cfg = loadConfig();
+    const agentId = resolveAgent(cfg, opts.agent);
+    const target = resolveCortexModeTarget(opts);
+    const next = await setCortexModeOverride({
+      agentId,
+      scope: target.scope,
+      targetId: target.targetId,
+      mode: parseCortexMode(mode),
+    });
+    if (opts.json) {
+      defaultRuntime.log(JSON.stringify(next, null, 2));
+      return;
+    }
+    defaultRuntime.log(
+      `Set Cortex mode override for ${target.scope} ${target.targetId} to ${next.mode} (${agentId}).`,
+    );
+  } catch (err) {
+    defaultRuntime.error(formatErrorMessage(err));
+    process.exitCode = 1;
+  }
+}
+
+async function runCortexModeReset(opts: CortexModeCommandOptions): Promise<void> {
+  try {
+    const cfg = loadConfig();
+    const agentId = resolveAgent(cfg, opts.agent);
+    const target = resolveCortexModeTarget(opts);
+    const removed = await clearCortexModeOverride({
+      agentId,
+      scope: target.scope,
+      targetId: target.targetId,
+    });
+    if (opts.json) {
+      defaultRuntime.log(
+        JSON.stringify(
+          {
+            agentId,
+            scope: target.scope,
+            targetId: target.targetId,
+            removed,
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
+    if (!removed) {
+      defaultRuntime.log(`No Cortex mode override found for ${target.scope} ${target.targetId}.`);
+      return;
+    }
+    defaultRuntime.log(`Cleared Cortex mode override for ${target.scope} ${target.targetId}.`);
+  } catch (err) {
+    defaultRuntime.error(formatErrorMessage(err));
+    process.exitCode = 1;
+  }
 }
 
 async function scanMemorySources(params: {
@@ -590,6 +944,23 @@ export function registerMemoryCli(program: Command) {
             "Limit results for focused troubleshooting.",
           ],
           ["openclaw memory status --json", "Output machine-readable JSON (good for scripts)."],
+          ["openclaw memory cortex status", "Check local Cortex bridge availability."],
+          [
+            "openclaw memory cortex preview --mode technical",
+            "Preview filtered Cortex context for the active agent workspace.",
+          ],
+          [
+            "openclaw memory cortex enable --mode technical",
+            "Turn on Cortex prompt injection without editing openclaw.json manually.",
+          ],
+          [
+            "openclaw memory cortex mode set minimal --session-id abc123",
+            "Override Cortex mode for one OpenClaw session.",
+          ],
+          [
+            "openclaw memory cortex mode set professional --channel slack",
+            "Override Cortex mode for a channel surface.",
+          ],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/memory", "docs.openclaw.ai/cli/memory")}\n`,
     );
 
@@ -814,4 +1185,94 @@ export function registerMemoryCli(program: Command) {
         });
       },
     );
+
+  const cortex = memory.command("cortex").description("Inspect the local Cortex memory bridge");
+
+  cortex
+    .command("status")
+    .description("Check Cortex CLI and graph availability")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--graph <path>", "Override Cortex graph path")
+    .option("--json", "Print JSON")
+    .action(async (opts: CortexCommandOptions) => {
+      await runCortexStatus(opts);
+    });
+
+  cortex
+    .command("preview")
+    .description("Preview Cortex context export for the active workspace")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--graph <path>", "Override Cortex graph path")
+    .option("--mode <mode>", "Context mode", "technical")
+    .option("--max-chars <n>", "Max characters", (value: string) => Number(value))
+    .option("--json", "Print JSON")
+    .action(
+      async (
+        opts: CortexCommandOptions & {
+          mode?: CortexPolicy;
+          maxChars?: number;
+        },
+      ) => {
+        await runCortexPreview(opts);
+      },
+    );
+
+  cortex
+    .command("init")
+    .description("Create the default Cortex graph if it does not exist")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--graph <path>", "Override Cortex graph path")
+    .option("--json", "Print JSON")
+    .action(async (opts: CortexCommandOptions) => {
+      await runCortexInit(opts);
+    });
+
+  cortex
+    .command("enable")
+    .description("Enable Cortex prompt context injection in config")
+    .option("--agent <id>", "Apply to a specific agent id instead of agent defaults")
+    .option("--graph <path>", "Override Cortex graph path")
+    .option("--mode <mode>", "Context mode", "technical")
+    .option("--max-chars <n>", "Max characters", (value: string) => Number(value))
+    .action(async (opts: CortexEnableCommandOptions) => {
+      await runCortexEnable(opts);
+    });
+
+  cortex
+    .command("disable")
+    .description("Disable Cortex prompt context injection in config")
+    .option("--agent <id>", "Apply to a specific agent id instead of agent defaults")
+    .action(async (opts: CortexCommandOptions) => {
+      await runCortexDisable(opts);
+    });
+
+  const cortexMode = cortex.command("mode").description("Manage runtime Cortex mode overrides");
+
+  const applyModeTargetOptions = (command: Command) =>
+    command
+      .option("--agent <id>", "Agent id (default: default agent)")
+      .option("--session-id <id>", "Apply override to a specific OpenClaw session")
+      .option("--channel <id>", "Apply override to a specific channel or surface")
+      .option("--json", "Print JSON");
+
+  applyModeTargetOptions(
+    cortexMode.command("show").description("Show the stored Cortex mode override for a target"),
+  ).action(async (opts: CortexModeCommandOptions) => {
+    await runCortexModeShow(opts);
+  });
+
+  applyModeTargetOptions(
+    cortexMode.command("reset").description("Clear the stored Cortex mode override for a target"),
+  ).action(async (opts: CortexModeCommandOptions) => {
+    await runCortexModeReset(opts);
+  });
+
+  applyModeTargetOptions(
+    cortexMode
+      .command("set")
+      .description("Set a runtime Cortex mode override for a target")
+      .argument("<mode>", "Mode (full|professional|technical|minimal)"),
+  ).action(async (mode: CortexPolicy, opts: CortexModeCommandOptions) => {
+    await runCortexModeSet(mode, opts);
+  });
 }

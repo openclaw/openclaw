@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import type { MsgContext } from "../templating.js";
+import type { MsgContext, TemplateContext } from "../templating.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { buildCommandContext } from "./commands.js";
 import { parseInlineDirectives } from "./directive-handling.js";
@@ -7,7 +7,7 @@ import { parseInlineDirectives } from "./directive-handling.js";
 export function buildCommandTestParams(
   commandBody: string,
   cfg: OpenClawConfig,
-  ctxOverrides?: Partial<MsgContext>,
+  ctxOverrides?: Partial<TemplateContext>,
   options?: {
     workspaceDir?: string;
   },

@@ -4,6 +4,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, resolveGatewayPort, writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
+import type { AgentCortexConfig } from "../config/types.agent-defaults.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -47,6 +48,7 @@ import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { setupSkills } from "./onboard-skills.js";
 
 type ConfigureSectionChoice = WizardSection | "__continue";
+type CortexMode = NonNullable<AgentCortexConfig["mode"]>;
 
 async function resolveGatewaySecretInputForWizard(params: {
   cfg: OpenClawConfig;
@@ -188,10 +190,7 @@ async function promptWebToolsConfig(
     if (stored && SEARCH_PROVIDER_OPTIONS.some((e) => e.value === stored)) {
       return stored;
     }
-    return (
-      SEARCH_PROVIDER_OPTIONS.find((e) => hasKeyForProvider(e.value))?.value ??
-      SEARCH_PROVIDER_OPTIONS[0].value
-    );
+    return SEARCH_PROVIDER_OPTIONS.find((e) => hasKeyForProvider(e.value))?.value ?? "brave";
   })();
 
   note(
@@ -298,6 +297,122 @@ async function promptWebToolsConfig(
         ...nextConfig.tools?.web,
         search: nextSearch,
         fetch: nextFetch,
+      },
+    },
+  };
+}
+
+async function promptCortexMemoryConfig(
+  nextConfig: OpenClawConfig,
+  runtime: RuntimeEnv,
+  workspaceDir: string,
+): Promise<OpenClawConfig> {
+  const existing: AgentCortexConfig | undefined = nextConfig.agents?.defaults?.cortex;
+  const defaultGraphPath = nodePath.join(workspaceDir, ".cortex", "context.json");
+  const graphExists = await fsPromises
+    .access(defaultGraphPath)
+    .then(() => true)
+    .catch(() => false);
+
+  note(
+    [
+      "Cortex can prepend a filtered local memory graph into agent system prompts.",
+      `Default workspace graph: ${defaultGraphPath}`,
+      graphExists
+        ? "A local Cortex graph was detected in this workspace."
+        : "No default Cortex graph was detected yet; you can still enable the bridge now.",
+    ].join("\n"),
+    "Cortex memory",
+  );
+
+  const enable = guardCancel(
+    await confirm({
+      message: "Enable Cortex prompt bridge?",
+      initialValue: existing?.enabled ?? graphExists,
+    }),
+    runtime,
+  );
+
+  if (!enable) {
+    return {
+      ...nextConfig,
+      agents: {
+        ...nextConfig.agents,
+        defaults: {
+          ...nextConfig.agents?.defaults,
+          cortex: {
+            ...existing,
+            enabled: false,
+          },
+        },
+      },
+    };
+  }
+
+  const mode = guardCancel(
+    await select({
+      message: "Cortex prompt mode",
+      options: [
+        { value: "technical", label: "Technical", hint: "Project and coding context" },
+        { value: "professional", label: "Professional", hint: "Work-safe context slice" },
+        { value: "minimal", label: "Minimal", hint: "Smallest safe context" },
+        { value: "full", label: "Full", hint: "Largest context slice" },
+      ],
+      initialValue: existing?.mode ?? "technical",
+    }),
+    runtime,
+  ) as CortexMode;
+
+  const maxCharsInput = guardCancel(
+    await text({
+      message: "Cortex max prompt chars",
+      initialValue: String(existing?.maxChars ?? 1500),
+      validate: (value) => {
+        const parsed = Number.parseInt(String(value), 10);
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+          return "Enter a positive integer";
+        }
+        return undefined;
+      },
+    }),
+    runtime,
+  );
+  const maxChars = Number.parseInt(String(maxCharsInput), 10);
+
+  const useDefaultGraph = guardCancel(
+    await confirm({
+      message: "Use the default workspace Cortex graph path?",
+      initialValue: !existing?.graphPath,
+    }),
+    runtime,
+  );
+
+  let graphPath: string | undefined;
+  if (!useDefaultGraph) {
+    const graphInput = guardCancel(
+      await text({
+        message: "Cortex graph path",
+        initialValue: existing?.graphPath ?? defaultGraphPath,
+      }),
+      runtime,
+    );
+    const trimmed = String(graphInput ?? "").trim();
+    graphPath = trimmed || defaultGraphPath;
+  }
+
+  return {
+    ...nextConfig,
+    agents: {
+      ...nextConfig.agents,
+      defaults: {
+        ...nextConfig.agents?.defaults,
+        cortex: {
+          ...existing,
+          enabled: true,
+          mode,
+          maxChars,
+          ...(graphPath ? { graphPath } : {}),
+        },
       },
     },
   };
@@ -530,6 +645,10 @@ export async function runConfigureWizard(
         nextConfig = await promptWebToolsConfig(nextConfig, runtime);
       }
 
+      if (selected.includes("memory")) {
+        nextConfig = await promptCortexMemoryConfig(nextConfig, runtime, workspaceDir);
+      }
+
       if (selected.includes("gateway")) {
         const gateway = await promptGatewayConfig(nextConfig, runtime);
         nextConfig = gateway.config;
@@ -581,6 +700,11 @@ export async function runConfigureWizard(
 
         if (choice === "web") {
           nextConfig = await promptWebToolsConfig(nextConfig, runtime);
+          await persistConfig();
+        }
+
+        if (choice === "memory") {
+          nextConfig = await promptCortexMemoryConfig(nextConfig, runtime, workspaceDir);
           await persistConfig();
         }
 

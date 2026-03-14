@@ -513,7 +513,9 @@ describe("update-cli", () => {
           call[0][2] === "-g",
       );
     const updateOptions =
-      typeof updateCall?.[1] === "object" && updateCall[1] !== null ? updateCall[1] : undefined;
+      updateCall && typeof updateCall[1] === "object" && updateCall[1] !== null
+        ? (updateCall[1] as { env?: Record<string, string | undefined> })
+        : undefined;
     const mergedPath = updateOptions?.env?.Path ?? updateOptions?.env?.PATH ?? "";
     expect(mergedPath.split(path.delimiter).slice(0, 2)).toEqual([
       portableGitMingw,

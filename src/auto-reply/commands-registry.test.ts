@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { getNativeCommandSurfaces } from "./commands-registry.data.js";
 import {
   buildCommandText,
   buildCommandTextFromArgs,
@@ -198,15 +199,83 @@ describe("commands registry", () => {
     ]);
   });
 
-  it("registers fast mode as a first-class options command", () => {
+  it("registers /fast as a text command", () => {
     const fast = listChatCommands().find((command) => command.key === "fast");
-    expect(fast).toMatchObject({
-      nativeName: "fast",
-      textAliases: ["/fast"],
-      category: "options",
-    });
-    const modeArg = fast?.args?.find((arg) => arg.name === "mode");
-    expect(modeArg?.choices).toEqual(["status", "on", "off"]);
+    expect(fast).toBeTruthy();
+    expect(fast?.scope).toBe("text");
+    expect(fast?.textAliases).toContain("/fast");
+  });
+
+  it("invalidates cached command lists after plugin registry updates", () => {
+    const before = listChatCommands();
+    expect(before.find((command) => command.key === "dock:msteams")).toBeFalsy();
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "test-plugin",
+          source: "test",
+          plugin: {
+            id: "msteams",
+            meta: {
+              id: "msteams",
+              label: "Microsoft Teams",
+              selectionLabel: "Microsoft Teams",
+              docsPath: "/channels/msteams",
+              blurb: "test stub.",
+            },
+            capabilities: {
+              chatTypes: ["direct"],
+              nativeCommands: true,
+            },
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({}),
+            },
+          },
+        },
+      ]),
+    );
+
+    const after = listChatCommands();
+    expect(after.find((command) => command.key === "dock:msteams")).toBeTruthy();
+  });
+
+  it("does not let native-surface cache refresh mask stale chat command cache", () => {
+    const before = listChatCommands();
+    expect(before.find((command) => command.key === "dock:msteams")).toBeFalsy();
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "test-plugin",
+          source: "test",
+          plugin: {
+            id: "msteams",
+            meta: {
+              id: "msteams",
+              label: "Microsoft Teams",
+              selectionLabel: "Microsoft Teams",
+              docsPath: "/channels/msteams",
+              blurb: "test stub.",
+            },
+            capabilities: {
+              chatTypes: ["direct"],
+              nativeCommands: true,
+            },
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({}),
+            },
+          },
+        },
+      ]),
+    );
+
+    expect(getNativeCommandSurfaces().has("msteams")).toBe(true);
+
+    const after = listChatCommands();
+    expect(after.find((command) => command.key === "dock:msteams")).toBeTruthy();
   });
 
   it("detects known text commands", () => {

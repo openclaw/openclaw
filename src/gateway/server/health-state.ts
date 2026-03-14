@@ -1,7 +1,13 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { getCachedLatestCortexCaptureHistoryEntry } from "../../agents/cortex-history.js";
+import { resolveAgentCortexConfig, resolveCortexChannelTarget } from "../../agents/cortex.js";
 import { getHealthSnapshot, type HealthSummary } from "../../commands/health.js";
 import { STATE_DIR, createConfigIO, loadConfig } from "../../config/config.js";
-import { resolveMainSessionKey } from "../../config/sessions.js";
+import {
+  loadSessionStore,
+  resolveMainSessionKey,
+  resolveStorePath,
+} from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { getUpdateAvailable } from "../../infra/update-startup.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
@@ -18,8 +24,24 @@ export function buildGatewaySnapshot(): Snapshot {
   const cfg = loadConfig();
   const configPath = createConfigIO().configPath;
   const defaultAgentId = resolveDefaultAgentId(cfg);
+  const cortex = resolveAgentCortexConfig(cfg, defaultAgentId);
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
   const mainSessionKey = resolveMainSessionKey(cfg);
+  const sessionStorePath = resolveStorePath(cfg.session?.store, { agentId: defaultAgentId });
+  const mainSessionEntry = loadSessionStore(sessionStorePath)[mainSessionKey];
+  const latestCortexCapture = cortex
+    ? getCachedLatestCortexCaptureHistoryEntry({
+        agentId: defaultAgentId,
+        sessionId: mainSessionEntry?.sessionId,
+        channelId: resolveCortexChannelTarget({
+          channel: mainSessionEntry?.lastChannel,
+          originatingChannel: mainSessionEntry?.deliveryContext?.channel,
+          originatingTo: mainSessionEntry?.deliveryContext?.to,
+          nativeChannelId: mainSessionEntry?.deliveryContext?.to,
+          to: mainSessionEntry?.lastTo,
+        }),
+      })
+    : null;
   const scope = cfg.session?.scope ?? "per-sender";
   const presence = listSystemPresence();
   const uptimeMs = Math.round(process.uptime() * 1000);
@@ -43,6 +65,17 @@ export function buildGatewaySnapshot(): Snapshot {
     },
     authMode: auth.mode,
     updateAvailable,
+    cortex: cortex
+      ? {
+          enabled: true,
+          mode: cortex.mode,
+          graphPath: cortex.graphPath,
+          lastCaptureAtMs: latestCortexCapture?.timestamp,
+          lastCaptureReason: latestCortexCapture?.reason,
+          lastCaptureStored: latestCortexCapture?.captured,
+          lastSyncPlatforms: latestCortexCapture?.syncPlatforms,
+        }
+      : undefined,
   };
 }
 

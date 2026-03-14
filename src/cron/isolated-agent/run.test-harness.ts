@@ -75,11 +75,13 @@ vi.mock("../../agents/skills/refresh.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../agents/workspace.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/workspace.js")>();
+vi.mock("../../agents/workspace.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/workspace.js")>(
+    "../../agents/workspace.js",
+  );
   return {
     ...actual,
-    DEFAULT_IDENTITY_FILENAME: "IDENTITY.md",
+    DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/workspace",
     ensureAgentWorkspace: vi.fn().mockResolvedValue({ dir: "/tmp/workspace" }),
   };
 });
@@ -260,8 +262,10 @@ vi.mock("../../logger.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../security/external-content.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../security/external-content.js")>();
+vi.mock("../../security/external-content.js", async () => {
+  const actual = await vi.importActual<typeof import("../../security/external-content.js")>(
+    "../../security/external-content.js",
+  );
   return {
     ...actual,
     buildSafeExternalPrompt: vi.fn().mockReturnValue("safe prompt"),

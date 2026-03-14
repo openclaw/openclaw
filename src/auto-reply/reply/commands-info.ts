@@ -6,6 +6,7 @@ import {
   buildHelpMessage,
 } from "../status.js";
 import { buildContextReply } from "./commands-context-report.js";
+import { handleCortexCommand } from "./commands-cortex.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
 import { buildStatusReply } from "./commands-status.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -133,6 +134,7 @@ export const handleStatusCommand: CommandHandler = async (params, allowTextComma
   }
   const reply = await buildStatusReply({
     cfg: params.cfg,
+    ctx: params.ctx,
     command: params.command,
     sessionEntry: params.sessionEntry,
     sessionKey: params.sessionKey,
@@ -226,3 +228,5 @@ export const handleWhoamiCommand: CommandHandler = async (params, allowTextComma
   }
   return { shouldContinue: false, reply: { text: lines.join("\n") } };
 };
+
+export { handleCortexCommand };

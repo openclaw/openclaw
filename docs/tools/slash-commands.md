@@ -76,6 +76,12 @@ Text + native (when enabled):
 - `/allowlist` (list/add/remove allowlist entries)
 - `/approve <id> allow-once|allow-always|deny` (resolve exec approval prompts)
 - `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
+- `/cortex preview|why|continuity|conflicts|resolve|sync coding|mode show|mode set|mode reset` (inspect, explain, and manage Cortex prompt context for the active conversation)
+  - After `/cortex mode set ...` or `/cortex mode reset`, use `/status` or `/cortex preview` to verify the active mode and source.
+  - `/cortex why` shows the injected Cortex context plus the active mode, source, graph, session, and channel.
+  - `/cortex continuity` explains which shared graph backs the current conversation so you can verify cross-channel continuity.
+  - `/cortex conflicts` lists memory conflicts and suggests the exact `/cortex resolve ...` command to run next.
+  - `/cortex sync coding` pushes the current graph into coding-tool context files (default: Claude Code, Cursor, Copilot).
 - `/btw <question>` (ask an ephemeral side question about the current session without changing future session context; see [/tools/btw](/tools/btw))
 - `/export-session [path]` (alias: `/export`) (export current session to HTML with full system prompt)
 - `/whoami` (show your sender id; alias: `/id`)
@@ -114,6 +120,9 @@ Text + native (when enabled):
 
 Text-only:
 
+- `/cortex preview|why|continuity|conflicts|resolve|sync coding|mode show|mode set|mode reset` (Cortex prompt preview, explanation, conflict resolution, coding-context sync, and per-conversation mode overrides)
+  - Recommended verification loop: `/cortex mode set minimal` then `/cortex preview` or `/status`.
+  - Continuity demo: run `/cortex continuity` in two channels bound to the same agent and compare the shared graph path.
 - `/compact [instructions]` (see [/concepts/compaction](/concepts/compaction))
 - `! <command>` (host-only; one at a time; use `!poll` + `!stop` for long-running jobs)
 - `!poll` (check output / status; accepts optional `sessionId`; `/bash poll` also works)
@@ -125,7 +134,6 @@ Notes:
 - `/new <model>` accepts a model alias, `provider/model`, or a provider name (fuzzy match); if no match, the text is treated as the message body.
 - For full provider usage breakdown, use `openclaw status --usage`.
 - `/allowlist add|remove` requires `commands.config=true` and honors channel `configWrites`.
-- In multi-account channels, config-targeted `/allowlist --account <id>` and `/config set channels.<provider>.accounts.<id>...` also honor the target account's `configWrites`.
 - `/usage` controls the per-response usage footer; `/usage cost` prints a local cost summary from OpenClaw session logs.
 - `/restart` is enabled by default; set `commands.restart: false` to disable it.
 - Discord-only native command: `/vc join|leave|status` controls voice channels (requires `channels.discord.voice` and native commands; not available as text).

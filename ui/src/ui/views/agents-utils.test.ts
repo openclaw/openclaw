@@ -101,6 +101,89 @@ describe("sortLocaleStrings", () => {
   });
 });
 
+describe("renderOverview", () => {
+  it("includes Cortex status details from the gateway snapshot", async () => {
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: () => null,
+        setItem: () => {},
+        removeItem: () => {},
+      },
+    });
+    const { renderOverview } = await import("./overview.ts");
+    const template = renderOverview({
+      connected: true,
+      hello: {
+        snapshot: {
+          cortex: {
+            enabled: true,
+            mode: "technical",
+            graphPath: ".cortex/context.json",
+            lastCaptureAtMs: Date.now() - 5_000,
+            lastCaptureReason: "high-signal memory candidate",
+            lastCaptureStored: true,
+            lastSyncPlatforms: ["claude-code", "cursor"],
+          },
+        },
+      } as never,
+      settings: {
+        gatewayUrl: "ws://127.0.0.1:18789",
+        token: "",
+        sessionKey: "main",
+        lastActiveSessionKey: "main",
+        theme: "claw",
+        themeMode: "system",
+        chatFocusMode: false,
+        chatShowThinking: true,
+        splitRatio: 0.6,
+        navCollapsed: false,
+        navWidth: 220,
+        navGroupsCollapsed: {},
+      },
+      password: "",
+      lastError: null,
+      lastErrorCode: null,
+      presenceCount: 1,
+      sessionsCount: 1,
+      cronEnabled: null,
+      cronNext: null,
+      lastChannelsRefresh: null,
+      usageResult: null,
+      sessionsResult: null,
+      skillsReport: null,
+      cronJobs: [],
+      cronStatus: null,
+      attentionItems: [],
+      eventLog: [],
+      overviewLogLines: [],
+      showGatewayToken: false,
+      showGatewayPassword: false,
+      onSettingsChange: () => {},
+      onPasswordChange: () => {},
+      onSessionKeyChange: () => {},
+      onToggleGatewayTokenVisibility: () => {},
+      onToggleGatewayPasswordVisibility: () => {},
+      onConnect: () => {},
+      onRefresh: () => {},
+      onOpenCortexPreview: () => {},
+      onOpenCortexConflicts: () => {},
+      onOpenCortexSync: () => {},
+      onNavigate: () => {},
+      onRefreshLogs: () => {},
+    }) as { strings: TemplateStringsArray; values: unknown[] };
+
+    expect(template.strings.join("")).toContain("Cortex");
+    const renderedValues = JSON.stringify(template.values);
+
+    expect(renderedValues).toContain("Preview in chat");
+    expect(renderedValues).toContain("Conflicts in chat");
+    expect(renderedValues).toContain("Sync coding");
+    expect(renderedValues).toContain("technical · stored");
+    expect(renderedValues).toContain("high-signal memory candidate");
+  });
+});
+
 describe("agentLogoUrl", () => {
   it("keeps base-mounted control UI logo paths absolute to the mount", () => {
     expect(agentLogoUrl("/ui")).toBe("/ui/favicon.svg");
