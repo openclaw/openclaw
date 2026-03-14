@@ -65,13 +65,29 @@ export function registerCronSimpleCommands(cron: Command) {
     cron
       .command("runs")
       .description("Show cron run history (JSONL-backed)")
-      .requiredOption("--id <id>", "Job id")
+      .argument("[id]", "Job id")
+      .option("--id <id>", "Job id")
       .option("--limit <n>", "Max entries (default 50)", "50")
-      .action(async (opts) => {
+      .action(async (idArg, opts, command) => {
         try {
           const limitRaw = Number.parseInt(String(opts.limit ?? "50"), 10);
           const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : 50;
-          const id = String(opts.id);
+          const positionalId = typeof idArg === "string" ? idArg.trim() : "";
+          const optionId = typeof opts.id === "string" ? opts.id.trim() : "";
+
+          if (positionalId && optionId && positionalId !== optionId) {
+            command.error(
+              `conflicting job ids: positional \`${positionalId}\` vs --id \`${optionId}\``,
+            );
+            return;
+          }
+
+          const id = optionId || positionalId;
+          if (!id) {
+            command.error("missing required job id (pass <id> or --id <id>)");
+            return;
+          }
+
           const res = await callGatewayFromCli("cron.runs", opts, {
             id,
             limit,

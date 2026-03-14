@@ -219,6 +219,28 @@ describe("cron cli", () => {
     expect(exitSpy).toHaveBeenCalledWith(expectedExitCode);
   });
 
+  it("accepts cron runs job id as a positional argument", async () => {
+    await runCronCommand(["cron", "runs", "job-123"]);
+
+    expect(getGatewayCallParams<{ id?: string; limit?: number }>("cron.runs")).toEqual({
+      id: "job-123",
+      limit: 50,
+    });
+  });
+
+  it("still accepts cron runs --id without a positional argument", async () => {
+    await runCronCommand(["cron", "runs", "--id", "job-123", "--limit", "7"]);
+
+    expect(getGatewayCallParams<{ id?: string; limit?: number }>("cron.runs")).toEqual({
+      id: "job-123",
+      limit: 7,
+    });
+  });
+
+  it("rejects conflicting cron runs ids between positional arg and --id", async () => {
+    await expectCronCommandExit(["cron", "runs", "job-123", "--id", "job-456"]);
+  });
+
   it("trims model and thinking on cron add", { timeout: CRON_CLI_TEST_TIMEOUT_MS }, async () => {
     await runCronCommand([
       "cron",
