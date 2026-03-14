@@ -69,6 +69,17 @@ describe("custom-rules", () => {
       expect(validateUserRule(rule, 0)).toHaveLength(0);
     });
 
+    it("rejects non-array keywords", () => {
+      const rule = {
+        type: "project_codename",
+        description: "Internal codename",
+        riskLevel: "high",
+        keywords: { bad: true },
+      } as unknown as UserDefinedRule;
+      const errors = validateUserRule(rule, 0);
+      expect(errors.some((e) => e.field === "keywords")).toBe(true);
+    });
+
     it("rejects missing type", () => {
       const rule = {
         description: "test",
