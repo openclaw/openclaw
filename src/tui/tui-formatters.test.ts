@@ -4,6 +4,7 @@ import {
   extractTextFromMessage,
   extractThinkingFromMessage,
   isCommandMessage,
+  resolveFinalAssistantText,
   sanitizeRenderableText,
 } from "./tui-formatters.js";
 
@@ -162,6 +163,57 @@ example
     });
 
     expect(text).toBe("Hello world");
+  });
+});
+
+describe("resolveFinalAssistantText", () => {
+  it("strips model special tokens from finalText", () => {
+    const result = resolveFinalAssistantText({
+      finalText: "Hello <|assistant|> world <|end|>",
+    });
+    expect(result).toBe("Hello world");
+  });
+
+  it("strips model special tokens from streamedText when finalText is empty", () => {
+    const result = resolveFinalAssistantText({
+      streamedText: "Response <|tool_call_result_begin|> content",
+    });
+    expect(result).toBe("Response content");
+  });
+
+  it("strips full-width pipe variant tokens from finalText", () => {
+    const result = resolveFinalAssistantText({
+      finalText: "Hello <｜begin▁of▁sentence｜> world",
+    });
+    expect(result).toBe("Hello world");
+  });
+
+  it("does not apply sanitization to errorMessage", () => {
+    const result = resolveFinalAssistantText({
+      errorMessage: "Error <|details|> here",
+    });
+    // errorMessage goes through formatRawAssistantErrorForUi, not stripModelSpecialTokens
+    expect(result).not.toBe("Error here");
+  });
+
+  it("returns (no output) when all fields are empty", () => {
+    const result = resolveFinalAssistantText({});
+    expect(result).toBe("(no output)");
+  });
+
+  it("prefers finalText over streamedText", () => {
+    const result = resolveFinalAssistantText({
+      finalText: "final",
+      streamedText: "streamed",
+    });
+    expect(result).toBe("final");
+  });
+
+  it("passes through clean text unchanged", () => {
+    const result = resolveFinalAssistantText({
+      finalText: "Hello world",
+    });
+    expect(result).toBe("Hello world");
   });
 });
 
