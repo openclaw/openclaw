@@ -113,10 +113,10 @@ async function sendReactionSignalCore(params: {
     ...targetAuthorParams,
   };
   if (normalizedRecipient) {
-    requestParams.recipients = [normalizedRecipient];
+    requestParams.recipient = [normalizedRecipient];
   }
   if (groupId) {
-    requestParams.groupIds = [groupId];
+    requestParams.groupId = groupId;
   }
   if (account) {
     requestParams.account = account;
