@@ -80,6 +80,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       ]);
 
       const profileState = current.profiles.get(profileCtx.profile.name);
+      const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
       let detectedBrowser: string | null = null;
       let detectedExecutablePath: string | null = null;
       let detectError: string | null = null;
@@ -98,14 +99,15 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
         enabled: current.resolved.enabled,
         profile: profileCtx.profile.name,
         driver: profileCtx.profile.driver,
+        transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
         running: cdpReady,
         cdpReady,
         cdpHttp,
-        pid: getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp
+        pid: capabilities.usesChromeMcp
           ? getChromeMcpPid(profileCtx.profile.name)
           : (profileState?.running?.pid ?? null),
-        cdpPort: profileCtx.profile.cdpPort,
-        cdpUrl: profileCtx.profile.cdpUrl,
+        cdpPort: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpPort,
+        cdpUrl: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpUrl,
         chosenBrowser: profileState?.running?.exe.kind ?? null,
         detectedBrowser,
         detectedExecutablePath,
