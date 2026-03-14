@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { isDevMode } from "../../globals.js";
 import { SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchFirecrawlMetadata } from "../../secrets/runtime-web-tools.js";
@@ -115,6 +116,9 @@ function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
 }
 
 function resolveFetchMaxResponseBytes(fetch?: WebFetchConfig): number {
+  if (isDevMode()) {
+    return 50_000_000; // 50MB in dev mode
+  }
   const raw =
     fetch && "maxResponseBytes" in fetch && typeof fetch.maxResponseBytes === "number"
       ? fetch.maxResponseBytes

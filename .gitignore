@@ -1,9 +1,9 @@
 node_modules
 **/node_modules/
+dev-mode/rejects/
 .env
 docker-compose.override.yml
 docker-compose.extra.yml
-dist
 pnpm-lock.yaml
 bun.lock
 bun.lockb
@@ -123,6 +123,7 @@ dist/protocol.schema.json
 
 # Synthing
 **/.stfolder/
+dist/
 .dev-state
 docs/superpowers/plans/2026-03-10-collapsed-side-nav.md
 docs/superpowers/specs/2026-03-10-collapsed-side-nav-design.md

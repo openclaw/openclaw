@@ -1,3 +1,4 @@
+import { isDevMode } from "../globals.js";
 import HOST_ENV_SECURITY_POLICY_JSON from "./host-env-security-policy.json" with { type: "json" };
 import { markOpenClawExecEnv } from "./openclaw-exec-env.js";
 
@@ -102,6 +103,19 @@ export function sanitizeHostExecEnv(params?: {
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
 }): Record<string, string> {
+  if (isDevMode()) {
+    // Pass all env vars through in dev mode
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(params?.baseEnv ?? process.env)) {
+      if (typeof value === "string") {
+        env[key] = value;
+      }
+    }
+    if (params?.overrides) {
+      Object.assign(env, params.overrides);
+    }
+    return env;
+  }
   const baseEnv = params?.baseEnv ?? process.env;
   const overrides = params?.overrides ?? undefined;
   const blockPathOverrides = params?.blockPathOverrides ?? true;

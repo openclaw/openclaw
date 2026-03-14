@@ -21,6 +21,7 @@ import {
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { isDevMode } from "../globals.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
@@ -946,6 +947,53 @@ export async function startGatewayServer(
       void hookRunner.runGatewayStart({ port }, { port }).catch((err) => {
         log.warn(`gateway_start hook failed: ${String(err)}`);
       });
+    }
+  }
+
+  // [dev-mode] Startup warning and Hub auto-start
+  if (!minimalTestGateway && isDevMode()) {
+    console.warn("\n⚠️  DEV MODE ACTIVE — security features relaxed. Do not use in production.\n");
+    try {
+      const { fileURLToPath } = await import("node:url");
+      const thisDir = path.dirname(fileURLToPath(import.meta.url));
+      const hubServerPath = path.resolve(thisDir, "../../dev-mode/hub/server.py");
+      const fs = await import("node:fs");
+      if (fs.existsSync(hubServerPath)) {
+        const http = await import("node:http");
+        const isRunning = await new Promise<boolean>((resolve) => {
+          const req = http.request(
+            { hostname: "127.0.0.1", port: 10020, path: "/pending", method: "GET", timeout: 1000 },
+            () => resolve(true),
+          );
+          req.on("error", () => resolve(false));
+          req.on("timeout", () => {
+            req.destroy();
+            resolve(false);
+          });
+          req.end();
+        });
+        if (!isRunning) {
+          const { spawn } = await import("node:child_process");
+          const child = spawn("python3", [hubServerPath], {
+            detached: true,
+            stdio: "ignore",
+          });
+          child.on("error", (err) => {
+            if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+              console.error(
+                "[dev-mode] Hub server requires python3 — please install it to use the Hub notification plugin.",
+              );
+            } else {
+              console.error(`[dev-mode] Failed to start Hub server: ${err.message}`);
+            }
+          });
+          child.unref();
+        }
+      }
+    } catch (err) {
+      console.error(
+        `[dev-mode] Hub server auto-start failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 

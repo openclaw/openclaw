@@ -84,6 +84,7 @@ export async function runCli(argv: string[] = process.argv) {
 
   loadDotEnv({ quiet: true });
   normalizeEnv();
+
   if (shouldEnsureCliPath(normalizedArgv)) {
     ensureOpenClawCliOnPath();
   }
