@@ -389,11 +389,16 @@ function shouldRetryWithIpv4Fallback(err: unknown): boolean {
   return true;
 }
 
+export function shouldRetryTelegramIpv4Fallback(err: unknown): boolean {
+  return shouldRetryWithIpv4Fallback(err);
+}
+
 // Prefer wrapped fetch when available to normalize AbortSignal across runtimes.
 export type TelegramTransport = {
   fetch: typeof fetch;
   sourceFetch: typeof fetch;
   pinnedDispatcherPolicy?: PinnedDispatcherPolicy;
+  fallbackPinnedDispatcherPolicy?: PinnedDispatcherPolicy;
 };
 
 export function resolveTelegramTransport(
@@ -438,20 +443,24 @@ export function resolveTelegramTransport(
     defaultDispatcher.mode === "direct" ||
     (defaultDispatcher.mode === "env-proxy" && shouldBypassEnvProxy);
   const stickyShouldUseEnvProxy = defaultDispatcher.mode === "env-proxy";
+  const fallbackPinnedDispatcherPolicy = allowStickyIpv4Fallback
+    ? resolveTelegramDispatcherPolicy({
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+        useEnvProxy: stickyShouldUseEnvProxy,
+        forceIpv4: true,
+        proxyUrl: explicitProxyUrl,
+      }).policy
+    : undefined;
 
   let stickyIpv4FallbackEnabled = false;
   let stickyIpv4Dispatcher: TelegramDispatcher | null = null;
   const resolveStickyIpv4Dispatcher = () => {
     if (!stickyIpv4Dispatcher) {
-      stickyIpv4Dispatcher = createTelegramDispatcher(
-        resolveTelegramDispatcherPolicy({
-          autoSelectFamily: false,
-          dnsResultOrder: "ipv4first",
-          useEnvProxy: stickyShouldUseEnvProxy,
-          forceIpv4: true,
-          proxyUrl: explicitProxyUrl,
-        }).policy,
-      ).dispatcher;
+      if (!fallbackPinnedDispatcherPolicy) {
+        return defaultDispatcher.dispatcher;
+      }
+      stickyIpv4Dispatcher = createTelegramDispatcher(fallbackPinnedDispatcherPolicy).dispatcher;
     }
     return stickyIpv4Dispatcher;
   };
@@ -493,6 +502,7 @@ export function resolveTelegramTransport(
     fetch: resolvedFetch,
     sourceFetch,
     pinnedDispatcherPolicy: defaultDispatcher.effectivePolicy,
+    fallbackPinnedDispatcherPolicy,
   };
 }
 
