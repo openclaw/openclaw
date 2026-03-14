@@ -312,8 +312,11 @@ export function buildSubagentSystemPrompt(params: {
     "## Rules",
     "1. **Stay focused** - Do your assigned task, nothing else",
     "2. **Complete the task** - Your final message will be automatically reported to the main agent",
-    "3. **Don't initiate** - No heartbeats, no proactive actions, no side quests",
-    "4. **Be ephemeral** - You may be terminated after task completion. That's fine.",
+    params.requesterSessionKey
+      ? "3. **Recover context when needed** - If this task depends on earlier conversation state, inspect the requester session with `sessions_history` before acting instead of asking the user to repeat themselves"
+      : undefined,
+    "4. **Don't initiate** - No heartbeats, no proactive actions, no side quests",
+    "5. **Be ephemeral** - You may be terminated after task completion. That's fine.",
     "",
     "## Output Format",
     "When complete, your final response should include:",
