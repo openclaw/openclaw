@@ -242,7 +242,13 @@ export class GatewayBrowserClient {
     // Gateways may reject this unless gateway.controlUi.allowInsecureAuth is enabled.
     const isSecureContext = typeof crypto !== "undefined" && !!crypto.subtle;
 
-    const scopes = ["operator.admin", "operator.approvals", "operator.pairing"];
+    const scopes = [
+      "operator.read",
+      "operator.write",
+      "operator.admin",
+      "operator.approvals",
+      "operator.pairing",
+    ];
     const role = "operator";
     const explicitGatewayToken = this.opts.token?.trim() || undefined;
     const explicitPassword = this.opts.password?.trim() || undefined;
