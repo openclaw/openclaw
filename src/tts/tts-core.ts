@@ -391,9 +391,16 @@ export function isValidOpenAIModel(model: string, baseUrl?: string): boolean {
 export function resolveOpenAITtsInstructions(
   model: string,
   instructions?: string,
+  baseUrl?: string,
 ): string | undefined {
   const next = trimToUndefined(instructions);
-  return next && model.includes("gpt-4o-mini-tts") ? next : undefined;
+  if (!next) {
+    return undefined;
+  }
+  if (baseUrl != null && isCustomOpenAIEndpoint(baseUrl)) {
+    return next;
+  }
+  return model.includes("gpt-4o-mini-tts") ? next : undefined;
 }
 
 export function isValidOpenAIVoice(voice: string, baseUrl?: string): voice is OpenAiTtsVoice {
@@ -639,7 +646,7 @@ export async function openaiTTS(params: {
 }): Promise<Buffer> {
   const { text, apiKey, baseUrl, model, voice, speed, instructions, responseFormat, timeoutMs } =
     params;
-  const effectiveInstructions = resolveOpenAITtsInstructions(model, instructions);
+  const effectiveInstructions = resolveOpenAITtsInstructions(model, instructions, baseUrl);
 
   if (!isValidOpenAIModel(model, baseUrl)) {
     throw new Error(`Invalid model: ${model}`);
