@@ -66,14 +66,25 @@ export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {
   };
 }
 
-const asFiniteNumber = (value: unknown): number | undefined => {
+const MAX_NORMALIZED_TOKEN_COUNT = 10_000_000;
+
+const asNormalizedTokenCount = (value: unknown): number | undefined => {
   if (typeof value !== "number") {
     return undefined;
   }
   if (!Number.isFinite(value)) {
     return undefined;
   }
-  return value;
+  if (value <= 0) {
+    return 0;
+  }
+
+  // Token counts must be non-negative safe integers for stable accounting.
+  const integer = Math.floor(value);
+  if (!Number.isSafeInteger(integer)) {
+    return MAX_NORMALIZED_TOKEN_COUNT;
+  }
+  return Math.min(integer, MAX_NORMALIZED_TOKEN_COUNT);
 };
 
 export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
@@ -90,31 +101,27 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     return undefined;
   }
 
-  // Some providers (pi-ai OpenAI-format) pre-subtract cached_tokens from
-  // prompt_tokens upstream.  When cached_tokens > prompt_tokens the result is
-  // negative, which is nonsensical.  Clamp to 0.
-  const rawInput = asFiniteNumber(
+  const input = asNormalizedTokenCount(
     raw.input ?? raw.inputTokens ?? raw.input_tokens ?? raw.promptTokens ?? raw.prompt_tokens,
   );
-  const input = rawInput !== undefined && rawInput < 0 ? 0 : rawInput;
-  const output = asFiniteNumber(
+  const output = asNormalizedTokenCount(
     raw.output ??
       raw.outputTokens ??
       raw.output_tokens ??
       raw.completionTokens ??
       raw.completion_tokens,
   );
-  const cacheRead = asFiniteNumber(
+  const cacheRead = asNormalizedTokenCount(
     raw.cacheRead ??
       raw.cache_read ??
       raw.cache_read_input_tokens ??
       raw.cached_tokens ??
       raw.prompt_tokens_details?.cached_tokens,
   );
-  const cacheWrite = asFiniteNumber(
+  const cacheWrite = asNormalizedTokenCount(
     raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,
   );
-  const total = asFiniteNumber(raw.total ?? raw.totalTokens ?? raw.total_tokens);
+  const total = asNormalizedTokenCount(raw.total ?? raw.totalTokens ?? raw.total_tokens);
 
   if (
     input === undefined &&

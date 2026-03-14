@@ -119,6 +119,40 @@ describe("normalizeUsage", () => {
     });
   });
 
+  it("clamps negative output/cache/total fields to zero", () => {
+    const usage = normalizeUsage({
+      input: 10,
+      output: -4,
+      cacheRead: -3,
+      cacheWrite: -2,
+      total: -1,
+    });
+    expect(usage).toEqual({
+      input: 10,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    });
+  });
+
+  it("normalizes fractional and oversized token counts", () => {
+    const usage = normalizeUsage({
+      input: 12.9,
+      output: 4.2,
+      cacheRead: Number.MAX_VALUE,
+      cacheWrite: 2.7,
+      total: Number.POSITIVE_INFINITY,
+    });
+    expect(usage).toEqual({
+      input: 12,
+      output: 4,
+      cacheRead: 10_000_000,
+      cacheWrite: 2,
+      total: undefined,
+    });
+  });
+
   it("returns undefined when no valid fields are provided", () => {
     const usage = normalizeUsage(null);
     expect(usage).toBeUndefined();
