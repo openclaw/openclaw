@@ -33,7 +33,9 @@ export function buildUsageWithNoCost(params: {
     output,
     cacheRead,
     cacheWrite,
-    totalTokens: params.totalTokens ?? input + output,
+    // Keep fallback totals aligned with providers that report cache tokens
+    // separately when `total_tokens` is omitted.
+    totalTokens: params.totalTokens ?? input + output + cacheRead + cacheWrite,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
 }

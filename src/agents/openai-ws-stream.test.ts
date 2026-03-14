@@ -694,6 +694,24 @@ describe("buildAssistantMessageFromResponse", () => {
     expect(msg.usage.totalTokens).toBe(13);
   });
 
+  it("includes cache usage when deriving total_tokens fallback", () => {
+    const response = {
+      ...makeResponseObject("resp_5d", "Hello"),
+      usage: {
+        prompt_tokens: 9,
+        completion_tokens: 4,
+        prompt_tokens_details: { cached_tokens: 3 },
+        cache_creation_input_tokens: 2,
+      },
+    };
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    expect(msg.usage.input).toBe(9);
+    expect(msg.usage.output).toBe(4);
+    expect(msg.usage.cacheRead).toBe(3);
+    expect(msg.usage.cacheWrite).toBe(2);
+    expect(msg.usage.totalTokens).toBe(18);
+  });
+
   it("sets model/provider/api from modelInfo", () => {
     const response = makeResponseObject("resp_6", "Hi");
     const msg = buildAssistantMessageFromResponse(response, modelInfo);
