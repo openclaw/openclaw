@@ -14,7 +14,10 @@ import { normalizeChannelId } from "../../channels/registry.js";
 import { readConfigFileSnapshot, writeConfigFile } from "../../config/config.js";
 import type { ButtonRow } from "../../telegram/model-buttons.js";
 import type { ReplyPayload } from "../types.js";
-import { rejectUnauthorizedCommand } from "./command-gates.js";
+import {
+  rejectUnauthorizedCommand,
+  requireCommandFlagEnabled,
+} from "./command-gates.js";
 import { buildModelsProviderData } from "./commands-models.js";
 import type { CommandHandler } from "./commands-types.js";
 
@@ -128,6 +131,15 @@ export const handleDefaultModelCommand: CommandHandler = async (params, allowTex
       ...(showPicker ? { channelData: { telegram: { buttons: providerButtons } } } : {}),
     };
     return { shouldContinue: false, reply };
+  }
+
+  // Check commands.config permission before mutating config
+  const disabled = requireCommandFlagEnabled(params.cfg, {
+    label: "/default_model",
+    configKey: "config",
+  });
+  if (disabled) {
+    return disabled;
   }
 
   // Check config write policy before persisting
