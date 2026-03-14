@@ -23,9 +23,12 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # KEEP THIS WORKFLOW ON GITHUB-HOSTED RUNNERS.
+  # DO NOT MOVE IT BACK TO BLACKSMITH WITHOUT RE-VALIDATING TAG BUILDS AND BACKFILLS.
   # Build amd64 images (default + slim share the build stage cache)
   build-amd64:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
+    runs-on: ubuntu-24.04
     permissions:
       packages: write
       contents: read
@@ -102,7 +105,8 @@ jobs:
 
       - name: Build and push amd64 image
         id: build
-        uses: useblacksmith/build-push-action@v2
+        # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
@@ -113,7 +117,8 @@ jobs:
 
       - name: Build and push amd64 slim image
         id: build-slim
-        uses: useblacksmith/build-push-action@v2
+        # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
@@ -126,7 +131,8 @@ jobs:
 
   # Build arm64 images (default + slim share the build stage cache)
   build-arm64:
-    runs-on: blacksmith-16vcpu-ubuntu-2404-arm
+    # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
+    runs-on: ubuntu-24.04-arm
     permissions:
       packages: write
       contents: read
@@ -203,7 +209,8 @@ jobs:
 
       - name: Build and push arm64 image
         id: build
-        uses: useblacksmith/build-push-action@v2
+        # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/arm64
@@ -214,7 +221,8 @@ jobs:
 
       - name: Build and push arm64 slim image
         id: build-slim
-        uses: useblacksmith/build-push-action@v2
+        # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/arm64
@@ -227,7 +235,8 @@ jobs:
 
   # Create multi-platform manifests
   create-manifest:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
+    runs-on: ubuntu-24.04
     permissions:
       packages: write
       contents: read
