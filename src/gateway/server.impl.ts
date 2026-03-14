@@ -652,28 +652,6 @@ export async function startGatewayServer(
     broadcast("voicewake.changed", { triggers }, { dropIfSlow: true });
   };
 
-  // Broadcast inbound channel messages to Control UI (chat.inbound) — refs #chat-inbound-polling
-  const chatInboundHookHandler: InternalHookHandler = async (event) => {
-    if (!isMessageReceivedEvent(event)) {
-      return;
-    }
-    const { channelId } = event.context;
-    // Skip webchat-originated messages — the UI already knows about those
-    if (channelId === "webchat") {
-      return;
-    }
-    broadcast(
-      "chat.inbound",
-      {
-        sessionKey: event.sessionKey,
-        channelId,
-        timestamp: event.timestamp.toISOString(),
-      },
-      { dropIfSlow: true },
-    );
-  };
-  registerInternalHook("message:received", chatInboundHookHandler);
-
   const hasMobileNodeConnected = () => hasConnectedMobileNode(nodeRegistry);
   applyGatewayLaneConcurrency(cfgAtStart);
 
@@ -967,6 +945,29 @@ export async function startGatewayServer(
       logBrowser,
     }));
   }
+
+  // Broadcast inbound channel messages to Control UI (chat.inbound).
+  // Registered AFTER startGatewaySidecars because it calls clearInternalHooks().
+  const chatInboundHookHandler: InternalHookHandler = async (event) => {
+    if (!isMessageReceivedEvent(event)) {
+      return;
+    }
+    const { channelId } = event.context;
+    // Skip webchat-originated messages — the UI already knows about those
+    if (channelId === "webchat") {
+      return;
+    }
+    broadcast(
+      "chat.inbound",
+      {
+        sessionKey: event.sessionKey,
+        channelId,
+        timestamp: event.timestamp.toISOString(),
+      },
+      { dropIfSlow: true },
+    );
+  };
+  registerInternalHook("message:received", chatInboundHookHandler);
 
   // Run gateway_start plugin hook (fire-and-forget)
   if (!minimalTestGateway) {

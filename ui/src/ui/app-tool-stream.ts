@@ -405,6 +405,24 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
+  // Stream assistant replies and thinking to the chat UI so channel-routed
+  // messages (Telegram, Discord, etc.) get real-time display. These only
+  // arrive as agent events, not chat events.
+  if (
+    (payload.stream === "assistant" || payload.stream === "thinking") &&
+    (host as unknown as { tab?: string }).tab === "chat" &&
+    payload.sessionKey === host.sessionKey
+  ) {
+    const text = typeof payload.data?.text === "string" ? payload.data.text : null;
+    if (text) {
+      host.chatStream = text;
+      if (!host.chatStreamStartedAt) {
+        host.chatStreamStartedAt = Date.now();
+      }
+    }
+    return;
+  }
+
   if (payload.stream !== "tool") {
     return;
   }

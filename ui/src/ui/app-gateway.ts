@@ -46,8 +46,9 @@ import type {
 } from "./types.ts";
 
 // Debounced chat history reload for chat.inbound events.
-// Collapses rapid-fire inbound messages (e.g. user sending multiple Telegram
-// messages quickly) into a single loadChatHistory call.
+// Two-phase refresh: first at 500ms (optimistic), second at 2500ms (guaranteed).
+// The inbound message may not be persisted to session history yet when the
+// WebSocket event arrives, so the second refresh ensures we catch it.
 // Note: module-level timer is fine — Control UI maintains a single gateway connection.
 let _chatInboundTimer: ReturnType<typeof setTimeout> | null = null;
 function debouncedLoadChatHistory(host: GatewayHost): void {
@@ -57,6 +58,13 @@ function debouncedLoadChatHistory(host: GatewayHost): void {
   _chatInboundTimer = setTimeout(() => {
     _chatInboundTimer = null;
     void loadChatHistory(host as unknown as OpenClawApp);
+    // Second refresh: wait for message persistence to complete.
+    // Skip if a new inbound event arrives in the meantime (its own debounce handles it).
+    setTimeout(() => {
+      if (!_chatInboundTimer) {
+        void loadChatHistory(host as unknown as OpenClawApp);
+      }
+    }, 3000);
   }, 500);
 }
 
@@ -352,6 +360,13 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       host as unknown as Parameters<typeof handleAgentEvent>[0],
       evt.payload as AgentEventPayload | undefined,
     );
+    // Reload history when agent run ends so both user inbound message
+    // and assistant reply appear in the UI (channel messages only emit
+    // agent events, not chat events).
+    const agentPayload = evt.payload as AgentEventPayload | undefined;
+    if (agentPayload?.stream === "lifecycle" && agentPayload.data?.phase === "end") {
+      void loadChatHistory(host as unknown as OpenClawApp);
+    }
     return;
   }
 
