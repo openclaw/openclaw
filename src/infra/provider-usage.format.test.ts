@@ -54,6 +54,18 @@ describe("provider-usage.format", () => {
     expect(summary).toBe("A 90% left · B 80% left");
   });
 
+  it("treats non-positive max windows as all windows and clamps overused percentages", () => {
+    const summary = formatUsageWindowSummary(
+      makeSnapshot([
+        { label: "Over", usedPercent: 120, resetAt: now + 60_000 },
+        { label: "Under", usedPercent: -10 },
+      ]),
+      { now, maxWindows: 0, includeResets: true },
+    );
+
+    expect(summary).toBe("Over 0% left ⏱1m · Under 100% left");
+  });
+
   it("formats summary line from highest-usage window and provider cap", () => {
     const summary: UsageSummary = {
       updatedAt: now,
@@ -77,6 +89,27 @@ describe("provider-usage.format", () => {
     expect(formatUsageSummaryLine(summary, { now, maxProviders: 1 })).toBe(
       "📊 Usage: Claude 30% left (Week)",
     );
+  });
+
+  it("returns null summary line when providers are errored or have no windows", () => {
+    expect(
+      formatUsageSummaryLine({
+        updatedAt: now,
+        providers: [
+          {
+            provider: "anthropic",
+            displayName: "Claude",
+            windows: [],
+            error: "HTTP 401",
+          },
+          {
+            provider: "zai",
+            displayName: "z.ai",
+            windows: [],
+          },
+        ],
+      }),
+    ).toBeNull();
   });
 
   it("formats report output for empty, error, no-data, and plan entries", () => {
@@ -105,6 +138,26 @@ describe("provider-usage.format", () => {
       "Usage:",
       "  Codex (Plus): Token expired",
       "  Xiaomi: no data",
+    ]);
+  });
+
+  it("formats detailed report lines with reset windows", () => {
+    const summary: UsageSummary = {
+      updatedAt: now,
+      providers: [
+        {
+          provider: "anthropic",
+          displayName: "Claude",
+          plan: "Pro",
+          windows: [{ label: "Daily", usedPercent: 25, resetAt: now + 2 * 60 * 60_000 }],
+        },
+      ],
+    };
+
+    expect(formatUsageReportLines(summary, { now })).toEqual([
+      "Usage:",
+      "  Claude (Pro)",
+      "    Daily: 75% left · resets 2h",
     ]);
   });
 });

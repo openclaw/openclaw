@@ -1,2 +1,1 @@
-export { deliverReplies } from "./delivery.replies.js";
-export { resolveMedia } from "./delivery.resolve-media.js";
+export * from "../../../extensions/telegram/src/bot/delivery.js";
