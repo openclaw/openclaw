@@ -130,7 +130,7 @@ export function normalizeToolParameters(
       ? "oneOf"
       : null;
   if (!variantKey) {
-    return tool;
+    return { ...tool, parameters: { ...schema, properties: schema.properties ?? {} } };
   }
   const variants = schema[variantKey] as unknown[];
   const mergedProperties: Record<string, unknown> = {};
