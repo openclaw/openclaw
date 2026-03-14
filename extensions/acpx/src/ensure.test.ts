@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ACPX_LOCAL_INSTALL_COMMAND,
   ACPX_PINNED_VERSION,
+  CHROME_DEVTOOLS_MCP_BUNDLED_BIN,
+  CHROME_DEVTOOLS_MCP_PINNED_VERSION,
   buildAcpxLocalInstallCommand,
+  buildChromeDevToolsMcpLocalInstallCommand,
 } from "./config.js";
 
 const { resolveSpawnFailureMock, spawnAndCollectMock } = vi.hoisted(() => ({
@@ -20,7 +23,12 @@ vi.mock("./runtime-internals/process.js", () => ({
   spawnAndCollect: spawnAndCollectMock,
 }));
 
-import { checkAcpxVersion, ensureAcpx } from "./ensure.js";
+import {
+  checkAcpxVersion,
+  checkChromeDevToolsMcpCommand,
+  ensureAcpx,
+  ensureChromeDevToolsMcp,
+} from "./ensure.js";
 
 describe("acpx ensure", () => {
   const tempDirs: string[] = [];
@@ -322,5 +330,95 @@ describe("acpx ensure", () => {
       ok: false,
       installCommand: buildAcpxLocalInstallCommand("0.2.0"),
     });
+  });
+
+  it("accepts chrome-devtools-mcp command availability", async () => {
+    spawnAndCollectMock.mockResolvedValueOnce({
+      stdout: "Usage: chrome-devtools-mcp [options]\n",
+      stderr: "",
+      code: 0,
+      error: null,
+    });
+
+    const result = await checkChromeDevToolsMcpCommand({
+      command: CHROME_DEVTOOLS_MCP_BUNDLED_BIN,
+      cwd: "/plugin",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(spawnAndCollectMock).toHaveBeenCalledWith({
+      command: CHROME_DEVTOOLS_MCP_BUNDLED_BIN,
+      args: ["--help"],
+      cwd: "/plugin",
+      stripProviderAuthEnvVars: undefined,
+    });
+  });
+
+  it("installs and verifies chrome-devtools-mcp when the bundled command is missing", async () => {
+    spawnAndCollectMock
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: "",
+        code: 0,
+        error: new Error("not found"),
+      })
+      .mockResolvedValueOnce({
+        stdout: "added 1 package\n",
+        stderr: "",
+        code: 0,
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        stdout: "Usage: chrome-devtools-mcp [options]\n",
+        stderr: "",
+        code: 0,
+        error: null,
+      });
+    resolveSpawnFailureMock.mockReturnValue("missing-command");
+
+    await ensureChromeDevToolsMcp({
+      command: CHROME_DEVTOOLS_MCP_BUNDLED_BIN,
+      pluginRoot: "/plugin",
+    });
+
+    expect(spawnAndCollectMock).toHaveBeenCalledTimes(3);
+    expect(spawnAndCollectMock.mock.calls[1]?.[0]).toMatchObject({
+      command: "npm",
+      args: [
+        "install",
+        "--omit=dev",
+        "--no-save",
+        `chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_PINNED_VERSION}`,
+      ],
+      cwd: "/plugin",
+    });
+  });
+
+  it("reports actionable install failures for chrome-devtools-mcp", async () => {
+    spawnAndCollectMock
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: "",
+        code: 0,
+        error: new Error("not found"),
+      })
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: "network down",
+        code: 1,
+        error: null,
+      });
+    resolveSpawnFailureMock.mockReturnValue("missing-command");
+
+    await expect(
+      ensureChromeDevToolsMcp({
+        command: CHROME_DEVTOOLS_MCP_BUNDLED_BIN,
+        pluginRoot: "/plugin",
+      }),
+    ).rejects.toThrow("failed to install plugin-local chrome-devtools-mcp");
+
+    expect(buildChromeDevToolsMcpLocalInstallCommand()).toBe(
+      `npm install --omit=dev --no-save chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_PINNED_VERSION}`,
+    );
   });
 });

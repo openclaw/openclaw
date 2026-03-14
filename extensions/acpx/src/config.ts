@@ -13,10 +13,24 @@ export const ACPX_VERSION_ANY = "any";
 const ACPX_BIN_NAME = process.platform === "win32" ? "acpx.cmd" : "acpx";
 export const ACPX_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const ACPX_BUNDLED_BIN = path.join(ACPX_PLUGIN_ROOT, "node_modules", ".bin", ACPX_BIN_NAME);
+export const CHROME_DEVTOOLS_MCP_PINNED_VERSION = "0.20.0";
+const CHROME_DEVTOOLS_MCP_BIN_NAME =
+  process.platform === "win32" ? "chrome-devtools-mcp.cmd" : "chrome-devtools-mcp";
+export const CHROME_DEVTOOLS_MCP_BUNDLED_BIN = path.join(
+  ACPX_PLUGIN_ROOT,
+  "node_modules",
+  ".bin",
+  CHROME_DEVTOOLS_MCP_BIN_NAME,
+);
 export function buildAcpxLocalInstallCommand(version: string = ACPX_PINNED_VERSION): string {
   return `npm install --omit=dev --no-save acpx@${version}`;
 }
 export const ACPX_LOCAL_INSTALL_COMMAND = buildAcpxLocalInstallCommand();
+export function buildChromeDevToolsMcpLocalInstallCommand(
+  version: string = CHROME_DEVTOOLS_MCP_PINNED_VERSION,
+): string {
+  return `npm install --omit=dev --no-save chrome-devtools-mcp@${version}`;
+}
 
 export type McpServerConfig = {
   command: string;

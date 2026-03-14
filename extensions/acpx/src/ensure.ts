@@ -1,7 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { PluginLogger } from "openclaw/plugin-sdk/acpx";
-import { ACPX_PINNED_VERSION, ACPX_PLUGIN_ROOT, buildAcpxLocalInstallCommand } from "./config.js";
+import {
+  ACPX_PINNED_VERSION,
+  ACPX_PLUGIN_ROOT,
+  CHROME_DEVTOOLS_MCP_PINNED_VERSION,
+  buildAcpxLocalInstallCommand,
+  buildChromeDevToolsMcpLocalInstallCommand,
+} from "./config.js";
 import {
   resolveSpawnFailure,
   type SpawnCommandOptions,
@@ -272,5 +278,164 @@ export async function ensureAcpx(params: {
     await pendingEnsure;
   } finally {
     pendingEnsure = null;
+  }
+}
+
+export type ChromeDevToolsMcpCheckResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: "missing-command" | "execution-failed";
+      message: string;
+      installCommand: string;
+    };
+
+export async function checkChromeDevToolsMcpCommand(params: {
+  command: string;
+  cwd?: string;
+  stripProviderAuthEnvVars?: boolean;
+  spawnOptions?: SpawnCommandOptions;
+}): Promise<ChromeDevToolsMcpCheckResult> {
+  const cwd = params.cwd ?? ACPX_PLUGIN_ROOT;
+  const installCommand = buildChromeDevToolsMcpLocalInstallCommand();
+  let result: Awaited<ReturnType<typeof spawnAndCollect>>;
+  try {
+    result = params.spawnOptions
+      ? await spawnAndCollect(
+          {
+            command: params.command,
+            args: ["--help"],
+            cwd,
+            stripProviderAuthEnvVars: params.stripProviderAuthEnvVars,
+          },
+          params.spawnOptions,
+        )
+      : await spawnAndCollect({
+          command: params.command,
+          args: ["--help"],
+          cwd,
+          stripProviderAuthEnvVars: params.stripProviderAuthEnvVars,
+        });
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "execution-failed",
+      message: error instanceof Error ? error.message : String(error),
+      installCommand,
+    };
+  }
+
+  if (result.error) {
+    const spawnFailure = resolveSpawnFailure(result.error, cwd);
+    if (spawnFailure === "missing-command") {
+      return {
+        ok: false,
+        reason: "missing-command",
+        message: `chrome-devtools-mcp command not found at ${params.command}`,
+        installCommand,
+      };
+    }
+    return {
+      ok: false,
+      reason: "execution-failed",
+      message: result.error.message,
+      installCommand,
+    };
+  }
+
+  if ((result.code ?? 0) !== 0) {
+    const stderr = result.stderr.trim();
+    return {
+      ok: false,
+      reason: "execution-failed",
+      message: stderr || `chrome-devtools-mcp --help failed with code ${result.code ?? "unknown"}`,
+      installCommand,
+    };
+  }
+
+  return { ok: true };
+}
+
+let pendingChromeDevToolsEnsure: Promise<void> | null = null;
+
+export async function ensureChromeDevToolsMcp(params: {
+  command: string;
+  logger?: PluginLogger;
+  pluginRoot?: string;
+  stripProviderAuthEnvVars?: boolean;
+  spawnOptions?: SpawnCommandOptions;
+}): Promise<void> {
+  if (pendingChromeDevToolsEnsure) {
+    return await pendingChromeDevToolsEnsure;
+  }
+
+  pendingChromeDevToolsEnsure = (async () => {
+    const pluginRoot = params.pluginRoot ?? ACPX_PLUGIN_ROOT;
+    const installCommand = buildChromeDevToolsMcpLocalInstallCommand();
+    const precheck = await checkChromeDevToolsMcpCommand({
+      command: params.command,
+      cwd: pluginRoot,
+      stripProviderAuthEnvVars: params.stripProviderAuthEnvVars,
+      spawnOptions: params.spawnOptions,
+    });
+    if (precheck.ok) {
+      return;
+    }
+
+    params.logger?.warn(
+      `chrome-devtools-mcp local binary unavailable (${precheck.message}); running plugin-local install`,
+    );
+
+    const install = await spawnAndCollect({
+      command: "npm",
+      args: [
+        "install",
+        "--omit=dev",
+        "--no-save",
+        `chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_PINNED_VERSION}`,
+      ],
+      cwd: pluginRoot,
+      stripProviderAuthEnvVars: params.stripProviderAuthEnvVars,
+    });
+
+    if (install.error) {
+      const spawnFailure = resolveSpawnFailure(install.error, pluginRoot);
+      if (spawnFailure === "missing-command") {
+        throw new Error(
+          "npm is required to install plugin-local chrome-devtools-mcp but was not found on PATH",
+        );
+      }
+      throw new Error(
+        `failed to install plugin-local chrome-devtools-mcp: ${install.error.message}`,
+      );
+    }
+
+    if ((install.code ?? 0) !== 0) {
+      const stderr = install.stderr.trim();
+      const stdout = install.stdout.trim();
+      const detail = stderr || stdout || `npm exited with code ${install.code ?? "unknown"}`;
+      throw new Error(`failed to install plugin-local chrome-devtools-mcp: ${detail}`);
+    }
+
+    const postcheck = await checkChromeDevToolsMcpCommand({
+      command: params.command,
+      cwd: pluginRoot,
+      stripProviderAuthEnvVars: params.stripProviderAuthEnvVars,
+      spawnOptions: params.spawnOptions,
+    });
+
+    if (!postcheck.ok) {
+      throw new Error(
+        `plugin-local chrome-devtools-mcp verification failed after install: ${postcheck.message}`,
+      );
+    }
+
+    params.logger?.info("chrome-devtools-mcp plugin-local binary ready");
+  })();
+
+  try {
+    await pendingChromeDevToolsEnsure;
+  } finally {
+    pendingChromeDevToolsEnsure = null;
   }
 }

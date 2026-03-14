@@ -17,9 +17,13 @@ import {
 const { ensureAcpxSpy } = vi.hoisted(() => ({
   ensureAcpxSpy: vi.fn(async () => {}),
 }));
+const { ensureChromeDevToolsMcpSpy } = vi.hoisted(() => ({
+  ensureChromeDevToolsMcpSpy: vi.fn(async () => {}),
+}));
 
 vi.mock("./ensure.js", () => ({
   ensureAcpx: ensureAcpxSpy,
+  ensureChromeDevToolsMcp: ensureChromeDevToolsMcpSpy,
 }));
 
 type RuntimeStub = AcpRuntime & {
@@ -152,6 +156,8 @@ describe("createAcpxRuntimeService", () => {
     __testing.resetAcpRuntimeBackendsForTests();
     ensureAcpxSpy.mockReset();
     ensureAcpxSpy.mockImplementation(async () => {});
+    ensureChromeDevToolsMcpSpy.mockReset();
+    ensureChromeDevToolsMcpSpy.mockImplementation(async () => {});
   });
 
   it("registers and unregisters the acpx backend", async () => {
@@ -252,6 +258,14 @@ describe("createAcpxRuntimeService", () => {
     expect(passedConfig.mcpServers["chrome-devtools"]).toEqual({
       command: CHROME_DEVTOOLS_MCP_BIN,
       args: ["--autoConnect", "--experimental-page-id-routing"],
+    });
+    await vi.waitFor(() => {
+      expect(ensureChromeDevToolsMcpSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: CHROME_DEVTOOLS_MCP_BIN,
+          stripProviderAuthEnvVars: true,
+        }),
+      );
     });
   });
 
@@ -387,6 +401,7 @@ describe("createAcpxRuntimeService", () => {
     expect(context.logger.info).toHaveBeenCalledWith(
       "chrome-devtools-mcp preset skipped: existing mcpServers entry takes precedence",
     );
+    expect(ensureChromeDevToolsMcpSpy).not.toHaveBeenCalled();
   });
 
   it("keeps explicit chrome-devtools entries when dangerouslyAllowPrivateNetwork overrides the legacy flag", async () => {

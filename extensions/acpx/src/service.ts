@@ -1,4 +1,3 @@
-import path from "node:path";
 import type {
   AcpRuntime,
   OpenClawPluginService,
@@ -7,24 +6,17 @@ import type {
 } from "openclaw/plugin-sdk/acpx";
 import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "openclaw/plugin-sdk/acpx";
 import {
-  ACPX_PLUGIN_ROOT,
+  CHROME_DEVTOOLS_MCP_BUNDLED_BIN,
   resolveAcpxPluginConfig,
   type McpServerConfig,
   type ResolvedAcpxPluginConfig,
 } from "./config.js";
-import { ensureAcpx } from "./ensure.js";
+import { ensureAcpx, ensureChromeDevToolsMcp } from "./ensure.js";
 import { ACPX_BACKEND_ID, AcpxRuntime } from "./runtime.js";
 
 const CHROME_DEVTOOLS_MCP_SERVER_NAME = "chrome-devtools";
 const CHROME_DEVTOOLS_MCP_PAGE_ID_ROUTING_FLAG = "--experimental-page-id-routing";
-const CHROME_DEVTOOLS_MCP_BIN_NAME =
-  process.platform === "win32" ? "chrome-devtools-mcp.cmd" : "chrome-devtools-mcp";
-export const CHROME_DEVTOOLS_MCP_BIN = path.join(
-  ACPX_PLUGIN_ROOT,
-  "node_modules",
-  ".bin",
-  CHROME_DEVTOOLS_MCP_BIN_NAME,
-);
+export const CHROME_DEVTOOLS_MCP_BIN = CHROME_DEVTOOLS_MCP_BUNDLED_BIN;
 
 /**
  * Build the chrome-devtools-mcp server config from core browser.mcp settings.
@@ -225,6 +217,17 @@ export function createAcpxRuntimeService(
               strictWindowsCmdWrapper: pluginConfig.strictWindowsCmdWrapper,
             },
           });
+          const chromeDevToolsServer = pluginConfig.mcpServers[CHROME_DEVTOOLS_MCP_SERVER_NAME];
+          if (chromeDevToolsServer?.command === CHROME_DEVTOOLS_MCP_BUNDLED_BIN) {
+            await ensureChromeDevToolsMcp({
+              command: chromeDevToolsServer.command,
+              logger: ctx.logger,
+              stripProviderAuthEnvVars: pluginConfig.stripProviderAuthEnvVars,
+              spawnOptions: {
+                strictWindowsCmdWrapper: pluginConfig.strictWindowsCmdWrapper,
+              },
+            });
+          }
           if (currentRevision !== lifecycleRevision) {
             return;
           }
