@@ -29,7 +29,7 @@ export const ACPX_LOCAL_INSTALL_COMMAND = buildAcpxLocalInstallCommand();
 export function buildChromeDevToolsMcpLocalInstallCommand(
   version: string = CHROME_DEVTOOLS_MCP_PINNED_VERSION,
 ): string {
-  return `npm install --omit=dev --no-save chrome-devtools-mcp@${version}`;
+  return `npm install --omit=dev --no-save --ignore-scripts chrome-devtools-mcp@${version}`;
 }
 
 export type McpServerConfig = {

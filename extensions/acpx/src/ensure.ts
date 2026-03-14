@@ -390,17 +390,21 @@ export async function ensureChromeDevToolsMcp(params: {
       `chrome-devtools-mcp local binary unavailable (${precheck.message}); running plugin-local install`,
     );
 
-    const install = await spawnAndCollect({
+    const installParams = {
       command: "npm",
       args: [
         "install",
         "--omit=dev",
         "--no-save",
+        "--ignore-scripts",
         `chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_PINNED_VERSION}`,
       ],
       cwd: pluginRoot,
       stripProviderAuthEnvVars: params.stripProviderAuthEnvVars,
-    });
+    };
+    const install = params.spawnOptions
+      ? await spawnAndCollect(installParams, params.spawnOptions)
+      : await spawnAndCollect(installParams);
 
     if (install.error) {
       const spawnFailure = resolveSpawnFailure(install.error, pluginRoot);

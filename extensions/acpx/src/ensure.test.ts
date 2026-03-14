@@ -388,6 +388,7 @@ describe("acpx ensure", () => {
         "install",
         "--omit=dev",
         "--no-save",
+        "--ignore-scripts",
         `chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_PINNED_VERSION}`,
       ],
       cwd: "/plugin",
@@ -418,7 +419,7 @@ describe("acpx ensure", () => {
     ).rejects.toThrow("failed to install plugin-local chrome-devtools-mcp");
 
     expect(buildChromeDevToolsMcpLocalInstallCommand()).toBe(
-      `npm install --omit=dev --no-save chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_PINNED_VERSION}`,
+      `npm install --omit=dev --no-save --ignore-scripts chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_PINNED_VERSION}`,
     );
   });
 
@@ -442,5 +443,38 @@ describe("acpx ensure", () => {
     );
 
     expect(spawnAndCollectMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("threads strict windows spawn policy through chrome-devtools install", async () => {
+    spawnAndCollectMock
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: "",
+        code: 0,
+        error: new Error("not found"),
+      })
+      .mockResolvedValueOnce({
+        stdout: "added 1 package\n",
+        stderr: "",
+        code: 0,
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        stdout: "Usage: chrome-devtools-mcp [options]\n",
+        stderr: "",
+        code: 0,
+        error: null,
+      });
+    resolveSpawnFailureMock.mockReturnValue("missing-command");
+
+    await ensureChromeDevToolsMcp({
+      command: CHROME_DEVTOOLS_MCP_BUNDLED_BIN,
+      pluginRoot: "/plugin",
+      spawnOptions: { strictWindowsCmdWrapper: true },
+    });
+
+    expect(spawnAndCollectMock.mock.calls[1]?.[1]).toEqual({
+      strictWindowsCmdWrapper: true,
+    });
   });
 });
