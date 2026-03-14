@@ -291,6 +291,13 @@ export async function applyNonInteractiveAuthChoice(params: {
       endpoint = "global";
     } else if (authChoice === "zai-cn") {
       endpoint = "cn";
+    }
+
+    if (endpoint) {
+      const detected = await detectZaiEndpoint({ apiKey: resolved.key, endpoint });
+      if (detected) {
+        modelIdOverride = detected.modelId;
+      }
     } else {
       const detected = await detectZaiEndpoint({ apiKey: resolved.key });
       if (detected) {

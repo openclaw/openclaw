@@ -126,6 +126,23 @@ openclaw gateway probe
 openclaw gateway probe --json
 ```
 
+Interpretation:
+
+- `Reachable: yes` means at least one target accepted a WebSocket connect.
+- `RPC: ok` means detail RPC calls (`health`/`status`/`system-presence`/`config.get`) also succeeded.
+- `RPC: limited - missing scope: operator.read` means connect succeeded but detail RPC is scope-limited. This is reported as **degraded** reachability, not full failure.
+- Exit code is non-zero only when no probed target is reachable.
+
+JSON notes (`--json`):
+
+- Top level:
+  - `ok`: at least one target is reachable.
+  - `degraded`: at least one target had scope-limited detail RPC.
+- Per target (`targets[].connect`):
+  - `ok`: reachability after connect + degraded classification.
+  - `rpcOk`: full detail RPC success.
+  - `scopeLimited`: detail RPC failed due to missing operator scope.
+
 #### Remote over SSH (Mac app parity)
 
 The macOS app “Remote over SSH” mode uses a local port-forward so the remote gateway (which may be bound to loopback only) becomes reachable at `ws://127.0.0.1:<port>`.
