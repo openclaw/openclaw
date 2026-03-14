@@ -224,8 +224,8 @@ function createDeferred<T>() {
 
 function createArgMenusHarness() {
   const commands = new Map<string, (args: unknown) => Promise<void>>();
-  const actions = new Map<string, (args: unknown) => Promise<void>>();
-  const options = new Map<string, (args: unknown) => Promise<void>>();
+  const actions = new Map<RegExp, (args: unknown) => Promise<void>>();
+  const options = new Map<RegExp, (args: unknown) => Promise<void>>();
   const optionsReceiverContexts: unknown[] = [];
 
   const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
@@ -234,12 +234,16 @@ function createArgMenusHarness() {
     command: (name: string, handler: (args: unknown) => Promise<void>) => {
       commands.set(name, handler);
     },
-    action: (id: string, handler: (args: unknown) => Promise<void>) => {
-      actions.set(id, handler);
+    action: (id: RegExp | string, handler: (args: unknown) => Promise<void>) => {
+      actions.set(id as RegExp, handler);
     },
-    options: function (this: unknown, id: string, handler: (args: unknown) => Promise<void>) {
+    options: function (
+      this: unknown,
+      id: RegExp | string,
+      handler: (args: unknown) => Promise<void>,
+    ) {
       optionsReceiverContexts.push(this);
-      options.set(id, handler);
+      options.set(id as RegExp, handler);
     },
   };
 
@@ -289,15 +293,24 @@ function createArgMenusHarness() {
 }
 
 function requireHandler(
-  handlers: Map<string, (args: unknown) => Promise<void>>,
-  key: string,
+  handlers: Map<string | RegExp, (args: unknown) => Promise<void>>,
+  key: string | RegExp,
   label: string,
 ): (args: unknown) => Promise<void> {
+  // First try direct lookup
   const handler = handlers.get(key);
-  if (!handler) {
-    throw new Error(`Missing ${label} handler`);
+  if (handler) {
+    return handler;
   }
-  return handler;
+  // If key is RegExp, try to find matching entry
+  if (key instanceof RegExp) {
+    for (const [k, h] of handlers) {
+      if (k instanceof RegExp && k.source === key.source) {
+        return h;
+      }
+    }
+  }
+  throw new Error(`Missing ${label} handler`);
 }
 
 function createSlashCommand(overrides: Partial<Record<string, string>> = {}) {
@@ -418,8 +431,8 @@ describe("Slack native command argument menus", () => {
     reportLongHandler = requireHandler(harness.commands, "/reportlong", "/reportlong");
     unsafeConfirmHandler = requireHandler(harness.commands, "/unsafeconfirm", "/unsafeconfirm");
     agentStatusHandler = requireHandler(harness.commands, "/agentstatus", "/agentstatus");
-    argMenuHandler = requireHandler(harness.actions, "openclaw_cmdarg", "arg-menu action");
-    argMenuOptionsHandler = requireHandler(harness.options, "openclaw_cmdarg", "arg-menu options");
+    argMenuHandler = requireHandler(harness.actions, /^openclaw_cmdarg/, "arg-menu action");
+    argMenuOptionsHandler = requireHandler(harness.options, /^openclaw_cmdarg/, "arg-menu options");
   });
 
   beforeEach(() => {
@@ -430,21 +443,29 @@ describe("Slack native command argument menus", () => {
     const testHarness = createArgMenusHarness();
     await registerCommands(testHarness.ctx, testHarness.account);
     expect(testHarness.commands.size).toBeGreaterThan(0);
-    expect(testHarness.actions.has("openclaw_cmdarg")).toBe(true);
-    expect(testHarness.options.has("openclaw_cmdarg")).toBe(true);
+    // Verify action handler is registered with correct regex pattern
+    expect(testHarness.actions.size).toBeGreaterThan(0);
+    const [actionKey] = testHarness.actions.keys();
+    expect(actionKey).toBeInstanceOf(RegExp);
+    expect(actionKey).toHaveProperty("source", "^openclaw_cmdarg");
+    // Verify options handler is registered with correct regex pattern
+    expect(testHarness.options.size).toBeGreaterThan(0);
+    const [optionsKey] = testHarness.options.keys();
+    expect(optionsKey).toBeInstanceOf(RegExp);
+    expect(optionsKey).toHaveProperty("source", "^openclaw_cmdarg");
     expect(testHarness.optionsReceiverContexts[0]).toBe(testHarness.app);
   });
 
   it("falls back to static menus when app.options() throws during registration", async () => {
     const commands = new Map<string, (args: unknown) => Promise<void>>();
-    const actions = new Map<string, (args: unknown) => Promise<void>>();
+    const actions = new Map<string | RegExp, (args: unknown) => Promise<void>>();
     const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
     const app = {
       client: { chat: { postEphemeral } },
       command: (name: string, handler: (args: unknown) => Promise<void>) => {
         commands.set(name, handler);
       },
-      action: (id: string, handler: (args: unknown) => Promise<void>) => {
+      action: (id: string | RegExp, handler: (args: unknown) => Promise<void>) => {
         actions.set(id, handler);
       },
       // Simulate Bolt throwing during options registration (e.g. receiver not initialized)
@@ -487,7 +508,11 @@ describe("Slack native command argument menus", () => {
     // Registration should not throw despite app.options() throwing
     await registerCommands(ctx, account);
     expect(commands.size).toBeGreaterThan(0);
-    expect(actions.has("openclaw_cmdarg")).toBe(true);
+    // Verify action handler is registered with regex pattern
+    expect(actions.size).toBeGreaterThan(0);
+    const [actionKey] = actions.keys();
+    expect(actionKey).toBeInstanceOf(RegExp);
+    expect(actionKey).toHaveProperty("source", "^openclaw_cmdarg");
 
     // The /reportexternal command (140 choices) should fall back to static_select
     // instead of external_select since options registration failed
@@ -520,7 +545,7 @@ describe("Slack native command argument menus", () => {
     const actions = expectArgMenuLayout(respond);
     const element = actions?.elements?.[0];
     expect(element?.type).toBe("static_select");
-    expect(element?.action_id).toBe("openclaw_cmdarg");
+    expect(element?.action_id).toBe("openclaw_cmdarg_0");
     expect(element?.confirm).toBeTruthy();
   });
 
