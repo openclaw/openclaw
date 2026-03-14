@@ -61,6 +61,11 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     actions: ["restart-heartbeat"],
   },
   {
+    prefix: "agents.defaults.models",
+    kind: "hot",
+    actions: ["restart-heartbeat"],
+  },
+  {
     prefix: "models",
     kind: "hot",
     actions: ["restart-heartbeat"],

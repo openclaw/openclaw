@@ -151,11 +151,16 @@ describe("buildGatewayReloadPlan", () => {
     const plan = buildGatewayReloadPlan([
       "models.providers.openai.models",
       "agents.defaults.model",
+      "agents.defaults.models.openai/gpt-5.2",
     ]);
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartHeartbeat).toBe(true);
     expect(plan.hotReasons).toEqual(
-      expect.arrayContaining(["models.providers.openai.models", "agents.defaults.model"]),
+      expect.arrayContaining([
+        "models.providers.openai.models",
+        "agents.defaults.model",
+        "agents.defaults.models.openai/gpt-5.2",
+      ]),
     );
   });
 
