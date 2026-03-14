@@ -142,7 +142,13 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 # Symlink into /usr/local/bin so OpenClaw doesn't depend on PATH.
 ENV BUN_INSTALL="/home/node/.bun"
 RUN if [ -n "$OPENCLAW_INSTALL_QMD" ]; then \
-      curl -fsSL https://bun.sh/install | bash && \
+      for attempt in 1 2 3 4 5; do \
+        if curl -fsSL https://bun.sh/install | bash; then \
+          break; \
+        fi; \
+        if [ "$attempt" -eq 5 ]; then exit 1; fi; \
+        sleep $((attempt * 2)); \
+      done && \
       /home/node/.bun/bin/bun install -g @tobilu/qmd && \
       ln -sf /home/node/.bun/bin/qmd /usr/local/bin/qmd && \
       chown -R node:node /home/node/.bun ; \
