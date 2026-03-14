@@ -207,8 +207,21 @@ export function renderChatControls(state: AppViewState) {
       <circle cx="12" cy="12" r="3"></circle>
     </svg>
   `;
+
+  const refreshLabel = t("chat.refreshTitle");
+  const thinkingLabel = disableThinkingToggle
+    ? t("chat.onboardingDisabled")
+    : t("chat.thinkingToggle");
+  const focusLabel = disableFocusToggle ? t("chat.onboardingDisabled") : t("chat.focusToggle");
+  const cronLabel = hideCron
+    ? hiddenCronCount > 0
+      ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
+      : t("chat.showCronSessions")
+    : t("chat.hideCronSessions");
+
   return html`
     <div class="chat-controls">
+      <span style="display: inline-flex" data-tooltip=${refreshLabel}>
       <button
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}
@@ -230,11 +243,13 @@ export function renderChatControls(state: AppViewState) {
             });
           }
         }}
-        title=${t("chat.refreshTitle")}
+        aria-label=${refreshLabel}
       >
         ${refreshIcon}
       </button>
+      </span>
       <span class="chat-controls__separator">|</span>
+      <span style="display: inline-flex" data-tooltip=${thinkingLabel}>
       <button
         class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
         ?disabled=${disableThinkingToggle}
@@ -248,10 +263,12 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${showThinking}
-        title=${disableThinkingToggle ? t("chat.onboardingDisabled") : t("chat.thinkingToggle")}
+        aria-label=${thinkingLabel}
       >
         ${icons.brain}
       </button>
+      </span>
+      <span style="display: inline-flex" data-tooltip=${focusLabel}>
       <button
         class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"
         ?disabled=${disableFocusToggle}
@@ -265,26 +282,23 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${focusActive}
-        title=${disableFocusToggle ? t("chat.onboardingDisabled") : t("chat.focusToggle")}
+        aria-label=${focusLabel}
       >
         ${focusIcon}
       </button>
+      </span>
+      <span style="display: inline-flex" data-tooltip=${cronLabel}>
       <button
         class="btn btn--sm btn--icon ${hideCron ? "active" : ""}"
         @click=${() => {
           state.sessionsHideCron = !hideCron;
         }}
         aria-pressed=${hideCron}
-        title=${
-          hideCron
-            ? hiddenCronCount > 0
-              ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
-              : t("chat.showCronSessions")
-            : t("chat.hideCronSessions")
-        }
+        aria-label=${cronLabel}
       >
         ${renderCronFilterIcon(hiddenCronCount)}
       </button>
+      </span>
     </div>
   `;
 }
