@@ -66,6 +66,10 @@ export function createWebSendApi(params: {
       const result = await params.sock.sendMessage(jid, payload);
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
       recordWhatsAppOutbound(accountId);
+      // WhatsApp audio messages don't support captions; send text as a follow-up message
+      if (mediaBuffer && mediaType?.startsWith("audio/") && text) {
+        await params.sock.sendMessage(jid, { text });
+      }
       const messageId = resolveOutboundMessageId(result);
       return { messageId };
     },
