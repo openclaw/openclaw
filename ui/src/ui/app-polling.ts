@@ -3,6 +3,22 @@ import { loadDebug } from "./controllers/debug.ts";
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 
+/**
+ * Polling intervals (ms).
+ *
+ * Previous values (5 s / 2 s / 3 s) caused excessive RPC traffic and
+ * progressive UI sluggishness — especially with many sessions or when
+ * the dashboard was left open in a background tab.
+ *
+ * New defaults balance freshness with resource usage:
+ *   - Nodes:  30 s  (topology rarely changes)
+ *   - Logs:    5 s  (still near-realtime tail)
+ *   - Debug:  10 s  (status data is slow-moving)
+ */
+const NODES_POLL_MS = 30_000;
+const LOGS_POLL_MS = 5_000;
+const DEBUG_POLL_MS = 10_000;
+
 type PollingHost = {
   nodesPollInterval: number | null;
   logsPollInterval: number | null;
@@ -16,7 +32,7 @@ export function startNodesPolling(host: PollingHost) {
   }
   host.nodesPollInterval = window.setInterval(
     () => void loadNodes(host as unknown as OpenClawApp, { quiet: true }),
-    5000,
+    NODES_POLL_MS,
   );
 }
 
@@ -37,7 +53,7 @@ export function startLogsPolling(host: PollingHost) {
       return;
     }
     void loadLogs(host as unknown as OpenClawApp, { quiet: true });
-  }, 2000);
+  }, LOGS_POLL_MS);
 }
 
 export function stopLogsPolling(host: PollingHost) {
@@ -57,7 +73,7 @@ export function startDebugPolling(host: PollingHost) {
       return;
     }
     void loadDebug(host as unknown as OpenClawApp);
-  }, 3000);
+  }, DEBUG_POLL_MS);
 }
 
 export function stopDebugPolling(host: PollingHost) {
