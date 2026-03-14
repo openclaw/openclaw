@@ -236,7 +236,7 @@ describe("inbound dedupe", () => {
     ).toBe(false);
   });
 
-  it("does not dedupe across session keys", () => {
+  it("does not dedupe across agent ids", () => {
     resetInboundDedupe();
     const base: MsgContext = {
       Provider: "whatsapp",
@@ -248,10 +248,34 @@ describe("inbound dedupe", () => {
       shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:alpha:main" }, { now: 100 }),
     ).toBe(false);
     expect(
-      shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:bravo:main" }, { now: 200 }),
+      shouldSkipDuplicateInbound(
+        { ...base, SessionKey: "agent:bravo:whatsapp:direct:+1555" },
+        {
+          now: 200,
+        },
+      ),
     ).toBe(false);
     expect(
       shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:alpha:main" }, { now: 300 }),
+    ).toBe(true);
+  });
+
+  it("dedupes when the same agent sees the same inbound message under different session keys", () => {
+    resetInboundDedupe();
+    const base: MsgContext = {
+      Provider: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:7463849194",
+      MessageSid: "msg-1",
+    };
+    expect(
+      shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:main:main" }, { now: 100 }),
+    ).toBe(false);
+    expect(
+      shouldSkipDuplicateInbound(
+        { ...base, SessionKey: "agent:main:telegram:direct:7463849194" },
+        { now: 200 },
+      ),
     ).toBe(true);
   });
 });
@@ -464,6 +488,54 @@ describe("resolveGroupRequireMention", () => {
       key: "slack:group:C123",
       channel: "slack",
       id: "C123",
+      chatType: "group",
+    };
+
+    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
+  });
+
+  it("respects LINE prefixed group keys in reply-stage requireMention resolution", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        line: {
+          groups: {
+            "room:r123": { requireMention: false },
+          },
+        },
+      },
+    };
+    const ctx: TemplateContext = {
+      Provider: "line",
+      From: "line:room:r123",
+    };
+    const groupResolution: GroupKeyResolution = {
+      key: "line:group:r123",
+      channel: "line",
+      id: "r123",
+      chatType: "group",
+    };
+
+    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
+  });
+
+  it("preserves plugin-backed channel requireMention resolution", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        bluebubbles: {
+          groups: {
+            "chat:primary": { requireMention: false },
+          },
+        },
+      },
+    };
+    const ctx: TemplateContext = {
+      Provider: "bluebubbles",
+      From: "bluebubbles:group:chat:primary",
+    };
+    const groupResolution: GroupKeyResolution = {
+      key: "bluebubbles:group:chat:primary",
+      channel: "bluebubbles",
+      id: "chat:primary",
       chatType: "group",
     };
 

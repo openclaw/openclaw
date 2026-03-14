@@ -6,6 +6,7 @@ import {
   createScopedPairingAccess,
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
+  issuePairingChallenge,
   normalizeAgentId,
   recordPendingHistoryEntryIfEnabled,
   resolveOpenProviderRuntimeGroupPolicy,
@@ -14,7 +15,7 @@ import {
 } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { tryRecordMessage, tryRecordMessagePersistent } from "./dedup.js";
+import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { downloadMessageResourceFeishu } from "./media.js";
@@ -866,8 +867,18 @@ export async function handleFeishuMessage(params: {
   runtime?: RuntimeEnv;
   chatHistories?: Map<string, HistoryEntry[]>;
   accountId?: string;
+  processingClaimHeld?: boolean;
 }): Promise<void> {
-  const { cfg, event, botOpenId, botName, runtime, chatHistories, accountId } = params;
+  const {
+    cfg,
+    event,
+    botOpenId,
+    botName,
+    runtime,
+    chatHistories,
+    accountId,
+    processingClaimHeld = false,
+  } = params;
 
   // Resolve account with merged config
   const account = resolveFeishuAccount({ cfg, accountId });
@@ -876,16 +887,15 @@ export async function handleFeishuMessage(params: {
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
 
-  // Dedup: synchronous memory guard prevents concurrent duplicate dispatch
-  // before the async persistent check completes.
   const messageId = event.message.message_id;
-  const memoryDedupeKey = `${account.accountId}:${messageId}`;
-  if (!tryRecordMessage(memoryDedupeKey)) {
-    log(`feishu: skipping duplicate message ${messageId} (memory dedup)`);
-    return;
-  }
-  // Persistent dedup survives restarts and reconnects.
-  if (!(await tryRecordMessagePersistent(messageId, account.accountId, log))) {
+  if (
+    !(await finalizeFeishuMessageProcessing({
+      messageId,
+      namespace: account.accountId,
+      log,
+      claimHeld: processingClaimHeld,
+    }))
+  ) {
     log(`feishu: skipping duplicate message ${messageId}`);
     return;
   }
@@ -1101,29 +1111,29 @@ export async function handleFeishuMessage(params: {
 
     if (isDirect && dmPolicy !== "open" && !dmAllowed) {
       if (dmPolicy === "pairing") {
-        const { code, created } = await pairing.upsertPairingRequest({
-          id: ctx.senderOpenId,
+        await issuePairingChallenge({
+          channel: "feishu",
+          senderId: ctx.senderOpenId,
+          senderIdLine: `Your Feishu user id: ${ctx.senderOpenId}`,
           meta: { name: ctx.senderName },
-        });
-        if (created) {
-          log(`feishu[${account.accountId}]: pairing request sender=${ctx.senderOpenId}`);
-          try {
+          upsertPairingRequest: pairing.upsertPairingRequest,
+          onCreated: () => {
+            log(`feishu[${account.accountId}]: pairing request sender=${ctx.senderOpenId}`);
+          },
+          sendPairingReply: async (text) => {
             await sendMessageFeishu({
               cfg,
               to: `chat:${ctx.chatId}`,
-              text: core.channel.pairing.buildPairingReply({
-                channel: "feishu",
-                idLine: `Your Feishu user id: ${ctx.senderOpenId}`,
-                code,
-              }),
+              text,
               accountId: account.accountId,
             });
-          } catch (err) {
+          },
+          onReplyError: (err) => {
             log(
               `feishu[${account.accountId}]: pairing reply failed for ${ctx.senderOpenId}: ${String(err)}`,
             );
-          }
-        }
+          },
+        });
       } else {
         log(
           `feishu[${account.accountId}]: blocked unauthorized sender ${ctx.senderOpenId} (dmPolicy=${dmPolicy})`,

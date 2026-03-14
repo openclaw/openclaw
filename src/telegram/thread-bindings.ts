@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveThreadBindingConversationIdFromBindingId } from "../channels/thread-binding-id.js";
 import { formatThreadBindingDurationLabel } from "../channels/thread-bindings-messages.js";
 import { resolveStateDir } from "../config/paths.js";
 import { logVerbose } from "../globals.js";
@@ -12,6 +13,7 @@ import {
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
 import { normalizeAccountId } from "../routing/session-key.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_THREAD_BINDING_MAX_AGE_MS = 0;
@@ -61,8 +63,26 @@ export type TelegramThreadBindingManager = {
   stop: () => void;
 };
 
-const MANAGERS_BY_ACCOUNT_ID = new Map<string, TelegramThreadBindingManager>();
-const BINDINGS_BY_ACCOUNT_CONVERSATION = new Map<string, TelegramThreadBindingRecord>();
+type TelegramThreadBindingsState = {
+  managersByAccountId: Map<string, TelegramThreadBindingManager>;
+  bindingsByAccountConversation: Map<string, TelegramThreadBindingRecord>;
+};
+
+/**
+ * Keep Telegram thread binding state shared across bundled chunks so routing,
+ * binding lookups, and binding mutations all observe the same live registry.
+ */
+const TELEGRAM_THREAD_BINDINGS_STATE_KEY = Symbol.for("openclaw.telegramThreadBindingsState");
+
+const threadBindingsState = resolveGlobalSingleton<TelegramThreadBindingsState>(
+  TELEGRAM_THREAD_BINDINGS_STATE_KEY,
+  () => ({
+    managersByAccountId: new Map<string, TelegramThreadBindingManager>(),
+    bindingsByAccountConversation: new Map<string, TelegramThreadBindingRecord>(),
+  }),
+);
+const MANAGERS_BY_ACCOUNT_ID = threadBindingsState.managersByAccountId;
+const BINDINGS_BY_ACCOUNT_CONVERSATION = threadBindingsState.bindingsByAccountConversation;
 
 function normalizeDurationMs(raw: unknown, fallback: number): number {
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
@@ -312,22 +332,6 @@ async function persistBindingsToDisk(params: {
   });
 }
 
-function resolveThreadIdFromBindingId(params: {
-  accountId: string;
-  bindingId?: string;
-}): string | undefined {
-  const bindingId = params.bindingId?.trim();
-  if (!bindingId) {
-    return undefined;
-  }
-  const prefix = `${params.accountId}:`;
-  if (!bindingId.startsWith(prefix)) {
-    return undefined;
-  }
-  const conversationId = bindingId.slice(prefix.length).trim();
-  return conversationId || undefined;
-}
-
 function normalizeTimestampMs(raw: unknown): number {
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
     return Date.now();
@@ -575,7 +579,7 @@ export function createTelegramThreadBindingManager(
         : null;
     },
     touch: (bindingId, at) => {
-      const conversationId = resolveThreadIdFromBindingId({
+      const conversationId = resolveThreadBindingConversationIdFromBindingId({
         accountId,
         bindingId,
       });
@@ -598,7 +602,7 @@ export function createTelegramThreadBindingManager(
           }),
         );
       }
-      const conversationId = resolveThreadIdFromBindingId({
+      const conversationId = resolveThreadBindingConversationIdFromBindingId({
         accountId,
         bindingId: input.bindingId,
       });

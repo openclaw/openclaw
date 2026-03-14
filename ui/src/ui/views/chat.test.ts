@@ -1,5 +1,11 @@
+/* @vitest-environment jsdom */
+
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { renderChatSessionSelect } from "../app-render.helpers.ts";
+import type { AppViewState } from "../app-view-state.ts";
+import type { GatewayBrowserClient } from "../gateway.ts";
+import type { ModelCatalogEntry } from "../types.ts";
 import type { SessionsListResult } from "../types.ts";
 import { renderChat, type ChatProps } from "./chat.ts";
 
@@ -11,6 +17,104 @@ function createSessions(): SessionsListResult {
     defaults: { model: null, contextTokens: null },
     sessions: [],
   };
+}
+
+function createChatHeaderState(
+  overrides: {
+    model?: string | null;
+    models?: ModelCatalogEntry[];
+    omitSessionFromList?: boolean;
+  } = {},
+): { state: AppViewState; request: ReturnType<typeof vi.fn> } {
+  let currentModel = overrides.model ?? null;
+  const omitSessionFromList = overrides.omitSessionFromList ?? false;
+  const catalog = overrides.models ?? [
+    { id: "gpt-5", name: "GPT-5", provider: "openai" },
+    { id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" },
+  ];
+  const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+    if (method === "sessions.patch") {
+      currentModel = (params.model as string | null | undefined) ?? null;
+      return { ok: true, key: "main" };
+    }
+    if (method === "chat.history") {
+      return { messages: [], thinkingLevel: null };
+    }
+    if (method === "sessions.list") {
+      return {
+        ts: 0,
+        path: "",
+        count: omitSessionFromList ? 0 : 1,
+        defaults: { model: "gpt-5", contextTokens: null },
+        sessions: omitSessionFromList
+          ? []
+          : [{ key: "main", kind: "direct", updatedAt: null, model: currentModel }],
+      };
+    }
+    if (method === "models.list") {
+      return { models: catalog };
+    }
+    throw new Error(`Unexpected request: ${method}`);
+  });
+  const state = {
+    sessionKey: "main",
+    connected: true,
+    sessionsHideCron: true,
+    sessionsResult: {
+      ts: 0,
+      path: "",
+      count: omitSessionFromList ? 0 : 1,
+      defaults: { model: "gpt-5", contextTokens: null },
+      sessions: omitSessionFromList
+        ? []
+        : [{ key: "main", kind: "direct", updatedAt: null, model: currentModel }],
+    },
+    chatModelOverrides: {},
+    chatModelCatalog: catalog,
+    chatModelsLoading: false,
+    client: { request } as unknown as GatewayBrowserClient,
+    settings: {
+      gatewayUrl: "",
+      token: "",
+      locale: "en",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "claw",
+      themeMode: "dark",
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navGroupsCollapsed: {},
+      chatFocusMode: false,
+      chatShowThinking: false,
+    },
+    chatMessage: "",
+    chatStream: null,
+    chatStreamStartedAt: null,
+    chatRunId: null,
+    chatQueue: [],
+    chatMessages: [],
+    chatLoading: false,
+    chatThinkingLevel: null,
+    lastError: null,
+    chatAvatarUrl: null,
+    basePath: "",
+    hello: null,
+    agentsList: null,
+    applySettings(next: AppViewState["settings"]) {
+      state.settings = next;
+    },
+    loadAssistantIdentity: vi.fn(),
+    resetToolStream: vi.fn(),
+    resetChatScroll: vi.fn(),
+  } as unknown as AppViewState & {
+    client: GatewayBrowserClient;
+    settings: AppViewState["settings"];
+  };
+  return { state, request };
+}
+
+function flushTasks() {
+  return new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
 function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
@@ -26,6 +130,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     fallbackStatus: null,
     messages: [],
     toolMessages: [],
+    streamSegments: [],
     stream: null,
     streamStartedAt: null,
     assistantAvatarUrl: null,
@@ -45,11 +150,103 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onSend: () => undefined,
     onQueueRemove: () => undefined,
     onNewSession: () => undefined,
+    agentsList: null,
+    currentAgentId: "",
+    onAgentChange: () => undefined,
     ...overrides,
   };
 }
 
 describe("chat view", () => {
+  it("uses the assistant avatar URL for the welcome state when the identity avatar is only initials", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          assistantName: "Assistant",
+          assistantAvatar: "A",
+          assistantAvatarUrl: "/avatar/main",
+        }),
+      ),
+      container,
+    );
+
+    const welcomeImage = container.querySelector<HTMLImageElement>(".agent-chat__welcome > img");
+    expect(welcomeImage).not.toBeNull();
+    expect(welcomeImage?.getAttribute("src")).toBe("/avatar/main");
+  });
+
+  it("falls back to the bundled logo in the welcome state when the assistant avatar is not a URL", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          assistantName: "Assistant",
+          assistantAvatar: "A",
+          assistantAvatarUrl: null,
+        }),
+      ),
+      container,
+    );
+
+    const welcomeImage = container.querySelector<HTMLImageElement>(".agent-chat__welcome > img");
+    const logoImage = container.querySelector<HTMLImageElement>(
+      ".agent-chat__welcome .agent-chat__avatar--logo img",
+    );
+    expect(welcomeImage).toBeNull();
+    expect(logoImage).not.toBeNull();
+    expect(logoImage?.getAttribute("src")).toBe("favicon.svg");
+  });
+
+  it("keeps the welcome logo fallback under the mounted base path", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          assistantName: "Assistant",
+          assistantAvatar: "A",
+          assistantAvatarUrl: null,
+          basePath: "/openclaw/",
+        }),
+      ),
+      container,
+    );
+
+    const logoImage = container.querySelector<HTMLImageElement>(
+      ".agent-chat__welcome .agent-chat__avatar--logo img",
+    );
+    expect(logoImage).not.toBeNull();
+    expect(logoImage?.getAttribute("src")).toBe("/openclaw/favicon.svg");
+  });
+
+  it("keeps grouped assistant avatar fallbacks under the mounted base path", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          assistantName: "Assistant",
+          assistantAvatar: "A",
+          assistantAvatarUrl: null,
+          basePath: "/openclaw/",
+          messages: [
+            {
+              role: "assistant",
+              content: "hello",
+              timestamp: 1000,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const groupedLogo = container.querySelector<HTMLImageElement>(
+      ".chat-group.assistant .chat-avatar--logo",
+    );
+    expect(groupedLogo).not.toBeNull();
+    expect(groupedLogo?.getAttribute("src")).toBe("/openclaw/favicon.svg");
+  });
+
   it("renders compacting indicator as a badge", () => {
     const container = document.createElement("div");
     render(
@@ -188,15 +385,14 @@ describe("chat view", () => {
       renderChat(
         createProps({
           canAbort: true,
+          sending: true,
           onAbort,
         }),
       ),
       container,
     );
 
-    const stopButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Stop",
-    );
+    const stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
     expect(stopButton).not.toBeUndefined();
     stopButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onAbort).toHaveBeenCalledTimes(1);
@@ -216,12 +412,239 @@ describe("chat view", () => {
       container,
     );
 
-    const newSessionButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "New session",
+    const newSessionButton = container.querySelector<HTMLButtonElement>(
+      'button[title="New session"]',
     );
     expect(newSessionButton).not.toBeUndefined();
     newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onNewSession).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Stop");
+  });
+
+  it("shows sender labels from sanitized gateway messages instead of generic You", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "user",
+              content: "hello from topic",
+              senderLabel: "Iris",
+              timestamp: 1000,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const senderLabels = Array.from(container.querySelectorAll(".chat-sender-name")).map((node) =>
+      node.textContent?.trim(),
+    );
+    expect(senderLabels).toContain("Iris");
+    expect(senderLabels).not.toContain("You");
+  });
+
+  it("keeps consecutive user messages from different senders in separate groups", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "user",
+              content: "first",
+              senderLabel: "Iris",
+              timestamp: 1000,
+            },
+            {
+              role: "user",
+              content: "second",
+              senderLabel: "Joaquin De Rojas",
+              timestamp: 1001,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const groups = container.querySelectorAll(".chat-group.user");
+    expect(groups).toHaveLength(2);
+    const senderLabels = Array.from(container.querySelectorAll(".chat-sender-name")).map((node) =>
+      node.textContent?.trim(),
+    );
+    expect(senderLabels).toContain("Iris");
+    expect(senderLabels).toContain("Joaquin De Rojas");
+  });
+
+  it("opens delete confirm on the left for user messages", () => {
+    try {
+      localStorage.removeItem("openclaw:skipDeleteConfirm");
+    } catch {
+      /* noop */
+    }
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "user",
+              content: "hello from user",
+              timestamp: 1000,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const deleteButton = container.querySelector<HTMLButtonElement>(
+      ".chat-group.user .chat-group-delete",
+    );
+    expect(deleteButton).not.toBeNull();
+    deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    const confirm = container.querySelector<HTMLElement>(".chat-group.user .chat-delete-confirm");
+    expect(confirm).not.toBeNull();
+    expect(confirm?.classList.contains("chat-delete-confirm--left")).toBe(true);
+  });
+
+  it("opens delete confirm on the right for assistant messages", () => {
+    try {
+      localStorage.removeItem("openclaw:skipDeleteConfirm");
+    } catch {
+      /* noop */
+    }
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: "hello from assistant",
+              timestamp: 1000,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const deleteButton = container.querySelector<HTMLButtonElement>(
+      ".chat-group.assistant .chat-group-delete",
+    );
+    expect(deleteButton).not.toBeNull();
+    deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    const confirm = container.querySelector<HTMLElement>(
+      ".chat-group.assistant .chat-delete-confirm",
+    );
+    expect(confirm).not.toBeNull();
+    expect(confirm?.classList.contains("chat-delete-confirm--right")).toBe(true);
+  });
+
+  it("patches the current session model from the chat header picker", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+      } satisfies Partial<Response>),
+    );
+    const { state, request } = createChatHeaderState();
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+    expect(modelSelect?.value).toBe("");
+
+    modelSelect!.value = "gpt-5-mini";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: "gpt-5-mini",
+    });
+    expect(request).not.toHaveBeenCalledWith("chat.history", expect.anything());
+    expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
+    vi.unstubAllGlobals();
+  });
+
+  it("clears the session model override back to the default model", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+      } satisfies Partial<Response>),
+    );
+    const { state, request } = createChatHeaderState({ model: "gpt-5-mini" });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+    expect(modelSelect?.value).toBe("gpt-5-mini");
+
+    modelSelect!.value = "";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: null,
+    });
+    expect(state.sessionsResult?.sessions[0]?.model).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it("disables the chat header model picker while a run is active", () => {
+    const { state } = createChatHeaderState();
+    state.chatRunId = "run-123";
+    state.chatStream = "Working";
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+    expect(modelSelect?.disabled).toBe(true);
+  });
+
+  it("keeps the selected model visible when the active session is absent from sessions.list", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+      } satisfies Partial<Response>),
+    );
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+
+    modelSelect!.value = "gpt-5-mini";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+    render(renderChatSessionSelect(state), container);
+
+    const rerendered = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(rerendered?.value).toBe("gpt-5-mini");
+    vi.unstubAllGlobals();
   });
 });

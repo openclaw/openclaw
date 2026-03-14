@@ -127,6 +127,32 @@ describe("web processMessage inbound contract", () => {
     }
   });
 
+  async function processSelfDirectMessage(cfg: unknown) {
+    capturedDispatchParams = undefined;
+    await processMessage(
+      makeProcessMessageArgs({
+        routeSessionKey: "agent:main:whatsapp:direct:+1555",
+        groupHistoryKey: "+1555",
+        cfg,
+        msg: {
+          id: "msg1",
+          from: "+1555",
+          to: "+1555",
+          selfE164: "+1555",
+          chatType: "direct",
+          body: "hi",
+        },
+      }),
+    );
+  }
+
+  function getDispatcherResponsePrefix() {
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const dispatcherOptions = (capturedDispatchParams as any)?.dispatcherOptions;
+    // oxlint-disable-next-line typescript/no-explicit-any
+    return dispatcherOptions?.responsePrefix as string | undefined;
+  }
+
   it("passes a finalized MsgContext to the dispatcher", async () => {
     await processMessage(
       makeProcessMessageArgs({
@@ -184,66 +210,30 @@ describe("web processMessage inbound contract", () => {
   });
 
   it("defaults responsePrefix to identity name in self-chats when unset", async () => {
-    capturedDispatchParams = undefined;
-
-    await processMessage(
-      makeProcessMessageArgs({
-        routeSessionKey: "agent:main:whatsapp:direct:+1555",
-        groupHistoryKey: "+1555",
-        cfg: {
-          agents: {
-            list: [
-              {
-                id: "main",
-                default: true,
-                identity: { name: "Mainbot", emoji: "🦞", theme: "space lobster" },
-              },
-            ],
+    await processSelfDirectMessage({
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            identity: { name: "Mainbot", emoji: "🦞", theme: "space lobster" },
           },
-          messages: {},
-          session: { store: sessionStorePath },
-        } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
-        msg: {
-          id: "msg1",
-          from: "+1555",
-          to: "+1555",
-          selfE164: "+1555",
-          chatType: "direct",
-          body: "hi",
-        },
-      }),
-    );
+        ],
+      },
+      messages: {},
+      session: { store: sessionStorePath },
+    } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>);
 
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const dispatcherOptions = (capturedDispatchParams as any)?.dispatcherOptions;
-    expect(dispatcherOptions?.responsePrefix).toBe("[Mainbot]");
+    expect(getDispatcherResponsePrefix()).toBe("[Mainbot]");
   });
 
   it("does not force an [openclaw] response prefix in self-chats when identity is unset", async () => {
-    capturedDispatchParams = undefined;
+    await processSelfDirectMessage({
+      messages: {},
+      session: { store: sessionStorePath },
+    } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>);
 
-    await processMessage(
-      makeProcessMessageArgs({
-        routeSessionKey: "agent:main:whatsapp:direct:+1555",
-        groupHistoryKey: "+1555",
-        cfg: {
-          messages: {},
-          session: { store: sessionStorePath },
-        } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
-        msg: {
-          id: "msg1",
-          from: "+1555",
-          to: "+1555",
-          selfE164: "+1555",
-          chatType: "direct",
-          body: "hi",
-        },
-      }),
-    );
-
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const dispatcherOptions = (capturedDispatchParams as any)?.dispatcherOptions;
-    expect(dispatcherOptions?.responsePrefix).toBeUndefined();
+    expect(getDispatcherResponsePrefix()).toBeUndefined();
   });
 
   it("clears pending group history when the dispatcher does not queue a final reply", async () => {
@@ -372,13 +362,14 @@ describe("web processMessage inbound contract", () => {
     expect(updateLastRouteMock).not.toHaveBeenCalled();
   });
 
-  it("does not update main last route for non-owner sender when main DM scope is pinned", async () => {
-    const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
-    updateLastRouteMock.mockClear();
-
+  function makePinnedMainScopeArgs(params: {
+    groupHistoryKey: string;
+    messageId: string;
+    from: string;
+  }) {
     const args = makeProcessMessageArgs({
       routeSessionKey: "agent:main:main",
-      groupHistoryKey: "+3000",
+      groupHistoryKey: params.groupHistoryKey,
       cfg: {
         channels: {
           whatsapp: {
@@ -389,12 +380,12 @@ describe("web processMessage inbound contract", () => {
         session: { store: sessionStorePath, dmScope: "main" },
       } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
       msg: {
-        id: "msg-last-route-3",
-        from: "+3000",
+        id: params.messageId,
+        from: params.from,
         to: "+2000",
         chatType: "direct",
         body: "hello",
-        senderE164: "+3000",
+        senderE164: params.from,
       },
     });
     args.route = {
@@ -402,6 +393,18 @@ describe("web processMessage inbound contract", () => {
       sessionKey: "agent:main:main",
       mainSessionKey: "agent:main:main",
     };
+    return args;
+  }
+
+  it("does not update main last route for non-owner sender when main DM scope is pinned", async () => {
+    const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
+    updateLastRouteMock.mockClear();
+
+    const args = makePinnedMainScopeArgs({
+      groupHistoryKey: "+3000",
+      messageId: "msg-last-route-3",
+      from: "+3000",
+    });
 
     await processMessage(args);
 
@@ -412,32 +415,11 @@ describe("web processMessage inbound contract", () => {
     const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
     updateLastRouteMock.mockClear();
 
-    const args = makeProcessMessageArgs({
-      routeSessionKey: "agent:main:main",
+    const args = makePinnedMainScopeArgs({
       groupHistoryKey: "+1000",
-      cfg: {
-        channels: {
-          whatsapp: {
-            allowFrom: ["+1000"],
-          },
-        },
-        messages: {},
-        session: { store: sessionStorePath, dmScope: "main" },
-      } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
-      msg: {
-        id: "msg-last-route-4",
-        from: "+1000",
-        to: "+2000",
-        chatType: "direct",
-        body: "hello",
-        senderE164: "+1000",
-      },
+      messageId: "msg-last-route-4",
+      from: "+1000",
     });
-    args.route = {
-      ...args.route,
-      sessionKey: "agent:main:main",
-      mainSessionKey: "agent:main:main",
-    };
 
     await processMessage(args);
 

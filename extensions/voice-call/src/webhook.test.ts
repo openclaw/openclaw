@@ -56,6 +56,28 @@ const createManager = (calls: CallRecord[]) => {
   return { manager, endCall, processEvent };
 };
 
+async function runStaleCallReaperCase(params: {
+  callAgeMs: number;
+  staleCallReaperSeconds: number;
+  advanceMs: number;
+}) {
+  const now = new Date("2026-02-16T00:00:00Z");
+  vi.setSystemTime(now);
+
+  const call = createCall(now.getTime() - params.callAgeMs);
+  const { manager, endCall } = createManager([call]);
+  const config = createConfig({ staleCallReaperSeconds: params.staleCallReaperSeconds });
+  const server = new VoiceCallWebhookServer(config, manager, provider);
+
+  try {
+    await server.start();
+    await vi.advanceTimersByTimeAsync(params.advanceMs);
+    return { call, endCall };
+  } finally {
+    await server.stop();
+  }
+}
+
 async function postWebhookForm(server: VoiceCallWebhookServer, baseUrl: string, body: string) {
   const address = (
     server as unknown as { server?: { address?: () => unknown } }
@@ -81,39 +103,21 @@ describe("VoiceCallWebhookServer stale call reaper", () => {
   });
 
   it("ends calls older than staleCallReaperSeconds", async () => {
-    const now = new Date("2026-02-16T00:00:00Z");
-    vi.setSystemTime(now);
-
-    const call = createCall(now.getTime() - 120_000);
-    const { manager, endCall } = createManager([call]);
-    const config = createConfig({ staleCallReaperSeconds: 60 });
-    const server = new VoiceCallWebhookServer(config, manager, provider);
-
-    try {
-      await server.start();
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(endCall).toHaveBeenCalledWith(call.callId);
-    } finally {
-      await server.stop();
-    }
+    const { call, endCall } = await runStaleCallReaperCase({
+      callAgeMs: 120_000,
+      staleCallReaperSeconds: 60,
+      advanceMs: 30_000,
+    });
+    expect(endCall).toHaveBeenCalledWith(call.callId);
   });
 
   it("skips calls that are younger than the threshold", async () => {
-    const now = new Date("2026-02-16T00:00:00Z");
-    vi.setSystemTime(now);
-
-    const call = createCall(now.getTime() - 10_000);
-    const { manager, endCall } = createManager([call]);
-    const config = createConfig({ staleCallReaperSeconds: 60 });
-    const server = new VoiceCallWebhookServer(config, manager, provider);
-
-    try {
-      await server.start();
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(endCall).not.toHaveBeenCalled();
-    } finally {
-      await server.stop();
-    }
+    const { endCall } = await runStaleCallReaperCase({
+      callAgeMs: 10_000,
+      staleCallReaperSeconds: 60,
+      advanceMs: 30_000,
+    });
+    expect(endCall).not.toHaveBeenCalled();
   });
 
   it("does not run when staleCallReaperSeconds is disabled", async () => {
@@ -268,6 +272,32 @@ describe("VoiceCallWebhookServer replay handling", () => {
 
       expect(response.status).toBe(401);
       expect(parseWebhookEvent).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
+describe("VoiceCallWebhookServer response normalization", () => {
+  it("preserves explicit empty provider response bodies", async () => {
+    const responseProvider: VoiceCallProvider = {
+      ...provider,
+      parseWebhookEvent: () => ({
+        events: [],
+        statusCode: 204,
+        providerResponseBody: "",
+      }),
+    };
+    const { manager } = createManager([]);
+    const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
+    const server = new VoiceCallWebhookServer(config, manager, responseProvider);
+
+    try {
+      const baseUrl = await server.start();
+      const response = await postWebhookForm(server, baseUrl, "CallSid=CA123&SpeechResult=hello");
+
+      expect(response.status).toBe(204);
+      expect(await response.text()).toBe("");
     } finally {
       await server.stop();
     }

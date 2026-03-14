@@ -141,6 +141,66 @@ describe("gateway server chat", () => {
     expect(res.payload?.startedAt).toBe(startedAt);
   };
 
+  const sendChatAndExpectStarted = async (runId: string, message = "/context list") => {
+    const res = await rpcReq(ws, "chat.send", {
+      sessionKey: "main",
+      message,
+      idempotencyKey: runId,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.payload?.status).toBe("started");
+    return res;
+  };
+
+  const waitForAgentRunOk = async (runId: string, timeoutMs = 1_000) => {
+    const res = await rpcReq(ws, "agent.wait", {
+      runId,
+      timeoutMs,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.payload?.status).toBe("ok");
+    return res;
+  };
+
+  const abortChatRun = async (runId: string) => {
+    const res = await rpcReq(ws, "chat.abort", {
+      sessionKey: "main",
+      runId,
+    });
+    expect(res.ok).toBe(true);
+    return res;
+  };
+
+  const mockBlockedChatReply = () => {
+    let releaseBlockedReply: (() => void) | undefined;
+    const blockedReply = new Promise<void>((resolve) => {
+      releaseBlockedReply = resolve;
+    });
+    const replySpy = vi.mocked(getReplyFromConfig);
+    replySpy.mockImplementationOnce(async (_ctx, opts) => {
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          resolve();
+        };
+        void blockedReply.then(finish);
+        if (opts?.abortSignal?.aborted) {
+          finish();
+          return;
+        }
+        opts?.abortSignal?.addEventListener("abort", finish, { once: true });
+      });
+      return undefined;
+    });
+    return () => {
+      releaseBlockedReply?.();
+    };
+  };
+
   test("sanitizes inbound chat.send message text and rejects null bytes", async () => {
     const nullByteRes = await rpcReq(ws, "chat.send", {
       sessionKey: "main",
@@ -467,37 +527,11 @@ describe("gateway server chat", () => {
   });
 
   test("agent.wait resolves chat.send runs that finish without lifecycle events", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-    try {
-      testState.sessionStorePath = path.join(dir, "sessions.json");
-      await writeSessionStore({
-        entries: {
-          main: {
-            sessionId: "sess-main",
-            updatedAt: Date.now(),
-          },
-        },
-      });
-
+    await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-1";
-      const sendRes = await rpcReq(ws, "chat.send", {
-        sessionKey: "main",
-        message: "/context list",
-        idempotencyKey: runId,
-      });
-      expect(sendRes.ok).toBe(true);
-      expect(sendRes.payload?.status).toBe("started");
-
-      const waitRes = await rpcReq(ws, "agent.wait", {
-        runId,
-        timeoutMs: 1_000,
-      });
-      expect(waitRes.ok).toBe(true);
-      expect(waitRes.payload?.status).toBe("ok");
-    } finally {
-      testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
-    }
+      await sendChatAndExpectStarted(runId);
+      await waitForAgentRunOk(runId);
+    });
   });
 
   test("agent.wait ignores stale chat dedupe when an agent run with the same runId is in flight", async () => {
@@ -524,20 +558,8 @@ describe("gateway server chat", () => {
       });
 
       const runId = "idem-wait-chat-vs-agent";
-      const sendRes = await rpcReq(ws, "chat.send", {
-        sessionKey: "main",
-        message: "/context list",
-        idempotencyKey: runId,
-      });
-      expect(sendRes.ok).toBe(true);
-      expect(sendRes.payload?.status).toBe("started");
-
-      const chatWaitRes = await rpcReq(ws, "agent.wait", {
-        runId,
-        timeoutMs: 1_000,
-      });
-      expect(chatWaitRes.ok).toBe(true);
-      expect(chatWaitRes.payload?.status).toBe("ok");
+      await sendChatAndExpectStarted(runId);
+      await waitForAgentRunOk(runId);
 
       const agentRes = await rpcReq(ws, "agent", {
         sessionKey: "main",
@@ -554,12 +576,7 @@ describe("gateway server chat", () => {
       expectAgentWaitTimeout(waitWhileAgentInFlight);
 
       resolveAgentRun?.();
-      const waitAfterAgentCompletion = await rpcReq(ws, "agent.wait", {
-        runId,
-        timeoutMs: 1_000,
-      });
-      expect(waitAfterAgentCompletion.ok).toBe(true);
-      expect(waitAfterAgentCompletion.payload?.status).toBe("ok");
+      await waitForAgentRunOk(runId);
     } finally {
       resolveAgentRun?.();
       testState.sessionStorePath = undefined;
@@ -585,39 +602,10 @@ describe("gateway server chat", () => {
       expect(seedWaitRes.ok).toBe(true);
       expect(seedWaitRes.payload?.status).toBe("ok");
 
-      let releaseBlockedReply: (() => void) | undefined;
-      const blockedReply = new Promise<void>((resolve) => {
-        releaseBlockedReply = resolve;
-      });
-      const replySpy = vi.mocked(getReplyFromConfig);
-      replySpy.mockImplementationOnce(async (_ctx, opts) => {
-        await new Promise<void>((resolve) => {
-          let settled = false;
-          const finish = () => {
-            if (settled) {
-              return;
-            }
-            settled = true;
-            resolve();
-          };
-          void blockedReply.then(finish);
-          if (opts?.abortSignal?.aborted) {
-            finish();
-            return;
-          }
-          opts?.abortSignal?.addEventListener("abort", finish, { once: true });
-        });
-        return undefined;
-      });
+      const releaseBlockedReply = mockBlockedChatReply();
 
       try {
-        const chatRes = await rpcReq(ws, "chat.send", {
-          sessionKey: "main",
-          message: "hold chat run open",
-          idempotencyKey: runId,
-        });
-        expect(chatRes.ok).toBe(true);
-        expect(chatRes.payload?.status).toBe("started");
+        await sendChatAndExpectStarted(runId, "hold chat run open");
 
         const waitWhileChatActive = await rpcReq(ws, "agent.wait", {
           runId,
@@ -625,13 +613,9 @@ describe("gateway server chat", () => {
         });
         expectAgentWaitTimeout(waitWhileChatActive);
 
-        const abortRes = await rpcReq(ws, "chat.abort", {
-          sessionKey: "main",
-          runId,
-        });
-        expect(abortRes.ok).toBe(true);
+        await abortChatRun(runId);
       } finally {
-        releaseBlockedReply?.();
+        releaseBlockedReply();
       }
     });
   });
@@ -639,39 +623,10 @@ describe("gateway server chat", () => {
   test("agent.wait keeps lifecycle wait active while same-runId chat.send is active", async () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-active-with-agent-lifecycle";
-      let releaseBlockedReply: (() => void) | undefined;
-      const blockedReply = new Promise<void>((resolve) => {
-        releaseBlockedReply = resolve;
-      });
-      const replySpy = vi.mocked(getReplyFromConfig);
-      replySpy.mockImplementationOnce(async (_ctx, opts) => {
-        await new Promise<void>((resolve) => {
-          let settled = false;
-          const finish = () => {
-            if (settled) {
-              return;
-            }
-            settled = true;
-            resolve();
-          };
-          void blockedReply.then(finish);
-          if (opts?.abortSignal?.aborted) {
-            finish();
-            return;
-          }
-          opts?.abortSignal?.addEventListener("abort", finish, { once: true });
-        });
-        return undefined;
-      });
+      const releaseBlockedReply = mockBlockedChatReply();
 
       try {
-        const chatRes = await rpcReq(ws, "chat.send", {
-          sessionKey: "main",
-          message: "hold chat run open",
-          idempotencyKey: runId,
-        });
-        expect(chatRes.ok).toBe(true);
-        expect(chatRes.payload?.status).toBe("started");
+        await sendChatAndExpectStarted(runId, "hold chat run open");
 
         const waitP = rpcReq(ws, "agent.wait", {
           runId,
@@ -694,13 +649,9 @@ describe("gateway server chat", () => {
         expect(waitRes.ok).toBe(true);
         expect(waitRes.payload?.status).toBe("ok");
 
-        const abortRes = await rpcReq(ws, "chat.abort", {
-          sessionKey: "main",
-          runId,
-        });
-        expect(abortRes.ok).toBe(true);
+        await abortChatRun(runId);
       } finally {
-        releaseBlockedReply?.();
+        releaseBlockedReply();
       }
     });
   });

@@ -30,7 +30,7 @@ import {
   resolveIMessageRemoteAttachmentRoots,
 } from "../../media/inbound-path-policy.js";
 import { kindFromMime } from "../../media/mime.js";
-import { buildPairingReply } from "../../pairing/pairing-messages.js";
+import { issuePairingChallenge } from "../../pairing/pairing-challenge.js";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
@@ -53,6 +53,7 @@ import {
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { parseIMessageNotification } from "./parse-notification.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
+import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
 
 /**
@@ -99,6 +100,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
   const sentMessageCache = createSentMessageCache();
+  const selfChatCache = createSelfChatCache();
   const loopRateLimiter = createLoopRateLimiter();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
   const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
@@ -252,6 +254,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       historyLimit,
       groupHistories,
       echoCache: sentMessageCache,
+      selfChatCache,
       logVerbose,
     });
 
@@ -267,6 +270,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       // are normal and should not escalate.
       const isLoopDrop =
         decision.reason === "echo" ||
+        decision.reason === "self-chat echo" ||
         decision.reason === "reflected assistant content" ||
         decision.reason === "from me";
       if (isLoopDrop) {
@@ -288,36 +292,36 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       if (!sender) {
         return;
       }
-      const { code, created } = await upsertChannelPairingRequest({
+      await issuePairingChallenge({
         channel: "imessage",
-        id: decision.senderId,
-        accountId: accountInfo.accountId,
+        senderId: decision.senderId,
+        senderIdLine: `Your iMessage sender id: ${decision.senderId}`,
         meta: {
           sender: decision.senderId,
           chatId: chatId ? String(chatId) : undefined,
         },
-      });
-      if (created) {
-        logVerbose(`imessage pairing request sender=${decision.senderId}`);
-        try {
-          await sendMessageIMessage(
-            sender,
-            buildPairingReply({
-              channel: "imessage",
-              idLine: `Your iMessage sender id: ${decision.senderId}`,
-              code,
-            }),
-            {
-              client,
-              maxBytes: mediaMaxBytes,
-              accountId: accountInfo.accountId,
-              ...(chatId ? { chatId } : {}),
-            },
-          );
-        } catch (err) {
+        upsertPairingRequest: async ({ id, meta }) =>
+          await upsertChannelPairingRequest({
+            channel: "imessage",
+            id,
+            accountId: accountInfo.accountId,
+            meta,
+          }),
+        onCreated: () => {
+          logVerbose(`imessage pairing request sender=${decision.senderId}`);
+        },
+        sendPairingReply: async (text) => {
+          await sendMessageIMessage(sender, text, {
+            client,
+            maxBytes: mediaMaxBytes,
+            accountId: accountInfo.accountId,
+            ...(chatId ? { chatId } : {}),
+          });
+        },
+        onReplyError: (err) => {
           logVerbose(`imessage pairing reply failed for ${decision.senderId}: ${String(err)}`);
-        }
-      }
+        },
+      });
       return;
     }
 

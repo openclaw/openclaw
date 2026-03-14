@@ -9,7 +9,10 @@ import { promptAccountId as promptAccountIdSdk } from "../../../plugin-sdk/onboa
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
 import type { PromptAccountId, PromptAccountIdParams } from "../onboarding-types.js";
-import { moveSingleAccountChannelSectionToDefaultAccount } from "../setup-helpers.js";
+import {
+  moveSingleAccountChannelSectionToDefaultAccount,
+  patchScopedAccountConfig,
+} from "../setup-helpers.js";
 
 export const promptAccountId: PromptAccountId = async (params: PromptAccountIdParams) => {
   return await promptAccountIdSdk(params);
@@ -161,6 +164,79 @@ export function setAccountAllowFromForChannel(params: {
   });
 }
 
+function patchTopLevelChannelConfig(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  enabled?: boolean;
+  patch: Record<string, unknown>;
+}): OpenClawConfig {
+  const channelConfig =
+    (params.cfg.channels?.[params.channel] as Record<string, unknown> | undefined) ?? {};
+  return {
+    ...params.cfg,
+    channels: {
+      ...params.cfg.channels,
+      [params.channel]: {
+        ...channelConfig,
+        ...(params.enabled ? { enabled: true } : {}),
+        ...params.patch,
+      },
+    },
+  };
+}
+
+export function setTopLevelChannelAllowFrom(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  allowFrom: string[];
+  enabled?: boolean;
+}): OpenClawConfig {
+  return patchTopLevelChannelConfig({
+    cfg: params.cfg,
+    channel: params.channel,
+    enabled: params.enabled,
+    patch: { allowFrom: params.allowFrom },
+  });
+}
+
+export function setTopLevelChannelDmPolicyWithAllowFrom(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  dmPolicy: DmPolicy;
+  getAllowFrom?: (cfg: OpenClawConfig) => Array<string | number> | undefined;
+}): OpenClawConfig {
+  const channelConfig =
+    (params.cfg.channels?.[params.channel] as Record<string, unknown> | undefined) ?? {};
+  const existingAllowFrom =
+    params.getAllowFrom?.(params.cfg) ??
+    (channelConfig.allowFrom as Array<string | number> | undefined) ??
+    undefined;
+  const allowFrom =
+    params.dmPolicy === "open" ? addWildcardAllowFrom(existingAllowFrom) : undefined;
+  return patchTopLevelChannelConfig({
+    cfg: params.cfg,
+    channel: params.channel,
+    patch: {
+      dmPolicy: params.dmPolicy,
+      ...(allowFrom ? { allowFrom } : {}),
+    },
+  });
+}
+
+export function setTopLevelChannelGroupPolicy(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  groupPolicy: GroupPolicy;
+  enabled?: boolean;
+}): OpenClawConfig {
+  return patchTopLevelChannelConfig({
+    cfg: params.cfg,
+    channel: params.channel,
+    enabled: params.enabled,
+    patch: { groupPolicy: params.groupPolicy },
+  });
+}
+
 export function setChannelDmPolicyWithAllowFrom(params: {
   cfg: OpenClawConfig;
   channel: "imessage" | "signal" | "telegram";
@@ -295,50 +371,14 @@ function patchConfigForScopedAccount(params: {
           cfg,
           channelKey: channel,
         });
-  const channelConfig =
-    (seededCfg.channels?.[channel] as Record<string, unknown> | undefined) ?? {};
-
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...seededCfg,
-      channels: {
-        ...seededCfg.channels,
-        [channel]: {
-          ...channelConfig,
-          ...(ensureEnabled ? { enabled: true } : {}),
-          ...patch,
-        },
-      },
-    };
-  }
-
-  const accounts =
-    (channelConfig.accounts as Record<string, Record<string, unknown>> | undefined) ?? {};
-  const existingAccount = accounts[accountId] ?? {};
-
-  return {
-    ...seededCfg,
-    channels: {
-      ...seededCfg.channels,
-      [channel]: {
-        ...channelConfig,
-        ...(ensureEnabled ? { enabled: true } : {}),
-        accounts: {
-          ...accounts,
-          [accountId]: {
-            ...existingAccount,
-            ...(ensureEnabled
-              ? {
-                  enabled:
-                    typeof existingAccount.enabled === "boolean" ? existingAccount.enabled : true,
-                }
-              : {}),
-            ...patch,
-          },
-        },
-      },
-    },
-  };
+  return patchScopedAccountConfig({
+    cfg: seededCfg,
+    channelKey: channel,
+    accountId,
+    patch,
+    ensureChannelEnabled: ensureEnabled,
+    ensureAccountEnabled: ensureEnabled,
+  });
 }
 
 export function patchChannelConfigForAccount(params: {
@@ -381,6 +421,23 @@ export function applySingleTokenPromptResult(params: {
     });
   }
   return next;
+}
+
+export function buildSingleChannelSecretPromptState(params: {
+  accountConfigured: boolean;
+  hasConfigToken: boolean;
+  allowEnv: boolean;
+  envValue?: string;
+}): {
+  accountConfigured: boolean;
+  hasConfigToken: boolean;
+  canUseEnv: boolean;
+} {
+  return {
+    accountConfigured: params.accountConfigured,
+    hasConfigToken: params.hasConfigToken,
+    canUseEnv: params.allowEnv && Boolean(params.envValue?.trim()) && !params.hasConfigToken,
+  };
 }
 
 export async function promptSingleChannelToken(params: {
@@ -428,6 +485,82 @@ export type SingleChannelSecretInputPromptResult =
   | { action: "keep" }
   | { action: "use-env" }
   | { action: "set"; value: SecretInput; resolvedValue: string };
+
+export async function runSingleChannelSecretStep(params: {
+  cfg: OpenClawConfig;
+  prompter: Pick<WizardPrompter, "confirm" | "text" | "select" | "note">;
+  providerHint: string;
+  credentialLabel: string;
+  secretInputMode?: "plaintext" | "ref";
+  accountConfigured: boolean;
+  hasConfigToken: boolean;
+  allowEnv: boolean;
+  envValue?: string;
+  envPrompt: string;
+  keepPrompt: string;
+  inputPrompt: string;
+  preferredEnvVar?: string;
+  onMissingConfigured?: () => Promise<void>;
+  applyUseEnv?: (cfg: OpenClawConfig) => OpenClawConfig | Promise<OpenClawConfig>;
+  applySet?: (
+    cfg: OpenClawConfig,
+    value: SecretInput,
+    resolvedValue: string,
+  ) => OpenClawConfig | Promise<OpenClawConfig>;
+}): Promise<{
+  cfg: OpenClawConfig;
+  action: SingleChannelSecretInputPromptResult["action"];
+  resolvedValue?: string;
+}> {
+  const promptState = buildSingleChannelSecretPromptState({
+    accountConfigured: params.accountConfigured,
+    hasConfigToken: params.hasConfigToken,
+    allowEnv: params.allowEnv,
+    envValue: params.envValue,
+  });
+
+  if (!promptState.accountConfigured && params.onMissingConfigured) {
+    await params.onMissingConfigured();
+  }
+
+  const result = await promptSingleChannelSecretInput({
+    cfg: params.cfg,
+    prompter: params.prompter,
+    providerHint: params.providerHint,
+    credentialLabel: params.credentialLabel,
+    secretInputMode: params.secretInputMode,
+    accountConfigured: promptState.accountConfigured,
+    canUseEnv: promptState.canUseEnv,
+    hasConfigToken: promptState.hasConfigToken,
+    envPrompt: params.envPrompt,
+    keepPrompt: params.keepPrompt,
+    inputPrompt: params.inputPrompt,
+    preferredEnvVar: params.preferredEnvVar,
+  });
+
+  if (result.action === "use-env") {
+    return {
+      cfg: params.applyUseEnv ? await params.applyUseEnv(params.cfg) : params.cfg,
+      action: result.action,
+      resolvedValue: params.envValue?.trim() || undefined,
+    };
+  }
+
+  if (result.action === "set") {
+    return {
+      cfg: params.applySet
+        ? await params.applySet(params.cfg, result.value, result.resolvedValue)
+        : params.cfg,
+      action: result.action,
+      resolvedValue: result.resolvedValue,
+    };
+  }
+
+  return {
+    cfg: params.cfg,
+    action: result.action,
+  };
+}
 
 export async function promptSingleChannelSecretInput(params: {
   cfg: OpenClawConfig;

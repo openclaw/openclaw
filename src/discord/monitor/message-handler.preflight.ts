@@ -29,8 +29,7 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logDebug } from "../../logger.js";
 import { getChildLogger } from "../../logging.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
-import { resolveAgentRoute } from "../../routing/resolve-route.js";
-import { DEFAULT_ACCOUNT_ID, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { fetchPluralKitMessageInfo } from "../pluralkit.js";
 import { sendMessageDiscord } from "../send.js";
 import {
@@ -60,6 +59,11 @@ import {
   resolveDiscordMessageText,
 } from "./message-utils.js";
 import { resolveDiscordPreflightAudioMentionContext } from "./preflight-audio.js";
+import {
+  buildDiscordRoutePeer,
+  resolveDiscordConversationRoute,
+  resolveDiscordEffectiveRoute,
+} from "./route-resolution.js";
 import { resolveDiscordSenderIdentity, resolveDiscordWebhookId } from "./sender-identity.js";
 import { resolveDiscordSystemEvent } from "./system-events.js";
 import { isRecentlyUnboundThreadWebhookMessage } from "./thread-bindings.js";
@@ -333,18 +337,18 @@ export async function preflightDiscordMessage(
     ? params.data.rawMember.roles.map((roleId: string) => String(roleId))
     : [];
   const freshCfg = loadConfig();
-  const route = resolveAgentRoute({
+  const route = resolveDiscordConversationRoute({
     cfg: freshCfg,
-    channel: "discord",
     accountId: params.accountId,
     guildId: params.data.guild_id ?? undefined,
     memberRoleIds,
-    peer: {
-      kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
-      id: isDirectMessage ? author.id : messageChannelId,
-    },
-    // Pass parent peer for thread binding inheritance
-    parentPeer: earlyThreadParentId ? { kind: "channel", id: earlyThreadParentId } : undefined,
+    peer: buildDiscordRoutePeer({
+      isDirectMessage,
+      isGroupDm,
+      directUserId: author.id,
+      conversationId: messageChannelId,
+    }),
+    parentConversationId: earlyThreadParentId,
   });
   let threadBinding: SessionBindingRecord | undefined;
   threadBinding =
@@ -381,15 +385,13 @@ export async function preflightDiscordMessage(
     return null;
   }
   const boundSessionKey = threadBinding?.targetSessionKey?.trim();
-  const boundAgentId = boundSessionKey ? resolveAgentIdFromSessionKey(boundSessionKey) : undefined;
-  const effectiveRoute = boundSessionKey
-    ? {
-        ...route,
-        sessionKey: boundSessionKey,
-        agentId: boundAgentId ?? route.agentId,
-        matchedBy: "binding.channel" as const,
-      }
-    : (configuredRoute?.route ?? route);
+  const effectiveRoute = resolveDiscordEffectiveRoute({
+    route,
+    boundSessionKey,
+    configuredRoute,
+    matchedBy: "binding.channel",
+  });
+  const boundAgentId = boundSessionKey ? effectiveRoute.agentId : undefined;
   const isBoundThreadSession = Boolean(boundSessionKey && earlyThreadChannel);
   if (
     isBoundThreadBotSystemMessage({
@@ -428,6 +430,7 @@ export async function preflightDiscordMessage(
   const guildInfo = isGuildMessage
     ? resolveDiscordGuildEntry({
         guild: params.data.guild ?? undefined,
+        guildId: params.data.guild_id ?? undefined,
         guildEntries: params.guildEntries,
       })
     : null;

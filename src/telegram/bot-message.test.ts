@@ -57,6 +57,21 @@ describe("telegram bot message processor", () => {
     );
   }
 
+  function createDispatchFailureHarness(
+    context: Record<string, unknown>,
+    sendMessage: ReturnType<typeof vi.fn>,
+  ) {
+    const runtimeError = vi.fn();
+    buildTelegramMessageContext.mockResolvedValue(context);
+    dispatchTelegramMessage.mockRejectedValue(new Error("dispatch exploded"));
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+      runtime: { error: runtimeError },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    return { processMessage, runtimeError };
+  }
+
   it("dispatches when context is available", async () => {
     buildTelegramMessageContext.mockResolvedValue({ route: { sessionKey: "agent:main:main" } });
 
@@ -71,5 +86,44 @@ describe("telegram bot message processor", () => {
     const processMessage = createTelegramMessageProcessor(baseDeps);
     await processSampleMessage(processMessage);
     expect(dispatchTelegramMessage).not.toHaveBeenCalled();
+  });
+
+  it("sends user-visible fallback when dispatch throws", async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const { processMessage, runtimeError } = createDispatchFailureHarness(
+      {
+        chatId: 123,
+        threadSpec: { id: 456 },
+        route: { sessionKey: "agent:main:main" },
+      },
+      sendMessage,
+    );
+    await expect(processSampleMessage(processMessage)).resolves.toBeUndefined();
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      123,
+      "Something went wrong while processing your request. Please try again.",
+      { message_thread_id: 456 },
+    );
+    expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("dispatch exploded"));
+  });
+
+  it("swallows fallback delivery failures after dispatch throws", async () => {
+    const sendMessage = vi.fn().mockRejectedValue(new Error("blocked by user"));
+    const { processMessage, runtimeError } = createDispatchFailureHarness(
+      {
+        chatId: 123,
+        route: { sessionKey: "agent:main:main" },
+      },
+      sendMessage,
+    );
+    await expect(processSampleMessage(processMessage)).resolves.toBeUndefined();
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      123,
+      "Something went wrong while processing your request. Please try again.",
+      undefined,
+    );
+    expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("dispatch exploded"));
   });
 });

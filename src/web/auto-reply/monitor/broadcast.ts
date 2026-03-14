@@ -1,6 +1,6 @@
 import type { loadConfig } from "../../../config/config.js";
 import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
-import { buildAgentSessionKey } from "../../../routing/resolve-route.js";
+import { buildAgentSessionKey, deriveLastRoutePolicy } from "../../../routing/resolve-route.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_MAIN_KEY,
@@ -10,6 +10,39 @@ import { formatError } from "../../session.js";
 import { whatsappInboundLog } from "../loggers.js";
 import type { WebInboundMsg } from "../types.js";
 import type { GroupHistoryEntry } from "./process-message.js";
+
+function buildBroadcastRouteKeys(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  msg: WebInboundMsg;
+  route: ReturnType<typeof resolveAgentRoute>;
+  peerId: string;
+  agentId: string;
+}) {
+  const sessionKey = buildAgentSessionKey({
+    agentId: params.agentId,
+    channel: "whatsapp",
+    accountId: params.route.accountId,
+    peer: {
+      kind: params.msg.chatType === "group" ? "group" : "direct",
+      id: params.peerId,
+    },
+    dmScope: params.cfg.session?.dmScope,
+    identityLinks: params.cfg.session?.identityLinks,
+  });
+  const mainSessionKey = buildAgentMainSessionKey({
+    agentId: params.agentId,
+    mainKey: DEFAULT_MAIN_KEY,
+  });
+
+  return {
+    sessionKey,
+    mainSessionKey,
+    lastRoutePolicy: deriveLastRoutePolicy({
+      sessionKey,
+      mainSessionKey,
+    }),
+  };
+}
 
 export async function maybeBroadcastMessage(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -52,24 +85,17 @@ export async function maybeBroadcastMessage(params: {
       whatsappInboundLog.warn(`Broadcast agent ${agentId} not found in agents.list; skipping`);
       return false;
     }
+    const routeKeys = buildBroadcastRouteKeys({
+      cfg: params.cfg,
+      msg: params.msg,
+      route: params.route,
+      peerId: params.peerId,
+      agentId: normalizedAgentId,
+    });
     const agentRoute = {
       ...params.route,
       agentId: normalizedAgentId,
-      sessionKey: buildAgentSessionKey({
-        agentId: normalizedAgentId,
-        channel: "whatsapp",
-        accountId: params.route.accountId,
-        peer: {
-          kind: params.msg.chatType === "group" ? "group" : "direct",
-          id: params.peerId,
-        },
-        dmScope: params.cfg.session?.dmScope,
-        identityLinks: params.cfg.session?.identityLinks,
-      }),
-      mainSessionKey: buildAgentMainSessionKey({
-        agentId: normalizedAgentId,
-        mainKey: DEFAULT_MAIN_KEY,
-      }),
+      ...routeKeys,
     };
 
     try {

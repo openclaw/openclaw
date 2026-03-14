@@ -40,6 +40,28 @@ describe("compaction hook wiring", () => {
     vi.mocked(emitAgentEvent).mockClear();
   });
 
+  function createCompactionEndCtx(params: {
+    runId: string;
+    messages?: unknown[];
+    compactionCount?: number;
+    withRetryHooks?: boolean;
+  }) {
+    return {
+      params: { runId: params.runId, session: { messages: params.messages ?? [] } },
+      state: { compactionInFlight: true },
+      log: { debug: vi.fn(), warn: vi.fn() },
+      maybeResolveCompactionWait: vi.fn(),
+      incrementCompactionCount: vi.fn(),
+      getCompactionCount: () => params.compactionCount ?? 0,
+      ...(params.withRetryHooks
+        ? {
+            noteCompactionRetry: vi.fn(),
+            resetForCompactionRetry: vi.fn(),
+          }
+        : {}),
+    };
+  }
+
   it("calls runBeforeCompaction in handleAutoCompactionStart", () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
 
@@ -86,20 +108,18 @@ describe("compaction hook wiring", () => {
   it("calls runAfterCompaction when willRetry is false", () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
 
-    const ctx = {
-      params: { runId: "r2", session: { messages: [1, 2] } },
-      state: { compactionInFlight: true },
-      log: { debug: vi.fn(), warn: vi.fn() },
-      maybeResolveCompactionWait: vi.fn(),
-      incrementCompactionCount: vi.fn(),
-      getCompactionCount: () => 1,
-    };
+    const ctx = createCompactionEndCtx({
+      runId: "r2",
+      messages: [1, 2],
+      compactionCount: 1,
+    });
 
     handleAutoCompactionEnd(
       ctx as never,
       {
         type: "auto_compaction_end",
         willRetry: false,
+        result: { summary: "compacted" },
       } as never,
     );
 
@@ -122,28 +142,27 @@ describe("compaction hook wiring", () => {
     });
   });
 
-  it("does not call runAfterCompaction when willRetry is true", () => {
+  it("does not call runAfterCompaction when willRetry is true but still increments counter", () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
 
-    const ctx = {
-      params: { runId: "r3", session: { messages: [] } },
-      state: { compactionInFlight: true },
-      log: { debug: vi.fn(), warn: vi.fn() },
-      noteCompactionRetry: vi.fn(),
-      resetForCompactionRetry: vi.fn(),
-      maybeResolveCompactionWait: vi.fn(),
-      getCompactionCount: () => 0,
-    };
+    const ctx = createCompactionEndCtx({
+      runId: "r3",
+      compactionCount: 1,
+      withRetryHooks: true,
+    });
 
     handleAutoCompactionEnd(
       ctx as never,
       {
         type: "auto_compaction_end",
         willRetry: true,
+        result: { summary: "compacted" },
       } as never,
     );
 
     expect(hookMocks.runner.runAfterCompaction).not.toHaveBeenCalled();
+    // Counter is incremented even with willRetry — compaction succeeded (#38905)
+    expect(ctx.incrementCompactionCount).toHaveBeenCalledTimes(1);
     expect(ctx.noteCompactionRetry).toHaveBeenCalledTimes(1);
     expect(ctx.resetForCompactionRetry).toHaveBeenCalledTimes(1);
     expect(ctx.maybeResolveCompactionWait).not.toHaveBeenCalled();
@@ -152,6 +171,54 @@ describe("compaction hook wiring", () => {
       stream: "compaction",
       data: { phase: "end", willRetry: true },
     });
+  });
+
+  it("does not increment counter when compaction was aborted", () => {
+    const ctx = createCompactionEndCtx({ runId: "r3b" });
+
+    handleAutoCompactionEnd(
+      ctx as never,
+      {
+        type: "auto_compaction_end",
+        willRetry: false,
+        result: undefined,
+        aborted: true,
+      } as never,
+    );
+
+    expect(ctx.incrementCompactionCount).not.toHaveBeenCalled();
+  });
+
+  it("does not increment counter when compaction has result but was aborted", () => {
+    const ctx = createCompactionEndCtx({ runId: "r3b2" });
+
+    handleAutoCompactionEnd(
+      ctx as never,
+      {
+        type: "auto_compaction_end",
+        willRetry: false,
+        result: { summary: "compacted" },
+        aborted: true,
+      } as never,
+    );
+
+    expect(ctx.incrementCompactionCount).not.toHaveBeenCalled();
+  });
+
+  it("does not increment counter when result is undefined", () => {
+    const ctx = createCompactionEndCtx({ runId: "r3c" });
+
+    handleAutoCompactionEnd(
+      ctx as never,
+      {
+        type: "auto_compaction_end",
+        willRetry: false,
+        result: undefined,
+        aborted: false,
+      } as never,
+    );
+
+    expect(ctx.incrementCompactionCount).not.toHaveBeenCalled();
   });
 
   it("resets stale assistant usage after final compaction", () => {
@@ -183,6 +250,7 @@ describe("compaction hook wiring", () => {
       {
         type: "auto_compaction_end",
         willRetry: false,
+        result: { summary: "compacted" },
       } as never,
     );
 

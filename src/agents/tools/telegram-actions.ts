@@ -154,6 +154,7 @@ export async function handleTelegramAction(
     let reactionResult: Awaited<ReturnType<typeof reactMessageTelegram>>;
     try {
       reactionResult = await reactMessageTelegram(chatId ?? "", messageId ?? 0, emoji ?? "", {
+        cfg,
         token,
         remove,
         accountId: accountId ?? undefined,
@@ -237,6 +238,7 @@ export async function handleTelegramAction(
       );
     }
     const result = await sendMessageTelegram(to, content, {
+      cfg,
       token,
       accountId: accountId ?? undefined,
       mediaUrl: mediaUrl || undefined,
@@ -293,6 +295,7 @@ export async function handleTelegramAction(
         durationHours: durationHours ?? undefined,
       },
       {
+        cfg,
         token,
         accountId: accountId ?? undefined,
         replyToMessageId: replyToMessageId ?? undefined,
@@ -327,6 +330,7 @@ export async function handleTelegramAction(
       );
     }
     await deleteMessageTelegram(chatId ?? "", messageId ?? 0, {
+      cfg,
       token,
       accountId: accountId ?? undefined,
     });
@@ -367,6 +371,7 @@ export async function handleTelegramAction(
       );
     }
     const result = await editMessageTelegram(chatId ?? "", messageId ?? 0, content, {
+      cfg,
       token,
       accountId: accountId ?? undefined,
       buttons,
@@ -399,6 +404,7 @@ export async function handleTelegramAction(
       );
     }
     const result = await sendStickerTelegram(to, fileId, {
+      cfg,
       token,
       accountId: accountId ?? undefined,
       replyToMessageId: replyToMessageId ?? undefined,
@@ -454,6 +460,7 @@ export async function handleTelegramAction(
       );
     }
     const result = await createForumTopicTelegram(chatId ?? "", name, {
+      cfg,
       token,
       accountId: accountId ?? undefined,
       iconColor: iconColor ?? undefined,

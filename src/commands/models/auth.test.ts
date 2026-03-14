@@ -3,10 +3,16 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
+  clackCancel: vi.fn(),
+  clackConfirm: vi.fn(),
+  clackIsCancel: vi.fn((value: unknown) => value === Symbol.for("clack:cancel")),
+  clackSelect: vi.fn(),
+  clackText: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
   resolveAgentDir: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentWorkspaceDir: vi.fn(),
+  upsertAuthProfile: vi.fn(),
   resolvePluginProviders: vi.fn(),
   createClackPrompter: vi.fn(),
   loginOpenAICodexOAuth: vi.fn(),
@@ -17,6 +23,14 @@ const mocks = vi.hoisted(() => ({
   openUrl: vi.fn(),
 }));
 
+vi.mock("@clack/prompts", () => ({
+  cancel: mocks.clackCancel,
+  confirm: mocks.clackConfirm,
+  isCancel: mocks.clackIsCancel,
+  select: mocks.clackSelect,
+  text: mocks.clackText,
+}));
+
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
   resolveAgentDir: mocks.resolveAgentDir,
@@ -25,6 +39,10 @@ vi.mock("../../agents/agent-scope.js", () => ({
 
 vi.mock("../../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: mocks.resolveDefaultAgentWorkspaceDir,
+}));
+
+vi.mock("../../agents/auth-profiles.js", () => ({
+  upsertAuthProfile: mocks.upsertAuthProfile,
 }));
 
 vi.mock("../../plugins/providers.js", () => ({
@@ -64,7 +82,7 @@ vi.mock("../onboard-helpers.js", () => ({
   openUrl: mocks.openUrl,
 }));
 
-const { modelsAuthLoginCommand } = await import("./auth.js");
+const { modelsAuthLoginCommand, modelsAuthPasteTokenCommand } = await import("./auth.js");
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -102,6 +120,14 @@ describe("modelsAuthLoginCommand", () => {
     restoreStdin = withInteractiveStdin();
     currentConfig = {};
     lastUpdatedConfig = null;
+    mocks.clackCancel.mockReset();
+    mocks.clackConfirm.mockReset();
+    mocks.clackIsCancel.mockImplementation(
+      (value: unknown) => value === Symbol.for("clack:cancel"),
+    );
+    mocks.clackSelect.mockReset();
+    mocks.clackText.mockReset();
+    mocks.upsertAuthProfile.mockReset();
 
     mocks.resolveDefaultAgentId.mockReturnValue("main");
     mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
@@ -157,7 +183,7 @@ describe("modelsAuthLoginCommand", () => {
       "Auth profile: openai-codex:user@example.com (openai-codex/oauth)",
     );
     expect(runtime.log).toHaveBeenCalledWith(
-      "Default model available: openai-codex/gpt-5.3-codex (use --set-default to apply)",
+      "Default model available: openai-codex/gpt-5.4 (use --set-default to apply)",
     );
   });
 
@@ -167,9 +193,9 @@ describe("modelsAuthLoginCommand", () => {
     await modelsAuthLoginCommand({ provider: "openai-codex", setDefault: true }, runtime);
 
     expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
-      primary: "openai-codex/gpt-5.3-codex",
+      primary: "openai-codex/gpt-5.4",
     });
-    expect(runtime.log).toHaveBeenCalledWith("Default model set to openai-codex/gpt-5.3-codex");
+    expect(runtime.log).toHaveBeenCalledWith("Default model set to openai-codex/gpt-5.4");
   });
 
   it("keeps existing plugin error behavior for non built-in providers", async () => {
@@ -178,5 +204,29 @@ describe("modelsAuthLoginCommand", () => {
     await expect(modelsAuthLoginCommand({ provider: "anthropic" }, runtime)).rejects.toThrow(
       "No provider plugins found.",
     );
+  });
+
+  it("does not persist a cancelled manual token entry", async () => {
+    const runtime = createRuntime();
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((
+      code?: string | number | null,
+    ) => {
+      throw new Error(`exit:${String(code ?? "")}`);
+    }) as typeof process.exit);
+    try {
+      const cancelSymbol = Symbol.for("clack:cancel");
+      mocks.clackText.mockResolvedValue(cancelSymbol);
+      mocks.clackIsCancel.mockImplementation((value: unknown) => value === cancelSymbol);
+
+      await expect(modelsAuthPasteTokenCommand({ provider: "openai" }, runtime)).rejects.toThrow(
+        "exit:0",
+      );
+
+      expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
+      expect(mocks.updateConfig).not.toHaveBeenCalled();
+      expect(mocks.logConfigUpdated).not.toHaveBeenCalled();
+    } finally {
+      exitSpy.mockRestore();
+    }
   });
 });

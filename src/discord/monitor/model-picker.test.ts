@@ -61,15 +61,17 @@ function renderRecentsViewRows(
 }
 
 describe("loadDiscordModelPickerData", () => {
-  it("reuses buildModelsProviderData as source of truth", async () => {
+  it("reuses buildModelsProviderData as source of truth with agent scope", async () => {
     const expected = createModelsProviderData({ openai: ["gpt-4o"] });
+    const cfg = {} as OpenClawConfig;
     const spy = vi
       .spyOn(modelsCommandModule, "buildModelsProviderData")
       .mockResolvedValue(expected);
 
-    const result = await loadDiscordModelPickerData({} as OpenClawConfig);
+    const result = await loadDiscordModelPickerData(cfg, "support");
 
     expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith(cfg, "support");
     expect(result).toBe(expected);
   });
 });
@@ -411,6 +413,24 @@ describe("Discord model picker rendering", () => {
 
     expect(payload.content).toContain("Model Picker");
     expect(payload.components?.[0]?.type).toBe(ComponentType.ActionRow);
+  });
+
+  it("preserves the stored model suffix spacing in Discord current-model text", () => {
+    const data = createModelsProviderData({ openai: [" gpt-5", "gpt-4o"] });
+
+    const rendered = renderDiscordModelPickerProvidersView({
+      command: "model",
+      userId: "99",
+      data,
+      currentModel: " OpenAI/ gpt-5 ",
+      layout: "classic",
+    });
+
+    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+      content?: string;
+    };
+
+    expect(payload.content).toContain("Current model: openai/ gpt-5");
   });
 
   it("renders model view with select menu and explicit submit button", () => {

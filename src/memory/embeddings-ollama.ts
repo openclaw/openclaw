@@ -1,7 +1,10 @@
 import { resolveEnvApiKey } from "../agents/model-auth.js";
+import { resolveOllamaApiBase } from "../agents/ollama-models.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
+import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
+import { normalizeEmbeddingModelWithPrefixes } from "./embeddings-model-normalize.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 import { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./remote-http.js";
 import { resolveMemorySecretInputString } from "./secret-input.js";
@@ -16,34 +19,13 @@ export type OllamaEmbeddingClient = {
 type OllamaEmbeddingClientConfig = Omit<OllamaEmbeddingClient, "embedBatch">;
 
 export const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
-const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
-
-function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
-  const sanitized = vec.map((value) => (Number.isFinite(value) ? value : 0));
-  const magnitude = Math.sqrt(sanitized.reduce((sum, value) => sum + value * value, 0));
-  if (magnitude < 1e-10) {
-    return sanitized;
-  }
-  return sanitized.map((value) => value / magnitude);
-}
 
 function normalizeOllamaModel(model: string): string {
-  const trimmed = model.trim();
-  if (!trimmed) {
-    return DEFAULT_OLLAMA_EMBEDDING_MODEL;
-  }
-  if (trimmed.startsWith("ollama/")) {
-    return trimmed.slice("ollama/".length);
-  }
-  return trimmed;
-}
-
-function resolveOllamaApiBase(configuredBaseUrl?: string): string {
-  if (!configuredBaseUrl) {
-    return DEFAULT_OLLAMA_BASE_URL;
-  }
-  const trimmed = configuredBaseUrl.replace(/\/+$/, "");
-  return trimmed.replace(/\/v1$/i, "");
+  return normalizeEmbeddingModelWithPrefixes({
+    model,
+    defaultModel: DEFAULT_OLLAMA_EMBEDDING_MODEL,
+    prefixes: ["ollama/"],
+  });
 }
 
 function resolveOllamaApiKey(options: EmbeddingProviderOptions): string | undefined {

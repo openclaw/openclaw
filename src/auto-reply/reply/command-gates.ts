@@ -1,6 +1,8 @@
 import type { CommandFlagKey } from "../../config/commands.js";
 import { isCommandFlagEnabled } from "../../config/commands.js";
 import { logVerbose } from "../../globals.js";
+import { redactIdentifier } from "../../logging/redact-identifier.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "./commands-types.js";
 
@@ -12,9 +14,46 @@ export function rejectUnauthorizedCommand(
     return null;
   }
   logVerbose(
-    `Ignoring ${commandLabel} from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    `Ignoring ${commandLabel} from unauthorized sender: ${redactIdentifier(params.command.senderId)}`,
   );
   return { shouldContinue: false };
+}
+
+export function rejectNonOwnerCommand(
+  params: HandleCommandsParams,
+  commandLabel: string,
+): CommandHandlerResult | null {
+  if (params.command.senderIsOwner) {
+    return null;
+  }
+  logVerbose(
+    `Ignoring ${commandLabel} from non-owner sender: ${redactIdentifier(params.command.senderId)}`,
+  );
+  return { shouldContinue: false };
+}
+
+export function requireGatewayClientScopeForInternalChannel(
+  params: HandleCommandsParams,
+  config: {
+    label: string;
+    allowedScopes: string[];
+    missingText: string;
+  },
+): CommandHandlerResult | null {
+  if (!isInternalMessageChannel(params.command.channel)) {
+    return null;
+  }
+  const scopes = params.ctx.GatewayClientScopes ?? [];
+  if (config.allowedScopes.some((scope) => scopes.includes(scope))) {
+    return null;
+  }
+  logVerbose(
+    `Ignoring ${config.label} from gateway client missing scope: ${config.allowedScopes.join(" or ")}`,
+  );
+  return {
+    shouldContinue: false,
+    reply: { text: config.missingText },
+  };
 }
 
 export function buildDisabledCommandReply(params: {

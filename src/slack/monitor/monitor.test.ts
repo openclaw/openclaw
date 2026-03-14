@@ -65,7 +65,7 @@ describe("resolveSlackChannelConfig", () => {
     // Slack always delivers channel IDs in uppercase (e.g. C0ABC12345).
     // Users commonly copy them in lowercase from docs or older CLI output.
     const res = resolveSlackChannelConfig({
-      channelId: "C0ABC12345",
+      channelId: "C0ABC12345", // pragma: allowlist secret
       channels: { c0abc12345: { allow: true, requireMention: false } },
       defaultRequireMention: true,
     });
@@ -75,11 +75,37 @@ describe("resolveSlackChannelConfig", () => {
   it("matches channel config key stored in uppercase when user types lowercase channel ID", () => {
     // Defensive: also handle the inverse direction.
     const res = resolveSlackChannelConfig({
-      channelId: "c0abc12345",
+      channelId: "c0abc12345", // pragma: allowlist secret
       channels: { C0ABC12345: { allow: true, requireMention: false } },
       defaultRequireMention: true,
     });
     expect(res).toMatchObject({ allowed: true, requireMention: false });
+  });
+
+  it("blocks channel-name route matches by default", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channelName: "ops-room",
+      channels: { "ops-room": { allow: true, requireMention: false } },
+      defaultRequireMention: true,
+    });
+    expect(res).toMatchObject({ allowed: false, requireMention: true });
+  });
+
+  it("allows channel-name route matches when dangerous name matching is enabled", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channelName: "ops-room",
+      channels: { "ops-room": { allow: true, requireMention: false } },
+      defaultRequireMention: true,
+      allowNameMatching: true,
+    });
+    expect(res).toMatchObject({
+      allowed: true,
+      requireMention: false,
+      matchKey: "ops-room",
+      matchSource: "direct",
+    });
   });
 });
 

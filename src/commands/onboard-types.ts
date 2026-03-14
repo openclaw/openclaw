@@ -2,14 +2,13 @@ import type { ChannelId } from "../channels/plugins/types.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 export type OnboardMode = "local" | "remote";
-export type AuthChoice =
+export type BuiltInAuthChoice =
   // Legacy alias for `setup-token` (kept for backwards CLI compatibility).
   | "oauth"
   | "setup-token"
   | "claude-cli"
   | "token"
   | "chutes"
-  | "vllm"
   | "openai-codex"
   | "openai-api-key"
   | "openrouter-api-key"
@@ -34,13 +33,12 @@ export type AuthChoice =
   | "zai-global"
   | "zai-cn"
   | "xiaomi-api-key"
-  | "minimax-cloud"
-  | "minimax"
-  | "minimax-api"
-  | "minimax-api-key-cn"
-  | "minimax-api-lightning"
-  | "minimax-portal"
+  | "minimax-global-oauth"
+  | "minimax-global-api"
+  | "minimax-cn-oauth"
+  | "minimax-cn-api"
   | "opencode-zen"
+  | "opencode-go"
   | "github-copilot"
   | "copilot-proxy"
   | "qwen-portal"
@@ -49,13 +47,16 @@ export type AuthChoice =
   | "volcengine-api-key"
   | "byteplus-api-key"
   | "qianfan-api-key"
+  | "modelstudio-api-key-cn"
+  | "modelstudio-api-key"
   | "custom-api-key"
   | "skip";
-export type AuthChoiceGroupId =
+export type AuthChoice = BuiltInAuthChoice | (string & {});
+
+export type BuiltInAuthChoiceGroupId =
   | "openai"
   | "anthropic"
   | "chutes"
-  | "vllm"
   | "google"
   | "copilot"
   | "openrouter"
@@ -66,7 +67,7 @@ export type AuthChoiceGroupId =
   | "moonshot"
   | "zai"
   | "xiaomi"
-  | "opencode-zen"
+  | "opencode"
   | "minimax"
   | "synthetic"
   | "venice"
@@ -75,10 +76,12 @@ export type AuthChoiceGroupId =
   | "together"
   | "huggingface"
   | "qianfan"
+  | "modelstudio"
   | "xai"
   | "volcengine"
   | "byteplus"
   | "custom";
+export type AuthChoiceGroupId = BuiltInAuthChoiceGroupId | (string & {});
 export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
 export type GatewayBind = "loopback" | "lan" | "auto" | "custom" | "tailnet";
@@ -131,10 +134,13 @@ export type OnboardOptions = {
   togetherApiKey?: string;
   huggingfaceApiKey?: string;
   opencodeZenApiKey?: string;
+  opencodeGoApiKey?: string;
   xaiApiKey?: string;
   volcengineApiKey?: string;
   byteplusApiKey?: string;
   qianfanApiKey?: string;
+  modelstudioApiKeyCn?: string;
+  modelstudioApiKey?: string;
   customBaseUrl?: string;
   customApiKey?: string;
   customModelId?: string;
