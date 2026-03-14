@@ -5,11 +5,16 @@ import {
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
 
+const callGatewayMock = vi.fn();
 const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatNowMock = vi.fn();
 const readAcpSessionEntryMock = vi.fn();
 const resolveSessionFilePathMock = vi.fn();
 const resolveSessionFilePathOptionsMock = vi.fn();
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: (...args: unknown[]) => callGatewayMock(...args),
+}));
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
@@ -19,14 +24,23 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
 }));
 
-vi.mock("../acp/runtime/session-meta.js", () => ({
-  readAcpSessionEntry: (...args: unknown[]) => readAcpSessionEntryMock(...args),
-}));
+vi.mock("../acp/runtime/session-meta.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../acp/runtime/session-meta.js")>();
+  return {
+    ...actual,
+    readAcpSessionEntry: (...args: unknown[]) => readAcpSessionEntryMock(...args),
+  };
+});
 
-vi.mock("../config/sessions/paths.js", () => ({
-  resolveSessionFilePath: (...args: unknown[]) => resolveSessionFilePathMock(...args),
-  resolveSessionFilePathOptions: (...args: unknown[]) => resolveSessionFilePathOptionsMock(...args),
-}));
+vi.mock("../config/sessions/paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions/paths.js")>();
+  return {
+    ...actual,
+    resolveSessionFilePath: (...args: unknown[]) => resolveSessionFilePathMock(...args),
+    resolveSessionFilePathOptions: (...args: unknown[]) =>
+      resolveSessionFilePathOptionsMock(...args),
+  };
+});
 
 function collectedTexts() {
   return enqueueSystemEventMock.mock.calls.map((call) => String(call[0] ?? ""));
@@ -34,6 +48,16 @@ function collectedTexts() {
 
 describe("startAcpSpawnParentStreamRelay", () => {
   beforeEach(() => {
+    callGatewayMock.mockReset();
+    callGatewayMock.mockImplementation(async (opts?: { method?: string }) => {
+      if (opts?.method === "chat.history") {
+        return { messages: [] };
+      }
+      if (opts?.method === "agent.wait") {
+        return { status: "timeout" };
+      }
+      throw new Error(`Unexpected method: ${String(opts?.method)}`);
+    });
     enqueueSystemEventMock.mockClear();
     requestHeartbeatNowMock.mockClear();
     readAcpSessionEntryMock.mockReset();
@@ -206,6 +230,148 @@ describe("startAcpSpawnParentStreamRelay", () => {
 
     const texts = collectedTexts();
     expect(texts.some((text) => text.includes("codex: hello world"))).toBe(true);
+    relay.dispose();
+  });
+
+  it("falls back to child history and gateway wait when local events never arrive", async () => {
+    callGatewayMock.mockImplementation(async (opts?: { method?: string }) => {
+      if (opts?.method === "chat.history") {
+        const isPrimingRead =
+          callGatewayMock.mock.calls.filter(([call]) => call?.method === "chat.history").length ===
+          1;
+        return isPrimingRead
+          ? { messages: [] }
+          : {
+              messages: [
+                {
+                  role: "assistant",
+                  content: [{ type: "text", text: "READY_FROM_HISTORY" }],
+                },
+              ],
+            };
+      }
+      if (opts?.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      throw new Error(`Unexpected method: ${String(opts?.method)}`);
+    });
+
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-6",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-6",
+      agentId: "codex",
+      streamFlushMs: 1,
+      noOutputNoticeMs: 120_000,
+      noOutputPollMs: 250,
+    });
+
+    await vi.advanceTimersByTimeAsync(250);
+
+    const texts = collectedTexts();
+    expect(texts.some((text) => text.includes("codex: READY_FROM_HISTORY"))).toBe(true);
+    expect(texts.some((text) => text.includes("codex run completed."))).toBe(true);
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "chat.history",
+        params: expect.objectContaining({
+          sessionKey: "agent:codex:acp:child-6",
+        }),
+      }),
+    );
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent.wait",
+        params: expect.objectContaining({
+          runId: "run-6",
+          timeoutMs: 1,
+        }),
+      }),
+    );
+    relay.dispose();
+  });
+
+  it("falls back to gateway wait when assistant deltas arrive but lifecycle completion is missing", async () => {
+    callGatewayMock.mockImplementation(async (opts?: { method?: string }) => {
+      if (opts?.method === "chat.history") {
+        return { messages: [] };
+      }
+      if (opts?.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      throw new Error(`Unexpected method: ${String(opts?.method)}`);
+    });
+
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-7",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-7",
+      agentId: "codex",
+      streamFlushMs: 1,
+      noOutputNoticeMs: 120_000,
+      noOutputPollMs: 250,
+    });
+
+    emitAgentEvent({
+      runId: "run-7",
+      stream: "assistant",
+      data: {
+        delta: "READY_FROM_LOCAL",
+      },
+    });
+    await vi.advanceTimersByTimeAsync(250);
+
+    const texts = collectedTexts();
+    expect(texts.some((text) => text.includes("codex: READY_FROM_LOCAL"))).toBe(true);
+    expect(texts.some((text) => text.includes("codex run completed."))).toBe(true);
+    relay.dispose();
+  });
+
+  it("hydrates missing assistant output from history before a local lifecycle end completes", async () => {
+    callGatewayMock.mockImplementation(async (opts?: { method?: string }) => {
+      if (opts?.method === "chat.history") {
+        const isPrimingRead =
+          callGatewayMock.mock.calls.filter(([call]) => call?.method === "chat.history").length ===
+          1;
+        return isPrimingRead
+          ? { messages: [] }
+          : {
+              messages: [
+                {
+                  role: "assistant",
+                  content: [{ type: "text", text: "READY_BEFORE_LOCAL_END" }],
+                },
+              ],
+            };
+      }
+      if (opts?.method === "agent.wait") {
+        return { status: "timeout" };
+      }
+      throw new Error(`Unexpected method: ${String(opts?.method)}`);
+    });
+
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-8",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-8",
+      agentId: "codex",
+      streamFlushMs: 1,
+      noOutputNoticeMs: 120_000,
+      noOutputPollMs: 250,
+    });
+
+    emitAgentEvent({
+      runId: "run-8",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+      },
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    const texts = collectedTexts();
+    expect(texts.some((text) => text.includes("codex: READY_BEFORE_LOCAL_END"))).toBe(true);
+    expect(texts.some((text) => text.includes("codex run completed."))).toBe(true);
     relay.dispose();
   });
 

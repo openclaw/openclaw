@@ -2,10 +2,12 @@ import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
+import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import { extractAssistantText, stripToolMessages } from "./tools/sessions-helpers.js";
 
 const DEFAULT_STREAM_FLUSH_MS = 2_500;
 const DEFAULT_NO_OUTPUT_NOTICE_MS = 60_000;
@@ -205,8 +207,15 @@ export function startAcpSpawnParentStreamRelay(params: {
   let pendingText = "";
   let lastProgressAt = Date.now();
   let stallNotified = false;
+  let sawLocalAssistantEvent = false;
+  let sawLocalTerminalEvent = false;
+  let fallbackPollInFlight = false;
+  let historyBaselineReady = false;
+  let historyOutputRelayed = false;
+  let lastHistoryAssistant = "";
   let flushTimer: NodeJS.Timeout | undefined;
   let relayLifetimeTimer: NodeJS.Timeout | undefined;
+  let fallbackPollTimer: NodeJS.Timeout | undefined;
 
   const clearFlushTimer = () => {
     if (!flushTimer) {
@@ -246,6 +255,152 @@ export function startAcpSpawnParentStreamRelay(params: {
     flushTimer.unref?.();
   };
 
+  const recordAssistantOutput = (delta: string | undefined, kind: string) => {
+    if (!delta || !delta.trim()) {
+      return false;
+    }
+    logEvent(kind, { delta });
+
+    if (stallNotified) {
+      stallNotified = false;
+      emit(`${relayLabel} resumed output.`, `${contextPrefix}:resumed`);
+    }
+
+    lastProgressAt = Date.now();
+    pendingText += delta;
+    if (pendingText.length > STREAM_BUFFER_MAX_CHARS) {
+      pendingText = pendingText.slice(-STREAM_BUFFER_MAX_CHARS);
+    }
+    if (pendingText.length >= STREAM_SNIPPET_MAX_CHARS || delta.includes("\n\n")) {
+      flushPending();
+      return true;
+    }
+    scheduleFlush();
+    return true;
+  };
+
+  const readLatestAssistantFromChildHistory = async (): Promise<string | undefined> => {
+    const history = await callGateway<{ messages?: unknown[] }>({
+      method: "chat.history",
+      params: {
+        sessionKey: params.childSessionKey,
+        limit: 24,
+      },
+      timeoutMs: 10_000,
+    }).catch(() => null);
+    const filtered = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
+    const assistantMessages = filtered.filter(
+      (msg) => (msg as { role?: unknown } | undefined)?.role === "assistant",
+    );
+    const last =
+      assistantMessages.length > 0 ? assistantMessages[assistantMessages.length - 1] : undefined;
+    return toTrimmedString(extractAssistantText(last));
+  };
+
+  const primeHistoryBaseline = async () => {
+    if (historyBaselineReady || disposed) {
+      return;
+    }
+    const reply = await readLatestAssistantFromChildHistory();
+    if (disposed) {
+      return;
+    }
+    historyBaselineReady = true;
+    lastHistoryAssistant = reply ?? "";
+  };
+
+  const maybeRelayHistoryAssistant = async (force = false) => {
+    const reply = await readLatestAssistantFromChildHistory();
+    if (disposed) {
+      return false;
+    }
+    if (!historyBaselineReady) {
+      historyBaselineReady = true;
+      lastHistoryAssistant = reply ?? "";
+      if (!force || !reply || sawLocalAssistantEvent) {
+        return false;
+      }
+      const relayed = recordAssistantOutput(reply, "assistant_history");
+      if (relayed) {
+        historyOutputRelayed = true;
+      }
+      return relayed;
+    }
+    if (!reply) {
+      return false;
+    }
+    const changed = reply !== lastHistoryAssistant;
+    lastHistoryAssistant = reply;
+    if (sawLocalAssistantEvent) {
+      return false;
+    }
+    if (!force && !changed) {
+      return false;
+    }
+    if (historyOutputRelayed && !changed) {
+      return false;
+    }
+    const relayed = recordAssistantOutput(reply, "assistant_history");
+    if (relayed) {
+      historyOutputRelayed = true;
+    }
+    return relayed;
+  };
+
+  const maybeFinalizeFromGateway = async () => {
+    if (disposed || sawLocalTerminalEvent) {
+      return false;
+    }
+    const wait = await callGateway<{ status?: unknown; error?: unknown }>({
+      method: "agent.wait",
+      params: {
+        runId,
+        timeoutMs: 1,
+      },
+      timeoutMs: 5_000,
+    }).catch(() => null);
+    const status = toTrimmedString(wait?.status);
+    if (disposed || !status || status === "timeout") {
+      return false;
+    }
+    if (status !== "ok" && status !== "error") {
+      return false;
+    }
+    sawLocalTerminalEvent = true;
+    if (status === "error") {
+      flushPending();
+      const errorText = toTrimmedString(wait?.error);
+      if (errorText) {
+        emit(`${relayLabel} run failed: ${errorText}`, `${contextPrefix}:error`);
+      } else {
+        emit(`${relayLabel} run failed.`, `${contextPrefix}:error`);
+      }
+      dispose();
+      return true;
+    }
+    await maybeRelayHistoryAssistant(true);
+    flushPending();
+    emit(`${relayLabel} run completed.`, `${contextPrefix}:done`);
+    dispose();
+    return true;
+  };
+
+  const fallbackPollIntervalMs = Math.min(noOutputPollMs, 5_000);
+  const runFallbackPoll = async () => {
+    if (disposed || fallbackPollInFlight) {
+      return;
+    }
+    fallbackPollInFlight = true;
+    try {
+      if (!sawLocalAssistantEvent) {
+        await maybeRelayHistoryAssistant(false);
+      }
+      await maybeFinalizeFromGateway();
+    } finally {
+      fallbackPollInFlight = false;
+    }
+  };
+
   const noOutputWatcherTimer = setInterval(() => {
     if (disposed || noOutputNoticeMs <= 0) {
       return;
@@ -276,6 +431,15 @@ export function startAcpSpawnParentStreamRelay(params: {
   }, maxRelayLifetimeMs);
   relayLifetimeTimer.unref?.();
 
+  if (fallbackPollIntervalMs > 0) {
+    fallbackPollTimer = setInterval(() => {
+      void runFallbackPoll();
+    }, fallbackPollIntervalMs);
+    fallbackPollTimer.unref?.();
+  }
+
+  void primeHistoryBaseline();
+
   if (params.emitStartNotice !== false) {
     emitStartNotice();
   }
@@ -286,31 +450,13 @@ export function startAcpSpawnParentStreamRelay(params: {
     }
 
     if (event.stream === "assistant") {
+      sawLocalAssistantEvent = true;
       const data = event.data;
       const deltaCandidate =
         (data as { delta?: unknown } | undefined)?.delta ??
         (data as { text?: unknown } | undefined)?.text;
       const delta = typeof deltaCandidate === "string" ? deltaCandidate : undefined;
-      if (!delta || !delta.trim()) {
-        return;
-      }
-      logEvent("assistant_delta", { delta });
-
-      if (stallNotified) {
-        stallNotified = false;
-        emit(`${relayLabel} resumed output.`, `${contextPrefix}:resumed`);
-      }
-
-      lastProgressAt = Date.now();
-      pendingText += delta;
-      if (pendingText.length > STREAM_BUFFER_MAX_CHARS) {
-        pendingText = pendingText.slice(-STREAM_BUFFER_MAX_CHARS);
-      }
-      if (pendingText.length >= STREAM_SNIPPET_MAX_CHARS || delta.includes("\n\n")) {
-        flushPending();
-        return;
-      }
-      scheduleFlush();
+      recordAssistantOutput(delta, "assistant_delta");
       return;
     }
 
@@ -321,7 +467,6 @@ export function startAcpSpawnParentStreamRelay(params: {
     const phase = toTrimmedString((event.data as { phase?: unknown } | undefined)?.phase);
     logEvent("lifecycle", { phase: phase ?? "unknown", data: event.data });
     if (phase === "end") {
-      flushPending();
       const startedAt = toFiniteNumber(
         (event.data as { startedAt?: unknown } | undefined)?.startedAt,
       );
@@ -330,19 +475,27 @@ export function startAcpSpawnParentStreamRelay(params: {
         startedAt != null && endedAt != null && endedAt >= startedAt
           ? endedAt - startedAt
           : undefined;
-      if (durationMs != null) {
-        emit(
-          `${relayLabel} run completed in ${Math.max(1, Math.round(durationMs / 1000))}s.`,
-          `${contextPrefix}:done`,
-        );
-      } else {
-        emit(`${relayLabel} run completed.`, `${contextPrefix}:done`);
-      }
-      dispose();
+      sawLocalTerminalEvent = true;
+      void (async () => {
+        if (!sawLocalAssistantEvent) {
+          await maybeRelayHistoryAssistant(true);
+        }
+        flushPending();
+        if (durationMs != null) {
+          emit(
+            `${relayLabel} run completed in ${Math.max(1, Math.round(durationMs / 1000))}s.`,
+            `${contextPrefix}:done`,
+          );
+        } else {
+          emit(`${relayLabel} run completed.`, `${contextPrefix}:done`);
+        }
+        dispose();
+      })();
       return;
     }
 
     if (phase === "error") {
+      sawLocalTerminalEvent = true;
       flushPending();
       const errorText = toTrimmedString((event.data as { error?: unknown } | undefined)?.error);
       if (errorText) {
@@ -363,6 +516,9 @@ export function startAcpSpawnParentStreamRelay(params: {
     clearRelayLifetimeTimer();
     flushLogBuffer();
     clearInterval(noOutputWatcherTimer);
+    if (fallbackPollTimer) {
+      clearInterval(fallbackPollTimer);
+    }
     unsubscribe();
   };
 
