@@ -55,11 +55,11 @@ export PRIVATEMODE_API_KEY=pm-your-key-here
 
 ## Supported models
 
-| Model ID                | Name                 | Modalities  | Notes             |
-| ----------------------- | -------------------- | ----------- | ----------------- |
-| `gemma-3-27b`           | Gemma 3 27B          | text, image | Multimodal        |
-| `gpt-oss-120b`          | GPT-OSS 120B         | text        | Large context     |
-| `qwen3-coder-30b-a3b`   | Qwen3-Coder 30B-A3B  | text        | Reasoning, coding |
+| Model ID              | Name                | Modalities  | Notes             |
+| --------------------- | ------------------- | ----------- | ----------------- |
+| `gemma-3-27b`         | Gemma 3 27B         | text, image | Multimodal        |
+| `gpt-oss-120b`        | GPT-OSS 120B        | text        | Large context     |
+| `qwen3-coder-30b-a3b` | Qwen3-Coder 30B-A3B | text        | Reasoning, coding |
 
 Privatemode also supports embeddings (`qwen3-embedding-4b`) and speech-to-text (`whisper-large-v3`, `voxtral-mini-3b`), though these are not yet wired into OpenClaw's provider model list.
 
