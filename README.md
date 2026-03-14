@@ -49,22 +49,23 @@ Model note: while many providers/models are supported, for the best experience a
 
 ## Install (recommended)
 
-Runtime: **Node ≥22**.
+> **Prerequisite:** Node.js ≥22 required. [Download Node.js](https://nodejs.org/)
 
 ```bash
 npm install -g openclaw@latest
 # or: pnpm add -g openclaw@latest
+# or: bun install -g openclaw@latest
 
 openclaw onboard --install-daemon
 ```
 
-The wizard installs the Gateway daemon (launchd/systemd user service) so it stays running.
+The onboarding wizard installs the Gateway daemon (launchd/systemd user service) so it stays running in the background.
 
 ## Quick start (TL;DR)
 
-Runtime: **Node ≥22**.
+> **Prerequisite:** Node.js ≥22 required. [Download Node.js](https://nodejs.org/)
 
-Full beginner guide (auth, pairing, channels): [Getting started](https://docs.openclaw.ai/start/getting-started)
+For a complete beginner guide (auth, pairing, channels): [Getting started](https://docs.openclaw.ai/start/getting-started)
 
 ```bash
 openclaw onboard --install-daemon
@@ -91,23 +92,25 @@ Details: [Development channels](https://docs.openclaw.ai/install/development-cha
 
 ## From source (development)
 
-Prefer `pnpm` for builds from source. Bun is optional for running TypeScript directly.
+> **Recommendation:** Use `pnpm` for building from source. `bun` is optional for running TypeScript directly.
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
 cd openclaw
 
 pnpm install
-pnpm ui:build # auto-installs UI deps on first run
+pnpm ui:build # auto-installs UI dependencies on first run
 pnpm build
 
 pnpm openclaw onboard --install-daemon
 
-# Dev loop (auto-reload on TS changes)
+# Development loop (auto-reload on TypeScript changes)
 pnpm gateway:watch
 ```
 
-Note: `pnpm openclaw ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node / the packaged `openclaw` binary.
+**Note:** 
+- `pnpm openclaw ...` runs TypeScript directly (via `tsx`)
+- `pnpm build` produces `dist/` for running via Node or the packaged `openclaw` binary
 
 ## Security defaults (DM access)
 
