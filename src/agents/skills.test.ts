@@ -235,6 +235,51 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).toContain("Does demo things");
     expect(prompt).toContain(path.join(skillDir, "SKILL.md"));
   });
+
+  it("discovers workspace skills beyond maxSkillsLoadedPerSource when within maxCandidatesPerRoot", async () => {
+    // Regression test for #38886: skill discovery was using maxSkillsLoadedPerSource
+    // (the loaded-skills cap) to truncate the candidate directory window instead of
+    // maxCandidatesPerRoot.  Skills alphabetically after the Nth folder were silently
+    // skipped even though they were within the allowed scan window.
+    const workspaceDir = await makeWorkspace();
+
+    // aa-skill (position 1) — has SKILL.md, discovered in both old and new code
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "aa-skill"),
+      name: "aa-skill",
+      description: "First skill",
+      body: "# AA Skill\n",
+    });
+
+    // bb-not-a-skill (position 2) — no SKILL.md, occupies a candidate slot
+    await fs.mkdir(path.join(workspaceDir, "skills", "bb-not-a-skill"), { recursive: true });
+
+    // cc-skill (position 3) — has SKILL.md; with the old bug it was excluded because
+    // the candidate window was capped at maxSkillsLoadedPerSource=2, skipping position 3.
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "cc-skill"),
+      name: "cc-skill",
+      description: "Third skill",
+      body: "# CC Skill\n",
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      config: {
+        skills: {
+          limits: {
+            maxCandidatesPerRoot: 3, // scan window: allow all 3 dirs
+            maxSkillsLoadedPerSource: 2, // load cap: allow up to 2 skills
+          },
+        },
+      },
+    });
+
+    const names = entries.map((e) => e.skill.name);
+    expect(names).toContain("aa-skill");
+    // cc-skill must be discovered even though it is past position maxSkillsLoadedPerSource
+    expect(names).toContain("cc-skill");
+  });
 });
 
 describe("applySkillEnvOverrides", () => {
