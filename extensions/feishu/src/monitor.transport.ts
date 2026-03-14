@@ -88,21 +88,44 @@ export async function monitorWebSocket({
   wsClients.set(accountId, wsClient);
 
   return new Promise((resolve, reject) => {
+    let settled = false;
     const cleanup = () => {
+      try {
+        wsClient.close?.({ force: true });
+      } catch {
+        // Best-effort shutdown; cleanup must remain non-throwing.
+      }
       wsClients.delete(accountId);
       botOpenIds.delete(accountId);
       botNames.delete(accountId);
+      abortSignal?.removeEventListener("abort", handleAbort);
+    };
+
+    const settleResolve = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve();
+    };
+
+    const settleReject = (err: unknown) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      reject(err);
     };
 
     const handleAbort = () => {
       log(`feishu[${accountId}]: abort signal received, stopping`);
-      cleanup();
-      resolve();
+      settleResolve();
     };
 
     if (abortSignal?.aborted) {
-      cleanup();
-      resolve();
+      settleResolve();
       return;
     }
 
@@ -111,21 +134,19 @@ export async function monitorWebSocket({
     try {
       Promise.resolve(wsClient.start({ eventDispatcher })).catch((err: any) => {
         errLog(`[lark-ws] WS connect/reconnect unhandled exception: ${err.message}`);
-        cleanup();
-        abortSignal?.removeEventListener("abort", handleAbort);
         if (!abortSignal?.aborted) {
-          reject(err);
+          settleReject(err);
           scheduleGatewaySigusr1Restart({
             reason: "feishu_websocket_zombie_timeout_recovered",
             delayMs: 15000,
           }); // Instruct gateway daemon to auto-restart (throttled)
+          return;
         }
+        settleResolve();
       });
       log(`feishu[${accountId}]: WebSocket client started`);
     } catch (err) {
-      cleanup();
-      abortSignal?.removeEventListener("abort", handleAbort);
-      reject(err);
+      settleReject(err);
     }
   });
 }

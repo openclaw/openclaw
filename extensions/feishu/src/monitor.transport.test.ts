@@ -22,15 +22,18 @@ describe("Feishu WebSocket Transport", () => {
 
   afterEach(() => {
     // noop
+    vi.clearAllMocks();
     vi.restoreAllMocks();
   });
 
   it("handles unhandled promise rejections during start() by triggering a gateway restart", async () => {
     const { createFeishuWSClient } = await import("./client.js");
+    const close = vi.fn();
 
     // Mock the WS client to return a rejecting promise
     vi.mocked(createFeishuWSClient).mockReturnValue({
       start: vi.fn().mockRejectedValue(new Error("ETIMEDOUT")),
+      close,
     } as any);
 
     const account = {
@@ -53,6 +56,38 @@ describe("Feishu WebSocket Transport", () => {
     ).rejects.toThrow("ETIMEDOUT");
 
     await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(close).toHaveBeenCalledWith({ force: true });
     expect(scheduleGatewaySigusr1Restart).toHaveBeenCalled();
+  });
+
+  it("force-closes the websocket client on abort so reconnect timers cannot linger", async () => {
+    const { createFeishuWSClient } = await import("./client.js");
+    const close = vi.fn();
+    vi.mocked(createFeishuWSClient).mockReturnValue({
+      start: vi.fn().mockImplementation(() => new Promise(() => {})),
+      close,
+    } as any);
+
+    const account = {
+      accountId: "test",
+      appId: "foo",
+      appSecret: "bar",
+      encryptKey: "",
+      verificationToken: "",
+    } as unknown as ResolvedFeishuAccount;
+    const abortController = new AbortController();
+
+    const promise = monitorWebSocket({
+      account,
+      accountId: "test",
+      runtime: undefined,
+      abortSignal: abortController.signal,
+      eventDispatcher: vi.fn() as any,
+    });
+
+    abortController.abort();
+    await expect(promise).resolves.toBeUndefined();
+    expect(close).toHaveBeenCalledWith({ force: true });
+    expect(scheduleGatewaySigusr1Restart).not.toHaveBeenCalled();
   });
 });
