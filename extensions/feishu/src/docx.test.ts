@@ -5,6 +5,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
+const convertMock = vi.hoisted(() => vi.fn());
+const documentCreateMock = vi.hoisted(() => vi.fn());
+const blockListMock = vi.hoisted(() => vi.fn());
+const blockChildrenCreateMock = vi.hoisted(() => vi.fn());
+const blockChildrenGetMock = vi.hoisted(() => vi.fn());
+const blockChildrenBatchDeleteMock = vi.hoisted(() => vi.fn());
+const blockDescendantCreateMock = vi.hoisted(() => vi.fn());
+const driveUploadAllMock = vi.hoisted(() => vi.fn());
+const permissionMemberCreateMock = vi.hoisted(() => vi.fn());
+const blockPatchMock = vi.hoisted(() => vi.fn());
+const scopeListMock = vi.hoisted(() => vi.fn());
+const commentListMock = vi.hoisted(() => vi.fn());
+const commentGetMock = vi.hoisted(() => vi.fn());
+const commentCreateMock = vi.hoisted(() => vi.fn());
+const commentUpdateMock = vi.hoisted(() => vi.fn());
+const commentDeleteMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
@@ -23,18 +39,6 @@ vi.mock("./runtime.js", () => ({
 import { registerFeishuDocTools } from "./docx.js";
 
 describe("feishu_doc image fetch hardening", () => {
-  const convertMock = vi.hoisted(() => vi.fn());
-  const documentCreateMock = vi.hoisted(() => vi.fn());
-  const blockListMock = vi.hoisted(() => vi.fn());
-  const blockChildrenCreateMock = vi.hoisted(() => vi.fn());
-  const blockChildrenGetMock = vi.hoisted(() => vi.fn());
-  const blockChildrenBatchDeleteMock = vi.hoisted(() => vi.fn());
-  const blockDescendantCreateMock = vi.hoisted(() => vi.fn());
-  const driveUploadAllMock = vi.hoisted(() => vi.fn());
-  const permissionMemberCreateMock = vi.hoisted(() => vi.fn());
-  const blockPatchMock = vi.hoisted(() => vi.fn());
-  const scopeListMock = vi.hoisted(() => vi.fn());
-
   beforeEach(() => {
     vi.clearAllMocks();
 
@@ -441,5 +445,251 @@ describe("feishu_doc image fetch hardening", () => {
     } finally {
       await fs.unlink(localPath);
     }
+  });
+});
+
+describe("feishu_doc comment operations", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    createFeishuClientMock.mockReturnValue({
+      docx: {
+        document: {
+          convert: convertMock,
+          create: documentCreateMock,
+        },
+        documentBlock: {
+          list: blockListMock,
+          patch: blockPatchMock,
+        },
+        documentBlockChildren: {
+          create: blockChildrenCreateMock,
+          get: blockChildrenGetMock,
+          batchDelete: blockChildrenBatchDeleteMock,
+        },
+        documentBlockDescendant: {
+          create: blockDescendantCreateMock,
+        },
+        documentComment: {
+          list: commentListMock,
+          get: commentGetMock,
+          create: commentCreateMock,
+          update: commentUpdateMock,
+          delete: commentDeleteMock,
+        },
+      },
+      drive: {
+        media: {
+          uploadAll: driveUploadAllMock,
+        },
+        permissionMember: {
+          create: permissionMemberCreateMock,
+        },
+      },
+      application: {
+        scope: {
+          list: scopeListMock,
+        },
+      },
+    });
+
+    // Setup default mock responses
+    convertMock.mockResolvedValue({ code: 0, data: { blocks: [], first_level_block_ids: [] } });
+    blockListMock.mockResolvedValue({ code: 0, data: { items: [] } });
+    blockChildrenCreateMock.mockResolvedValue({ code: 0, data: { children: [] } });
+    blockChildrenGetMock.mockResolvedValue({ code: 0, data: { items: [] } });
+    blockDescendantCreateMock.mockResolvedValue({ code: 0, data: { children: [] } });
+    documentCreateMock.mockResolvedValue({
+      code: 0,
+      data: { document: { document_id: "doc_created" } },
+    });
+    permissionMemberCreateMock.mockResolvedValue({ code: 0 });
+    scopeListMock.mockResolvedValue({ code: 0, data: { scopes: [] } });
+
+    // Comment mocks
+    commentListMock.mockResolvedValue({
+      code: 0,
+      data: {
+        items: [
+          { comment_id: "com_1", content: "First comment", create_time: "2024-01-01" },
+          { comment_id: "com_2", content: "Second comment", create_time: "2024-01-02" },
+        ],
+      },
+    });
+    commentGetMock.mockResolvedValue({
+      code: 0,
+      data: {
+        comment: { comment_id: "com_1", content: "First comment", create_time: "2024-01-01" },
+      },
+    });
+    commentCreateMock.mockResolvedValue({
+      code: 0,
+      data: {
+        comment: { comment_id: "com_new", content: "New comment", create_time: "2024-01-03" },
+      },
+    });
+    commentUpdateMock.mockResolvedValue({
+      code: 0,
+      data: {
+        comment: { comment_id: "com_1", content: "Updated comment", update_time: "2024-01-04" },
+      },
+    });
+    commentDeleteMock.mockResolvedValue({ code: 0 });
+  });
+
+  function resolveFeishuDocTool(context: Record<string, unknown> = {}) {
+    const registerTool = vi.fn();
+    registerFeishuDocTools({
+      config: {
+        channels: {
+          feishu: {
+            appId: "app_id",
+            appSecret: "app_secret",
+          },
+        },
+      } as any,
+      logger: { debug: vi.fn(), info: vi.fn() } as any,
+      registerTool,
+    } as any);
+
+    const tool = registerTool.mock.calls
+      .map((call) => call[0])
+      .map((candidate) => (typeof candidate === "function" ? candidate(context) : candidate))
+      .find((candidate) => candidate.name === "feishu_doc");
+    expect(tool).toBeDefined();
+    return tool as { execute: (callId: string, params: Record<string, unknown>) => Promise<any> };
+  }
+
+  it("lists comments for a document", async () => {
+    const feishuDocTool = resolveFeishuDocTool();
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "list_comments",
+      doc_token: "doc_1",
+    });
+
+    expect(commentListMock).toHaveBeenCalledWith({
+      path: { document_id: "doc_1" },
+      params: {},
+    });
+    expect(result.details.comments).toHaveLength(2);
+    expect(result.details.total).toBe(2);
+  });
+
+  it("lists comments for a specific block", async () => {
+    const feishuDocTool = resolveFeishuDocTool();
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "list_comments",
+      doc_token: "doc_1",
+      block_id: "block_1",
+    });
+
+    expect(commentListMock).toHaveBeenCalledWith({
+      path: { document_id: "doc_1" },
+      params: { block_id: "block_1" },
+    });
+  });
+
+  it("gets a single comment", async () => {
+    const feishuDocTool = resolveFeishuDocTool();
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "get_comment",
+      doc_token: "doc_1",
+      comment_id: "com_1",
+    });
+
+    expect(commentGetMock).toHaveBeenCalledWith({
+      path: { document_id: "doc_1", comment_id: "com_1" },
+    });
+    expect(result.details.comment.comment_id).toBe("com_1");
+    expect(result.details.comment.content).toBe("First comment");
+  });
+
+  it("creates a document-level comment", async () => {
+    const feishuDocTool = resolveFeishuDocTool();
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "create_comment",
+      doc_token: "doc_1",
+      content: "This is a new comment",
+    });
+
+    expect(commentCreateMock).toHaveBeenCalledWith({
+      path: { document_id: "doc_1" },
+      data: { content: "This is a new comment" },
+    });
+    expect(result.details.success).toBe(true);
+    expect(result.details.comment.comment_id).toBe("com_new");
+  });
+
+  it("creates a comment on a specific block", async () => {
+    const feishuDocTool = resolveFeishuDocTool();
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "create_comment",
+      doc_token: "doc_1",
+      content: "Comment on block",
+      block_id: "block_1",
+    });
+
+    expect(commentCreateMock).toHaveBeenCalledWith({
+      path: { document_id: "doc_1" },
+      data: { content: "Comment on block", block_id: "block_1" },
+    });
+  });
+
+  it("creates a reply to an existing comment", async () => {
+    const feishuDocTool = resolveFeishuDocTool();
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "create_comment",
+      doc_token: "doc_1",
+      content: "Reply to comment",
+      reply_to_comment_id: "com_1",
+    });
+
+    expect(commentCreateMock).toHaveBeenCalledWith({
+      path: { document_id: "doc_1" },
+      data: { content: "Reply to comment", reply_to_comment_id: "com_1" },
+    });
+  });
+
+  it("updates an existing comment", async () => {
+    const feishuDocTool = resolveFeishuDocTool();
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "update_comment",
+      doc_token: "doc_1",
+      comment_id: "com_1",
+      content: "Updated comment content",
+    });
+
+    expect(commentUpdateMock).toHaveBeenCalledWith({
+      path: { document_id: "doc_1", comment_id: "com_1" },
+      data: { content: "Updated comment content" },
+    });
+    expect(result.details.success).toBe(true);
+    expect(result.details.comment.content).toBe("Updated comment");
+  });
+
+  it("deletes a comment", async () => {
+    const feishuDocTool = resolveFeishuDocTool();
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "delete_comment",
+      doc_token: "doc_1",
+      comment_id: "com_1",
+    });
+
+    expect(commentDeleteMock).toHaveBeenCalledWith({
+      path: { document_id: "doc_1", comment_id: "com_1" },
+    });
+    expect(result.details.success).toBe(true);
+  });
+
+  it("returns error when comment API fails", async () => {
+    commentListMock.mockResolvedValueOnce({ code: 999, msg: "Comment API error" });
+
+    const feishuDocTool = resolveFeishuDocTool();
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "list_comments",
+      doc_token: "doc_1",
+    });
+
+    expect(result.details.error).toBe("Comment API error");
   });
 });

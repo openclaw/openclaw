@@ -189,6 +189,77 @@ Rules:
 - optional `filename` override
 - optional `parent_block_id`
 
+### List Comments
+
+```json
+{ "action": "list_comments", "doc_token": "ABC123def" }
+```
+
+List comments for the document. Optional `block_id` to list comments for a specific block:
+
+```json
+{ "action": "list_comments", "doc_token": "ABC123def", "block_id": "doxcnXXX" }
+```
+
+Returns: list of comments with id, content, author, create/update timestamps, and replies.
+
+### Get Single Comment
+
+```json
+{ "action": "get_comment", "doc_token": "ABC123def", "comment_id": "comcnXXX" }
+```
+
+Returns: single comment details.
+
+### Create Comment
+
+```json
+{ "action": "create_comment", "doc_token": "ABC123def", "content": "This is a comment" }
+```
+
+Create a document-level comment. To comment on a specific block:
+
+```json
+{
+  "action": "create_comment",
+  "doc_token": "ABC123def",
+  "content": "Good point!",
+  "block_id": "doxcnXXX"
+}
+```
+
+To reply to an existing comment (nested comment):
+
+```json
+{
+  "action": "create_comment",
+  "doc_token": "ABC123def",
+  "content": "Thanks!",
+  "reply_to_comment_id": "comcnXXX"
+}
+```
+
+### Update Comment
+
+```json
+{
+  "action": "update_comment",
+  "doc_token": "ABC123def",
+  "comment_id": "comcnXXX",
+  "content": "Updated comment text"
+}
+```
+
+Updates an existing comment's content.
+
+### Delete Comment
+
+```json
+{ "action": "delete_comment", "doc_token": "ABC123def", "comment_id": "comcnXXX" }
+```
+
+Deletes a comment.
+
 ## Reading Workflow
 
 1. Start with `action: "read"` - get plain text + statistics
@@ -208,4 +279,6 @@ channels:
 
 ## Permissions
 
-Required: `docx:document`, `docx:document:readonly`, `docx:document.block:convert`, `drive:drive`
+Required: `docx:document`, `docx:document:readonly`, `docx:document.block:convert`, `drive:drive`, `docx:document.comment`
+
+- `docx:document.comment` - Required for all comment operations (read, create, update, delete)
