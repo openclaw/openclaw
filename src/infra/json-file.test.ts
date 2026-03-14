@@ -33,10 +33,12 @@ describe("json-file helpers", () => {
       expect(raw.endsWith("\n")).toBe(true);
       expect(loadJsonFile(pathname)).toEqual({ enabled: true, count: 2 });
 
-      const fileMode = fs.statSync(pathname).mode & 0o777;
-      const dirMode = fs.statSync(path.dirname(pathname)).mode & 0o777;
-      expect(fileMode).toBe(0o600);
-      expect(dirMode).toBe(0o700);
+      if (process.platform !== "win32") {
+        const fileMode = fs.statSync(pathname).mode & 0o777;
+        const dirMode = fs.statSync(path.dirname(pathname)).mode & 0o777;
+        expect(fileMode).toBe(0o600);
+        expect(dirMode).toBe(0o700);
+      }
     });
   });
 
