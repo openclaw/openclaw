@@ -386,4 +386,61 @@ describe("plugin conversation binding approvals", () => {
         "This conversation is already bound by core routing and cannot be claimed by a plugin.",
     });
   });
+
+  it("migrates a legacy plugin binding record through the new approval flow", async () => {
+    sessionBindingState.setRecord({
+      bindingId: "binding-legacy",
+      targetSessionKey: "plugin-binding:codex:legacy123",
+      targetKind: "session",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-10099:topic:77",
+      },
+      status: "active",
+      boundAt: Date.now(),
+      metadata: {
+        label: "legacy plugin bind",
+      },
+    });
+
+    const request = await requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/codex-a",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-10099:topic:77",
+        parentConversationId: "-10099",
+        threadId: "77",
+      },
+      binding: { summary: "Bind this conversation to Codex thread abc." },
+    });
+
+    expect(["pending", "bound"]).toContain(request.status);
+    const binding =
+      request.status === "pending"
+        ? await resolvePluginConversationBindingApproval({
+            approvalId: request.approvalId,
+            decision: "allow-once",
+            senderId: "user-1",
+          }).then((approved) => {
+            expect(approved.status).toBe("approved");
+            if (approved.status !== "approved") {
+              throw new Error("expected approved bind result");
+            }
+            return approved.binding;
+          })
+        : request.binding;
+
+    expect(binding).toEqual(
+      expect.objectContaining({
+        pluginId: "codex",
+        pluginRoot: "/plugins/codex-a",
+        conversationId: "-10099:topic:77",
+      }),
+    );
+  });
 });
