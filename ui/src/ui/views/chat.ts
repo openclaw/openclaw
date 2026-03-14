@@ -344,19 +344,26 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
   addFilesAsAttachments(files, props);
 }
 
-function handleDragOver(e: DragEvent) {
+function handleDragOver(e: DragEvent, interceptNonFileDrops = false) {
   const types = e.dataTransfer?.types;
   if (!types) {
+    if (interceptNonFileDrops) {
+      e.preventDefault();
+    }
     return;
   }
-  if (Array.from(types).includes("Files")) {
+  if (interceptNonFileDrops || Array.from(types).includes("Files")) {
     e.preventDefault();
   }
 }
 
-function handleDrop(e: DragEvent, props: ChatProps) {
+function handleDrop(e: DragEvent, props: ChatProps, interceptNonFileDrops = false) {
   const types = e.dataTransfer?.types;
   if (!types || !Array.from(types).includes("Files")) {
+    if (interceptNonFileDrops) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
     return;
   }
   e.preventDefault();
@@ -1081,8 +1088,8 @@ export function renderChat(props: ChatProps) {
   return html`
     <section
       class="card chat"
-      @drop=${(e: DragEvent) => handleDrop(e, props)}
-      @dragover=${(e: DragEvent) => handleDragOver(e)}
+      @drop=${(e: DragEvent) => handleDrop(e, props, true)}
+      @dragover=${(e: DragEvent) => handleDragOver(e, true)}
     >
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
