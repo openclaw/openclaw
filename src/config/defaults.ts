@@ -145,8 +145,18 @@ function resolvePrimaryModelRef(raw?: string): string | null {
   if (!trimmed) {
     return null;
   }
+  // Inline alias lookup to avoid TDZ issues during early config loading
   const aliasKey = trimmed.toLowerCase();
-  return DEFAULT_MODEL_ALIASES[aliasKey] ?? trimmed;
+  const aliases: Record<string, string> = {
+    opus: "anthropic/claude-opus-4-6",
+    sonnet: "anthropic/claude-sonnet-4-6",
+    gpt: "openai/gpt-5.4",
+    "gpt-mini": "openai/gpt-5-mini",
+    gemini: "google/gemini-3.1-pro-preview",
+    "gemini-flash": "google/gemini-3-flash-preview",
+    "gemini-flash-lite": "google/gemini-3.1-flash-lite-preview",
+  };
+  return aliases[aliasKey] ?? trimmed;
 }
 
 export type SessionDefaultsOptions = {
