@@ -1,6 +1,7 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { normalizeFeishuMarkdownLinks } from "./markdown-links.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
 import { parsePostContent } from "./post.js";
@@ -328,7 +329,9 @@ export async function sendMessageFeishu(
   if (mentions && mentions.length > 0) {
     rawText = buildMentionedMessage(mentions, rawText);
   }
-  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(rawText, tableMode);
+  const messageText = normalizeFeishuMarkdownLinks(
+    getFeishuRuntime().channel.text.convertMarkdownTables(rawText, tableMode),
+  );
 
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
 
@@ -438,6 +441,7 @@ export async function sendMarkdownCardFeishu(params: {
   if (mentions && mentions.length > 0) {
     cardText = buildMentionedCardContent(mentions, text);
   }
+  cardText = normalizeFeishuMarkdownLinks(cardText);
   const card = buildMarkdownCard(cardText);
   return sendCardFeishu({ cfg, to, card, replyToMessageId, replyInThread, accountId });
 }
@@ -463,7 +467,9 @@ export async function editMessageFeishu(params: {
     cfg,
     channel: "feishu",
   });
-  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(text ?? "", tableMode);
+  const messageText = normalizeFeishuMarkdownLinks(
+    getFeishuRuntime().channel.text.convertMarkdownTables(text ?? "", tableMode),
+  );
 
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
 

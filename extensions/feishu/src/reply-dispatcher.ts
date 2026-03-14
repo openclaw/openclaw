@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { normalizeFeishuMarkdownLinks } from "./markdown-links.js";
 import { sendMediaFeishu } from "./media.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedCardContent } from "./mention.js";
@@ -172,7 +173,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         await streamingStartPromise;
       }
       if (streaming?.isActive()) {
-        await streaming.update(streamText);
+        await streaming.update(normalizeFeishuMarkdownLinks(streamText));
       }
     });
   };
@@ -216,7 +217,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (mentionTargets?.length) {
         text = buildMentionedCardContent(mentionTargets, text);
       }
-      await streaming.close(text);
+      await streaming.close(normalizeFeishuMarkdownLinks(text));
     }
     streaming = null;
     streamingStartPromise = null;
