@@ -2491,6 +2491,22 @@ export function createWebSearchTool(options?: {
           continue;
         }
 
+        // Skip fallback providers that cannot honor country/language constraints
+        if ((country || language) && candidate !== "brave" && candidate !== "perplexity") {
+          logVerbose(
+            `web_search: skipping ${candidate} (does not support country/language filter), trying next`,
+          );
+          continue;
+        }
+
+        // Skip fallback providers that cannot honor freshness constraints
+        if (rawFreshness && candidate !== "brave" && candidate !== "perplexity") {
+          logVerbose(
+            `web_search: skipping ${candidate} (does not support freshness filter), trying next`,
+          );
+          continue;
+        }
+
         const runParams = resolveProviderRunParams(candidate, search);
         if (!runParams) {
           logVerbose(`web_search: skipping ${candidate} (no API key), trying next`);
@@ -2509,7 +2525,7 @@ export function createWebSearchTool(options?: {
             language,
             search_lang: resolvedSearchLang,
             ui_lang: resolvedUiLang,
-            freshness,
+            freshness: rawFreshness ? normalizeFreshness(rawFreshness, candidate) : undefined,
             dateAfter,
             dateBefore,
             searchDomainFilter: domainFilter,
@@ -2528,7 +2544,7 @@ export function createWebSearchTool(options?: {
           });
           if (candidate !== provider && attempts.length > 0) {
             logVerbose(
-              `↪️ Search Fallback: ${candidate} (selected ${provider}; ${attempts[0].reason})`,
+              `↪️ Search Fallback: ${candidate} (selected ${provider}; ${attempts.map((a) => `${a.provider}: ${a.reason}`).join(", ")})`,
             );
           }
           return jsonResult(result);
