@@ -147,6 +147,18 @@ describe("createDiscordGatewayPlugin", () => {
     expect(baseRegisterClientSpy).not.toHaveBeenCalled();
   }
 
+  async function registerGatewayClientWithMetadata(params: {
+    plugin: unknown;
+    fetchMock: typeof globalFetchMock;
+  }) {
+    params.fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ url: "wss://gateway.discord.gg" }),
+    } as Response);
+    await registerGatewayClient(params.plugin);
+  }
+
   beforeEach(() => {
     vi.stubGlobal("fetch", globalFetchMock);
     baseRegisterClientSpy.mockClear();
@@ -161,23 +173,12 @@ describe("createDiscordGatewayPlugin", () => {
 
   it("uses safe gateway metadata lookup without proxy", async () => {
     const runtime = createRuntime();
-    globalFetchMock.mockResolvedValue({
-      ok: true,
-      status: 200,
-      text: async () => JSON.stringify({ url: "wss://gateway.discord.gg" }),
-    } as Response);
     const plugin = createDiscordGatewayPlugin({
       discordConfig: {},
       runtime,
     });
 
-    await (
-      plugin as unknown as {
-        registerClient: (client: { options: { token: string } }) => Promise<void>;
-      }
-    ).registerClient({
-      options: { token: "token-123" },
-    });
+    await registerGatewayClientWithMetadata({ plugin, fetchMock: globalFetchMock });
 
     expect(globalFetchMock).toHaveBeenCalledWith(
       "https://discord.com/api/v10/gateway/bot",
@@ -235,23 +236,12 @@ describe("createDiscordGatewayPlugin", () => {
 
   it("uses proxy fetch for gateway metadata lookup before registering", async () => {
     const runtime = createRuntime();
-    undiciFetchMock.mockResolvedValue({
-      ok: true,
-      status: 200,
-      text: async () => JSON.stringify({ url: "wss://gateway.discord.gg" }),
-    } as Response);
     const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "http://proxy.test:8080" },
       runtime,
     });
 
-    await (
-      plugin as unknown as {
-        registerClient: (client: { options: { token: string } }) => Promise<void>;
-      }
-    ).registerClient({
-      options: { token: "token-123" },
-    });
+    await registerGatewayClientWithMetadata({ plugin, fetchMock: undiciFetchMock });
 
     expect(restProxyAgentSpy).toHaveBeenCalledWith("http://proxy.test:8080");
     expect(undiciFetchMock).toHaveBeenCalledWith(

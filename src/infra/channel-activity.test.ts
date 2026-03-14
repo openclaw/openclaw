@@ -60,6 +60,30 @@ describe("channel activity", () => {
     });
   });
 
+  it("keeps activity isolated per account on the same channel", () => {
+    recordChannelActivity({
+      channel: "telegram",
+      accountId: "team-a",
+      direction: "inbound",
+      at: 10,
+    });
+    recordChannelActivity({
+      channel: "telegram",
+      accountId: "team-b",
+      direction: "outbound",
+      at: 20,
+    });
+
+    expect(getChannelActivity({ channel: "telegram", accountId: "team-a" })).toEqual({
+      inboundAt: 10,
+      outboundAt: null,
+    });
+    expect(getChannelActivity({ channel: "telegram", accountId: " team-b " })).toEqual({
+      inboundAt: null,
+      outboundAt: 20,
+    });
+  });
+
   it("reset clears previously recorded activity", () => {
     recordChannelActivity({ channel: "line", direction: "outbound", at: 7 });
     resetChannelActivityForTest();

@@ -40,6 +40,14 @@ function createCustomRootCfg(customRoot: string, defaultAgentId = "ops"): OpenCl
   };
 }
 
+async function resolveTargetsForCustomRoot(home: string, agentIds: string[]) {
+  const customRoot = path.join(home, "custom-state");
+  const storePaths = await createAgentSessionStores(customRoot, agentIds);
+  const cfg = createCustomRootCfg(customRoot);
+  const targets = await resolveAllAgentSessionStoreTargets(cfg, { env: process.env });
+  return { storePaths, targets };
+}
+
 function expectTargetsToContainStores(
   targets: Array<{ agentId: string; storePath: string }>,
   stores: Record<string, string>,
@@ -152,11 +160,7 @@ describe("resolveAllAgentSessionStoreTargets", () => {
 
   it("discovers retired agent stores under a configured custom session root", async () => {
     await withTempHome(async (home) => {
-      const customRoot = path.join(home, "custom-state");
-      const storePaths = await createAgentSessionStores(customRoot, ["ops", "retired"]);
-      const cfg = createCustomRootCfg(customRoot);
-
-      const targets = await resolveAllAgentSessionStoreTargets(cfg, { env: process.env });
+      const { storePaths, targets } = await resolveTargetsForCustomRoot(home, ["ops", "retired"]);
 
       expectTargetsToContainStores(targets, storePaths);
       expect(targets.filter((target) => target.storePath === storePaths.ops)).toHaveLength(1);
@@ -165,11 +169,10 @@ describe("resolveAllAgentSessionStoreTargets", () => {
 
   it("keeps the actual on-disk store path for discovered retired agents", async () => {
     await withTempHome(async (home) => {
-      const customRoot = path.join(home, "custom-state");
-      const storePaths = await createAgentSessionStores(customRoot, ["ops", "Retired Agent"]);
-      const cfg = createCustomRootCfg(customRoot);
-
-      const targets = await resolveAllAgentSessionStoreTargets(cfg, { env: process.env });
+      const { storePaths, targets } = await resolveTargetsForCustomRoot(home, [
+        "ops",
+        "Retired Agent",
+      ]);
 
       expect(targets).toEqual(
         expect.arrayContaining([

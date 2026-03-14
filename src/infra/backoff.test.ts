@@ -33,4 +33,14 @@ describe("backoff helpers", () => {
     await expect(sleepWithAbort(0, AbortSignal.abort())).resolves.toBeUndefined();
     await expect(sleepWithAbort(-5)).resolves.toBeUndefined();
   });
+
+  it("wraps aborted sleeps with a stable aborted error", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(sleepWithAbort(5, controller.signal)).rejects.toMatchObject({
+      message: "aborted",
+      cause: expect.anything(),
+    });
+  });
 });

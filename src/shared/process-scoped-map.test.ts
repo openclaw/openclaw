@@ -5,8 +5,8 @@ const MAP_KEY = Symbol("process-scoped-map:test");
 const OTHER_MAP_KEY = Symbol("process-scoped-map:other");
 
 afterEach(() => {
-  delete (process as Record<PropertyKey, unknown>)[MAP_KEY];
-  delete (process as Record<PropertyKey, unknown>)[OTHER_MAP_KEY];
+  delete (process as unknown as Record<symbol, unknown>)[MAP_KEY];
+  delete (process as unknown as Record<symbol, unknown>)[OTHER_MAP_KEY];
 });
 
 describe("shared/process-scoped-map", () => {
@@ -25,5 +25,15 @@ describe("shared/process-scoped-map", () => {
     const second = resolveProcessScopedMap<number>(OTHER_MAP_KEY);
 
     expect(second).not.toBe(first);
+  });
+
+  it("reuses a prepopulated process map without replacing it", () => {
+    const existing = new Map<string, number>([["a", 1]]);
+    (process as unknown as Record<symbol, unknown>)[MAP_KEY] = existing;
+
+    const resolved = resolveProcessScopedMap<number>(MAP_KEY);
+
+    expect(resolved).toBe(existing);
+    expect(resolved.get("a")).toBe(1);
   });
 });

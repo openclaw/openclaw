@@ -129,4 +129,33 @@ describe("shared/entry-status", () => {
       configChecks: [],
     });
   });
+
+  it("returns empty requirements when metadata and frontmatter are missing", () => {
+    const result = evaluateEntryMetadataRequirements({
+      always: false,
+      hasLocalBin: () => false,
+      localPlatform: "linux",
+      isEnvSatisfied: () => false,
+      isConfigSatisfied: () => false,
+    });
+
+    expect(result).toEqual({
+      required: {
+        bins: [],
+        anyBins: [],
+        env: [],
+        config: [],
+        os: [],
+      },
+      missing: {
+        bins: [],
+        anyBins: [],
+        env: [],
+        config: [],
+        os: [],
+      },
+      requirementsSatisfied: true,
+      configChecks: [],
+    });
+  });
 });

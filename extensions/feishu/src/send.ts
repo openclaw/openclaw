@@ -55,6 +55,30 @@ type FeishuCreateMessageClient = {
   };
 };
 
+type FeishuMessageSender = {
+  id?: string;
+  id_type?: string;
+  sender_type?: string;
+};
+
+type FeishuMessageGetItem = {
+  message_id?: string;
+  chat_id?: string;
+  chat_type?: FeishuChatType;
+  msg_type?: string;
+  body?: { content?: string };
+  sender?: FeishuMessageSender;
+  create_time?: string;
+};
+
+type FeishuGetMessageResponse = {
+  code?: number;
+  msg?: string;
+  data?: FeishuMessageGetItem & {
+    items?: FeishuMessageGetItem[];
+  };
+};
+
 /** Send a direct message as a fallback when a reply target is unavailable. */
 async function sendFallbackDirect(
   client: FeishuCreateMessageClient,
@@ -214,36 +238,7 @@ export async function getMessageFeishu(params: {
   try {
     const response = (await client.im.message.get({
       path: { message_id: messageId },
-    })) as {
-      code?: number;
-      msg?: string;
-      data?: {
-        items?: Array<{
-          message_id?: string;
-          chat_id?: string;
-          chat_type?: FeishuChatType;
-          msg_type?: string;
-          body?: { content?: string };
-          sender?: {
-            id?: string;
-            id_type?: string;
-            sender_type?: string;
-          };
-          create_time?: string;
-        }>;
-        message_id?: string;
-        chat_id?: string;
-        chat_type?: FeishuChatType;
-        msg_type?: string;
-        body?: { content?: string };
-        sender?: {
-          id?: string;
-          id_type?: string;
-          sender_type?: string;
-        };
-        create_time?: string;
-      };
-    };
+    })) as FeishuGetMessageResponse;
 
     if (response.code !== 0) {
       return null;
