@@ -92,7 +92,10 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   const record = params as Record<string, unknown>;
   const normalized = { ...record };
   // file_path → path (read, write, edit)
-  if ("file_path" in normalized && !("path" in normalized)) {
+  // Use truthy checks: when a model emits both file_path (non-empty) and path (""),
+  // the "in" operator sees path as present, skipping the alias and leaving path as ""
+  // which causes lstat("") → EISDIR/ENOENT.
+  if (normalized.file_path && !normalized.path) {
     normalized.path = normalized.file_path;
     delete normalized.file_path;
   }
