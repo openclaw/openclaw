@@ -1,6 +1,3 @@
-import { resolveFastModeState } from "../../agents/fast-mode.js";
-import { parseDurationMs } from "../../cli/parse-duration.js";
-import { isRestartEnabled } from "../../config/commands.js";
 import {
   formatThreadBindingDurationLabel,
   getThreadBindingManager,
@@ -10,16 +7,19 @@ import {
   resolveThreadBindingMaxAgeMs,
   setThreadBindingIdleTimeoutBySessionKey,
   setThreadBindingMaxAgeBySessionKey,
-} from "../../discord/monitor/thread-bindings.js";
+} from "../../../extensions/discord/src/monitor/thread-bindings.js";
+import {
+  setTelegramThreadBindingIdleTimeoutBySessionKey,
+  setTelegramThreadBindingMaxAgeBySessionKey,
+} from "../../../extensions/telegram/src/thread-bindings.js";
+import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { parseDurationMs } from "../../cli/parse-duration.js";
+import { isRestartEnabled } from "../../config/commands.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
-import {
-  setTelegramThreadBindingIdleTimeoutBySessionKey,
-  setTelegramThreadBindingMaxAgeBySessionKey,
-} from "../../telegram/thread-bindings.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";

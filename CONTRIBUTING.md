@@ -23,7 +23,7 @@ Welcome to the lobster tank! 🦞
 - **Jos** - Telegram, API, Nix mode
   - GitHub: [@joshp123](https://github.com/joshp123) · X: [@jjpcodes](https://x.com/jjpcodes)
 
-- **Ayaan Zaidi** - Telegram subsystem, iOS app
+- **Ayaan Zaidi** - Telegram subsystem, Android app
   - GitHub: [@obviyus](https://github.com/obviyus) · X: [@0bviyus](https://x.com/0bviyus)
 
 - **Tyler Yust** - Agents/subagents, cron, BlueBubbles, macOS app

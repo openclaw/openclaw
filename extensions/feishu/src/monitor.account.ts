@@ -12,10 +12,10 @@ import {
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
 import { createEventDispatcher } from "./client.js";
 import {
-  hasRecordedMessage,
-  hasRecordedMessagePersistent,
-  tryRecordMessage,
-  tryRecordMessagePersistent,
+  hasProcessedFeishuMessage,
+  recordProcessedFeishuMessage,
+  releaseFeishuMessageProcessing,
+  tryBeginFeishuMessageProcessing,
   warmupDedupFromDisk,
 } from "./dedup.js";
 import { isMentionForwardRequest } from "./mention.js";
@@ -264,6 +264,7 @@ function registerEventHandlers(
         runtime,
         chatHistories,
         accountId,
+        processingClaimHeld: true,
       });
     await enqueue(chatId, task);
   };
@@ -291,10 +292,8 @@ function registerEventHandlers(
       return;
     }
     for (const messageId of suppressedIds) {
-      // Keep in-memory dedupe in sync with handleFeishuMessage's keying.
-      tryRecordMessage(`${accountId}:${messageId}`);
       try {
-        await tryRecordMessagePersistent(messageId, accountId, log);
+        await recordProcessedFeishuMessage(messageId, accountId, log);
       } catch (err) {
         error(
           `feishu[${accountId}]: failed to record merged dedupe id ${messageId}: ${String(err)}`,
@@ -303,15 +302,7 @@ function registerEventHandlers(
     }
   };
   const isMessageAlreadyProcessed = async (entry: FeishuMessageEvent): Promise<boolean> => {
-    const messageId = entry.message.message_id?.trim();
-    if (!messageId) {
-      return false;
-    }
-    const memoryKey = `${accountId}:${messageId}`;
-    if (hasRecordedMessage(memoryKey)) {
-      return true;
-    }
-    return hasRecordedMessagePersistent(messageId, accountId, log);
+    return await hasProcessedFeishuMessage(entry.message.message_id, accountId, log);
   };
   const inboundDebouncer = core.channel.debounce.createInboundDebouncer<FeishuMessageEvent>({
     debounceMs: inboundDebounceMs,
@@ -384,19 +375,28 @@ function registerEventHandlers(
         },
       });
     },
-    onError: (err) => {
+    onError: (err, entries) => {
+      for (const entry of entries) {
+        releaseFeishuMessageProcessing(entry.message.message_id, accountId);
+      }
       error(`feishu[${accountId}]: inbound debounce flush failed: ${String(err)}`);
     },
   });
 
   eventDispatcher.register({
     "im.message.receive_v1": async (data) => {
+      const event = data as unknown as FeishuMessageEvent;
+      const messageId = event.message?.message_id?.trim();
+      if (!tryBeginFeishuMessageProcessing(messageId, accountId)) {
+        log(`feishu[${accountId}]: dropping duplicate event for message ${messageId}`);
+        return;
+      }
       const processMessage = async () => {
-        const event = data as unknown as FeishuMessageEvent;
         await inboundDebouncer.enqueue(event);
       };
       if (fireAndForget) {
         void processMessage().catch((err) => {
+          releaseFeishuMessageProcessing(messageId, accountId);
           error(`feishu[${accountId}]: error handling message: ${String(err)}`);
         });
         return;
@@ -404,6 +404,7 @@ function registerEventHandlers(
       try {
         await processMessage();
       } catch (err) {
+        releaseFeishuMessageProcessing(messageId, accountId);
         error(`feishu[${accountId}]: error handling message: ${String(err)}`);
       }
     },

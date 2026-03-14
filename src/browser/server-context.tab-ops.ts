@@ -1,6 +1,7 @@
 import { CDP_JSON_NEW_TIMEOUT_MS } from "./cdp-timeouts.js";
 import { fetchJson, fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath, createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
+import { listChromeMcpTabs, openChromeMcpTab } from "./chrome-mcp.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import {
   assertBrowserNavigationAllowed,
@@ -65,6 +66,10 @@ export function createProfileTabOps({
   const capabilities = getBrowserProfileCapabilities(profile);
 
   const listTabs = async (): Promise<BrowserTab[]> => {
+    if (capabilities.usesChromeMcp) {
+      return await listChromeMcpTabs(profile.name);
+    }
+
     if (capabilities.usesPersistentPlaywright) {
       const mod = await getPwAiModule({ mode: "strict" });
       const listPagesViaPlaywright = (mod as Partial<PwAiModule> | null)?.listPagesViaPlaywright;
@@ -133,6 +138,15 @@ export function createProfileTabOps({
 
   const openTab = async (url: string): Promise<BrowserTab> => {
     const ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy);
+
+    if (capabilities.usesChromeMcp) {
+      await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
+      const page = await openChromeMcpTab(profile.name, url);
+      const profileState = getProfileState();
+      profileState.lastTargetId = page.targetId;
+      await assertBrowserNavigationResultAllowed({ url: page.url, ...ssrfPolicyOpts });
+      return page;
+    }
 
     if (capabilities.usesPersistentPlaywright) {
       const mod = await getPwAiModule({ mode: "strict" });
