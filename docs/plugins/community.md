@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **Tier Router** — Rules-based complexity routing across model tiers. Routes simple tasks to cheap local models, complex tasks to capable cloud models, with deterministic classification and zero token cost for routing decisions.
+  npm: `@shawnmandel/openclaw-tier-router`
+  repo: `https://github.com/shawnmandel/openclaw-tier-router`
+  install: `openclaw plugins install @shawnmandel/openclaw-tier-router`
