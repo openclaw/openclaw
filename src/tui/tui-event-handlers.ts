@@ -203,7 +203,13 @@ export function createEventHandlers(context: EventHandlerContext) {
     // A remote user message arrived on this session (e.g. from Telegram/Discord).
     // Append it to the chat log immediately so the TUI live-tails the conversation
     // without requiring a manual reload.
+    // Skip messages that originated from this TUI instance — the local send path
+    // (tui-command-handlers.ts sendMessage) already calls chatLog.addUser() before
+    // the RPC, so the broadcast echo would produce a duplicate entry.
     if (evt.state === "user-message") {
+      if (isLocalRunId?.(evt.runId)) {
+        return;
+      }
       const text =
         evt.message && typeof evt.message === "object" && !Array.isArray(evt.message)
           ? typeof (evt.message as Record<string, unknown>).text === "string"

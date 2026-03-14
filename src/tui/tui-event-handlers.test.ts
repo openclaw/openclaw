@@ -661,5 +661,26 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       expect(chatLog.addUser).not.toHaveBeenCalled();
       expect(tui.requestRender).not.toHaveBeenCalled();
     });
+
+    // Regression: gateway broadcasts user-message to all connected clients including
+    // the originating TUI. The local send path already calls chatLog.addUser() before
+    // the RPC, so the broadcast echo must be suppressed to avoid duplicate entries.
+    it("ignores user-message echo for locally-originated runs (P1 regression #45417)", () => {
+      const { state, chatLog, tui, noteLocalRunId, handleChatEvent } = createHandlersHarness();
+
+      noteLocalRunId("local-run-99");
+
+      const evt: ChatEvent = {
+        runId: "local-run-99",
+        sessionKey: state.currentSessionKey,
+        state: "user-message",
+        message: { text: "Hello from this TUI" },
+      };
+
+      handleChatEvent(evt);
+
+      expect(chatLog.addUser).not.toHaveBeenCalled();
+      expect(tui.requestRender).not.toHaveBeenCalled();
+    });
   });
 });
