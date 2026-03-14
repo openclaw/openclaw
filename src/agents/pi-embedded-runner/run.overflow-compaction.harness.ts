@@ -137,6 +137,15 @@ export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
 export const mockedPickFallbackThinkingLevel = vi.fn<(params?: unknown) => ThinkLevel | null>(
   () => null,
 );
+export const mockedGetApiKeyForModel = vi.fn(
+  async ({ profileId }: { profileId?: string } = {}) => ({
+    apiKey: "test-key",
+    profileId: profileId ?? "test-profile",
+    source: "test",
+    mode: "api-key" as const,
+  }),
+);
+export const mockedResolveAuthProfileOrder = vi.fn(() => [] as string[]);
 
 export const overflowBaseRunParams = {
   sessionId: "test-session",
@@ -226,6 +235,17 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   });
   mockedPickFallbackThinkingLevel.mockReset();
   mockedPickFallbackThinkingLevel.mockReturnValue(null);
+  mockedGetApiKeyForModel.mockReset();
+  mockedGetApiKeyForModel.mockImplementation(
+    async ({ profileId }: { profileId?: string } = {}) => ({
+      apiKey: "test-key",
+      profileId: profileId ?? "test-profile",
+      source: "test",
+      mode: "api-key",
+    }),
+  );
+  mockedResolveAuthProfileOrder.mockReset();
+  mockedResolveAuthProfileOrder.mockReturnValue([]);
 }
 
 export async function loadRunOverflowCompactionHarness(): Promise<{
@@ -329,12 +349,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("../model-auth.js", () => ({
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
     ensureAuthProfileStore: vi.fn(() => ({})),
-    getApiKeyForModel: vi.fn(async () => ({
-      apiKey: "test-key",
-      profileId: "test-profile",
-      source: "test",
-    })),
-    resolveAuthProfileOrder: vi.fn(() => []),
+    getApiKeyForModel: mockedGetApiKeyForModel,
+    resolveAuthProfileOrder: mockedResolveAuthProfileOrder,
   }));
 
   vi.doMock("../models-config.js", () => ({
