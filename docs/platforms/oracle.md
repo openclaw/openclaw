@@ -16,7 +16,7 @@ Run a persistent OpenClaw Gateway on Oracle Cloud's **Always Free** ARM tier.
 Oracle’s free tier can be a great fit for OpenClaw (especially if you already have an OCI account), but it comes with tradeoffs:
 
 - ARM architecture (most things work, but some binaries may be x86-only)
-- Capacity is finicky, and sometimes requires Pay-to-Go for requesting instances
+- Capacity is finicky in some regions; upgrading to Pay-to-Go can help when the free tier has no available capacity
 
 ## Cost Comparison (2026)
 
