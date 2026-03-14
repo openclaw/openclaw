@@ -92,8 +92,10 @@ vi.mock("../infra/home-dir.js", () => ({
 
 const {
   __testing,
+  buildPluginBindingApprovalCustomId,
   detachPluginConversationBinding,
   getCurrentPluginConversationBinding,
+  parsePluginBindingApprovalCustomId,
   requestPluginConversationBinding,
   resolvePluginConversationBindingApproval,
 } = await import("./conversation-binding.js");
@@ -130,6 +132,20 @@ describe("plugin conversation binding approvals", () => {
     registerSessionBindingAdapter(createAdapter("discord", "work"));
     registerSessionBindingAdapter(createAdapter("discord", "isolated"));
     registerSessionBindingAdapter(createAdapter("telegram", "default"));
+  });
+
+  it("keeps Telegram bind approval callback_data within Telegram's limit", () => {
+    const allowOnce = buildPluginBindingApprovalCustomId("abcdefghijkl", "allow-once");
+    const allowAlways = buildPluginBindingApprovalCustomId("abcdefghijkl", "allow-always");
+    const deny = buildPluginBindingApprovalCustomId("abcdefghijkl", "deny");
+
+    expect(Buffer.byteLength(allowOnce, "utf8")).toBeLessThanOrEqual(64);
+    expect(Buffer.byteLength(allowAlways, "utf8")).toBeLessThanOrEqual(64);
+    expect(Buffer.byteLength(deny, "utf8")).toBeLessThanOrEqual(64);
+    expect(parsePluginBindingApprovalCustomId(allowAlways)).toEqual({
+      approvalId: "abcdefghijkl",
+      decision: "allow-always",
+    });
   });
 
   it("requires a fresh approval again after allow-once is consumed", async () => {

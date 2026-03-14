@@ -9,6 +9,7 @@ import type { GatewayPresenceUpdate } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import type { DiscordAccountConfig } from "../../../../src/config/types.discord.js";
+import { buildPluginBindingApprovalCustomId } from "../../../../src/plugins/conversation-binding.js";
 import { buildAgentSessionKey } from "../../../../src/routing/resolve-route.js";
 import {
   clearDiscordComponentEntries,
@@ -53,6 +54,8 @@ const recordInboundSessionMock = vi.hoisted(() => vi.fn());
 const readSessionUpdatedAtMock = vi.hoisted(() => vi.fn());
 const resolveStorePathMock = vi.hoisted(() => vi.fn());
 const dispatchPluginInteractiveHandlerMock = vi.hoisted(() => vi.fn());
+const resolvePluginConversationBindingApprovalMock = vi.hoisted(() => vi.fn());
+const buildPluginBindingResolvedTextMock = vi.hoisted(() => vi.fn());
 let lastDispatchCtx: Record<string, unknown> | undefined;
 
 vi.mock("../../../../src/pairing/pairing-store.js", () => ({
@@ -89,8 +92,20 @@ vi.mock("../../../../src/config/sessions.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../plugins/interactive.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../plugins/interactive.js")>();
+vi.mock("../../../../src/plugins/conversation-binding.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../../src/plugins/conversation-binding.js")>();
+  return {
+    ...actual,
+    resolvePluginConversationBindingApproval: (...args: unknown[]) =>
+      resolvePluginConversationBindingApprovalMock(...args),
+    buildPluginBindingResolvedText: (...args: unknown[]) =>
+      buildPluginBindingResolvedTextMock(...args),
+  };
+});
+
+vi.mock("../../../../src/plugins/interactive.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/plugins/interactive.js")>();
   return {
     ...actual,
     dispatchPluginInteractiveHandler: (...args: unknown[]) =>
@@ -356,6 +371,33 @@ describe("discord component interactions", () => {
       handled: false,
       duplicate: false,
     });
+    resolvePluginConversationBindingApprovalMock.mockReset().mockResolvedValue({
+      status: "approved",
+      binding: {
+        bindingId: "binding-1",
+        pluginId: "openclaw-codex-app-server",
+        pluginName: "OpenClaw App Server",
+        pluginRoot: "/plugins/codex",
+        channel: "discord",
+        accountId: "default",
+        conversationId: "user:123456789",
+        boundAt: Date.now(),
+      },
+      request: {
+        id: "approval-1",
+        pluginId: "openclaw-codex-app-server",
+        pluginName: "OpenClaw App Server",
+        pluginRoot: "/plugins/codex",
+        requestedAt: Date.now(),
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "user:123456789",
+        },
+      },
+      decision: "allow-once",
+    });
+    buildPluginBindingResolvedTextMock.mockReset().mockReturnValue("Binding approved.");
   });
 
   it("routes button clicks with reply references", async () => {
@@ -599,6 +641,30 @@ describe("discord component interactions", () => {
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 
+  it("does not fall through to Claw when a plugin Discord interaction already replied", async () => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry({ callbackData: "codex:approve" })],
+      modals: [],
+    });
+    dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: any) => {
+      await params.respond.reply({ text: "✓", ephemeral: true });
+      return {
+        matched: true,
+        handled: true,
+        duplicate: false,
+      };
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const { interaction, reply } = createComponentButtonInteraction();
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+    expect(dispatchReplyMock).not.toHaveBeenCalled();
+  });
+
   it("falls through to built-in Discord component routing when a plugin declines handling", async () => {
     registerDiscordComponentEntries({
       entries: [createButtonEntry({ callbackData: "codex:approve" })],
@@ -618,6 +684,35 @@ describe("discord component interactions", () => {
     expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledTimes(1);
     expect(reply).toHaveBeenCalledWith({ content: "✓" });
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves plugin binding approvals without falling through to Claw", async () => {
+    registerDiscordComponentEntries({
+      entries: [
+        createButtonEntry({
+          callbackData: buildPluginBindingApprovalCustomId("approval-1", "allow-once"),
+        }),
+      ],
+      modals: [],
+    });
+    const button = createDiscordComponentButton(createComponentContext());
+    const update = vi.fn().mockResolvedValue(undefined);
+    const followUp = vi.fn().mockResolvedValue(undefined);
+    const interaction = {
+      ...(createComponentButtonInteraction().interaction as any),
+      update,
+      followUp,
+    } as ButtonInteraction;
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(resolvePluginConversationBindingApprovalMock).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith({ components: [] });
+    expect(followUp).toHaveBeenCalledWith({
+      content: "Binding approved.",
+      ephemeral: true,
+    });
+    expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 });
 

@@ -269,6 +269,11 @@ function buildTelegramButtons(approvalId: string) {
   ];
 }
 
+function createApprovalRequestId(): string {
+  // Keep approval ids compact so Telegram callback_data stays under its 64-byte limit.
+  return crypto.randomBytes(9).toString("base64url");
+}
+
 function loadApprovalsFromDisk(): PluginBindingApprovalsFile {
   const filePath = resolveApprovalsPath();
   try {
@@ -507,10 +512,8 @@ export function buildPluginBindingApprovalCustomId(
   approvalId: string,
   decision: PluginBindingApprovalDecision,
 ): string {
-  return [
-    `${PLUGIN_BINDING_CUSTOM_ID_PREFIX}:id=${encodeCustomIdValue(approvalId)}`,
-    `decision=${decision}`,
-  ].join(";");
+  const decisionCode = decision === "allow-once" ? "o" : decision === "allow-always" ? "a" : "d";
+  return `${PLUGIN_BINDING_CUSTOM_ID_PREFIX}:${encodeCustomIdValue(approvalId)}:${decisionCode}`;
 }
 
 export function parsePluginBindingApprovalCustomId(
@@ -521,13 +524,24 @@ export function parsePluginBindingApprovalCustomId(
     return null;
   }
   const body = trimmed.slice(`${PLUGIN_BINDING_CUSTOM_ID_PREFIX}:`.length);
-  const params = new URLSearchParams(body.replaceAll(";", "&"));
-  const rawId = params.get("id")?.trim() ?? "";
-  const rawDecision = params.get("decision")?.trim() ?? "";
+  const separator = body.lastIndexOf(":");
+  if (separator <= 0 || separator === body.length - 1) {
+    return null;
+  }
+  const rawId = body.slice(0, separator).trim();
+  const rawDecisionCode = body.slice(separator + 1).trim();
   if (!rawId) {
     return null;
   }
-  if (rawDecision !== "allow-once" && rawDecision !== "allow-always" && rawDecision !== "deny") {
+  const rawDecision =
+    rawDecisionCode === "o"
+      ? "allow-once"
+      : rawDecisionCode === "a"
+        ? "allow-always"
+        : rawDecisionCode === "d"
+          ? "deny"
+          : null;
+  if (!rawDecision) {
     return null;
   }
   return {
@@ -610,7 +624,7 @@ export async function requestPluginConversationBinding(params: {
   }
 
   const request: PendingPluginBindingRequest = {
-    id: crypto.randomUUID(),
+    id: createApprovalRequestId(),
     pluginId: params.pluginId,
     pluginName: params.pluginName,
     pluginRoot: params.pluginRoot,
