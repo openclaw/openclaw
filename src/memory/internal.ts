@@ -163,12 +163,21 @@ export async function listMemoryFiles(
       } catch {}
     }
   }
-  if (result.length <= 1) {
-    return result;
+  // Filter out files under shared/excluded directories (before dedup/early return)
+  let filtered = result;
+  if (excludePaths && excludePaths.length > 0) {
+    const resolved = excludePaths.map((p) => path.resolve(p));
+    filtered = result.filter((f) => {
+      const abs = path.resolve(f);
+      return !resolved.some((exc) => abs.startsWith(exc + path.sep) || abs === exc);
+    });
+  }
+  if (filtered.length <= 1) {
+    return filtered;
   }
   const seen = new Set<string>();
   const deduped: string[] = [];
-  for (const entry of result) {
+  for (const entry of filtered) {
     let key = entry;
     try {
       key = await fs.realpath(entry);
@@ -178,14 +187,6 @@ export async function listMemoryFiles(
     }
     seen.add(key);
     deduped.push(entry);
-  }
-  // Filter out files under shared/excluded directories
-  if (excludePaths && excludePaths.length > 0) {
-    const resolved = excludePaths.map((p) => path.resolve(p));
-    return deduped.filter((f) => {
-      const abs = path.resolve(f);
-      return !resolved.some((exc) => abs.startsWith(exc + path.sep) || abs === exc);
-    });
   }
   return deduped;
 }
