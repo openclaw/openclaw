@@ -2059,15 +2059,16 @@ export async function runEmbeddedAttempt(
         );
       }
 
-      if (anthropicPayloadLogger) {
+      const useReplacedContentInLogs = params.config?.privacy?.log?.useReplacedContent !== false;
+      if (anthropicPayloadLogger && useReplacedContentInLogs) {
+        // Logger is inner wrapper so outer privacy filter can redact outbound payloads
+        // before they are captured in logs.
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
         );
       }
 
       // Privacy filter: replace sensitive content before sending to LLM API.
-      // Applied AFTER the payload logger so privacy is the outer wrapper —
-      // the logger sees already-filtered content, preventing sensitive data in logs.
       const privacyEnabled = params.config?.privacy?.enabled !== false;
       let privacyCtx: PrivacyFilterContext | undefined;
       if (privacyEnabled) {
@@ -2084,6 +2085,14 @@ export async function runEmbeddedAttempt(
             `[privacy] Failed to initialize privacy filter, continuing without: ${(err as Error).message}`,
           );
         }
+      }
+
+      if (anthropicPayloadLogger && !useReplacedContentInLogs) {
+        // Logger is outer wrapper and captures original outbound payloads when
+        // replacement-in-logs is explicitly disabled.
+        activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
+          activeSession.agent.streamFn,
+        );
       }
 
       try {
