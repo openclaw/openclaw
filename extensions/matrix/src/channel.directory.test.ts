@@ -1,5 +1,6 @@
 import type { PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/matrix";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
 import { matrixPlugin } from "./channel.js";
 import { setMatrixRuntime } from "./runtime.js";
 import { createMatrixBotSdkMock } from "./test-mocks.js";
@@ -10,13 +11,7 @@ vi.mock("@vector-im/matrix-bot-sdk", () =>
 );
 
 describe("matrix directory", () => {
-  const runtimeEnv: RuntimeEnv = {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn((code: number): never => {
-      throw new Error(`exit ${code}`);
-    }),
-  };
+  const runtimeEnv: RuntimeEnv = createRuntimeEnv();
 
   beforeEach(() => {
     setMatrixRuntime({
