@@ -392,7 +392,6 @@ describe("sendMessageMatrix media", () => {
     expect(sendMessage).not.toHaveBeenCalled();
     expect(matrixLogWarnMock).not.toHaveBeenCalled();
   });
-
   it("does not replay already-sent chunks when a later Matrix user-target send fails", async () => {
     const userId = "@user:example.org";
     const staleRoom = "!stale:example.org";
