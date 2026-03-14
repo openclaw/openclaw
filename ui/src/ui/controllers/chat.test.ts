@@ -572,6 +572,93 @@ describe("sendChatMessage", () => {
       ],
     });
   });
+
+  it("sends attachment-only turns with image payloads", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "", [
+      {
+        id: "att-1",
+        mimeType: "image/png",
+        dataUrl: "data:image/png;base64,QUJDRA==",
+      },
+    ]);
+
+    expect(result).toEqual(expect.any(String));
+    expect(request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "main",
+      message: "",
+      deliver: false,
+      idempotencyKey: expect.any(String),
+      attachments: [
+        {
+          type: "image",
+          mimeType: "image/png",
+          content: "QUJDRA==",
+        },
+      ],
+    });
+  });
+
+  it("keeps image attachments when data URLs include extra metadata parameters", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "see attached", [
+      {
+        id: "att-2",
+        mimeType: "image/png",
+        dataUrl: " data:image/png;charset=utf-8;name=clip.png;base64,QUJDRA== ",
+      },
+    ]);
+
+    expect(result).toEqual(expect.any(String));
+    expect(request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "main",
+      message: "see attached",
+      deliver: false,
+      idempotencyKey: expect.any(String),
+      attachments: [
+        {
+          type: "image",
+          mimeType: "image/png",
+          content: "QUJDRA==",
+        },
+      ],
+    });
+  });
+
+  it("drops malformed attachment data URLs without blocking text sends", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "hello", [
+      {
+        id: "att-3",
+        mimeType: "image/png",
+        dataUrl: "data:image/png,not-base64",
+      },
+    ]);
+
+    expect(result).toEqual(expect.any(String));
+    expect(request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "main",
+      message: "hello",
+      deliver: false,
+      idempotencyKey: expect.any(String),
+      attachments: [],
+    });
+  });
 });
 
 describe("abortChatRun", () => {
