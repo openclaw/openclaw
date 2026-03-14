@@ -11,6 +11,8 @@ import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.app.ActivityCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -86,22 +88,55 @@ class PermissionRequester(private val activity: ComponentActivity) {
 
   private suspend fun showRationaleDialog(permissions: List<String>): Boolean =
     withContext(Dispatchers.Main) {
+      if (activity.isFinishing || activity.isDestroyed) {
+        return@withContext false
+      }
       suspendCancellableCoroutine { cont ->
-        AlertDialog.Builder(activity)
-          .setTitle("Permission required")
-          .setMessage(buildRationaleMessage(permissions))
-          .setPositiveButton("Continue") { _, _ -> cont.resume(true) }
-          .setNegativeButton("Not now") { _, _ -> cont.resume(false) }
-          .setOnCancelListener { cont.resume(false) }
-          .show()
+        val lifecycle = activity.lifecycle
+        var dialog: AlertDialog? = null
+        var observer: LifecycleEventObserver? = null
+        observer =
+          LifecycleEventObserver { _, event ->
+            if (event != Lifecycle.Event.ON_DESTROY || !cont.isActive) return@LifecycleEventObserver
+            dialog?.dismiss()
+            observer?.let(lifecycle::removeObserver)
+            cont.resume(false)
+          }
+        lifecycle.addObserver(observer)
+        cont.invokeOnCancellation {
+          observer?.let(lifecycle::removeObserver)
+          dialog?.dismiss()
+        }
+        dialog =
+          AlertDialog.Builder(activity)
+            .setTitle("Permission required")
+            .setMessage(buildRationaleMessage(permissions))
+            .setPositiveButton("Continue") { _, _ ->
+              if (!cont.isActive) return@setPositiveButton
+              observer?.let(lifecycle::removeObserver)
+              cont.resume(true)
+            }
+            .setNegativeButton("Not now") { _, _ ->
+              if (!cont.isActive) return@setNegativeButton
+              observer?.let(lifecycle::removeObserver)
+              cont.resume(false)
+            }
+            .setOnCancelListener {
+              if (!cont.isActive) return@setOnCancelListener
+              observer?.let(lifecycle::removeObserver)
+              cont.resume(false)
+            }
+            .show()
       }
     }
 
   private fun showSettingsDialog(permissions: List<String>) {
+    if (activity.isFinishing || activity.isDestroyed) return
     AlertDialog.Builder(activity)
       .setTitle("Enable permission in Settings")
       .setMessage(buildSettingsMessage(permissions))
       .setPositiveButton("Open Settings") { _, _ ->
+        if (activity.isFinishing || activity.isDestroyed) return@setPositiveButton
         val intent =
           Intent(
             Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
