@@ -24,11 +24,20 @@ function isLikelyVoiceId(value: string): boolean {
 }
 
 async function listVoices(apiKey: string): Promise<ElevenLabsVoice[]> {
-  const res = await fetch("https://api.elevenlabs.io/v1/voices", {
-    headers: {
-      "xi-api-key": apiKey,
-    },
-  });
+  let res: Response;
+  try {
+    res = await fetch("https://api.elevenlabs.io/v1/voices", {
+      headers: {
+        "xi-api-key": apiKey,
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (err) {
+    throw new Error(
+      `ElevenLabs voices API error: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
   if (!res.ok) {
     throw new Error(`ElevenLabs voices API error (${res.status})`);
   }
