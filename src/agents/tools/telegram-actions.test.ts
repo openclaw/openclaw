@@ -28,6 +28,7 @@ const createForumTopicTelegram = vi.fn(async () => ({
   name: "Topic",
   chatId: "123",
 }));
+const editForumTopicTelegram = vi.fn(async () => ({ ok: true }));
 let envSnapshot: ReturnType<typeof captureEnv>;
 
 vi.mock("../../../extensions/telegram/src/send.js", () => ({
@@ -44,6 +45,8 @@ vi.mock("../../../extensions/telegram/src/send.js", () => ({
     editMessageTelegram(...args),
   createForumTopicTelegram: (...args: Parameters<typeof createForumTopicTelegram>) =>
     createForumTopicTelegram(...args),
+  editForumTopicTelegram: (...args: Parameters<typeof editForumTopicTelegram>) =>
+    editForumTopicTelegram(...args),
 }));
 
 describe("handleTelegramAction", () => {
@@ -106,6 +109,7 @@ describe("handleTelegramAction", () => {
     deleteMessageTelegram.mockClear();
     editMessageTelegram.mockClear();
     createForumTopicTelegram.mockClear();
+    editForumTopicTelegram.mockClear();
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
 
@@ -456,6 +460,14 @@ describe("handleTelegramAction", () => {
       assertCall: (
         readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
       ) => readCallOpts(createForumTopicTelegram.mock.calls as unknown[][], 2),
+    },
+    {
+      name: "editForumTopic",
+      params: { action: "editForumTopic", chatId: "123", messageThreadId: 42, name: "New" },
+      cfg: telegramConfig({ actions: { editForumTopic: true } }),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(editForumTopicTelegram.mock.calls as unknown[][], 2),
     },
   ])("forwards resolved cfg for $name action", async ({ params, cfg, assertCall }) => {
     const readCallOpts = (calls: unknown[][], argIndex: number): Record<string, unknown> => {
