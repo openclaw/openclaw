@@ -13,6 +13,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { displayPath } from "../utils.js";
 import {
+  ensureDependencies,
   ensureDependency,
   ensureGcloudAuth,
   ensureSubscription,
@@ -76,11 +77,14 @@ export type GmailRunOptions = GmailCommonOptions & {
 const DEFAULT_GMAIL_TOPIC_IAM_MEMBER = "serviceAccount:gmail-api-push@system.gserviceaccount.com";
 
 export async function runGmailSetup(opts: GmailSetupOptions) {
-  await ensureDependency("gcloud", ["--cask", "gcloud-cli"]);
-  await ensureDependency("gog", ["gogcli"]);
+  const dependencyMap: Record<string, string[]> = {
+    gcloud: ["--cask", "gcloud-cli"],
+    gog: ["gogcli"],
+  };
   if (opts.tailscale !== "off" && !opts.pushEndpoint) {
-    await ensureDependency("tailscale", ["tailscale"]);
+    dependencyMap.tailscale = ["tailscale"];
   }
+  await ensureDependencies(dependencyMap, { silent: Boolean(opts.json) });
 
   await ensureGcloudAuth();
 
