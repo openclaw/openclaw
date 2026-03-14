@@ -26,10 +26,10 @@ export function isReasoningTagProvider(provider: string | undefined | null): boo
     return true;
   }
 
-  // Handle Minimax (M2.5 is chatty/reasoning-like)
-  if (normalized.includes("minimax")) {
-    return true;
-  }
+  // Note: MiniMax is intentionally excluded — its OpenAI-compatible endpoint
+  // handles reasoning natively via the `reasoning_content` field in streaming
+  // chunks (same as Ollama, see #2279). Tag-based enforcement discards all
+  // output because MiniMax never emits <final> tags.
 
   return false;
 }
