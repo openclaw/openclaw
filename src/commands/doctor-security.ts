@@ -58,12 +58,14 @@ async function resolveDoctorSecurityAccountContext(params: {
   plugin: (typeof listChannelPlugins extends () => infer T ? T : never)[number];
   cfg: OpenClawConfig;
 }) {
+  let unresolvedSecretRefError: unknown;
   try {
     return await resolveDefaultChannelAccountContext(params.plugin, params.cfg);
   } catch (error) {
     if (!isUnresolvedSecretRefError(error)) {
       throw error;
     }
+    unresolvedSecretRefError = error;
   }
 
   const accountIds = params.plugin.config.listAccountIds(params.cfg);
@@ -80,7 +82,7 @@ async function resolveDoctorSecurityAccountContext(params: {
       accountId: defaultAccountId,
     });
   if (!account) {
-    return null;
+    throw unresolvedSecretRefError;
   }
   const enabled = params.plugin.config.isEnabled
     ? params.plugin.config.isEnabled(account, params.cfg)
