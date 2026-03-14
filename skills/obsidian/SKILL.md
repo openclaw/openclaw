@@ -1,6 +1,6 @@
 ---
 name: obsidian
-description: Work with Obsidian vaults (plain Markdown notes) and automate via obsidian-cli.
+description: "Work with Obsidian vaults (plain Markdown notes) and automate via obsidian-cli. Use when creating, searching, opening, or managing notes in Obsidian. Trigger phrases: 'add to Obsidian', 'create a note', 'search my vault', 'open note', 'daily note'. NOT for: Apple Notes (use apple-notes skill), Bear (use bear-notes skill), or general file management."
 homepage: https://help.obsidian.md
 metadata:
   {

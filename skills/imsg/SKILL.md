@@ -1,6 +1,6 @@
 ---
 name: imsg
-description: iMessage/SMS CLI for listing chats, history, and sending messages via Messages.app.
+description: "iMessage/SMS CLI for listing chats, history, and sending messages via Messages.app. Use when sending iMessages or SMS, reading chat history, or listing conversations. Trigger phrases: 'text', 'iMessage', 'send SMS', 'check messages'. NOT for: platforms with dedicated integrations (Discord, Telegram, Slack — use their skills), or when bluebubbles is configured (prefer that for iMessage)."
 homepage: https://imsg.to
 metadata:
   {
