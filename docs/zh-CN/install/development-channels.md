@@ -5,10 +5,10 @@ read_when:
 summary: stable、beta 和 dev 渠道：语义、切换和标签
 title: 开发渠道
 x-i18n:
-  generated_at: "2026-02-03T10:07:21Z"
+  generated_at: "2026-03-11T12:00:00Z"
   model: claude-opus-4-5
   provider: pi
-  source_hash: 2b01219b7e705044ce39838a0da7c7fa65c719809ab2f8a51e14529064af81bf
+  source_hash: a585ce9f2a9c61271c2a0f56cfb6c20645029a32
   source_path: install/development-channels.md
   workflow: 15
 ---
@@ -66,7 +66,9 @@ openclaw update --channel dev
 
 ## 标签最佳实践
 
-- 为你希望 git checkout 落在的发布版本打标签（`vYYYY.M.D` 或 `vYYYY.M.D-<patch>`）。
+- 为你希望 git checkout 落在的发布版本打标签（`vYYYY.M.D` 表示 stable，`vYYYY.M.D-beta.N` 表示 beta）。
+- `vYYYY.M.D.beta.N` 也可识别（兼容），但推荐使用 `-beta.N`。
+- 旧版 `vYYYY.M.D-<patch>` 标签仍被视为 stable（非 beta）。
 - 保持标签不可变：永远不要移动或重用标签。
 - npm dist-tag 仍然是 npm 安装的数据源：
   - `latest` → stable
