@@ -1,3 +1,4 @@
+import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
   createAuthChoiceAgentModelNoter,
@@ -94,8 +95,77 @@ export async function applyAuthChoiceOpenAI(
       return { config: nextConfig, agentModelOverride };
     }
     if (creds) {
+      let derivedEmail =
+        typeof creds?.email === "string" && creds.email.trim() ? creds.email.trim() : "";
+      if (!derivedEmail && typeof creds?.access === "string") {
+        try {
+          const tokenParts = creds.access.split(".");
+          if (tokenParts.length >= 2) {
+            const payload = JSON.parse(Buffer.from(tokenParts[1], "base64url").toString("utf8"));
+            derivedEmail =
+              payload?.["https://api.openai.com/profile"]?.email || payload?.email || "";
+          }
+        } catch {
+          // best-effort email extraction for picker labels
+        }
+      }
+
+      const emailSuffix = derivedEmail || "default";
+      const defaultProfileId = "openai-codex:default";
+      const emailProfileId = `openai-codex:${emailSuffix}`;
+      const store = ensureAuthProfileStore(params.agentDir);
+      const existingProfileIds = listProfilesForProvider(store, "openai-codex");
+      let altIndex = 1;
+      while (existingProfileIds.includes(`openai-codex:alt${altIndex}`)) {
+        altIndex += 1;
+      }
+      const altProfileId = `openai-codex:alt${altIndex}`;
+
+      let requestedProfileId = params.opts?.profileId ? String(params.opts.profileId).trim() : "";
+      const hasDefaultProfile = existingProfileIds.includes(defaultProfileId);
+      if (!requestedProfileId) {
+        if (!hasDefaultProfile) {
+          requestedProfileId = defaultProfileId;
+        } else {
+          const choice = String(
+            await params.prompter.select({
+              message: "Profile id",
+              options: [
+                {
+                  value: emailProfileId,
+                  label: `email (${emailProfileId})`,
+                  hint: "recommended for account visibility",
+                },
+                { value: altProfileId, label: `altN (${altProfileId})`, hint: "next free alias" },
+                {
+                  value: "__custom__",
+                  label: "custom",
+                  hint: "set any provider:profile id",
+                },
+                {
+                  value: defaultProfileId,
+                  label: `default (${defaultProfileId})`,
+                  hint: "will overwrite current default",
+                },
+              ],
+            }),
+          ).trim();
+          if (choice === "__custom__") {
+            requestedProfileId = String(
+              await params.prompter.text({
+                message: "Custom profile id",
+                initialValue: altProfileId,
+              }),
+            ).trim();
+          } else {
+            requestedProfileId = choice;
+          }
+        }
+      }
+
       const profileId = await writeOAuthCredentials("openai-codex", creds, params.agentDir, {
         syncSiblingAgents: true,
+        profileId: requestedProfileId || undefined,
       });
       nextConfig = applyAuthProfileConfig(nextConfig, {
         profileId,

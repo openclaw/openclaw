@@ -110,6 +110,9 @@ export type ProviderAuthContext = {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   isRemote: boolean;
+  opts?: {
+    profileId?: string;
+  };
   openUrl: (url: string) => Promise<void>;
   oauth: {
     createVpsAwareHandlers: typeof createVpsAwareOAuthHandlers;

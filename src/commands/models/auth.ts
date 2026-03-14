@@ -267,6 +267,7 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
 type LoginOptions = {
   provider?: string;
   method?: string;
+  profileId?: string;
   setDefault?: boolean;
 };
 
@@ -443,6 +444,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     prompter,
     runtime,
     isRemote,
+    opts: { profileId: opts.profileId },
     openUrl: async (url) => {
       await openUrl(url);
     },

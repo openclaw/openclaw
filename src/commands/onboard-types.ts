@@ -111,6 +111,8 @@ export type OnboardOptions = {
   tokenProfileId?: string;
   /** Used when `authChoice=token` in non-interactive mode. */
   tokenExpiresIn?: string;
+  /** Optional auth profile id override for OAuth/provider login flows. */
+  profileId?: string;
   /** API key persistence mode for onboarding flows (default: plaintext). */
   secretInputMode?: SecretInputMode;
   anthropicApiKey?: string;
