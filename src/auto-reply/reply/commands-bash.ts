@@ -9,7 +9,7 @@ export const handleBashCommand: CommandHandler = async (params, allowTextCommand
   const { command } = params;
   const bashSlashRequested =
     command.commandBodyNormalized === "/bash" || command.commandBodyNormalized.startsWith("/bash ");
-  const bashBangRequested = command.commandBodyNormalized.startsWith("!");
+  const bashBangRequested = /^!(?:\s|:|[a-z0-9]|$)/i.test(command.commandBodyNormalized);
   if (!bashSlashRequested && !(bashBangRequested && command.isAuthorizedSender)) {
     return null;
   }
