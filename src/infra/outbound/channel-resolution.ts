@@ -15,12 +15,22 @@ const bootstrapAttempts = new Set<string>();
 
 export function normalizeDeliverableOutboundChannel(
   raw?: string | null,
+  cfg?: OpenClawConfig,
 ): DeliverableMessageChannel | undefined {
   const normalized = normalizeMessageChannel(raw);
-  if (!normalized || !isDeliverableMessageChannel(normalized)) {
+  if (!normalized) {
     return undefined;
   }
-  return normalized;
+  if (isDeliverableMessageChannel(normalized)) {
+    return normalized;
+  }
+  if (cfg) {
+    maybeBootstrapChannelPlugin({ channel: normalized as DeliverableMessageChannel, cfg });
+    if (isDeliverableMessageChannel(normalized)) {
+      return normalized;
+    }
+  }
+  return undefined;
 }
 
 function maybeBootstrapChannelPlugin(params: {

@@ -249,7 +249,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   if (rawTarget === "none" || rawTarget === "last") {
     target = rawTarget;
   } else if (typeof rawTarget === "string") {
-    const normalized = normalizeDeliverableOutboundChannel(rawTarget);
+    const normalized = normalizeDeliverableOutboundChannel(rawTarget, cfg);
     if (normalized) {
       target = normalized;
     }
