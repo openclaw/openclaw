@@ -1,4 +1,8 @@
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
+import {
+  getAcpRuntimeBackend,
+  isBackendHealthy,
+} from "../acp/runtime/registry.js";
 import { ACP_SESSION_IDENTITY_RENDERER_VERSION } from "../acp/runtime/session-identifiers.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
@@ -22,6 +26,7 @@ import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
+import { sleep } from "../utils.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import {
   scheduleRestartSentinelWake,
@@ -30,6 +35,34 @@ import {
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
+
+/**
+ * Waits for the ACP runtime backend to become ready.
+ * Returns true if backend is ready, false if timeout is reached.
+ */
+async function waitForAcpBackendReady(params: {
+  backendId?: string;
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+}): Promise<boolean> {
+  const timeoutMs = params.timeoutMs ?? 5000;
+  const pollIntervalMs = params.pollIntervalMs ?? 50;
+  const started = Date.now();
+  const deadline = started + timeoutMs;
+
+  while (true) {
+    const backend = getAcpRuntimeBackend(params.backendId);
+    if (backend && isBackendHealthy(backend)) {
+      return true;
+    }
+    if (Date.now() >= deadline) {
+      break;
+    }
+    await sleep(pollIntervalMs);
+  }
+
+  return false;
+}
 
 export async function startGatewaySidecars(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -162,19 +195,35 @@ export async function startGatewaySidecars(params: {
   }
 
   if (params.cfg.acp?.enabled) {
-    void getAcpSessionManager()
-      .reconcilePendingSessionIdentities({ cfg: params.cfg })
-      .then((result) => {
+    void (async () => {
+      // Wait for ACP backend to be ready before running identity reconcile
+      // to avoid startup race condition errors.
+      const backendId = params.cfg.acp.backend;
+      const backendReady = await waitForAcpBackendReady({
+        backendId,
+        timeoutMs: 5000,
+        pollIntervalMs: 50,
+      });
+      if (!backendReady) {
+        params.log.warn(
+          `acp backend not ready after timeout, proceeding with identity reconcile anyway`,
+        );
+      }
+
+      try {
+        const result = await getAcpSessionManager().reconcilePendingSessionIdentities({
+          cfg: params.cfg,
+        });
         if (result.checked === 0) {
           return;
         }
         params.log.warn(
           `acp startup identity reconcile (renderer=${ACP_SESSION_IDENTITY_RENDERER_VERSION}): checked=${result.checked} resolved=${result.resolved} failed=${result.failed}`,
         );
-      })
-      .catch((err) => {
+      } catch (err) {
         params.log.warn(`acp startup identity reconcile failed: ${String(err)}`);
-      });
+      }
+    })();
   }
 
   void startGatewayMemoryBackend({ cfg: params.cfg, log: params.log }).catch((err) => {

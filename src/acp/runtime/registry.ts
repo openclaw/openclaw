@@ -35,7 +35,7 @@ function normalizeBackendId(id: string | undefined): string {
   return id?.trim().toLowerCase() || "";
 }
 
-function isBackendHealthy(backend: AcpRuntimeBackend): boolean {
+export function isBackendHealthy(backend: AcpRuntimeBackend): boolean {
   if (!backend.healthy) {
     return true;
   }
