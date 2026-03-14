@@ -85,7 +85,7 @@ export async function probeGatewayMemoryStatus(params: {
     const message = err instanceof Error ? err.message : String(err);
     // Timeout means the gateway is slow — memory may still be operational.
     // Report unchecked so doctor doesn't emit a false warning.
-    if (message.includes("timeout")) {
+    if (message.startsWith("gateway timeout after ")) {
       return { checked: false, ready: false };
     }
     return {
