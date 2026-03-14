@@ -29,8 +29,8 @@ import {
   type ChannelPlugin,
   type ResolvedIMessageAccount,
 } from "openclaw/plugin-sdk/imessage";
-import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/deliver.js";
+import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { getIMessageRuntime } from "./runtime.js";
 
 const meta = getChatChannelMeta("imessage");

@@ -1,5 +1,5 @@
-import type { PluginRuntimeChannel } from "../../plugins/runtime/types-channel.js";
 import { resolveOutboundSendDep } from "../../infra/outbound/deliver.js";
+import type { PluginRuntimeChannel } from "../../plugins/runtime/types-channel.js";
 import { escapeRegExp } from "../../utils.js";
 import { resolveWhatsAppOutboundTarget } from "../../whatsapp/resolve-outbound-target.js";
 import type { ChannelOutboundAdapter } from "./types.js";
