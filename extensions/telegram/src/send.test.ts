@@ -775,11 +775,12 @@ describe("sendMessageTelegram", () => {
     }
   });
 
-  it("retries send on pre-connect network errors", async () => {
+  it("retries pre-connect send errors and honors retry_after when present", async () => {
     vi.useFakeTimers();
     const chatId = "123";
-    const err = Object.assign(new Error("ECONNREFUSED"), {
-      code: "ECONNREFUSED",
+    const err = Object.assign(new Error("getaddrinfo ENOTFOUND api.telegram.org"), {
+      code: "ENOTFOUND",
+      parameters: { retry_after: 0.5 },
     });
     const sendMessage = vi
       .fn()
@@ -801,7 +802,7 @@ describe("sendMessageTelegram", () => {
 
     await vi.runAllTimersAsync();
     await expect(promise).resolves.toEqual({ messageId: "1", chatId });
-    expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(0);
+    expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(500);
     setTimeoutSpy.mockRestore();
     vi.useRealTimers();
   });
@@ -823,17 +824,13 @@ describe("sendMessageTelegram", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("does not retry grammY failed-after envelope errors for non-idempotent sends", async () => {
+  it("does not retry generic grammY failed-after envelopes for non-idempotent sends", async () => {
     const chatId = "123";
     const sendMessage = vi
       .fn()
       .mockRejectedValueOnce(
         new Error("Network request for 'sendMessage' failed after 1 attempts."),
-      )
-      .mockResolvedValueOnce({
-        message_id: 7,
-        chat: { id: chatId },
-      });
+      );
     const api = { sendMessage } as unknown as {
       sendMessage: typeof sendMessage;
     };
@@ -845,7 +842,6 @@ describe("sendMessageTelegram", () => {
         retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
       }),
     ).rejects.toThrow(/failed after 1 attempts/i);
-
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 

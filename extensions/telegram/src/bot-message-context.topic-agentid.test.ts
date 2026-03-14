@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../../src/config/config.js";
-import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
 const { defaultRouteConfig } = vi.hoisted(() => ({
   defaultRouteConfig: {
@@ -19,6 +18,9 @@ vi.mock("../../../src/config/config.js", async (importOriginal) => {
     loadConfig: vi.fn(() => defaultRouteConfig),
   };
 });
+
+const { buildTelegramMessageContextForTest } =
+  await import("./bot-message-context.test-harness.js");
 
 describe("buildTelegramMessageContext per-topic agentId routing", () => {
   function buildForumMessage(threadId = 3) {
@@ -98,7 +100,7 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
     expect(ctx?.ctxPayload?.SessionKey).toContain("agent:main:");
   });
 
-  it("routes to topic agentId verbatim even when it is not in the agent list", async () => {
+  it("preserves an unknown topic agentId in the session key", async () => {
     vi.mocked(loadConfig).mockReturnValue({
       agents: {
         list: [{ id: "main", default: true }, { id: "zu" }],
