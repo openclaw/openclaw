@@ -179,7 +179,7 @@ function uniquePreserveOrder(values: string[]): string[] {
 }
 
 function shouldRenderSharedPageHeader(tab: Tab, isChat: boolean): boolean {
-  // Keep Usage on its dedicated in-view hero header to match the v2026.3.11 layout.
+  // Usage owns its in-view hero header; chat and config already use custom header paths.
   return !isChat && tab !== "config" && tab !== "usage";
 }
 
@@ -614,7 +614,10 @@ export function renderApp(state: AppViewState) {
             : isChat
               ? html`<section class="content-header">
                   <div>${renderChatSessionSelect(state)}</div>
-                  <div class="page-meta">${renderChatControls(state)}</div>
+                  <div class="page-meta">
+                    ${state.lastError ? html`<div class="pill danger">${state.lastError}</div>` : nothing}
+                    ${renderChatControls(state)}
+                  </div>
                 </section>`
               : nothing
         }
