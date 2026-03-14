@@ -156,7 +156,9 @@ export function buildTelegramStatusReactionVariants(
 }
 
 export function isTelegramSupportedReactionEmoji(emoji: string): boolean {
-  return TELEGRAM_SUPPORTED_REACTION_EMOJIS.has(emoji);
+  // Normalize variation selectors (e.g. ❤️ U+FE0F → ❤) so equivalent
+  // Unicode forms match the canonical set entries.
+  return TELEGRAM_SUPPORTED_REACTION_EMOJIS.has(emoji.replace(/\uFE0F/g, ""));
 }
 
 export function extractTelegramAllowedEmojiReactions(

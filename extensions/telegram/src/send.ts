@@ -1022,12 +1022,12 @@ export async function reactMessageTelegram(
       warning: `Reaction unavailable: ${trimmedEmoji} (not in Telegram supported emoji set)`,
     };
   }
-  // Build the reaction array. We cast emoji to the grammY union type since
-  // Telegram validates emoji server-side; invalid emojis fail gracefully.
+  // Build the reaction array using the normalized emoji (variation selectors
+  // stripped) so Telegram receives the canonical form it expects.
   const reactions: ReactionType[] =
     remove || !trimmedEmoji
       ? []
-      : [{ type: "emoji", emoji: trimmedEmoji as ReactionTypeEmoji["emoji"] }];
+      : [{ type: "emoji", emoji: normalizedEmoji as ReactionTypeEmoji["emoji"] }];
   if (typeof api.setMessageReaction !== "function") {
     throw new Error("Telegram reactions are unavailable in this bot API.");
   }

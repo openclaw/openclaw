@@ -404,13 +404,13 @@ export const buildTelegramMessageContext = async ({
     : shouldAckReaction() &&
         msg.message_id &&
         reactionApi &&
-        isTelegramSupportedReactionEmoji(ackReaction.replace(/\uFE0F/g, ""))
+        isTelegramSupportedReactionEmoji(ackReaction)
       ? withTelegramApiErrorLogging({
           operation: "setMessageReaction",
-          fn: () =>
-            reactionApi(chatId, msg.message_id, [
-              { type: "emoji", emoji: ackReaction.replace(/\uFE0F/g, "") },
-            ]),
+          fn: () => {
+            const normalizedAck = ackReaction.replace(/\uFE0F/g, "");
+            return reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: normalizedAck }]);
+          },
         }).then(
           () => true,
           (err) => {
