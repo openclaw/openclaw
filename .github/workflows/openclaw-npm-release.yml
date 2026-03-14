@@ -129,6 +129,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_MAIN_REF: origin/main
+          RELEASE_SKIP_CALVER_WINDOW: "1"
         run: |
           set -euo pipefail
           RELEASE_SHA=$(git rev-parse HEAD)
