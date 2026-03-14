@@ -45,6 +45,20 @@ import type {
   UpdateAvailable,
 } from "./types.ts";
 
+// Debounced chat history reload for chat.inbound events.
+// Collapses rapid-fire inbound messages (e.g. user sending multiple Telegram
+// messages quickly) into a single loadChatHistory call.
+let _chatInboundTimer: ReturnType<typeof setTimeout> | null = null;
+function debouncedLoadChatHistory(host: GatewayHost): void {
+  if (_chatInboundTimer) {
+    clearTimeout(_chatInboundTimer);
+  }
+  _chatInboundTimer = setTimeout(() => {
+    _chatInboundTimer = null;
+    void loadChatHistory(host as unknown as OpenClawApp);
+  }, 500);
+}
+
 function isGenericBrowserFetchFailure(message: string): boolean {
   return /^(?:typeerror:\s*)?(?:fetch failed|failed to fetch)$/i.test(message.trim());
 }
@@ -368,6 +382,14 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     (host as GatewayHostWithShutdownMessage).pendingShutdownMessage = shutdownMessage;
     host.lastError = shutdownMessage;
     host.lastErrorCode = null;
+    return;
+  }
+
+  if (evt.event === "chat.inbound") {
+    const payload = evt.payload as { sessionKey?: string } | undefined;
+    if (host.tab === "chat" && payload?.sessionKey === host.sessionKey) {
+      debouncedLoadChatHistory(host);
+    }
     return;
   }
 

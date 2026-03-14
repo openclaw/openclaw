@@ -21,6 +21,11 @@ import {
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import {
+  registerInternalHook,
+  unregisterInternalHook,
+  type InternalHookHandler,
+} from "../hooks/internal-hooks.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
@@ -645,6 +650,26 @@ export async function startGatewayServer(
   const broadcastVoiceWakeChanged = (triggers: string[]) => {
     broadcast("voicewake.changed", { triggers }, { dropIfSlow: true });
   };
+
+  // Broadcast inbound channel messages to Control UI (chat.inbound) — refs #chat-inbound-polling
+  const chatInboundHookHandler: InternalHookHandler = async (event) => {
+    const channelId = event.context?.channelId as string | undefined;
+    // Skip webchat-originated messages — the UI already knows about those
+    if (!channelId || channelId === "webchat") {
+      return;
+    }
+    broadcast(
+      "chat.inbound",
+      {
+        sessionKey: event.sessionKey,
+        channelId,
+        timestamp: event.timestamp?.toISOString?.() ?? new Date().toISOString(),
+      },
+      { dropIfSlow: true },
+    );
+  };
+  registerInternalHook("message:received", chatInboundHookHandler);
+
   const hasMobileNodeConnected = () => hasConnectedMobileNode(nodeRegistry);
   applyGatewayLaneConcurrency(cfgAtStart);
 
@@ -1063,6 +1088,7 @@ export async function startGatewayServer(
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
       channelHealthMonitor?.stop();
+      unregisterInternalHook("message:received", chatInboundHookHandler);
       clearSecretsRuntimeSnapshot();
       await close(opts);
     },
