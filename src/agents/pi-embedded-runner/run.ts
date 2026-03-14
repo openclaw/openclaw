@@ -1609,6 +1609,7 @@ export async function runEmbeddedPiAgent(
                     },
                   ]
                 : undefined,
+              yieldDetected: attempt.yieldDetected || undefined,
             },
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,

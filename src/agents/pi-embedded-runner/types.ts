@@ -52,6 +52,8 @@ export type EmbeddedPiRunMeta = {
     name: string;
     arguments: string;
   }>;
+  /** Whether sessions_yield was detected during the run. */
+  yieldDetected?: boolean;
 };
 
 export type EmbeddedPiRunResult = {
