@@ -31,6 +31,25 @@ const launchdRestartHandoffState = vi.hoisted(() => ({
 }));
 const defaultProgramArguments = ["node", "-e", "process.exit(0)"];
 
+function expectLaunchctlEnableBootstrapOrder(env: Record<string, string | undefined>) {
+  const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+  const label = "ai.openclaw.gateway";
+  const plistPath = resolveLaunchAgentPlistPath(env);
+  const serviceId = `${domain}/${label}`;
+  const enableIndex = state.launchctlCalls.findIndex(
+    (c) => c[0] === "enable" && c[1] === serviceId,
+  );
+  const bootstrapIndex = state.launchctlCalls.findIndex(
+    (c) => c[0] === "bootstrap" && c[1] === domain && c[2] === plistPath,
+  );
+
+  expect(enableIndex).toBeGreaterThanOrEqual(0);
+  expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
+  expect(enableIndex).toBeLessThan(bootstrapIndex);
+
+  return { domain, label, serviceId, bootstrapIndex };
+}
+
 function normalizeLaunchctlArgs(file: string, args: string[]): string[] {
   if (file === "launchctl") {
     return args;
@@ -219,25 +238,12 @@ describe("launchd bootstrap repair", () => {
     const repair = await repairLaunchAgentBootstrap({ env });
     expect(repair.ok).toBe(true);
 
-    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-    const label = "ai.openclaw.gateway";
-    const plistPath = resolveLaunchAgentPlistPath(env);
-    const serviceId = `${domain}/${label}`;
-
-    const enableIndex = state.launchctlCalls.findIndex(
-      (c) => c[0] === "enable" && c[1] === serviceId,
-    );
-    const bootstrapIndex = state.launchctlCalls.findIndex(
-      (c) => c[0] === "bootstrap" && c[1] === domain && c[2] === plistPath,
-    );
+    const { serviceId, bootstrapIndex } = expectLaunchctlEnableBootstrapOrder(env);
     const kickstartIndex = state.launchctlCalls.findIndex(
       (c) => c[0] === "kickstart" && c[1] === "-k" && c[2] === serviceId,
     );
 
-    expect(enableIndex).toBeGreaterThanOrEqual(0);
-    expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
     expect(kickstartIndex).toBeGreaterThanOrEqual(0);
-    expect(enableIndex).toBeLessThan(bootstrapIndex);
     expect(bootstrapIndex).toBeLessThan(kickstartIndex);
   });
 });
@@ -250,7 +256,7 @@ describe("launchd install", () => {
     };
   }
 
-  it("enables service before bootstrap (clears persisted disabled state)", async () => {
+  it("enables service before bootstrap without self-restarting the fresh agent", async () => {
     const env = createDefaultLaunchdEnv();
     await installLaunchAgent({
       env,
@@ -258,20 +264,11 @@ describe("launchd install", () => {
       programArguments: defaultProgramArguments,
     });
 
-    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-    const label = "ai.openclaw.gateway";
-    const plistPath = resolveLaunchAgentPlistPath(env);
-    const serviceId = `${domain}/${label}`;
-
-    const enableIndex = state.launchctlCalls.findIndex(
-      (c) => c[0] === "enable" && c[1] === serviceId,
+    const { serviceId } = expectLaunchctlEnableBootstrapOrder(env);
+    const installKickstartIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "kickstart" && c[2] === serviceId,
     );
-    const bootstrapIndex = state.launchctlCalls.findIndex(
-      (c) => c[0] === "bootstrap" && c[1] === domain && c[2] === plistPath,
-    );
-    expect(enableIndex).toBeGreaterThanOrEqual(0);
-    expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
-    expect(enableIndex).toBeLessThan(bootstrapIndex);
+    expect(installKickstartIndex).toBe(-1);
   });
 
   it("writes TMPDIR to LaunchAgent environment when provided", async () => {
@@ -356,24 +353,13 @@ describe("launchd install", () => {
       stdout: new PassThrough(),
     });
 
-    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-    const label = "ai.openclaw.gateway";
-    const plistPath = resolveLaunchAgentPlistPath(env);
-    const serviceId = `${domain}/${label}`;
+    const { serviceId } = expectLaunchctlEnableBootstrapOrder(env);
     const kickstartCalls = state.launchctlCalls.filter(
       (c) => c[0] === "kickstart" && c[1] === "-k" && c[2] === serviceId,
-    );
-    const enableIndex = state.launchctlCalls.findIndex(
-      (c) => c[0] === "enable" && c[1] === serviceId,
-    );
-    const bootstrapIndex = state.launchctlCalls.findIndex(
-      (c) => c[0] === "bootstrap" && c[1] === domain && c[2] === plistPath,
     );
 
     expect(result).toEqual({ outcome: "completed" });
     expect(kickstartCalls).toHaveLength(2);
-    expect(enableIndex).toBeGreaterThanOrEqual(0);
-    expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
   });
 

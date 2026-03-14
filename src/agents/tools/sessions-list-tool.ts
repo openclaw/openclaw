@@ -1,6 +1,6 @@
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
-import { loadConfig } from "../../config/config.js";
+import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -33,6 +33,7 @@ const SessionsListToolSchema = Type.Object({
 export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
+  config?: OpenClawConfig;
 }): AnyAgentTool {
   return {
     label: "Sessions",

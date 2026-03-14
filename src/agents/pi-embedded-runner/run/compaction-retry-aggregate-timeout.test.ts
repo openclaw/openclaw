@@ -1,10 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 
+async function withFakeTimers(run: () => Promise<void>) {
+  vi.useFakeTimers();
+  try {
+    await run();
+  } finally {
+    await vi.runOnlyPendingTimersAsync();
+    vi.useRealTimers();
+  }
+}
+
+function expectClearedTimeoutState(onTimeout: ReturnType<typeof vi.fn>, timedOut: boolean) {
+  if (timedOut) {
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+  } else {
+    expect(onTimeout).not.toHaveBeenCalled();
+  }
+  expect(vi.getTimerCount()).toBe(0);
+}
+
 describe("waitForCompactionRetryWithAggregateTimeout", () => {
   it("times out and fires callback when compaction retry never resolves", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const onTimeout = vi.fn();
       const waitForCompactionRetry = vi.fn(async () => await new Promise<void>(() => {}));
 
@@ -19,17 +37,12 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
       const result = await resultPromise;
 
       expect(result.timedOut).toBe(true);
-      expect(onTimeout).toHaveBeenCalledTimes(1);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+      expectClearedTimeoutState(onTimeout, true);
+    });
   });
 
   it("keeps waiting while compaction remains in flight", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const onTimeout = vi.fn();
       let compactionInFlight = true;
       const waitForCompactionRetry = vi.fn(
@@ -54,17 +67,12 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
       const result = await resultPromise;
 
       expect(result.timedOut).toBe(false);
-      expect(onTimeout).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+      expectClearedTimeoutState(onTimeout, false);
+    });
   });
 
   it("times out after an idle timeout window", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const onTimeout = vi.fn();
       let compactionInFlight = true;
       const waitForCompactionRetry = vi.fn(async () => await new Promise<void>(() => {}));
@@ -84,17 +92,12 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
       const result = await resultPromise;
 
       expect(result.timedOut).toBe(true);
-      expect(onTimeout).toHaveBeenCalledTimes(1);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+      expectClearedTimeoutState(onTimeout, true);
+    });
   });
 
   it("does not time out when compaction retry resolves", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const onTimeout = vi.fn();
       const waitForCompactionRetry = vi.fn(async () => {});
 
@@ -106,17 +109,12 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
       });
 
       expect(result.timedOut).toBe(false);
-      expect(onTimeout).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+      expectClearedTimeoutState(onTimeout, false);
+    });
   });
 
   it("propagates abort errors from abortable and clears timer", async () => {
-    vi.useFakeTimers();
-    try {
+    await withFakeTimers(async () => {
       const abortError = new Error("aborted");
       abortError.name = "AbortError";
       const onTimeout = vi.fn();
@@ -133,11 +131,7 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
         }),
       ).rejects.toThrow("aborted");
 
-      expect(onTimeout).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
+      expectClearedTimeoutState(onTimeout, false);
+    });
   });
 });

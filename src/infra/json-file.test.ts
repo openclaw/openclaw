@@ -1,38 +1,57 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { saveJsonFile } from "./json-file.js";
+import { describe, expect, it } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
+import { loadJsonFile, saveJsonFile } from "./json-file.js";
 
-describe("saveJsonFile", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
+describe("json-file helpers", () => {
+  it("returns undefined for missing and invalid JSON files", async () => {
+    await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
+      const pathname = path.join(root, "config.json");
+      expect(loadJsonFile(pathname)).toBeUndefined();
+
+      fs.writeFileSync(pathname, "{", "utf8");
+      expect(loadJsonFile(pathname)).toBeUndefined();
+    });
   });
 
-  it("keeps the write when chmod is not permitted by the filesystem", () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "json-file-"));
-    const pathname = path.join(tmpDir, "state.json");
-    const chmodError = Object.assign(new Error("operation not permitted"), {
-      code: "EPERM",
-    });
-    vi.spyOn(fs, "chmodSync").mockImplementation(() => {
-      throw chmodError;
-    });
+  it("returns undefined when the target path is a directory", async () => {
+    await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
+      const pathname = path.join(root, "config-dir");
+      fs.mkdirSync(pathname);
 
-    expect(() => saveJsonFile(pathname, { ok: true })).not.toThrow();
-    expect(JSON.parse(fs.readFileSync(pathname, "utf8"))).toEqual({ ok: true });
+      expect(loadJsonFile(pathname)).toBeUndefined();
+    });
   });
 
-  it("still throws unexpected chmod failures", () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "json-file-"));
-    const pathname = path.join(tmpDir, "state.json");
-    const chmodError = Object.assign(new Error("access denied"), {
-      code: "EACCES",
-    });
-    vi.spyOn(fs, "chmodSync").mockImplementation(() => {
-      throw chmodError;
-    });
+  it("creates parent dirs, writes a trailing newline, and loads the saved object", async () => {
+    await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
+      const pathname = path.join(root, "nested", "config.json");
+      saveJsonFile(pathname, { enabled: true, count: 2 });
 
-    expect(() => saveJsonFile(pathname, { ok: true })).toThrow("access denied");
+      const raw = fs.readFileSync(pathname, "utf8");
+      expect(raw.endsWith("\n")).toBe(true);
+      expect(loadJsonFile(pathname)).toEqual({ enabled: true, count: 2 });
+
+      const fileMode = fs.statSync(pathname).mode & 0o777;
+      const dirMode = fs.statSync(path.dirname(pathname)).mode & 0o777;
+      if (process.platform === "win32") {
+        expect(fileMode & 0o111).toBe(0);
+      } else {
+        expect(fileMode).toBe(0o600);
+        expect(dirMode).toBe(0o700);
+      }
+    });
+  });
+
+  it("overwrites existing JSON files with the latest payload", async () => {
+    await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
+      const pathname = path.join(root, "config.json");
+      fs.writeFileSync(pathname, '{"enabled":false}\n', "utf8");
+
+      saveJsonFile(pathname, { enabled: true, count: 2 });
+
+      expect(loadJsonFile(pathname)).toEqual({ enabled: true, count: 2 });
+    });
   });
 });

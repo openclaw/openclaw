@@ -97,6 +97,7 @@ type ZalouserSharedConfig = {
   enabled?: boolean;
   name?: string;
   profile?: string;
+  dangerouslyAllowNameMatching?: boolean;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   allowFrom?: Array<string | number>;
   historyLimit?: number;

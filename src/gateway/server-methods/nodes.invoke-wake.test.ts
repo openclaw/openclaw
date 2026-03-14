@@ -52,6 +52,24 @@ type RespondCall = [
   }?,
 ];
 
+function expectNodeNotConnected(respond: ReturnType<typeof vi.fn>) {
+  const call = respond.mock.calls[0] as RespondCall | undefined;
+  expect(call?.[0]).toBe(false);
+  expect(call?.[2]?.message).toBe("node not connected");
+}
+
+async function invokeDisconnectedNode(nodeId: string, idempotencyKey: string) {
+  const nodeRegistry = {
+    get: vi.fn(() => undefined),
+    invoke: vi.fn().mockResolvedValue({ ok: true }),
+  };
+
+  return await invokeNode({
+    nodeRegistry,
+    requestParams: { nodeId, idempotencyKey },
+  });
+}
+
 type TestNodeSession = {
   nodeId: string;
   commands: string[];
@@ -59,6 +77,92 @@ type TestNodeSession = {
 };
 
 const WAKE_WAIT_TIMEOUT_MS = 3_001;
+const DEFAULT_RELAY_CONFIG = {
+  baseUrl: "https://relay.example.com",
+  timeoutMs: 1000,
+} as const;
+type WakeResultOverrides = Partial<{
+  ok: boolean;
+  status: number;
+  reason: string;
+  tokenSuffix: string;
+  topic: string;
+  environment: "sandbox" | "production";
+  transport: "direct" | "relay";
+}>;
+
+function directRegistration(nodeId: string) {
+  return {
+    nodeId,
+    transport: "direct" as const,
+    token: "abcd1234abcd1234abcd1234abcd1234",
+    topic: "ai.openclaw.ios",
+    environment: "sandbox" as const,
+    updatedAtMs: 1,
+  };
+}
+
+function relayRegistration(nodeId: string) {
+  return {
+    nodeId,
+    transport: "relay" as const,
+    relayHandle: "relay-handle-123",
+    sendGrant: "send-grant-123",
+    installationId: "install-123",
+    topic: "ai.openclaw.ios",
+    environment: "production" as const,
+    distribution: "official" as const,
+    updatedAtMs: 1,
+    tokenDebugSuffix: "abcd1234",
+  };
+}
+
+function mockDirectWakeConfig(nodeId: string, overrides: WakeResultOverrides = {}) {
+  mocks.loadApnsRegistration.mockResolvedValue(directRegistration(nodeId));
+  mocks.resolveApnsAuthConfigFromEnv.mockResolvedValue({
+    ok: true,
+    value: {
+      teamId: "TEAM123",
+      keyId: "KEY123",
+      privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", // pragma: allowlist secret
+    },
+  });
+  mocks.sendApnsBackgroundWake.mockResolvedValue({
+    ok: true,
+    status: 200,
+    tokenSuffix: "1234abcd",
+    topic: "ai.openclaw.ios",
+    environment: "sandbox",
+    transport: "direct",
+    ...overrides,
+  });
+}
+
+function mockRelayWakeConfig(nodeId: string, overrides: WakeResultOverrides = {}) {
+  mocks.loadConfig.mockReturnValue({
+    gateway: {
+      push: {
+        apns: {
+          relay: DEFAULT_RELAY_CONFIG,
+        },
+      },
+    },
+  });
+  mocks.loadApnsRegistration.mockResolvedValue(relayRegistration(nodeId));
+  mocks.resolveApnsRelayConfigFromEnv.mockReturnValue({
+    ok: true,
+    value: DEFAULT_RELAY_CONFIG,
+  });
+  mocks.sendApnsBackgroundWake.mockResolvedValue({
+    ok: true,
+    status: 200,
+    tokenSuffix: "abcd1234",
+    topic: "ai.openclaw.ios",
+    environment: "production",
+    transport: "relay",
+    ...overrides,
+  });
+}
 
 function makeNodeInvokeParams(overrides?: Partial<Record<string, unknown>>) {
   return {
@@ -109,24 +213,28 @@ async function invokeNode(params: {
   return respond;
 }
 
+function createNodeClient(nodeId: string) {
+  return {
+    connect: {
+      role: "node" as const,
+      client: {
+        id: nodeId,
+        mode: "node" as const,
+        name: "ios-test",
+        platform: "iOS 26.4.0",
+        version: "test",
+      },
+    },
+  };
+}
+
 async function pullPending(nodeId: string) {
   const respond = vi.fn();
   await nodeHandlers["node.pending.pull"]({
     params: {},
     respond: respond as never,
     context: {} as never,
-    client: {
-      connect: {
-        role: "node",
-        client: {
-          id: nodeId,
-          mode: "node",
-          name: "ios-test",
-          platform: "iOS 26.4.0",
-          version: "test",
-        },
-      },
-    } as never,
+    client: createNodeClient(nodeId) as never,
     req: { type: "req", id: "req-node-pending", method: "node.pending.pull" },
     isWebchatConnect: () => false,
   });
@@ -139,49 +247,11 @@ async function ackPending(nodeId: string, ids: string[]) {
     params: { ids },
     respond: respond as never,
     context: {} as never,
-    client: {
-      connect: {
-        role: "node",
-        client: {
-          id: nodeId,
-          mode: "node",
-          name: "ios-test",
-          platform: "iOS 26.4.0",
-          version: "test",
-        },
-      },
-    } as never,
+    client: createNodeClient(nodeId) as never,
     req: { type: "req", id: "req-node-pending-ack", method: "node.pending.ack" },
     isWebchatConnect: () => false,
   });
   return respond;
-}
-
-function mockSuccessfulWakeConfig(nodeId: string) {
-  mocks.loadApnsRegistration.mockResolvedValue({
-    nodeId,
-    transport: "direct",
-    token: "abcd1234abcd1234abcd1234abcd1234",
-    topic: "ai.openclaw.ios",
-    environment: "sandbox",
-    updatedAtMs: 1,
-  });
-  mocks.resolveApnsAuthConfigFromEnv.mockResolvedValue({
-    ok: true,
-    value: {
-      teamId: "TEAM123",
-      keyId: "KEY123",
-      privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", // pragma: allowlist secret
-    },
-  });
-  mocks.sendApnsBackgroundWake.mockResolvedValue({
-    ok: true,
-    status: 200,
-    tokenSuffix: "1234abcd",
-    topic: "ai.openclaw.ios",
-    environment: "sandbox",
-    transport: "direct",
-  });
 }
 
 describe("node.invoke APNs wake path", () => {
@@ -227,18 +297,7 @@ describe("node.invoke APNs wake path", () => {
   });
 
   it("does not throttle repeated relay wake attempts when relay config is missing", async () => {
-    mocks.loadApnsRegistration.mockResolvedValue({
-      nodeId: "ios-node-relay-no-auth",
-      transport: "relay",
-      relayHandle: "relay-handle-123",
-      sendGrant: "send-grant-123",
-      installationId: "install-123",
-      topic: "ai.openclaw.ios",
-      environment: "production",
-      distribution: "official",
-      updatedAtMs: 1,
-      tokenDebugSuffix: "abcd1234",
-    });
+    mocks.loadApnsRegistration.mockResolvedValue(relayRegistration("ios-node-relay-no-auth"));
     mocks.resolveApnsRelayConfigFromEnv.mockReturnValue({
       ok: false,
       error: "relay config missing",
@@ -265,7 +324,7 @@ describe("node.invoke APNs wake path", () => {
 
   it("wakes and retries invoke after the node reconnects", async () => {
     vi.useFakeTimers();
-    mockSuccessfulWakeConfig("ios-node-reconnect");
+    mockDirectWakeConfig("ios-node-reconnect");
 
     let connected = false;
     const session: TestNodeSession = { nodeId: "ios-node-reconnect", commands: ["camera.capture"] };
@@ -308,138 +367,43 @@ describe("node.invoke APNs wake path", () => {
   });
 
   it("clears stale registrations after an invalid device token wake failure", async () => {
-    mocks.loadApnsRegistration.mockResolvedValue({
-      nodeId: "ios-node-stale",
-      transport: "direct",
-      token: "abcd1234abcd1234abcd1234abcd1234",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      updatedAtMs: 1,
-    });
-    mocks.resolveApnsAuthConfigFromEnv.mockResolvedValue({
-      ok: true,
-      value: {
-        teamId: "TEAM123",
-        keyId: "KEY123",
-        privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", // pragma: allowlist secret
-      },
-    });
-    mocks.sendApnsBackgroundWake.mockResolvedValue({
+    const registration = directRegistration("ios-node-stale");
+    mocks.loadApnsRegistration.mockResolvedValue(registration);
+    mockDirectWakeConfig("ios-node-stale", {
       ok: false,
       status: 400,
       reason: "BadDeviceToken",
-      tokenSuffix: "1234abcd",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      transport: "direct",
     });
     mocks.shouldClearStoredApnsRegistration.mockReturnValue(true);
+    const respond = await invokeDisconnectedNode("ios-node-stale", "idem-stale");
 
-    const nodeRegistry = {
-      get: vi.fn(() => undefined),
-      invoke: vi.fn().mockResolvedValue({ ok: true }),
-    };
-
-    const respond = await invokeNode({
-      nodeRegistry,
-      requestParams: { nodeId: "ios-node-stale", idempotencyKey: "idem-stale" },
-    });
-
-    const call = respond.mock.calls[0] as RespondCall | undefined;
-    expect(call?.[0]).toBe(false);
-    expect(call?.[2]?.message).toBe("node not connected");
+    expectNodeNotConnected(respond);
     expect(mocks.clearApnsRegistrationIfCurrent).toHaveBeenCalledWith({
       nodeId: "ios-node-stale",
-      registration: {
-        nodeId: "ios-node-stale",
-        transport: "direct",
-        token: "abcd1234abcd1234abcd1234abcd1234",
-        topic: "ai.openclaw.ios",
-        environment: "sandbox",
-        updatedAtMs: 1,
-      },
+      registration,
     });
   });
 
   it("does not clear relay registrations from wake failures", async () => {
-    mocks.loadConfig.mockReturnValue({
-      gateway: {
-        push: {
-          apns: {
-            relay: {
-              baseUrl: "https://relay.example.com",
-              timeoutMs: 1000,
-            },
-          },
-        },
-      },
-    });
-    mocks.loadApnsRegistration.mockResolvedValue({
-      nodeId: "ios-node-relay",
-      transport: "relay",
-      relayHandle: "relay-handle-123",
-      sendGrant: "send-grant-123",
-      installationId: "install-123",
-      topic: "ai.openclaw.ios",
-      environment: "production",
-      distribution: "official",
-      updatedAtMs: 1,
-      tokenDebugSuffix: "abcd1234",
-    });
-    mocks.resolveApnsRelayConfigFromEnv.mockReturnValue({
-      ok: true,
-      value: {
-        baseUrl: "https://relay.example.com",
-        timeoutMs: 1000,
-      },
-    });
-    mocks.sendApnsBackgroundWake.mockResolvedValue({
+    const registration = relayRegistration("ios-node-relay");
+    mockRelayWakeConfig("ios-node-relay", {
       ok: false,
       status: 410,
       reason: "Unregistered",
-      tokenSuffix: "abcd1234",
-      topic: "ai.openclaw.ios",
-      environment: "production",
-      transport: "relay",
     });
     mocks.shouldClearStoredApnsRegistration.mockReturnValue(false);
+    const respond = await invokeDisconnectedNode("ios-node-relay", "idem-relay");
 
-    const nodeRegistry = {
-      get: vi.fn(() => undefined),
-      invoke: vi.fn().mockResolvedValue({ ok: true }),
-    };
-
-    const respond = await invokeNode({
-      nodeRegistry,
-      requestParams: { nodeId: "ios-node-relay", idempotencyKey: "idem-relay" },
-    });
-
-    const call = respond.mock.calls[0] as RespondCall | undefined;
-    expect(call?.[0]).toBe(false);
-    expect(call?.[2]?.message).toBe("node not connected");
+    expectNodeNotConnected(respond);
     expect(mocks.resolveApnsRelayConfigFromEnv).toHaveBeenCalledWith(process.env, {
       push: {
         apns: {
-          relay: {
-            baseUrl: "https://relay.example.com",
-            timeoutMs: 1000,
-          },
+          relay: DEFAULT_RELAY_CONFIG,
         },
       },
     });
     expect(mocks.shouldClearStoredApnsRegistration).toHaveBeenCalledWith({
-      registration: {
-        nodeId: "ios-node-relay",
-        transport: "relay",
-        relayHandle: "relay-handle-123",
-        sendGrant: "send-grant-123",
-        installationId: "install-123",
-        topic: "ai.openclaw.ios",
-        environment: "production",
-        distribution: "official",
-        updatedAtMs: 1,
-        tokenDebugSuffix: "abcd1234",
-      },
+      registration,
       result: {
         ok: false,
         status: 410,
@@ -455,7 +419,7 @@ describe("node.invoke APNs wake path", () => {
 
   it("forces one retry wake when the first wake still fails to reconnect", async () => {
     vi.useFakeTimers();
-    mockSuccessfulWakeConfig("ios-node-throttle");
+    mockDirectWakeConfig("ios-node-throttle");
 
     const nodeRegistry = {
       get: vi.fn(() => undefined),

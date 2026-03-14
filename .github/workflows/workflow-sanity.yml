@@ -9,12 +9,15 @@ concurrency:
   group: workflow-sanity-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   no-tabs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Fail on tabs in workflow files
         run: |
@@ -45,7 +48,7 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install actionlint
         shell: bash
