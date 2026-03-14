@@ -115,8 +115,9 @@ export function processCustomRulesConfig(config: CustomRulesConfig): CustomRules
 export function validateUserRule(rule: UserDefinedRule, index: number): RuleValidationError[] {
   const errors: RuleValidationError[] = [];
   const type = rule.type ?? "";
-  const hasKeywordsField = (rule as Record<string, unknown>).keywords !== undefined;
-  const keywordsIsArray = Array.isArray(rule.keywords);
+  const keywords = rule.keywords;
+  const hasKeywordsField = keywords !== undefined;
+  const keywordsIsArray = Array.isArray(keywords);
 
   if (!type || typeof type !== "string") {
     errors.push({
@@ -161,7 +162,7 @@ export function validateUserRule(rule: UserDefinedRule, index: number): RuleVali
     });
   }
 
-  if (!rule.pattern && (!keywordsIsArray || rule.keywords.length === 0)) {
+  if (!rule.pattern && (!keywordsIsArray || keywords.length === 0)) {
     errors.push({
       ruleIndex: index,
       type,
@@ -174,13 +175,13 @@ export function validateUserRule(rule: UserDefinedRule, index: number): RuleVali
   // from malformed JSON5) would later cause escapeRegex to throw inside
   // PrivacyDetector.loadRules, crashing session startup.
   if (keywordsIsArray) {
-    const badIdx = rule.keywords.findIndex((kw) => typeof kw !== "string");
+    const badIdx = keywords.findIndex((kw) => typeof kw !== "string");
     if (badIdx !== -1) {
       errors.push({
         ruleIndex: index,
         type,
         field: "keywords",
-        message: `keywords[${badIdx}] must be a string (got ${typeof rule.keywords[badIdx]})`,
+        message: `keywords[${badIdx}] must be a string (got ${typeof keywords[badIdx]})`,
       });
     }
   }
