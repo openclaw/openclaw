@@ -32,6 +32,8 @@ type ChatMessage = {
   timestamp: number;
 };
 
+const CHAT_COLLAPSE_THRESHOLD = 600;
+
 type ChatEventPayload = {
   runId: string;
   sessionKey: string;
@@ -347,6 +349,29 @@ class WebControlUiApp extends LitElement {
       margin-top: 16px;
     }
 
+    .bubble-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 8px;
+      color: #93c5fd;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .bubble-toggle {
+      background: transparent;
+      border: 0;
+      color: #93c5fd;
+      cursor: pointer;
+      padding: 0;
+      height: auto;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
     .chat-actions,
     .memory-actions {
       display: flex;
@@ -393,6 +418,7 @@ class WebControlUiApp extends LitElement {
   @state() chatRunId: string | null = null;
   @state() chatLoading = false;
   @state() chatSending = false;
+  @state() expandedMessages: Record<string, boolean> = {};
   @state() preferenceMemory: PreferenceMemory = defaultPreferenceMemory();
   @state() preferenceDraft: PreferenceMemoryDraft = toDraft(defaultPreferenceMemory());
   @state() preferenceSavedAt: string | null = null;
@@ -678,6 +704,39 @@ class WebControlUiApp extends LitElement {
     return token ? `http://localhost:4173/#token=${token}` : "http://localhost:4173/#token=<gateway-token>";
   }
 
+  private messageKey(message: ChatMessage, index: number) {
+    return `${message.role}:${message.timestamp}:${index}`;
+  }
+
+  private renderBubble(message: ChatMessage, index: number) {
+    const key = this.messageKey(message, index);
+    const expanded = this.expandedMessages[key] === true;
+    const isLong = message.text.length > CHAT_COLLAPSE_THRESHOLD;
+    const visibleText = isLong && !expanded ? `${message.text.slice(0, CHAT_COLLAPSE_THRESHOLD)}\n\n…` : message.text;
+    const label = message.role === "system" ? "system / tool" : message.role;
+
+    return html`
+      <div class="bubble ${message.role}">
+        <div class="bubble-meta">
+          <span>${label}</span>
+          ${isLong
+            ? html`<button
+                class="bubble-toggle"
+                type="button"
+                @click=${() => {
+                  this.expandedMessages = {
+                    ...this.expandedMessages,
+                    [key]: !expanded,
+                  };
+                }}
+              >${expanded ? "收起" : "展开"}</button>`
+            : null}
+        </div>
+        <div>${visibleText}</div>
+      </div>
+    `;
+  }
+
   render() {
     return html`
       <div class="page">
@@ -849,11 +908,14 @@ class WebControlUiApp extends LitElement {
               <h2>Designer Chat</h2>
               <p class="subtitle">发送时会自动把“提示词 + 偏好记忆 + 本轮需求”拼成最终上下文，再交给 OpenClaw 原生能力去推动代码改动。</p>
               <div class="chat-log">
-                ${this.chatMessages.map(
-                  (message) => html`<div class="bubble ${message.role}">${message.text}</div>`,
-                )}
+                ${this.chatMessages.map((message, index) => this.renderBubble(message, index))}
                 ${this.chatLoading ? html`<div class="bubble system">加载聊天记录中…</div>` : null}
-                ${this.chatStream ? html`<div class="bubble assistant">${this.chatStream}</div>` : null}
+                ${this.chatStream
+                  ? this.renderBubble(
+                      { role: "assistant", text: this.chatStream, timestamp: Date.now() },
+                      -1,
+                    )
+                  : null}
               </div>
               <div class="chat-compose">
                 <textarea
