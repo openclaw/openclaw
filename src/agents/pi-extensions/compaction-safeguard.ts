@@ -183,6 +183,26 @@ function isRealConversationMessage(message: AgentMessage): boolean {
   return message.role === "user" || message.role === "assistant" || message.role === "toolResult";
 }
 
+function summarizeMessageRoles(messages: AgentMessage[]): string {
+  if (messages.length === 0) {
+    return "count=0 roles=[] real=0";
+  }
+  const roleCounts = new Map<string, number>();
+  let realCount = 0;
+  for (const message of messages) {
+    const role =
+      typeof (message as { role?: unknown }).role === "string"
+        ? ((message as { role?: string }).role ?? "unknown")
+        : "unknown";
+    roleCounts.set(role, (roleCounts.get(role) ?? 0) + 1);
+    if (isRealConversationMessage(message)) {
+      realCount += 1;
+    }
+  }
+  const roles = [...roleCounts.entries()].map(([role, count]) => `${role}:${count}`).join(",");
+  return `count=${messages.length} roles=[${roles}] real=${realCount}`;
+}
+
 function computeFileLists(fileOps: FileOperations): {
   readFiles: string[];
   modifiedFiles: string[];
@@ -702,9 +722,17 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions: eventInstructions, signal } = event;
-    if (!preparation.messagesToSummarize.some(isRealConversationMessage)) {
+    const hasRealMessagesToSummarize =
+      preparation.messagesToSummarize.some(isRealConversationMessage);
+    const hasRealSplitTurnPrefixMessages =
+      preparation.isSplitTurn &&
+      (preparation.turnPrefixMessages ?? []).some(isRealConversationMessage);
+    if (!hasRealMessagesToSummarize && !hasRealSplitTurnPrefixMessages) {
       log.warn(
-        "Compaction safeguard: cancelling compaction with no real conversation messages to summarize.",
+        "Compaction safeguard: cancelling compaction with no real conversation messages to summarize. " +
+          `isSplitTurn=${preparation.isSplitTurn} ` +
+          `messagesToSummarize={${summarizeMessageRoles(preparation.messagesToSummarize)}} ` +
+          `turnPrefixMessages={${summarizeMessageRoles(preparation.turnPrefixMessages ?? [])}}`,
       );
       return { cancel: true };
     }

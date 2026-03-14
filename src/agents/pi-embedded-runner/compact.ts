@@ -225,6 +225,46 @@ function summarizeCompactionMessages(messages: AgentMessage[]): CompactionMessag
   };
 }
 
+function summarizeCompactionRoleCounts(messages: AgentMessage[]): string {
+  if (messages.length === 0) {
+    return "count=0 roles=[] real=0";
+  }
+  const roleCounts = new Map<string, number>();
+  let realCount = 0;
+  for (const message of messages) {
+    const role = typeof message.role === "string" ? message.role : "unknown";
+    roleCounts.set(role, (roleCounts.get(role) ?? 0) + 1);
+    if (hasRealConversationContent(message)) {
+      realCount += 1;
+    }
+  }
+  const roles = [...roleCounts.entries()].map(([role, count]) => `${role}:${count}`).join(",");
+  return `count=${messages.length} roles=[${roles}] real=${realCount}`;
+}
+
+function resolveManualCompactionRetryKeepRecentTokens(params: {
+  currentKeepRecentTokens: number;
+  estimatedTokens?: number;
+  historyTextChars?: number;
+}): number | null {
+  const estimatedTokens =
+    typeof params.estimatedTokens === "number" && Number.isFinite(params.estimatedTokens)
+      ? Math.max(0, Math.floor(params.estimatedTokens))
+      : typeof params.historyTextChars === "number" &&
+          Number.isFinite(params.historyTextChars) &&
+          params.historyTextChars > 0
+        ? Math.max(1, Math.ceil(params.historyTextChars / 4))
+        : undefined;
+  if (estimatedTokens === undefined || estimatedTokens <= 1) {
+    return null;
+  }
+  const targetKeepRecentTokens = Math.max(1, Math.floor(estimatedTokens / 2));
+  if (targetKeepRecentTokens >= params.currentKeepRecentTokens) {
+    return null;
+  }
+  return targetKeepRecentTokens;
+}
+
 function classifyCompactionReason(reason?: string): string {
   const text = (reason ?? "").trim().toLowerCase();
   if (!text) {
@@ -405,10 +445,24 @@ export async function compactEmbeddedPiSessionDirect(
     modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
   }
   const fail = (reason: string): EmbeddedPiCompactResult => {
+    const classifiedReason = classifyCompactionReason(reason);
+    if (classifiedReason === "already_compacted_recently") {
+      log.warn(
+        `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+          `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
+          `attempt=${attempt} maxAttempts=${maxAttempts} outcome=skipped reason=${classifiedReason} ` +
+          `durationMs=${Date.now() - startedAt}`,
+      );
+      return {
+        ok: true,
+        compacted: false,
+        reason,
+      };
+    }
     log.warn(
       `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
         `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
-        `attempt=${attempt} maxAttempts=${maxAttempts} outcome=failed reason=${classifyCompactionReason(reason)} ` +
+        `attempt=${attempt} maxAttempts=${maxAttempts} outcome=failed reason=${classifiedReason} ` +
         `durationMs=${Date.now() - startedAt}`,
     );
     return {
@@ -868,8 +922,8 @@ export async function compactEmbeddedPiSessionDirect(
           }
         }
         const diagEnabled = log.isEnabled("debug");
-        const preMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
-        if (diagEnabled && preMetrics) {
+        const preMetrics = summarizeCompactionMessages(session.messages);
+        if (diagEnabled) {
           log.debug(
             `[compaction-diag] start runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
               `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
@@ -908,9 +962,65 @@ export async function compactEmbeddedPiSessionDirect(
           // If token estimation throws on a malformed message, fall back to 0 so
           // the sanity check below becomes a no-op instead of crashing compaction.
         }
-        const result = await compactWithSafetyTimeout(() =>
-          session.compact(params.customInstructions),
-        );
+        let result: Awaited<ReturnType<typeof session.compact>>;
+        const runCompaction = async () =>
+          await compactWithSafetyTimeout(() => session.compact(params.customInstructions));
+        try {
+          result = await runCompaction();
+        } catch (err) {
+          const reason = describeUnknownError(err);
+          const currentKeepRecentTokens = settingsManager.getCompactionKeepRecentTokens();
+          const retryKeepRecentTokens =
+            trigger === "manual" &&
+            reason.includes("Compaction cancelled") &&
+            session.messages.some(hasRealConversationContent)
+              ? resolveManualCompactionRetryKeepRecentTokens({
+                  currentKeepRecentTokens,
+                  estimatedTokens: preMetrics.estTokens,
+                  historyTextChars: preMetrics.historyTextChars,
+                })
+              : null;
+          if (retryKeepRecentTokens !== null) {
+            log.warn(
+              `[compaction-diag] retrying manual compaction after empty preparation ` +
+                `runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                `diagId=${diagId} provider=${provider}/${modelId} reason=${reason} ` +
+                `keepRecentTokens=${currentKeepRecentTokens} -> ${retryKeepRecentTokens} ` +
+                `pre={${summarizeCompactionRoleCounts(session.messages)}}`,
+            );
+            settingsManager.applyOverrides({
+              compaction: { keepRecentTokens: retryKeepRecentTokens },
+            });
+            try {
+              result = await runCompaction();
+            } catch (retryErr) {
+              const retryReason = describeUnknownError(retryErr);
+              log.warn(
+                `[compaction-diag] session.compact failed after manual retry runId=${runId} ` +
+                  `sessionKey=${params.sessionKey ?? params.sessionId} diagId=${diagId} ` +
+                  `trigger=${trigger} provider=${provider}/${modelId} reason=${retryReason} ` +
+                  `pre={${summarizeCompactionRoleCounts(session.messages)}} ` +
+                  `pre.historyTextChars=${preMetrics.historyTextChars} ` +
+                  `pre.toolResultChars=${preMetrics.toolResultChars} ` +
+                  `pre.estTokens=${preMetrics.estTokens ?? "unknown"} ` +
+                  `contributors=${JSON.stringify(preMetrics.contributors)}`,
+              );
+              throw retryErr;
+            }
+          } else {
+            log.warn(
+              `[compaction-diag] session.compact failed runId=${runId} ` +
+                `sessionKey=${params.sessionKey ?? params.sessionId} diagId=${diagId} ` +
+                `trigger=${trigger} provider=${provider}/${modelId} reason=${reason} ` +
+                `pre={${summarizeCompactionRoleCounts(session.messages)}} ` +
+                `pre.historyTextChars=${preMetrics.historyTextChars} ` +
+                `pre.toolResultChars=${preMetrics.toolResultChars} ` +
+                `pre.estTokens=${preMetrics.estTokens ?? "unknown"} ` +
+                `contributors=${JSON.stringify(preMetrics.contributors)}`,
+            );
+            throw err;
+          }
+        }
         await runPostCompactionSideEffects({
           config: params.config,
           sessionKey: params.sessionKey,

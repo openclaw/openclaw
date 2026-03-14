@@ -4,6 +4,7 @@ import type { NativeCommandSpec } from "../../auto-reply/commands-registry.js";
 import * as dispatcherModule from "../../auto-reply/reply/provider-dispatcher.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as pluginCommandsModule from "../../plugins/commands.js";
+import * as timeoutModule from "../../utils/with-timeout.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 import {
   createMockCommandInteraction,
@@ -65,6 +66,23 @@ function createStatusCommand(cfg: OpenClawConfig) {
   const commandSpec: NativeCommandSpec = {
     name: "status",
     description: "Status",
+    acceptsArgs: false,
+  };
+  return createDiscordNativeCommand({
+    command: commandSpec,
+    cfg,
+    discordConfig: cfg.channels?.discord ?? {},
+    accountId: "default",
+    sessionPrefix: "discord:slash",
+    ephemeralDefault: true,
+    threadBindings: createNoopThreadBindingManager("default"),
+  });
+}
+
+function createCompactCommand(cfg: OpenClawConfig) {
+  const commandSpec: NativeCommandSpec = {
+    name: "compact",
+    description: "Compact",
     acceptsArgs: false,
   };
   return createDiscordNativeCommand({
@@ -339,5 +357,25 @@ describe("Discord native plugin command dispatch", () => {
       channelId,
       boundSessionKey,
     });
+  });
+  it("shows a still-processing follow-up when slash compact exceeds the interaction window", async () => {
+    const cfg = createConfig();
+    const command = createCompactCommand(cfg);
+    const interaction = createInteraction();
+
+    vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
+    vi.spyOn(dispatcherModule, "dispatchReplyWithDispatcher").mockImplementation(
+      () => new Promise(() => {}) as never,
+    );
+    vi.spyOn(timeoutModule, "withTimeout").mockRejectedValue(new Error("timeout"));
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(interaction.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining("/compact is still processing"),
+        ephemeral: true,
+      }),
+    );
   });
 });
