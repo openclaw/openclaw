@@ -14,10 +14,8 @@ import {
   type StringSelectMenuInteraction,
 } from "@buape/carbon";
 import {
-  ApplicationIntegrationType,
   ApplicationCommandOptionType,
   ApplicationCommandType,
-  InteractionContextType,
   ButtonStyle,
 } from "discord-api-types/v10";
 import {
@@ -211,42 +209,15 @@ export type DiscordNativeCommandOptionDefinition = {
   type: number;
   required?: boolean;
   autocomplete?: boolean;
-  choices?: Array<{ name: string; value: string | number }>;
-  channel_types?: number[];
-  options?: DiscordNativeCommandOptionDefinition[];
+  choices?: Array<{ name: string; value: string }>;
 };
 
 export type DiscordNativeCommandDeploymentDefinition = {
   name: string;
   description: string;
   type: typeof ApplicationCommandType.ChatInput;
-  integration_types?: number[];
-  contexts?: number[];
-  default_member_permissions?: string | null;
   options?: DiscordNativeCommandOptionDefinition[];
 };
-
-const DISCORD_NATIVE_COMMAND_DEFAULT_INTEGRATION_TYPES = [
-  ApplicationIntegrationType.GuildInstall,
-  ApplicationIntegrationType.UserInstall,
-];
-
-const DISCORD_NATIVE_COMMAND_DEFAULT_CONTEXTS = [
-  InteractionContextType.Guild,
-  InteractionContextType.BotDM,
-  InteractionContextType.PrivateChannel,
-];
-
-export function applyDiscordNativeCommandDeploymentDefaults(
-  definition: DiscordNativeCommandDeploymentDefinition,
-): DiscordNativeCommandDeploymentDefinition {
-  return {
-    ...definition,
-    integration_types: [...DISCORD_NATIVE_COMMAND_DEFAULT_INTEGRATION_TYPES],
-    contexts: [...DISCORD_NATIVE_COMMAND_DEFAULT_CONTEXTS],
-    default_member_permissions: null,
-  };
-}
 
 export function buildDiscordNativeCommandDeploymentDefinition(params: {
   command: NativeCommandSpec;
@@ -271,7 +242,6 @@ export function buildDiscordNativeCommandDeploymentDefinition(params: {
   const options = builtOptions?.map((option) => {
     const optionRecord = option as Record<string, unknown>;
     const rawChoices = optionRecord.choices;
-    const rawChannelTypes = optionRecord.channel_types;
     const choices = Array.isArray(rawChoices)
       ? rawChoices
           .map((choice) => {
@@ -289,25 +259,21 @@ export function buildDiscordNativeCommandDeploymentDefinition(params: {
           })
           .filter((choice): choice is { name: string; value: string | number } => Boolean(choice))
       : undefined;
-    const channelTypes = Array.isArray(rawChannelTypes)
-      ? rawChannelTypes.filter((value): value is number => typeof value === "number")
-      : undefined;
     return {
       name: option.name,
       description: option.description,
       type: option.type,
       required: option.required,
       autocomplete: typeof optionRecord.autocomplete === "function" ? true : undefined,
-      channel_types: channelTypes,
       choices,
     };
   });
-  return applyDiscordNativeCommandDeploymentDefaults({
+  return {
     name: params.command.name,
     description: params.command.description,
     type: ApplicationCommandType.ChatInput,
     options,
-  });
+  };
 }
 
 function readDiscordCommandArgs(

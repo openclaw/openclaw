@@ -1,38 +1,56 @@
 import crypto from "node:crypto";
-import type { BaseCommand, Client } from "@buape/carbon";
+import os from "node:os";
+import path from "node:path";
+import type { Client } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
+import type { NativeCommandSpec } from "../../../../src/auto-reply/commands-registry.js";
+import type { OpenClawConfig } from "../../../../src/config/config.js";
+import { resolveStateDir } from "../../../../src/config/paths.js";
+import { resolveRequiredHomeDir } from "../../../../src/infra/home-dir.js";
+import {
+  readJsonFileWithFallback,
+  writeJsonFileAtomically,
+} from "../../../../src/plugin-sdk/json-store.js";
+import { normalizeAccountId as normalizeSharedAccountId } from "../../../../src/routing/account-id.js";
+import {
+  buildDiscordNativeCommandDeploymentDefinition,
+  type DiscordNativeCommandDeploymentDefinition,
+} from "./native-command.js";
+
+type PersistedDiscordNativeCommand = {
+  id: string;
+  name: string;
+  signatureHash: string;
+  deployedAt: string;
+  lastSeenAt: string;
+};
+
+type DiscordNativeCommandState = {
+  version: 1;
+  accountId: string;
+  applicationId: string;
+  commands: PersistedDiscordNativeCommand[];
+};
+
 type LiveDiscordCommand = {
   id: string;
   name: string;
   signatureHash: string;
-  body: Record<string, unknown>;
 };
 
 type DesiredDiscordCommand = {
   name: string;
   signatureHash: string;
-  body: Record<string, unknown>;
+  body: DiscordNativeCommandDeploymentDefinition;
 };
 
 type DiscordNativeCommandReconcileSummary = {
-  validated: number;
   unchanged: number;
   created: number;
   updated: number;
   deleted: number;
   leftAlone: number;
 };
-
-const DISCORD_COMMAND_RESPONSE_ONLY_FIELDS = new Set([
-  "application_id",
-  "description_localized",
-  "dm_permission",
-  "guild_id",
-  "id",
-  "name_localized",
-  "nsfw",
-  "version",
-]);
 
 export type DiscordNativeCommandReconcileResult = {
   mode: "reconcile";
@@ -41,15 +59,23 @@ export type DiscordNativeCommandReconcileResult = {
   summary: DiscordNativeCommandReconcileSummary;
 };
 
-const DISCORD_SUBCOMMAND_ONLY_FIELDS = new Set([
-  "contexts",
-  "default_member_permissions",
-  "integration_types",
-]);
+function normalizeAccountId(accountId?: string): string {
+  return normalizeSharedAccountId(accountId);
+}
 
-function toSortedObject(value: unknown, path: string[] = []): unknown {
+function resolveStatePath(params: { accountId: string; env?: NodeJS.ProcessEnv }): string {
+  const env = params.env ?? process.env;
+  const stateDir = resolveStateDir(env, () => resolveRequiredHomeDir(env, os.homedir));
+  return path.join(
+    stateDir,
+    "discord",
+    `native-commands-${normalizeAccountId(params.accountId)}.json`,
+  );
+}
+
+function toSortedObject(value: unknown): unknown {
   if (Array.isArray(value)) {
-    return value.map((entry) => toSortedObject(entry, path));
+    return value.map((entry) => toSortedObject(entry));
   }
   if (!value || typeof value !== "object") {
     return value;
@@ -58,91 +84,25 @@ function toSortedObject(value: unknown, path: string[] = []): unknown {
   return Object.fromEntries(
     Object.keys(record)
       .toSorted()
-      .flatMap((key) => {
-        const normalizedValue = normalizeCommandComparisonValue(key, record[key], path);
-        if (normalizedValue === undefined) {
-          return [];
-        }
-        return [[key, toSortedObject(normalizedValue, [...path, key])]];
-      }),
+      .map((key) => [key, toSortedObject(record[key])]),
   );
 }
 
-function normalizeCommandComparisonValue(key: string, value: unknown, path: string[]): unknown {
-  if (value === undefined) {
-    return undefined;
-  }
-  // Discord omits explicit false for optional command option flags, so
-  // required:false and autocomplete:false should compare the same as missing.
-  if ((key === "required" || key === "autocomplete") && value === false) {
-    return undefined;
-  }
-  // Carbon serializes subcommands by spreading a full BaseCommand payload into
-  // the options array. Discord does not echo these top-level command fields
-  // back on subcommand option objects.
-  if (path.includes("options") && DISCORD_SUBCOMMAND_ONLY_FIELDS.has(key)) {
-    return undefined;
-  }
-  return value;
+function hashDefinition(definition: DiscordNativeCommandDeploymentDefinition): string {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(toSortedObject(definition)))
+    .digest("hex");
 }
 
-function stringifySorted(value: unknown): string {
-  return JSON.stringify(toSortedObject(value));
-}
-
-function hashDefinition(definition: unknown): string {
-  return crypto.createHash("sha256").update(stringifySorted(definition)).digest("hex");
-}
-
-function summarizeCommandNames(names: string[], maxEntries = 8): string {
-  if (names.length === 0) {
-    return "(none)";
-  }
-  const sample = [...names].sort().slice(0, maxEntries);
-  const remainder = names.length - sample.length;
-  return remainder > 0 ? `${sample.join(", ")} (+${remainder} more)` : sample.join(", ");
-}
-
-function describeDrift(live: Record<string, unknown>, desired: Record<string, unknown>): string {
-  const liveSorted = toSortedObject(live) as Record<string, unknown>;
-  const desiredSorted = toSortedObject(desired) as Record<string, unknown>;
-  const allKeys = [
-    ...new Set([...Object.keys(liveSorted), ...Object.keys(desiredSorted)]),
-  ].toSorted();
-  const mismatches: string[] = [];
-  for (const key of allKeys) {
-    const liveValue = liveSorted[key];
-    const desiredValue = desiredSorted[key];
-    if (stringifySorted(liveValue) === stringifySorted(desiredValue)) {
-      continue;
-    }
-    mismatches.push(
-      `${key}: live=${JSON.stringify(liveValue)} desired=${JSON.stringify(desiredValue)}`,
-    );
-    if (mismatches.length >= 6) {
-      break;
-    }
-  }
-  return mismatches.length > 0 ? mismatches.join("; ") : "hash mismatch with no field diff";
-}
-
-function normalizeDesiredCommandBody(raw: unknown): Record<string, unknown> | null {
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-  const record = raw as Record<string, unknown>;
-  const name = typeof record.name === "string" ? record.name.trim() : "";
-  if (!name) {
-    return null;
-  }
-  return record;
-}
-
-function toDesiredCommand(command: BaseCommand): DesiredDiscordCommand | null {
-  const body = normalizeDesiredCommandBody(command.serialize());
-  if (!body) {
-    return null;
-  }
+function toDesiredCommand(params: {
+  cfg: OpenClawConfig;
+  command: NativeCommandSpec;
+}): DesiredDiscordCommand {
+  const body = buildDiscordNativeCommandDeploymentDefinition({
+    cfg: params.cfg,
+    command: params.command,
+  });
   return {
     name: body.name.trim().toLowerCase(),
     signatureHash: hashDefinition(body),
@@ -150,19 +110,79 @@ function toDesiredCommand(command: BaseCommand): DesiredDiscordCommand | null {
   };
 }
 
-function sanitizeLiveCommandBody(raw: unknown): Record<string, unknown> | null {
-  if (!raw || typeof raw !== "object") {
-    return null;
+function toPersistedState(params: {
+  accountId: string;
+  applicationId: string;
+  commands: LiveDiscordCommand[];
+}): DiscordNativeCommandState {
+  const now = new Date().toISOString();
+  return {
+    version: 1,
+    accountId: normalizeAccountId(params.accountId),
+    applicationId: params.applicationId,
+    commands: params.commands.map((command) => ({
+      id: command.id,
+      name: command.name,
+      signatureHash: command.signatureHash,
+      deployedAt: now,
+      lastSeenAt: now,
+    })),
+  };
+}
+
+async function loadState(params: {
+  accountId: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<DiscordNativeCommandState> {
+  const filePath = resolveStatePath(params);
+  const fallback: DiscordNativeCommandState = {
+    version: 1,
+    accountId: normalizeAccountId(params.accountId),
+    applicationId: "",
+    commands: [],
+  };
+  const { value } = await readJsonFileWithFallback<DiscordNativeCommandState>(filePath, fallback);
+  if (
+    !value ||
+    typeof value !== "object" ||
+    value.version !== 1 ||
+    !Array.isArray(value.commands)
+  ) {
+    return fallback;
   }
-  const record = raw as Record<string, unknown>;
-  const sanitized = Object.fromEntries(
-    Object.entries(record).filter(([key]) => !DISCORD_COMMAND_RESPONSE_ONLY_FIELDS.has(key)),
-  );
-  const name = typeof sanitized.name === "string" ? sanitized.name.trim() : "";
-  if (!name) {
-    return null;
-  }
-  return sanitized;
+  return {
+    version: 1,
+    accountId:
+      typeof value.accountId === "string"
+        ? normalizeAccountId(value.accountId)
+        : fallback.accountId,
+    applicationId: typeof value.applicationId === "string" ? value.applicationId : "",
+    commands: value.commands
+      .filter((entry): entry is PersistedDiscordNativeCommand =>
+        Boolean(entry && typeof entry === "object"),
+      )
+      .map((entry) => ({
+        id: typeof entry.id === "string" ? entry.id : "",
+        name: typeof entry.name === "string" ? entry.name.trim().toLowerCase() : "",
+        signatureHash: typeof entry.signatureHash === "string" ? entry.signatureHash : "",
+        deployedAt:
+          typeof entry.deployedAt === "string" ? entry.deployedAt : new Date(0).toISOString(),
+        lastSeenAt:
+          typeof entry.lastSeenAt === "string" ? entry.lastSeenAt : new Date(0).toISOString(),
+      }))
+      .filter((entry) => entry.id && entry.name && entry.signatureHash),
+  };
+}
+
+async function saveState(params: {
+  state: DiscordNativeCommandState;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  const filePath = resolveStatePath({
+    accountId: params.state.accountId,
+    env: params.env,
+  });
+  await writeJsonFileAtomically(filePath, params.state);
 }
 
 function normalizeLiveCommand(raw: unknown): LiveDiscordCommand | null {
@@ -171,16 +191,22 @@ function normalizeLiveCommand(raw: unknown): LiveDiscordCommand | null {
   }
   const record = raw as Record<string, unknown>;
   const id = typeof record.id === "string" ? record.id : "";
-  const body = sanitizeLiveCommandBody(raw);
-  const name = typeof body?.name === "string" ? body.name.trim().toLowerCase() : "";
-  if (!id || !name || !body) {
+  const name = typeof record.name === "string" ? record.name.trim().toLowerCase() : "";
+  const description = typeof record.description === "string" ? record.description : "";
+  const type = typeof record.type === "number" ? record.type : 1;
+  const options = Array.isArray(record.options) ? record.options : undefined;
+  if (!id || !name) {
     return null;
   }
   return {
     id,
     name,
-    signatureHash: hashDefinition(body),
-    body,
+    signatureHash: hashDefinition({
+      name,
+      description,
+      type: type as 1,
+      options: options as DiscordNativeCommandDeploymentDefinition["options"],
+    }),
   };
 }
 
@@ -199,120 +225,115 @@ async function fetchLiveCommands(params: {
 
 export async function reconcileDiscordNativeCommands(params: {
   client: Client;
+  cfg: OpenClawConfig;
   runtime: {
     log?: (message: string) => void;
   };
   accountId: string;
   applicationId: string;
-  commands: BaseCommand[];
+  commandSpecs: NativeCommandSpec[];
+  env?: NodeJS.ProcessEnv;
 }): Promise<DiscordNativeCommandReconcileResult> {
-  const desiredCommands = params.commands
-    .map((command) => toDesiredCommand(command))
-    .filter((command): command is DesiredDiscordCommand => Boolean(command));
+  const desiredCommands = params.commandSpecs.map((command) =>
+    toDesiredCommand({
+      cfg: params.cfg,
+      command,
+    }),
+  );
   const desiredByName = new Map(desiredCommands.map((command) => [command.name, command]));
+  const savedState = await loadState({ accountId: params.accountId, env: params.env });
+  const savedByName = new Map(savedState.commands.map((command) => [command.name, command]));
   const liveCommands = await fetchLiveCommands({
     client: params.client,
     applicationId: params.applicationId,
   });
   const liveByName = new Map(liveCommands.map((command) => [command.name, command]));
-  const deletedLiveCommands = liveCommands.filter((command) => !desiredByName.has(command.name));
-  const updatedCommands = desiredCommands.flatMap((desired) => {
-    const live = liveByName.get(desired.name);
-    if (!live || live.signatureHash === desired.signatureHash) {
-      return [];
-    }
-    return [{ live, desired }];
-  });
-  const createdCommands = desiredCommands.filter((desired) => !liveByName.has(desired.name));
 
   const summary: DiscordNativeCommandReconcileSummary = {
-    validated: 0,
     unchanged: 0,
     created: 0,
     updated: 0,
     deleted: 0,
     leftAlone: 0,
   };
+  const resultingCommands: LiveDiscordCommand[] = [];
+
+  params.runtime.log?.(
+    `discord: reconcile loaded saved=${savedState.commands.length} live=${liveCommands.length} desired=${desiredCommands.length}`,
+  );
 
   for (const desired of desiredCommands) {
     const live = liveByName.get(desired.name);
     if (live) {
       if (live.signatureHash === desired.signatureHash) {
-        summary.validated += 1;
         summary.unchanged += 1;
+        resultingCommands.push(live);
         continue;
       }
-      summary.validated += 1;
+      const updated = await params.client.rest.patch(
+        Routes.applicationCommand(params.applicationId, live.id),
+        {
+          body: desired.body,
+        },
+      );
+      const normalizedUpdated = normalizeLiveCommand(updated) ?? {
+        id: live.id,
+        name: desired.name,
+        signatureHash: desired.signatureHash,
+      };
       summary.updated += 1;
+      resultingCommands.push(normalizedUpdated);
       continue;
     }
 
+    const created = await params.client.rest.post(
+      Routes.applicationCommands(params.applicationId),
+      {
+        body: desired.body,
+      },
+    );
+    const normalizedCreated = normalizeLiveCommand(created);
     summary.created += 1;
-  }
-
-  summary.deleted = deletedLiveCommands.length;
-  const matchedByNameCount = summary.validated;
-
-  params.runtime.log?.(
-    `discord: native command reconcile loaded live=${liveCommands.length} desired=${desiredCommands.length} matched=${matchedByNameCount} extra=${deletedLiveCommands.length} missing=${createdCommands.length} drifted=${updatedCommands.length}`,
-  );
-  if (deletedLiveCommands.length > 0) {
-    params.runtime.log?.(
-      `discord: native command reconcile deleting extra live commands: ${summarizeCommandNames(deletedLiveCommands.map((command) => command.name))}`,
+    resultingCommands.push(
+      normalizedCreated ?? {
+        id: "",
+        name: desired.name,
+        signatureHash: desired.signatureHash,
+      },
     );
   }
-  if (updatedCommands.length > 0) {
-    params.runtime.log?.(
-      `discord: native command reconcile updating drifted commands: ${summarizeCommandNames(updatedCommands.map(({ desired }) => desired.name))}`,
-    );
-    const sample = updatedCommands.at(0);
-    if (sample) {
-      params.runtime.log?.(
-        `discord: native command reconcile drift sample /${sample.desired.name}: ${describeDrift(sample.live.body, sample.desired.body)}`,
-      );
+
+  for (const live of liveCommands) {
+    if (desiredByName.has(live.name)) {
+      continue;
     }
-  }
-  if (createdCommands.length > 0) {
-    params.runtime.log?.(
-      `discord: native command reconcile creating missing commands: ${summarizeCommandNames(createdCommands.map((command) => command.name))}`,
-    );
-  }
-
-  if (summary.created === 0 && summary.updated === 0 && summary.deleted === 0) {
-    params.runtime.log?.(
-      `discord: native command reconcile summary validated=${summary.validated} unchanged=${summary.unchanged} created=${summary.created} updated=${summary.updated} deleted=${summary.deleted} leftAlone=${summary.leftAlone}`,
-    );
-
-    return {
-      mode: "reconcile",
-      liveCount: liveCommands.length,
-      savedCount: 0,
-      summary,
-    };
-  }
-
-  for (const live of deletedLiveCommands) {
+    const saved = savedByName.get(live.name);
+    if (!saved || saved.id !== live.id) {
+      summary.leftAlone += 1;
+      continue;
+    }
     await params.client.rest.delete(Routes.applicationCommand(params.applicationId, live.id));
+    summary.deleted += 1;
   }
-  for (const { live, desired } of updatedCommands) {
-    await params.client.rest.patch(Routes.applicationCommand(params.applicationId, live.id), {
-      body: desired.body,
-    });
-  }
-  for (const desired of createdCommands) {
-    await params.client.rest.post(Routes.applicationCommands(params.applicationId), {
-      body: desired.body,
-    });
-  }
+
+  const persistedCommands = resultingCommands.filter((command) => command.id);
+  await saveState({
+    env: params.env,
+    state: toPersistedState({
+      accountId: params.accountId,
+      applicationId: params.applicationId,
+      commands: persistedCommands,
+    }),
+  });
 
   params.runtime.log?.(
-    `discord: native command reconcile summary validated=${summary.validated} unchanged=${summary.unchanged} created=${summary.created} updated=${summary.updated} deleted=${summary.deleted} leftAlone=${summary.leftAlone}`,
+    `discord: reconcile summary unchanged=${summary.unchanged} created=${summary.created} updated=${summary.updated} deleted=${summary.deleted} leftAlone=${summary.leftAlone}`,
   );
 
   return {
     mode: "reconcile",
     liveCount: liveCommands.length,
-    savedCount: 0,
+    savedCount: savedState.commands.length,
     summary,
   };
 }
@@ -320,4 +341,5 @@ export async function reconcileDiscordNativeCommands(params: {
 export const __testing = {
   hashDefinition,
   normalizeLiveCommand,
+  resolveStatePath,
 };

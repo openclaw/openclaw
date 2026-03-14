@@ -273,18 +273,6 @@ vi.mock("../token.js", () => ({
 }));
 
 vi.mock("../voice/command.js", () => ({
-  buildDiscordVoiceCommandDeploymentDefinition: () => ({
-    name: "vc",
-    description: "Voice channel controls",
-    type: 1,
-    options: [
-      {
-        name: "join",
-        description: "Join a voice channel",
-        type: 1,
-      },
-    ],
-  }),
   createDiscordVoiceCommand: () => ({ name: "voice-command" }),
 }));
 
@@ -513,19 +501,7 @@ describe("monitorDiscordProvider", () => {
     const { monitorDiscordProvider } = await import("./provider.js");
 
     await monitorDiscordProvider({
-      config: {
-        ...baseConfig(),
-        channels: {
-          discord: {
-            accounts: {
-              default: {},
-            },
-            commands: {
-              reconcileOnStartup: true,
-            },
-          },
-        },
-      } as OpenClawConfig,
+      config: baseConfig(),
       runtime: baseRuntime(),
     });
 
@@ -911,34 +887,6 @@ describe("monitorDiscordProvider", () => {
     expect(clientHandleDeployRequestMock).not.toHaveBeenCalled();
   });
 
-  it("falls back to the legacy deploy path when reconcile is enabled for a guild-scoped command", async () => {
-    const { monitorDiscordProvider } = await import("./provider.js");
-    createDiscordNativeCommandMock.mockReturnValue({
-      name: "mock-command",
-      guildIds: ["guild-1"],
-    });
-
-    await monitorDiscordProvider({
-      config: {
-        ...baseConfig(),
-        channels: {
-          discord: {
-            commands: {
-              reconcileOnStartup: true,
-            },
-            accounts: {
-              default: {},
-            },
-          },
-        },
-      } as OpenClawConfig,
-      runtime: baseRuntime(),
-    });
-
-    expect(reconcileDiscordNativeCommandsMock).not.toHaveBeenCalled();
-    expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
-  });
-
   it("passes plugin commands into the reconcile path", async () => {
     const { monitorDiscordProvider } = await import("./provider.js");
     getPluginCommandSpecsMock.mockReturnValue([
@@ -965,46 +913,11 @@ describe("monitorDiscordProvider", () => {
     expect(reconcileDiscordNativeCommandsMock).toHaveBeenCalledTimes(1);
     const firstCallArg = (
       reconcileDiscordNativeCommandsMock.mock.calls.at(0) as unknown as
-        | [{ commands?: Array<{ name: string }> }]
+        | [{ commandSpecs?: Array<{ name: string }> }]
         | undefined
     )?.[0];
-    const commands = firstCallArg?.commands;
-    expect(commands?.map((command) => command.name)).toEqual(["mock-command", "mock-command"]);
-  });
-
-  it("passes the managed voice command into the reconcile path when voice is enabled", async () => {
-    const { monitorDiscordProvider } = await import("./provider.js");
-    mockResolvedDiscordAccountConfig({
-      voice: { enabled: true },
-    });
-
-    await monitorDiscordProvider({
-      config: {
-        ...baseConfig(),
-        channels: {
-          discord: {
-            accounts: {
-              default: {},
-            },
-            commands: {
-              reconcileOnStartup: true,
-            },
-          },
-        },
-      } as OpenClawConfig,
-      runtime: baseRuntime(),
-    });
-
-    const firstCallArg = (
-      reconcileDiscordNativeCommandsMock.mock.calls.at(0) as unknown as
-        | [
-            {
-              commands?: Array<{ name: string }>;
-            },
-          ]
-        | undefined
-    )?.[0];
-    expect(firstCallArg?.commands?.some((entry) => entry.name === "voice-command")).toBe(true);
+    const commandSpecs = firstCallArg?.commandSpecs;
+    expect(commandSpecs?.map((command) => command.name)).toEqual(["cmd", "cron_jobs"]);
   });
 
   it("reports connected status on startup and shutdown", async () => {
