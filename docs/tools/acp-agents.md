@@ -1,5 +1,5 @@
 ---
-summary: "Use ACP runtime sessions for Pi, Claude Code, Codex, OpenCode, Gemini CLI, and other harness agents"
+summary: "Use ACP runtime sessions for Pi, Claude Code, Codex, Cursor, OpenCode, Gemini CLI, and other harness agents"
 read_when:
   - Running coding harnesses through ACP
   - Setting up thread-bound ACP sessions on thread-capable channels
@@ -11,7 +11,7 @@ title: "ACP Agents"
 
 # ACP agents
 
-[Agent Client Protocol (ACP)](https://agentclientprotocol.com/) sessions let OpenClaw run external coding harnesses (for example Pi, Claude Code, Codex, OpenCode, and Gemini CLI) through an ACP backend plugin.
+[Agent Client Protocol (ACP)](https://agentclientprotocol.com/) sessions let OpenClaw run external coding harnesses (for example Pi, Claude Code, Codex, Cursor, OpenCode, and Gemini CLI) through an ACP backend plugin.
 
 If you ask OpenClaw in plain language to "run this in Codex" or "start Claude Code in a thread", OpenClaw should route that request to the ACP runtime (not the native sub-agent runtime).
 
@@ -441,12 +441,13 @@ Equivalent operations:
 
 Current acpx built-in harness aliases:
 
-- `pi`
 - `claude`
 - `codex`
-- `opencode`
+- `cursor` (Cursor CLI: `agent acp`)
 - `gemini`
 - `kimi`
+- `opencode`
+- `pi`
 
 When OpenClaw uses the acpx backend, prefer these values for `agentId` unless your acpx config defines custom agent aliases.
 
@@ -464,7 +465,7 @@ Core ACP baseline:
     dispatch: { enabled: true },
     backend: "acpx",
     defaultAgent: "codex",
-    allowedAgents: ["pi", "claude", "codex", "opencode", "gemini", "kimi"],
+    allowedAgents: ["claude", "codex", "cursor", "gemini", "kimi", "opencode", "pi"],
     maxConcurrentSessions: 8,
     stream: {
       coalesceIdleMs: 300,
