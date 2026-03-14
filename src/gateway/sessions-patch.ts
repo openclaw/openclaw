@@ -401,7 +401,7 @@ export async function applySessionsPatchToStore(params: {
         catalog,
         raw: trimmed,
         defaultProvider: existing?.providerOverride?.trim() || resolvedDefault.provider,
-        defaultModel: subagentModelHint ?? existing?.modelOverride?.trim() || resolvedDefault.model,
+        defaultModel: subagentModelHint ?? (existing?.modelOverride?.trim() || resolvedDefault.model),
       });
       if ("error" in resolved) {
         return invalid(resolved.error);
