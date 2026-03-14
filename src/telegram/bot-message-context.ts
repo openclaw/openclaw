@@ -224,7 +224,7 @@ export const buildTelegramMessageContext = async ({
     return false;
   };
 
-  const baseSessionKey = isNamedAccountFallback
+  let baseSessionKey = isNamedAccountFallback
     ? buildAgentSessionKey({
         agentId: route.agentId,
         channel: "telegram",
@@ -240,6 +240,49 @@ export const buildTelegramMessageContext = async ({
         identityLinks: freshCfg.session?.identityLinks,
       }).toLowerCase()
     : route.sessionKey;
+  // Telegram DM isolation: when dmScope is unset (defaults to "main"), DMs
+  // share the agent:main:main session with heartbeats and internal traffic.
+  // Force per-channel-peer isolation so DMs always get their own session key
+  // (e.g. agent:main:telegram:direct:<id>), preventing session pollution.
+  //
+  // Only override when dmScope is NOT explicitly configured — if the operator
+  // set dmScope: "main" intentionally (or uses conversationBindings / ACP
+  // bindings), we respect that choice.
+  // See: https://github.com/openclaw/openclaw/issues/41165
+  // Check freshCfg (not cfg) for consistency — route selection above uses
+  // freshCfg via resolveTelegramConversationRoute, so the explicitness check
+  // must read from the same source to avoid divergence at runtime.
+  const dmScopeExplicit = freshCfg.session?.dmScope != null;
+  const isExplicitRouteBinding =
+    route.matchedBy !== "default" ||
+    configuredBinding != null ||
+    Boolean(configuredBindingSessionKey?.trim());
+  if (
+    !isGroup &&
+    !isNamedAccountFallback &&
+    !isExplicitRouteBinding &&
+    !dmScopeExplicit &&
+    baseSessionKey === route.mainSessionKey
+  ) {
+    const isolatedKey = buildAgentSessionKey({
+      agentId: route.agentId,
+      channel: "telegram",
+      accountId: route.accountId,
+      peer: {
+        kind: "direct",
+        id: resolveTelegramDirectPeerId({
+          chatId,
+          senderId,
+        }),
+      },
+      dmScope: "per-channel-peer",
+      identityLinks: freshCfg.session?.identityLinks,
+    }).toLowerCase();
+    logVerbose(
+      `telegram: DM isolation override — rerouting from ${baseSessionKey} to ${isolatedKey} (dmScope not explicitly configured)`,
+    );
+    baseSessionKey = isolatedKey;
+  }
   // DMs: use thread suffix for session isolation (works regardless of dmScope)
   const threadKeys =
     dmThreadId != null

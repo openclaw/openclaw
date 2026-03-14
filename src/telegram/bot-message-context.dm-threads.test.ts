@@ -20,7 +20,8 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
 
     expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);
-    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main:thread:1234:42");
+    // After #41165 fix: DMs use per-channel-peer isolation instead of main
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:direct:42:thread:1234:42");
   });
 
   it("keeps legacy dm session key when no thread id", async () => {
@@ -34,7 +35,8 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
 
     expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.MessageThreadId).toBeUndefined();
-    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main");
+    // After #41165 fix: DMs use per-channel-peer isolation instead of main
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:direct:42");
   });
 });
 
