@@ -1,11 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
-import { createInboundDebouncer } from "./inbound-debounce.js";
+import {
+  clearInboundDebouncerRegistry,
+  createInboundDebouncer,
+  flushAllInboundDebouncers,
+} from "./inbound-debounce.js";
 import { installGroupRequireMentionTestPlugins } from "./inbound.group-require-mention-test-plugins.js";
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
@@ -310,7 +314,11 @@ describe("createInboundDebouncer", () => {
     vi.useFakeTimers();
     const calls: Array<string[]> = [];
 
-    const debouncer = createInboundDebouncer<{ key: string; id: string; debounce: boolean }>({
+    const debouncer = createInboundDebouncer<{
+      key: string;
+      id: string;
+      debounce: boolean;
+    }>({
       debounceMs: 50,
       buildKey: (item) => item.key,
       shouldDebounce: (item) => item.debounce,
@@ -331,7 +339,11 @@ describe("createInboundDebouncer", () => {
     vi.useFakeTimers();
     const calls: Array<string[]> = [];
 
-    const debouncer = createInboundDebouncer<{ key: string; id: string; windowMs: number }>({
+    const debouncer = createInboundDebouncer<{
+      key: string;
+      id: string;
+      windowMs: number;
+    }>({
       debounceMs: 0,
       buildKey: (item) => item.key,
       resolveDebounceMs: (item) => item.windowMs,
@@ -703,6 +715,108 @@ describe("createInboundDebouncer", () => {
     } finally {
       setTimeoutSpy.mockRestore();
     }
+  });
+});
+
+describe("flushAllInboundDebouncers", () => {
+  // Clear registry before each test to avoid leaking state from other tests
+  // that create debouncers.
+  beforeEach(() => {
+    clearInboundDebouncerRegistry();
+  });
+
+  afterEach(() => {
+    clearInboundDebouncerRegistry();
+  });
+
+  it("flushes all registered debouncers immediately", async () => {
+    vi.useFakeTimers();
+    const callsA: Array<string[]> = [];
+    const callsB: Array<string[]> = [];
+
+    const debouncerA = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 5000,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        callsA.push(items.map((entry) => entry.id));
+      },
+    });
+
+    const debouncerB = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 5000,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        callsB.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncerA.enqueue({ key: "session-1", id: "msg-1" });
+    await debouncerA.enqueue({ key: "session-1", id: "msg-2" });
+    await debouncerB.enqueue({ key: "session-2", id: "msg-3" });
+
+    // Nothing flushed yet (timers haven't fired)
+    expect(callsA).toEqual([]);
+    expect(callsB).toEqual([]);
+
+    const flushed = await flushAllInboundDebouncers();
+    expect(flushed).toBe(2);
+    expect(callsA).toEqual([["msg-1", "msg-2"]]);
+    expect(callsB).toEqual([["msg-3"]]);
+
+    vi.useRealTimers();
+  });
+
+  it("returns 0 when no debouncers are registered", async () => {
+    const flushed = await flushAllInboundDebouncers();
+    expect(flushed).toBe(0);
+  });
+
+  it("deregisters debouncers from global registry after flush", async () => {
+    vi.useFakeTimers();
+
+    createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 5000,
+      buildKey: (item) => item.key,
+      onFlush: async () => {},
+    });
+
+    // First flush deregisters
+    await flushAllInboundDebouncers();
+
+    // Second flush should find nothing
+    const flushed = await flushAllInboundDebouncers();
+    expect(flushed).toBe(0);
+
+    vi.useRealTimers();
+  });
+});
+
+describe("createInboundDebouncer flushAll", () => {
+  it("flushes all buffered keys", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 5000,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    await debouncer.enqueue({ key: "b", id: "2" });
+    await debouncer.enqueue({ key: "a", id: "3" });
+
+    expect(calls).toEqual([]);
+    await debouncer.flushAll();
+
+    // Both keys flushed
+    expect(calls).toHaveLength(2);
+    expect(calls).toContainEqual(["1", "3"]);
+    expect(calls).toContainEqual(["2"]);
+
+    vi.useRealTimers();
   });
 });
 

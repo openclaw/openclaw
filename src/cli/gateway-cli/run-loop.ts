@@ -3,6 +3,8 @@ import {
   getActiveEmbeddedRunCount,
   waitForActiveEmbeddedRuns,
 } from "../../agents/pi-embedded-runner/runs.js";
+import { flushAllInboundDebouncers } from "../../auto-reply/inbound-debounce.js";
+import { waitForFollowupQueueDrain } from "../../auto-reply/reply/queue/drain-all.js";
 import { loadConfig } from "../../config/config.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -166,6 +168,26 @@ export async function runGatewayLoop(params: {
         // On restart, wait for in-flight agent turns to finish before
         // tearing down the server so buffered messages are delivered.
         if (isRestart) {
+          // Flush inbound debounce buffers first. This pushes any messages
+          // waiting in per-channel debounce timers (e.g. the 2500ms collect
+          // window) into the followup queues immediately, preventing silent
+          // message loss when the server reinitializes.
+          const flushedDebouncers = await flushAllInboundDebouncers();
+          if (flushedDebouncers > 0) {
+            gatewayLog.info(`flushed ${flushedDebouncers} inbound debouncer(s) before restart`);
+            // Give the followup queue drain loops a short window to process
+            // the newly flushed items before we mark the gateway as draining.
+            const FOLLOWUP_DRAIN_TIMEOUT_MS = 5_000;
+            const followupResult = await waitForFollowupQueueDrain(FOLLOWUP_DRAIN_TIMEOUT_MS);
+            if (followupResult.drained) {
+              gatewayLog.info("followup queues drained after debounce flush");
+            } else {
+              gatewayLog.warn(
+                `followup queue drain timeout; ${followupResult.remaining} item(s) still pending`,
+              );
+            }
+          }
+
           // Reject new enqueues immediately during the drain window so
           // sessions get an explicit restart error instead of silent task loss.
           markGatewayDraining();
