@@ -165,6 +165,58 @@ describe("runReplyAgent execution-task interim retry", () => {
     });
   });
 
+  it("short-circuits bare continuation nudges when a background executor is already active", async () => {
+    listSubagentRunsForRequesterMock.mockReset().mockReturnValue([
+      {
+        runId: "child-1",
+        childSessionKey: "agent:main:child",
+        requesterSessionKey: "main",
+        requesterDisplayKey: "main",
+        task: "background task",
+        cleanup: "keep",
+        createdAt: Date.now(),
+      },
+    ]);
+
+    const result = await createRun({
+      summaryLine: "继续执行",
+      commandBody: "继续执行",
+    });
+
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      text: "On it. A background run is already in progress and will report back when it is done.",
+    });
+  });
+
+  it("still evaluates non-trivial follow-up instructions while a background executor is active", async () => {
+    listSubagentRunsForRequesterMock.mockReset().mockReturnValue([
+      {
+        runId: "child-1",
+        childSessionKey: "agent:main:child",
+        requesterSessionKey: "main",
+        requesterDisplayKey: "main",
+        task: "background task",
+        cleanup: "keep",
+        createdAt: Date.now(),
+      },
+    ]);
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "on it" }],
+      meta: {},
+    });
+
+    const result = await createRun({
+      summaryLine: "继续执行，但把标题改短一点",
+      commandBody: "继续执行，但把标题改短一点",
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      text: "On it. A background run is already in progress and will report back when it is done.",
+    });
+  });
+
   it("does not rerun when the first turn already returns substantive content", async () => {
     listSubagentRunsForRequesterMock.mockReset().mockReturnValue([]);
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
