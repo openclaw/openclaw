@@ -70,12 +70,21 @@ export function isInboundMediaPath(filePath: string): boolean {
   // identically regardless of how the caller constructed the string.
   const posix = filePath.replace(/\\/g, "/");
   const normalized = path.posix.normalize(posix);
-  return (
-    normalized.includes(`/${INBOUND_MEDIA_PATH_SEGMENT}/`) ||
+  // Relative path: media/inbound is the first directory segment.
+  if (
     normalized.startsWith(`${INBOUND_MEDIA_PATH_SEGMENT}/`) ||
-    normalized === INBOUND_MEDIA_PATH_SEGMENT ||
-    normalized.endsWith(`/${INBOUND_MEDIA_PATH_SEGMENT}`)
-  );
+    normalized === INBOUND_MEDIA_PATH_SEGMENT
+  ) {
+    return true;
+  }
+  // Absolute path (POSIX or Windows drive): the staging directory must sit
+  // exactly one level below the filesystem root / drive root, i.e.
+  //   /workspace/media/inbound/...   (true)
+  //   C:/workspace/media/inbound/... (true)
+  //   /workspace/src/media/inbound/  (false - nested, not the staging root)
+  return new RegExp(
+    `^(?:[A-Za-z]:)?/[^/]+/${INBOUND_MEDIA_PATH_SEGMENT}(?:/|$)`,
+  ).test(normalized);
 }
 
 type OpenClawReadToolOptions = {

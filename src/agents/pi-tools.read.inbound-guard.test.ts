@@ -35,6 +35,14 @@ describe("isInboundMediaPath", () => {
     expect(isInboundMediaPath("media-inbound/file.txt")).toBe(false);
   });
 
+  it("does not misclassify workspace source files nested under media/inbound", () => {
+    // Regression: paths like src/media/inbound/parser.ts must not be treated as
+    // untrusted inbound media — media/inbound must be at the workspace root level.
+    expect(isInboundMediaPath("src/media/inbound/parser.ts")).toBe(false);
+    expect(isInboundMediaPath("/workspace/src/media/inbound/parser.ts")).toBe(false);
+    expect(isInboundMediaPath("packages/core/media/inbound/file.txt")).toBe(false);
+  });
+
   it("correctly classifies non-canonical path forms (double-slashes, dot segments)", () => {
     // Regression: non-canonical paths must not bypass the inbound guard
     // (see #11207 P1 review — path.posix.normalize now applied before check)
