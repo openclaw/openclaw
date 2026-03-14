@@ -877,7 +877,7 @@ describe("resolveModel", () => {
     });
   });
 
-  it("does not rewrite openai baseUrl when openai-codex api stays non-codex", () => {
+  it("normalizes openai-codex gpt-5.4 overrides away from /v1/completions", () => {
     mockOpenAICodexTemplateModel();
 
     const cfg: OpenClawConfig = {
@@ -896,9 +896,34 @@ describe("resolveModel", () => {
       id: "gpt-5.4",
       cfg,
       expectedModel: {
-        api: "openai-completions",
-        baseUrl: "https://api.openai.com/v1",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
         id: "gpt-5.4",
+        provider: "openai-codex",
+      },
+    });
+  });
+
+  it("normalizes openai-codex gpt-5.3-codex overrides away from /v1/completions", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expectResolvedForwardCompatFallback({
+      provider: "openai-codex",
+      id: "gpt-5.3-codex",
+      cfg,
+      expectedModel: {
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+        id: "gpt-5.3-codex",
         provider: "openai-codex",
       },
     });

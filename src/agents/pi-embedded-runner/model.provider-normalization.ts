@@ -34,7 +34,8 @@ function normalizeOpenAICodexTransport(params: {
     isOpenAICodexBaseUrl(params.model.baseUrl);
 
   const nextApi =
-    useCodexTransport && params.model.api === "openai-responses"
+    useCodexTransport &&
+    (params.model.api === "openai-responses" || params.model.api === "openai-completions")
       ? ("openai-codex-responses" as const)
       : params.model.api;
   const nextBaseUrl =
