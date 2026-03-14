@@ -162,11 +162,13 @@ export function collectReleaseTagErrors(params: {
   releaseSha?: string;
   releaseMainRef?: string;
   now?: Date;
+  enforceCalverWindow?: boolean;
 }): string[] {
   const errors: string[] = [];
   const releaseTag = params.releaseTag.trim();
   const packageVersion = params.packageVersion.trim();
   const now = params.now ?? new Date();
+  const enforceCalverWindow = params.enforceCalverWindow ?? true;
 
   const parsedVersion = parseReleaseVersion(packageVersion);
   if (parsedVersion === null) {
@@ -196,7 +198,7 @@ export function collectReleaseTagErrors(params: {
     );
   }
 
-  if (parsedVersion !== null) {
+  if (parsedVersion !== null && enforceCalverWindow) {
     const dayDistance = utcCalendarDayDistance(parsedVersion.date, now);
     if (dayDistance > MAX_CALVER_DISTANCE_DAYS) {
       const nowLabel = now.toISOString().slice(0, 10);
@@ -230,12 +232,16 @@ function loadPackageJson(): PackageJson {
 
 function main(): number {
   const pkg = loadPackageJson();
+  const skipCalverWindow = process.env.RELEASE_SKIP_CALVER_WINDOW === "1";
+  const now = new Date();
   const metadataErrors = collectReleasePackageMetadataErrors(pkg);
   const tagErrors = collectReleaseTagErrors({
     packageVersion: pkg.version ?? "",
     releaseTag: process.env.RELEASE_TAG ?? "",
     releaseSha: process.env.RELEASE_SHA,
     releaseMainRef: process.env.RELEASE_MAIN_REF,
+    now,
+    enforceCalverWindow: !skipCalverWindow,
   });
   const errors = [...metadataErrors, ...tagErrors];
 
@@ -251,7 +257,9 @@ function main(): number {
   const dayDistance =
     parsedVersion === null
       ? "unknown"
-      : String(utcCalendarDayDistance(parsedVersion.date, new Date()));
+      : skipCalverWindow
+        ? "skipped"
+        : String(utcCalendarDayDistance(parsedVersion.date, now));
   console.log(
     `openclaw-npm-release-check: validated ${channel} release ${pkg.version} (${dayDistance} day UTC delta).`,
   );

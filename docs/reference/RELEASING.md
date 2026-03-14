@@ -94,7 +94,8 @@ Historical note:
 
 - [ ] Confirm git status is clean; commit and push as needed.
 - [ ] Confirm npm trusted publishing is configured for the `openclaw` package.
-- [ ] Push the matching git tag to trigger `.github/workflows/openclaw-npm-release.yml`.
+- [ ] Push the matching git tag to trigger the preview run in `.github/workflows/openclaw-npm-release.yml`.
+- [ ] Run `OpenClaw NPM Release` manually with the same tag to publish after `npm-release` environment approval.
   - Stable tags publish to npm `latest`.
   - Beta tags publish to npm `beta`.
   - The workflow rejects tags that do not match `package.json`, are not on `main`, or whose CalVer date is more than 2 UTC calendar days away from the release date.
