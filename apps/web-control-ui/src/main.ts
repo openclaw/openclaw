@@ -618,6 +618,12 @@ class WebControlUiApp extends LitElement {
     await this.sendRawMessage(userText, outbound);
   }
 
+  private async triggerListCheckpoints() {
+    const userText = "查看最近 checkpoint";
+    const outbound = `${this.promptDraft.trim()}\n\n请不要修改页面代码，只执行查询：在 openclaw-src 仓库根目录运行\n\npwsh ./scripts/web-control-ui-list-checkpoints.ps1\n\n最后只回复最近的 checkpoint ref 列表（每行一个），如果没有则明确说当前为空。`;
+    await this.sendRawMessage(userText, outbound);
+  }
+
   private savePreferenceDraft() {
     this.preferenceMemory = fromDraft(this.preferenceDraft);
     savePreferenceMemory(this.preferenceMemory);
