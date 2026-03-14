@@ -826,6 +826,7 @@ export const SlackDmSchema = z
     groupEnabled: z.boolean().optional(),
     groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
     replyToMode: ReplyToModeSchema.optional(),
+    systemPrompt: z.string().optional(),
   })
   .strict();
 
@@ -862,6 +863,7 @@ const SlackReplyToModeByChatTypeSchema = z
 export const SlackAccountSchema = z
   .object({
     name: z.string().optional(),
+    systemPrompt: z.string().optional(),
     mode: z.enum(["socket", "http"]).optional(),
     signingSecret: SecretInputSchema.optional().register(sensitive),
     webhookPath: z.string().optional(),
