@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { clearPluginDiscoveryCache, discoverOpenClawPlugins } from "./discovery.js";
 import {
   cleanupTrackedTempDirs,
@@ -9,7 +9,6 @@ import {
 } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
-const previousUmask = process.umask(0o022);
 
 function makeTempDir() {
   return makeTrackedTempDir("openclaw-plugins", tempDirs);
@@ -57,10 +56,6 @@ function expectEscapesPackageDiagnostic(diagnostics: Array<{ message: string }>)
 afterEach(() => {
   clearPluginDiscoveryCache();
   cleanupTrackedTempDirs(tempDirs);
-});
-
-afterAll(() => {
-  process.umask(previousUmask);
 });
 
 describe("discoverOpenClawPlugins", () => {

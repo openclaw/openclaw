@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import {
   clearPluginManifestRegistryCache,
@@ -11,7 +11,6 @@ import { validateConfigObject } from "./config.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 
 const tempDirs: string[] = [];
-const previousUmask = process.umask(0o022);
 
 function chmodSafeDir(dir: string) {
   if (process.platform === "win32") {
@@ -124,10 +123,6 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
-});
-
-afterAll(() => {
-  process.umask(previousUmask);
 });
 
 describe("applyPluginAutoEnable", () => {
