@@ -223,8 +223,7 @@ function resolveEnvSourceLabel(params: {
 export function resolveBedrockBearerToken(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  const value = env[AWS_BEARER_ENV]?.trim();
-  return value || undefined;
+  return normalizeOptionalSecretInput(env[AWS_BEARER_ENV]);
 }
 
 export function resolveAwsSdkEnvVarName(env: NodeJS.ProcessEnv = process.env): string | undefined {
