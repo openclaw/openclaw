@@ -34,6 +34,8 @@ export type SlackChannelConfig = {
   allow?: boolean;
   /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
+  /** Override mention requirement inside threads (inherits requireMention when unset). */
+  requireMentionInThreads?: boolean;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -120,6 +122,8 @@ export type SlackAccountConfig = {
   dangerouslyAllowNameMatching?: boolean;
   /** Default mention requirement for channel messages (default: true). */
   requireMention?: boolean;
+  /** Default mention requirement inside threads (inherits requireMention when unset). */
+  requireMentionInThreads?: boolean;
   /**
    * Controls how channel messages are handled:
    * - "open": channels bypass allowlists; mention-gating applies
