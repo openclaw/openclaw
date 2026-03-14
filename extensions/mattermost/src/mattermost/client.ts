@@ -168,11 +168,147 @@ export async function sendMattermostTyping(
 export async function createMattermostDirectChannel(
   client: MattermostClient,
   userIds: string[],
+  signal?: AbortSignal,
 ): Promise<MattermostChannel> {
   return await client.request<MattermostChannel>("/channels/direct", {
     method: "POST",
     body: JSON.stringify(userIds),
+    signal,
   });
+}
+
+export type CreateDmChannelRetryOptions = {
+  /** Maximum number of retry attempts (default: 3) */
+  maxRetries?: number;
+  /** Initial delay in milliseconds (default: 1000) */
+  initialDelayMs?: number;
+  /** Maximum delay in milliseconds (default: 10000) */
+  maxDelayMs?: number;
+  /** Timeout for each individual request in milliseconds (default: 30000) */
+  timeoutMs?: number;
+  /** Optional logger for retry events */
+  onRetry?: (attempt: number, delayMs: number, error: Error) => void;
+};
+
+/**
+ * Creates a Mattermost DM channel with exponential backoff retry logic.
+ * Retries on transient errors (429, 5xx, network errors) but not on
+ * client errors (4xx except 429) or permanent failures.
+ */
+export async function createMattermostDirectChannelWithRetry(
+  client: MattermostClient,
+  userIds: string[],
+  options: CreateDmChannelRetryOptions = {},
+): Promise<MattermostChannel> {
+  const {
+    maxRetries = 3,
+    initialDelayMs = 1000,
+    maxDelayMs = 10000,
+    timeoutMs = 30000,
+    onRetry,
+  } = options;
+
+  let lastError: Error | undefined;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      // Use AbortController for per-request timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const result = await createMattermostDirectChannel(client, userIds, controller.signal);
+        return result;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+
+      // Don't retry on the last attempt
+      if (attempt >= maxRetries) {
+        break;
+      }
+
+      // Check if error is retryable
+      if (!isRetryableError(lastError)) {
+        throw lastError;
+      }
+
+      // Calculate exponential backoff delay with full-jitter
+      // Jitter is proportional to the exponential delay, not a fixed 1000ms
+      // This ensures backoff behaves correctly for small delay configurations
+      const exponentialDelay = initialDelayMs * Math.pow(2, attempt);
+      const jitter = Math.random() * exponentialDelay;
+      const delayMs = Math.min(exponentialDelay + jitter, maxDelayMs);
+
+      if (onRetry) {
+        onRetry(attempt + 1, delayMs, lastError);
+      }
+
+      // Wait before retrying
+      await sleep(delayMs);
+    }
+  }
+
+  throw lastError ?? new Error("Failed to create DM channel after retries");
+}
+
+function isRetryableError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+
+  // Retry on 5xx server errors FIRST (before checking 4xx)
+  // Use "mattermost api" prefix to avoid matching port numbers (e.g., :443) or IP octets
+  // This prevents misclassification when a 5xx error detail contains a 4xx substring
+  // e.g., "Mattermost API 503: upstream returned 404"
+  if (/mattermost api 5\d{2}\b/.test(message)) {
+    return true;
+  }
+
+  // Check for explicit 429 rate limiting FIRST (before generic "429" text match)
+  // This avoids retrying when error detail contains "429" but it's not the status code
+  if (/mattermost api 429\b/.test(message) || message.includes("too many requests")) {
+    return true;
+  }
+
+  // Check for explicit 4xx status codes - these are client errors and should NOT be retried
+  // (except 429 which is handled above)
+  // Use "mattermost api" prefix to avoid matching port numbers like :443
+  const clientErrorMatch = message.match(/mattermost api (4\d{2})\b/);
+  if (clientErrorMatch) {
+    const statusCode = parseInt(clientErrorMatch[1], 10);
+    if (statusCode >= 400 && statusCode < 500) {
+      return false;
+    }
+  }
+
+  // Retry on network/transient errors only if no explicit Mattermost API status code is present
+  // This avoids false positives like:
+  // - "400 Bad Request: connection timed out" (has status code)
+  // - "connect ECONNRESET 104.18.32.10:443" (has port number, not status)
+  const hasMattermostApiStatusCode = /mattermost api \d{3}\b/.test(message);
+  if (hasMattermostApiStatusCode) {
+    return false;
+  }
+
+  // Retry on network/transient errors (no explicit HTTP status code in message)
+  const retryablePatterns = [
+    "network error",
+    "timeout",
+    "abort",
+    "connection refused",
+    "econnreset",
+    "econnrefused",
+    "etimedout",
+    "enotfound",
+    "socket hang up",
+  ];
+
+  return retryablePatterns.some((pattern) => message.includes(pattern));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function createMattermostPost(
