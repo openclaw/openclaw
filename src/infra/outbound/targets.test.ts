@@ -355,7 +355,7 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.threadId, params.name).toBe(params.expectedThreadId);
   };
 
-  it.each([
+  const heartbeatCases: Array<Parameters<typeof expectHeartbeatTarget>[0]> = [
     {
       name: "allows heartbeat delivery to Slack DMs by default and drops inherited thread ids",
       entry: {
@@ -462,23 +462,21 @@ describe("resolveSessionDeliveryTarget", () => {
       expectedChannel: "none",
       expectedReason: "dm-blocked",
     },
-  ] satisfies Array<{
-    name: string;
-    entry: NonNullable<Parameters<typeof resolveHeartbeatDeliveryTarget>[0]["entry"]>;
-    directPolicy?: "allow" | "block";
-    expectedChannel: string;
-    expectedTo?: string;
-    expectedReason?: string;
-  }>)("$name", ({ name, entry, directPolicy, expectedChannel, expectedTo, expectedReason }) => {
-    expectHeartbeatTarget({
-      name,
-      entry,
-      directPolicy,
-      expectedChannel,
-      expectedTo,
-      expectedReason,
-    });
-  });
+  ];
+
+  it.each(heartbeatCases)(
+    "$name",
+    ({ name, entry, directPolicy, expectedChannel, expectedTo, expectedReason }) => {
+      expectHeartbeatTarget({
+        name,
+        entry,
+        directPolicy,
+        expectedChannel,
+        expectedTo,
+        expectedReason,
+      });
+    },
+  );
 
   it("allows heartbeat delivery to Discord DMs by default", () => {
     const cfg: OpenClawConfig = {};

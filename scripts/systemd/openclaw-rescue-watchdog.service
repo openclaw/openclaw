@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenClaw Rescue Watchdog
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/openclaw
+ExecStart=%h/openclaw/scripts/rescue-watchdog.sh
+Environment=OPENCLAW_RESCUE_RUNNER=%h/openclaw/scripts/claude-rescue-runner.sh
+# Environment=OPENCLAW_RESCUE_NOTIFY_CHANNEL=telegram
+# Environment=OPENCLAW_RESCUE_NOTIFY_TARGET=@mychat
+# Environment=OPENCLAW_RESCUE_COOLDOWN_SEC=900
+# Environment=CLAUDE_RESCUE_MODEL=sonnet
+# Environment=CLAUDE_RESCUE_PERMISSION_MODE=acceptEdits
+
+[Install]
+WantedBy=default.target

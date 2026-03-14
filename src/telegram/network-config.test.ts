@@ -131,7 +131,13 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
 });
 
 describe("resolveTelegramDnsResultOrderDecision", () => {
-  it.each([
+  const dnsResultOrderCases: Array<{
+    name: string;
+    env?: NodeJS.ProcessEnv;
+    network?: TelegramNetworkConfig | (TelegramNetworkConfig & { dnsResultOrder: string });
+    nodeMajor: number;
+    expected: ReturnType<typeof resolveTelegramDnsResultOrderDecision>;
+  }> = [
     {
       name: "uses env override when provided",
       env: { OPENCLAW_TELEGRAM_DNS_RESULT_ORDER: "verbatim" },
@@ -178,13 +184,9 @@ describe("resolveTelegramDnsResultOrderDecision", () => {
       nodeMajor: 22,
       expected: { value: "ipv4first", source: "default-node22" },
     },
-  ] satisfies Array<{
-    name: string;
-    env?: NodeJS.ProcessEnv;
-    network?: TelegramNetworkConfig | (TelegramNetworkConfig & { dnsResultOrder: string });
-    nodeMajor: number;
-    expected: ReturnType<typeof resolveTelegramDnsResultOrderDecision>;
-  }>)("$name", ({ env, network, nodeMajor, expected }) => {
+  ];
+
+  it.each(dnsResultOrderCases)("$name", ({ env, network, nodeMajor, expected }) => {
     const decision = resolveTelegramDnsResultOrderDecision({
       env,
       network,

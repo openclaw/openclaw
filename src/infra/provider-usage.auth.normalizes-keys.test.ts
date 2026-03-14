@@ -173,7 +173,12 @@ describe("resolveProviderAuths key normalization", () => {
     );
   }
 
-  it.each([
+  const envNormalizationCases: Array<{
+    name: string;
+    providers: ReadonlyArray<Parameters<typeof resolveProviderAuths>[0]["providers"][number]>;
+    env: Record<string, string | undefined>;
+    expected: ProviderAuth[];
+  }> = [
     {
       name: "strips embedded CR/LF from env keys",
       providers: ["zai", "minimax", "xiaomi"] as const,
@@ -214,12 +219,9 @@ describe("resolveProviderAuths key normalization", () => {
       },
       expected: [{ provider: "minimax", token: "code-plan-key" }],
     },
-  ] satisfies Array<{
-    name: string;
-    providers: readonly Parameters<typeof resolveProviderAuths>[0]["providers"][number][];
-    env: Record<string, string | undefined>;
-    expected: ProviderAuth[];
-  }>)("$name", async ({ providers, env, expected }) => {
+  ];
+
+  it.each(envNormalizationCases)("$name", async ({ providers, env, expected }) => {
     await expectResolvedAuthsFromSuiteHome({ providers: [...providers], env, expected });
   });
 
