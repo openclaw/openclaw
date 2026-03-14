@@ -6,7 +6,30 @@ import { sendMediaFeishu } from "./media.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
 
-function normalizePossibleLocalImagePath(text: string | undefined): string | null {
+const SUPPORTED_LOCAL_FILE_EXTENSIONS = new Set([
+  // Images
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".gif",
+  ".webp",
+  ".bmp",
+  ".ico",
+  ".tiff",
+  // Documents
+  ".pdf",
+  ".doc",
+  ".docx",
+  ".xls",
+  ".xlsx",
+  ".ppt",
+  ".pptx",
+  // Media
+  ".opus",
+  ".mp4",
+]);
+
+function normalizePossibleLocalFilePath(text: string | undefined): string | null {
   const raw = text?.trim();
   if (!raw) return null;
 
@@ -19,10 +42,7 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
   if (/^(https?:\/\/|data:|file:\/\/)/i.test(raw)) return null;
 
   const ext = path.extname(raw).toLowerCase();
-  const isImageExt = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(
-    ext,
-  );
-  if (!isImageExt) return null;
+  if (!SUPPORTED_LOCAL_FILE_EXTENSIONS.has(ext)) return null;
 
   if (!path.isAbsolute(raw)) return null;
   if (!fs.existsSync(raw)) return null;
@@ -86,13 +106,13 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     // Scheme A compatibility shim:
     // when upstream accidentally returns a local image path as plain text,
     // auto-upload and send as Feishu image message instead of leaking path text.
-    const localImagePath = normalizePossibleLocalImagePath(text);
-    if (localImagePath) {
+    const localFilePath = normalizePossibleLocalFilePath(text);
+    if (localFilePath) {
       try {
         const result = await sendMediaFeishu({
           cfg,
           to,
-          mediaUrl: localImagePath,
+          mediaUrl: localFilePath,
           accountId: accountId ?? undefined,
           replyToMessageId,
           mediaLocalRoots,
