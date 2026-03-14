@@ -455,7 +455,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       };
     });
 
-    return [...agentResults, ...tagged].toSorted((a, b) => b.score - a.score).slice(0, maxResults);
+    return [...agentResults, ...tagged]
+      .filter((r) => r.score >= minScore)
+      .toSorted((a, b) => b.score - a.score)
+      .slice(0, maxResults);
   }
 
   private async searchVector(
@@ -903,10 +906,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       const { DatabaseSync } = requireNodeSqlite();
       const db = new DatabaseSync(this.settings.sharedStorePath, { open: true, readOnly: true });
       try {
-        const row = db
-          .prepare("SELECT COUNT(DISTINCT path) as files, COUNT(*) as chunks FROM chunks")
-          .get() as { files: number; chunks: number } | undefined;
-        return { files: row?.files ?? 0, chunks: row?.chunks ?? 0 };
+        const filesRow = db.prepare("SELECT COUNT(*) as c FROM files").get() as
+          | { c: number }
+          | undefined;
+        const chunksRow = db.prepare("SELECT COUNT(*) as c FROM chunks").get() as
+          | { c: number }
+          | undefined;
+        return { files: filesRow?.c ?? 0, chunks: chunksRow?.c ?? 0 };
       } finally {
         db.close();
       }

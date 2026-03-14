@@ -246,10 +246,12 @@ function mergeConfig(
     }
   }
 
-  // Convention directory: always include ~/.openclaw/shared-memory/
-  const conventionDir = getSharedMemoryConventionDir();
-  if (!sharedPaths.some((sp) => sp.path === conventionDir)) {
-    sharedPaths.unshift({ path: conventionDir, weight: 1.0 });
+  // Convention directory: include ~/.openclaw/shared-memory/ only when user has opted in
+  if (sharedPaths.length > 0) {
+    const conventionDir = getSharedMemoryConventionDir();
+    if (!sharedPaths.some((sp) => sp.path === conventionDir)) {
+      sharedPaths.unshift({ path: conventionDir, weight: 1.0 });
+    }
   }
 
   // Per-agent extraPaths: only from overrides, excluding any shared paths
