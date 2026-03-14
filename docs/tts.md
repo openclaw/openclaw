@@ -17,6 +17,7 @@ It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubb
 - **ElevenLabs** (primary or fallback provider)
 - **OpenAI** (primary or fallback provider; also used for summaries)
 - **Edge TTS** (primary or fallback provider; uses `node-edge-tts`, default when no API keys)
+- **CLI** (custom local TTS via command-line tool)
 
 ### Edge TTS notes
 
@@ -37,7 +38,7 @@ If you want OpenAI or ElevenLabs:
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
 - `OPENAI_API_KEY`
 
-Edge TTS does **not** require an API key. If no API keys are found, OpenClaw defaults
+Edge TTS and CLI do **not** require an API key. If no API keys are found, OpenClaw defaults
 to Edge TTS (unless disabled via `messages.tts.edge.enabled=false`).
 
 If multiple providers are configured, the selected provider is used first and the others are fallback options.
@@ -153,6 +154,47 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 }
 ```
 
+### CLI provider (custom local TTS)
+
+Use any command-line TTS tool. The CLI provider is useful for local TTS engines like macOS `say` and `mlx-audio`, Linux `espeak`, or custom scripts.
+
+```json5
+{
+  messages: {
+    tts: {
+      provider: "cli",
+      cli: {
+        command: "/path/to/my-local-tts",
+        args: [
+          "--output_path",
+          "{{TtsOutputPath}}",
+          "--output_format",
+          "{{TtsOutputFormat}}",
+          "--text",
+          "{{TtsText}}",
+        ],
+      },
+    },
+  },
+}
+```
+
+**Template variables:**
+
+- `{{TtsText}}` — The text to convert to speech
+- `{{TtsOutputPath}}` — Full path where audio output should be written
+- `{{TtsOutputFormat}}` — Output format (`pcm` for telephony, `opus` for voice note, `mp3` otherwise)
+
+**Environment variables:**
+
+- `TTS_TEXT` — The text to convert (same as `{{TtsText}}`)
+- `TTS_OUTPUT_PATH` — Output path (same as `{{TtsOutputPath}}`)
+- `TTS_OUTPUT_FORMAT` — Output format (same as `{{TtsOutputFormat}}`)
+
+Use environment variables instead of template variables if your CLI tool is a Windows batch wrapper (`.cmd`/`.bat`), since special characters like `&`, `%`, `|`, or newlines in user text can cause argument parsing failures. For example, text containing `R&D` would fail when passed via `{{TtsText}}` but works via `TTS_TEXT` env var.
+
+If the CLI command exits with non-zero code, OpenClaw automatically falls back to the next configured provider. You may need to enlarge `timeoutMs` if local CLI is slow.
+
 ### Custom limits + prefs path
 
 ```json5
@@ -205,7 +247,7 @@ Then run:
   - `tagged` only sends audio when the reply includes `[[tts]]` tags.
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
-- `provider`: `"elevenlabs"`, `"openai"`, or `"edge"` (fallback is automatic).
+- `provider`: `"elevenlabs"`, `"openai"`, `"edge"`, or `"cli"` (fallback is automatic).
 - If `provider` is **unset**, OpenClaw prefers `openai` (if key), then `elevenlabs` (if key),
   otherwise `edge`.
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
@@ -236,6 +278,9 @@ Then run:
 - `edge.saveSubtitles`: write JSON subtitles alongside the audio file.
 - `edge.proxy`: proxy URL for Edge TTS requests.
 - `edge.timeoutMs`: request timeout override (ms).
+- `cli.command`: CLI binary path or name (searched in PATH).
+- `cli.args`: CLI arguments with template variables (`{{TtsText}}`, `{{TtsOutputPath}}`, `{{TtsOutputFormat}}`).
+- `cli.sampleRate`: PCM sample rate (Hz) produced by the CLI command for telephony paths (default: `22050`). Must match the actual output of your CLI tool when used in voice-call integrations.
 
 ## Model-driven overrides (default on)
 
@@ -260,7 +305,7 @@ Here you go.
 
 Available directive keys (when enabled):
 
-- `provider` (`openai` | `elevenlabs` | `edge`, requires `allowProvider: true`)
+- `provider` (`openai` | `elevenlabs` | `edge` | `cli`, requires `allowProvider: true`)
 - `voice` (OpenAI voice) or `voiceId` (ElevenLabs)
 - `model` (OpenAI TTS model or ElevenLabs model id)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`

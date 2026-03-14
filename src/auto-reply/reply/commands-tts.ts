@@ -162,6 +162,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       const hasOpenAI = Boolean(resolveTtsApiKey(config, "openai"));
       const hasElevenLabs = Boolean(resolveTtsApiKey(config, "elevenlabs"));
       const hasEdge = isTtsProviderConfigured(config, "edge");
+      const hasCli = isTtsProviderConfigured(config, "cli");
       return {
         shouldContinue: false,
         reply: {
@@ -171,13 +172,19 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
             `OpenAI key: ${hasOpenAI ? "✅" : "❌"}\n` +
             `ElevenLabs key: ${hasElevenLabs ? "✅" : "❌"}\n` +
             `Edge enabled: ${hasEdge ? "✅" : "❌"}\n` +
-            `Usage: /tts provider openai | elevenlabs | edge`,
+            `CLI configured: ${hasCli ? "✅" : "❌"}\n` +
+            `Usage: /tts provider openai | elevenlabs | edge | cli`,
         },
       };
     }
 
     const requested = args.trim().toLowerCase();
-    if (requested !== "openai" && requested !== "elevenlabs" && requested !== "edge") {
+    if (
+      requested !== "openai" &&
+      requested !== "elevenlabs" &&
+      requested !== "edge" &&
+      requested !== "cli"
+    ) {
       return { shouldContinue: false, reply: ttsUsage() };
     }
 

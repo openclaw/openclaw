@@ -1,6 +1,6 @@
 import type { SecretInput } from "./types.secrets.js";
 
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "cli";
 
 export type TtsMode = "final" | "all";
 
@@ -79,6 +79,15 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** CLI provider configuration. */
+  cli?: {
+    /** CLI binary path or name (searched in PATH). */
+    command: string;
+    /** CLI arguments with template variables. */
+    args?: string[];
+    /** PCM sample rate produced by the CLI command (Hz). Used for telephony paths. */
+    sampleRate?: number;
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;
