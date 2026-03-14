@@ -717,7 +717,10 @@ async function deliverOutboundPayloadsCore(
         replyToId: effectivePayload.replyToId ?? params.replyToId ?? undefined,
         threadId: params.threadId ?? undefined,
       };
-      if (handler.sendPayload && effectivePayload.channelData) {
+      const shouldUsePayloadAdapter =
+        Boolean(effectivePayload.channelData) ||
+        (effectivePayload.audioAsVoice === true && payloadSummary.mediaUrls.length > 0);
+      if (handler.sendPayload && shouldUsePayloadAdapter) {
         const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
         results.push(delivery);
         emitMessageSent({

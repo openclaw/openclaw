@@ -403,6 +403,90 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("routes iMessage audioAsVoice payloads through sendPayload semantics", async () => {
+    const sendIMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "voice-1" })
+      .mockResolvedValueOnce({ messageId: "text-1" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "imessage",
+      to: "chat_id:42",
+      payloads: [
+        {
+          text: "voice caption",
+          mediaUrl: "https://example.com/voice.m4a",
+          audioAsVoice: true,
+        },
+      ],
+      deps: { sendIMessage },
+    });
+
+    expect(sendIMessage).toHaveBeenCalledTimes(2);
+    expect(sendIMessage).toHaveBeenNthCalledWith(
+      1,
+      "chat_id:42",
+      "",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/voice.m4a",
+        audioAsVoice: true,
+      }),
+    );
+    expect(sendIMessage).toHaveBeenNthCalledWith(
+      2,
+      "chat_id:42",
+      "voice caption",
+      expect.not.objectContaining({
+        mediaUrl: expect.anything(),
+      }),
+    );
+  });
+
+  it("chunks iMessage text using configured textChunkLimit", async () => {
+    const sendIMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "i1" })
+      .mockResolvedValueOnce({ messageId: "i2" });
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { imessage: { textChunkLimit: 2 } } },
+      channel: "imessage",
+      to: "chat_id:42",
+      payloads: [{ text: "abcd" }],
+      deps: { sendIMessage },
+    });
+
+    expect(sendIMessage).toHaveBeenCalledTimes(2);
+    expect(sendIMessage).toHaveBeenNthCalledWith(
+      1,
+      "chat_id:42",
+      "ab",
+      expect.objectContaining({ accountId: undefined }),
+    );
+    expect(sendIMessage).toHaveBeenNthCalledWith(
+      2,
+      "chat_id:42",
+      "cd",
+      expect.objectContaining({ accountId: undefined }),
+    );
+  });
+
+  it("preserves empty channelData-only payloads for imessage without sending", async () => {
+    const sendIMessage = vi.fn().mockResolvedValue({ messageId: "unexpected" });
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "imessage",
+      to: "chat_id:42",
+      payloads: [{ text: " \n\t ", channelData: { mode: "custom" } }],
+      deps: { sendIMessage },
+    });
+
+    expect(sendIMessage).not.toHaveBeenCalled();
+    expect(results).toEqual([{ channel: "imessage", messageId: "" }]);
+  });
+
   it("uses signal media maxBytes from config", async () => {
     const sendSignal = vi.fn().mockResolvedValue({ messageId: "s1", timestamp: 123 });
     const cfg: OpenClawConfig = { channels: { signal: { mediaMaxMb: 2 } } };

@@ -66,4 +66,89 @@ describe("imessageOutbound", () => {
     );
     expect(result).toEqual({ channel: "imessage", messageId: "media-1" });
   });
+
+  it("routes audioAsVoice payloads through sendPayload and sends text separately", async () => {
+    const sendIMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "voice-1" })
+      .mockResolvedValueOnce({ messageId: "text-1" })
+      .mockResolvedValueOnce({ messageId: "extra-1" });
+    const sendPayload = imessageOutbound.sendPayload;
+    expect(sendPayload).toBeDefined();
+
+    const result = await sendPayload!({
+      cfg,
+      to: "chat_id:123",
+      text: "voice caption",
+      payload: {
+        text: "voice caption",
+        mediaUrls: ["https://example.com/voice.m4a", "https://example.com/extra.png"],
+        audioAsVoice: true,
+      },
+      mediaLocalRoots: ["/tmp"],
+      accountId: "acct-1",
+      replyToId: "msg-voice",
+      deps: { sendIMessage },
+    });
+
+    expect(sendIMessage).toHaveBeenNthCalledWith(
+      1,
+      "chat_id:123",
+      "",
+      expect.objectContaining({
+        audioAsVoice: true,
+        mediaUrl: "https://example.com/voice.m4a",
+        mediaLocalRoots: ["/tmp"],
+        replyToId: "msg-voice",
+        accountId: "acct-1",
+        maxBytes: 2 * 1024 * 1024,
+      }),
+    );
+    expect(sendIMessage).toHaveBeenNthCalledWith(
+      2,
+      "chat_id:123",
+      "voice caption",
+      expect.objectContaining({
+        replyToId: "msg-voice",
+        accountId: "acct-1",
+        maxBytes: 2 * 1024 * 1024,
+      }),
+    );
+    expect(sendIMessage).toHaveBeenNthCalledWith(
+      3,
+      "chat_id:123",
+      "",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/extra.png",
+        mediaLocalRoots: ["/tmp"],
+        replyToId: "msg-voice",
+        accountId: "acct-1",
+        maxBytes: 2 * 1024 * 1024,
+      }),
+    );
+    expect(result).toEqual({ channel: "imessage", messageId: "extra-1" });
+  });
+
+  it("does not send empty channelData-only payloads", async () => {
+    const sendIMessage = vi.fn().mockResolvedValue({ messageId: "unexpected" });
+    const sendPayload = imessageOutbound.sendPayload;
+    expect(sendPayload).toBeDefined();
+
+    const result = await sendPayload!({
+      cfg,
+      to: "chat_id:123",
+      text: "",
+      payload: {
+        text: "",
+        channelData: { mode: "noop" },
+      },
+      mediaLocalRoots: ["/tmp"],
+      accountId: "acct-1",
+      replyToId: "msg-empty",
+      deps: { sendIMessage },
+    });
+
+    expect(sendIMessage).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "imessage", messageId: "" });
+  });
 });
