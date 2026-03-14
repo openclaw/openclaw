@@ -81,6 +81,33 @@ describe("checkBrowserOrigin", () => {
       expected: { ok: false as const, reason: "origin missing or invalid" },
     },
     {
+      name: "accepts custom scheme origin in allowlist (tauri://)",
+      input: {
+        requestHost: "gateway.example.com:18789",
+        origin: "tauri://localhost",
+        allowedOrigins: ["tauri://localhost"],
+      },
+      expected: { ok: true as const, matchedBy: "allowlist" as const },
+    },
+    {
+      name: "accepts custom scheme origin with port in allowlist (electron://)",
+      input: {
+        requestHost: "gateway.example.com:18789",
+        origin: "electron://localhost:3000",
+        allowedOrigins: ["electron://localhost:3000"],
+      },
+      expected: { ok: true as const, matchedBy: "allowlist" as const },
+    },
+    {
+      name: "rejects custom scheme origin not in allowlist",
+      input: {
+        requestHost: "gateway.example.com:18789",
+        origin: "tauri://attacker.local",
+        allowedOrigins: ["tauri://localhost"],
+      },
+      expected: { ok: false as const, reason: "origin not allowed" },
+    },
+    {
       name: "rejects mismatched origins",
       input: {
         requestHost: "gateway.example.com:18789",
