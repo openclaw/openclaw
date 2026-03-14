@@ -1,0 +1,58 @@
+name: security-scan
+
+# GovDOSS™ Phase 1 — automated secrets detection and dependency audit.
+# Runs on every PR and daily on main.
+
+on:
+  pull_request:
+  schedule:
+    - cron: "0 3 * * *" # daily at 03:00 UTC
+
+concurrency:
+  group: security-scan-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  secrets-scan:
+    name: Detect secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install detect-secrets
+        run: pip install detect-secrets==1.5.0
+
+      - name: Scan for secrets
+        run: |
+          detect-secrets scan \
+            --baseline .secrets.baseline \
+            --exclude-files '(^|/)pnpm-lock\.yaml$' \
+            --exclude-files '^\.secrets\.baseline$'
+
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit production dependencies
+        run: pnpm audit --prod --audit-level=high

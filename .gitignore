@@ -131,3 +131,14 @@ ui/src/ui/theme-variants.browser.test.ts
 ui/src/ui/__screenshots__/navigation.browser.test.ts/control-UI-routing-auto-scrolls-chat-history-to-the-latest-message-1.png
 ui/src/ui/__screenshots__/navigation.browser.test.ts/control-UI-routing-auto-scrolls-chat-history-to-the-latest-message-1.png
 ui/src/ui/__screenshots__/navigation.browser.test.ts/control-UI-routing-auto-scrolls-chat-history-to-the-latest-message-1.png
+
+# Credential and secrets files (CMMC / GovDOSS™)
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+.secrets
+.credentials
+credentials.json
