@@ -15,7 +15,7 @@ const HOME = os.homedir();
 // like /etc/hosts that don't exist there.
 describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
   it("starts with --ro-bind / / when /**  rule allows reads", () => {
-    const config: AccessPolicyConfig = { rules: { "/**": "r--" } };
+    const config: AccessPolicyConfig = { policy: { "/**": "r--" } };
     const args = generateBwrapArgs(config, HOME);
     expect(args.slice(0, 3)).toEqual(["--ro-bind", "/", "/"]);
   });
@@ -31,14 +31,14 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
   });
 
   it("ends with --", () => {
-    const config: AccessPolicyConfig = { rules: { "/**": "r--" } };
+    const config: AccessPolicyConfig = { policy: { "/**": "r--" } };
     const args = generateBwrapArgs(config, HOME);
     expect(args[args.length - 1]).toBe("--");
   });
 
   it('adds --tmpfs for "---" rules in permissive mode', () => {
     const config: AccessPolicyConfig = {
-      rules: { "/**": "r--", [`${HOME}/.ssh/**`]: "---", [`${HOME}/.gnupg/**`]: "---" },
+      policy: { "/**": "r--", [`${HOME}/.ssh/**`]: "---", [`${HOME}/.gnupg/**`]: "---" },
     };
     const args = generateBwrapArgs(config, HOME);
     const tmpfsMounts = args.map((a, i) => (a === "--tmpfs" ? args[i + 1] : null)).filter(Boolean);
@@ -48,7 +48,7 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
 
   it('expands ~ in "---" rules using homeDir', () => {
     const config: AccessPolicyConfig = {
-      rules: { "/**": "r--", "~/.ssh/**": "---" },
+      policy: { "/**": "r--", "~/.ssh/**": "---" },
     };
     const args = generateBwrapArgs(config, HOME);
     const tmpfsMounts = args.map((a, i) => (a === "--tmpfs" ? args[i + 1] : null)).filter(Boolean);
@@ -57,7 +57,7 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
 
   it("adds --bind for paths with w bit in rules", () => {
     const config: AccessPolicyConfig = {
-      rules: { "/**": "r--", [`${HOME}/workspace/**`]: "rw-" },
+      policy: { "/**": "r--", [`${HOME}/workspace/**`]: "rw-" },
     };
     const args = generateBwrapArgs(config, HOME);
     const bindPairs: string[] = [];
@@ -71,7 +71,7 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
 
   it("does not add --bind for read-only rules on permissive base", () => {
     const config: AccessPolicyConfig = {
-      rules: { "/**": "r--", "/usr/bin/**": "r--" },
+      policy: { "/**": "r--", "/usr/bin/**": "r--" },
     };
     const args = generateBwrapArgs(config, HOME);
     // /usr/bin should NOT appear as a --bind-try (it's already ro-bound via /)
@@ -86,7 +86,7 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
 
   it('"---" rule for sensitive path appears in args regardless of broader rule', () => {
     const config: AccessPolicyConfig = {
-      rules: { "/**": "r--", [`${HOME}/**`]: "rwx", [`${HOME}/.ssh/**`]: "---" },
+      policy: { "/**": "r--", [`${HOME}/**`]: "rwx", [`${HOME}/.ssh/**`]: "---" },
     };
     const args = generateBwrapArgs(config, HOME);
     const tmpfsMounts = args.map((a, i) => (a === "--tmpfs" ? args[i + 1] : null)).filter(Boolean);
@@ -100,14 +100,14 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
   it("adds --proc /proc in permissive mode so /proc is accessible inside the sandbox", () => {
     // --ro-bind / / does not propagate kernel filesystems (procfs) into the new
     // mount namespace; without --proc /proc, shells and Python fail in the sandbox.
-    const args = generateBwrapArgs({ rules: { "/**": "r--" } }, HOME);
+    const args = generateBwrapArgs({ policy: { "/**": "r--" } }, HOME);
     const procIdx = args.indexOf("--proc");
     expect(procIdx).toBeGreaterThan(-1);
     expect(args[procIdx + 1]).toBe("/proc");
   });
 
   it("adds --tmpfs /tmp in permissive mode (/** allows reads)", () => {
-    const config: AccessPolicyConfig = { rules: { "/**": "r--" } };
+    const config: AccessPolicyConfig = { policy: { "/**": "r--" } };
     const args = generateBwrapArgs(config, HOME);
     const tmpfsMounts = args.map((a, i) => (a === "--tmpfs" ? args[i + 1] : null)).filter(Boolean);
     expect(tmpfsMounts).toContain("/tmp");
@@ -124,7 +124,7 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
   it("skips --tmpfs /tmp in permissive mode when policy explicitly restricts /tmp writes", () => {
     // A rule "/tmp/**": "r--" means the user wants /tmp read-only; the base --ro-bind / /
     // already makes it readable. Adding --tmpfs /tmp would silently grant write access.
-    const config: AccessPolicyConfig = { rules: { "/**": "r--", "/tmp/**": "r--" } };
+    const config: AccessPolicyConfig = { policy: { "/**": "r--", "/tmp/**": "r--" } };
     const args = generateBwrapArgs(config, HOME);
     const tmpfsMounts = args.map((a, i) => (a === "--tmpfs" ? args[i + 1] : null)).filter(Boolean);
     expect(tmpfsMounts).not.toContain("/tmp");
@@ -135,7 +135,7 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
     // but the rules loop always follows with --bind-try /tmp /tmp which wins (last mount wins
     // in bwrap). The --tmpfs was dead code. Confirm: explicit rw- rule → no --tmpfs /tmp,
     // but --bind-try /tmp IS present.
-    const config: AccessPolicyConfig = { rules: { "/**": "r--", "/tmp/**": "rw-" } };
+    const config: AccessPolicyConfig = { policy: { "/**": "r--", "/tmp/**": "rw-" } };
     const args = generateBwrapArgs(config, HOME);
     const tmpfsMounts = args.map((a, i) => (a === "--tmpfs" ? args[i + 1] : null)).filter(Boolean);
     const bindMounts = args
@@ -147,7 +147,7 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
 
   it("does not add --tmpfs /tmp in restrictive mode (no /** rule) — regression guard", () => {
     // When there is no "/**" rule at all, no /tmp mount should appear.
-    const config: AccessPolicyConfig = { rules: { [`${HOME}/workspace/**`]: "rwx" } };
+    const config: AccessPolicyConfig = { policy: { [`${HOME}/workspace/**`]: "rwx" } };
     const args = generateBwrapArgs(config, HOME);
     const tmpfsMounts = args.map((a, i) => (a === "--tmpfs" ? args[i + 1] : null)).filter(Boolean);
     expect(tmpfsMounts).not.toContain("/tmp");
@@ -157,7 +157,7 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
     // With "/**":"r--", --ro-bind / / makes everything readable. A narrowing
     // rule like "/secret/**": "---" must overlay --tmpfs so the path is hidden.
     const config: AccessPolicyConfig = {
-      rules: { "/**": "r--", [`${HOME}/secret/**`]: "---" },
+      policy: { "/**": "r--", [`${HOME}/secret/**`]: "---" },
     };
     const args = generateBwrapArgs(config, HOME);
     const tmpfsMounts = args.map((a, i) => (a === "--tmpfs" ? args[i + 1] : null)).filter(Boolean);
@@ -173,7 +173,7 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
     // process.execPath is always an existing file — use it as the test target.
     const filePath = process.execPath;
     const config: AccessPolicyConfig = {
-      rules: { "/**": "r--", [filePath]: "---" },
+      policy: { "/**": "r--", [filePath]: "---" },
     };
     const args = generateBwrapArgs(config, HOME);
     const tmpfsMounts = args.map((a, i) => (a === "--tmpfs" ? args[i + 1] : null)).filter(Boolean);
@@ -184,7 +184,7 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
   it('"--x" rule in permissive mode gets --tmpfs overlay to block reads', () => {
     // Execute-only rules have no read bit — same treatment as "---" in permissive mode.
     const config: AccessPolicyConfig = {
-      rules: { "/**": "r--", [`${HOME}/scripts/**`]: "--x" },
+      policy: { "/**": "r--", [`${HOME}/scripts/**`]: "--x" },
     };
     const args = generateBwrapArgs(config, HOME);
     const tmpfsMounts = args.map((a, i) => (a === "--tmpfs" ? args[i + 1] : null)).filter(Boolean);
@@ -197,7 +197,7 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
     // for a "---" rule would silently grant read access to paths that should
     // be fully blocked.
     const config: AccessPolicyConfig = {
-      rules: {
+      policy: {
         [`${HOME}/workspace/**`]: "rwx", // allowed: should produce --bind-try
         [`${HOME}/workspace/private/**`]: "---", // denied: must NOT produce any mount
       },
@@ -216,7 +216,7 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
   it('"--x" rules do not create --ro-bind-try mounts in restrictive mode', () => {
     // Same as "---" case: execute-only rules also must not emit read mounts.
     const config: AccessPolicyConfig = {
-      rules: { [`${HOME}/scripts/**`]: "--x" },
+      policy: { [`${HOME}/scripts/**`]: "--x" },
     };
     const args = generateBwrapArgs(config, HOME);
     const roBound = args
@@ -231,7 +231,7 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
     // write-without-read at the mount level; reads are also permitted at the OS layer,
     // but the tool layer still denies read tool calls per the "-w-" rule.
     const config: AccessPolicyConfig = {
-      rules: { [`${HOME}/logs/**`]: "-w-" },
+      policy: { [`${HOME}/logs/**`]: "-w-" },
     };
     const args = generateBwrapArgs(config, HOME);
     const bindMounts = args
@@ -245,7 +245,7 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
     // A "-w-" rule upgrades to rw for that path — reads are not newly leaked
     // since the base already allowed them.
     const config: AccessPolicyConfig = {
-      rules: { "/**": "r--", [`${HOME}/output/**`]: "-w-" },
+      policy: { "/**": "r--", [`${HOME}/output/**`]: "-w-" },
     };
     const args = generateBwrapArgs(config, HOME);
     const bindMounts = args
@@ -259,7 +259,7 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
     // would hide the entire home directory. Must be skipped.
     const fakeHome = "/home/testuser";
     const config: AccessPolicyConfig = {
-      rules: { "/**": "r--", "/home/*/.config/**": "---" },
+      policy: { "/**": "r--", "/home/*/.config/**": "---" },
     };
     const args = generateBwrapArgs(config, fakeHome);
     const allMountTargets = args
@@ -275,7 +275,7 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
     // OS layer uses the concrete prefix (/scripts) as an approximate ro-bind-try target;
     // the tool layer enforces the *.sh filter precisely.
     const config: AccessPolicyConfig = {
-      rules: { "/scripts/**/*.sh": "r-x" },
+      policy: { "/scripts/**/*.sh": "r-x" },
     };
     const args = generateBwrapArgs(config, "/home/user");
     const allMountTargets = args
@@ -290,7 +290,7 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
     // "/var/log/secret*" must mount "/var/log", NOT the literal prefix "/var/log/secret"
     // which is not a directory and leaves entries like "/var/log/secret.old" unprotected.
     const config: AccessPolicyConfig = {
-      rules: { "/**": "r--", "/var/log/secret*": "---" },
+      policy: { "/**": "r--", "/var/log/secret*": "---" },
     };
     const args = generateBwrapArgs(config, HOME);
     const tmpfsMounts = args.map((a, i) => (a === "--tmpfs" ? args[i + 1] : null)).filter(Boolean);
@@ -304,7 +304,7 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
     const config: AccessPolicyConfig = {
       // Deliberately insert secret first so Object.entries() would yield it first
       // without sorting — proving the sort is what fixes the order.
-      rules: {
+      policy: {
         [`${HOME}/dev/secret/**`]: "r--",
         [`${HOME}/dev/**`]: "rw-",
       },
@@ -330,7 +330,7 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
     // both flags are false so it fell to else → --tmpfs, silently blocking writes.
     // Fix: any write-granting override always emits --bind-try.
     const config: AccessPolicyConfig = {
-      rules: { [`${HOME}/workspace/**`]: "rwx" },
+      policy: { [`${HOME}/workspace/**`]: "rwx" },
     };
     const overrides = { [`${HOME}/logs/**`]: "-w-" as const };
     const args = generateBwrapArgs(config, HOME, overrides);
@@ -345,7 +345,7 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
   it("narrowing rule that resolves to an existing file does not emit --tmpfs (bwrap only accepts dirs)", () => {
     // /etc/hosts is a file on Linux; bwrap --tmpfs rejects file paths.
     // generateBwrapArgs must not emit "--tmpfs /etc/hosts" — it should be silently skipped.
-    const config: AccessPolicyConfig = { rules: { "/**": "r--", "/etc/hosts/**": "---" } };
+    const config: AccessPolicyConfig = { policy: { "/**": "r--", "/etc/hosts/**": "---" } };
     const args = generateBwrapArgs(config, HOME);
     const tmpfsMounts = args.map((a, i) => (a === "--tmpfs" ? args[i + 1] : null)).filter(Boolean);
     expect(tmpfsMounts).not.toContain("/etc/hosts");
@@ -365,7 +365,7 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
   it('still emits --tmpfs for "---" rule that resolves to a directory', () => {
     // Non-existent paths are treated as directories (forward-protection).
     const config: AccessPolicyConfig = {
-      rules: { "/**": "r--", [`${HOME}/.nonexistent-dir/**`]: "---" },
+      policy: { "/**": "r--", [`${HOME}/.nonexistent-dir/**`]: "---" },
     };
     const args = generateBwrapArgs(config, HOME);
     const tmpfsMounts = args.map((a, i) => (a === "--tmpfs" ? args[i + 1] : null)).filter(Boolean);
@@ -375,8 +375,8 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
   it("trailing-slash rule is treated as /** and resolves to correct path", () => {
     // "/tmp/" is shorthand for "/tmp/**" — must produce the same mount target
     // and sort-order length as an explicit "/tmp/**" rule.
-    const withSlash = generateBwrapArgs({ rules: { "/tmp/": "rw-" } }, HOME);
-    const withGlob = generateBwrapArgs({ rules: { "/tmp/**": "rw-" } }, HOME);
+    const withSlash = generateBwrapArgs({ policy: { "/tmp/": "rw-" } }, HOME);
+    const withGlob = generateBwrapArgs({ policy: { "/tmp/**": "rw-" } }, HOME);
     const bindOf = (args: string[]) =>
       args.map((a, i) => (args[i - 1] === "--bind-try" ? a : null)).filter(Boolean);
     expect(bindOf(withSlash)).toContain("/tmp");
@@ -386,17 +386,17 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
 
 describe("wrapCommandWithBwrap", () => {
   it("starts with bwrap", () => {
-    const result = wrapCommandWithBwrap("ls /tmp", { rules: { "/**": "r--" } }, HOME);
+    const result = wrapCommandWithBwrap("ls /tmp", { policy: { "/**": "r--" } }, HOME);
     expect(result).toMatch(/^bwrap /);
   });
 
   it("contains -- separator before the command", () => {
-    const result = wrapCommandWithBwrap("ls /tmp", { rules: { "/**": "r--" } }, HOME);
+    const result = wrapCommandWithBwrap("ls /tmp", { policy: { "/**": "r--" } }, HOME);
     expect(result).toContain("-- /bin/sh -c");
   });
 
   it("wraps command in /bin/sh -c", () => {
-    const result = wrapCommandWithBwrap("cat /etc/hosts", { rules: { "/**": "r--" } }, HOME);
+    const result = wrapCommandWithBwrap("cat /etc/hosts", { policy: { "/**": "r--" } }, HOME);
     expect(result).toContain("/bin/sh -c");
     expect(result).toContain("cat /etc/hosts");
   });

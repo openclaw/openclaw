@@ -143,7 +143,7 @@ export function generateBwrapArgs(
 ): string[] {
   const args: string[] = [];
   // Determine base stance from the "/**" catch-all rule (replaces the removed `default` field).
-  const catchAllPerm = findBestRule("/**", config.rules ?? {}, homeDir) ?? "---";
+  const catchAllPerm = findBestRule("/**", config.policy ?? {}, homeDir) ?? "---";
   const defaultAllowsRead = catchAllPerm[0] === "r";
 
   if (defaultAllowsRead) {
@@ -174,7 +174,7 @@ export function generateBwrapArgs(
   // In restrictive mode (default:"---"), /tmp is intentionally omitted so rules
   // control tmpfs access explicitly (e.g. "/tmp/**":"rwx" is handled by the rules loop).
   if (defaultAllowsRead) {
-    const explicitTmpPerm = findBestRule("/tmp", config.rules ?? {}, homeDir);
+    const explicitTmpPerm = findBestRule("/tmp", config.policy ?? {}, homeDir);
     if (explicitTmpPerm === null) {
       // Only emit --tmpfs /tmp when there is no explicit rule for /tmp.
       // When an explicit write rule exists, the rules loop below emits --bind-try /tmp /tmp
@@ -190,7 +190,7 @@ export function generateBwrapArgs(
   // first — bwrap applies mounts in order, and later mounts win for overlapping
   // paths. Without sorting, a broad rw bind (e.g. ~/dev) could be emitted after
   // a narrow ro bind (~/dev/secret), wiping out the intended restriction.
-  const ruleEntries = Object.entries(config.rules ?? {}).toSorted(([a], [b]) => {
+  const ruleEntries = Object.entries(config.policy ?? {}).toSorted(([a], [b]) => {
     const pa = patternToPath(a, homeDir);
     const pb = patternToPath(b, homeDir);
     return (pa?.length ?? 0) - (pb?.length ?? 0);

@@ -41,82 +41,113 @@ function hasMidPathWildcard(pattern: string): boolean {
 }
 
 /**
+ * If `pattern` is a bare path (no glob metacharacters, no trailing /) that resolves
+ * to a real directory, auto-expand it to `pattern/**` in-place inside `rules` and push
+ * a diagnostic. A bare directory path matches only the directory entry itself, not its
+ * contents — the expanded form is almost always what the operator intended.
+ *
+ * Any stat failure is silently ignored: if the path doesn't exist the rule is a no-op.
+ */
+function autoExpandBareDir(
+  rules: Record<string, PermStr>,
+  pattern: string,
+  perm: PermStr,
+  errors: string[],
+): void {
+  if (!pattern || pattern.endsWith("/") || /[*?[]/.test(pattern)) {
+    return;
+  }
+  const expanded = pattern.startsWith("~") ? pattern.replace(/^~(?=$|\/)/, os.homedir()) : pattern;
+  try {
+    if (fs.statSync(expanded).isDirectory()) {
+      const fixed = `${pattern}/**`;
+      // Only write the expanded key if no explicit glob for this path already
+      // exists — overwriting an existing "/**" rule would silently widen access
+      // (e.g. {"/tmp":"rwx","/tmp/**":"---"} would become {"/tmp/**":"rwx"}).
+      if (!(fixed in rules)) {
+        rules[fixed] = perm;
+      }
+      delete rules[pattern];
+      if (!_autoExpandedWarned.has(pattern)) {
+        _autoExpandedWarned.add(pattern);
+        errors.push(
+          `access-policy.policy["${pattern}"] is a directory — rule auto-expanded to "${fixed}" so it covers all contents.`,
+        );
+      }
+    }
+  } catch {
+    // Path inaccessible or missing — no action needed.
+  }
+}
+
+/**
  * Validates and normalizes an AccessPolicyConfig for well-formedness.
  * Returns an array of human-readable diagnostic strings; empty = valid.
- * May mutate config.rules in place (e.g. auto-expanding bare directory paths).
+ * May mutate config.policy in place (e.g. auto-expanding bare directory paths).
  */
 export function validateAccessPolicyConfig(config: AccessPolicyConfig): string[] {
   const errors: string[] = [];
 
-  if (config.rules) {
-    for (const [pattern, perm] of Object.entries(config.rules)) {
+  if (config.policy) {
+    for (const [pattern, perm] of Object.entries(config.policy)) {
       if (!pattern) {
-        errors.push("access-policy.rules: rule key must be a non-empty glob pattern");
+        errors.push("access-policy.policy: rule key must be a non-empty glob pattern");
       }
       if (!PERM_STR_RE.test(perm)) {
         errors.push(
-          `access-policy.rules["${pattern}"] "${perm}" is invalid: must be exactly 3 chars (e.g. "rwx", "r--", "---")`,
+          `access-policy.policy["${pattern}"] "${perm}" is invalid: must be exactly 3 chars (e.g. "rwx", "r--", "---")`,
         );
       }
-      if (hasMidPathWildcard(pattern) && !_midPathWildcardWarned.has(`rules:${pattern}`)) {
-        _midPathWildcardWarned.add(`rules:${pattern}`);
+      if (hasMidPathWildcard(pattern) && !_midPathWildcardWarned.has(`policy:${pattern}`)) {
+        _midPathWildcardWarned.add(`policy:${pattern}`);
         if (perm === "---") {
           // Deny-all on a mid-path wildcard prefix would be too broad at the OS layer
           // (e.g. "secrets/**/*.env: ---" → deny all of secrets/). Skip OS emission entirely.
           errors.push(
-            `access-policy.rules["${pattern}"] contains a mid-path wildcard with "---" — OS-level (bwrap/Seatbelt) enforcement cannot apply; tool-layer enforcement is still active.`,
+            `access-policy.policy["${pattern}"] contains a mid-path wildcard with "---" — OS-level (bwrap/Seatbelt) enforcement cannot apply; tool-layer enforcement is still active.`,
           );
         } else {
           // For non-deny rules the OS layer uses the longest concrete prefix as an
           // approximate mount/subpath target. The file-type filter (e.g. *.sh) is enforced
           // precisely by the tool layer only.
           errors.push(
-            `access-policy.rules["${pattern}"] contains a mid-path wildcard — OS-level enforcement uses prefix match (file-type filter is tool-layer only).`,
+            `access-policy.policy["${pattern}"] contains a mid-path wildcard — OS-level enforcement uses prefix match (file-type filter is tool-layer only).`,
           );
         }
       }
       // If a bare path (no glob metacharacters, no trailing /) points to a real
       // directory it would match only the directory entry itself, not its
       // contents. Auto-expand to "/**" and notify — the fix is unambiguous.
-      // Any stat failure means the agent faces the same error (ENOENT/EACCES),
-      // so the rule is a no-op and no action is needed.
-      if (pattern && !pattern.endsWith("/") && !/[*?[]/.test(pattern)) {
-        const expanded = pattern.startsWith("~")
-          ? pattern.replace(/^~(?=$|\/)/, os.homedir())
-          : pattern;
-        try {
-          if (fs.statSync(expanded).isDirectory()) {
-            const fixed = `${pattern}/**`;
-            // Only write the expanded key if no explicit glob for this path already
-            // exists — overwriting an existing "/**" rule would silently widen access
-            // (e.g. {"/tmp":"rwx","/tmp/**":"---"} would become {"/tmp/**":"rwx"}).
-            if (!(fixed in config.rules)) {
-              config.rules[fixed] = perm;
-            }
-            delete config.rules[pattern];
-            if (!_autoExpandedWarned.has(pattern)) {
-              _autoExpandedWarned.add(pattern);
-              errors.push(
-                `access-policy.rules["${pattern}"] is a directory — rule auto-expanded to "${fixed}" so it covers all contents.`,
-              );
-            }
-          }
-        } catch {
-          // Path inaccessible or missing — no action needed.
-        }
-      }
+      autoExpandBareDir(config.policy, pattern, perm, errors);
     }
   }
 
   if (config.scripts) {
+    // scripts["policy"] is a shared Record<string, PermStr> — validate as flat rules.
+    const sharedPolicy = config.scripts["policy"];
+    if (sharedPolicy) {
+      for (const [pattern, perm] of Object.entries(sharedPolicy)) {
+        if (!PERM_STR_RE.test(perm)) {
+          errors.push(
+            `access-policy.scripts["policy"]["${pattern}"] "${perm}" is invalid: must be exactly 3 chars (e.g. "rwx", "r--", "---")`,
+          );
+        }
+        autoExpandBareDir(sharedPolicy, pattern, perm, errors);
+      }
+    }
     for (const [scriptPath, entry] of Object.entries(config.scripts)) {
-      if (entry.rules) {
-        for (const [pattern, perm] of Object.entries(entry.rules)) {
+      if (scriptPath === "policy") {
+        continue; // handled above
+      }
+      const scriptEntry = entry as import("../config/types.tools.js").ScriptPolicyEntry | undefined;
+      if (scriptEntry?.policy) {
+        for (const [pattern, perm] of Object.entries(scriptEntry.policy)) {
           if (!PERM_STR_RE.test(perm)) {
             errors.push(
-              `access-policy.scripts["${scriptPath}"].rules["${pattern}"] "${perm}" is invalid: must be exactly 3 chars (e.g. "rwx", "r--", "---")`,
+              `access-policy.scripts["${scriptPath}"].policy["${pattern}"] "${perm}" is invalid: must be exactly 3 chars (e.g. "rwx", "r--", "---")`,
             );
           }
+          autoExpandBareDir(scriptEntry.policy, pattern, perm, errors);
         }
       }
     }
@@ -272,7 +303,7 @@ export function checkAccessPolicy(
   // rules — longest match wins (check both path and path + "/" variants).
   let bestPerm: PermStr | null = null;
   let bestLen = -1;
-  for (const [pattern, perm] of Object.entries(config.rules ?? {})) {
+  for (const [pattern, perm] of Object.entries(config.policy ?? {})) {
     // Normalize so /private/tmp/** patterns match /tmp/** targets on macOS.
     const expanded = normalizePlatformPath(expandPattern(pattern, homeDir));
     if (matchesPattern(expanded) && expanded.length > bestLen) {
@@ -425,7 +456,16 @@ export function resolveArgv0(command: string, cwd?: string, _depth = 0): string 
   // (NAME=value stripping, quoting, cwd-relative resolution, symlink following).
   if (path.basename(token, path.extname(token)) === "env" && commandRest) {
     // Strip the env/"/usr/bin/env" token itself from commandRest.
-    let afterEnv = commandRest.replace(/^\S+\s*/, "");
+    // When argv0 was quoted (e.g. `"/usr/bin env" /script.sh`), a bare /^\S+\s*/ would
+    // stop at the first space inside the quoted token. Handle the quoted case explicitly.
+    let afterEnv: string;
+    if (commandRest[0] === '"' || commandRest[0] === "'") {
+      const q = commandRest[0];
+      const closeIdx = commandRest.indexOf(q, 1);
+      afterEnv = closeIdx !== -1 ? commandRest.slice(closeIdx + 1).trimStart() : "";
+    } else {
+      afterEnv = commandRest.replace(/^\S+\s*/, "");
+    }
     // Skip env options and their arguments so `env -i /script.sh` resolves to
     // /script.sh rather than treating `-i` as argv0. Short options that consume
     // the next token as their argument (-u VAR, -C DIR) are stripped including
@@ -528,9 +568,10 @@ export function applyScriptPolicyOverride(
   // normalized the same way or the lookup silently misses, skipping sha256 verification.
   const scripts = policy.scripts;
   const override = scripts
-    ? Object.entries(scripts).find(
-        ([k]) => path.normalize(resolveScriptKey(k)) === path.normalize(resolvedArgv0),
-      )?.[1]
+    ? (Object.entries(scripts).find(
+        ([k]) =>
+          k !== "policy" && path.normalize(resolveScriptKey(k)) === path.normalize(resolvedArgv0),
+      )?.[1] as import("../config/types.tools.js").ScriptPolicyEntry | undefined)
     : undefined;
   if (!override) {
     return { policy };
@@ -572,6 +613,6 @@ export function applyScriptPolicyOverride(
   return {
     policy: merged,
     overrideRules:
-      override.rules && Object.keys(override.rules).length > 0 ? override.rules : undefined,
+      override.policy && Object.keys(override.policy).length > 0 ? override.policy : undefined,
   };
 }

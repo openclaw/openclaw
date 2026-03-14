@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { AccessPolicyConfig } from "../config/types.tools.js";
+import type { AccessPolicyConfig, ScriptPolicyEntry } from "../config/types.tools.js";
 import {
   _resetAutoExpandedWarnedForTest,
   _resetMidPathWildcardWarnedForTest,
@@ -34,7 +34,7 @@ describe("validateAccessPolicyConfig", () => {
   it("returns no errors for a valid config", () => {
     expect(
       validateAccessPolicyConfig({
-        rules: { "/**": "r--", [`${HOME}/**`]: "rwx", [`${HOME}/.ssh/**`]: "---" },
+        policy: { "/**": "r--", [`${HOME}/**`]: "rwx", [`${HOME}/.ssh/**`]: "---" },
       }),
     ).toEqual([]);
   });
@@ -44,19 +44,19 @@ describe("validateAccessPolicyConfig", () => {
   });
 
   it("rejects invalid rule perm value", () => {
-    const errs = validateAccessPolicyConfig({ rules: { "/**": "rx" } });
+    const errs = validateAccessPolicyConfig({ policy: { "/**": "rx" } });
     expect(errs).toHaveLength(1);
-    expect(errs[0]).toMatch(/rules/);
+    expect(errs[0]).toMatch(/policy/);
   });
 
   it("rejects rule perm value with wrong char in w position", () => {
-    const errs = validateAccessPolicyConfig({ rules: { "/**": "r1x" } });
+    const errs = validateAccessPolicyConfig({ policy: { "/**": "r1x" } });
     expect(errs).toHaveLength(1);
-    expect(errs[0]).toMatch(/rules/);
+    expect(errs[0]).toMatch(/policy/);
   });
 
   it("reports an error when a rule perm value is invalid", () => {
-    const errs = validateAccessPolicyConfig({ rules: { "/**": "xyz" } });
+    const errs = validateAccessPolicyConfig({ policy: { "/**": "xyz" } });
     expect(errs.length).toBeGreaterThanOrEqual(1);
   });
 
@@ -64,19 +64,19 @@ describe("validateAccessPolicyConfig", () => {
     // A "---" rule on a specific file path must block reads at the tool layer.
     const file = process.execPath;
     const config: AccessPolicyConfig = {
-      rules: { "/**": "rwx", [file]: "---" },
+      policy: { "/**": "rwx", [file]: "---" },
     };
     validateAccessPolicyConfig(config); // applies normalization in-place
     expect(checkAccessPolicy(file, "read", config)).toBe("deny");
   });
 
-  it("validates scripts[].rules perm strings and emits diagnostics for bad ones", () => {
-    // A typo like "rwX" in a script's rules must produce a diagnostic, not silently
+  it("validates scripts[].policy perm strings and emits diagnostics for bad ones", () => {
+    // A typo like "rwX" in a script's policy must produce a diagnostic, not silently
     // fail closed (which would deny exec with no operator-visible error).
     const config: AccessPolicyConfig = {
       scripts: {
         "/usr/local/bin/deploy.sh": {
-          rules: { "~/deploy/**": "rwX" }, // invalid: uppercase X
+          policy: { "~/deploy/**": "rwX" }, // invalid: uppercase X
         },
       },
     };
@@ -85,21 +85,21 @@ describe("validateAccessPolicyConfig", () => {
   });
 
   it("accepts valid rule perm strings", () => {
-    expect(validateAccessPolicyConfig({ rules: { "/**": "rwx" } })).toEqual([]);
-    expect(validateAccessPolicyConfig({ rules: { "/**": "---" } })).toEqual([]);
-    expect(validateAccessPolicyConfig({ rules: { "/**": "r-x" } })).toEqual([]);
+    expect(validateAccessPolicyConfig({ policy: { "/**": "rwx" } })).toEqual([]);
+    expect(validateAccessPolicyConfig({ policy: { "/**": "---" } })).toEqual([]);
+    expect(validateAccessPolicyConfig({ policy: { "/**": "r-x" } })).toEqual([]);
   });
 
   it("auto-expands a bare path that points to a real directory", () => {
     // os.tmpdir() is guaranteed to exist and be a directory on every platform.
     const dir = os.tmpdir();
-    const config = { rules: { [dir]: "r--" as const } };
+    const config: AccessPolicyConfig = { policy: { [dir]: "r--" as const } };
     const errs = validateAccessPolicyConfig(config);
     expect(errs).toHaveLength(1);
     expect(errs[0]).toMatch(/auto-expanded/);
     // Rule should be rewritten in place with /** suffix.
-    expect(config.rules[`${dir}/**`]).toBe("r--");
-    expect(config.rules[dir]).toBeUndefined();
+    expect(config.policy?.[`${dir}/**`]).toBe("r--");
+    expect(config.policy?.[dir]).toBeUndefined();
   });
 
   it("auto-expand does not overwrite an existing explicit glob rule", () => {
@@ -108,52 +108,76 @@ describe("validateAccessPolicyConfig", () => {
     // from "---" to "rwx" — a security regression.
     const dir = os.tmpdir();
     const config: AccessPolicyConfig = {
-      rules: { [dir]: "rwx", [`${dir}/**`]: "---" },
+      policy: { [dir]: "rwx", [`${dir}/**`]: "---" },
     };
     validateAccessPolicyConfig(config);
     // Explicit "---" rule must be preserved.
-    expect(config.rules?.[`${dir}/**`]).toBe("---");
+    expect(config.policy?.[`${dir}/**`]).toBe("---");
   });
 
   it("auto-expands when a ~ path expands to a real directory", () => {
     // "~" expands to os.homedir() which always exists and is a directory.
-    const config: AccessPolicyConfig = { rules: { "~": "r--" } };
+    const config: AccessPolicyConfig = { policy: { "~": "r--" } };
     const errs = validateAccessPolicyConfig(config);
     expect(errs).toHaveLength(1);
     expect(errs[0]).toMatch(/auto-expanded/);
     // Rule key should be rewritten with /** suffix.
-    expect(config.rules?.["~/**"]).toBe("r--");
-    expect(config.rules?.["~"]).toBeUndefined();
+    expect(config.policy?.["~/**"]).toBe("r--");
+    expect(config.policy?.["~"]).toBeUndefined();
   });
 
   it("emits the diagnostic only once per process for the same pattern", () => {
     const dir = os.tmpdir();
     // First call — should warn.
-    const first = validateAccessPolicyConfig({ rules: { [dir]: "r--" as const } });
+    const first = validateAccessPolicyConfig({ policy: { [dir]: "r--" as const } });
     expect(first).toHaveLength(1);
     // Second call with the same bare pattern — already warned, silent.
-    const second = validateAccessPolicyConfig({ rules: { [dir]: "r--" as const } });
+    const second = validateAccessPolicyConfig({ policy: { [dir]: "r--" as const } });
     expect(second).toHaveLength(0);
   });
 
   it("does not warn for glob patterns or trailing-/ rules", () => {
     const dir = os.tmpdir();
-    expect(validateAccessPolicyConfig({ rules: { [`${dir}/**`]: "r--" } })).toEqual([]);
-    expect(validateAccessPolicyConfig({ rules: { [`${dir}/`]: "r--" } })).toEqual([]);
-    expect(validateAccessPolicyConfig({ rules: { "/tmp/**": "rwx" } })).toEqual([]);
+    expect(validateAccessPolicyConfig({ policy: { [`${dir}/**`]: "r--" } })).toEqual([]);
+    expect(validateAccessPolicyConfig({ policy: { [`${dir}/`]: "r--" } })).toEqual([]);
+    expect(validateAccessPolicyConfig({ policy: { "/tmp/**": "rwx" } })).toEqual([]);
   });
 
   it("does not warn for bare file paths (stat confirms it is a file)", () => {
     // process.execPath is the running node/bun binary — always a real file, never a dir.
-    expect(validateAccessPolicyConfig({ rules: { [process.execPath]: "r--" } })).toEqual([]);
+    expect(validateAccessPolicyConfig({ policy: { [process.execPath]: "r--" } })).toEqual([]);
   });
 
   it("does not warn for paths that do not exist (ENOENT silently ignored)", () => {
     expect(
       validateAccessPolicyConfig({
-        rules: { "/nonexistent/path/that/cannot/exist-xyzzy": "r--" },
+        policy: { "/nonexistent/path/that/cannot/exist-xyzzy": "r--" },
       }),
     ).toEqual([]);
+  });
+
+  it('auto-expands bare directory in scripts["policy"] shared rules', () => {
+    const dir = os.tmpdir();
+    const config: AccessPolicyConfig = {
+      scripts: { policy: { [dir]: "rw-" as const } },
+    };
+    const errs = validateAccessPolicyConfig(config);
+    expect(errs.some((e) => e.includes("auto-expanded"))).toBe(true);
+    const sharedPolicy = config.scripts?.["policy"];
+    expect(sharedPolicy?.[`${dir}/**`]).toBe("rw-");
+    expect(sharedPolicy?.[dir]).toBeUndefined();
+  });
+
+  it("auto-expands bare directory in per-script policy entry", () => {
+    const dir = os.tmpdir();
+    const config: AccessPolicyConfig = {
+      scripts: { "/deploy.sh": { policy: { [dir]: "rwx" as const } } },
+    };
+    const errs = validateAccessPolicyConfig(config);
+    expect(errs.some((e) => e.includes("auto-expanded"))).toBe(true);
+    const entry = config.scripts?.["/deploy.sh"] as ScriptPolicyEntry | undefined;
+    expect(entry?.policy?.[`${dir}/**`]).toBe("rwx");
+    expect(entry?.policy?.[dir]).toBeUndefined();
   });
 
   it("emits a one-time diagnostic for mid-path wildcard rules (OS-level enforcement skipped)", () => {
@@ -162,7 +186,7 @@ describe("validateAccessPolicyConfig", () => {
     // Seatbelt cannot derive a concrete mount path so they skip it silently.
     // validateAccessPolicyConfig must surface this so operators know.
     const errs = validateAccessPolicyConfig({
-      rules: { "/home/*/secrets/**": "---" },
+      policy: { "/home/*/secrets/**": "---" },
     });
     expect(errs).toHaveLength(1);
     expect(errs[0]).toMatch(/mid-path wildcard/);
@@ -171,7 +195,7 @@ describe("validateAccessPolicyConfig", () => {
 
   it("deduplicates mid-path wildcard rule diagnostics across calls", () => {
     _resetMidPathWildcardWarnedForTest();
-    const config = { rules: { "/home/*/secrets/**": "---" } };
+    const config = { policy: { "/home/*/secrets/**": "---" } };
     const first = validateAccessPolicyConfig(config);
     const second = validateAccessPolicyConfig(config);
     expect(first.filter((e) => e.includes("mid-path wildcard"))).toHaveLength(1);
@@ -181,7 +205,7 @@ describe("validateAccessPolicyConfig", () => {
   it("non-deny mid-path wildcard emits approximate-prefix diagnostic (not cannot-apply)", () => {
     _resetMidPathWildcardWarnedForTest();
     const errs = validateAccessPolicyConfig({
-      rules: { "~/.openclaw/agents/subri/workspace/skills/**/*.sh": "r-x" },
+      policy: { "~/.openclaw/agents/subri/workspace/skills/**/*.sh": "r-x" },
     });
     expect(errs).toHaveLength(1);
     expect(errs[0]).toMatch(/mid-path wildcard/);
@@ -193,7 +217,7 @@ describe("validateAccessPolicyConfig", () => {
     _resetMidPathWildcardWarnedForTest();
     // "/home/user/**" — wildcard is in the final segment, no path separator follows.
     const errs = validateAccessPolicyConfig({
-      rules: { "/home/user/**": "r--", "~/**": "rwx", "/tmp/**": "---" },
+      policy: { "/home/user/**": "r--", "~/**": "rwx", "/tmp/**": "---" },
     });
     expect(errs.filter((e) => e.includes("mid-path wildcard"))).toHaveLength(0);
   });
@@ -206,17 +230,17 @@ describe("validateAccessPolicyConfig", () => {
 describe("checkAccessPolicy — malformed permission characters fail closed", () => {
   it("treats a typo like 'r1-' as deny for write (only exact 'w' grants write)", () => {
     // "r1-": index 1 is "1", not "w" — must deny write, not allow it.
-    const config = { rules: { "/tmp/**": "r1-" as unknown as "r--" } };
+    const config = { policy: { "/tmp/**": "r1-" as unknown as "r--" } };
     expect(checkAccessPolicy("/tmp/foo.txt", "write", config)).toBe("deny");
   });
 
   it("treats 'R--' (uppercase) as deny for read (only lowercase 'r' grants read)", () => {
-    const config = { rules: { "/tmp/**": "R--" as unknown as "r--" } };
+    const config = { policy: { "/tmp/**": "R--" as unknown as "r--" } };
     expect(checkAccessPolicy("/tmp/foo.txt", "read", config)).toBe("deny");
   });
 
   it("treats 'rWx' (uppercase W) as deny for write", () => {
-    const config = { rules: { "/tmp/**": "rWx" as unknown as "rwx" } };
+    const config = { policy: { "/tmp/**": "rWx" as unknown as "rwx" } };
     expect(checkAccessPolicy("/tmp/foo.txt", "write", config)).toBe("deny");
   });
 });
@@ -227,13 +251,13 @@ describe("checkAccessPolicy — malformed permission characters fail closed", ()
 
 describe("checkAccessPolicy — trailing slash shorthand", () => {
   it('"/tmp/" is equivalent to "/tmp/**"', () => {
-    const config: AccessPolicyConfig = { rules: { "/tmp/": "rwx" } };
+    const config: AccessPolicyConfig = { policy: { "/tmp/": "rwx" } };
     expect(checkAccessPolicy("/tmp/foo.txt", "write", config)).toBe("allow");
     expect(checkAccessPolicy("/tmp/a/b/c", "write", config)).toBe("allow");
   });
 
   it('"~/" is equivalent to "~/**"', () => {
-    const config: AccessPolicyConfig = { rules: { "~/": "rw-" } };
+    const config: AccessPolicyConfig = { policy: { "~/": "rw-" } };
     expect(checkAccessPolicy(`${HOME}/foo.txt`, "read", config)).toBe("allow");
     expect(checkAccessPolicy(`${HOME}/foo.txt`, "write", config)).toBe("allow");
     expect(checkAccessPolicy(`${HOME}/foo.txt`, "exec", config)).toBe("deny");
@@ -241,14 +265,14 @@ describe("checkAccessPolicy — trailing slash shorthand", () => {
 
   it('"---" rule with trailing slash blocks subtree', () => {
     const config: AccessPolicyConfig = {
-      rules: { "/**": "rwx", [`${HOME}/.ssh/`]: "---" },
+      policy: { "/**": "rwx", [`${HOME}/.ssh/`]: "---" },
     };
     expect(checkAccessPolicy(`${HOME}/.ssh/id_rsa`, "read", config)).toBe("deny");
   });
 
   it("trailing slash and /** produce identical results", () => {
-    const withSlash: AccessPolicyConfig = { rules: { "/tmp/": "rwx" } };
-    const withGlob: AccessPolicyConfig = { rules: { "/tmp/**": "rwx" } };
+    const withSlash: AccessPolicyConfig = { policy: { "/tmp/": "rwx" } };
+    const withGlob: AccessPolicyConfig = { policy: { "/tmp/**": "rwx" } };
     const paths = ["/tmp/a", "/tmp/a/b", "/tmp/a/b/c.txt"];
     for (const p of paths) {
       expect(checkAccessPolicy(p, "write", withSlash)).toBe(
@@ -261,7 +285,7 @@ describe("checkAccessPolicy — trailing slash shorthand", () => {
     // Rule "~/.openclaw/heartbeat/" should allow write on the bare directory
     // path ~/.openclaw/heartbeat (no trailing component), not just its contents.
     const config: AccessPolicyConfig = {
-      rules: { "/**": "r--", [`${HOME}/.openclaw/heartbeat/`]: "rw-" },
+      policy: { "/**": "r--", [`${HOME}/.openclaw/heartbeat/`]: "rw-" },
     };
     expect(checkAccessPolicy(`${HOME}/.openclaw/heartbeat`, "write", config)).toBe("allow");
     expect(checkAccessPolicy(`${HOME}/.openclaw/heartbeat/test.txt`, "write", config)).toBe(
@@ -271,7 +295,7 @@ describe("checkAccessPolicy — trailing slash shorthand", () => {
 
   it('"---" trailing-slash rule blocks the directory itself and its contents', () => {
     const config: AccessPolicyConfig = {
-      rules: { "/**": "rwx", [`${HOME}/.ssh/`]: "---" },
+      policy: { "/**": "rwx", [`${HOME}/.ssh/`]: "---" },
     };
     // Both the directory and its contents should be denied.
     expect(checkAccessPolicy(`${HOME}/.ssh`, "read", config)).toBe("deny");
@@ -287,7 +311,7 @@ describe.skipIf(process.platform !== "darwin")(
   "checkAccessPolicy — macOS /private alias normalization",
   () => {
     const config: AccessPolicyConfig = {
-      rules: {
+      policy: {
         "/tmp/**": "rwx",
         "/var/**": "r--",
         "/etc/**": "r--",
@@ -312,7 +336,7 @@ describe.skipIf(process.platform !== "darwin")(
 
     it('"---" rule for /tmp/** also blocks /private/tmp/**', () => {
       const denyConfig: AccessPolicyConfig = {
-        rules: { "/**": "rwx", "/tmp/**": "---" },
+        policy: { "/**": "rwx", "/tmp/**": "---" },
       };
       expect(checkAccessPolicy("/private/tmp/evil.sh", "exec", denyConfig)).toBe("deny");
     });
@@ -320,7 +344,7 @@ describe.skipIf(process.platform !== "darwin")(
     it("/private/tmp/** deny rule blocks /tmp/** target", () => {
       // Rule written with /private/tmp must still match the normalized /tmp target.
       const denyConfig: AccessPolicyConfig = {
-        rules: { "/**": "rwx", "/private/tmp/**": "---" },
+        policy: { "/**": "rwx", "/private/tmp/**": "---" },
       };
       expect(checkAccessPolicy("/tmp/evil.sh", "read", denyConfig)).toBe("deny");
     });
@@ -328,7 +352,7 @@ describe.skipIf(process.platform !== "darwin")(
     it("/private/tmp/** rule matches /tmp/** target", () => {
       // Rule written with /private/* prefix must match a /tmp/* target path.
       const cfg: AccessPolicyConfig = {
-        rules: { "/private/tmp/**": "rwx" },
+        policy: { "/private/tmp/**": "rwx" },
       };
       expect(checkAccessPolicy("/tmp/foo.txt", "write", cfg)).toBe("allow");
     });
@@ -394,7 +418,7 @@ describe("findBestRule", () => {
 describe('checkAccessPolicy — "---" rules act as deny', () => {
   it('"---" rule blocks all ops, even when a broader rule would allow', () => {
     const config: AccessPolicyConfig = {
-      rules: { "/**": "rwx", [`${HOME}/.ssh/**`]: "---" },
+      policy: { "/**": "rwx", [`${HOME}/.ssh/**`]: "---" },
     };
     expect(checkAccessPolicy(`${HOME}/.ssh/id_rsa`, "read", config)).toBe("deny");
     expect(checkAccessPolicy(`${HOME}/.ssh/id_rsa`, "write", config)).toBe("deny");
@@ -405,7 +429,7 @@ describe('checkAccessPolicy — "---" rules act as deny', () => {
     '"---" rule does not affect paths outside its glob',
     () => {
       const config: AccessPolicyConfig = {
-        rules: { "/**": "rwx", [`${HOME}/.ssh/**`]: "---" },
+        policy: { "/**": "rwx", [`${HOME}/.ssh/**`]: "---" },
       };
       expect(checkAccessPolicy(`${HOME}/workspace/foo.py`, "read", config)).toBe("allow");
     },
@@ -413,7 +437,7 @@ describe('checkAccessPolicy — "---" rules act as deny', () => {
 
   it("multiple narrowing rules block distinct subtrees", () => {
     const config: AccessPolicyConfig = {
-      rules: { "/**": "rwx", [`${HOME}/.ssh/**`]: "---", [`${HOME}/.gnupg/**`]: "---" },
+      policy: { "/**": "rwx", [`${HOME}/.ssh/**`]: "---", [`${HOME}/.gnupg/**`]: "---" },
     };
     expect(checkAccessPolicy(`${HOME}/.gnupg/secring.gpg`, "read", config)).toBe("deny");
   });
@@ -425,28 +449,28 @@ describe('checkAccessPolicy — "---" rules act as deny', () => {
 
 describe("checkAccessPolicy — rules", () => {
   it("allows read when r bit is set", () => {
-    const config: AccessPolicyConfig = { rules: { "/**": "r--" } };
+    const config: AccessPolicyConfig = { policy: { "/**": "r--" } };
     expect(checkAccessPolicy("/etc/passwd", "read", config)).toBe("allow");
   });
 
   it("denies write when w bit is absent", () => {
-    const config: AccessPolicyConfig = { rules: { "/**": "r--" } };
+    const config: AccessPolicyConfig = { policy: { "/**": "r--" } };
     expect(checkAccessPolicy("/etc/passwd", "write", config)).toBe("deny");
   });
 
   it("denies exec when x bit is absent", () => {
-    const config: AccessPolicyConfig = { rules: { "/usr/bin/**": "r--" } };
+    const config: AccessPolicyConfig = { policy: { "/usr/bin/**": "r--" } };
     expect(checkAccessPolicy("/usr/bin/grep", "exec", config)).toBe("deny");
   });
 
   it("allows exec when x bit is set", () => {
-    const config: AccessPolicyConfig = { rules: { "/usr/bin/**": "r-x" } };
+    const config: AccessPolicyConfig = { policy: { "/usr/bin/**": "r-x" } };
     expect(checkAccessPolicy("/usr/bin/grep", "exec", config)).toBe("allow");
   });
 
   it("longer rule overrides shorter for the same path", () => {
     const config: AccessPolicyConfig = {
-      rules: {
+      policy: {
         "/**": "r--",
         [`${HOME}/**`]: "rwx",
       },
@@ -459,7 +483,7 @@ describe("checkAccessPolicy — rules", () => {
 
   it("specific sub-path rule can restrict a broader allow", () => {
     const config: AccessPolicyConfig = {
-      rules: {
+      policy: {
         [`${HOME}/**`]: "rwx",
         [`${HOME}/.config/**`]: "r--",
       },
@@ -472,7 +496,7 @@ describe("checkAccessPolicy — rules", () => {
     // Without the expanded-length fix, "~/.ssh/**" (9 raw chars) would lose to
     // `${HOME}/**` when HOME is long, letting rwx override the intended --- deny.
     const config: AccessPolicyConfig = {
-      rules: {
+      policy: {
         [`${HOME}/**`]: "rwx",
         "~/.ssh/**": "---",
       },
@@ -489,7 +513,7 @@ describe("checkAccessPolicy — rules", () => {
 describe("checkAccessPolicy — implicit fallback to ---", () => {
   it("denies all ops when no rule matches (implicit --- fallback)", () => {
     const config: AccessPolicyConfig = {
-      rules: { [`${HOME}/**`]: "rwx" },
+      policy: { [`${HOME}/**`]: "rwx" },
     };
     expect(checkAccessPolicy("/etc/passwd", "read", config)).toBe("deny");
     expect(checkAccessPolicy("/etc/passwd", "write", config)).toBe("deny");
@@ -498,7 +522,7 @@ describe("checkAccessPolicy — implicit fallback to ---", () => {
 
   it('"/**" rule acts as catch-all for unmatched paths', () => {
     const config: AccessPolicyConfig = {
-      rules: { [`${HOME}/**`]: "rwx", "/**": "r--" },
+      policy: { [`${HOME}/**`]: "rwx", "/**": "r--" },
     };
     expect(checkAccessPolicy("/etc/passwd", "read", config)).toBe("allow");
     expect(checkAccessPolicy("/etc/passwd", "write", config)).toBe("deny");
@@ -506,7 +530,7 @@ describe("checkAccessPolicy — implicit fallback to ---", () => {
 
   it("empty rules deny everything via implicit fallback", () => {
     const config: AccessPolicyConfig = {
-      rules: { [`${HOME}/workspace/**`]: "rw-" },
+      policy: { [`${HOME}/workspace/**`]: "rw-" },
     };
     expect(checkAccessPolicy("/tmp/foo", "read", config)).toBe("deny");
     expect(checkAccessPolicy("/tmp/foo", "write", config)).toBe("deny");
@@ -521,7 +545,7 @@ describe("checkAccessPolicy — implicit fallback to ---", () => {
 describe("checkAccessPolicy — precedence integration", () => {
   it("narrowing rule beats broader allow — all in play", () => {
     const config: AccessPolicyConfig = {
-      rules: {
+      policy: {
         "/**": "r--",
         [`${HOME}/**`]: "rwx",
         [`${HOME}/.ssh/**`]: "---",
@@ -559,7 +583,7 @@ describe("checkAccessPolicy — symlink resolved-path scenarios", () => {
     // ~/workspace/link → ~/.ssh/id_rsa (symlink in allowed dir to denied-subpath)
     // Caller passes the resolved path; the "---" rule wins.
     const config: AccessPolicyConfig = {
-      rules: { [`${HOME}/workspace/**`]: "rw-", [`${HOME}/.ssh/**`]: "---" },
+      policy: { [`${HOME}/workspace/**`]: "rw-", [`${HOME}/.ssh/**`]: "---" },
     };
     expect(checkAccessPolicy(`${HOME}/.ssh/id_rsa`, "read", config, HOME)).toBe("deny");
   });
@@ -568,7 +592,7 @@ describe("checkAccessPolicy — symlink resolved-path scenarios", () => {
     // ~/workspace/link → ~/workspace/secret/file
     // workspace is rw-, but the secret subdir is r--. Resolved path hits r--.
     const config: AccessPolicyConfig = {
-      rules: {
+      policy: {
         [`${HOME}/workspace/**`]: "rw-",
         [`${HOME}/workspace/secret/**`]: "r--",
       },
@@ -585,7 +609,7 @@ describe("checkAccessPolicy — symlink resolved-path scenarios", () => {
   it("symlink source path in allowed dir is allowed; resolved denied target is denied", () => {
     // This illustrates that the policy must be checked on the resolved path.
     const config: AccessPolicyConfig = {
-      rules: { [`${HOME}/workspace/**`]: "rw-", [`${HOME}/.aws/**`]: "---" },
+      policy: { [`${HOME}/workspace/**`]: "rw-", [`${HOME}/.aws/**`]: "---" },
     };
     // Source path (the symlink) — allowed
     expect(checkAccessPolicy(`${HOME}/workspace/creds`, "read", config, HOME)).toBe("allow");
@@ -811,6 +835,16 @@ describe("resolveArgv0", () => {
     expect(result).toMatch(/sh$/);
   });
 
+  itUnix("strips quoted argv0 with internal spaces when looking through env", () => {
+    // `"/usr/bin env" /bin/sh` — argv0 contains a space inside quotes.
+    // The bare /^\S+\s*/ regex stopped at the first space, leaving a corrupted afterEnv.
+    // The fix strips the full quoted token before processing env options/args.
+    // We use a path we know exists so realpathSync succeeds.
+    const result = resolveArgv0('"/usr/bin/env" /bin/sh -c echo');
+    expect(result).not.toBeNull();
+    expect(result).toMatch(/sh$/);
+  });
+
   it("returns null for deeply nested env -S to prevent stack overflow", () => {
     // Build a deeply nested "env -S 'env -S ...' " string beyond the depth cap (8).
     let cmd = "/bin/sh";
@@ -857,7 +891,7 @@ describe("resolveScriptKey", () => {
 
 describe("applyScriptPolicyOverride", () => {
   it("returns base policy unchanged when no scripts block", () => {
-    const base: AccessPolicyConfig = { rules: { "/**": "r--" } };
+    const base: AccessPolicyConfig = { policy: { "/**": "r--" } };
     const { policy, hashMismatch } = applyScriptPolicyOverride(base, "/any/path");
     expect(hashMismatch).toBeUndefined();
     expect(policy).toBe(base);
@@ -865,8 +899,8 @@ describe("applyScriptPolicyOverride", () => {
 
   it("returns base policy unchanged when argv0 not in scripts", () => {
     const base: AccessPolicyConfig = {
-      rules: { "/**": "r--" },
-      scripts: { "/other/script.sh": { rules: { "/tmp/**": "rwx" } } },
+      policy: { "/**": "r--" },
+      scripts: { "/other/script.sh": { policy: { "/tmp/**": "rwx" } } },
     };
     const { policy, hashMismatch } = applyScriptPolicyOverride(base, "/my/script.sh");
     expect(hashMismatch).toBeUndefined();
@@ -885,9 +919,9 @@ describe("applyScriptPolicyOverride", () => {
     try {
       const resolvedReal = fs.realpathSync(symlinkScript);
       const base: AccessPolicyConfig = {
-        rules: { "/**": "r--" },
+        policy: { "/**": "r--" },
         // Key is the symlink path; resolvedArgv0 will be the real path.
-        scripts: { [symlinkScript]: { rules: { "/tmp/**": "rwx" } } },
+        scripts: { [symlinkScript]: { policy: { "/tmp/**": "rwx" } } },
       };
       const { overrideRules, hashMismatch } = applyScriptPolicyOverride(base, resolvedReal);
       expect(hashMismatch).toBeUndefined();
@@ -900,8 +934,8 @@ describe("applyScriptPolicyOverride", () => {
 
   it("returns override rules separately so seatbelt emits them after base rules", () => {
     const base: AccessPolicyConfig = {
-      rules: { "/**": "r--" },
-      scripts: { "/my/script.sh": { rules: { [`${HOME}/.openclaw/credentials/`]: "r--" } } },
+      policy: { "/**": "r--" },
+      scripts: { "/my/script.sh": { policy: { [`${HOME}/.openclaw/credentials/`]: "r--" } } },
     };
     const { policy, overrideRules, hashMismatch } = applyScriptPolicyOverride(
       base,
@@ -909,8 +943,8 @@ describe("applyScriptPolicyOverride", () => {
     );
     expect(hashMismatch).toBeUndefined();
     // Base rules unchanged in policy
-    expect(policy.rules?.["/**"]).toBe("r--");
-    expect(policy.rules?.[`${HOME}/.openclaw/credentials/`]).toBeUndefined();
+    expect(policy.policy?.["/**"]).toBe("r--");
+    expect(policy.policy?.[`${HOME}/.openclaw/credentials/`]).toBeUndefined();
     // Override rules returned separately — caller emits them last in seatbelt profile
     expect(overrideRules?.[`${HOME}/.openclaw/credentials/`]).toBe("r--");
     expect(policy.scripts).toBeUndefined();
@@ -918,21 +952,21 @@ describe("applyScriptPolicyOverride", () => {
 
   it("override rules returned separately — base policy rule unchanged", () => {
     const base: AccessPolicyConfig = {
-      rules: { [`${HOME}/workspace/**`]: "r--" },
-      scripts: { "/trusted.sh": { rules: { [`${HOME}/workspace/**`]: "rwx" } } },
+      policy: { [`${HOME}/workspace/**`]: "r--" },
+      scripts: { "/trusted.sh": { policy: { [`${HOME}/workspace/**`]: "rwx" } } },
     };
     const { policy, overrideRules } = applyScriptPolicyOverride(base, "/trusted.sh");
-    expect(policy.rules?.[`${HOME}/workspace/**`]).toBe("r--");
+    expect(policy.policy?.[`${HOME}/workspace/**`]).toBe("r--");
     expect(overrideRules?.[`${HOME}/workspace/**`]).toBe("rwx");
   });
 
   it("narrowing override returned separately", () => {
     const base: AccessPolicyConfig = {
-      rules: { "/tmp/**": "rwx" },
-      scripts: { "/cautious.sh": { rules: { "/tmp/**": "r--" } } },
+      policy: { "/tmp/**": "rwx" },
+      scripts: { "/cautious.sh": { policy: { "/tmp/**": "r--" } } },
     };
     const { policy, overrideRules } = applyScriptPolicyOverride(base, "/cautious.sh");
-    expect(policy.rules?.["/tmp/**"]).toBe("rwx");
+    expect(policy.policy?.["/tmp/**"]).toBe("rwx");
     expect(overrideRules?.["/tmp/**"]).toBe("r--");
   });
 
@@ -947,7 +981,7 @@ describe("applyScriptPolicyOverride", () => {
     try {
       const base: AccessPolicyConfig = {
         scripts: {
-          [scriptPath]: { sha256: "deadbeef".padEnd(64, "0"), rules: { "/tmp/**": "rwx" } },
+          [scriptPath]: { sha256: "deadbeef".padEnd(64, "0"), policy: { "/tmp/**": "rwx" } },
         },
       };
       const { policy, hashMismatch } = applyScriptPolicyOverride(base, realScriptPath);
@@ -963,8 +997,8 @@ describe("applyScriptPolicyOverride", () => {
     // A direct object lookup misses tilde keys; ~ must be expanded before comparing.
     const absPath = path.join(os.homedir(), "bin", "deploy.sh");
     const base: AccessPolicyConfig = {
-      rules: { "/**": "rwx" },
-      scripts: { "~/bin/deploy.sh": { rules: { "/secret/**": "---" } } },
+      policy: { "/**": "rwx" },
+      scripts: { "~/bin/deploy.sh": { policy: { "/secret/**": "---" } } },
     };
     const { overrideRules, hashMismatch } = applyScriptPolicyOverride(base, absPath);
     expect(hashMismatch).toBeUndefined();
@@ -980,8 +1014,8 @@ describe("applyScriptPolicyOverride", () => {
     const realScriptPath = fs.realpathSync(scriptPath);
     try {
       const base: AccessPolicyConfig = {
-        rules: { "/**": "r--" },
-        scripts: { [scriptPath]: { sha256: hash, rules: { "/tmp/**": "rwx" } } },
+        policy: { "/**": "r--" },
+        scripts: { [scriptPath]: { sha256: hash, policy: { "/tmp/**": "rwx" } } },
       };
       const { policy, overrideRules, hashMismatch } = applyScriptPolicyOverride(
         base,
@@ -989,7 +1023,7 @@ describe("applyScriptPolicyOverride", () => {
       );
       expect(hashMismatch).toBeUndefined();
       expect(overrideRules?.["/tmp/**"]).toBe("rwx");
-      expect(policy.rules?.["/tmp/**"]).toBeUndefined();
+      expect(policy.policy?.["/tmp/**"]).toBeUndefined();
       expect(policy.scripts).toBeUndefined();
     } finally {
       fs.rmSync(tmpDir, { recursive: true });

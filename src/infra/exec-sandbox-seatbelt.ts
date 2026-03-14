@@ -184,7 +184,7 @@ export function generateSeatbeltProfile(
   lines.push("");
 
   // Determine base stance from the "/**" catch-all rule (replaces the removed `default` field).
-  const catchAllPerm = findBestRule("/**", config.rules ?? {}, homeDir) ?? "---";
+  const catchAllPerm = findBestRule("/**", config.policy ?? {}, homeDir) ?? "---";
   const defaultPerm = catchAllPerm; // alias for readability below
   const defaultAllowsAnything =
     catchAllPerm[0] === "r" || catchAllPerm[1] === "w" || catchAllPerm[2] === "x";
@@ -223,7 +223,7 @@ export function generateSeatbeltProfile(
     // unconditionally granting /tmp access when default: "---".
     // findBestRule probes both the path and path+"/" internally, so "/tmp" correctly
     // matches glob rules like "/tmp/**" without needing the "/tmp/." workaround.
-    const tmpPerm = findBestRule("/tmp", config.rules ?? {}, homeDir) ?? "---";
+    const tmpPerm = findBestRule("/tmp", config.policy ?? {}, homeDir) ?? "---";
     // Emit read and write allowances independently so a read-only policy like
     // "/tmp/**": "r--" does not accidentally grant write access to /tmp.
     if (tmpPerm[0] === "r") {
@@ -252,7 +252,7 @@ export function generateSeatbeltProfile(
   // Use expanded lengths so a tilde rule ("~/.ssh/**" → e.g. "/home/u/.ssh/**")
   // sorts after a shorter absolute rule ("/home/u/**") and therefore wins.
   const expandTilde = (p: string) => (p.startsWith("~") ? p.replace(/^~(?=$|[/\\])/, homeDir) : p);
-  const ruleEntries = Object.entries(config.rules ?? {}).toSorted(
+  const ruleEntries = Object.entries(config.policy ?? {}).toSorted(
     ([a], [b]) => expandTilde(a).length - expandTilde(b).length,
   );
 

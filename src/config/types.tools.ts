@@ -8,8 +8,8 @@ export type PermStr = string;
 
 /** Per-script policy entry — allows narrower permissions for a specific script binary. */
 export type ScriptPolicyEntry = {
-  /** Restrict/expand rules for this script. Merged over the base policy rules. */
-  rules?: Record<string, PermStr>;
+  /** Extra path rules for this script, merged over the shared script policy. */
+  policy?: Record<string, PermStr>;
   /** SHA-256 hex of the script file for integrity checking (best-effort, not atomic). */
   sha256?: string;
 };
@@ -23,9 +23,17 @@ export type ScriptPolicyEntry = {
  */
 export type AccessPolicyConfig = {
   /** Glob-pattern rules: path → permission string. Longest prefix wins. */
-  rules?: Record<string, PermStr>;
-  /** Per-script argv0 policy overrides keyed by resolved binary path. */
-  scripts?: Record<string, ScriptPolicyEntry>;
+  policy?: Record<string, PermStr>;
+  /**
+   * Per-script argv0 policy overrides keyed by resolved binary path.
+   * Reserved key "policy" holds shared rules applied to every script before
+   * per-script policy is merged in.
+   */
+  scripts?: {
+    /** Shared rules applied to all scripts; per-script policy wins on collision. */
+    policy?: Record<string, PermStr>;
+    [path: string]: ScriptPolicyEntry | Record<string, PermStr> | undefined;
+  };
 };
 
 export type MediaUnderstandingScopeMatch = {

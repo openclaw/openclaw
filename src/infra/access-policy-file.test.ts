@@ -56,28 +56,28 @@ describe("mergeAccessPolicy", () => {
   });
 
   it("returns base when override is undefined", () => {
-    const base = { rules: { "/**": "r--" as const } };
+    const base = { policy: { "/**": "r--" as const } };
     expect(mergeAccessPolicy(base, undefined)).toEqual(base);
   });
 
   it("returns override when base is undefined", () => {
-    const override = { rules: { "/**": "rwx" as const } };
+    const override = { policy: { "/**": "rwx" as const } };
     expect(mergeAccessPolicy(undefined, override)).toEqual(override);
   });
 
   it("rules are shallow-merged, override key wins on collision", () => {
     const result = mergeAccessPolicy(
-      { rules: { "/**": "r--", "~/**": "rw-" } },
-      { rules: { "~/**": "rwx", "~/dev/**": "rwx" } },
+      { policy: { "/**": "r--", "~/**": "rw-" } },
+      { policy: { "~/**": "rwx", "~/dev/**": "rwx" } },
     );
-    expect(result?.rules?.["/**"]).toBe("r--"); // base survives
-    expect(result?.rules?.["~/**"]).toBe("rwx"); // override wins
-    expect(result?.rules?.["~/dev/**"]).toBe("rwx"); // override adds
+    expect(result?.policy?.["/**"]).toBe("r--"); // base survives
+    expect(result?.policy?.["~/**"]).toBe("rwx"); // override wins
+    expect(result?.policy?.["~/dev/**"]).toBe("rwx"); // override adds
   });
 
   it("omits empty rules from result", () => {
     const result = mergeAccessPolicy({ scripts: { "/s.sh": { sha256: "abc" } } }, {});
-    expect(result?.rules).toBeUndefined();
+    expect(result?.policy).toBeUndefined();
   });
 
   it("scripts deep-merge: base sha256 is preserved when override supplies same script key", () => {
@@ -87,7 +87,7 @@ describe("mergeAccessPolicy", () => {
       scripts: {
         "/usr/local/bin/deploy.sh": {
           sha256: "abc123",
-          rules: { "~/deploy/**": "rwx" as const },
+          policy: { "~/deploy/**": "rwx" as const },
         },
       },
     };
@@ -95,28 +95,33 @@ describe("mergeAccessPolicy", () => {
       scripts: {
         "/usr/local/bin/deploy.sh": {
           // Agent block supplies same key — must NOT be able to drop sha256.
-          rules: { "~/deploy/**": "r--" as const }, // narrower override — fine
+          policy: { "~/deploy/**": "r--" as const }, // narrower override — fine
         },
       },
     };
     const result = mergeAccessPolicy(base, override);
-    const merged = result?.scripts?.["/usr/local/bin/deploy.sh"];
+    const merged = result?.scripts?.["/usr/local/bin/deploy.sh"] as
+      | import("../config/types.tools.js").ScriptPolicyEntry
+      | undefined;
     // sha256 from base must survive.
     expect(merged?.sha256).toBe("abc123");
-    // rules: override key wins on collision.
-    expect(merged?.rules?.["~/deploy/**"]).toBe("r--");
+    // policy: override key wins on collision.
+    expect(merged?.policy?.["~/deploy/**"]).toBe("r--");
   });
 
   it("scripts deep-merge: override-only script key is added verbatim", () => {
     const base = { scripts: { "/bin/existing.sh": { sha256: "deadbeef" } } };
     const override = {
-      scripts: { "/bin/new.sh": { rules: { "/tmp/**": "rwx" as const } } },
+      scripts: { "/bin/new.sh": { policy: { "/tmp/**": "rwx" as const } } },
     };
     const result = mergeAccessPolicy(base, override);
     // Base script untouched.
     expect(result?.scripts?.["/bin/existing.sh"]?.sha256).toBe("deadbeef");
     // New script from override is added.
-    expect(result?.scripts?.["/bin/new.sh"]?.rules?.["/tmp/**"]).toBe("rwx");
+    const newScript = result?.scripts?.["/bin/new.sh"] as
+      | import("../config/types.tools.js").ScriptPolicyEntry
+      | undefined;
+    expect(newScript?.policy?.["/tmp/**"]).toBe("rwx");
   });
 });
 
@@ -150,12 +155,12 @@ describe("loadAccessPolicyFile", () => {
     spy.mockRestore();
   });
 
-  it("returns BROKEN_POLICY_FILE and logs error when base is not an object", () => {
+  it('returns BROKEN_POLICY_FILE and logs error when base is placed at top level (use agents["*"])', () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    writeFile({ version: 1, base: ["r--"] });
+    writeFile({ version: 1, base: { policy: { "/**": "r--" } } });
     const result = loadAccessPolicyFile();
     expect(result).toBe(BROKEN_POLICY_FILE);
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining('"base" must be an object'));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('unexpected top-level key "base"'));
     spy.mockRestore();
   });
 
@@ -168,13 +173,13 @@ describe("loadAccessPolicyFile", () => {
     spy.mockRestore();
   });
 
-  it("returns BROKEN_POLICY_FILE and logs error when a top-level key like 'rules' is misplaced", () => {
+  it("returns BROKEN_POLICY_FILE and logs error when a top-level key like 'policy' is misplaced", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    // Common mistake: rules at top level instead of under base
-    writeFile({ version: 1, rules: { "/**": "r--" } });
+    // Common mistake: policy at top level instead of under agents["*"]
+    writeFile({ version: 1, policy: { "/**": "r--" } });
     const result = loadAccessPolicyFile();
     expect(result).toBe(BROKEN_POLICY_FILE);
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining('unexpected top-level key "rules"'));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('unexpected top-level key "policy"'));
     spy.mockRestore();
   });
 
@@ -199,8 +204,10 @@ describe("loadAccessPolicyFile", () => {
   it("returns parsed file when valid", () => {
     const content: AccessPolicyFile = {
       version: 1,
-      base: { rules: { "/**": "r--", "~/.ssh/**": "---" } },
-      agents: { subri: { rules: { "~/dev/**": "rwx" } } },
+      agents: {
+        "*": { policy: { "/**": "r--", "~/.ssh/**": "---" } },
+        subri: { policy: { "~/dev/**": "rwx" } },
+      },
     };
     writeFile(content);
     const result = loadAccessPolicyFile();
@@ -210,8 +217,8 @@ describe("loadAccessPolicyFile", () => {
       throw new Error("unexpected");
     }
     expect(result.version).toBe(1);
-    expect(result.base?.rules?.["/**"]).toBe("r--");
-    expect(result.agents?.subri?.rules?.["~/dev/**"]).toBe("rwx");
+    expect(result.agents?.["*"]?.policy?.["/**"]).toBe("r--");
+    expect(result.agents?.subri?.policy?.["~/dev/**"]).toBe("rwx");
   });
 });
 
@@ -221,7 +228,7 @@ describe("loadAccessPolicyFile", () => {
 
 describe("loadAccessPolicyFile — mtime cache", () => {
   it("returns cached result on second call without re-reading the file", () => {
-    writeFile({ version: 1, base: { rules: { "/**": "r--" } } });
+    writeFile({ version: 1, agents: { "*": { policy: { "/**": "r--" } } } });
     const spy = vi.spyOn(fs, "readFileSync");
     loadAccessPolicyFile(); // populate cache
     loadAccessPolicyFile(); // should hit cache
@@ -231,11 +238,11 @@ describe("loadAccessPolicyFile — mtime cache", () => {
   });
 
   it("re-reads when mtime changes (file updated)", () => {
-    writeFile({ version: 1, base: { rules: { "/**": "r--" } } });
+    writeFile({ version: 1, agents: { "*": { policy: { "/**": "r--" } } } });
     loadAccessPolicyFile(); // populate cache
     // Rewrite the file — on most filesystems this bumps mtime. Force a detectable
     // mtime change by setting it explicitly via utimesSync.
-    writeFile({ version: 1, base: { rules: { "/**": "rwx" } } });
+    writeFile({ version: 1, agents: { "*": { policy: { "/**": "rwx" } } } });
     const future = Date.now() / 1000 + 1;
     fs.utimesSync(FP_FILE, future, future);
     const result = loadAccessPolicyFile();
@@ -243,11 +250,11 @@ describe("loadAccessPolicyFile — mtime cache", () => {
     if (result === null || result === BROKEN_POLICY_FILE) {
       throw new Error("unexpected");
     }
-    expect(result.base?.rules?.["/**"]).toBe("rwx");
+    expect(result.agents?.["*"]?.policy?.["/**"]).toBe("rwx");
   });
 
   it("clears cache when file is deleted", () => {
-    writeFile({ version: 1, base: { default: "r--" } });
+    writeFile({ version: 1, agents: { "*": { policy: { "/**": "r--" } } } });
     loadAccessPolicyFile(); // populate cache
     fs.unlinkSync(FP_FILE);
     expect(loadAccessPolicyFile()).toBeNull();
@@ -287,7 +294,7 @@ describe("resolveAccessPolicyForAgent", () => {
 
   it("does not warn when config file exists and is valid", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    writeFile({ version: 1, base: { rules: { "/**": "r--" } } });
+    writeFile({ version: 1, agents: { "*": { policy: { "/**": "r--" } } } });
     resolveAccessPolicyForAgent("subri");
     expect(warnSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();
@@ -296,7 +303,7 @@ describe("resolveAccessPolicyForAgent", () => {
   it("returns deny-all and logs error when config file is broken (fail-closed)", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    writeFile({ version: 1, rules: { "/**": "r--" } }); // misplaced key — triggers error
+    writeFile({ version: 1, policy: { "/**": "r--" } }); // misplaced key — triggers error
     const result = resolveAccessPolicyForAgent("subri");
     expect(warnSpy).not.toHaveBeenCalled();
     expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("Failing closed"));
@@ -308,7 +315,7 @@ describe("resolveAccessPolicyForAgent", () => {
 
   it("deny-all policy returned on broken file is frozen — mutation does not corrupt future calls", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    writeFile({ version: 1, rules: { "/**": "r--" } }); // misplaced key — broken
+    writeFile({ version: 1, policy: { "/**": "r--" } }); // misplaced key — broken
     const result = resolveAccessPolicyForAgent("subri");
     expect(result).toEqual({});
     // Attempt to mutate the returned object — must not affect the next call.
@@ -327,59 +334,59 @@ describe("resolveAccessPolicyForAgent", () => {
   it("returns base when no agent block exists", () => {
     writeFile({
       version: 1,
-      base: { rules: { "/**": "r--", [`~/.ssh/**`]: "---" } },
+      agents: { "*": { policy: { "/**": "r--", [`~/.ssh/**`]: "---" } } },
     });
     const result = resolveAccessPolicyForAgent("subri");
-    expect(result?.rules?.["/**"]).toBe("r--");
-    expect(result?.rules?.["~/.ssh/**"]).toBe("---");
+    expect(result?.policy?.["/**"]).toBe("r--");
+    expect(result?.policy?.["~/.ssh/**"]).toBe("---");
   });
 
   it("merges base + named agent", () => {
     writeFile({
       version: 1,
-      base: { rules: { "/**": "r--", [`~/.ssh/**`]: "---" } },
-      agents: { subri: { rules: { "~/dev/**": "rwx" } } },
+      agents: {
+        "*": { policy: { "/**": "r--", [`~/.ssh/**`]: "---" } },
+        subri: { policy: { "~/dev/**": "rwx" } },
+      },
     });
     const result = resolveAccessPolicyForAgent("subri");
-    // rules: merged, agent rule wins on collision
-    expect(result?.rules?.["/**"]).toBe("r--");
-    expect(result?.rules?.["~/dev/**"]).toBe("rwx");
+    // policy: merged, agent rule wins on collision
+    expect(result?.policy?.["/**"]).toBe("r--");
+    expect(result?.policy?.["~/dev/**"]).toBe("rwx");
     // base "---" rule preserved
-    expect(result?.rules?.["~/.ssh/**"]).toBe("---");
+    expect(result?.policy?.["~/.ssh/**"]).toBe("---");
   });
 
   it("wildcard agent applies before named agent", () => {
     writeFile({
       version: 1,
-      base: {},
       agents: {
-        "*": { rules: { "/usr/bin/**": "r-x" } },
-        subri: { rules: { "~/dev/**": "rwx" } },
+        "*": { policy: { "/usr/bin/**": "r-x" } },
+        subri: { policy: { "~/dev/**": "rwx" } },
       },
     });
     const result = resolveAccessPolicyForAgent("subri");
-    expect(result?.rules?.["/usr/bin/**"]).toBe("r-x"); // from wildcard
-    expect(result?.rules?.["~/dev/**"]).toBe("rwx"); // from named agent
+    expect(result?.policy?.["/usr/bin/**"]).toBe("r-x"); // from wildcard
+    expect(result?.policy?.["~/dev/**"]).toBe("rwx"); // from named agent
   });
 
   it("wildcard applies even when no named agent block", () => {
     writeFile({
       version: 1,
-      base: {},
-      agents: { "*": { rules: { [`~/.ssh/**`]: "---" } } },
+      agents: { "*": { policy: { [`~/.ssh/**`]: "---" } } },
     });
     const result = resolveAccessPolicyForAgent("other-agent");
-    expect(result?.rules?.["~/.ssh/**"]).toBe("---");
+    expect(result?.policy?.["~/.ssh/**"]).toBe("---");
   });
 
   it("wildcard key itself is not treated as a named agent", () => {
     writeFile({
       version: 1,
-      agents: { "*": { rules: { [`~/.ssh/**`]: "---" } } },
+      agents: { "*": { policy: { [`~/.ssh/**`]: "---" } } },
     });
     // Requesting agentId "*" should not double-apply wildcard as named
     const result = resolveAccessPolicyForAgent("*");
-    expect(result?.rules?.["~/.ssh/**"]).toBe("---");
+    expect(result?.policy?.["~/.ssh/**"]).toBe("---");
   });
 
   it("returns undefined when file is empty (no base, no agents)", () => {
@@ -393,7 +400,7 @@ describe("resolveAccessPolicyForAgent", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     writeFile({
       version: 1,
-      base: { rules: { "/**": "BAD" } },
+      agents: { "*": { policy: { "/**": "BAD" } } },
     });
     resolveAccessPolicyForAgent("subri");
     expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("BAD"));
@@ -409,7 +416,7 @@ describe("resolveAccessPolicyForAgent", () => {
     // Write a file whose rules entry is a bare directory — triggers auto-expand diagnostic
     // but no real perm-string error.
     const dir = os.tmpdir();
-    writeFile({ version: 1, base: { rules: { [dir]: "r--" } } });
+    writeFile({ version: 1, agents: { "*": { policy: { [dir]: "r--" } } } });
     resolveAccessPolicyForAgent("subri");
     const calls = errSpy.mock.calls.map((c) => String(c[0]));
     expect(calls.some((m) => m.includes("auto-expanded"))).toBe(true);
@@ -419,7 +426,7 @@ describe("resolveAccessPolicyForAgent", () => {
 
   it("prints 'Bad permission strings' footer when a real perm-string error is present", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    writeFile({ version: 1, base: { rules: { "/**": "BAD" } } });
+    writeFile({ version: 1, agents: { "*": { policy: { "/**": "BAD" } } } });
     resolveAccessPolicyForAgent("subri");
     const calls = errSpy.mock.calls.map((c) => String(c[0]));
     expect(calls.some((m) => m.includes("Bad permission strings"))).toBe(true);
@@ -429,11 +436,13 @@ describe("resolveAccessPolicyForAgent", () => {
   it("narrowing rules from base and agent are all preserved in merged result", () => {
     writeFile({
       version: 1,
-      base: { rules: { [`~/.ssh/**`]: "---" } },
-      agents: { paranoid: { rules: { [`~/.aws/**`]: "---" } } },
+      agents: {
+        "*": { policy: { [`~/.ssh/**`]: "---" } },
+        paranoid: { policy: { [`~/.aws/**`]: "---" } },
+      },
     });
     const result = resolveAccessPolicyForAgent("paranoid");
-    expect(result?.rules?.["~/.ssh/**"]).toBe("---");
-    expect(result?.rules?.["~/.aws/**"]).toBe("---");
+    expect(result?.policy?.["~/.ssh/**"]).toBe("---");
+    expect(result?.policy?.["~/.aws/**"]).toBe("---");
   });
 });

@@ -55,7 +55,7 @@ describe("createHostWorkspaceEditTool edit read-permission check", () => {
       // "-w-" policy: write allowed, read denied.
       // Edit must NOT be allowed to read the file even if write is permitted.
       const permissions: AccessPolicyConfig = {
-        rules: { [`${tmpDir}/**`]: "-w-" },
+        policy: { [`${tmpDir}/**`]: "-w-" },
       };
       createHostWorkspaceEditTool(tmpDir, { workspaceOnly: false, permissions });
       expect(mocks.operations).toBeDefined();
@@ -72,7 +72,7 @@ describe("createHostWorkspaceEditTool edit read-permission check", () => {
       await fs.writeFile(filePath, "content", "utf8");
 
       const permissions: AccessPolicyConfig = {
-        rules: { [`${tmpDir}/**`]: "rw-" },
+        policy: { [`${tmpDir}/**`]: "rw-" },
       };
       createHostWorkspaceEditTool(tmpDir, { workspaceOnly: false, permissions });
       expect(mocks.operations).toBeDefined();
@@ -90,7 +90,7 @@ describe("createHostWorkspaceEditTool edit read-permission check", () => {
 
       // "r--" policy: read allowed, write denied.
       const permissions: AccessPolicyConfig = {
-        rules: { [`${tmpDir}/**`]: "r--" },
+        policy: { [`${tmpDir}/**`]: "r--" },
       };
       createHostWorkspaceEditTool(tmpDir, { workspaceOnly: false, permissions });
       expect(mocks.operations).toBeDefined();

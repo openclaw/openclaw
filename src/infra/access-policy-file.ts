@@ -6,16 +6,17 @@ import { validateAccessPolicyConfig } from "./access-policy.js";
 
 export type AccessPolicyFile = {
   version: 1;
-  base?: AccessPolicyConfig;
   /**
-   * Per-agent overrides keyed by agent ID, or "*" for a wildcard that applies
-   * to every agent before the named agent block is merged in.
+   * Per-agent overrides keyed by agent ID.
+   *
+   * Reserved key:
+   *   "*" — base policy applied to every agent before the named agent block is merged in.
    *
    * Merge order (each layer wins over the previous):
-   *   base → agents["*"] → agents[agentId]
+   *   agents["*"] → agents[agentId]
    *
    * Within each layer:
-   *   - rules:   shallow-merge, override key wins on collision
+   *   - policy:  shallow-merge, override key wins on collision
    *   - scripts: deep-merge per key; base sha256 is preserved
    */
   agents?: Record<string, AccessPolicyConfig>;
@@ -46,31 +47,44 @@ export function mergeAccessPolicy(
   if (!override) {
     return base;
   }
-  const rules = { ...base.rules, ...override.rules };
+  const rules = { ...base.policy, ...override.policy };
   // scripts: deep-merge per key — base sha256 is preserved regardless of
   // what the agent override supplies. A plain spread ({ ...base.scripts, ...override.scripts })
   // would silently drop the admin-configured hash integrity check when an agent block
   // supplies the same script key, defeating the security intent.
   const mergedScripts: NonNullable<AccessPolicyConfig["scripts"]> = { ...base.scripts };
   for (const [key, overrideEntry] of Object.entries(override.scripts ?? {})) {
-    const baseEntry = base.scripts?.[key];
+    if (key === "policy") {
+      // "policy" holds shared rules (Record<string, PermStr>) — merge as flat rules,
+      // override key wins. No sha256 preservation applies here.
+      mergedScripts["policy"] = { ...base.scripts?.["policy"], ...overrideEntry } as Record<
+        string,
+        string
+      >;
+      continue;
+    }
+    const baseEntry = base.scripts?.[key] as
+      | import("../config/types.tools.js").ScriptPolicyEntry
+      | undefined;
+    const overrideScriptEntry =
+      overrideEntry as import("../config/types.tools.js").ScriptPolicyEntry;
     if (!baseEntry) {
-      mergedScripts[key] = overrideEntry;
+      mergedScripts[key] = overrideScriptEntry;
       continue;
     }
     mergedScripts[key] = {
       // sha256: base always wins — cannot be removed or replaced by an agent override.
       ...(baseEntry.sha256 !== undefined ? { sha256: baseEntry.sha256 } : {}),
-      // rules: shallow-merge, override key wins on collision.
-      ...(Object.keys({ ...baseEntry.rules, ...overrideEntry.rules }).length > 0
-        ? { rules: { ...baseEntry.rules, ...overrideEntry.rules } }
+      // policy: shallow-merge, override key wins on collision.
+      ...(Object.keys({ ...baseEntry.policy, ...overrideScriptEntry.policy }).length > 0
+        ? { policy: { ...baseEntry.policy, ...overrideScriptEntry.policy } }
         : {}),
     };
   }
   const scripts = Object.keys(mergedScripts).length > 0 ? mergedScripts : undefined;
   const result: AccessPolicyConfig = {};
   if (Object.keys(rules).length > 0) {
-    result.rules = rules;
+    result.policy = rules;
   }
   if (scripts) {
     result.scripts = scripts;
@@ -86,17 +100,10 @@ function validateAccessPolicyFileStructure(filePath: string, parsed: unknown): s
   const errors: string[] = [];
   const p = parsed as Record<string, unknown>;
 
-  if (
-    p["base"] !== undefined &&
-    (typeof p["base"] !== "object" || p["base"] === null || Array.isArray(p["base"]))
-  ) {
-    errors.push(`${filePath}: "base" must be an object`);
-  }
   // Removed fields: "deny" and "default" were dropped in favour of "---" rules.
   // A user who configures these fields would receive no protection because the
   // fields are silently discarded. Reject them explicitly so the file fails-closed.
   const REMOVED_KEYS = ["deny", "default"] as const;
-  const KNOWN_CONFIG_KEYS = new Set(["rules", "scripts"]);
 
   function checkRemovedKeys(block: Record<string, unknown>, context: string): void {
     for (const key of REMOVED_KEYS) {
@@ -104,15 +111,6 @@ function validateAccessPolicyFileStructure(filePath: string, parsed: unknown): s
         errors.push(
           `${filePath}: ${context} "${key}" is no longer supported — use "---" rules instead (e.g. "~/.ssh/**": "---"). Failing closed until removed.`,
         );
-      }
-    }
-    for (const key of Object.keys(block)) {
-      if (!KNOWN_CONFIG_KEYS.has(key)) {
-        // Only warn for keys that look like removed/misplaced fields, not arbitrary agent data.
-        if (REMOVED_KEYS.includes(key as (typeof REMOVED_KEYS)[number])) {
-          continue;
-        } // already reported above
-        // Unknown keys that are not known config keys — warn but don't fail-close for forward compat.
       }
     }
   }
@@ -131,16 +129,12 @@ function validateAccessPolicyFileStructure(filePath: string, parsed: unknown): s
     }
   }
 
-  if (typeof p["base"] === "object" && p["base"] !== null && !Array.isArray(p["base"])) {
-    checkRemovedKeys(p["base"] as Record<string, unknown>, `base`);
-  }
-
-  // Catch common mistake: AccessPolicyConfig fields accidentally at top level
-  // (e.g. user puts "rules" or "scripts" directly instead of under "base").
-  for (const key of ["rules", "scripts"] as const) {
+  // Catch common mistakes: keys placed at the top level that belong inside agents["*"].
+  // "base" and "policy" were old top-level fields; "rules"/"scripts" are often misplaced here too.
+  for (const key of ["base", "policy", "rules", "scripts"] as const) {
     if (p[key] !== undefined) {
       errors.push(
-        `${filePath}: unexpected top-level key "${key}" — did you mean to put it under "base"?`,
+        `${filePath}: unexpected top-level key "${key}" — did you mean to put it under agents["*"]?`,
       );
     }
   }
@@ -260,7 +254,7 @@ export function _resetNotFoundWarnedForTest(): void {
 /**
  * Resolve the effective AccessPolicyConfig for a given agent.
  *
- * Merge order: base → agents["*"] → agents[agentId]
+ * Merge order: agents["*"] → agents[agentId]
  *
  * Returns undefined when no sidecar file exists (no-op — all operations pass through).
  * Logs errors on invalid perm strings but does not throw — bad strings fall back to
@@ -282,11 +276,8 @@ export function resolveAccessPolicyForAgent(agentId?: string): AccessPolicyConfi
     return undefined;
   }
 
-  let merged = mergeAccessPolicy(undefined, file.base);
-  const wildcard = file.agents?.["*"];
-  if (wildcard) {
-    merged = mergeAccessPolicy(merged, wildcard);
-  }
+  // agents["*"] is the base — applies to every agent before the named block.
+  let merged = mergeAccessPolicy(undefined, file.agents?.["*"]);
   if (agentId && agentId !== "*") {
     const agentBlock = file.agents?.[agentId];
     if (agentBlock) {
