@@ -37,6 +37,7 @@ const RESERVED_COMMANDS = new Set([
   "status",
   "whoami",
   "context",
+  "btw",
   // Session management
   "stop",
   "restart",
