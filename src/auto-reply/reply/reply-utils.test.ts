@@ -116,13 +116,26 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).not.toContain("NO_REPLY");
   });
 
-  it("strips NO_REPLY appended after substantive text (#30916)", () => {
-    const result = normalizeReplyPayload({
-      text: "File's there. Not urgent.\n\nNO_REPLY",
-    });
-    expect(result).not.toBeNull();
-    expect(result!.text).toContain("File's there");
-    expect(result!.text).not.toContain("NO_REPLY");
+  it("suppresses entire message when NO_REPLY is on its own line (#42472)", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      { text: "File's there. Not urgent.\n\nNO_REPLY" },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
+
+  it("suppresses heartbeat narration followed by newline NO_REPLY (#42472)", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      {
+        text: "All tasks completed:\n• infra: 0 alerts\n• gmail: 0 new\nNO_REPLY",
+      },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
   });
 
   it("keeps NO_REPLY when used as leading substantive text", () => {

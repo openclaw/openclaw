@@ -3,6 +3,7 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   HEARTBEAT_TOKEN,
   isSilentReplyText,
+  isSilentTokenOnOwnLine,
   SILENT_REPLY_TOKEN,
   stripSilentToken,
 } from "../tokens.js";
@@ -50,14 +51,25 @@ export function normalizeReplyPayload(
     }
     text = "";
   }
-  // Strip NO_REPLY from mixed-content messages (e.g. "😄 NO_REPLY") so the
-  // token never leaks to end users.  If stripping leaves nothing, treat it as
-  // silent just like the exact-match path above.  (#30916, #30955)
+  // When NO_REPLY appears on its own line (preceded by \n), the model intended
+  // silence — the preceding text is internal narration, not user-facing content.
+  // Suppress the entire message.  (#42472, #30916)
+  //
+  // When NO_REPLY appears inline (e.g. "😄 NO_REPLY"), strip only the token so
+  // the non-token text can still be delivered.  (#30916, #30955)
   if (text && text.includes(silentToken) && !isSilentReplyText(text, silentToken)) {
-    text = stripSilentToken(text, silentToken);
-    if (!text && !hasMedia && !hasChannelData) {
-      opts.onSkip?.("silent");
-      return null;
+    if (isSilentTokenOnOwnLine(text, silentToken)) {
+      if (!hasMedia && !hasChannelData) {
+        opts.onSkip?.("silent");
+        return null;
+      }
+      text = "";
+    } else {
+      text = stripSilentToken(text, silentToken);
+      if (!text && !hasMedia && !hasChannelData) {
+        opts.onSkip?.("silent");
+        return null;
+      }
     }
   }
   if (text && !trimmed) {

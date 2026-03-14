@@ -49,6 +49,21 @@ export function stripSilentToken(text: string, token: string = SILENT_REPLY_TOKE
   return text.replace(getSilentTrailingRegex(token), "").trim();
 }
 
+/**
+ * Check whether the silent token appears on its own line at the end of the text.
+ * When the model outputs reasoning/narration followed by `\nNO_REPLY`, the entire
+ * response should be treated as silent — the preceding text is internal narration,
+ * not user-facing content.  Inline occurrences like `"😄 NO_REPLY"` are left to
+ * {@link stripSilentToken} so the non-token text can still be delivered.
+ */
+export function isSilentTokenOnOwnLine(text: string, token: string = SILENT_REPLY_TOKEN): boolean {
+  if (!text) {
+    return false;
+  }
+  const escaped = escapeRegExp(token);
+  return new RegExp(`(\\n|^)\\s*${escaped}\\s*$`).test(text);
+}
+
 export function isSilentReplyPrefixText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,

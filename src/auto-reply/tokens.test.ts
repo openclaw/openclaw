@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { isSilentReplyPrefixText, isSilentReplyText, stripSilentToken } from "./tokens.js";
+import {
+  isSilentReplyPrefixText,
+  isSilentReplyText,
+  isSilentTokenOnOwnLine,
+  stripSilentToken,
+} from "./tokens.js";
 
 describe("isSilentReplyText", () => {
   it("returns true for exact token", () => {
@@ -70,6 +75,42 @@ describe("stripSilentToken", () => {
 
   it("works with custom token", () => {
     expect(stripSilentToken("done HEARTBEAT_OK", "HEARTBEAT_OK")).toBe("done");
+  });
+});
+
+describe("isSilentTokenOnOwnLine", () => {
+  it("matches token on its own line after text (#42472)", () => {
+    expect(isSilentTokenOnOwnLine("Checked inbox.\n\nNO_REPLY")).toBe(true);
+    expect(isSilentTokenOnOwnLine("All done.\nNO_REPLY")).toBe(true);
+    expect(isSilentTokenOnOwnLine("tasks:\n• email: ok\n• wa: ok\nNO_REPLY")).toBe(true);
+  });
+
+  it("matches token with leading whitespace on its line", () => {
+    expect(isSilentTokenOnOwnLine("Some text.\n  NO_REPLY")).toBe(true);
+    expect(isSilentTokenOnOwnLine("Some text.\n  NO_REPLY  ")).toBe(true);
+  });
+
+  it("matches standalone token (no preceding text)", () => {
+    expect(isSilentTokenOnOwnLine("NO_REPLY")).toBe(true);
+  });
+
+  it("does not match inline token (same line as content)", () => {
+    expect(isSilentTokenOnOwnLine("😄 NO_REPLY")).toBe(false);
+    expect(isSilentTokenOnOwnLine("ok NO_REPLY")).toBe(false);
+  });
+
+  it("does not match token in the middle of text", () => {
+    expect(isSilentTokenOnOwnLine("NO_REPLY but here is more")).toBe(false);
+    expect(isSilentTokenOnOwnLine("Please NO_REPLY to this")).toBe(false);
+  });
+
+  it("returns false for empty/undefined input", () => {
+    expect(isSilentTokenOnOwnLine("")).toBe(false);
+  });
+
+  it("works with custom token", () => {
+    expect(isSilentTokenOnOwnLine("done\nHEARTBEAT_OK", "HEARTBEAT_OK")).toBe(true);
+    expect(isSilentTokenOnOwnLine("done HEARTBEAT_OK", "HEARTBEAT_OK")).toBe(false);
   });
 });
 
