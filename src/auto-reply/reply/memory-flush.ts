@@ -170,7 +170,11 @@ export function resolveMemoryFlushContextWindowTokens(params: {
 export function shouldRunMemoryFlush(params: {
   entry?: Pick<
     SessionEntry,
-    "totalTokens" | "totalTokensFresh" | "compactionCount" | "memoryFlushCompactionCount"
+    | "totalTokens"
+    | "totalTokensFresh"
+    | "outputTokens"
+    | "compactionCount"
+    | "memoryFlushCompactionCount"
   >;
   /**
    * Optional token count override for flush gating. When provided, this value is
@@ -192,7 +196,14 @@ export function shouldRunMemoryFlush(params: {
       ? Math.floor(override)
       : undefined;
 
-  const totalTokens = overrideTokens ?? resolveFreshSessionTotalTokens(params.entry);
+  const baseTokens = overrideTokens ?? resolveFreshSessionTotalTokens(params.entry);
+  const outputTokens =
+    overrideTokens != null
+      ? 0
+      : typeof params.entry?.outputTokens === "number"
+        ? params.entry.outputTokens
+        : 0;
+  const totalTokens = baseTokens != null ? baseTokens + outputTokens : undefined;
   if (!totalTokens || totalTokens <= 0) {
     return false;
   }
