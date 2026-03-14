@@ -65,7 +65,7 @@ class WizardSessionPrompter implements WizardPrompter {
     });
   }
 
-  async note(message: string, title?: string): Promise<void> {
+  async note(message: string, title?: string, _options?: { plain?: boolean }): Promise<void> {
     await this.prompt({ type: "note", title, message, executor: "client" });
   }
 

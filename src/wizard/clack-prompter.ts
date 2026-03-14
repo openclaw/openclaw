@@ -13,7 +13,7 @@ import {
 } from "@clack/prompts";
 import { createCliProgress } from "../cli/progress.js";
 import { stripAnsi } from "../terminal/ansi.js";
-import { note as emitNote } from "../terminal/note.js";
+import { isNoteSuppressed, note as emitNote } from "../terminal/note.js";
 import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 import { theme } from "../terminal/theme.js";
 import type { WizardProgress, WizardPrompter } from "./prompts.js";
@@ -59,8 +59,18 @@ export function createClackPrompter(): WizardPrompter {
     outro: async (message) => {
       outro(stylePromptTitle(message) ?? message);
     },
-    note: async (message, title) => {
-      emitNote(message, title);
+    note: async (message, title, options) => {
+      if (options?.plain) {
+        if (isNoteSuppressed()) {
+          return;
+        }
+        if (title) {
+          console.log(`\n${title}:`);
+        }
+        console.log(message);
+      } else {
+        emitNote(message, title);
+      }
     },
     select: async (params) =>
       guardCancel(

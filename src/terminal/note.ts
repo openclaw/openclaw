@@ -17,6 +17,10 @@ function isSuppressedByEnv(value: string | undefined): boolean {
   return normalized !== "0" && normalized !== "false" && normalized !== "off";
 }
 
+export function isNoteSuppressed(): boolean {
+  return isSuppressedByEnv(process.env.OPENCLAW_SUPPRESS_NOTES);
+}
+
 function splitLongWord(word: string, maxLen: number): string[] {
   if (maxLen <= 0) {
     return [word];
@@ -158,7 +162,7 @@ export function wrapNoteMessage(
 }
 
 export function note(message: string, title?: string) {
-  if (isSuppressedByEnv(process.env.OPENCLAW_SUPPRESS_NOTES)) {
+  if (isNoteSuppressed()) {
     return;
   }
   clackNote(wrapNoteMessage(message), stylePromptTitle(title));
