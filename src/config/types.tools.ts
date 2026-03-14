@@ -151,7 +151,7 @@ export type ToolLoopDetectionDetectorConfig = {
 };
 
 export type ToolLoopDetectionConfig = {
-  /** Enable tool-loop protection (default: false). */
+  /** Enable tool-loop protection (default: true). */
   enabled?: boolean;
   /** Maximum tool call history entries retained for loop detection (default: 30). */
   historySize?: number;
