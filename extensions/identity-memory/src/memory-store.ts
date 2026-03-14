@@ -8,6 +8,14 @@ import { readFile, writeFile, appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { EpisodicEntry, UserProfile } from "./types.js";
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function assertValidIdentityId(identityId: string): void {
+  if (!UUID_RE.test(identityId)) {
+    throw new Error("Invalid identityId format");
+  }
+}
+
 export class MemoryStore {
   private profiles = new Map<string, UserProfile>();
   private dataDir: string;
@@ -56,6 +64,7 @@ export class MemoryStore {
     insights?: string[];
     platform?: string;
   }): Promise<EpisodicEntry> {
+    assertValidIdentityId(params.identityId);
     const entry: EpisodicEntry = {
       id: randomUUID(),
       identityId: params.identityId,
@@ -72,6 +81,7 @@ export class MemoryStore {
 
   /** Read all episodic entries for an identity. */
   async readEpisodic(identityId: string): Promise<EpisodicEntry[]> {
+    assertValidIdentityId(identityId);
     try {
       const raw = await readFile(join(this.dataDir, `episodic-${identityId}.jsonl`), "utf-8");
       return raw
@@ -118,6 +128,7 @@ export class MemoryStore {
 
   /** Compress old episodic entries: keep only the most recent N, return removed entries. */
   async compressEpisodic(identityId: string, keepCount: number): Promise<EpisodicEntry[]> {
+    assertValidIdentityId(identityId);
     const entries = await this.readEpisodic(identityId);
     if (entries.length <= keepCount) {
       return [];

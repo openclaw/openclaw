@@ -169,7 +169,9 @@ export class IdentityStore {
       this.verifications.delete(code);
       return { ok: false, error: "expired" };
     }
-    if (entry.attempts >= maxAttempts) {
+    // Increment attempt counter on every verification attempt.
+    entry.attempts++;
+    if (entry.attempts > maxAttempts) {
       this.verifications.delete(code);
       return { ok: false, error: "too_many_attempts" };
     }
@@ -184,14 +186,6 @@ export class IdentityStore {
       return { ok: false, error: "identity_not_found" };
     }
     return { ok: true, identityId: entry.identityId };
-  }
-
-  /** Increment attempt counter for a verification code. */
-  recordAttempt(code: string): void {
-    const entry = this.verifications.get(code);
-    if (entry) {
-      entry.attempts++;
-    }
   }
 
   /** Clean up expired verification codes. */

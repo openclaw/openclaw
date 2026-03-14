@@ -1,0 +1,16 @@
+{
+  "id": "identity-memory",
+  "kind": "memory",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "maxEpisodicEntries": { "type": "number" },
+      "verificationTtlSec": { "type": "number" },
+      "maxVerificationAttempts": { "type": "number" },
+      "injectMemoryContext": { "type": "boolean" },
+      "maxContextLength": { "type": "number" }
+    }
+  }
+}

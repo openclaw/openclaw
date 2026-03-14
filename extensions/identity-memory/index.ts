@@ -80,8 +80,8 @@ const configSchema = {
   },
 };
 
-// Sender identity resolved during message_received, keyed by "channelId:senderId".
-const resolvedIdentities = new Map<string, string>();
+/** LRU cap for the resolved identities cache. */
+const MAX_RESOLVED_IDENTITIES = 10_000;
 
 const identityMemoryPlugin = {
   id: "identity-memory",
@@ -95,6 +95,16 @@ const identityMemoryPlugin = {
       api.logger.info("[identity-memory] Plugin disabled via config");
       return;
     }
+
+    // Scoped to this plugin instance — not module-level — so re-registration
+    // starts fresh and the map is eligible for GC when the plugin is unloaded.
+    // Key: "channelId:senderId" → identityId  (for /identity command)
+    const resolvedIdentities = new Map<string, string>();
+    // Key: channelId → identityId  (most recent sender; bridge from
+    // message_received to agent hooks that lack a senderId field)
+    const pendingChannelIdentity = new Map<string, string>();
+    // Key: sessionKey → identityId  (set in before_prompt_build, read in agent_end)
+    const sessionIdentities = new Map<string, string>();
 
     const stateDir = api.resolvePath("~/.openclaw/identity-memory");
     const identityStore = new IdentityStore(stateDir);
@@ -153,7 +163,20 @@ const identityMemoryPlugin = {
           senderId,
           event.metadata?.senderName as string | undefined,
         );
-        resolvedIdentities.set(`${ctx.channelId}:${senderId}`, identityId);
+        const key = `${ctx.channelId}:${senderId}`;
+        // Store as "pending" so the next before_prompt_build on this channel
+        // can pick up the sender identity (the SDK's agent context lacks senderId).
+        pendingChannelIdentity.set(ctx.channelId, identityId);
+        // LRU eviction: delete-then-set keeps the newest entries at the end.
+        resolvedIdentities.delete(key);
+        resolvedIdentities.set(key, identityId);
+        if (resolvedIdentities.size > MAX_RESOLVED_IDENTITIES) {
+          // Evict the oldest entry (first key in insertion order).
+          const oldest = resolvedIdentities.keys().next().value;
+          if (oldest !== undefined) {
+            resolvedIdentities.delete(oldest);
+          }
+        }
       },
       { priority: 100 }, // Run early so identity is available to other hooks.
     );
@@ -165,9 +188,27 @@ const identityMemoryPlugin = {
       api.on(
         "before_prompt_build",
         async (event: PluginHookBeforePromptBuildEvent, ctx: PluginHookAgentContext) => {
-          const identityId = resolveIdentityFromCtx(ctx.channelId, event);
+          // Resolve identity from the pending map (set by message_received).
+          // This is the bridge: message_received knows the sender, agent hooks don't.
+          const identityId = ctx.channelId
+            ? pendingChannelIdentity.get(ctx.channelId)
+            : undefined;
           if (!identityId) {
             return;
+          }
+          // Consume the pending entry and promote to session-scoped so
+          // agent_end can retrieve it by sessionKey.
+          if (ctx.channelId) {
+            pendingChannelIdentity.delete(ctx.channelId);
+          }
+          if (ctx.sessionKey) {
+            sessionIdentities.set(ctx.sessionKey, identityId);
+            if (sessionIdentities.size > MAX_RESOLVED_IDENTITIES) {
+              const oldest = sessionIdentities.keys().next().value;
+              if (oldest !== undefined) {
+                sessionIdentities.delete(oldest);
+              }
+            }
           }
           const memCtx = await buildMemoryContext({
             identityStore,
@@ -187,7 +228,12 @@ const identityMemoryPlugin = {
     // Hook: agent_end — record interaction, update profile.
     // =========================================================================
     api.on("agent_end", async (_event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext) => {
-      const identityId = resolveIdentityFromAgentCtx(ctx);
+      // Look up identity stored during before_prompt_build for this session.
+      // The SDK's PluginHookAgentContext does not carry senderId, so we rely
+      // on the sessionKey bridge set up during the prompt-build phase.
+      const identityId = ctx.sessionKey
+        ? sessionIdentities.get(ctx.sessionKey)
+        : undefined;
       if (!identityId) {
         return;
       }
@@ -479,41 +525,5 @@ const identityMemoryPlugin = {
     });
   },
 };
-
-/** Resolve identity ID from hook context (channel + sender). */
-function resolveIdentityFromCtx(
-  channelId: string | undefined,
-  event: { from?: string; prompt?: string },
-): string | undefined {
-  if (!channelId) {
-    return undefined;
-  }
-  // Try "from" field from message_received.
-  if (event.from) {
-    return resolvedIdentities.get(`${channelId}:${event.from}`);
-  }
-  // Fall back to any recently resolved identity for this channel.
-  for (const [key, id] of resolvedIdentities) {
-    if (key.startsWith(`${channelId}:`)) {
-      return id;
-    }
-  }
-  return undefined;
-}
-
-/** Resolve identity from agent context. */
-function resolveIdentityFromAgentCtx(ctx: {
-  channelId?: string;
-  sessionKey?: string;
-}): string | undefined {
-  if (ctx.channelId) {
-    for (const [key, id] of resolvedIdentities) {
-      if (key.startsWith(`${ctx.channelId}:`)) {
-        return id;
-      }
-    }
-  }
-  return undefined;
-}
 
 export default identityMemoryPlugin;
