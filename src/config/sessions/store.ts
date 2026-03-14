@@ -862,14 +862,14 @@ export async function updateLastRoute(params: {
         })
       : null;
     const basePatch: Partial<SessionEntry> = {
-      updatedAt: Math.max(existing?.updatedAt ?? 0, now),
+      updatedAt: existing?.updatedAt ?? now,
       deliveryContext: normalized.deliveryContext,
       lastChannel: normalized.lastChannel,
       lastTo: normalized.lastTo,
       lastAccountId: normalized.lastAccountId,
       lastThreadId: normalized.lastThreadId,
     };
-    const next = mergeSessionEntry(
+    const next = mergeSessionEntryPreserveActivity(
       existing,
       metaPatch ? { ...basePatch, ...metaPatch } : basePatch,
     );
