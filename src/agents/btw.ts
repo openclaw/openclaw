@@ -17,6 +17,7 @@ import {
 } from "../config/sessions.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
+import { FailoverError } from "./failover-error.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./pi-embedded-block-chunker.js";
@@ -150,7 +151,11 @@ async function resolveRuntimeModel(params: {
     cfg: params.cfg,
   });
   if (!model) {
-    throw new Error(`Unknown model: ${params.provider}/${params.model}`);
+    throw new FailoverError(`Unknown model: ${params.provider}/${params.model}`, {
+      reason: "model_not_found",
+      provider: params.provider,
+      model: params.model,
+    });
   }
 
   const authProfileId = await resolveSessionAuthProfileOverride({
