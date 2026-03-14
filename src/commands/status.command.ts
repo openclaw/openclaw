@@ -196,9 +196,38 @@ export async function statusCommand(
             urlSource: gatewayConnection.urlSource,
             misconfigured: remoteUrlMissing,
             reachable: gatewayReachable,
+            rpcOk: gatewayProbe?.rpcOk ?? null,
+            scopeLimited: gatewayProbe?.scopeLimited ?? null,
             connectLatencyMs: gatewayProbe?.connectLatencyMs ?? null,
             self: gatewaySelf,
-            error: gatewayProbe?.error ?? null,
+            error:
+              [
+                gatewayProbe?.error,
+                gatewayProbeAuthWarning,
+                (() => {
+                  const mode = cfg.gateway?.auth?.mode;
+                  if (mode === "token" && !gatewayProbeAuth?.token) {
+                    return "gateway.auth.token SecretRef is unresolved in this command path; probing without configured auth credentials.";
+                  }
+                  if (mode === "password" && !gatewayProbeAuth?.password) {
+                    return "gateway.auth.password SecretRef is unresolved in this command path; probing without configured auth credentials.";
+                  }
+                  // Heuristic fallback for best-effort config loads where auth mode
+                  // information may be missing from the resolved snapshot.
+                  if (
+                    !gatewayProbeAuth?.token &&
+                    !gatewayProbeAuth?.password &&
+                    gatewayProbe?.ok === false &&
+                    typeof gatewayProbe?.error === "string" &&
+                    /timeout|connect failed/i.test(gatewayProbe.error)
+                  ) {
+                    return "gateway.auth.token SecretRef is unresolved in this command path; probing without configured auth credentials.";
+                  }
+                  return null;
+                })(),
+              ]
+                .filter((v) => typeof v === "string" && v.trim())
+                .join("; ") || null,
             authWarning: gatewayProbeAuthWarning ?? null,
           },
           gatewayService: daemon,
@@ -260,7 +289,14 @@ export async function statusCommand(
     const reach = remoteUrlMissing
       ? warn("misconfigured (remote.url missing)")
       : gatewayReachable
-        ? ok(`reachable ${formatDuration(gatewayProbe?.connectLatencyMs)}`)
+        ? (() => {
+            const latency = formatDuration(gatewayProbe?.connectLatencyMs);
+            if (gatewayProbe && !gatewayProbe.rpcOk) {
+              const reason = gatewayProbe.error ? ` (${gatewayProbe.error})` : "";
+              return ok(`reachable ${latency}`) + muted(` · scope-limited${reason}`);
+            }
+            return ok(`reachable ${latency}`);
+          })()
         : warn(gatewayProbe?.error ? `unreachable (${gatewayProbe.error})` : "unreachable");
     const auth =
       gatewayReachable && !remoteUrlMissing

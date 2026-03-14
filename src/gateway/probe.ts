@@ -18,9 +18,15 @@ export type GatewayProbeClose = {
 };
 
 export type GatewayProbeResult = {
+  /** WebSocket connect/handshake succeeded. */
   ok: boolean;
+  /** All probe RPC calls succeeded (health/status/presence/config.get). */
+  rpcOk: boolean;
+  /** True when RPC failed due to missing scopes (cosmetic reachability issue). */
+  scopeLimited: boolean;
   url: string;
   connectLatencyMs: number | null;
+  /** Non-null when RPC failed (or connect failed). */
   error: string | null;
   close: GatewayProbeClose | null;
   health: unknown;
@@ -79,9 +85,12 @@ export async function probeGateway(opts: {
       },
       onHelloOk: async () => {
         connectLatencyMs = Date.now() - startedAt;
+
         if (opts.includeDetails === false) {
           settle({
             ok: true,
+            rpcOk: true,
+            scopeLimited: false,
             connectLatencyMs,
             error: null,
             close,
@@ -92,35 +101,38 @@ export async function probeGateway(opts: {
           });
           return;
         }
-        try {
-          const [health, status, presence, configSnapshot] = await Promise.all([
-            client.request("health"),
-            client.request("status"),
-            client.request("system-presence"),
-            client.request("config.get", {}),
-          ]);
-          settle({
-            ok: true,
-            connectLatencyMs,
-            error: null,
-            close,
-            health,
-            status,
-            presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
-            configSnapshot,
-          });
-        } catch (err) {
-          settle({
-            ok: false,
-            connectLatencyMs,
-            error: formatErrorMessage(err),
-            close,
-            health: null,
-            status: null,
-            presence: null,
-            configSnapshot: null,
-          });
-        }
+
+        const results = await Promise.allSettled([
+          client.request("health"),
+          client.request("status"),
+          client.request("system-presence"),
+          client.request("config.get", {}),
+        ]);
+
+        const [healthRes, statusRes, presenceRes, configRes] = results;
+
+        const rejected = results.find((r) => r.status === "rejected");
+        const errorText = rejected ? formatErrorMessage(rejected.reason) : null;
+        const rpcOk = !rejected;
+        const scopeLimited = Boolean(errorText && /missing scope:/i.test(errorText));
+
+        const health = healthRes?.status === "fulfilled" ? healthRes.value : null;
+        const status = statusRes?.status === "fulfilled" ? statusRes.value : null;
+        const presenceRaw = presenceRes?.status === "fulfilled" ? presenceRes.value : null;
+        const configSnapshot = configRes?.status === "fulfilled" ? configRes.value : null;
+
+        settle({
+          ok: true,
+          rpcOk,
+          scopeLimited,
+          connectLatencyMs,
+          error: errorText,
+          close,
+          health,
+          status,
+          presence: Array.isArray(presenceRaw) ? (presenceRaw as SystemPresence[]) : null,
+          configSnapshot,
+        });
       },
     });
 
@@ -128,6 +140,8 @@ export async function probeGateway(opts: {
       () => {
         settle({
           ok: false,
+          rpcOk: false,
+          scopeLimited: false,
           connectLatencyMs,
           error: connectError ? `connect failed: ${connectError}` : "timeout",
           close,
