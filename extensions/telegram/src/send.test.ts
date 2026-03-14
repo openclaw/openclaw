@@ -775,11 +775,11 @@ describe("sendMessageTelegram", () => {
     }
   });
 
-  it("retries on transient errors with retry_after", async () => {
+  it("retries send on pre-connect network errors", async () => {
     vi.useFakeTimers();
     const chatId = "123";
-    const err = Object.assign(new Error("429"), {
-      parameters: { retry_after: 0.5 },
+    const err = Object.assign(new Error("ECONNREFUSED"), {
+      code: "ECONNREFUSED",
     });
     const sendMessage = vi
       .fn()
@@ -801,7 +801,7 @@ describe("sendMessageTelegram", () => {
 
     await vi.runAllTimersAsync();
     await expect(promise).resolves.toEqual({ messageId: "1", chatId });
-    expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(500);
+    expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(0);
     setTimeoutSpy.mockRestore();
     vi.useRealTimers();
   });
@@ -823,7 +823,7 @@ describe("sendMessageTelegram", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("retries when grammY network envelope message includes failed-after wording", async () => {
+  it("does not retry grammY failed-after envelope errors for non-idempotent sends", async () => {
     const chatId = "123";
     const sendMessage = vi
       .fn()
@@ -838,14 +838,15 @@ describe("sendMessageTelegram", () => {
       sendMessage: typeof sendMessage;
     };
 
-    const result = await sendMessageTelegram(chatId, "hi", {
-      token: "tok",
-      api,
-      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
-    });
+    await expect(
+      sendMessageTelegram(chatId, "hi", {
+        token: "tok",
+        api,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      }),
+    ).rejects.toThrow(/failed after 1 attempts/i);
 
-    expect(sendMessage).toHaveBeenCalledTimes(2);
-    expect(result).toEqual({ messageId: "7", chatId });
+    expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it("sends GIF media as animation", async () => {
