@@ -2,7 +2,7 @@
 
 > **Repo:** `iris-2.0` (branch local de trabalho sobre `main`)
 > **Upstream:** `upstream/main` (openclaw/openclaw.git)
-> **Última atualização:** 26/02/2026
+> **Última atualização:** 14/03/2026
 
 ---
 
@@ -37,7 +37,9 @@ A Iris roda em cima do OpenClaw upstream com duas camadas de customização:
 | `src/infra/outbound/deliver.ts`                 | normalizeBrazilianMobile (+55 DDD9) nos destinatários        | ⏳ Pendente |
 | `src/utils.ts`                                  | Função normalizeBrazilianMobile                              | ⏳ Pendente |
 | `src/utils.test.ts`                             | Testes do normalizeBrazilianMobile                           | ⏳ Pendente |
-| `src/web/auto-reply/monitor/process-message.ts` | Smart-router outbound + message_transcribed dispatch         | ⏳ Pendente |
+| `extensions/whatsapp/src/auto-reply/monitor/process-message.ts` | Smart-router outbound + message_transcribed dispatch | ⏳ Pendente |
+| `extensions/whatsapp/src/active-listener.ts`    | globalThis singleton fix (rolldown chunk splitting)          | ⏳ Pendente |
+| `src/cron/isolated-agent/delivery-dispatch.ts`  | replyMode tool-only no cron delivery dispatch                | ⏳ Pendente |
 
 ### 🔒 Patches Permanentes (upstream removeu — Iris mantém em produção)
 
@@ -80,9 +82,20 @@ A Iris roda em cima do OpenClaw upstream com duas camadas de customização:
 
 | Data       | Upstream HEAD | Commits incorporados            | Conflitos manuais | Responsável |
 | ---------- | ------------- | ------------------------------- | ----------------- | ----------- |
+| 14/03/2026 | `c08317203`   | 740 commits (desde `3cf06f793`) | 2 arquivos        | Iris 🌈     |
 | 13/03/2026 | `3cf06f793`   | 379 commits (desde `0ff184397`) | 5 arquivos        | Iris 🌈     |
 | 06/03/2026 | `d6d21b3ab`   | 171 commits (desde `49acb07f9`) | 3 arquivos        | Iris 🌈     |
 | 26/02/2026 | `85b075d0c`   | 192 commits (desde `a898acbd5`) | 0 — auto-merge    | Iris 🌈     |
+
+**Notas do merge 14/03/2026:**
+
+- Merge-base corrigido com `git replace --graft` — squash commit do 13/03 tinha apenas 1 parent, causando 1.119 commits aparentes quando apenas 740 eram novos
+- `pnpm-lock.yaml`: aceito THEIRS (regenerado por `pnpm install`)
+- `ui/src/ui/app-render.ts`: aceito THEIRS (nova estrutura topnav-shell/sidebar-shell) + re-aplicado branding Iris ("IRIS" / "by QualiApps 🌈" / favicon.svg)
+- Upstream moveu `src/web/` para `extensions/whatsapp/src/` — patches Iris (smart-router outbound + globalThis singleton fix) auto-merged nos novos locais
+- PR #45613 (`feat(anthropic): migrate 1M context from beta to GA`) incorporado automaticamente via merge
+- Build: passou (`pnpm build` + `node scripts/ui.js build`) sem erros
+- Todas as features Iris verificadas intactas: replyMode tool-only, normalizeBrazilianMobile, senderMetadata, message_transcribed, branding, pattern-detector, message-logger, contact-manager
 
 **Notas do merge 13/03/2026:**
 
@@ -134,7 +147,7 @@ git fetch upstream
 git log main..upstream/main --oneline
 
 # Verificar se algum arquivo nosso foi tocado
-git diff main...upstream/main --stat -- src/cli/banner.ts src/cli/tagline.ts src/agents/pi-embedded-runner/ src/auto-reply/reply/ src/config/types.agent-defaults.ts src/config/zod-schema.agent-defaults.ts src/infra/outbound/deliver.ts src/plugins/hooks.ts src/plugins/types.ts src/utils.ts src/web/auto-reply/monitor/process-message.ts ui/
+git diff main...upstream/main --stat -- src/cli/banner.ts src/cli/tagline.ts src/agents/pi-embedded-runner/ src/auto-reply/reply/ src/config/types.agent-defaults.ts src/config/zod-schema.agent-defaults.ts src/infra/outbound/deliver.ts src/plugins/hooks.ts src/plugins/types.ts src/utils.ts src/cron/isolated-agent/delivery-dispatch.ts extensions/whatsapp/src/auto-reply/monitor/process-message.ts extensions/whatsapp/src/active-listener.ts ui/
 ```
 
 ### 3. Merge

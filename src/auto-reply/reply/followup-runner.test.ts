@@ -4,7 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
-import { createMockTypingController } from "./test-helpers.js";
+import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
 const routeReplyMock = vi.fn();
@@ -50,47 +50,12 @@ beforeEach(() => {
 });
 
 const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
-  ({
-    prompt: "hello",
-    summaryLine: "hello",
-    enqueuedAt: Date.now(),
-    originatingTo: "channel:C1",
-    run: {
-      sessionId: "session",
-      sessionKey: "main",
-      messageProvider,
-      agentAccountId: "primary",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      config: {},
-      skillsSnapshot: {},
-      provider: "anthropic",
-      model: "claude",
-      thinkLevel: "low",
-      verboseLevel: "off",
-      elevatedLevel: "off",
-      bashElevated: {
-        enabled: false,
-        allowed: false,
-        defaultLevel: "off",
-      },
-      timeoutMs: 1_000,
-      blockReplyBreak: "message_end",
-    },
-  }) as FollowupRun;
+  createMockFollowupRun({ run: { messageProvider } });
 
 function createQueuedRun(
   overrides: Partial<Omit<FollowupRun, "run">> & { run?: Partial<FollowupRun["run"]> } = {},
 ): FollowupRun {
-  const base = baseQueuedRun();
-  return {
-    ...base,
-    ...overrides,
-    run: {
-      ...base.run,
-      ...overrides.run,
-    },
-  };
+  return createMockFollowupRun(overrides);
 }
 
 function mockCompactionRun(params: {

@@ -2,7 +2,6 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
-import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
 import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import {
@@ -14,6 +13,7 @@ import {
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
+import { formatConnectError } from "./connect-error.ts";
 import { loadAgents } from "./controllers/agents.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
@@ -47,20 +47,6 @@ import type {
 
 function isGenericBrowserFetchFailure(message: string): boolean {
   return /^(?:typeerror:\s*)?(?:fetch failed|failed to fetch)$/i.test(message.trim());
-}
-
-function formatAuthCloseErrorMessage(code: string | null, fallback: string): string {
-  const resolvedCode = code ?? "";
-  if (resolvedCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH) {
-    return "unauthorized: gateway token mismatch (open dashboard URL with current token)";
-  }
-  if (resolvedCode === ConnectErrorDetailCodes.AUTH_RATE_LIMITED) {
-    return "unauthorized: too many failed authentication attempts (retry later)";
-  }
-  if (resolvedCode === ConnectErrorDetailCodes.AUTH_UNAUTHORIZED) {
-    return "unauthorized: authentication failed";
-  }
-  return fallback;
 }
 
 type GatewayHost = {
@@ -240,7 +226,11 @@ export function connectGateway(host: GatewayHost) {
         if (error?.message) {
           host.lastError =
             host.lastErrorCode && isGenericBrowserFetchFailure(error.message)
-              ? formatAuthCloseErrorMessage(host.lastErrorCode, error.message)
+              ? formatConnectError({
+                  message: error.message,
+                  details: error.details,
+                  code: error.code,
+                } as Parameters<typeof formatConnectError>[0])
               : error.message;
           return;
         }
@@ -339,17 +329,6 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       host as unknown as Parameters<typeof handleAgentEvent>[0],
       evt.payload as AgentEventPayload | undefined,
     );
-    // Reload history after each tool result so the persisted text + tool
-    // output replaces any truncated streaming fragments.
-    const agentPayload = evt.payload as AgentEventPayload | undefined;
-    const toolData = agentPayload?.data;
-    if (
-      agentPayload?.stream === "tool" &&
-      typeof toolData?.phase === "string" &&
-      toolData.phase === "result"
-    ) {
-      void loadChatHistory(host as unknown as OpenClawApp);
-    }
     return;
   }
 

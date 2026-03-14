@@ -244,8 +244,14 @@ export class GatewayBrowserClient {
 
     const scopes = ["operator.admin", "operator.approvals", "operator.pairing"];
     const role = "operator";
+    const explicitGatewayToken = this.opts.token?.trim() || undefined;
+    const explicitPassword = this.opts.password?.trim() || undefined;
     let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
-    let selectedAuth: SelectedConnectAuth = { canFallbackToShared: false };
+    let selectedAuth: SelectedConnectAuth = {
+      authToken: explicitGatewayToken,
+      authPassword: explicitPassword,
+      canFallbackToShared: false,
+    };
 
     if (isSecureContext) {
       deviceIdentity = await loadOrCreateDeviceIdentity();
@@ -257,7 +263,6 @@ export class GatewayBrowserClient {
         this.pendingDeviceTokenRetry = false;
       }
     }
-    const explicitGatewayToken = this.opts.token?.trim() || undefined;
     const authToken = selectedAuth.authToken;
     const deviceToken = selectedAuth.authDeviceToken ?? selectedAuth.resolvedDeviceToken;
     const auth =
