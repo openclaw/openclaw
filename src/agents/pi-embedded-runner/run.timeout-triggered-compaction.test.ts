@@ -1,5 +1,6 @@
 import "./run.overflow-compaction.mocks.shared.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { pickFallbackThinkingLevel } from "../pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "./run.js";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
 import {
@@ -17,6 +18,8 @@ import {
   overflowBaseRunParams,
 } from "./run.overflow-compaction.shared-test.js";
 
+const mockedPickFallbackThinkingLevel = vi.mocked(pickFallbackThinkingLevel);
+
 describe("timeout-triggered compaction", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -30,6 +33,7 @@ describe("timeout-triggered compaction", () => {
     mockedGlobalHookRunner.runBeforeAgentStart.mockReset();
     mockedGlobalHookRunner.runBeforeCompaction.mockReset();
     mockedGlobalHookRunner.runAfterCompaction.mockReset();
+    mockedPickFallbackThinkingLevel.mockReset();
     mockedContextEngine.info.ownsCompaction = false;
     mockedCompactDirect.mockResolvedValue({
       ok: false,
@@ -49,6 +53,7 @@ describe("timeout-triggered compaction", () => {
       truncatedCount: 0,
       reason: "no oversized tool results",
     });
+    mockedPickFallbackThinkingLevel.mockReturnValue(undefined);
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
 
@@ -166,6 +171,31 @@ describe("timeout-triggered compaction", () => {
     expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 
+  it("does not attempt compaction for low-context timeouts on later retries", async () => {
+    mockedPickFallbackThinkingLevel.mockReturnValueOnce("low");
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: new Error("unsupported reasoning mode"),
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          timedOut: true,
+          lastAssistant: {
+            usage: { total: 20000 },
+          } as never,
+        }),
+      );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("timed out");
+  });
+
   it("does not attempt compaction when aborted", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
@@ -218,5 +248,50 @@ describe("timeout-triggered compaction", () => {
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
+  });
+
+  it("fires compaction hooks during timeout recovery for ownsCompaction engines", async () => {
+    mockedContextEngine.info.ownsCompaction = true;
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName) => hookName === "before_compaction" || hookName === "after_compaction",
+    );
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          timedOut: true,
+          lastAssistant: {
+            usage: { total: 160000 },
+          } as never,
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedCompactDirect.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "engine-owned timeout compaction",
+        tokensAfter: 70,
+      },
+    });
+
+    await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(mockedGlobalHookRunner.runBeforeCompaction).toHaveBeenCalledWith(
+      { messageCount: -1, sessionFile: "/tmp/session.json" },
+      expect.objectContaining({
+        sessionKey: "test-key",
+      }),
+    );
+    expect(mockedGlobalHookRunner.runAfterCompaction).toHaveBeenCalledWith(
+      {
+        messageCount: -1,
+        compactedCount: -1,
+        tokenCount: 70,
+        sessionFile: "/tmp/session.json",
+      },
+      expect.objectContaining({
+        sessionKey: "test-key",
+      }),
+    );
   });
 });
