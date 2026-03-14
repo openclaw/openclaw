@@ -44,6 +44,7 @@ export const MatrixConfigSchema = z.object({
   deviceName: z.string().optional(),
   initialSyncLimit: z.number().optional(),
   encryption: z.boolean().optional(),
+  recoveryKey: buildSecretInputSchema().optional(),
   allowlistOnly: z.boolean().optional(),
   groupPolicy: GroupPolicySchema.optional(),
   replyToMode: z.enum(["off", "first", "all"]).optional(),
