@@ -193,6 +193,23 @@ async function buildDiscordSendError(
     );
   }
   if (code !== DISCORD_MISSING_PERMISSIONS) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg || msg === "Error") {
+      const detail = code !== undefined ? ` (discord code ${code})` : "";
+      const retryMeta =
+        err && typeof err === "object"
+          ? {
+              retryAfter: (err as { retryAfter?: number }).retryAfter,
+              status: (err as { status?: number }).status,
+              statusCode: (err as { statusCode?: number }).statusCode,
+            }
+          : {};
+      return new DiscordSendError(`discord send failed in channel ${ctx.channelId}${detail}`, {
+        channelId: ctx.channelId,
+        cause: err instanceof Error ? err : undefined,
+        ...retryMeta,
+      });
+    }
     return err;
   }
 
