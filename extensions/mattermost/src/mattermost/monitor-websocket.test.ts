@@ -11,10 +11,13 @@ class FakeWebSocket implements MattermostWebSocketLike {
   public readonly sent: string[] = [];
   public closeCalls = 0;
   public terminateCalls = 0;
+  public readyState = 1;
+  public readonly OPEN = 1;
   private openListeners: Array<() => void> = [];
   private messageListeners: Array<(data: Buffer) => void | Promise<void>> = [];
   private closeListeners: Array<(code: number, reason: Buffer) => void> = [];
   private errorListeners: Array<(err: unknown) => void> = [];
+  private pongListeners: Array<(...args: unknown[]) => void> = [];
 
   on(event: "open", listener: () => void): void;
   on(event: "message", listener: (data: Buffer) => void | Promise<void>): void;
@@ -46,6 +49,26 @@ class FakeWebSocket implements MattermostWebSocketLike {
 
   terminate(): void {
     this.terminateCalls++;
+  }
+
+  once(event: string, listener: (...args: unknown[]) => void): void {
+    if (event === "pong") {
+      this.pongListeners.push(listener);
+    }
+  }
+
+  removeListener(event: string, listener: (...args: unknown[]) => void): void {
+    if (event === "pong") {
+      this.pongListeners = this.pongListeners.filter((l) => l !== listener);
+    }
+  }
+
+  ping(): void {
+    // Simulate immediate pong
+    for (const listener of this.pongListeners) {
+      listener();
+    }
+    this.pongListeners = [];
   }
 
   emitOpen(): void {
