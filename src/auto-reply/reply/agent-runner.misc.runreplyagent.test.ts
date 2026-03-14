@@ -1565,6 +1565,7 @@ describe("runReplyAgent outbound transforms", () => {
     responseUsage?: "tokens" | "full";
     resolvedVerboseLevel?: "off" | "on";
     isNewSession?: boolean;
+    typingMode?: "instant" | "thinking";
     opts?: {
       onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
     };
@@ -1633,7 +1634,7 @@ describe("runReplyAgent outbound transforms", () => {
       blockStreamingEnabled: false,
       resolvedBlockStreamingBreak: "message_end",
       shouldInjectGroupIntro: false,
-      typingMode: "instant",
+      typingMode: params?.typingMode ?? "instant",
     });
   }
 
@@ -1683,6 +1684,25 @@ describe("runReplyAgent outbound transforms", () => {
     expect(payloads[1]?.text).toContain("OK");
     expect(payloads[1]?.text).toContain("Usage:");
     expect(payloads[1]?.text).not.toContain("USAGE:");
+  });
+
+  it("skips reasoning transforms when no preview sink is configured", async () => {
+    const runOutboundTransforms = vi.fn((text: string) => text.toUpperCase());
+    hookRunnerMocks.getGlobalHookRunner.mockReturnValue({
+      runOutboundTransforms,
+    });
+    runEmbeddedPiAgentMock.mockImplementationOnce(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        onReasoningStream?: (payload: { text?: string }) => Promise<void>;
+      };
+      await params.onReasoningStream?.({ text: "Reasoning:\nsecret step" });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    await createRun({ typingMode: "thinking" });
+
+    expect(runOutboundTransforms).toHaveBeenCalledTimes(1);
+    expect(runOutboundTransforms).toHaveBeenCalledWith("final");
   });
 });
 

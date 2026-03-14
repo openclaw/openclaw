@@ -370,11 +370,14 @@ export async function runAgentTurnWithFallback(params: {
                 params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
                   ? async (payload) => {
                       await params.typingSignals.signalReasoningDelta();
+                      if (!params.opts?.onReasoningStream) {
+                        return;
+                      }
                       const transformedText =
                         typeof payload.text === "string"
                           ? applyOutboundTransforms(payload.text)
                           : payload.text;
-                      await params.opts?.onReasoningStream?.({
+                      await params.opts.onReasoningStream({
                         text: transformedText,
                         mediaUrls: payload.mediaUrls,
                       });
