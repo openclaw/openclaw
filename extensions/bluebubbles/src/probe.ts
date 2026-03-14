@@ -1,5 +1,7 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk/bluebubbles";
-import { normalizeSecretInputString } from "./secret-input.js";
+import type { BaseProbeResult } from "openclaw/plugin-sdk";
+import { findRegisteredPluginHttpRoute } from "../../../src/gateway/server/plugins-http/route-match.js";
+import { getActivePluginRegistry } from "../../../src/plugins/runtime.js";
+import { normalizeWebhookPath } from "./monitor-shared.js";
 import { buildBlueBubblesApiUrl, blueBubblesFetchWithTimeout } from "./types.js";
 
 export type BlueBubblesProbe = BaseProbeResult & {
@@ -14,6 +16,17 @@ export type BlueBubblesServerInfo = {
   proxy_service?: string;
   detected_icloud?: string;
   computer_id?: string;
+};
+
+export type BlueBubblesAudit = {
+  ok: boolean;
+  webhookPath: string;
+  webhookRouteRegistered: boolean;
+  privateApi: boolean | null;
+  helperConnected: boolean | null;
+  serverVersion: string | null;
+  osVersion: string | null;
+  warnings: string[];
 };
 
 /** Cache server info by account ID to avoid repeated API calls.
@@ -36,8 +49,8 @@ export async function fetchBlueBubblesServerInfo(params: {
   accountId?: string;
   timeoutMs?: number;
 }): Promise<BlueBubblesServerInfo | null> {
-  const baseUrl = normalizeSecretInputString(params.baseUrl);
-  const password = normalizeSecretInputString(params.password);
+  const baseUrl = params.baseUrl?.trim();
+  const password = params.password?.trim();
   if (!baseUrl || !password) {
     return null;
   }
@@ -97,14 +110,6 @@ export function getCachedBlueBubblesPrivateApiStatus(accountId?: string): boolea
   return info.private_api;
 }
 
-export function isBlueBubblesPrivateApiStatusEnabled(status: boolean | null): boolean {
-  return status === true;
-}
-
-export function isBlueBubblesPrivateApiEnabled(accountId?: string): boolean {
-  return isBlueBubblesPrivateApiStatusEnabled(getCachedBlueBubblesPrivateApiStatus(accountId));
-}
-
 /**
  * Parse macOS version string (e.g., "15.0.1" or "26.0") into major version number.
  */
@@ -139,8 +144,8 @@ export async function probeBlueBubbles(params: {
   password?: string | null;
   timeoutMs?: number;
 }): Promise<BlueBubblesProbe> {
-  const baseUrl = normalizeSecretInputString(params.baseUrl);
-  const password = normalizeSecretInputString(params.password);
+  const baseUrl = params.baseUrl?.trim();
+  const password = params.password?.trim();
   if (!baseUrl) {
     return { ok: false, error: "serverUrl not configured" };
   }
@@ -161,4 +166,50 @@ export async function probeBlueBubbles(params: {
       error: err instanceof Error ? err.message : String(err),
     };
   }
+}
+
+export async function auditBlueBubbles(params: {
+  baseUrl?: string | null;
+  password?: string | null;
+  accountId?: string;
+  webhookPath?: string | null;
+  timeoutMs?: number;
+}): Promise<BlueBubblesAudit> {
+  const webhookPath = normalizeWebhookPath(params.webhookPath?.trim() || "/bluebubbles-webhook");
+  const registry = getActivePluginRegistry();
+  const route = registry ? findRegisteredPluginHttpRoute(registry, webhookPath) : undefined;
+  const webhookRouteRegistered =
+    route?.path === webhookPath &&
+    (route.pluginId === "bluebubbles" || route.source === "bluebubbles-webhook");
+  const serverInfo = await fetchBlueBubblesServerInfo({
+    baseUrl: params.baseUrl,
+    password: params.password,
+    accountId: params.accountId,
+    timeoutMs: params.timeoutMs,
+  }).catch(() => null);
+
+  const privateApi = typeof serverInfo?.private_api === "boolean" ? serverInfo.private_api : null;
+  const helperConnected =
+    typeof serverInfo?.helper_connected === "boolean" ? serverInfo.helper_connected : null;
+  const warnings: string[] = [];
+  if (!webhookRouteRegistered) {
+    warnings.push("webhook route not registered");
+  }
+  if (privateApi === false) {
+    warnings.push("private api disabled");
+  }
+  if (helperConnected === false) {
+    warnings.push("private api helper disconnected");
+  }
+
+  return {
+    ok: warnings.length === 0,
+    webhookPath,
+    webhookRouteRegistered,
+    privateApi,
+    helperConnected,
+    serverVersion: serverInfo?.server_version?.trim() || null,
+    osVersion: serverInfo?.os_version?.trim() || null,
+    warnings,
+  };
 }

@@ -44,13 +44,12 @@ Full troubleshooting: [/channels/whatsapp#troubleshooting-quick](/channels/whats
 
 ### Telegram failure signatures
 
-| Symptom                             | Fastest check                                   | Fix                                                                         |
-| ----------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------- |
-| `/start` but no usable reply flow   | `openclaw pairing list telegram`                | Approve pairing or change DM policy.                                        |
-| Bot online but group stays silent   | Verify mention requirement and bot privacy mode | Disable privacy mode for group visibility or mention bot.                   |
-| Send failures with network errors   | Inspect logs for Telegram API call failures     | Fix DNS/IPv6/proxy routing to `api.telegram.org`.                           |
-| `setMyCommands` rejected at startup | Inspect logs for `BOT_COMMANDS_TOO_MUCH`        | Reduce plugin/skill/custom Telegram commands or disable native menus.       |
-| Upgraded and allowlist blocks you   | `openclaw security audit` and config allowlists | Run `openclaw doctor --fix` or replace `@username` with numeric sender IDs. |
+| Symptom                           | Fastest check                                   | Fix                                                                         |
+| --------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------- |
+| `/start` but no usable reply flow | `openclaw pairing list telegram`                | Approve pairing or change DM policy.                                        |
+| Bot online but group stays silent | Verify mention requirement and bot privacy mode | Disable privacy mode for group visibility or mention bot.                   |
+| Send failures with network errors | Inspect logs for Telegram API call failures     | Fix DNS/IPv6/proxy routing to `api.telegram.org`.                           |
+| Upgraded and allowlist blocks you | `openclaw security audit` and config allowlists | Run `openclaw doctor --fix` or replace `@username` with numeric sender IDs. |
 
 Full troubleshooting: [/channels/telegram#troubleshooting](/channels/telegram#troubleshooting)
 
@@ -82,16 +81,25 @@ Full troubleshooting: [/channels/slack#troubleshooting](/channels/slack#troubles
 
 ### iMessage and BlueBubbles failure signatures
 
-| Symptom                          | Fastest check                                                           | Fix                                                   |
-| -------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------- |
-| No inbound events                | Verify webhook/server reachability and app permissions                  | Fix webhook URL or BlueBubbles server state.          |
-| Can send but no receive on macOS | Check macOS privacy permissions for Messages automation                 | Re-grant TCC permissions and restart channel process. |
-| DM sender blocked                | `openclaw pairing list imessage` or `openclaw pairing list bluebubbles` | Approve pairing or update allowlist.                  |
+| Symptom                           | Fastest check                                                               | Fix                                                                  |
+| --------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| No inbound events                 | Verify webhook/server reachability, route registration, and app permissions | Fix webhook URL, route binding, or BlueBubbles server state.         |
+| Probe says works but chat is dead | `openclaw channels status --probe` for `route`, `private-api`, `helper`     | Treat `ping` as partial health only; inspect webhook + helper state. |
+| Can send but no receive on macOS  | Check macOS privacy permissions for Messages automation                     | Re-grant TCC permissions and restart channel process.                |
+| DM sender blocked                 | `openclaw pairing list imessage` or `openclaw pairing list bluebubbles`     | Approve pairing or update allowlist.                                 |
 
 Full troubleshooting:
 
 - [/channels/imessage#troubleshooting-macos-privacy-and-security-tcc](/channels/imessage#troubleshooting-macos-privacy-and-security-tcc)
 - [/channels/bluebubbles#troubleshooting](/channels/bluebubbles#troubleshooting)
+
+Recommended BlueBubbles ladder:
+
+1. `openclaw channels status --probe`
+2. Direct POST to the configured webhook path on the live gateway
+3. BlueBubbles `server/info`
+4. BlueBubbles webhook dispatch logs
+5. `Messages/chat.db` for the same sender
 
 ## Signal
 

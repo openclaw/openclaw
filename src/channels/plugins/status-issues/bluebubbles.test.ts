@@ -2,12 +2,16 @@ import { describe, expect, it } from "vitest";
 import { collectBlueBubblesStatusIssues } from "./bluebubbles.js";
 
 describe("collectBlueBubblesStatusIssues", () => {
-  it("reports unconfigured enabled accounts", () => {
+  it("reports helper disconnected even when ping still works", () => {
     const issues = collectBlueBubblesStatusIssues([
       {
         accountId: "default",
         enabled: true,
-        configured: false,
+        configured: true,
+        running: true,
+        connected: true,
+        probe: { ok: true, status: 200 },
+        helperConnected: false,
       },
     ]);
 
@@ -15,52 +19,53 @@ describe("collectBlueBubblesStatusIssues", () => {
       expect.objectContaining({
         channel: "bluebubbles",
         accountId: "default",
-        kind: "config",
+        message: expect.stringContaining("helper disconnected"),
       }),
     ]);
   });
 
-  it("reports probe failure and runtime error for configured running accounts", () => {
+  it("reports private api disabled even when the server is reachable", () => {
     const issues = collectBlueBubblesStatusIssues([
       {
-        accountId: "work",
+        accountId: "default",
         enabled: true,
         configured: true,
         running: true,
-        lastError: "timeout",
-        probe: {
-          ok: false,
-          status: 503,
-        },
+        connected: true,
+        probe: { ok: true, status: 200 },
+        privateApi: false,
       },
     ]);
 
-    expect(issues).toHaveLength(2);
-    expect(issues[0]).toEqual(
+    expect(issues).toEqual([
       expect.objectContaining({
         channel: "bluebubbles",
-        accountId: "work",
-        kind: "runtime",
+        accountId: "default",
+        message: expect.stringContaining("Private API disabled"),
       }),
-    );
-    expect(issues[1]).toEqual(
-      expect.objectContaining({
-        channel: "bluebubbles",
-        accountId: "work",
-        kind: "runtime",
-        message: "Channel error: timeout",
-      }),
-    );
+    ]);
   });
 
-  it("skips disabled accounts", () => {
+  it("reports a missing live webhook route when ping still works", () => {
     const issues = collectBlueBubblesStatusIssues([
       {
-        accountId: "disabled",
-        enabled: false,
-        configured: false,
+        accountId: "default",
+        enabled: true,
+        configured: true,
+        running: true,
+        connected: true,
+        webhookPath: "/bluebubbles-webhook",
+        webhookRouteRegistered: false,
+        probe: { ok: true, status: 200 },
       },
     ]);
-    expect(issues).toEqual([]);
+
+    expect(issues).toEqual([
+      expect.objectContaining({
+        channel: "bluebubbles",
+        accountId: "default",
+        message: expect.stringContaining("webhook route missing"),
+      }),
+    ]);
   });
 });

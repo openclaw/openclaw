@@ -24,5 +24,5 @@ Notes:
 - Overview includes Gateway + node host service install/runtime status when available.
 - Overview includes update channel + git SHA (for source checkouts).
 - Update info surfaces in the Overview; if an update is available, status prints a hint to run `openclaw update` (see [Updating](/install/updating)).
-- Read-only status surfaces (`status`, `status --json`, `status --all`) resolve supported SecretRefs for their targeted config paths when possible.
-- If a supported channel SecretRef is configured but unavailable in the current command path, status stays read-only and reports degraded output instead of crashing. Human output shows warnings such as “configured token unavailable in this command path”, and JSON output includes `secretDiagnostics`.
+- `openclaw channels status --probe` is the better channel-level command when debugging webhook-backed providers like BlueBubbles.
+- For BlueBubbles, `works` only confirms REST `ping`; also inspect `route:registered`, `private-api:on/off`, and `helper:connected/disconnected`.
