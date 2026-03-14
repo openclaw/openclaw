@@ -942,6 +942,43 @@ describe("isOllamaCompatProvider", () => {
   });
 });
 
+describe("isOllamaCompatProvider — stream routing coverage (#45369)", () => {
+  it("detects localhost:11434 with openai-completions api as ollama-compatible", () => {
+    // This is the exact config that caused fallback chain misrouting:
+    // api:"openai-completions" + baseUrl:"http://127.0.0.1:11434/v1" would skip
+    // createConfiguredOllamaStreamFn and fall through to streamSimple, which
+    // reused the previous provider's HTTP client in the fallback chain.
+    const model = {
+      provider: "ollama",
+      api: "openai-completions" as const,
+      baseUrl: "http://127.0.0.1:11434/v1",
+    };
+    // The routing condition: api === "ollama" || isOllamaCompatProvider(model)
+    const wouldRouteToOllama = model.api === "ollama" || isOllamaCompatProvider(model);
+    expect(wouldRouteToOllama).toBe(true);
+  });
+
+  it("does not misroute non-ollama openai-completions providers", () => {
+    const model = {
+      provider: "mor-gateway",
+      api: "openai-completions" as const,
+      baseUrl: "https://api.mor.org/api/v1",
+    };
+    const wouldRouteToOllama = model.api === "ollama" || isOllamaCompatProvider(model);
+    expect(wouldRouteToOllama).toBe(false);
+  });
+
+  it("routes native ollama api directly", () => {
+    const model = {
+      provider: "ollama",
+      api: "ollama" as const,
+      baseUrl: "http://127.0.0.1:11434/v1",
+    };
+    const wouldRouteToOllama = model.api === "ollama" || isOllamaCompatProvider(model);
+    expect(wouldRouteToOllama).toBe(true);
+  });
+});
+
 describe("resolveOllamaBaseUrlForRun", () => {
   it("prefers provider baseUrl over model baseUrl", () => {
     expect(

@@ -1880,7 +1880,10 @@ export async function runEmbeddedAttempt(
 
       // Ollama native API: bypass SDK's streamSimple and use direct /api/chat calls
       // for reliable streaming + tool calling support (#11828).
-      if (params.model.api === "ollama") {
+      // Also detect Ollama-compatible providers (e.g. api:"openai-completions" with
+      // baseUrl pointing to localhost:11434) to prevent fallback chain misrouting
+      // where streamSimple reuses the previous provider's HTTP client (#45369).
+      if (params.model.api === "ollama" || isOllamaCompatProvider(params.model)) {
         // Prioritize configured provider baseUrl so Docker/remote Ollama hosts work reliably.
         const providerConfig = params.config?.models?.providers?.[params.model.provider];
         const providerBaseUrl =
