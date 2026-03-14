@@ -13,6 +13,11 @@ const OPEN_DIRECTORY_FLAGS =
   (typeof fs.constants.O_DIRECTORY === "number" ? fs.constants.O_DIRECTORY : 0) |
   (SUPPORTS_NOFOLLOW ? fs.constants.O_NOFOLLOW : 0);
 
+type PathIdentitySnapshot = {
+  path: string;
+  stat: fs.Stats;
+};
+
 function resolveAgentSessionsDir(
   agentId?: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -23,8 +28,87 @@ function resolveAgentSessionsDir(
   return path.join(root, "agents", id, "sessions");
 }
 
+function resolveManagedSessionsSafetyChain(sessionsDir: string): string[] {
+  const resolved = path.resolve(sessionsDir);
+  const agentDir = path.dirname(resolved);
+  const agentsDir = path.dirname(agentDir);
+  const stateDir = path.dirname(agentsDir);
+  if (
+    path.basename(resolved) === "sessions" &&
+    path.basename(agentsDir) === "agents" &&
+    path.basename(stateDir) === ".openclaw"
+  ) {
+    return [stateDir, agentsDir, agentDir, resolved];
+  }
+  return [path.dirname(resolved), resolved];
+}
+
+async function verifyDirectoryIdentity(dirPath: string): Promise<fs.Stats> {
+  const stat = await fsPromises.lstat(dirPath);
+  if (stat.isSymbolicLink()) {
+    throw new Error(`Session transcripts dir must not traverse a symlink: ${dirPath}`);
+  }
+  if (!stat.isDirectory()) {
+    throw new Error(`Session transcripts dir must be a directory: ${dirPath}`);
+  }
+  if (!SUPPORTS_NOFOLLOW) {
+    return stat;
+  }
+
+  const handle = await fsPromises.open(dirPath, OPEN_DIRECTORY_FLAGS);
+  try {
+    const openedStat = await handle.stat();
+    if (!openedStat.isDirectory()) {
+      throw new Error(`Session transcripts dir must be a directory: ${dirPath}`);
+    }
+    if (!sameFileIdentity(stat, openedStat)) {
+      throw new Error(`Session transcripts dir changed during permission update: ${dirPath}`);
+    }
+    return stat;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
+async function snapshotManagedSessionsSafetyChain(
+  sessionsDir: string,
+  opts: { allowMissingTail: boolean },
+): Promise<PathIdentitySnapshot[]> {
+  const chain = resolveManagedSessionsSafetyChain(sessionsDir);
+  const snapshots: PathIdentitySnapshot[] = [];
+  for (const entry of chain) {
+    try {
+      const stat = await verifyDirectoryIdentity(entry);
+      snapshots.push({ path: entry, stat });
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (opts.allowMissingTail && code === "ENOENT") {
+        continue;
+      }
+      throw err;
+    }
+  }
+  return snapshots;
+}
+
+function assertStablePathIdentities(
+  expected: PathIdentitySnapshot[],
+  actual: PathIdentitySnapshot[],
+): void {
+  const actualByPath = new Map(actual.map((entry) => [entry.path, entry.stat]));
+  for (const entry of expected) {
+    const current = actualByPath.get(entry.path);
+    if (!current || !sameFileIdentity(entry.stat, current)) {
+      throw new Error(`Session transcripts dir changed during permission update: ${entry.path}`);
+    }
+  }
+}
+
 export async function ensurePrivateSessionsDir(sessionsDir: string): Promise<string> {
   const resolved = path.resolve(sessionsDir);
+  const ancestorSnapshots = await snapshotManagedSessionsSafetyChain(resolved, {
+    allowMissingTail: true,
+  });
   try {
     const stat = await fsPromises.lstat(resolved);
     if (stat.isSymbolicLink()) {
@@ -37,6 +121,10 @@ export async function ensurePrivateSessionsDir(sessionsDir: string): Promise<str
     }
   }
   await fsPromises.mkdir(resolved, { recursive: true, mode: 0o700 });
+  const currentAncestorSnapshots = await snapshotManagedSessionsSafetyChain(resolved, {
+    allowMissingTail: false,
+  });
+  assertStablePathIdentities(ancestorSnapshots, currentAncestorSnapshots);
   const stat = await fsPromises.lstat(resolved);
   if (stat.isSymbolicLink()) {
     throw new Error(`Session transcripts dir must not be a symlink: ${resolved}`);
@@ -52,7 +140,12 @@ export async function ensurePrivateSessionsDir(sessionsDir: string): Promise<str
       if (!openedStat.isDirectory()) {
         throw new Error(`Session transcripts dir must be a directory: ${resolved}`);
       }
-      if (!sameFileIdentity(stat, openedStat)) {
+      const finalAncestorSnapshots = await snapshotManagedSessionsSafetyChain(resolved, {
+        allowMissingTail: false,
+      });
+      assertStablePathIdentities(currentAncestorSnapshots, finalAncestorSnapshots);
+      const currentStat = await fsPromises.lstat(resolved);
+      if (!sameFileIdentity(stat, openedStat) || !sameFileIdentity(currentStat, openedStat)) {
         throw new Error(`Session transcripts dir changed during permission update: ${resolved}`);
       }
       try {

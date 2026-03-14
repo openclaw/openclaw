@@ -192,7 +192,9 @@ describe("session directory permissions", () => {
       fs.mkdirSync(realDir, { recursive: true });
       fs.symlinkSync(realDir, symlinkDir, "dir");
 
-      await expect(ensurePrivateSessionsDir(symlinkDir)).rejects.toThrow(/must not be a symlink/i);
+      await expect(ensurePrivateSessionsDir(symlinkDir)).rejects.toThrow(
+        /must not (be|traverse) a symlink/i,
+      );
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
