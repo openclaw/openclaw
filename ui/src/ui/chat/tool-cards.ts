@@ -146,11 +146,43 @@ function coerceArgs(value: unknown): unknown {
 }
 
 function extractToolText(item: Record<string, unknown>): string | undefined {
+  // Direct text field as string
   if (typeof item.text === "string") {
     return item.text;
   }
+  // text as array: concatenate all text fragments (not just the first)
+  if (Array.isArray(item.text)) {
+    const parts = collectTextParts(item.text);
+    if (parts.length > 0) {
+      return parts.join("\n");
+    }
+  }
+  // content as string
   if (typeof item.content === "string") {
     return item.content;
   }
+  // content as array: concatenate all text fragments (not just the first)
+  if (Array.isArray(item.content)) {
+    const parts = collectTextParts(item.content);
+    if (parts.length > 0) {
+      return parts.join("\n");
+    }
+  }
   return undefined;
+}
+
+/** Extract `.text` strings from an array of content items. */
+function collectTextParts(items: unknown[]): string[] {
+  const parts: string[] = [];
+  for (const entry of items) {
+    if (typeof entry === "string") {
+      parts.push(entry);
+    } else if (typeof entry === "object" && entry !== null) {
+      const obj = entry as Record<string, unknown>;
+      if (typeof obj.text === "string") {
+        parts.push(obj.text);
+      }
+    }
+  }
+  return parts;
 }
