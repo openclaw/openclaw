@@ -28,7 +28,7 @@ export async function issuePairingChallenge(
     id: params.senderId,
     meta: params.meta,
   });
-  if (!created) {
+  if (!code) {
     return { created: false };
   }
   params.onCreated?.({ code });
