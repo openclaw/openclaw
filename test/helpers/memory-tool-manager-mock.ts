@@ -4,6 +4,19 @@ export type SearchImpl = () => Promise<unknown[]>;
 export type MemoryReadParams = { relPath: string; from?: number; lines?: number };
 export type MemoryReadResult = { text: string; path: string };
 type MemoryBackend = "builtin" | "qmd";
+export type MemoryStatusResult = {
+  backend: MemoryBackend;
+  files: number;
+  chunks: number;
+  dirty: boolean;
+  workspaceDir: string;
+  dbPath: string;
+  provider: string;
+  model: string;
+  requestedProvider: string;
+  sources: Array<"memory">;
+  sourceCounts: Array<{ source: "memory"; files: number; chunks: number }>;
+};
 
 let backend: MemoryBackend = "builtin";
 let searchImpl: SearchImpl = async () => [];
@@ -11,23 +24,25 @@ let readFileImpl: (params: MemoryReadParams) => Promise<MemoryReadResult> = asyn
   text: "",
   path: params.relPath,
 });
+const defaultStatus = (): MemoryStatusResult => ({
+  backend,
+  files: 1,
+  chunks: 1,
+  dirty: false,
+  workspaceDir: "/workspace",
+  dbPath: "/workspace/.memory/index.sqlite",
+  provider: "builtin",
+  model: "builtin",
+  requestedProvider: "builtin",
+  sources: ["memory" as const],
+  sourceCounts: [{ source: "memory" as const, files: 1, chunks: 1 }],
+});
+let statusImpl: () => MemoryStatusResult = defaultStatus;
 
 const stubManager = {
   search: vi.fn(async () => await searchImpl()),
   readFile: vi.fn(async (params: MemoryReadParams) => await readFileImpl(params)),
-  status: () => ({
-    backend,
-    files: 1,
-    chunks: 1,
-    dirty: false,
-    workspaceDir: "/workspace",
-    dbPath: "/workspace/.memory/index.sqlite",
-    provider: "builtin",
-    model: "builtin",
-    requestedProvider: "builtin",
-    sources: ["memory" as const],
-    sourceCounts: [{ source: "memory" as const, files: 1, chunks: 1 }],
-  }),
+  status: () => statusImpl(),
   sync: vi.fn(),
   probeVectorAvailability: vi.fn(async () => true),
   close: vi.fn(),
@@ -51,6 +66,10 @@ export function setMemoryReadFileImpl(
   readFileImpl = next;
 }
 
+export function setMemoryStatusImpl(next: () => MemoryStatusResult): void {
+  statusImpl = next;
+}
+
 export function resetMemoryToolMockState(overrides?: {
   backend?: MemoryBackend;
   searchImpl?: SearchImpl;
@@ -61,5 +80,6 @@ export function resetMemoryToolMockState(overrides?: {
   readFileImpl =
     overrides?.readFileImpl ??
     (async (params: MemoryReadParams) => ({ text: "", path: params.relPath }));
+  statusImpl = defaultStatus;
   vi.clearAllMocks();
 }

@@ -130,12 +130,13 @@ export function createMemorySearchTool(options: {
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          return jsonResult(
-            buildMemorySearchUnavailableResult(
-              message,
-              resolveEmbeddingAuthDiagnostics(memory.manager.status()),
-            ),
-          );
+          let embeddingAuth: EmbeddingAuthDiagnostics | undefined;
+          try {
+            embeddingAuth = resolveEmbeddingAuthDiagnostics(memory.manager.status());
+          } catch {
+            embeddingAuth = undefined;
+          }
+          return jsonResult(buildMemorySearchUnavailableResult(message, embeddingAuth));
         }
       },
   });
