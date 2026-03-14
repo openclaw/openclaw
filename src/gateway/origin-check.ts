@@ -22,8 +22,35 @@ function parseOrigin(
       hostname: url.hostname.toLowerCase(),
     };
   } catch {
+    // new URL() only understands standard schemes (http, https, ws, wss, etc.).
+    // Fall back to manual parsing for custom schemes like tauri:// or electron://.
+    return parseCustomSchemeOrigin(trimmed);
+  }
+}
+
+/** Manual fallback for non-standard URL schemes (tauri://, electron://, etc.). */
+function parseCustomSchemeOrigin(
+  input: string,
+): { origin: string; host: string; hostname: string } | null {
+  // Match: scheme://host or scheme://host:port
+  const match = input.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/([^/]+)/);
+  if (!match) {
     return null;
   }
+  const scheme = match[1].toLowerCase();
+  const hostPart = match[2].toLowerCase();
+  // Extract hostname (strip port)
+  const colonIdx = hostPart.lastIndexOf(":");
+  const hostname = colonIdx > 0 ? hostPart.substring(0, colonIdx) : hostPart;
+  // Only allow valid hostname characters
+  if (!/^[a-zA-Z0-9._-]+$/.test(hostname)) {
+    return null;
+  }
+  return {
+    origin: `${scheme}://${hostPart}`,
+    host: hostPart,
+    hostname,
+  };
 }
 
 export function checkBrowserOrigin(params: {
