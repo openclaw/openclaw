@@ -59,7 +59,9 @@ jobs:
     environment: docker-release
     steps:
       - name: Approve Docker backfill
-        run: echo "Approved Docker backfill for ${{ inputs.tag }}"
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: echo "Approved Docker backfill for $RELEASE_TAG"
 
   # KEEP THIS WORKFLOW ON GITHUB-HOSTED RUNNERS.
   # DO NOT MOVE IT BACK TO BLACKSMITH WITHOUT RE-VALIDATING TAG BUILDS AND BACKFILLS.
