@@ -173,6 +173,64 @@ describe("existing-session browser routes", () => {
     expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalled();
   });
 
+  it("allows ref screenshots for existing-session profiles", async () => {
+    const { app, postHandlers } = createApp();
+    registerBrowserAgentSnapshotRoutes(app, {
+      state: () => ({ resolved: { ssrfPolicy: undefined } }),
+    } as never);
+    const handler = postHandlers.get("/screenshot");
+    expect(handler).toBeTypeOf("function");
+
+    const response = createResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { ref: "btn-1", type: "jpeg" },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      path: "/tmp/fake.png",
+      targetId: "7",
+    });
+    expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      uid: "btn-1",
+      fullPage: false,
+      format: "jpeg",
+    });
+  });
+
+  it("rejects selector-based element screenshots for existing-session profiles", async () => {
+    const { app, postHandlers } = createApp();
+    registerBrowserAgentSnapshotRoutes(app, {
+      state: () => ({ resolved: { ssrfPolicy: undefined } }),
+    } as never);
+    const handler = postHandlers.get("/screenshot");
+    expect(handler).toBeTypeOf("function");
+
+    const response = createResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { element: "#submit" },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toMatchObject({
+      error: expect.stringContaining("element screenshots are not supported"),
+    });
+    expect(chromeMcpMocks.takeChromeMcpScreenshot).not.toHaveBeenCalled();
+  });
+
   it("fails closed for existing-session networkidle waits", async () => {
     const { app, postHandlers } = createApp();
     registerBrowserAgentActRoutes(app, {
