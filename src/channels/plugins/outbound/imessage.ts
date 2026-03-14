@@ -1,5 +1,8 @@
 import { sendMessageIMessage } from "../../../../extensions/imessage/src/send.js";
-import { resolveOutboundSendDep, type OutboundSendDeps } from "../../../infra/outbound/deliver.js";
+import {
+  resolveOutboundSendDep,
+  type OutboundSendDeps,
+} from "../../../infra/outbound/send-deps.js";
 import {
   createScopedChannelMediaMaxBytesResolver,
   createDirectTextMediaOutbound,
