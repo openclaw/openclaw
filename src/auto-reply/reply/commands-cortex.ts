@@ -53,7 +53,7 @@ function parseResolveAction(value?: string): CortexMemoryResolveAction | null {
 }
 
 function resolveActiveSessionId(params: HandleCommandsParams): string | undefined {
-  return params.sessionEntry?.sessionId ?? params.ctx.SessionId;
+  return params.sessionEntry?.sessionId;
 }
 
 function resolveActiveChannelId(params: HandleCommandsParams): string {

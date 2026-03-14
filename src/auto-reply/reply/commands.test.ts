@@ -716,7 +716,7 @@ describe("/cortex command", () => {
       context: "## Cortex Context\n- Minimal",
     });
 
-    const params = buildParams("/cortex preview", cfg, { SessionId: "session-1" });
+    const params = buildParams("/cortex preview", cfg);
 
     const result = await handleCommands(params);
 
@@ -769,7 +769,6 @@ describe("/cortex command", () => {
     });
 
     const params = buildParams("/cortex why", cfg, {
-      SessionId: "session-1",
       NativeChannelId: "C123",
     });
 
@@ -810,7 +809,6 @@ describe("/cortex command", () => {
     previewCortexContextMock.mockRejectedValueOnce(new Error("Cortex graph not found"));
 
     const params = buildParams("/cortex why", cfg, {
-      SessionId: "session-1",
       NativeChannelId: "C123",
     });
 
@@ -841,7 +839,6 @@ describe("/cortex command", () => {
     } as OpenClawConfig;
 
     const params = buildParams("/cortex continuity", cfg, {
-      SessionId: "session-1",
       NativeChannelId: "C123",
     });
 
@@ -879,7 +876,7 @@ describe("/cortex command", () => {
       },
     ]);
 
-    const params = buildParams("/cortex conflicts", cfg, { SessionId: "session-1" });
+    const params = buildParams("/cortex conflicts", cfg);
 
     const result = await handleCommands(params);
 
@@ -919,7 +916,7 @@ describe("/cortex command", () => {
       },
     ]);
 
-    const params = buildParams("/cortex conflict conf_1", cfg, { SessionId: "session-1" });
+    const params = buildParams("/cortex conflict conf_1", cfg);
 
     const result = await handleCommands(params);
 
@@ -952,9 +949,7 @@ describe("/cortex command", () => {
       commitId: "ver_123",
     });
 
-    const params = buildParams("/cortex resolve conf_1 accept-new", cfg, {
-      SessionId: "session-1",
-    });
+    const params = buildParams("/cortex resolve conf_1 accept-new", cfg);
 
     const result = await handleCommands(params);
 
@@ -992,7 +987,7 @@ describe("/cortex command", () => {
       platforms: ["claude-code", "cursor", "copilot"],
     });
 
-    const params = buildParams("/cortex sync coding", cfg, { SessionId: "session-1" });
+    const params = buildParams("/cortex sync coding", cfg);
 
     const result = await handleCommands(params);
 
@@ -1012,7 +1007,7 @@ describe("/cortex command", () => {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig;
-    const params = buildParams("/cortex mode set professional", cfg, { SessionId: "session-1" });
+    const params = buildParams("/cortex mode set professional", cfg);
 
     const result = await handleCommands(params);
 
@@ -1063,7 +1058,7 @@ describe("/cortex command", () => {
       source: "session-override",
       maxChars: 1500,
     });
-    const params = buildParams("/status", cfg, { SessionId: "session-1" });
+    const params = buildParams("/status", cfg);
 
     const result = await handleCommands(params);
 
