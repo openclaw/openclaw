@@ -73,7 +73,7 @@ export function registerBrowserManageCommands(
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
         const query: Record<string, string | boolean | undefined> = {
-          ...resolveProfileQuery(profile),
+          ...(resolveProfileQuery(profile) ?? {}),
         };
         if (opts.headless) {
           query.headless = "true";
