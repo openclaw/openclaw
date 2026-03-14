@@ -346,6 +346,12 @@ function buildChannelTargetSchema() {
 
 function buildStickerSchema() {
   return {
+    fileId: Type.Optional(
+      Type.String({
+        description:
+          "Platform-specific file identifier (e.g. Telegram sticker file_id, Slack file id for download-file).",
+      }),
+    ),
     emojiName: Type.Optional(Type.String()),
     stickerId: Type.Optional(Type.Array(Type.String())),
     stickerName: Type.Optional(Type.String()),
