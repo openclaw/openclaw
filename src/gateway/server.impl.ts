@@ -106,6 +106,7 @@ import {
   getPresenceVersion,
   incrementPresenceVersion,
   refreshGatewayHealthSnapshot,
+  setHealthRuntimeSnapshotProvider,
 } from "./server/health-state.js";
 import { resolveHookClientIpConfig } from "./server/hooks.js";
 import { createReadinessChecker } from "./server/readiness.js";
@@ -657,6 +658,7 @@ export async function startGatewayServer(
 
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;
+  setHealthRuntimeSnapshotProvider(getRuntimeSnapshot);
 
   if (!minimalTestGateway) {
     const machineDisplayName = await getMachineDisplayName();
@@ -1064,6 +1066,7 @@ export async function startGatewayServer(
       browserAuthRateLimiter.dispose();
       channelHealthMonitor?.stop();
       clearSecretsRuntimeSnapshot();
+      setHealthRuntimeSnapshotProvider(null);
       await close(opts);
     },
   };

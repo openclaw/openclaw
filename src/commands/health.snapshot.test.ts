@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
+import type { ChannelRuntimeSnapshot } from "../gateway/server-channels.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { HealthSummary } from "./health.js";
@@ -221,6 +222,71 @@ describe("getHealthSnapshot", () => {
     expect(telegram.configured).toBe(true);
     expect(telegram.probe?.ok).toBe(false);
     expect(telegram.probe?.error).toMatch(/network down/i);
+  });
+
+  it("includes live runtime fields in telegram health summaries when provided", async () => {
+    testConfig = { channels: { telegram: { botToken: "t-live" } } };
+    testStore = {};
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
+
+    const startedAt = 1773508368414;
+    const runtimeSnapshot: ChannelRuntimeSnapshot = {
+      channels: {
+        telegram: {
+          accountId: "default",
+          running: true,
+          lastStartAt: startedAt,
+          lastStopAt: null,
+          lastError: null,
+          mode: "polling",
+          lastInboundAt: startedAt + 123,
+        },
+      },
+      channelAccounts: {
+        telegram: {
+          default: {
+            accountId: "default",
+            running: true,
+            lastStartAt: startedAt,
+            lastStopAt: null,
+            lastError: null,
+            mode: "polling",
+            lastInboundAt: startedAt + 123,
+          },
+        },
+      },
+    };
+
+    const snap = await getHealthSnapshot({
+      timeoutMs: 25,
+      probe: false,
+      runtimeSnapshot,
+    });
+    const telegram = snap.channels.telegram as {
+      configured?: boolean;
+      running?: boolean;
+      lastStartAt?: number | null;
+      mode?: string | null;
+      tokenSource?: string | null;
+      accounts?: Record<
+        string,
+        {
+          running?: boolean;
+          lastStartAt?: number | null;
+          mode?: string | null;
+          tokenSource?: string | null;
+        }
+      >;
+    };
+    expect(telegram.configured).toBe(true);
+    expect(telegram.running).toBe(true);
+    expect(telegram.lastStartAt).toBe(startedAt);
+    expect(telegram.mode).toBe("polling");
+    expect(telegram.tokenSource).toBe("config");
+    expect(telegram.accounts?.default?.running).toBe(true);
+    expect(telegram.accounts?.default?.lastStartAt).toBe(startedAt);
+    expect(telegram.accounts?.default?.mode).toBe("polling");
+    expect(telegram.accounts?.default?.tokenSource).toBe("config");
   });
 
   it("disables heartbeat for agents without heartbeat blocks", async () => {
