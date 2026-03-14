@@ -36,8 +36,8 @@ export function createReplyReferencePlanner(options: {
     if (!id) {
       return undefined;
     }
+    // "all": every reply gets a reference - never mark as replied.
     if (options.replyToMode === "all") {
-      hasReplied = true;
       return id;
     }
     // "first": only the first reply gets a reference.
