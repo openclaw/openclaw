@@ -6,8 +6,39 @@
 - GitHub comment footgun: never use `gh issue/pr comment -b "..."` when body contains backticks or shell chars. Always use single-quoted heredoc (`-F - <<'EOF'`) so no command substitution/escaping corruption.
 - GitHub linking footgun: don’t wrap issue/PR refs like `#24643` in backticks when you want auto-linking. Use plain `#24643` (optionally add full URL).
 - PR landing comments: always make commit SHAs clickable with full commit links (both landed SHA + source SHA when present).
+- PR review conversations: if a bot leaves review conversations on your PR, address them and resolve those conversations yourself once fixed. Leave a conversation unresolved only when reviewer or maintainer judgment is still needed; do not leave bot-conversation cleanup to maintainers.
 - GitHub searching footgun: don't limit yourself to the first 500 issues or PRs when wanting to search all. Unless you're supposed to look at the most recent, keep going until you've reached the last page in the search
 - Security advisory analysis: before triage/severity decisions, read `SECURITY.md` to align with OpenClaw's trust model and design boundaries.
+
+## Auto-close labels (issues and PRs)
+
+- If an issue/PR matches one of the reasons below, apply the label and let `.github/workflows/auto-response.yml` handle comment/close/lock.
+- Do not manually close + manually comment for these reasons.
+- Why: keeps wording consistent, preserves automation behavior (`state_reason`, locking), and keeps triage/reporting searchable by label.
+- `r:*` labels can be used on both issues and PRs.
+
+- `r: skill`: close with guidance to publish skills on Clawhub.
+- `r: support`: close with redirect to Discord support + stuck FAQ.
+- `r: no-ci-pr`: close test-fix-only PRs for failing `main` CI and post the standard explanation.
+- `r: too-many-prs`: close when author exceeds active PR limit.
+- `r: testflight`: close requests asking for TestFlight access/builds. OpenClaw does not provide TestFlight distribution yet, so use the standard response (“Not available, build from source.”) instead of ad-hoc replies.
+- `r: third-party-extension`: close with guidance to ship as third-party plugin.
+- `r: moltbook`: close + lock as off-topic (not affiliated).
+- `r: spam`: close + lock as spam (`lock_reason: spam`).
+- `invalid`: close invalid items (issues are closed as `not_planned`; PRs are closed).
+- `dirty`: close PRs with too many unrelated/unexpected changes (PR-only label).
+
+## PR truthfulness and bug-fix validation
+
+- Never merge a bug-fix PR based only on issue text, PR text, or AI rationale.
+- Before `/landpr`, run `/reviewpr` and require explicit evidence for bug-fix claims.
+- Minimum merge gate for bug-fix PRs:
+  1. symptom evidence (repro/log/failing test),
+  2. verified root cause in code with file/line,
+  3. fix touches the implicated code path,
+  4. regression test (fail before/pass after) when feasible; if not feasible, include manual verification proof and why no test was added.
+- If claim is unsubstantiated or likely hallucinated/BS: do not merge. Request evidence/changes, or close with `invalid` when appropriate.
+- If linked issue appears wrong/outdated, correct triage first; do not merge speculative fixes.
 
 ## Project Structure & Module Organization
 
@@ -28,6 +59,7 @@
 - Docs are hosted on Mintlify (docs.openclaw.ai).
 - Internal doc links in `docs/**/*.md`: root-relative, no `.md`/`.mdx` (example: `[Config](/configuration)`).
 - When working with documentation, read the mintlify skill.
+- For docs, UI copy, and picker lists, order services/providers alphabetically unless the section is explicitly describing runtime behavior (for example auto-detection or execution order).
 - Section cross-references: use anchors on root-relative paths (example: `[Hooks](/configuration#hooks)`).
 - Doc headings and anchors: avoid em dashes and apostrophes in headings because they break Mintlify anchor links.
 - When Peter asks for links, reply with full `https://docs.openclaw.ai/...` URLs (not root-relative).
@@ -86,6 +118,7 @@
 - Keep files concise; extract helpers instead of “V2” copies. Use existing patterns for CLI options and dependency injection via `createDefaultDeps`.
 - Aim to keep files under ~700 LOC; guideline only (not a hard guardrail). Split/refactor when it improves clarity or testability.
 - Naming: use **OpenClaw** for product/app/docs headings; use `openclaw` for CLI command, package/binary, paths, and config keys.
+- Written English: use American spelling and grammar in code, comments, docs, and UI strings (e.g. "color" not "colour", "behavior" not "behaviour", "analyze" not "analyse").
 
 ## Release Channels (Naming)
 
@@ -99,6 +132,7 @@
 - Framework: Vitest with V8 coverage thresholds (70% lines/branches/functions/statements).
 - Naming: match source names with `*.test.ts`; e2e in `*.e2e.test.ts`.
 - Run `pnpm test` (or `pnpm test:coverage`) before pushing when you touch logic.
+- For targeted/local debugging, keep using the wrapper: `pnpm test -- <path-or-filter> [vitest args...]` (for example `pnpm test -- src/commands/onboard-search.test.ts -t "shows registered plugin providers"`); do not default to raw `pnpm vitest run ...` because it bypasses wrapper config/profile/pool routing.
 - Do not set test workers above 16; tried already.
 - If local Vitest runs cause memory pressure (common on non-Mac-Studio hosts), use `OPENCLAW_TEST_PROFILE=low OPENCLAW_TEST_SERIAL_GATEWAY=1 pnpm test` for land/gate runs.
 - Live tests (real keys): `CLAWDBOT_LIVE_TEST=1 pnpm test:live` (OpenClaw-only) or `LIVE=1 pnpm test:live` (includes provider live tests). Docker: `pnpm test:docker:live-models`, `pnpm test:docker:live-gateway`. Onboarding Docker E2E: `pnpm test:docker:onboard`.
@@ -113,6 +147,7 @@
 
 **Full maintainer PR workflow (optional):** If you want the repo's end-to-end maintainer workflow (triage order, quality bar, rebase rules, commit/changelog conventions, co-contributor policy, and the `review-pr` > `prepare-pr` > `merge-pr` pipeline), see `.agents/skills/PR_WORKFLOW.md`. Maintainers may use other workflows; when a maintainer specifies a workflow, follow that. If no workflow is specified, default to PR_WORKFLOW.
 
+- `/landpr` lives in the global Codex prompts (`~/.codex/prompts/landpr.md`); when landing or merging any PR, always follow that `/landpr` process.
 - Create commits with `scripts/committer "<msg>" <file...>`; avoid manual `git add`/`git commit` so staging stays scoped.
 - Follow concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
 - Group related changes; avoid bundling unrelated refactors.
@@ -167,6 +202,16 @@
 ## Agent-Specific Notes
 
 - Vocabulary: "makeup" = "mac app".
+- Parallels macOS retests: use the snapshot most closely named like `macOS 26.3.1 fresh` when the user asks for a clean/fresh macOS rerun; avoid older Tahoe snapshots unless explicitly requested.
+- Parallels macOS smoke playbook:
+  - `prlctl exec` is fine for deterministic repo commands, but it can misrepresent interactive shell behavior (`PATH`, `HOME`, `curl | bash`, shebang resolution). For installer parity or shell-sensitive repros, prefer the guest Terminal or `prlctl enter`.
+  - Fresh Tahoe snapshot current reality: `brew` exists, `node` may not be on `PATH` in noninteractive guest exec. Use absolute `/opt/homebrew/bin/node` for repo/CLI runs when needed.
+  - Preferred automation entrypoint: `pnpm test:parallels:macos`. It restores the snapshot most closely matching `macOS 26.3.1 fresh`, serves the current `main` tarball from the host, then runs fresh-install and latest-release-to-main smoke lanes.
+  - Harness output: pass `--json` for machine-readable summary; per-phase logs land under `/tmp/openclaw-parallels-smoke.*`.
+  - Fresh host-served tgz install: restore fresh snapshot, install tgz as guest root with `HOME=/var/root`, then run onboarding as the desktop user via `prlctl exec --current-user`.
+  - For `openclaw onboard --non-interactive --secret-input-mode ref --install-daemon`, expect env-backed auth-profile refs (for example `OPENAI_API_KEY`) to be copied into the service env at install time; this path was fixed and should stay green.
+  - Don’t run local + gateway agent turns in parallel on the same fresh workspace/session; they can collide on the session lock. Run sequentially.
+  - Root-installed tarball smoke on Tahoe can still log plugin blocks for world-writable `extensions/*` under `/opt/homebrew/lib/node_modules/openclaw`; treat that as separate from onboarding/gateway health unless the task is plugin loading.
 - Never edit `node_modules` (global/Homebrew/npm/git installs too). Updates overwrite. Skill notes go in `tools.md` or `AGENTS.md`.
 - When adding a new `AGENTS.md` anywhere in the repo, also add a `CLAUDE.md` symlink pointing to it (example: `ln -s AGENTS.md CLAUDE.md`).
 - Signal: "update fly" => `fly ssh console -a flawd-bot -C "bash -lc 'cd /data/clawd/openclaw && git pull --rebase origin main'"` then `fly machines restart e825232f34d058 -a flawd-bot`.

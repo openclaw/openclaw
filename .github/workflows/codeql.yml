@@ -7,6 +7,9 @@ concurrency:
   group: codeql-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 permissions:
   actions: read
   contents: read
@@ -28,6 +31,7 @@ jobs:
             needs_swift_tools: false
             needs_manual_build: false
             needs_autobuild: false
+            config_file: ./.github/codeql/codeql-javascript-typescript.yml
           - language: actions
             runs_on: blacksmith-16vcpu-ubuntu-2404
             needs_node: false
@@ -36,6 +40,7 @@ jobs:
             needs_swift_tools: false
             needs_manual_build: false
             needs_autobuild: false
+            config_file: ""
           - language: python
             runs_on: blacksmith-16vcpu-ubuntu-2404
             needs_node: false
@@ -44,6 +49,7 @@ jobs:
             needs_swift_tools: false
             needs_manual_build: false
             needs_autobuild: false
+            config_file: ""
           - language: java-kotlin
             runs_on: blacksmith-16vcpu-ubuntu-2404
             needs_node: false
@@ -52,6 +58,7 @@ jobs:
             needs_swift_tools: false
             needs_manual_build: true
             needs_autobuild: false
+            config_file: ""
           - language: swift
             runs_on: macos-latest
             needs_node: false
@@ -60,9 +67,10 @@ jobs:
             needs_swift_tools: true
             needs_manual_build: true
             needs_autobuild: false
+            config_file: ""
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
@@ -71,30 +79,35 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "true"
+          use-sticky-disk: "false"
 
       - name: Setup Python
         if: matrix.needs_python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Setup Java
         if: matrix.needs_java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
 
       - name: Setup Swift build tools
         if: matrix.needs_swift_tools
-        run: brew install xcodegen swiftlint swiftformat
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.1.app
+          xcodebuild -version
+          brew install xcodegen swiftlint swiftformat
+          swift --version
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           queries: security-and-quality
+          config-file: ${{ matrix.config_file || '' }}
 
       - name: Autobuild
         if: matrix.needs_autobuild

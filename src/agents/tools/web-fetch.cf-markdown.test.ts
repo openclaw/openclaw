@@ -84,6 +84,47 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     expect(details?.contentType).toBe("text/html");
   });
 
+  it("bypasses Firecrawl when runtime metadata marks Firecrawl inactive", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(
+        htmlResponse(
+          "<html><body><article><h1>Runtime Off</h1><p>Use direct fetch.</p></article></body></html>",
+        ),
+      );
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const tool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              firecrawl: {
+                enabled: true,
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "MISSING_FIRECRAWL_KEY_REF",
+                },
+              },
+            },
+          },
+        },
+      },
+      sandboxed: false,
+      runtimeFirecrawl: {
+        active: false,
+        apiKeySource: "secretRef", // pragma: allowlist secret
+        diagnostics: [],
+      },
+    });
+
+    await tool?.execute?.("call", { url: "https://example.com/runtime-firecrawl-off" });
+
+    expect(fetchSpy).toHaveBeenCalled();
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://example.com/runtime-firecrawl-off");
+  });
+
   it("logs x-markdown-tokens when header is present", async () => {
     const logSpy = vi.spyOn(logger, "logDebug").mockImplementation(() => {});
     const fetchSpy = vi

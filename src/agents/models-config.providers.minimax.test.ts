@@ -3,7 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveImplicitProviders } from "./models-config.providers.js";
+import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 
 describe("minimax provider catalog", () => {
   it("does not advertise the removed lightning model for api-key or oauth providers", async () => {
@@ -34,7 +34,7 @@ describe("minimax provider catalog", () => {
       "utf8",
     );
 
-    const providers = await resolveImplicitProviders({ agentDir });
+    const providers = await resolveImplicitProvidersForTest({ agentDir });
     expect(providers?.minimax?.models?.map((model) => model.id)).toEqual([
       "MiniMax-VL-01",
       "MiniMax-M2.5",

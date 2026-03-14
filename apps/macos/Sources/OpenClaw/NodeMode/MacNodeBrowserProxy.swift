@@ -122,7 +122,7 @@ actor MacNodeBrowserProxy {
             }
         }
         let profile = params.profile?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !profile.isEmpty && !queryItems.contains(where: { $0.name == "profile" }) {
+        if !profile.isEmpty, !queryItems.contains(where: { $0.name == "profile" }) {
             queryItems.append(URLQueryItem(name: "profile", value: profile))
         }
         if !queryItems.isEmpty {
@@ -146,8 +146,8 @@ actor MacNodeBrowserProxy {
             request.setValue(password, forHTTPHeaderField: "x-openclaw-password")
         }
 
-        if method != "GET", let body = params.body?.value {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.fragmentsAllowed])
+        if method != "GET", let body = params.body {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body.foundationValue, options: [.fragmentsAllowed])
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
 
@@ -172,7 +172,7 @@ actor MacNodeBrowserProxy {
         }
         if let text = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
-           !text.isEmpty
+            !text.isEmpty
         {
             return text
         }

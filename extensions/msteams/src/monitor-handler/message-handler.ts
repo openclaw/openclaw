@@ -175,6 +175,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       teamName,
       conversationId,
       channelName,
+      allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
     });
     const senderGroupPolicy = resolveSenderScopedGroupPolicy({
       groupPolicy,
@@ -242,10 +243,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       }
       const senderGroupAccess = evaluateSenderGroupAccessForPolicy({
         groupPolicy,
-        groupAllowFrom:
-          effectiveGroupAllowFrom.length > 0 || !channelGate.allowlistConfigured
-            ? effectiveGroupAllowFrom
-            : ["*"],
+        groupAllowFrom: effectiveGroupAllowFrom,
         senderId,
         isSenderAllowed: (_senderId, allowFrom) =>
           resolveMSTeamsAllowlistMatch({

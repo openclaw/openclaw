@@ -30,6 +30,8 @@ type BrowserProxyResult = {
 };
 
 const BROWSER_PROXY_MAX_FILE_BYTES = 10 * 1024 * 1024;
+const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
+const BROWSER_PROXY_STATUS_TIMEOUT_MS = 750;
 
 function normalizeProfileAllowlist(raw?: string[]): string[] {
   return Array.isArray(raw) ? raw.map((entry) => entry.trim()).filter(Boolean) : [];
@@ -119,6 +121,87 @@ function decodeParams<T>(raw?: string | null): T {
   return JSON.parse(raw) as T;
 }
 
+function resolveBrowserProxyTimeout(timeoutMs?: number): number {
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+    ? Math.max(1, Math.floor(timeoutMs))
+    : DEFAULT_BROWSER_PROXY_TIMEOUT_MS;
+}
+
+function isBrowserProxyTimeoutError(err: unknown): boolean {
+  return String(err).includes("browser proxy request timed out");
+}
+
+function isWsBackedBrowserProxyPath(path: string): boolean {
+  return (
+    path === "/act" ||
+    path === "/navigate" ||
+    path === "/pdf" ||
+    path === "/screenshot" ||
+    path === "/snapshot"
+  );
+}
+
+async function readBrowserProxyStatus(params: {
+  dispatcher: ReturnType<typeof createBrowserRouteDispatcher>;
+  profile?: string;
+}): Promise<Record<string, unknown> | null> {
+  const query = params.profile ? { profile: params.profile } : {};
+  try {
+    const response = await withTimeout(
+      (signal) =>
+        params.dispatcher.dispatch({
+          method: "GET",
+          path: "/",
+          query,
+          signal,
+        }),
+      BROWSER_PROXY_STATUS_TIMEOUT_MS,
+      "browser proxy status",
+    );
+    if (response.status >= 400 || !response.body || typeof response.body !== "object") {
+      return null;
+    }
+    const body = response.body as Record<string, unknown>;
+    return {
+      running: body.running,
+      cdpHttp: body.cdpHttp,
+      cdpReady: body.cdpReady,
+      cdpUrl: body.cdpUrl,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function formatBrowserProxyTimeoutMessage(params: {
+  method: string;
+  path: string;
+  profile?: string;
+  timeoutMs: number;
+  wsBacked: boolean;
+  status: Record<string, unknown> | null;
+}): string {
+  const parts = [
+    `browser proxy timed out for ${params.method} ${params.path} after ${params.timeoutMs}ms`,
+    params.wsBacked ? "ws-backed browser action" : "browser action",
+  ];
+  if (params.profile) {
+    parts.push(`profile=${params.profile}`);
+  }
+  if (params.status) {
+    const statusParts = [
+      `running=${String(params.status.running)}`,
+      `cdpHttp=${String(params.status.cdpHttp)}`,
+      `cdpReady=${String(params.status.cdpReady)}`,
+    ];
+    if (typeof params.status.cdpUrl === "string" && params.status.cdpUrl.trim()) {
+      statusParts.push(`cdpUrl=${params.status.cdpUrl}`);
+    }
+    parts.push(`status(${statusParts.join(", ")})`);
+  }
+  return parts.join("; ");
+}
+
 export async function runBrowserProxyCommand(paramsJSON?: string | null): Promise<string> {
   const params = decodeParams<BrowserProxyParams>(paramsJSON);
   const pathValue = typeof params.path === "string" ? params.path.trim() : "";
@@ -151,6 +234,7 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
   const method = typeof params.method === "string" ? params.method.toUpperCase() : "GET";
   const path = pathValue.startsWith("/") ? pathValue : `/${pathValue}`;
   const body = params.body;
+  const timeoutMs = resolveBrowserProxyTimeout(params.timeoutMs);
   const query: Record<string, unknown> = {};
   if (requestedProfile) {
     query.profile = requestedProfile;
@@ -164,18 +248,41 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
   }
 
   const dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
-  const response = await withTimeout(
-    (signal) =>
-      dispatcher.dispatch({
-        method: method === "DELETE" ? "DELETE" : method === "POST" ? "POST" : "GET",
+  let response;
+  try {
+    response = await withTimeout(
+      (signal) =>
+        dispatcher.dispatch({
+          method: method === "DELETE" ? "DELETE" : method === "POST" ? "POST" : "GET",
+          path,
+          query,
+          body,
+          signal,
+        }),
+      timeoutMs,
+      "browser proxy request",
+    );
+  } catch (err) {
+    if (!isBrowserProxyTimeoutError(err)) {
+      throw err;
+    }
+    const profileForStatus = requestedProfile || resolved.defaultProfile;
+    const status = await readBrowserProxyStatus({
+      dispatcher,
+      profile: path === "/profiles" ? undefined : profileForStatus,
+    });
+    throw new Error(
+      formatBrowserProxyTimeoutMessage({
+        method,
         path,
-        query,
-        body,
-        signal,
+        profile: path === "/profiles" ? undefined : profileForStatus || undefined,
+        timeoutMs,
+        wsBacked: isWsBackedBrowserProxyPath(path),
+        status,
       }),
-    params.timeoutMs,
-    "browser proxy request",
-  );
+      { cause: err },
+    );
+  }
   if (response.status >= 400) {
     const message =
       response.body && typeof response.body === "object" && "error" in response.body

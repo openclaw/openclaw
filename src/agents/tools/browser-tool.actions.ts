@@ -74,6 +74,17 @@ function stripTargetIdFromActRequest(
   return retryRequest as Parameters<typeof browserAct>[1];
 }
 
+function canRetryChromeActWithoutTargetId(request: Parameters<typeof browserAct>[1]): boolean {
+  const typedRequest = request as Partial<Record<"kind" | "action", unknown>>;
+  const kind =
+    typeof typedRequest.kind === "string"
+      ? typedRequest.kind
+      : typeof typedRequest.action === "string"
+        ? typedRequest.action
+        : "";
+  return kind === "hover" || kind === "scrollIntoView" || kind === "wait";
+}
+
 export async function executeTabsAction(params: {
   baseUrl?: string;
   profile?: string;
@@ -101,16 +112,19 @@ export async function executeSnapshotAction(params: {
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
   const snapshotDefaults = loadConfig().browser?.snapshotDefaults;
-  const format =
-    input.snapshotFormat === "ai" || input.snapshotFormat === "aria" ? input.snapshotFormat : "ai";
-  const mode =
+  const format: "ai" | "aria" | undefined =
+    input.snapshotFormat === "ai" || input.snapshotFormat === "aria"
+      ? input.snapshotFormat
+      : undefined;
+  const mode: "efficient" | undefined =
     input.mode === "efficient"
       ? "efficient"
-      : format === "ai" && snapshotDefaults?.mode === "efficient"
+      : format !== "aria" && snapshotDefaults?.mode === "efficient"
         ? "efficient"
         : undefined;
   const labels = typeof input.labels === "boolean" ? input.labels : undefined;
-  const refs = input.refs === "aria" || input.refs === "role" ? input.refs : undefined;
+  const refs: "aria" | "role" | undefined =
+    input.refs === "aria" || input.refs === "role" ? input.refs : undefined;
   const hasMaxChars = Object.hasOwn(input, "maxChars");
   const targetId = typeof input.targetId === "string" ? input.targetId.trim() : undefined;
   const limit =
@@ -119,6 +133,12 @@ export async function executeSnapshotAction(params: {
     typeof input.maxChars === "number" && Number.isFinite(input.maxChars) && input.maxChars > 0
       ? Math.floor(input.maxChars)
       : undefined;
+  const interactive = typeof input.interactive === "boolean" ? input.interactive : undefined;
+  const compact = typeof input.compact === "boolean" ? input.compact : undefined;
+  const depth =
+    typeof input.depth === "number" && Number.isFinite(input.depth) ? input.depth : undefined;
+  const selector = typeof input.selector === "string" ? input.selector.trim() : undefined;
+  const frame = typeof input.frame === "string" ? input.frame.trim() : undefined;
   const resolvedMaxChars =
     format === "ai"
       ? hasMaxChars
@@ -126,46 +146,32 @@ export async function executeSnapshotAction(params: {
         : mode === "efficient"
           ? undefined
           : DEFAULT_AI_SNAPSHOT_MAX_CHARS
-      : undefined;
-  const interactive = typeof input.interactive === "boolean" ? input.interactive : undefined;
-  const compact = typeof input.compact === "boolean" ? input.compact : undefined;
-  const depth =
-    typeof input.depth === "number" && Number.isFinite(input.depth) ? input.depth : undefined;
-  const selector = typeof input.selector === "string" ? input.selector.trim() : undefined;
-  const frame = typeof input.frame === "string" ? input.frame.trim() : undefined;
+      : hasMaxChars
+        ? maxChars
+        : undefined;
+  const snapshotQuery = {
+    ...(format ? { format } : {}),
+    targetId,
+    limit,
+    ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
+    refs,
+    interactive,
+    compact,
+    depth,
+    selector,
+    frame,
+    labels,
+    mode,
+  };
   const snapshot = proxyRequest
     ? ((await proxyRequest({
         method: "GET",
         path: "/snapshot",
         profile,
-        query: {
-          format,
-          targetId,
-          limit,
-          ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
-          refs,
-          interactive,
-          compact,
-          depth,
-          selector,
-          frame,
-          labels,
-          mode,
-        },
+        query: snapshotQuery,
       })) as Awaited<ReturnType<typeof browserSnapshot>>)
     : await browserSnapshot(baseUrl, {
-        format,
-        targetId,
-        limit,
-        ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
-        refs,
-        interactive,
-        compact,
-        depth,
-        selector,
-        frame,
-        labels,
-        mode,
+        ...snapshotQuery,
         profile,
       });
   if (snapshot.format === "ai") {
@@ -304,9 +310,18 @@ export async function executeActAction(params: {
   } catch (err) {
     if (isChromeStaleTargetError(profile, err)) {
       const retryRequest = stripTargetIdFromActRequest(request);
+      const tabs = proxyRequest
+        ? ((
+            (await proxyRequest({
+              method: "GET",
+              path: "/tabs",
+              profile,
+            })) as { tabs?: unknown[] }
+          ).tabs ?? [])
+        : await browserTabs(baseUrl, { profile }).catch(() => []);
       // Some Chrome relay targetIds can go stale between snapshots and actions.
-      // Retry once without targetId to let relay use the currently attached tab.
-      if (retryRequest) {
+      // Only retry safe read-only actions, and only when exactly one tab remains attached.
+      if (retryRequest && canRetryChromeActWithoutTargetId(request) && tabs.length === 1) {
         try {
           const retryResult = proxyRequest
             ? await proxyRequest({
@@ -323,15 +338,6 @@ export async function executeActAction(params: {
           // Fall through to explicit stale-target guidance.
         }
       }
-      const tabs = proxyRequest
-        ? ((
-            (await proxyRequest({
-              method: "GET",
-              path: "/tabs",
-              profile,
-            })) as { tabs?: unknown[] }
-          ).tabs ?? [])
-        : await browserTabs(baseUrl, { profile }).catch(() => []);
       if (!tabs.length) {
         throw new Error(
           "No Chrome tabs are attached via the OpenClaw Browser Relay extension. Click the toolbar icon on the tab you want to control (badge ON), then retry.",

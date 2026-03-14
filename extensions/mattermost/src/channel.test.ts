@@ -65,6 +65,38 @@ describe("mattermostPlugin", () => {
     });
   });
 
+  describe("threading", () => {
+    it("uses replyToMode for channel messages and keeps direct messages off", () => {
+      const resolveReplyToMode = mattermostPlugin.threading?.resolveReplyToMode;
+      if (!resolveReplyToMode) {
+        return;
+      }
+
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            replyToMode: "all",
+          },
+        },
+      };
+
+      expect(
+        resolveReplyToMode({
+          cfg,
+          accountId: "default",
+          chatType: "channel",
+        }),
+      ).toBe("all");
+      expect(
+        resolveReplyToMode({
+          cfg,
+          accountId: "default",
+          chatType: "direct",
+        }),
+      ).toBe("off");
+    });
+  });
+
   describe("messageActions", () => {
     beforeEach(() => {
       resetMattermostReactionBotUserCacheForTests();
@@ -213,6 +245,57 @@ describe("mattermostPlugin", () => {
         { type: "text", text: "Removed reaction :thumbsup: from POST1" },
       ]);
       expect(result?.details).toEqual({});
+    });
+
+    it("maps replyTo to replyToId for send actions", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.({
+        channel: "mattermost",
+        action: "send",
+        params: {
+          to: "channel:CHAN1",
+          message: "hello",
+          replyTo: "post-root",
+        },
+        cfg,
+        accountId: "default",
+      } as any);
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "hello",
+        expect.objectContaining({
+          accountId: "default",
+          replyToId: "post-root",
+        }),
+      );
+    });
+
+    it("falls back to trimmed replyTo when replyToId is blank", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.({
+        channel: "mattermost",
+        action: "send",
+        params: {
+          to: "channel:CHAN1",
+          message: "hello",
+          replyToId: "   ",
+          replyTo: " post-root ",
+        },
+        cfg,
+        accountId: "default",
+      } as any);
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "hello",
+        expect.objectContaining({
+          accountId: "default",
+          replyToId: "post-root",
+        }),
+      );
     });
   });
 

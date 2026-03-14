@@ -60,6 +60,20 @@ export type FeishuSendResult = {
   chatId: string;
 };
 
+export type FeishuChatType = "p2p" | "group" | "private";
+
+export type FeishuMessageInfo = {
+  messageId: string;
+  chatId: string;
+  chatType?: FeishuChatType;
+  senderId?: string;
+  senderOpenId?: string;
+  senderType?: string;
+  content: string;
+  contentType: string;
+  createTime?: number;
+};
+
 export type FeishuProbeResult = BaseProbeResult<string> & {
   appId?: string;
   botName?: string;

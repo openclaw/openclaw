@@ -135,11 +135,10 @@ function setupNodeInvokeMock(params: {
 function createSystemRunPreparePayload(cwd: string | null) {
   return {
     payload: {
-      cmdText: "echo hi",
       plan: {
         argv: ["echo", "hi"],
         cwd,
-        rawCommand: "echo hi",
+        commandText: "echo hi",
         agentId: null,
         sessionKey: null,
       },
@@ -662,10 +661,9 @@ describe("nodes run", () => {
       onApprovalRequest: (approvalParams) => {
         expect(approvalParams).toMatchObject({
           id: expect.any(String),
-          command: "echo hi",
-          commandArgv: ["echo", "hi"],
           systemRunPlan: expect.objectContaining({
             argv: ["echo", "hi"],
+            commandText: "echo hi",
           }),
           nodeId: NODE_ID,
           host: "node",

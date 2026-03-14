@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
-import { resolveImplicitProviders, resolveOllamaApiBase } from "./models-config.providers.js";
+import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
+import { resolveOllamaApiBase } from "./models-config.providers.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -60,7 +61,7 @@ describe("Ollama provider", () => {
   }
 
   async function resolveProvidersWithOllamaKey(agentDir: string) {
-    return await withOllamaApiKey(async () => await resolveImplicitProviders({ agentDir }));
+    return await withOllamaApiKey(async () => await resolveImplicitProvidersForTest({ agentDir }));
   }
 
   const createTagModel = (name: string) => ({ name, modified_at: "", size: 1, digest: "" });
@@ -78,7 +79,7 @@ describe("Ollama provider", () => {
 
   it("should not include ollama when no API key is configured", async () => {
     const agentDir = createAgentDir();
-    const providers = await resolveImplicitProviders({ agentDir });
+    const providers = await resolveImplicitProvidersForTest({ agentDir });
 
     expect(providers?.ollama).toBeUndefined();
   });
@@ -86,7 +87,7 @@ describe("Ollama provider", () => {
   it("should use native ollama api type", async () => {
     const agentDir = createAgentDir();
     await withOllamaApiKey(async () => {
-      const providers = await resolveImplicitProviders({ agentDir });
+      const providers = await resolveImplicitProvidersForTest({ agentDir });
 
       expect(providers?.ollama).toBeDefined();
       expect(providers?.ollama?.apiKey).toBe("OLLAMA_API_KEY");
@@ -98,7 +99,7 @@ describe("Ollama provider", () => {
   it("should preserve explicit ollama baseUrl on implicit provider injection", async () => {
     const agentDir = createAgentDir();
     await withOllamaApiKey(async () => {
-      const providers = await resolveImplicitProviders({
+      const providers = await resolveImplicitProvidersForTest({
         agentDir,
         explicitProviders: {
           ollama: {
@@ -239,7 +240,7 @@ describe("Ollama provider", () => {
       },
     ];
 
-    const providers = await resolveImplicitProviders({
+    const providers = await resolveImplicitProvidersForTest({
       agentDir,
       explicitProviders: {
         ollama: {
@@ -264,7 +265,7 @@ describe("Ollama provider", () => {
   it("should preserve explicit apiKey when discovery path has no models and no env key", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
 
-    const providers = await resolveImplicitProviders({
+    const providers = await resolveImplicitProvidersForTest({
       agentDir,
       explicitProviders: {
         ollama: {

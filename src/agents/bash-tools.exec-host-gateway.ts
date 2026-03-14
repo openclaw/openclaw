@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
 import {
   addAllowlistEntry,
   type ExecAsk,
@@ -13,21 +14,22 @@ import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import { logInfo } from "../logger.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
+import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
 import {
-  createDefaultExecApprovalRequestContext,
+  createAndRegisterDefaultExecApprovalRequest,
   resolveBaseExecApprovalDecision,
   resolveApprovalDecisionOrUndefined,
   resolveExecHostApprovalContext,
 } from "./bash-tools.exec-host-shared.js";
 import {
+  buildApprovalPendingMessage,
   DEFAULT_NOTIFY_TAIL_CHARS,
   createApprovalSlug,
-  emitExecSystemEvent,
   normalizeNotifyOutput,
   runExecProcess,
 } from "./bash-tools.exec-runtime.js";
@@ -141,52 +143,52 @@ export async function processGatewayAllowlist(
     const {
       approvalId,
       approvalSlug,
-      contextKey,
-      noticeSeconds,
       warningText,
-      expiresAtMs: defaultExpiresAtMs,
-      preResolvedDecision: defaultPreResolvedDecision,
-    } = createDefaultExecApprovalRequestContext({
+      expiresAtMs,
+      preResolvedDecision,
+      initiatingSurface,
+      sentApproverDms,
+      unavailableReason,
+    } = await createAndRegisterDefaultExecApprovalRequest({
       warnings: params.warnings,
       approvalRunningNoticeMs: params.approvalRunningNoticeMs,
       createApprovalSlug,
+      turnSourceChannel: params.turnSourceChannel,
+      turnSourceAccountId: params.turnSourceAccountId,
+      register: async (approvalId) =>
+        await registerExecApprovalRequestForHostOrThrow({
+          approvalId,
+          command: params.command,
+          workdir: params.workdir,
+          host: "gateway",
+          security: hostSecurity,
+          ask: hostAsk,
+          ...buildExecApprovalRequesterContext({
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+          }),
+          resolvedPath: allowlistEval.segments[0]?.resolution?.resolvedPath,
+          ...buildExecApprovalTurnSourceContext(params),
+        }),
     });
     const resolvedPath = allowlistEval.segments[0]?.resolution?.resolvedPath;
     const effectiveTimeout =
       typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
-    let expiresAtMs = defaultExpiresAtMs;
-    let preResolvedDecision = defaultPreResolvedDecision;
-
-    // Register first so the returned approval ID is actionable immediately.
-    const registration = await registerExecApprovalRequestForHostOrThrow({
-      approvalId,
-      command: params.command,
-      workdir: params.workdir,
-      host: "gateway",
-      security: hostSecurity,
-      ask: hostAsk,
-      ...buildExecApprovalRequesterContext({
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-      }),
-      resolvedPath,
-      ...buildExecApprovalTurnSourceContext(params),
-    });
-    expiresAtMs = registration.expiresAtMs;
-    preResolvedDecision = registration.finalDecision;
 
     void (async () => {
       const decision = await resolveApprovalDecisionOrUndefined({
         approvalId,
         preResolvedDecision,
         onFailure: () =>
-          emitExecSystemEvent(
-            `Exec denied (gateway id=${approvalId}, approval-request-failed): ${params.command}`,
-            {
-              sessionKey: params.notifySessionKey,
-              contextKey,
-            },
-          ),
+          void sendExecApprovalFollowup({
+            approvalId,
+            sessionKey: params.notifySessionKey,
+            turnSourceChannel: params.turnSourceChannel,
+            turnSourceTo: params.turnSourceTo,
+            turnSourceAccountId: params.turnSourceAccountId,
+            turnSourceThreadId: params.turnSourceThreadId,
+            resultText: `Exec denied (gateway id=${approvalId}, approval-request-failed): ${params.command}`,
+          }),
       });
       if (decision === undefined) {
         return;
@@ -230,13 +232,15 @@ export async function processGatewayAllowlist(
       }
 
       if (deniedReason) {
-        emitExecSystemEvent(
-          `Exec denied (gateway id=${approvalId}, ${deniedReason}): ${params.command}`,
-          {
-            sessionKey: params.notifySessionKey,
-            contextKey,
-          },
-        );
+        await sendExecApprovalFollowup({
+          approvalId,
+          sessionKey: params.notifySessionKey,
+          turnSourceChannel: params.turnSourceChannel,
+          turnSourceTo: params.turnSourceTo,
+          turnSourceAccountId: params.turnSourceAccountId,
+          turnSourceThreadId: params.turnSourceThreadId,
+          resultText: `Exec denied (gateway id=${approvalId}, ${deniedReason}): ${params.command}`,
+        }).catch(() => {});
         return;
       }
 
@@ -262,32 +266,21 @@ export async function processGatewayAllowlist(
           timeoutSec: effectiveTimeout,
         });
       } catch {
-        emitExecSystemEvent(
-          `Exec denied (gateway id=${approvalId}, spawn-failed): ${params.command}`,
-          {
-            sessionKey: params.notifySessionKey,
-            contextKey,
-          },
-        );
+        await sendExecApprovalFollowup({
+          approvalId,
+          sessionKey: params.notifySessionKey,
+          turnSourceChannel: params.turnSourceChannel,
+          turnSourceTo: params.turnSourceTo,
+          turnSourceAccountId: params.turnSourceAccountId,
+          turnSourceThreadId: params.turnSourceThreadId,
+          resultText: `Exec denied (gateway id=${approvalId}, spawn-failed): ${params.command}`,
+        }).catch(() => {});
         return;
       }
 
       markBackgrounded(run.session);
 
-      let runningTimer: NodeJS.Timeout | null = null;
-      if (params.approvalRunningNoticeMs > 0) {
-        runningTimer = setTimeout(() => {
-          emitExecSystemEvent(
-            `Exec running (gateway id=${approvalId}, session=${run?.session.id}, >${noticeSeconds}s): ${params.command}`,
-            { sessionKey: params.notifySessionKey, contextKey },
-          );
-        }, params.approvalRunningNoticeMs);
-      }
-
       const outcome = await run.promise;
-      if (runningTimer) {
-        clearTimeout(runningTimer);
-      }
       const output = normalizeNotifyOutput(
         tail(outcome.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
       );
@@ -295,7 +288,15 @@ export async function processGatewayAllowlist(
       const summary = output
         ? `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})\n${output}`
         : `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})`;
-      emitExecSystemEvent(summary, { sessionKey: params.notifySessionKey, contextKey });
+      await sendExecApprovalFollowup({
+        approvalId,
+        sessionKey: params.notifySessionKey,
+        turnSourceChannel: params.turnSourceChannel,
+        turnSourceTo: params.turnSourceTo,
+        turnSourceAccountId: params.turnSourceAccountId,
+        turnSourceThreadId: params.turnSourceThreadId,
+        resultText: summary,
+      }).catch(() => {});
     })();
 
     return {
@@ -304,19 +305,45 @@ export async function processGatewayAllowlist(
           {
             type: "text",
             text:
-              `${warningText}Approval required (id ${approvalSlug}). ` +
-              "Approve to run; updates will arrive after completion.",
+              unavailableReason !== null
+                ? (buildExecApprovalUnavailableReplyPayload({
+                    warningText,
+                    reason: unavailableReason,
+                    channelLabel: initiatingSurface.channelLabel,
+                    sentApproverDms,
+                  }).text ?? "")
+                : buildApprovalPendingMessage({
+                    warningText,
+                    approvalSlug,
+                    approvalId,
+                    command: params.command,
+                    cwd: params.workdir,
+                    host: "gateway",
+                  }),
           },
         ],
-        details: {
-          status: "approval-pending",
-          approvalId,
-          approvalSlug,
-          expiresAtMs,
-          host: "gateway",
-          command: params.command,
-          cwd: params.workdir,
-        },
+        details:
+          unavailableReason !== null
+            ? ({
+                status: "approval-unavailable",
+                reason: unavailableReason,
+                channelLabel: initiatingSurface.channelLabel,
+                sentApproverDms,
+                host: "gateway",
+                command: params.command,
+                cwd: params.workdir,
+                warningText,
+              } satisfies ExecToolDetails)
+            : ({
+                status: "approval-pending",
+                approvalId,
+                approvalSlug,
+                expiresAtMs,
+                host: "gateway",
+                command: params.command,
+                cwd: params.workdir,
+                warningText,
+              } satisfies ExecToolDetails),
       },
     };
   }

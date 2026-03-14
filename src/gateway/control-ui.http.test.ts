@@ -45,6 +45,7 @@ describe("handleControlUiHttpRequest", () => {
     method: "GET" | "HEAD" | "POST";
     rootPath: string;
     basePath?: string;
+    rootKind?: "resolved" | "bundled";
   }) {
     const { res, end } = makeMockHttpResponse();
     const handled = handleControlUiHttpRequest(
@@ -52,7 +53,7 @@ describe("handleControlUiHttpRequest", () => {
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
-        root: { kind: "resolved", path: params.rootPath },
+        root: { kind: params.rootKind ?? "resolved", path: params.rootPath },
       },
     );
     return { res, end, handled };
@@ -82,6 +83,13 @@ describe("handleControlUiHttpRequest", () => {
     const filePath = path.join(assetsDir, filename);
     await fs.writeFile(filePath, contents);
     return { assetsDir, filePath };
+  }
+
+  async function createHardlinkedAssetFile(rootPath: string) {
+    const { filePath } = await writeAssetFile(rootPath, "app.js", "console.log('hi');");
+    const hardlinkPath = path.join(path.dirname(filePath), "app.hl.js");
+    await fs.link(filePath, hardlinkPath);
+    return hardlinkPath;
   }
 
   async function withBasePathRootFixture<T>(params: {
@@ -322,6 +330,66 @@ describe("handleControlUiHttpRequest", () => {
         } finally {
           await fs.rm(outsideDir, { recursive: true, force: true });
         }
+      },
+    });
+  });
+
+  it("rejects hardlinked index.html for non-package control-ui roots", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-index-hardlink-"));
+        try {
+          const outsideIndex = path.join(outsideDir, "index.html");
+          await fs.writeFile(outsideIndex, "<html>outside-hardlink</html>\n");
+          await fs.rm(path.join(tmp, "index.html"));
+          await fs.link(outsideIndex, path.join(tmp, "index.html"));
+
+          const { res, end, handled } = runControlUiRequest({
+            url: "/",
+            method: "GET",
+            rootPath: tmp,
+          });
+          expectNotFoundResponse({ handled, res, end });
+        } finally {
+          await fs.rm(outsideDir, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
+  it("rejects hardlinked asset files for custom/resolved roots (security boundary)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await createHardlinkedAssetFile(tmp);
+
+        const { res, end, handled } = runControlUiRequest({
+          url: "/assets/app.hl.js",
+          method: "GET",
+          rootPath: tmp,
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(404);
+        expect(end).toHaveBeenCalledWith("Not Found");
+      },
+    });
+  });
+
+  it("serves hardlinked asset files for bundled roots (pnpm global install)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await createHardlinkedAssetFile(tmp);
+
+        const { res, end, handled } = runControlUiRequest({
+          url: "/assets/app.hl.js",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("console.log('hi');");
       },
     });
   });

@@ -3,7 +3,7 @@ import Testing
 @testable import OpenClaw
 
 struct MacNodeBrowserProxyTests {
-    @Test func requestUsesBrowserControlEndpointAndWrapsResult() async throws {
+    @Test func `request uses browser control endpoint and wraps result`() async throws {
         let proxy = MacNodeBrowserProxy(
             endpointProvider: {
                 MacNodeBrowserProxy.Endpoint(
@@ -37,5 +37,50 @@ struct MacNodeBrowserProxyTests {
         #expect(payload["files"] == nil)
         #expect(tabs.count == 1)
         #expect(tabs[0]["id"] as? String == "tab-1")
+    }
+
+    // Regression test: nested POST bodies must serialize without __SwiftValue crashes.
+    @Test func postRequestSerializesNestedBodyWithoutCrash() async throws {
+        actor BodyCapture {
+            private var body: Data?
+
+            func set(_ body: Data?) {
+                self.body = body
+            }
+
+            func get() -> Data? {
+                self.body
+            }
+        }
+
+        let capturedBody = BodyCapture()
+        let proxy = MacNodeBrowserProxy(
+            endpointProvider: {
+                MacNodeBrowserProxy.Endpoint(
+                    baseURL: URL(string: "http://127.0.0.1:18791")!,
+                    token: nil,
+                    password: nil)
+            },
+            performRequest: { request in
+                await capturedBody.set(request.httpBody)
+                let url = try #require(request.url)
+                let response = try #require(
+                    HTTPURLResponse(
+                        url: url,
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: nil))
+                return (Data(#"{"ok":true}"#.utf8), response)
+            })
+
+        _ = try await proxy.request(
+            paramsJSON: #"{"method":"POST","path":"/action","body":{"nested":{"key":"val"},"arr":[1,2]}}"#)
+
+        let bodyData = try #require(await capturedBody.get())
+        let parsed = try #require(JSONSerialization.jsonObject(with: bodyData) as? [String: Any])
+        let nested = try #require(parsed["nested"] as? [String: Any])
+        #expect(nested["key"] as? String == "val")
+        let arr = try #require(parsed["arr"] as? [Any])
+        #expect(arr.count == 2)
     }
 }

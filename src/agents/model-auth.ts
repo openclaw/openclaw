@@ -4,6 +4,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   normalizeOptionalSecretInput,
   normalizeSecretInput,
@@ -17,10 +18,16 @@ import {
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
 import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
-import { OLLAMA_LOCAL_AUTH_MARKER } from "./model-auth-markers.js";
+import {
+  isKnownEnvApiKeyMarker,
+  isNonSecretApiKeyMarker,
+  OLLAMA_LOCAL_AUTH_MARKER,
+} from "./model-auth-markers.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
+
+const log = createSubsystemLogger("model-auth");
 
 const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
@@ -55,6 +62,49 @@ export function getCustomProviderApiKey(
 ): string | undefined {
   const entry = resolveProviderConfig(cfg, provider);
   return normalizeOptionalSecretInput(entry?.apiKey);
+}
+
+type ResolvedCustomProviderApiKey = {
+  apiKey: string;
+  source: string;
+};
+
+export function resolveUsableCustomProviderApiKey(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  env?: NodeJS.ProcessEnv;
+}): ResolvedCustomProviderApiKey | null {
+  const customKey = getCustomProviderApiKey(params.cfg, params.provider);
+  if (!customKey) {
+    return null;
+  }
+  if (!isNonSecretApiKeyMarker(customKey)) {
+    return { apiKey: customKey, source: "models.json" };
+  }
+  if (!isKnownEnvApiKeyMarker(customKey)) {
+    return null;
+  }
+  const envValue = normalizeOptionalSecretInput((params.env ?? process.env)[customKey]);
+  if (!envValue) {
+    return null;
+  }
+  const applied = new Set(getShellEnvAppliedKeys());
+  return {
+    apiKey: envValue,
+    source: resolveEnvSourceLabel({
+      applied,
+      envVars: [customKey],
+      label: `${customKey} (models.json marker)`,
+    }),
+  };
+}
+
+export function hasUsableCustomProviderApiKey(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  env?: NodeJS.ProcessEnv,
+): boolean {
+  return Boolean(resolveUsableCustomProviderApiKey({ cfg, provider, env }));
 }
 
 function resolveProviderAuthOverride(
@@ -221,7 +271,9 @@ export async function resolveApiKeyForProvider(params: {
           mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
         };
       }
-    } catch {}
+    } catch (err) {
+      log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
+    }
   }
 
   const envResolved = resolveEnvApiKey(provider);
@@ -233,9 +285,9 @@ export async function resolveApiKeyForProvider(params: {
     };
   }
 
-  const customKey = getCustomProviderApiKey(cfg, provider);
+  const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
   if (customKey) {
-    return { apiKey: customKey, source: "models.json", mode: "api-key" };
+    return { apiKey: customKey.apiKey, source: customKey.source, mode: "api-key" };
   }
 
   const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
@@ -271,11 +323,14 @@ export async function resolveApiKeyForProvider(params: {
 export type EnvApiKeyResult = { apiKey: string; source: string };
 export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
 
-export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
+export function resolveEnvApiKey(
+  provider: string,
+  env: NodeJS.ProcessEnv = process.env,
+): EnvApiKeyResult | null {
   const normalized = normalizeProviderId(provider);
   const applied = new Set(getShellEnvAppliedKeys());
   const pick = (envVar: string): EnvApiKeyResult | null => {
-    const value = normalizeOptionalSecretInput(process.env[envVar]);
+    const value = normalizeOptionalSecretInput(env[envVar]);
     if (!value) {
       return null;
     }
@@ -352,7 +407,7 @@ export function resolveModelAuthMode(
     return envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
   }
 
-  if (getCustomProviderApiKey(cfg, resolved)) {
+  if (hasUsableCustomProviderApiKey(cfg, resolved)) {
     return "api-key";
   }
 

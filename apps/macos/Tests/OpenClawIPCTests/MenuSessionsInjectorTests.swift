@@ -5,7 +5,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct MenuSessionsInjectorTests {
-    @Test func injectsDisconnectedMessage() {
+    @Test func `injects disconnected message`() {
         let injector = MenuSessionsInjector()
         injector.setTestingControlChannelConnected(false)
         injector.setTestingSnapshot(nil, errorText: nil)
@@ -19,7 +19,7 @@ struct MenuSessionsInjectorTests {
         #expect(menu.items.contains { $0.tag == 9_415_557 })
     }
 
-    @Test func injectsSessionRows() {
+    @Test func `injects session rows`() {
         let injector = MenuSessionsInjector()
         injector.setTestingControlChannelConnected(true)
 
@@ -94,7 +94,7 @@ struct MenuSessionsInjectorTests {
         #expect(menu.items.contains { $0.tag == 9_415_557 && $0.isSeparatorItem })
     }
 
-    @Test func costUsageSubmenuDoesNotUseInjectorDelegate() {
+    @Test func `cost usage submenu does not use injector delegate`() {
         let injector = MenuSessionsInjector()
         injector.setTestingControlChannelConnected(true)
 

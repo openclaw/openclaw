@@ -53,6 +53,7 @@ import {
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { parseIMessageNotification } from "./parse-notification.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
+import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
 
 /**
@@ -99,6 +100,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
   const sentMessageCache = createSentMessageCache();
+  const selfChatCache = createSelfChatCache();
   const loopRateLimiter = createLoopRateLimiter();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
   const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
@@ -252,6 +254,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       historyLimit,
       groupHistories,
       echoCache: sentMessageCache,
+      selfChatCache,
       logVerbose,
     });
 
@@ -267,6 +270,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       // are normal and should not escalate.
       const isLoopDrop =
         decision.reason === "echo" ||
+        decision.reason === "self-chat echo" ||
         decision.reason === "reflected assistant content" ||
         decision.reason === "from me";
       if (isLoopDrop) {

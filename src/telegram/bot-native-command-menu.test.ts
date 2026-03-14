@@ -13,6 +13,7 @@ type SyncMenuOptions = {
   accountId: string;
   botIdentity: string;
   runtimeLog?: ReturnType<typeof vi.fn>;
+  runtimeError?: ReturnType<typeof vi.fn>;
 };
 
 function syncMenuCommandsWithMocks(options: SyncMenuOptions): void {
@@ -22,7 +23,7 @@ function syncMenuCommandsWithMocks(options: SyncMenuOptions): void {
     } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
     runtime: {
       log: options.runtimeLog ?? vi.fn(),
-      error: vi.fn(),
+      error: options.runtimeError ?? vi.fn(),
       exit: vi.fn(),
     } as Parameters<typeof syncTelegramMenuCommands>[0]["runtime"],
     commandsToRegister: options.commandsToRegister,
@@ -248,19 +249,13 @@ describe("bot-native-command-menu", () => {
       .mockRejectedValueOnce(new Error("400: Bad Request: BOT_COMMANDS_TOO_MUCH"))
       .mockResolvedValue(undefined);
     const runtimeLog = vi.fn();
+    const runtimeError = vi.fn();
 
-    syncTelegramMenuCommands({
-      bot: {
-        api: {
-          deleteMyCommands,
-          setMyCommands,
-        },
-      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
-      runtime: {
-        log: runtimeLog,
-        error: vi.fn(),
-        exit: vi.fn(),
-      } as Parameters<typeof syncTelegramMenuCommands>[0]["runtime"],
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
+      runtimeError,
       commandsToRegister: Array.from({ length: 100 }, (_, i) => ({
         command: `cmd_${i}`,
         description: `Command ${i}`,
@@ -279,5 +274,9 @@ describe("bot-native-command-menu", () => {
     expect(runtimeLog).toHaveBeenCalledWith(
       "Telegram rejected 100 commands (BOT_COMMANDS_TOO_MUCH); retrying with 80.",
     );
+    expect(runtimeLog).toHaveBeenCalledWith(
+      "Telegram accepted 80 commands after BOT_COMMANDS_TOO_MUCH (started with 100; omitted 20). Reduce plugin/skill/custom commands to expose more menu entries.",
+    );
+    expect(runtimeError).not.toHaveBeenCalled();
   });
 });

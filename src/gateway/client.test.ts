@@ -7,7 +7,6 @@ const wsInstances = vi.hoisted((): MockWebSocket[] => []);
 const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const loadDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const storeDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
-const clearDevicePairingMock = vi.hoisted(() => vi.fn());
 const logDebugMock = vi.hoisted(() => vi.fn());
 
 type WsEvent = "open" | "message" | "close" | "error";
@@ -52,7 +51,9 @@ class MockWebSocket {
     }
   }
 
-  close(_code?: number, _reason?: string): void {}
+  close(code?: number, reason?: string): void {
+    this.emitClose(code ?? 1000, reason ?? "");
+  }
 
   send(data: string): void {
     this.sent.push(data);
@@ -91,14 +92,6 @@ vi.mock("../infra/device-auth-store.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../infra/device-pairing.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/device-pairing.js")>();
-  return {
-    ...actual,
-    clearDevicePairing: (...args: unknown[]) => clearDevicePairingMock(...args),
-  };
-});
-
 vi.mock("../logger.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../logger.js")>();
   return {
@@ -108,6 +101,7 @@ vi.mock("../logger.js", async (importOriginal) => {
 });
 
 const { GatewayClient } = await import("./client.js");
+type GatewayClientInstance = InstanceType<typeof GatewayClient>;
 
 function getLatestWs(): MockWebSocket {
   const ws = wsInstances.at(-1);
@@ -250,8 +244,6 @@ describe("GatewayClient close handling", () => {
     wsInstances.length = 0;
     clearDeviceAuthTokenMock.mockClear();
     clearDeviceAuthTokenMock.mockImplementation(() => undefined);
-    clearDevicePairingMock.mockClear();
-    clearDevicePairingMock.mockResolvedValue(true);
     logDebugMock.mockClear();
   });
 
@@ -266,7 +258,7 @@ describe("GatewayClient close handling", () => {
     );
 
     expect(clearDeviceAuthTokenMock).toHaveBeenCalledWith({ deviceId: "dev-1", role: "operator" });
-    expect(clearDevicePairingMock).toHaveBeenCalledWith("dev-1");
+    expect(logDebugMock).toHaveBeenCalledWith("cleared stale device-auth token for device dev-1");
     expect(onClose).toHaveBeenCalledWith(
       1008,
       "unauthorized: DEVICE token mismatch (rotate/reissue device token)",
@@ -289,38 +281,18 @@ describe("GatewayClient close handling", () => {
     expect(logDebugMock).toHaveBeenCalledWith(
       expect.stringContaining("failed clearing stale device-auth token"),
     );
-    expect(clearDevicePairingMock).not.toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
-    client.stop();
-  });
-
-  it("does not break close flow when pairing clear rejects", async () => {
-    clearDevicePairingMock.mockRejectedValue(new Error("pairing store unavailable"));
-    const onClose = vi.fn();
-    const client = createClientWithIdentity("dev-3", onClose);
-
-    client.start();
-    expect(() => {
-      getLatestWs().emitClose(1008, "unauthorized: device token mismatch");
-    }).not.toThrow();
-
-    await Promise.resolve();
-    expect(logDebugMock).toHaveBeenCalledWith(
-      expect.stringContaining("failed clearing stale device pairing"),
-    );
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
     client.stop();
   });
 
   it("does not clear auth state for non-mismatch close reasons", () => {
     const onClose = vi.fn();
-    const client = createClientWithIdentity("dev-4", onClose);
+    const client = createClientWithIdentity("dev-3", onClose);
 
     client.start();
     getLatestWs().emitClose(1008, "unauthorized: signature invalid");
 
     expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
-    expect(clearDevicePairingMock).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid");
     client.stop();
   });
@@ -328,7 +300,7 @@ describe("GatewayClient close handling", () => {
   it("does not clear persisted device auth when explicit shared token is provided", () => {
     const onClose = vi.fn();
     const identity: DeviceIdentity = {
-      deviceId: "dev-5",
+      deviceId: "dev-4",
       privateKeyPem: "private-key", // pragma: allowlist secret
       publicKeyPem: "public-key",
     };
@@ -343,7 +315,6 @@ describe("GatewayClient close handling", () => {
     getLatestWs().emitClose(1008, "unauthorized: device token mismatch");
 
     expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
-    expect(clearDevicePairingMock).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
     client.stop();
   });
@@ -365,12 +336,27 @@ describe("GatewayClient connect auth payload", () => {
       params?: {
         auth?: {
           token?: string;
+          bootstrapToken?: string;
           deviceToken?: string;
           password?: string;
         };
       };
     };
     return parsed.params?.auth ?? {};
+  }
+
+  function connectRequestFrom(ws: MockWebSocket) {
+    const raw = ws.sent.find((frame) => frame.includes('"method":"connect"'));
+    expect(raw).toBeTruthy();
+    return JSON.parse(raw ?? "{}") as {
+      id?: string;
+      params?: {
+        auth?: {
+          token?: string;
+          deviceToken?: string;
+        };
+      };
+    };
   }
 
   function emitConnectChallenge(ws: MockWebSocket, nonce = "nonce-1") {
@@ -381,6 +367,63 @@ describe("GatewayClient connect auth payload", () => {
         payload: { nonce },
       }),
     );
+  }
+
+  function startClientAndConnect(params: { client: GatewayClientInstance; nonce?: string }) {
+    params.client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws, params.nonce);
+    return { ws, connect: connectRequestFrom(ws) };
+  }
+
+  function emitConnectFailure(
+    ws: MockWebSocket,
+    connectId: string | undefined,
+    details: Record<string, unknown>,
+  ) {
+    ws.emitMessage(
+      JSON.stringify({
+        type: "res",
+        id: connectId,
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "unauthorized",
+          details,
+        },
+      }),
+    );
+  }
+
+  async function expectRetriedConnectAuth(params: {
+    firstWs: MockWebSocket;
+    connectId: string | undefined;
+    failureDetails: Record<string, unknown>;
+  }) {
+    emitConnectFailure(params.firstWs, params.connectId, params.failureDetails);
+    await vi.waitFor(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws, "nonce-2");
+    return connectFrameFrom(ws);
+  }
+
+  async function expectNoReconnectAfterConnectFailure(params: {
+    client: GatewayClientInstance;
+    firstWs: MockWebSocket;
+    connectId: string | undefined;
+    failureDetails: Record<string, unknown>;
+  }) {
+    vi.useFakeTimers();
+    try {
+      emitConnectFailure(params.firstWs, params.connectId, params.failureDetails);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(wsInstances).toHaveLength(1);
+    } finally {
+      params.client.stop();
+      vi.useRealTimers();
+    }
   }
 
   it("uses explicit shared token and does not inject stored device token", () => {
@@ -440,6 +483,26 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
+  it("uses bootstrap token when no shared or device token is available", () => {
+    loadDeviceAuthTokenMock.mockReturnValue(undefined);
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      bootstrapToken: "bootstrap-token",
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+
+    expect(connectFrameFrom(ws)).toMatchObject({
+      bootstrapToken: "bootstrap-token",
+    });
+    expect(connectFrameFrom(ws).token).toBeUndefined();
+    expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
+    client.stop();
+  });
+
   it("prefers explicit deviceToken over stored device token", () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
     const client = new GatewayClient({
@@ -457,5 +520,79 @@ describe("GatewayClient connect auth payload", () => {
       deviceToken: "explicit-device-token",
     });
     client.stop();
+  });
+
+  it("retries with stored device token after shared-token mismatch on trusted endpoints", async () => {
+    loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    expect(firstConnect.params?.auth?.token).toBe("shared-token");
+    expect(firstConnect.params?.auth?.deviceToken).toBeUndefined();
+
+    const retriedAuth = await expectRetriedConnectAuth({
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: { code: "AUTH_TOKEN_MISMATCH", canRetryWithDeviceToken: true },
+    });
+    expect(retriedAuth).toMatchObject({
+      token: "shared-token",
+      deviceToken: "stored-device-token",
+    });
+    client.stop();
+  });
+
+  it("retries with stored device token when server recommends retry_with_device_token", async () => {
+    loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    const retriedAuth = await expectRetriedConnectAuth({
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: { code: "AUTH_UNAUTHORIZED", recommendedNextStep: "retry_with_device_token" },
+    });
+    expect(retriedAuth).toMatchObject({
+      token: "shared-token",
+      deviceToken: "stored-device-token",
+    });
+    client.stop();
+  });
+
+  it("does not auto-reconnect on AUTH_TOKEN_MISSING connect failures", async () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: { code: "AUTH_TOKEN_MISSING" },
+    });
+  });
+
+  it("does not auto-reconnect on token mismatch when retry is not trusted", async () => {
+    loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
+    const client = new GatewayClient({
+      url: "wss://gateway.example.com:18789",
+      token: "shared-token",
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: { code: "AUTH_TOKEN_MISMATCH", canRetryWithDeviceToken: true },
+    });
   });
 });

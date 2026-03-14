@@ -6,7 +6,6 @@ import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.node.CameraCaptureManager
 import ai.openclaw.app.node.CanvasController
-import ai.openclaw.app.node.ScreenRecordManager
 import ai.openclaw.app.node.SmsManager
 import ai.openclaw.app.voice.VoiceConversationEntry
 import kotlinx.coroutines.flow.StateFlow
@@ -20,7 +19,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val canvasRehydratePending: StateFlow<Boolean> = runtime.canvasRehydratePending
   val canvasRehydrateErrorText: StateFlow<String?> = runtime.canvasRehydrateErrorText
   val camera: CameraCaptureManager = runtime.camera
-  val screenRecorder: ScreenRecordManager = runtime.screenRecorder
   val sms: SmsManager = runtime.sms
 
   val gateways: StateFlow<List<GatewayEndpoint>> = runtime.gateways
@@ -38,7 +36,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   val cameraHud: StateFlow<CameraHudState?> = runtime.cameraHud
   val cameraFlashToken: StateFlow<Long> = runtime.cameraFlashToken
-  val screenRecordActive: StateFlow<Boolean> = runtime.screenRecordActive
 
   val instanceId: StateFlow<String> = runtime.instanceId
   val displayName: StateFlow<String> = runtime.displayName
@@ -117,6 +114,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun setGatewayToken(value: String) {
     runtime.setGatewayToken(value)
+  }
+
+  fun setGatewayBootstrapToken(value: String) {
+    runtime.setGatewayBootstrapToken(value)
   }
 
   fun setGatewayPassword(value: String) {

@@ -10,7 +10,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = "perplexity" | "brave" | "gemini" | "grok" | "kimi";
+export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -23,17 +23,9 @@ type SearchProviderEntry = {
 
 export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
   {
-    value: "perplexity",
-    label: "Perplexity Search",
-    hint: "Structured results · domain/language/freshness filters",
-    envKeys: ["PERPLEXITY_API_KEY"],
-    placeholder: "pplx-...",
-    signupUrl: "https://www.perplexity.ai/settings/api",
-  },
-  {
     value: "brave",
     label: "Brave Search",
-    hint: "Structured results · region-specific",
+    hint: "Structured results · country/language/time filters",
     envKeys: ["BRAVE_API_KEY"],
     placeholder: "BSA...",
     signupUrl: "https://brave.com/search/api/",
@@ -62,6 +54,14 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
     placeholder: "sk-...",
     signupUrl: "https://platform.moonshot.cn/",
   },
+  {
+    value: "perplexity",
+    label: "Perplexity Search",
+    hint: "Structured results · domain/country/language/time filters",
+    envKeys: ["PERPLEXITY_API_KEY"],
+    placeholder: "pplx-...",
+    signupUrl: "https://www.perplexity.ai/settings/api",
+  },
 ] as const;
 
 export function hasKeyInEnv(entry: SearchProviderEntry): boolean {
@@ -73,14 +73,14 @@ function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown 
   switch (provider) {
     case "brave":
       return search?.apiKey;
-    case "perplexity":
-      return search?.perplexity?.apiKey;
     case "gemini":
       return search?.gemini?.apiKey;
     case "grok":
       return search?.grok?.apiKey;
     case "kimi":
       return search?.kimi?.apiKey;
+    case "perplexity":
+      return search?.perplexity?.apiKey;
   }
 }
 
@@ -132,9 +132,6 @@ export function applySearchKey(
     case "brave":
       search.apiKey = key;
       break;
-    case "perplexity":
-      search.perplexity = { ...search.perplexity, apiKey: key };
-      break;
     case "gemini":
       search.gemini = { ...search.gemini, apiKey: key };
       break;
@@ -143,6 +140,9 @@ export function applySearchKey(
       break;
     case "kimi":
       search.kimi = { ...search.kimi, apiKey: key };
+      break;
+    case "perplexity":
+      search.perplexity = { ...search.perplexity, apiKey: key };
       break;
   }
   return {
@@ -222,7 +222,7 @@ export async function setupSearch(
     if (detected) {
       return detected.value;
     }
-    return "perplexity";
+    return SEARCH_PROVIDER_OPTIONS[0].value;
   })();
 
   type PickerValue = SearchProvider | "__skip__";

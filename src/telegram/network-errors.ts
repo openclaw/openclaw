@@ -5,6 +5,8 @@ import {
   readErrorName,
 } from "../infra/errors.js";
 
+const TELEGRAM_NETWORK_ORIGIN = Symbol("openclaw.telegram.network-origin");
+
 const RECOVERABLE_ERROR_CODES = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
@@ -101,6 +103,51 @@ function getErrorCode(err: unknown): string | undefined {
 }
 
 export type TelegramNetworkErrorContext = "polling" | "send" | "webhook" | "unknown";
+export type TelegramNetworkErrorOrigin = {
+  method?: string | null;
+  url?: string | null;
+};
+
+function normalizeTelegramNetworkMethod(method?: string | null): string | null {
+  const trimmed = method?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed.toLowerCase();
+}
+
+export function tagTelegramNetworkError(err: unknown, origin: TelegramNetworkErrorOrigin): void {
+  if (!err || typeof err !== "object") {
+    return;
+  }
+  Object.defineProperty(err, TELEGRAM_NETWORK_ORIGIN, {
+    value: {
+      method: normalizeTelegramNetworkMethod(origin.method),
+      url: typeof origin.url === "string" && origin.url.trim() ? origin.url : null,
+    } satisfies TelegramNetworkErrorOrigin,
+    configurable: true,
+  });
+}
+
+export function getTelegramNetworkErrorOrigin(err: unknown): TelegramNetworkErrorOrigin | null {
+  for (const candidate of collectTelegramErrorCandidates(err)) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const origin = (candidate as Record<PropertyKey, unknown>)[TELEGRAM_NETWORK_ORIGIN];
+    if (!origin || typeof origin !== "object") {
+      continue;
+    }
+    const method = "method" in origin && typeof origin.method === "string" ? origin.method : null;
+    const url = "url" in origin && typeof origin.url === "string" ? origin.url : null;
+    return { method, url };
+  }
+  return null;
+}
+
+export function isTelegramPollingNetworkError(err: unknown): boolean {
+  return getTelegramNetworkErrorOrigin(err)?.method === "getupdates";
+}
 
 /**
  * Returns true if the error is safe to retry for a non-idempotent Telegram send operation
@@ -121,6 +168,29 @@ export function isSafeToRetrySendError(err: unknown): boolean {
     }
   }
   return false;
+}
+
+function hasTelegramErrorCode(err: unknown, matches: (code: number) => boolean): boolean {
+  for (const candidate of collectTelegramErrorCandidates(err)) {
+    if (!candidate || typeof candidate !== "object" || !("error_code" in candidate)) {
+      continue;
+    }
+    const code = (candidate as { error_code: unknown }).error_code;
+    if (typeof code === "number" && matches(code)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Returns true for HTTP 5xx server errors (error may have been processed). */
+export function isTelegramServerError(err: unknown): boolean {
+  return hasTelegramErrorCode(err, (code) => code >= 500);
+}
+
+/** Returns true for HTTP 4xx client errors (Telegram explicitly rejected, not applied). */
+export function isTelegramClientRejection(err: unknown): boolean {
+  return hasTelegramErrorCode(err, (code) => code >= 400 && code < 500);
 }
 
 export function isRecoverableTelegramNetworkError(

@@ -53,6 +53,7 @@ export {
   parseTelegramThreadId,
 } from "../telegram/outbound-params.js";
 export { collectTelegramStatusIssues } from "../channels/plugins/status-issues/telegram.js";
+export { sendTelegramPayloadMessages } from "../channels/plugins/outbound/telegram.js";
 
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,

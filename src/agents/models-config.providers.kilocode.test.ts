@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import { buildKilocodeProvider, resolveImplicitProviders } from "./models-config.providers.js";
+import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
+import { buildKilocodeProvider } from "./models-config.providers.js";
 
 const KILOCODE_MODEL_IDS = ["kilo/auto"];
 
@@ -14,7 +15,7 @@ describe("Kilo Gateway implicit provider", () => {
     process.env.KILOCODE_API_KEY = "test-key"; // pragma: allowlist secret
 
     try {
-      const providers = await resolveImplicitProviders({ agentDir });
+      const providers = await resolveImplicitProvidersForTest({ agentDir });
       expect(providers?.kilocode).toBeDefined();
       expect(providers?.kilocode?.models?.length).toBeGreaterThan(0);
     } finally {
@@ -28,7 +29,7 @@ describe("Kilo Gateway implicit provider", () => {
     delete process.env.KILOCODE_API_KEY;
 
     try {
-      const providers = await resolveImplicitProviders({ agentDir });
+      const providers = await resolveImplicitProvidersForTest({ agentDir });
       expect(providers?.kilocode).toBeUndefined();
     } finally {
       envSnapshot.restore();
