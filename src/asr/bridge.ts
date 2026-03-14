@@ -22,13 +22,15 @@ export function asrEngineToTranscribeAudioFn(
 /**
  * Create a `MediaUnderstandingProvider` backed by an {@link AsrEngine}.
  *
- * The returned provider only exposes the `transcribeAudio` capability.
- * Image and video capabilities are left undefined.
+ * The returned provider only exposes the `transcribeAudio` method.
+ * `capabilities` is intentionally omitted so that, when used as an override
+ * in `buildMediaUnderstandingRegistry`, the existing provider's full
+ * capability list (which may include image/video) is preserved via the
+ * `capabilities: provider.capabilities ?? existing.capabilities` merge path.
  */
 export function asrEngineToMediaProvider(engine: AsrEngine): MediaUnderstandingProvider {
   return {
     id: engine.id,
-    capabilities: ["audio"],
     transcribeAudio: asrEngineToTranscribeAudioFn(engine),
   };
 }

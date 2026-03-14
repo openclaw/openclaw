@@ -1,22 +1,12 @@
-export type AsrTranscribeRequest = {
-  buffer: Buffer;
-  fileName: string;
-  mime?: string;
-  apiKey: string;
-  baseUrl?: string;
-  headers?: Record<string, string>;
-  model?: string;
-  language?: string;
-  prompt?: string;
-  query?: Record<string, string | number | boolean>;
-  timeoutMs: number;
-  fetchFn?: typeof fetch;
-};
+export type {
+  AudioTranscriptionRequest as AsrTranscribeRequest,
+  AudioTranscriptionResult as AsrTranscribeResult,
+} from "../media-understanding/types.js";
 
-export type AsrTranscribeResult = {
-  text: string;
-  model?: string;
-};
+import type {
+  AudioTranscriptionRequest as AsrTranscribeRequest,
+  AudioTranscriptionResult as AsrTranscribeResult,
+} from "../media-understanding/types.js";
 
 /**
  * Dedicated engine interface for ASR (Automatic Speech Recognition).
