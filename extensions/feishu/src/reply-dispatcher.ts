@@ -420,7 +420,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
         : undefined,
       onReasoningStream: streamingEnabled
-        ? (payload: { text: string }) => {
+        ? (payload: ReplyPayload) => {
             if (!payload.text) {
               return;
             }
