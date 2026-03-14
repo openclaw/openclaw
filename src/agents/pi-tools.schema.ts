@@ -182,7 +182,9 @@ export function normalizeToolParameters(
     ...(typeof nextSchema.title === "string" ? { title: nextSchema.title } : {}),
     ...(typeof nextSchema.description === "string" ? { description: nextSchema.description } : {}),
     properties:
-      Object.keys(mergedProperties).length > 0 ? mergedProperties : (schema.properties ?? {}),
+      Object.keys(mergedProperties).length > 0
+        ? mergedProperties
+        : ((schema?.properties as Record<string, unknown>) ?? {}),
     ...(mergedRequired && mergedRequired.length > 0 ? { required: mergedRequired } : {}),
     additionalProperties: "additionalProperties" in schema ? schema.additionalProperties : true,
   };
