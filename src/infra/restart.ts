@@ -303,14 +303,141 @@ export function triggerOpenClawRestart(): RestartAttempt {
       process.env.OPENCLAW_SYSTEMD_UNIT,
       process.env.OPENCLAW_PROFILE,
     );
+
+    // Detect which service scope is enabled/active to avoid unnecessary tries
+    // and provide better feedback to the user about the detected service.
+    const userEnabledCheck = spawnSync("systemctl", ["--user", "is-enabled", unit], {
+      encoding: "utf8",
+      timeout: SPAWN_TIMEOUT_MS,
+    });
+    const systemEnabledCheck = spawnSync("systemctl", ["is-enabled", unit], {
+      encoding: "utf8",
+      timeout: SPAWN_TIMEOUT_MS,
+    });
+
+    const userEnabled = !userEnabledCheck.error && userEnabledCheck.status === 0;
+    const systemEnabled = !systemEnabledCheck.error && systemEnabledCheck.status === 0;
+
+    // Check which service is actually active (running)
+    const userActiveCheck = spawnSync("systemctl", ["--user", "is-active", unit], {
+      encoding: "utf8",
+      timeout: SPAWN_TIMEOUT_MS,
+    });
+    const systemActiveCheck = spawnSync("systemctl", ["is-active", unit], {
+      encoding: "utf8",
+      timeout: SPAWN_TIMEOUT_MS,
+    });
+
+    const userActive = !userActiveCheck.error && userActiveCheck.status === 0;
+    const systemActive = !systemActiveCheck.error && systemActiveCheck.status === 0;
+
+    // Determine the preferred service scope based on detection
+    // Prefer the scope that is both enabled and active, then enabled, then active
+    let preferredScope: "user" | "system" | "none" = "none";
+    let detectionDetail: string | undefined;
+
+    if (userEnabled && userActive) {
+      preferredScope = "user";
+      detectionDetail = "user (enabled+active)";
+    } else if (systemEnabled && systemActive) {
+      preferredScope = "system";
+      detectionDetail = "system (enabled+active)";
+    } else if (userEnabled) {
+      preferredScope = "user";
+      detectionDetail = "user (enabled)";
+    } else if (systemEnabled) {
+      preferredScope = "system";
+      detectionDetail = "system (enabled)";
+    } else if (userActive) {
+      preferredScope = "user";
+      detectionDetail = "user (active)";
+    } else if (systemActive) {
+      preferredScope = "system";
+      detectionDetail = "system (active)";
+    }
+
+    // Try the preferred scope first, then fall back to the other
+    if (preferredScope === "user") {
+      const userArgs = ["--user", "restart", unit];
+      tried.push(
+        `systemctl ${userArgs.join(" ")}${detectionDetail ? ` [${detectionDetail}]` : ""}`,
+      );
+      const userRestart = spawnSync("systemctl", userArgs, {
+        encoding: "utf8",
+        timeout: SPAWN_TIMEOUT_MS,
+      });
+      if (!userRestart.error && userRestart.status === 0) {
+        return { ok: true, method: "systemd", tried, detail: detectionDetail };
+      }
+
+      // Fallback to system service if user service fails
+      const systemArgs = ["restart", unit];
+      tried.push(`systemctl ${systemArgs.join(" ")}`);
+      const systemRestart = spawnSync("systemctl", systemArgs, {
+        encoding: "utf8",
+        timeout: SPAWN_TIMEOUT_MS,
+      });
+      if (!systemRestart.error && systemRestart.status === 0) {
+        return {
+          ok: true,
+          method: "systemd",
+          tried,
+          detail: detectionDetail + "; fallback to system",
+        };
+      }
+
+      const detail = [
+        `user (${detectionDetail}): ${formatSpawnDetail(userRestart)}`,
+        `system (fallback): ${formatSpawnDetail(systemRestart)}`,
+      ].join("; ");
+      return { ok: false, method: "systemd", detail, tried };
+    }
+
+    if (preferredScope === "system") {
+      const systemArgs = ["restart", unit];
+      tried.push(
+        `systemctl ${systemArgs.join(" ")}${detectionDetail ? ` [${detectionDetail}]` : ""}`,
+      );
+      const systemRestart = spawnSync("systemctl", systemArgs, {
+        encoding: "utf8",
+        timeout: SPAWN_TIMEOUT_MS,
+      });
+      if (!systemRestart.error && systemRestart.status === 0) {
+        return { ok: true, method: "systemd", tried, detail: detectionDetail };
+      }
+
+      // Fallback to user service if system service fails
+      const userArgs = ["--user", "restart", unit];
+      tried.push(`systemctl ${userArgs.join(" ")}`);
+      const userRestart = spawnSync("systemctl", userArgs, {
+        encoding: "utf8",
+        timeout: SPAWN_TIMEOUT_MS,
+      });
+      if (!userRestart.error && userRestart.status === 0) {
+        return {
+          ok: true,
+          method: "systemd",
+          tried,
+          detail: detectionDetail + "; fallback to user",
+        };
+      }
+
+      const detail = [
+        `system (${detectionDetail}): ${formatSpawnDetail(systemRestart)}`,
+        `user (fallback): ${formatSpawnDetail(userRestart)}`,
+      ].join("; ");
+      return { ok: false, method: "systemd", detail, tried };
+    }
+
+    // No service detected, try both (original behavior)
     const userArgs = ["--user", "restart", unit];
-    tried.push(`systemctl ${userArgs.join(" ")}`);
+    tried.push(`systemctl ${userArgs.join(" ")} [no service detected]`);
     const userRestart = spawnSync("systemctl", userArgs, {
       encoding: "utf8",
       timeout: SPAWN_TIMEOUT_MS,
     });
     if (!userRestart.error && userRestart.status === 0) {
-      return { ok: true, method: "systemd", tried };
+      return { ok: true, method: "systemd", tried, detail: "user (detected by restart)" };
     }
     const systemArgs = ["restart", unit];
     tried.push(`systemctl ${systemArgs.join(" ")}`);
@@ -319,7 +446,7 @@ export function triggerOpenClawRestart(): RestartAttempt {
       timeout: SPAWN_TIMEOUT_MS,
     });
     if (!systemRestart.error && systemRestart.status === 0) {
-      return { ok: true, method: "systemd", tried };
+      return { ok: true, method: "systemd", tried, detail: "system (detected by restart)" };
     }
     const detail = [
       `user: ${formatSpawnDetail(userRestart)}`,
