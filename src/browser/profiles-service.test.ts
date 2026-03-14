@@ -178,10 +178,9 @@ describe("BrowserProfilesService", () => {
       driver: "existing-session",
     });
 
-    expect(result.cdpPort).toBe(18801);
+    expect(result.cdpPort).toBe(0);
     expect(result.isRemote).toBe(false);
     expect(state.resolved.profiles["chrome-live"]).toEqual({
-      cdpPort: 18801,
       driver: "existing-session",
       attachOnly: true,
       color: expect.any(String),
@@ -191,7 +190,6 @@ describe("BrowserProfilesService", () => {
         browser: expect.objectContaining({
           profiles: expect.objectContaining({
             "chrome-live": expect.objectContaining({
-              cdpPort: 18801,
               driver: "existing-session",
               attachOnly: true,
             }),

@@ -342,6 +342,20 @@ export function resolveProfile(
         ? "existing-session"
         : "openclaw";
 
+  if (driver === "existing-session") {
+    // existing-session uses Chrome MCP auto-connect; no CDP port/URL needed
+    return {
+      name: profileName,
+      cdpPort: 0,
+      cdpUrl: "",
+      cdpHost: "",
+      cdpIsLoopback: true,
+      color: profile.color,
+      driver,
+      attachOnly: true,
+    };
+  }
+
   if (rawProfileUrl) {
     const parsed = parseHttpUrl(rawProfileUrl, `browser.profiles.${profileName}.cdpUrl`);
     cdpHost = parsed.parsed.hostname;
@@ -361,7 +375,7 @@ export function resolveProfile(
     cdpIsLoopback: isLoopbackHost(cdpHost),
     color: profile.color,
     driver,
-    attachOnly: driver === "existing-session" ? true : (profile.attachOnly ?? resolved.attachOnly),
+    attachOnly: profile.attachOnly ?? resolved.attachOnly,
   };
 }
 

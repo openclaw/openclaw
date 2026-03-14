@@ -1,6 +1,7 @@
 import { getChromeMcpPid } from "../chrome-mcp.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
 import { toBrowserErrorResponse } from "../errors.js";
+import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { resolveProfileContext } from "./agent.shared.js";
@@ -100,10 +101,9 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
         running: cdpReady,
         cdpReady,
         cdpHttp,
-        pid:
-          profileCtx.profile.driver === "existing-session"
-            ? getChromeMcpPid(profileCtx.profile.name)
-            : (profileState?.running?.pid ?? null),
+        pid: getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp
+          ? getChromeMcpPid(profileCtx.profile.name)
+          : (profileState?.running?.pid ?? null),
         cdpPort: profileCtx.profile.cdpPort,
         cdpUrl: profileCtx.profile.cdpUrl,
         chosenBrowser: profileState?.running?.exe.kind ?? null,

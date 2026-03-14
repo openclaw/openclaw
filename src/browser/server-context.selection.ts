@@ -112,7 +112,7 @@ export function createProfileSelectionOps({
   const focusTab = async (targetId: string): Promise<void> => {
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId);
 
-    if (profile.driver === "existing-session") {
+    if (capabilities.usesChromeMcp) {
       await focusChromeMcpTab(profile.name, resolvedTargetId);
       const profileState = getProfileState();
       profileState.lastTargetId = resolvedTargetId;
@@ -142,7 +142,7 @@ export function createProfileSelectionOps({
   const closeTab = async (targetId: string): Promise<void> => {
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId);
 
-    if (profile.driver === "existing-session") {
+    if (capabilities.usesChromeMcp) {
       await closeChromeMcpTab(profile.name, resolvedTargetId);
       return;
     }
