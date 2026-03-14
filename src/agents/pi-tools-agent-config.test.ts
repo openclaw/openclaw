@@ -686,6 +686,39 @@ describe("Agent-specific tool filtering", () => {
     expect(ownerNames).toContain("exec");
   });
 
+  it("should prefer account-scoped direct policy when ambiguous direct candidates have equal precedence", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          dms: {
+            "direct:ou-owner": {
+              tools: { allow: ["read"] },
+            },
+          },
+          accounts: {
+            direct: {
+              dms: {
+                "ou-owner": {
+                  tools: { allow: ["read", "exec"] },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:direct:direct:ou-owner",
+      workspaceDir: "/tmp/test-feishu-direct-account-named-direct-tie-break",
+      agentDir: "/tmp/agent-feishu-direct-account-named-direct-tie-break",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).toContain("exec");
+  });
+
   it("should use account-scoped DM policy from session key without explicit accountId", () => {
     const cfg: OpenClawConfig = {
       channels: {
