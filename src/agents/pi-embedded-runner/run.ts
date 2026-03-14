@@ -1533,7 +1533,7 @@ export async function runEmbeddedPiAgent(
                   `Retry ${rateLimitRetryCount}/${MAX_RATE_LIMIT_RETRIES} in ${backoffMs}ms` +
                   (retryMs ? ` (server Retry-After)` : ` (exponential backoff)`),
               );
-              await sleepWithAbort(backoffMs, params.signal);
+              await sleepWithAbort(backoffMs, params.abortSignal);
               continue;
             }
           }
