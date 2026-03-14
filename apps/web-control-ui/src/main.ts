@@ -32,11 +32,21 @@ type PreferenceMemory = {
   currentGoal: string;
 };
 
+type PreferenceMemoryDraft = {
+  visualStyle: string;
+  layout: string;
+  modules: string;
+  dislikes: string;
+  currentGoal: string;
+};
+
 type FeatureRecommendation = {
   title: string;
   reason: string;
   action: string;
 };
+
+const PREFERENCE_MEMORY_STORAGE_KEY = "openclaw.web-control-ui.preference-memory";
 
 function defaultGatewayUrl(): string {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -69,6 +79,66 @@ function extractText(message: unknown): string {
     }
   }
   return "";
+}
+
+function defaultPreferenceMemory(): PreferenceMemory {
+  return {
+    visualStyle: ["深色", "卡片式", "玻璃感", "高信息密度"],
+    layout: ["左侧导航", "主聊天区", "右侧记忆/推荐面板"],
+    modules: ["聊天改页面", "偏好记忆", "功能推荐"],
+    dislikes: ["纯调试风", "每次都要重复说明偏好"],
+    currentGoal: "把独立前端做成能通过对话共创页面的专属 agent 产品",
+  };
+}
+
+function toDraft(memory: PreferenceMemory): PreferenceMemoryDraft {
+  return {
+    visualStyle: memory.visualStyle.join("、"),
+    layout: memory.layout.join("、"),
+    modules: memory.modules.join("、"),
+    dislikes: memory.dislikes.join("、"),
+    currentGoal: memory.currentGoal,
+  };
+}
+
+function splitTags(value: string): string[] {
+  return value
+    .split(/[、,，\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function fromDraft(draft: PreferenceMemoryDraft): PreferenceMemory {
+  return {
+    visualStyle: splitTags(draft.visualStyle),
+    layout: splitTags(draft.layout),
+    modules: splitTags(draft.modules),
+    dislikes: splitTags(draft.dislikes),
+    currentGoal: draft.currentGoal.trim(),
+  };
+}
+
+function loadPreferenceMemory(): PreferenceMemory {
+  try {
+    const raw = window.localStorage.getItem(PREFERENCE_MEMORY_STORAGE_KEY);
+    if (!raw) {
+      return defaultPreferenceMemory();
+    }
+    const parsed = JSON.parse(raw) as Partial<PreferenceMemory>;
+    return {
+      visualStyle: Array.isArray(parsed.visualStyle) ? parsed.visualStyle.filter((v): v is string => typeof v === "string") : defaultPreferenceMemory().visualStyle,
+      layout: Array.isArray(parsed.layout) ? parsed.layout.filter((v): v is string => typeof v === "string") : defaultPreferenceMemory().layout,
+      modules: Array.isArray(parsed.modules) ? parsed.modules.filter((v): v is string => typeof v === "string") : defaultPreferenceMemory().modules,
+      dislikes: Array.isArray(parsed.dislikes) ? parsed.dislikes.filter((v): v is string => typeof v === "string") : defaultPreferenceMemory().dislikes,
+      currentGoal: typeof parsed.currentGoal === "string" && parsed.currentGoal.trim() ? parsed.currentGoal : defaultPreferenceMemory().currentGoal,
+    };
+  } catch {
+    return defaultPreferenceMemory();
+  }
+}
+
+function savePreferenceMemory(memory: PreferenceMemory) {
+  window.localStorage.setItem(PREFERENCE_MEMORY_STORAGE_KEY, JSON.stringify(memory));
 }
 
 @customElement("web-control-ui-app")
@@ -340,10 +410,12 @@ class WebControlUiApp extends LitElement {
       margin-top: 16px;
     }
 
-    .chat-actions {
+    .chat-actions,
+    .memory-actions {
       display: flex;
       gap: 12px;
       justify-content: flex-end;
+      flex-wrap: wrap;
     }
 
     .subtitle {
@@ -378,13 +450,9 @@ class WebControlUiApp extends LitElement {
   @state() chatRunId: string | null = null;
   @state() chatLoading = false;
   @state() chatSending = false;
-  @state() preferenceMemory: PreferenceMemory = {
-    visualStyle: ["深色", "卡片式", "玻璃感", "高信息密度"],
-    layout: ["左侧导航", "主聊天区", "右侧记忆/推荐面板"],
-    modules: ["聊天改页面", "偏好记忆", "功能推荐"],
-    dislikes: ["纯调试风", "每次都要重复说明偏好"],
-    currentGoal: "把独立前端做成能通过对话共创页面的专属 agent 产品",
-  };
+  @state() preferenceMemory: PreferenceMemory = defaultPreferenceMemory();
+  @state() preferenceDraft: PreferenceMemoryDraft = toDraft(defaultPreferenceMemory());
+  @state() preferenceSavedAt: string | null = null;
   @state() recommendations: FeatureRecommendation[] = [
     {
       title: "把聊天区升级为‘设计师对话’",
@@ -393,7 +461,7 @@ class WebControlUiApp extends LitElement {
     },
     {
       title: "把偏好记忆从展示卡片升级为可写入存档",
-      reason: "当前只是前端内置示例，下一步要真正按用户维度持久化。",
+      reason: "当前已经变成可编辑 + localStorage 持久化，下一步要再升级到按用户 profile 长期沉淀。",
       action: "新增 preference profile 文件与会话绑定，按用户沉淀风格、布局和模块偏好。",
     },
     {
@@ -405,6 +473,9 @@ class WebControlUiApp extends LitElement {
 
   connectedCallback(): void {
     super.connectedCallback();
+    const loaded = loadPreferenceMemory();
+    this.preferenceMemory = loaded;
+    this.preferenceDraft = toDraft(loaded);
     this.connect();
   }
 
@@ -592,6 +663,20 @@ class WebControlUiApp extends LitElement {
     }
   }
 
+  private savePreferenceDraft() {
+    this.preferenceMemory = fromDraft(this.preferenceDraft);
+    savePreferenceMemory(this.preferenceMemory);
+    this.preferenceSavedAt = new Date().toLocaleString("zh-CN", { hour12: false });
+  }
+
+  private resetPreferenceDraft() {
+    const fresh = defaultPreferenceMemory();
+    this.preferenceMemory = fresh;
+    this.preferenceDraft = toDraft(fresh);
+    savePreferenceMemory(fresh);
+    this.preferenceSavedAt = new Date().toLocaleString("zh-CN", { hour12: false });
+  }
+
   private handleConnectSubmit(event: Event) {
     event.preventDefault();
     this.connect();
@@ -749,27 +834,77 @@ class WebControlUiApp extends LitElement {
             <div class="stack" style="gap: 20px; margin: 0;">
               <section class="panel">
                 <h2>Preference Memory</h2>
-                <p class="subtitle">专属 agent 需要长期记住的用户画像。目前先做产品骨架展示，下一步会接真正的持久化。</p>
+                <p class="subtitle">现在已经从静态展示升级为：可编辑 + localStorage 本地持久化。下一步会再接真正的用户级 profile 存档。</p>
                 <div class="memory-item">
-                  <span class="label">视觉风格</span>
+                  <span class="label">视觉风格（用 、 或逗号分隔）</span>
+                  <input
+                    .value=${this.preferenceDraft.visualStyle}
+                    @input=${(event: InputEvent) => {
+                      this.preferenceDraft = {
+                        ...this.preferenceDraft,
+                        visualStyle: (event.target as HTMLInputElement).value,
+                      };
+                    }}
+                  />
                   ${this.renderTags(this.preferenceMemory.visualStyle)}
                 </div>
                 <div class="memory-item" style="margin-top: 12px;">
                   <span class="label">布局偏好</span>
+                  <input
+                    .value=${this.preferenceDraft.layout}
+                    @input=${(event: InputEvent) => {
+                      this.preferenceDraft = {
+                        ...this.preferenceDraft,
+                        layout: (event.target as HTMLInputElement).value,
+                      };
+                    }}
+                  />
                   ${this.renderTags(this.preferenceMemory.layout)}
                 </div>
                 <div class="memory-item" style="margin-top: 12px;">
                   <span class="label">常用模块</span>
+                  <input
+                    .value=${this.preferenceDraft.modules}
+                    @input=${(event: InputEvent) => {
+                      this.preferenceDraft = {
+                        ...this.preferenceDraft,
+                        modules: (event.target as HTMLInputElement).value,
+                      };
+                    }}
+                  />
                   ${this.renderTags(this.preferenceMemory.modules)}
                 </div>
                 <div class="memory-item" style="margin-top: 12px;">
                   <span class="label">明确不喜欢</span>
+                  <input
+                    .value=${this.preferenceDraft.dislikes}
+                    @input=${(event: InputEvent) => {
+                      this.preferenceDraft = {
+                        ...this.preferenceDraft,
+                        dislikes: (event.target as HTMLInputElement).value,
+                      };
+                    }}
+                  />
                   ${this.renderTags(this.preferenceMemory.dislikes)}
                 </div>
                 <div class="memory-item" style="margin-top: 12px;">
                   <span class="label">当前目标</span>
+                  <textarea
+                    .value=${this.preferenceDraft.currentGoal}
+                    @input=${(event: InputEvent) => {
+                      this.preferenceDraft = {
+                        ...this.preferenceDraft,
+                        currentGoal: (event.target as HTMLTextAreaElement).value,
+                      };
+                    }}
+                  ></textarea>
                   <div class="value" style="font-size: 15px; font-weight: 500;">${this.preferenceMemory.currentGoal}</div>
                 </div>
+                <div class="memory-actions" style="margin-top: 12px;">
+                  <button class="secondary" type="button" @click=${() => this.resetPreferenceDraft()}>恢复默认</button>
+                  <button type="button" @click=${() => this.savePreferenceDraft()}>保存偏好记忆</button>
+                </div>
+                ${this.preferenceSavedAt ? html`<p class="muted" style="margin-top: 8px;">最近保存：${this.preferenceSavedAt}</p>` : null}
               </section>
 
               <section class="panel">
