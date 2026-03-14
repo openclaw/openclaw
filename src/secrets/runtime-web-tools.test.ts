@@ -686,6 +686,45 @@ describe("runtime web tools resolution", () => {
     );
   });
 
+  it("fails fast when configured provider ref is unresolved even if another provider has a key", async () => {
+    const sourceConfig = asConfig({
+      tools: {
+        web: {
+          search: {
+            provider: "brave",
+            apiKey: { source: "env", provider: "default", id: "MISSING_BRAVE_API_KEY_REF" },
+            gemini: {
+              apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY_REF" },
+            },
+          },
+        },
+      },
+    });
+    const resolvedConfig = structuredClone(sourceConfig);
+    const context = createResolverContext({
+      sourceConfig,
+      env: {
+        GEMINI_API_KEY_REF: "gemini-runtime-key", // pragma: allowlist secret
+      },
+    });
+
+    await expect(
+      resolveRuntimeWebTools({
+        sourceConfig,
+        resolvedConfig,
+        context,
+      }),
+    ).rejects.toThrow("[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK]");
+    expect(context.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+          path: "tools.web.search.apiKey",
+        }),
+      ]),
+    );
+  });
+
   it("does not resolve Firecrawl SecretRef when Firecrawl is inactive", async () => {
     const resolveSpy = vi.spyOn(secretResolve, "resolveSecretRefValues");
     const { metadata, context } = await runRuntimeWebTools({

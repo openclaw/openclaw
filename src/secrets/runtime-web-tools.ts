@@ -712,7 +712,32 @@ export async function resolveRuntimeWebTools(params: {
       }
     }
 
-    const failUnresolvedSearchNoFallback = (unresolved: { path: string; reason: string }) => {
+    const unresolvedConfiguredProvider = configuredProvider
+      ? unresolvedWithoutFallback.find((entry) => entry.provider === configuredProvider)
+      : undefined;
+    if (unresolvedConfiguredProvider) {
+      const diagnostic: RuntimeWebDiagnostic = {
+        code: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+        message: unresolvedConfiguredProvider.reason,
+        path: unresolvedConfiguredProvider.path,
+      };
+      diagnostics.push(diagnostic);
+      searchMetadata.diagnostics.push(diagnostic);
+      pushWarning(params.context, {
+        code: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+        path: unresolvedConfiguredProvider.path,
+        message: unresolvedConfiguredProvider.reason,
+      });
+      throw new Error(
+        `[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK] ${unresolvedConfiguredProvider.reason}`,
+      );
+    }
+
+    if (!selectedProvider && unresolvedWithoutFallback.length > 0) {
+      const unresolved = configuredProvider
+        ? (unresolvedWithoutFallback.find((entry) => entry.provider === configuredProvider) ??
+          unresolvedWithoutFallback[0])
+        : unresolvedWithoutFallback[0];
       const diagnostic: RuntimeWebDiagnostic = {
         code: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
         message: unresolved.reason,
@@ -726,17 +751,6 @@ export async function resolveRuntimeWebTools(params: {
         message: unresolved.reason,
       });
       throw new Error(`[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK] ${unresolved.reason}`);
-    };
-
-    if (configuredProvider) {
-      const unresolved = unresolvedWithoutFallback[0];
-      if (unresolved) {
-        failUnresolvedSearchNoFallback(unresolved);
-      }
-    } else {
-      if (!selectedProvider && unresolvedWithoutFallback.length > 0) {
-        failUnresolvedSearchNoFallback(unresolvedWithoutFallback[0]);
-      }
     }
 
     if (configuredProvider && selectedProvider && selectedProvider !== configuredProvider) {
