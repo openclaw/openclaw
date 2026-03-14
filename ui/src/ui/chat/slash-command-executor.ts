@@ -283,7 +283,7 @@ async function executeStatus(
   sessionKey: string,
 ): Promise<SlashCommandResult> {
   try {
-    const session = await loadCurrentSession(client, sessionKey);
+    const { session, models } = await loadThinkingCommandState(client, sessionKey);
     if (!session) {
       return { content: "No active session." };
     }
@@ -294,11 +294,12 @@ async function executeStatus(
     if (session.modelProvider) {
       lines.push(`Provider: \`${session.modelProvider}\``);
     }
-    const thinkingLevel = normalizeThinkLevel(session.thinkingLevel) ?? "off";
-    lines.push(`Thinking: **${thinkingLevel}**`);
+    // Use resolveCurrentThinkingLevel so the effective level (including model
+    // defaults) is shown, not just the raw persisted field which may be unset.
+    lines.push(`Thinking: **${resolveCurrentThinkingLevel(session, models)}**`);
     const verboseLevel = normalizeVerboseLevel(session.verboseLevel) ?? "off";
     lines.push(`Verbose: **${verboseLevel}**`);
-    lines.push(`Fast mode: **${session.fastMode === true ? "on" : "off"}**`);
+    lines.push(`Fast mode: **${resolveCurrentFastMode(session)}**`);
     if (session.abortedLastRun) {
       lines.push("Last run: **aborted**");
     }
