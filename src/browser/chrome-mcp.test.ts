@@ -174,7 +174,7 @@ describe("chrome MCP page parsing", () => {
     });
 
     const plan = buildChromeMcpLaunchPlanForTest("chrome-live");
-    expect(plan.mode).toBe("browserUrl");
+    expect(plan.mode).toBe("wsEndpoint");
     expect(plan.args).toEqual(
       expect.arrayContaining(["--wsEndpoint", "ws://127.0.0.1:9222/devtools/browser/abc"]),
     );

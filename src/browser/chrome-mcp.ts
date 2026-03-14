@@ -46,7 +46,7 @@ let sessionFactory: ChromeMcpSessionFactory | null = null;
 
 type ChromeMcpLaunchPlan = {
   args: string[];
-  mode: "autoConnect" | "browserUrl" | "headless";
+  mode: "autoConnect" | "browserUrl" | "wsEndpoint" | "headless";
 };
 
 function buildChromeMcpLaunchPlan(profileName: string): ChromeMcpLaunchPlan {
@@ -62,10 +62,11 @@ function buildChromeMcpLaunchPlan(profileName: string): ChromeMcpLaunchPlan {
   const args = [...DEFAULT_CHROME_MCP_ARGS];
   if (profile.mcpTargetUrl) {
     const parsed = new URL(profile.mcpTargetUrl);
-    args.push(
-      parsed.protocol === "ws:" || parsed.protocol === "wss:" ? "--wsEndpoint" : "--browserUrl",
-      profile.mcpTargetUrl,
-    );
+    if (parsed.protocol === "ws:" || parsed.protocol === "wss:") {
+      args.push("--wsEndpoint", profile.mcpTargetUrl);
+      return { args, mode: "wsEndpoint" };
+    }
+    args.push("--browserUrl", profile.mcpTargetUrl);
     return { args, mode: "browserUrl" };
   }
 
@@ -241,7 +242,7 @@ async function createRealSession(profileName: string): Promise<ChromeMcpSession>
       const hint =
         launchPlan.mode === "autoConnect"
           ? "Make sure Chrome is running, enable chrome://inspect/#remote-debugging, and approve the connection."
-          : launchPlan.mode === "browserUrl"
+          : launchPlan.mode === "browserUrl" || launchPlan.mode === "wsEndpoint"
             ? "Make sure the configured browserUrl/wsEndpoint is reachable and Chrome is running with remote debugging enabled."
             : "Make sure a Chrome executable is available, and use browser.noSandbox=true on Linux containers/root setups when needed.";
       throw new BrowserProfileUnavailableError(
