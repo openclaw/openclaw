@@ -107,7 +107,13 @@ export async function monitorWebSocket({
     abortSignal?.addEventListener("abort", handleAbort, { once: true });
 
     try {
-      wsClient.start({ eventDispatcher });
+      Promise.resolve(wsClient.start({ eventDispatcher })).catch((err: any) => {
+        log.error(`[lark-ws] WS connect/reconnect unhandled exception: ${err.message}`);
+        cleanup();
+        if (!abortSignal?.aborted) {
+          process.kill(process.pid, "SIGUSR1"); // Instruct gateway daemon to safely auto-restart
+        }
+      });
       log(`feishu[${accountId}]: WebSocket client started`);
     } catch (err) {
       cleanup();
