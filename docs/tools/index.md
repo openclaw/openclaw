@@ -519,6 +519,39 @@ Notes:
 - Result is restricted to per-agent allowlists (`agents.list[].subagents.allowAgents`).
 - When `["*"]` is configured, the tool includes all configured agents and marks `allowAny: true`.
 
+### `memory_search`
+
+Semantically search memory files (`MEMORY.md` + `memory/**/*.md`) and optionally indexed session transcripts.
+
+Core parameters:
+
+- `query` (required) — search query string
+- `limit` (optional) — max results to return
+
+Notes:
+
+- Returns snippets (~400 token chunks, ~700 char cap) with file path, line range, and relevance score.
+- Powered by QMD (sqlite-vec) when configured; falls back to builtin SQLite if QMD is unavailable.
+- Session transcript indexing is optional (`memory.qmd.sessions.enabled`).
+- See [Memory](/concepts/memory) for configuration and backend options.
+
+### `memory_get`
+
+Read a specific memory file by workspace-relative path.
+
+Core parameters:
+
+- `path` (required) — memory file path (e.g., `memory/2026-03-14.md` or `MEMORY.md`)
+- `offset` (optional) — start line number (1-indexed)
+- `limit` (optional) — max lines to read
+
+Notes:
+
+- Restricted to `MEMORY.md` and `memory/**/*.md` by default.
+- Extra paths must be explicitly allowlisted via `memorySearch.extraPaths`.
+- QMD-sourced results (e.g., `qmd/<collection>/<path>`) are also supported when QMD backend is configured.
+- See [Memory](/concepts/memory) for file layout and workflow.
+
 ## Parameters (common)
 
 Gateway-backed tools (`canvas`, `nodes`, `cron`):
