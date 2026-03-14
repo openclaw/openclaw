@@ -60,4 +60,10 @@ describe("resolveLineOutboundMedia", () => {
       /requires mediaBaseUrl/i,
     );
   });
+
+  it("rejects non-HTTPS URL explicitly", async () => {
+    await expect(resolveLineOutboundMedia("http://example.com/image.jpg")).rejects.toThrow(
+      /must use HTTPS/i,
+    );
+  });
 });

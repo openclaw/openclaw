@@ -93,6 +93,18 @@ export async function resolveLineOutboundMedia(
     };
   }
 
+  try {
+    const parsed = new URL(trimmedUrl);
+    if (parsed.protocol !== "https:") {
+      throw new Error(`LINE outbound media URL must use HTTPS: ${trimmedUrl}`);
+    }
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith("LINE outbound")) {
+      throw e;
+    }
+    // URL parse failure means this may be a local path; continue to local-path handling.
+  }
+
   if (!opts.mediaBaseUrl?.trim()) {
     throw new Error("LINE local media path requires mediaBaseUrl to be configured");
   }
