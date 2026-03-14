@@ -6,8 +6,8 @@ import {
   getAcpRuntimeBackend,
   requireAcpRuntimeBackend,
 } from "../../../src/acp/runtime/registry.js";
-import { ACPX_BUNDLED_BIN, ACPX_PINNED_VERSION } from "./config.js";
-import { createAcpxRuntimeService } from "./service.js";
+import { ACPX_BUNDLED_BIN, ACPX_PINNED_VERSION, type ResolvedAcpxPluginConfig } from "./config.js";
+import { buildChromeDevToolsMcpPreset, createAcpxRuntimeService } from "./service.js";
 
 const { ensureAcpxSpy } = vi.hoisted(() => ({
   ensureAcpxSpy: vi.fn(async () => {}),
@@ -20,6 +20,12 @@ vi.mock("./ensure.js", () => ({
 type RuntimeStub = AcpRuntime & {
   probeAvailability(): Promise<void>;
   isHealthy(): boolean;
+};
+
+type RuntimeFactoryParams = {
+  pluginConfig: ResolvedAcpxPluginConfig;
+  queueOwnerTtlSeconds: number;
+  logger?: OpenClawPluginServiceContext["logger"];
 };
 
 function createRuntimeStub(healthy: boolean): {
@@ -69,6 +75,67 @@ function createServiceContext(
     ...overrides,
   };
 }
+
+function createRuntimeFactorySpy(runtime: RuntimeStub) {
+  return vi.fn((_params: RuntimeFactoryParams) => runtime);
+}
+
+function getPassedPluginConfig(runtimeFactory: ReturnType<typeof vi.fn>, callIndex = 0) {
+  const call = runtimeFactory.mock.calls[callIndex];
+  expect(call).toBeDefined();
+  return call![0].pluginConfig;
+}
+
+describe("buildChromeDevToolsMcpPreset", () => {
+  it("returns undefined when not enabled", () => {
+    expect(buildChromeDevToolsMcpPreset({ existingMcpServers: {} })).toBeUndefined();
+    expect(
+      buildChromeDevToolsMcpPreset({ browserMcp: { enabled: false }, existingMcpServers: {} }),
+    ).toBeUndefined();
+  });
+
+  it("returns full-mode config by default", () => {
+    const result = buildChromeDevToolsMcpPreset({
+      browserMcp: { enabled: true },
+      existingMcpServers: {},
+    });
+    expect(result).toBeDefined();
+    expect(result?.command).toContain("chrome-devtools-mcp");
+    expect(result?.args).toContain("--autoConnect");
+  });
+
+  it("adds --slim flag in slim mode", () => {
+    const result = buildChromeDevToolsMcpPreset({
+      browserMcp: { enabled: true, mode: "slim" },
+      existingMcpServers: {},
+    });
+    expect(result?.args).toContain("--slim");
+  });
+
+  it("adds --channel for non-stable channels", () => {
+    const result = buildChromeDevToolsMcpPreset({
+      browserMcp: { enabled: true, channel: "canary" },
+      existingMcpServers: {},
+    });
+    expect(result?.args).toContain("--channel=canary");
+  });
+
+  it("omits --channel for stable (default)", () => {
+    const result = buildChromeDevToolsMcpPreset({
+      browserMcp: { enabled: true, channel: "stable" },
+      existingMcpServers: {},
+    });
+    expect(result?.args).not.toContain(expect.stringContaining("--channel"));
+  });
+
+  it("returns undefined when existing entry already exists", () => {
+    const result = buildChromeDevToolsMcpPreset({
+      browserMcp: { enabled: true },
+      existingMcpServers: { "chrome-devtools": { command: "custom" } },
+    });
+    expect(result).toBeUndefined();
+  });
+});
 
 describe("createAcpxRuntimeService", () => {
   beforeEach(() => {
@@ -176,5 +243,93 @@ describe("createAcpxRuntimeService", () => {
 
     expect(startResult).toBe("started");
     expect(getAcpRuntimeBackend("acpx")?.runtime).toBe(runtime);
+  });
+
+  it("injects chrome-devtools-mcp when browser.mcp.enabled is true", async () => {
+    const { runtime } = createRuntimeStub(true);
+    const runtimeFactory = createRuntimeFactorySpy(runtime);
+    const service = createAcpxRuntimeService({ runtimeFactory });
+    const context = createServiceContext({
+      config: { browser: { mcp: { enabled: true } } },
+    });
+
+    await service.start(context);
+
+    const passedConfig = getPassedPluginConfig(runtimeFactory);
+    expect(passedConfig.mcpServers["chrome-devtools"]).toBeDefined();
+    expect(passedConfig.mcpServers["chrome-devtools"]?.args).toContain("--autoConnect");
+    expect(passedConfig.mcpServers["chrome-devtools"]?.command).toMatch(
+      /(chrome-devtools-mcp|npx$)/,
+    );
+  });
+
+  it("injects chrome-devtools-mcp in slim mode when configured", async () => {
+    const { runtime } = createRuntimeStub(true);
+    const runtimeFactory = createRuntimeFactorySpy(runtime);
+    const service = createAcpxRuntimeService({ runtimeFactory });
+    const context = createServiceContext({
+      config: { browser: { mcp: { enabled: true, mode: "slim" } } },
+    });
+
+    await service.start(context);
+
+    const passedConfig = getPassedPluginConfig(runtimeFactory);
+    expect(passedConfig.mcpServers["chrome-devtools"]?.args).toContain("--slim");
+  });
+
+  it("does not inject chrome-devtools-mcp when browser.mcp is not enabled", async () => {
+    const { runtime } = createRuntimeStub(true);
+    const runtimeFactory = createRuntimeFactorySpy(runtime);
+    const service = createAcpxRuntimeService({ runtimeFactory });
+    const context = createServiceContext({ config: {} });
+
+    await service.start(context);
+
+    const passedConfig = getPassedPluginConfig(runtimeFactory);
+    expect(passedConfig.mcpServers["chrome-devtools"]).toBeUndefined();
+  });
+
+  it("does not override explicit user-defined chrome-devtools entry", async () => {
+    const { runtime } = createRuntimeStub(true);
+    const runtimeFactory = createRuntimeFactorySpy(runtime);
+    const userDefined = { command: "my-custom-chrome-mcp", args: ["--custom"] };
+    const service = createAcpxRuntimeService({
+      runtimeFactory,
+      pluginConfig: { mcpServers: { "chrome-devtools": userDefined } },
+    });
+    const context = createServiceContext({
+      config: { browser: { mcp: { enabled: true } } },
+    });
+
+    await service.start(context);
+
+    const passedConfig = getPassedPluginConfig(runtimeFactory);
+    expect(passedConfig.mcpServers["chrome-devtools"]).toEqual(userDefined);
+    expect(context.logger.info).toHaveBeenCalledWith(
+      "chrome-devtools-mcp preset skipped: existing mcpServers entry takes precedence",
+    );
+  });
+
+  it("does not leak injected preset into subsequent restarts when disabled", async () => {
+    const { runtime } = createRuntimeStub(true);
+    const runtimeFactory = createRuntimeFactorySpy(runtime);
+    const userMcpServers = { canva: { command: "npx", args: ["canva-mcp"] } };
+    const service = createAcpxRuntimeService({
+      runtimeFactory,
+      pluginConfig: { mcpServers: userMcpServers },
+    });
+
+    const enabledCtx = createServiceContext({
+      config: { browser: { mcp: { enabled: true } } },
+    });
+    await service.start(enabledCtx);
+    expect(getPassedPluginConfig(runtimeFactory).mcpServers["chrome-devtools"]).toBeDefined();
+
+    await service.stop?.(enabledCtx);
+
+    const disabledCtx = createServiceContext({ config: {} });
+    await service.start(disabledCtx);
+    expect(getPassedPluginConfig(runtimeFactory, 1).mcpServers["chrome-devtools"]).toBeUndefined();
+    expect(getPassedPluginConfig(runtimeFactory, 1).mcpServers["canva"]).toBeDefined();
   });
 });

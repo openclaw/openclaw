@@ -43,7 +43,6 @@ function resolveStartupEntryPath(env: Record<string, string>) {
   );
 }
 
-<<<<<<< HEAD
 async function withWindowsEnv(
   run: (params: { tmpDir: string; env: Record<string, string> }) => Promise<void>,
 ) {
@@ -76,26 +75,6 @@ async function writeGatewayScript(env: Record<string, string>, port = 18789) {
   );
 }
 
-||||||| parent of 8fb2c3f894 (refactor: share windows daemon test fixtures)
-async function withWindowsEnv(
-  run: (params: { tmpDir: string; env: Record<string, string> }) => Promise<void>,
-) {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-win-startup-"));
-  const env = {
-    USERPROFILE: tmpDir,
-    APPDATA: path.join(tmpDir, "AppData", "Roaming"),
-    OPENCLAW_PROFILE: "default",
-    OPENCLAW_GATEWAY_PORT: "18789",
-  };
-  try {
-    await run({ tmpDir, env });
-  } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true });
-  }
-}
-
-=======
->>>>>>> 8fb2c3f894 (refactor: share windows daemon test fixtures)
 beforeEach(() => {
   resetSchtasksBaseMocks();
   spawn.mockClear();

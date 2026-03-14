@@ -30,6 +30,23 @@ export type BrowserSsrFPolicyConfig = {
    */
   hostnameAllowlist?: string[];
 };
+export type BrowserMcpConfig = {
+  /** Enable Chrome DevTools MCP server for agent sessions. Default: false */
+  enabled?: boolean;
+  /**
+   * Tool exposure mode.
+   * - "full": all 29 DevTools MCP tools (input, navigation, debugging, performance, network, emulation).
+   * - "slim": 3 essential tools only (navigate, evaluate_script, take_screenshot).
+   * Note: evaluate_script is unaffected by browser.evaluateEnabled; ACPX permission mode controls it.
+   * Default: "full"
+   */
+  mode?: "full" | "slim";
+  /**
+   * Chrome channel to connect to.
+   * Default: "stable". Use "beta", "canary", or "dev" for pre-release Chrome builds.
+   */
+  channel?: "stable" | "beta" | "canary" | "dev";
+};
 export type BrowserConfig = {
   enabled?: boolean;
   /** If false, disable browser act:evaluate (arbitrary JS). Default: true */
@@ -66,6 +83,8 @@ export type BrowserConfig = {
    * Example: ["--window-size=1920,1080", "--disable-infobars"]
    */
   extraArgs?: string[];
+  /** Chrome DevTools MCP server integration for agent sessions. */
+  mcp?: BrowserMcpConfig;
   /**
    * Bind address for the Chrome extension relay server.
    * Default: "127.0.0.1". Set to "0.0.0.0" for WSL2 or other environments where
