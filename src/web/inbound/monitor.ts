@@ -482,6 +482,10 @@ export async function monitorWebInbox(options: {
     signalClose: (reason?: WebListenerCloseReason) => {
       resolveClose(reason ?? { status: undefined, isLoggedOut: false, error: "closed" });
     },
+    // Round-trip presence ping to verify the WhatsApp socket is alive.
+    pingPresence: async () => {
+      await sock.sendPresenceUpdate("available");
+    },
     // IPC surface (sendMessage/sendPoll/sendReaction/sendComposingTo)
     ...sendApi,
   } as const;
