@@ -329,8 +329,38 @@ function resolveToolPolicies(params: {
 
 function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   const search = cfg.tools?.web?.search;
+  const provider = search?.provider?.trim().toLowerCase();
+
+  // If a provider is explicitly configured, only check for that provider's keys
+  if (provider === "brave") {
+    return Boolean(search?.apiKey || env.BRAVE_API_KEY);
+  }
+  if (provider === "perplexity") {
+    return Boolean(search?.perplexity?.apiKey || env.PERPLEXITY_API_KEY);
+  }
+  if (provider === "gemini") {
+    return Boolean(search?.gemini?.apiKey || env.GEMINI_API_KEY);
+  }
+  if (provider === "grok") {
+    return Boolean(search?.grok?.apiKey || env.XAI_API_KEY);
+  }
+  if (provider === "kimi") {
+    return Boolean(search?.kimi?.apiKey || env.KIMI_API_KEY || env.MOONSHOT_API_KEY);
+  }
+
+  // No provider configured - check all providers (auto-detection)
   return Boolean(
-    search?.apiKey || search?.perplexity?.apiKey || env.BRAVE_API_KEY || env.PERPLEXITY_API_KEY,
+    search?.apiKey ||
+    search?.perplexity?.apiKey ||
+    search?.gemini?.apiKey ||
+    search?.grok?.apiKey ||
+    search?.kimi?.apiKey ||
+    env.BRAVE_API_KEY ||
+    env.PERPLEXITY_API_KEY ||
+    env.GEMINI_API_KEY ||
+    env.XAI_API_KEY ||
+    env.KIMI_API_KEY ||
+    env.MOONSHOT_API_KEY,
   );
 }
 
