@@ -104,10 +104,14 @@ export function allocateColor(usedColors: Set<string>): string {
 }
 
 export function getUsedColors(
-  profiles: Record<string, { color: string }> | undefined,
+  profiles: Record<string, { color?: string }> | undefined,
 ): Set<string> {
   if (!profiles) {
     return new Set();
   }
-  return new Set(Object.values(profiles).map((p) => p.color.toUpperCase()));
+  return new Set(
+    Object.values(profiles)
+      .filter((p) => p.color)
+      .map((p) => p.color!.toUpperCase()),
+  );
 }

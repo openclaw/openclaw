@@ -368,7 +368,7 @@ export const OpenClawSchema = z
                   ])
                   .optional(),
                 attachOnly: z.boolean().optional(),
-                color: HexColorSchema,
+                color: HexColorSchema.optional(),
               })
               .strict()
               .refine((value) => value.cdpPort || value.cdpUrl, {
