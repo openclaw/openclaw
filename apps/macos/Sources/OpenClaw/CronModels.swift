@@ -237,6 +237,38 @@ struct CronJob: Identifiable, Codable, Equatable {
     let delivery: CronDelivery?
     let state: CronJobState
 
+    init(
+        id: String,
+        agentId: String? = nil,
+        name: String,
+        description: String? = nil,
+        enabled: Bool,
+        deleteAfterRun: Bool? = nil,
+        createdAtMs: Int,
+        updatedAtMs: Int,
+        schedule: CronSchedule,
+        sessionTarget: CronSessionTarget = .isolated,
+        wakeMode: CronWakeMode,
+        payload: CronPayload,
+        delivery: CronDelivery? = nil,
+        state: CronJobState
+    ) {
+        self.id = id
+        self.agentId = agentId
+        self.name = name
+        self.description = description
+        self.enabled = enabled
+        self.deleteAfterRun = deleteAfterRun
+        self.createdAtMs = createdAtMs
+        self.updatedAtMs = updatedAtMs
+        self.schedule = schedule
+        self.sessionTargetRaw = sessionTarget.rawValue
+        self.wakeMode = wakeMode
+        self.payload = payload
+        self.delivery = delivery
+        self.state = state
+    }
+
     enum CodingKeys: String, CodingKey {
         case id
         case agentId
