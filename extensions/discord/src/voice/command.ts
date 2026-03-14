@@ -7,6 +7,7 @@ import {
 } from "@buape/carbon";
 import {
   ApplicationCommandOptionType,
+  ApplicationCommandType,
   ChannelType as DiscordChannelType,
   type APIApplicationCommandChannelOption,
 } from "discord-api-types/v10";
@@ -24,6 +25,10 @@ import {
   resolveDiscordMemberAccessState,
 } from "../monitor/allow-list.js";
 import { resolveDiscordChannelInfo } from "../monitor/message-utils.js";
+import type {
+  DiscordNativeCommandDeploymentDefinition,
+  DiscordNativeCommandOptionDefinition,
+} from "../monitor/native-command.js";
 import { resolveDiscordSenderIdentity } from "../monitor/sender-identity.js";
 import { resolveDiscordThreadParentInfo } from "../monitor/threading.js";
 import type { DiscordVoiceManager } from "./manager.js";
@@ -53,6 +58,40 @@ type VoiceCommandRuntimeContext = {
   guildId: string;
   manager: DiscordVoiceManager;
 };
+
+const VOICE_JOIN_OPTION: DiscordNativeCommandOptionDefinition = {
+  name: "channel",
+  description: "Voice channel to join",
+  type: ApplicationCommandOptionType.Channel,
+  required: true,
+  channel_types: VOICE_CHANNEL_TYPES,
+};
+
+export function buildDiscordVoiceCommandDeploymentDefinition(): DiscordNativeCommandDeploymentDefinition {
+  return {
+    name: "vc",
+    description: "Voice channel controls",
+    type: ApplicationCommandType.ChatInput,
+    options: [
+      {
+        name: "join",
+        description: "Join a voice channel",
+        type: ApplicationCommandOptionType.Subcommand,
+        options: [VOICE_JOIN_OPTION],
+      },
+      {
+        name: "leave",
+        description: "Leave the current voice channel",
+        type: ApplicationCommandOptionType.Subcommand,
+      },
+      {
+        name: "status",
+        description: "Show active voice sessions",
+        type: ApplicationCommandOptionType.Subcommand,
+      },
+    ],
+  };
+}
 
 async function authorizeVoiceCommand(
   interaction: CommandInteraction,

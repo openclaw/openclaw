@@ -273,6 +273,18 @@ vi.mock("../token.js", () => ({
 }));
 
 vi.mock("../voice/command.js", () => ({
+  buildDiscordVoiceCommandDeploymentDefinition: () => ({
+    name: "vc",
+    description: "Voice channel controls",
+    type: 1,
+    options: [
+      {
+        name: "join",
+        description: "Join a voice channel",
+        type: 1,
+      },
+    ],
+  }),
   createDiscordVoiceCommand: () => ({ name: "voice-command" }),
 }));
 
@@ -501,7 +513,19 @@ describe("monitorDiscordProvider", () => {
     const { monitorDiscordProvider } = await import("./provider.js");
 
     await monitorDiscordProvider({
-      config: baseConfig(),
+      config: {
+        ...baseConfig(),
+        channels: {
+          discord: {
+            accounts: {
+              default: {},
+            },
+            commands: {
+              reconcileOnStartup: true,
+            },
+          },
+        },
+      } as OpenClawConfig,
       runtime: baseRuntime(),
     });
 
@@ -918,6 +942,41 @@ describe("monitorDiscordProvider", () => {
     )?.[0];
     const commandSpecs = firstCallArg?.commandSpecs;
     expect(commandSpecs?.map((command) => command.name)).toEqual(["cmd", "cron_jobs"]);
+  });
+
+  it("passes the voice command definition into the reconcile path when voice is enabled", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    mockResolvedDiscordAccountConfig({
+      voice: { enabled: true },
+    });
+
+    await monitorDiscordProvider({
+      config: {
+        ...baseConfig(),
+        channels: {
+          discord: {
+            accounts: {
+              default: {},
+            },
+            commands: {
+              reconcileOnStartup: true,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      runtime: baseRuntime(),
+    });
+
+    const firstCallArg = (
+      reconcileDiscordNativeCommandsMock.mock.calls.at(0) as unknown as
+        | [
+            {
+              extraDefinitions?: Array<{ name: string }>;
+            },
+          ]
+        | undefined
+    )?.[0];
+    expect(firstCallArg?.extraDefinitions?.map((entry) => entry.name)).toEqual(["vc"]);
   });
 
   it("reports connected status on startup and shutdown", async () => {
