@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { discoverModels } from "../pi-model-discovery.js";
 
 vi.mock("../pi-model-discovery.js", () => ({
   discoverAuthStorage: vi.fn(() => ({ mocked: true })),
@@ -133,6 +134,46 @@ describe("pi embedded model e2e smoke", () => {
       baseUrl: "https://generativelanguage.googleapis.com",
       id: "gemini-3.1-pro-preview",
       name: "gemini-3.1-pro-preview",
+      reasoning: true,
+    });
+  });
+
+  it("prefers a gemini-3.1-pro-preview template over the stale gemini-3-pro-preview template", () => {
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider !== "google") {
+          return null;
+        }
+        if (modelId === "gemini-3.1-pro-preview") {
+          return {
+            ...GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
+            id: "gemini-3.1-pro-preview",
+            name: "Gemini 3.1 Pro",
+            provider: "google",
+            api: "google-generative-ai",
+            baseUrl: "https://generativelanguage.googleapis.com",
+          };
+        }
+        if (modelId === "gemini-3-pro-preview") {
+          return {
+            ...GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
+            provider: "google",
+            api: "google-generative-ai",
+            baseUrl: "https://generativelanguage.googleapis.com",
+          };
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("google", "gemini-3.1-pro", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      id: "gemini-3.1-pro-preview",
+      name: "gemini-3.1-pro-preview",
+      provider: "google",
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com",
       reasoning: true,
     });
   });
