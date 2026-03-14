@@ -19,8 +19,8 @@ const {
   proxyAgentCtor: vi.fn(function MockProxyAgent(this: { options: unknown }, options: unknown) {
     this.options = options;
   }),
-  getDefaultAutoSelectFamily: vi.fn(() => true),
-  getDefaultAutoSelectFamilyAttemptTimeout: vi.fn(() => undefined),
+  getDefaultAutoSelectFamily: vi.fn(() => true as boolean | undefined),
+  getDefaultAutoSelectFamilyAttemptTimeout: vi.fn(() => undefined as number | undefined),
 }));
 
 vi.mock("undici", () => ({
