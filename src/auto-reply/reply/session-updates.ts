@@ -3,7 +3,7 @@ import { resolveUserTimezone } from "../../agents/date-time.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
+import { resolveMainSessionKey, type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
 import {
   resolveTimezone,
@@ -86,6 +86,14 @@ export async function drainFormattedSystemEvents(params: {
 
   const systemLines: string[] = [];
   const queued = drainSystemEventEntries(params.sessionKey);
+  const mainSessionKey = resolveMainSessionKey(params.cfg);
+  if (mainSessionKey !== params.sessionKey) {
+    // System-triggered events still enqueue against the canonical main session key.
+    // In isolated DM scopes, merge that queue into the active session drain so the
+    // currently active DM session can consume those events on its next turn.
+    queued.push(...drainSystemEventEntries(mainSessionKey));
+  }
+  queued.sort((left, right) => left.ts - right.ts);
   systemLines.push(
     ...queued
       .map((event) => {
