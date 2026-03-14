@@ -16,6 +16,7 @@ import {
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAccountId, normalizeAgentId } from "../../routing/session-key.js";
+import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import { normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 
 export type DeliveryTargetResolution =
@@ -88,7 +89,8 @@ export async function resolveDeliveryTarget(
     } else if (
       requestedChannel === "last" &&
       typeof jobPayload.originChannel === "string" &&
-      jobPayload.originChannel.trim()
+      jobPayload.originChannel.trim() &&
+      isDeliverableMessageChannel(jobPayload.originChannel.trim())
     ) {
       fallbackChannel = jobPayload.originChannel.trim() as Exclude<OutboundChannel, "none">;
       originSnapshotApplied = true;
