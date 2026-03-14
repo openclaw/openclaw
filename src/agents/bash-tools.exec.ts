@@ -334,17 +334,18 @@ export function createExecTool(
       }
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
-      if (
-        host === "sandbox" &&
-        !sandbox &&
-        (sandboxHostConfigured || requestedHost === "sandbox")
-      ) {
-        throw new Error(
-          [
-            "exec host=sandbox is configured, but sandbox runtime is unavailable for this session.",
-            'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or set tools.exec.host to "gateway"/"node".',
-          ].join("\n"),
-        );
+      if (host === "sandbox" && !sandbox) {
+        if (sandboxHostConfigured || requestedHost === "sandbox") {
+          throw new Error(
+            [
+              "exec host=sandbox is configured, but sandbox runtime is unavailable for this session.",
+              'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or set tools.exec.host to "gateway"/"node".',
+            ].join("\n"),
+          );
+        }
+        // Sandbox unavailable via default fallback (tools.exec.host unset):
+        // route to gateway so the approval flow (allowlist + ask) applies.
+        host = "gateway";
       }
       const rawWorkdir = params.workdir?.trim() || defaults?.cwd || process.cwd();
       let workdir = rawWorkdir;
