@@ -1160,4 +1160,37 @@ describe("acp final chat snapshots", () => {
     });
     sessionStore.clearAllSessionsForTest();
   });
+
+  it("does not finish a BTW side-result turn when the side-result text is empty", async () => {
+    const { agent, sessionUpdate, promptPromise, runId, sessionStore } =
+      await createSnapshotHarness();
+
+    await agent.handleGatewayEvent({
+      event: "chat.side_result",
+      payload: {
+        sessionKey: "snapshot-session",
+        runId,
+        text: "   ",
+      },
+    } as unknown as EventFrame);
+
+    expect(sessionUpdate).not.toHaveBeenCalled();
+    expect(sessionStore.getSession("snapshot-session")?.activeRunId).toBe(runId);
+
+    await agent.handleGatewayEvent({
+      event: "chat",
+      payload: {
+        sessionKey: "snapshot-session",
+        runId,
+        state: "final",
+        stopReason: "end_turn",
+        message: {
+          content: [{ type: "text", text: "main run finished" }],
+        },
+      },
+    } as unknown as EventFrame);
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+    sessionStore.clearAllSessionsForTest();
+  });
 });

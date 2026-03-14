@@ -374,6 +374,73 @@ describe("runBtwSideQuestion", () => {
     );
   });
 
+  it("uses the in-flight prompt as background only when there is no prior transcript context", async () => {
+    buildSessionContextMock.mockReturnValue({ messages: [] });
+    getActiveEmbeddedRunSnapshotMock.mockReturnValue({
+      transcriptLeafId: null,
+      messages: [],
+      inFlightPrompt: "build me a tic-tac-toe game in brainfuck",
+    });
+    streamSimpleMock.mockReturnValue(
+      makeAsyncEvents([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "You're building a tic-tac-toe game in Brainfuck." }],
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-5",
+            stopReason: "stop",
+            usage: {
+              input: 1,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 3,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: Date.now(),
+          },
+        },
+      ]),
+    );
+
+    const result = await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: "/tmp/agent",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      question: "what are we doing?",
+      sessionEntry: createSessionEntry(),
+      resolvedReasoningLevel: "off",
+      opts: {},
+      isNewSession: false,
+    });
+
+    expect(result).toEqual({ text: "You're building a tic-tac-toe game in Brainfuck." });
+    expect(streamSimpleMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        messages: [
+          expect.objectContaining({
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: expect.stringContaining(
+                  "<in_flight_main_task>\nbuild me a tic-tac-toe game in brainfuck\n</in_flight_main_task>",
+                ),
+              },
+            ],
+          }),
+        ],
+      }),
+      expect.anything(),
+    );
+  });
+
   it("wraps the side question so the model does not treat it as a main-task continuation", async () => {
     streamSimpleMock.mockReturnValue(
       makeAsyncEvents([

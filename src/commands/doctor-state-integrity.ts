@@ -8,6 +8,7 @@ import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import {
   formatSessionArchiveTimestamp,
   isPrimarySessionTranscriptFileName,
+  isSessionArchiveArtifactName,
   isSessionSideResultsArtifactName,
   loadSessionStore,
   resolveMainSessionKey,
@@ -775,6 +776,7 @@ export async function noteStateIntegrity(
       .filter(
         (entry) =>
           entry.isFile() &&
+          !isSessionArchiveArtifactName(entry.name) &&
           (isPrimarySessionTranscriptFileName(entry.name) ||
             isSessionSideResultsArtifactName(entry.name)),
       )

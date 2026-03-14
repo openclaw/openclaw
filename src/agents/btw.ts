@@ -62,19 +62,7 @@ type BtwCustomEntryData = {
   usage?: unknown;
 };
 
-type BtwSideResultData = {
-  timestamp: number;
-  question: string;
-  answer: string;
-  provider: string;
-  model: string;
-  thinkingLevel: ThinkLevel | "off";
-  reasoningLevel: ReasoningLevel;
-  sessionKey?: string;
-  authProfileId?: string;
-  authProfileIdSource?: "auto" | "user";
-  usage?: unknown;
-};
+type BtwSideResultData = BtwCustomEntryData;
 
 async function appendBtwCustomEntry(params: {
   sessionFile: string;
@@ -198,15 +186,24 @@ function buildBtwSystemPrompt(): string {
   ].join("\n");
 }
 
-function buildBtwQuestionPrompt(question: string): string {
-  return [
+function buildBtwQuestionPrompt(question: string, inFlightPrompt?: string): string {
+  const lines = [
     "Answer this side question only.",
     "Ignore any unfinished task in the conversation while answering it.",
-    "",
-    "<btw_side_question>",
-    question.trim(),
-    "</btw_side_question>",
-  ].join("\n");
+  ];
+  const trimmedPrompt = inFlightPrompt?.trim();
+  if (trimmedPrompt) {
+    lines.push(
+      "",
+      "Current in-flight main task request for background context only:",
+      "<in_flight_main_task>",
+      trimmedPrompt,
+      "</in_flight_main_task>",
+      "Do not continue or complete that task while answering the side question.",
+    );
+  }
+  lines.push("", "<btw_side_question>", question.trim(), "</btw_side_question>");
+  return lines.join("\n");
 }
 
 function toSimpleContextMessages(messages: unknown[]): Message[] {
@@ -334,9 +331,12 @@ export async function runBtwSideQuestion(
   const sessionManager = SessionManager.open(sessionFile) as SessionManagerLike;
   const activeRunSnapshot = getActiveEmbeddedRunSnapshot(sessionId);
   let messages: Message[] = [];
+  let inFlightPrompt: string | undefined;
   if (Array.isArray(activeRunSnapshot?.messages) && activeRunSnapshot.messages.length > 0) {
     messages = toSimpleContextMessages(activeRunSnapshot.messages);
+    inFlightPrompt = activeRunSnapshot.inFlightPrompt;
   } else if (activeRunSnapshot) {
+    inFlightPrompt = activeRunSnapshot.inFlightPrompt;
     if (activeRunSnapshot.transcriptLeafId && sessionManager.branch) {
       sessionManager.branch(activeRunSnapshot.transcriptLeafId);
     } else {
@@ -358,7 +358,7 @@ export async function runBtwSideQuestion(
       Array.isArray(sessionContext.messages) ? sessionContext.messages : [],
     );
   }
-  if (messages.length === 0) {
+  if (messages.length === 0 && !inFlightPrompt?.trim()) {
     throw new Error("No active session context.");
   }
 
@@ -415,7 +415,12 @@ export async function runBtwSideQuestion(
         ...messages,
         {
           role: "user",
-          content: [{ type: "text", text: buildBtwQuestionPrompt(params.question) }],
+          content: [
+            {
+              type: "text",
+              text: buildBtwQuestionPrompt(params.question, inFlightPrompt),
+            },
+          ],
           timestamp: Date.now(),
         },
       ],

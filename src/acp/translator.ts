@@ -859,9 +859,8 @@ export class AcpGatewayAgent implements Agent {
       });
       pending.sentTextLength = trimmed.length;
       pending.sentText = trimmed;
+      await this.finishPrompt(pending.sessionId, pending, "end_turn");
     }
-
-    await this.finishPrompt(pending.sessionId, pending, "end_turn");
   }
 
   private async handleDeltaEvent(

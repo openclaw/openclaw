@@ -831,6 +831,7 @@ function extractBalancedJsonPrefix(raw: string): string | null {
 const MAX_TOOLCALL_REPAIR_BUFFER_CHARS = 64_000;
 const MAX_TOOLCALL_REPAIR_TRAILING_CHARS = 3;
 const TOOLCALL_REPAIR_ALLOWED_TRAILING_RE = /^[^\s{}[\]":,\\]{1,3}$/;
+const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 
 function shouldAttemptMalformedToolCallRepair(partialJson: string, delta: string): boolean {
   if (/[}\]]/.test(delta)) {
@@ -2457,17 +2458,11 @@ export async function runEmbeddedAttempt(
               });
           }
 
-          const btwSnapshotMessages = [
-            ...activeSession.messages,
-            {
-              role: "user",
-              content: [{ type: "text", text: effectivePrompt }],
-              timestamp: Date.now(),
-            },
-          ];
+          const btwSnapshotMessages = activeSession.messages.slice(-MAX_BTW_SNAPSHOT_MESSAGES);
           updateActiveEmbeddedRunSnapshot(params.sessionId, {
             transcriptLeafId,
             messages: btwSnapshotMessages,
+            inFlightPrompt: effectivePrompt,
           });
 
           // Only pass images option if there are actually images to pass

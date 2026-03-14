@@ -15,6 +15,7 @@ type EmbeddedPiQueueHandle = {
 export type ActiveEmbeddedRunSnapshot = {
   transcriptLeafId: string | null;
   messages?: unknown[];
+  inFlightPrompt?: string;
 };
 
 type EmbeddedRunWaiter = {
