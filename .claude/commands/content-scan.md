@@ -1,32 +1,104 @@
-Scan for the top 5 thought leadership article ideas relevant to AI, enterprise technology, and business strategy.
+Scan for the top frontier AI developments with strong enterprise thought leadership potential.
+
+Read `memory/brand/editorial_brain.md` for the enterprise editorial lens before scanning.
+Read `memory/brand/writing_style.md` for audience and voice context.
 
 Use the researcher subagent to:
 
-1. Identify emerging themes from the past 2 weeks in AI and technology
-2. Score each theme on: relevance to technology leaders, timeliness, originality, the author's expertise
-3. Generate 5 article ideas with a working title, 2-sentence description, and why it matters now
+1. Collect recent AI developments from the past 7 days
+2. Cluster duplicates referring to the same underlying development
+3. Evaluate each development using the scoring rubric below
+4. Return only stories scoring above 75
 
-Read `memory/brand/writing_style.md` to ensure ideas match the author's voice and audience.
+---
 
-Output format:
+## Scoring Rubric (100 points total)
+
+| Dimension                                        | Points |
+| ------------------------------------------------ | ------ |
+| Novelty                                          | 15     |
+| Strategic Importance                             | 15     |
+| Enterprise Relevance                             | 20     |
+| Practical Applicability                          | 15     |
+| Thought Leadership Potential                     | 10     |
+| Audience Fit (CIOs, CTOs, enterprise architects) | 10     |
+| Evidence Quality                                 | 10     |
+| Cross-Platform Reuse Potential                   | 5      |
+
+---
+
+## Detection Targets
+
+Prioritize signals that reveal meaningful shifts in:
+
+- AI capabilities (agents, reasoning, multimodal)
+- Enterprise adoption patterns
+- AI infrastructure and platform architecture
+- Agent systems and orchestration
+- Enterprise productivity and workflow transformation
+- AI governance and regulation
+- Data platform readiness
+
+Prefer primary sources: AI lab announcements, research papers, arXiv, GitHub trending, enterprise deployment stories.
+
+---
+
+## Output Structure
+
+For each story above 75, return:
 
 ```
-# Top 5 Article Ideas — [Date]
+---
+story_id: [slug]
+headline: [clear descriptive headline]
+source_links: [URLs]
+published_date: [date]
+category: [AI Capabilities / Enterprise Adoption / Infrastructure / Governance / Productivity]
+sub_category: [specific tag]
 
-## 1. [Title]
-**Why now:** [1 sentence]
-**Core insight:** [1–2 sentences]
-**Audience hook:** [What will make technology leaders stop and read]
+summary_1line: [one sentence]
+summary_5line: [five sentences — what happened, why it matters, enterprise angle, market gap, implication]
 
-## 2. [Title]
-...
+novelty_score: [0–15]
+enterprise_relevance_score: [0–20]
+thought_leadership_score: [0–10]
+total_score: [0–100]
+
+why_it_matters_for_leaders: [2–3 sentences]
+why_it_matters_for_tech_teams: [2–3 sentences]
+
+editorial_angles:
+  angle_1_strategy: [strategic leadership insight]
+  angle_2_operating_model: [enterprise operating model implication]
+  angle_3_platform: [technical or platform capability shift]
+
+possible_contrarian_angles: [1–2 non-obvious takes]
+
+recommended_formats:
+  - x_post
+  - linkedin_post
+  - medium_article
+
+risk_flags: [hype / unsupported claims / single source / etc.]
+duplicate_of: [story_id if applicable]
+---
 ```
 
-Save the full output to two locations:
+---
 
-1. `outputs/content/ideas.md` — overwrite with latest (used by downstream pipeline steps)
-2. `outputs/content/ideas/[YYYY-MM-DD-HH-MM]-[topic-slug].md` — dated archive copy that is never overwritten
+## Filter Rules
 
-The topic slug is a 3-5 word kebab-case summary of the scan topic or top idea title (e.g. `geo-search-cpg-brands`, `ai-governance-enterprise`, `general-scan`).
+Only return stories scoring above 75.
+Prioritize developments that reveal deeper shifts in enterprise AI adoption.
+Reject low-signal stories per the editorial brain rejection rules.
 
-Confirm both save paths and print the top idea with a one-line summary.
+---
+
+## Save Output
+
+Save the full structured output to:
+
+1. `outputs/content/scan-results.md` — overwrite with latest (used by orchestrator)
+2. `outputs/content/ideas/[YYYY-MM-DD-HH-MM]-scan.md` — dated archive copy (never overwrite)
+
+Confirm both save paths and print the top-scoring story with its recommended formats.
