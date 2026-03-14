@@ -212,6 +212,10 @@
       "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",
       "default": "./dist/plugin-sdk/keyed-async-queue.js"
     },
+    "./plugin-sdk/outbound-send-deps": {
+      "types": "./dist/plugin-sdk/outbound-send-deps.d.ts",
+      "default": "./dist/plugin-sdk/outbound-send-deps.js"
+    },
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {

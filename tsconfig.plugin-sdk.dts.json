@@ -24,6 +24,7 @@
     "src/plugin-sdk/msteams.ts",
     "src/plugin-sdk/account-id.ts",
     "src/plugin-sdk/keyed-async-queue.ts",
+    "src/plugin-sdk/outbound-send-deps.ts",
     "src/plugin-sdk/acpx.ts",
     "src/plugin-sdk/bluebubbles.ts",
     "src/plugin-sdk/copilot-proxy.ts",
