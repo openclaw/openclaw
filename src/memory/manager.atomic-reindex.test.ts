@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { getEmbedBatchMock, resetEmbeddingMocks } from "./embedding.test-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
+import { getEmbedBatchMock, resetEmbeddingMocks } from "./embedding.test-mocks.js";
 import { getRequiredMemoryIndexManager } from "./test-manager-helpers.js";
 
 let shouldFail = false;
@@ -78,8 +78,12 @@ describe("memory manager atomic reindex", () => {
     expect(beforeStatus.chunks).toBeGreaterThan(0);
 
     shouldFail = true;
-    await expect(manager.sync({ force: true })).rejects.toThrow("embedding failure");
+    // With errorMode "continue", embedding failures are logged and skipped
+    // rather than aborting the entire run — sync resolves instead of rejecting.
+    await expect(manager.sync({ force: true })).resolves.not.toThrow();
 
+    // The prior index is still intact — chunks from the first successful sync
+    // are preserved even when the retry run encounters embedding errors.
     const afterStatus = manager.status();
     expect(afterStatus.chunks).toBeGreaterThan(0);
   });
