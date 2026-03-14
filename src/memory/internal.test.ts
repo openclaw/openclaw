@@ -6,6 +6,7 @@ import {
   buildMultimodalChunkForIndexing,
   buildFileEntry,
   chunkMarkdown,
+  isMemoryPath,
   listMemoryFiles,
   normalizeExtraMemoryPaths,
   remapChunkLines,
@@ -38,6 +39,28 @@ describe("normalizeExtraMemoryPaths", () => {
       "",
     ]);
     expect(result).toEqual([path.resolve(workspaceDir, "notes"), absPath]);
+  });
+});
+
+describe("isMemoryPath", () => {
+  it("recognizes root memory files", () => {
+    expect(isMemoryPath("MEMORY.md")).toBe(true);
+    expect(isMemoryPath("memory.md")).toBe(true);
+    expect(isMemoryPath("./MEMORY.md")).toBe(true);
+  });
+
+  it("recognizes memory subdirectory paths case-insensitively", () => {
+    expect(isMemoryPath("memory/notes.md")).toBe(true);
+    expect(isMemoryPath("MEMORY/notes.md")).toBe(true);
+    expect(isMemoryPath("Memory/daily.md")).toBe(true);
+    expect(isMemoryPath("./memory/nested/file.md")).toBe(true);
+    expect(isMemoryPath("./MEMORY/nested/file.md")).toBe(true);
+  });
+
+  it("rejects non-memory paths", () => {
+    expect(isMemoryPath("")).toBe(false);
+    expect(isMemoryPath("src/index.ts")).toBe(false);
+    expect(isMemoryPath("notes/memory.md")).toBe(false);
   });
 });
 

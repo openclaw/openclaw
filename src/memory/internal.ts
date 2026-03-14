@@ -79,7 +79,7 @@ export function isMemoryPath(relPath: string): boolean {
   if (normalized === "MEMORY.md" || normalized === "memory.md") {
     return true;
   }
-  return normalized.startsWith("memory/");
+  return normalized.toLowerCase().startsWith("memory/");
 }
 
 function isAllowedMemoryFilePath(filePath: string, multimodal?: MemoryMultimodalSettings): boolean {
