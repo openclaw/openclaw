@@ -182,6 +182,41 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("passes model override from transform (#36326)", async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-model-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    const modPath = path.join(transformsRoot, "model-transform.mjs");
+    fs.writeFileSync(
+      modPath,
+      `export default () => ({ message: "transformed", model: "anthropic-proxy/claude-sonnet-4-6" });`,
+    );
+
+    const mappings = resolveHookMappings(
+      {
+        mappings: [
+          {
+            match: { path: "custom" },
+            action: "agent",
+            transform: { module: "model-transform.mjs" },
+          },
+        ],
+      },
+      { configDir },
+    );
+
+    const result = await applyHookMappings(mappings, {
+      payload: {},
+      headers: {},
+      url: new URL("http://127.0.0.1:18789/hooks/custom"),
+      path: "custom",
+    });
+
+    expect(result?.ok).toBe(true);
+    expect(result).toHaveProperty(["action", "kind"], "agent");
+    expect(result).toHaveProperty(["action", "model"], "anthropic-proxy/claude-sonnet-4-6");
+  });
+
   it("rejects transform module traversal outside transformsDir", () => {
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-traversal-"));
     const transformsRoot = path.join(configDir, "hooks", "transforms");

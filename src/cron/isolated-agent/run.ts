@@ -23,6 +23,7 @@ import {
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
+  resolveModelRefFromString,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
@@ -325,9 +326,24 @@ export async function runCronIsolatedAgentTurn(params: {
     });
     if ("error" in resolvedOverride) {
       if (resolvedOverride.error.startsWith("model not allowed:")) {
-        logWarn(
-          `cron: payload.model '${modelOverride}' not allowed, falling back to agent defaults`,
-        );
+        // #36326: Payload model overrides come from trusted admin-controlled
+        // sources (cron config, hook transforms, API).  Honour them even when
+        // they are not in agents.defaults.models so that hook transform model
+        // overrides work as expected.  The interactive /model allowlist still
+        // gates session-level overrides separately.
+        const parsed = resolveModelRefFromString({
+          raw: modelOverride,
+          defaultProvider: resolvedDefault.provider,
+        });
+        if (parsed) {
+          provider = parsed.ref.provider;
+          model = parsed.ref.model;
+          logWarn(`cron: payload.model '${modelOverride}' not in model allowlist, using as-is`);
+        } else {
+          logWarn(
+            `cron: payload.model '${modelOverride}' could not be parsed, falling back to agent defaults`,
+          );
+        }
       } else {
         return { status: "error", error: resolvedOverride.error };
       }

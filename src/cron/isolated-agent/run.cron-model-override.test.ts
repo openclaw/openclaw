@@ -251,3 +251,89 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
   });
 });
+
+describe("runCronIsolatedAgentTurn — hook transform model override (#36326)", () => {
+  let previousFastTestEnv: string | undefined;
+  let cronSession: ReturnType<typeof makeCronSession>;
+
+  beforeEach(() => {
+    previousFastTestEnv = clearFastTestEnv();
+    resetRunCronIsolatedAgentTurnHarness();
+
+    // Agent default model is Opus
+    resolveConfiguredModelRefMock.mockReturnValue({
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+
+    resolveAgentConfigMock.mockReturnValue(undefined);
+    updateSessionStoreMock.mockResolvedValue(undefined);
+
+    cronSession = makeCronSession({
+      sessionEntry: makeFreshSessionEntry(),
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
+  });
+
+  afterEach(() => {
+    restoreFastTestEnv(previousFastTestEnv);
+  });
+
+  it("honours payload model even when model allowlist rejects it", async () => {
+    // The transform returns a model that is not in agents.defaults.models.
+    // resolveAllowedModelRef returns the lowercase "model not allowed:" error.
+    resolveAllowedModelRefMock.mockReturnValueOnce({
+      error: "model not allowed: anthropic-proxy/claude-sonnet-4-6",
+    });
+
+    runWithModelFallbackMock.mockResolvedValueOnce(
+      makeSuccessfulRunResult({
+        provider: "anthropic-proxy",
+        model: "claude-sonnet-4-6",
+      }),
+    );
+
+    const job = makeJob({
+      payload: {
+        kind: "agentTurn",
+        message: "hook message",
+        model: "anthropic-proxy/claude-sonnet-4-6",
+      },
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeParams({ job }));
+
+    expect(result.status).toBe("ok");
+    // The session entry should record the hook transform model, not the
+    // agent default (Opus).  Before #36326, the "model not allowed" case
+    // silently fell back to the default.
+    expect(cronSession.sessionEntry.modelProvider).toBe("anthropic-proxy");
+    expect(cronSession.sessionEntry.model).toBe("claude-sonnet-4-6");
+  });
+
+  it("falls back when model not allowed AND cannot be parsed", async () => {
+    // Edge case: model is "not allowed" and also fails parsing (should not
+    // happen in practice since resolveAllowedModelRef already parsed it,
+    // but guard against corruption).
+    resolveAllowedModelRefMock.mockReturnValueOnce({
+      error: "model not allowed: /",
+    });
+
+    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
+
+    const job = makeJob({
+      payload: {
+        kind: "agentTurn",
+        message: "hook message",
+        model: "/",
+      },
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeParams({ job }));
+
+    // Should still succeed but with the default model (fallback)
+    expect(result.status).toBe("ok");
+    expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
+    expect(cronSession.sessionEntry.model).toBe("claude-opus-4-6");
+  });
+});
