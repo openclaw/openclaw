@@ -349,15 +349,8 @@ export function chunkMarkdown(
     return /^#{1,6}\s+/.test(line.trim());
   };
 
-  // Get heading level (1-6) or 0 if not a heading
-  const getHeadingLevel = (line: string): number => {
-    const match = line.trim().match(/^(#{1,6})\s+/);
-    return match ? match[1].length : 0;
-  };
-
   let current: Array<{ line: string; lineNo: number }> = [];
   let currentChars = 0;
-  let currentSectionStart = 0;
 
   const flush = () => {
     if (current.length === 0) {
@@ -424,17 +417,10 @@ export function chunkMarkdown(
     for (const segment of segments) {
       const lineSize = segment.length + 1;
       
-      // In heading-aware mode, only flush if segment exceeds maxChars (otherwise keep accumulating)
-      if (headingAware) {
-        if (lineSize > maxChars && current.length > 0) {
-          flush();
-          carryOverlap();
-        }
-      } else {
-        if (currentChars + lineSize > maxChars && current.length > 0) {
-          flush();
-          carryOverlap();
-        }
+      // In heading-aware mode, still enforce cumulative size limit to avoid giant chunks
+      if (currentChars + lineSize > maxChars && current.length > 0) {
+        flush();
+        carryOverlap();
       }
       current.push({ line: segment, lineNo });
       currentChars += lineSize;

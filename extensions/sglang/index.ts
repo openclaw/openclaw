@@ -1,10 +1,10 @@
 import {
   buildSglangProvider,
+  configureOpenAICompatibleSelfHostedProviderNonInteractive,
   emptyPluginConfigSchema,
-  promptAndConfigureOpenAICompatibleSelfHostedProvider,
+  promptAndConfigureOpenAICompatibleSelfHostedProviderAuth,
   type OpenClawPluginApi,
-  type ProviderAuthContext,
-  type ProviderAuthResult,
+  type ProviderAuthMethodNonInteractiveContext,
   type ProviderDiscoveryContext,
 } from "openclaw/plugin-sdk/core";
 
@@ -28,8 +28,8 @@ const sglangPlugin = {
           label: "SGLang",
           hint: "Fast self-hosted OpenAI-compatible server",
           kind: "custom",
-          run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
-            const result = await promptAndConfigureOpenAICompatibleSelfHostedProvider({
+          run: (ctx) =>
+            promptAndConfigureOpenAICompatibleSelfHostedProviderAuth({
               cfg: ctx.config,
               prompter: ctx.prompter,
               providerId: PROVIDER_ID,
@@ -37,18 +37,16 @@ const sglangPlugin = {
               defaultBaseUrl: DEFAULT_BASE_URL,
               defaultApiKeyEnvVar: "SGLANG_API_KEY",
               modelPlaceholder: "Qwen/Qwen3-8B",
-            });
-            return {
-              profiles: [
-                {
-                  profileId: result.profileId,
-                  credential: result.credential,
-                },
-              ],
-              configPatch: result.config,
-              defaultModel: result.modelRef,
-            };
-          },
+            }),
+          runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) =>
+            configureOpenAICompatibleSelfHostedProviderNonInteractive({
+              ctx,
+              providerId: PROVIDER_ID,
+              providerLabel: "SGLang",
+              defaultBaseUrl: DEFAULT_BASE_URL,
+              defaultApiKeyEnvVar: "SGLANG_API_KEY",
+              modelPlaceholder: "Qwen/Qwen3-8B",
+            }),
         },
       ],
       discovery: {

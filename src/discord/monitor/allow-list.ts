@@ -19,34 +19,7 @@ export type DiscordAllowListMatch = AllowlistMatch<"wildcard" | "id" | "name" | 
 
 const DISCORD_OWNER_ALLOWLIST_PREFIXES = ["discord:", "user:", "pk:"];
 
-export type DiscordGuildEntryResolved = {
-  id?: string;
-  slug?: string;
-  requireMention?: boolean;
-  ignoreOtherMentions?: boolean;
-  reactionNotifications?: "off" | "own" | "all" | "allowlist";
-  users?: string[];
-  roles?: string[];
-  channels?: Record<
-    string,
-    {
-      allow?: boolean;
-      requireMention?: boolean;
-      ignoreOtherMentions?: boolean;
-      skills?: string[];
-      enabled?: boolean;
-      users?: string[];
-      roles?: string[];
-      systemPrompt?: string;
-      includeThreadStarter?: boolean;
-      autoThread?: boolean;
-      autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
-    }
-  >;
-};
-
-export type DiscordChannelConfigResolved = {
-  allowed: boolean;
+type DiscordChannelOverrideConfig = {
   requireMention?: boolean;
   ignoreOtherMentions?: boolean;
   skills?: string[];
@@ -57,6 +30,21 @@ export type DiscordChannelConfigResolved = {
   includeThreadStarter?: boolean;
   autoThread?: boolean;
   autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
+};
+
+export type DiscordGuildEntryResolved = {
+  id?: string;
+  slug?: string;
+  requireMention?: boolean;
+  ignoreOtherMentions?: boolean;
+  reactionNotifications?: "off" | "own" | "all" | "allowlist";
+  users?: string[];
+  roles?: string[];
+  channels?: Record<string, { allow?: boolean } & DiscordChannelOverrideConfig>;
+};
+
+export type DiscordChannelConfigResolved = DiscordChannelOverrideConfig & {
+  allowed: boolean;
   matchKey?: string;
   matchSource?: ChannelMatchSource;
 };
@@ -103,6 +91,21 @@ export function normalizeDiscordSlug(value: string) {
     .replace(/^-+|-+$/g, "");
 }
 
+function resolveDiscordAllowListNameMatch(
+  list: DiscordAllowList,
+  candidate: { name?: string; tag?: string },
+): { matchKey: string; matchSource: "name" | "tag" } | null {
+  const nameSlug = candidate.name ? normalizeDiscordSlug(candidate.name) : "";
+  if (nameSlug && list.names.has(nameSlug)) {
+    return { matchKey: nameSlug, matchSource: "name" };
+  }
+  const tagSlug = candidate.tag ? normalizeDiscordSlug(candidate.tag) : "";
+  if (tagSlug && list.names.has(tagSlug)) {
+    return { matchKey: tagSlug, matchSource: "tag" };
+  }
+  return null;
+}
+
 export function allowListMatches(
   list: DiscordAllowList,
   candidate: { id?: string; name?: string; tag?: string },
@@ -115,11 +118,7 @@ export function allowListMatches(
     return true;
   }
   if (params?.allowNameMatching === true) {
-    const slug = candidate.name ? normalizeDiscordSlug(candidate.name) : "";
-    if (slug && list.names.has(slug)) {
-      return true;
-    }
-    if (candidate.tag && list.names.has(normalizeDiscordSlug(candidate.tag))) {
+    if (resolveDiscordAllowListNameMatch(list, candidate)) {
       return true;
     }
   }
@@ -139,13 +138,9 @@ export function resolveDiscordAllowListMatch(params: {
     return { allowed: true, matchKey: candidate.id, matchSource: "id" };
   }
   if (params.allowNameMatching === true) {
-    const nameSlug = candidate.name ? normalizeDiscordSlug(candidate.name) : "";
-    if (nameSlug && allowList.names.has(nameSlug)) {
-      return { allowed: true, matchKey: nameSlug, matchSource: "name" };
-    }
-    const tagSlug = candidate.tag ? normalizeDiscordSlug(candidate.tag) : "";
-    if (tagSlug && allowList.names.has(tagSlug)) {
-      return { allowed: true, matchKey: tagSlug, matchSource: "tag" };
+    const namedMatch = resolveDiscordAllowListNameMatch(allowList, candidate);
+    if (namedMatch) {
+      return { allowed: true, ...namedMatch };
     }
   }
   return { allowed: false };

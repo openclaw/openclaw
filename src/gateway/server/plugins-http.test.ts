@@ -86,6 +86,31 @@ async function createSubagentRuntime(): Promise<PluginRuntime["subagent"]> {
   return call.runtimeOptions.subagent;
 }
 
+function createSecurePluginRouteHandler(params: {
+  exactPluginHandler: () => boolean | Promise<boolean>;
+  prefixGatewayHandler: () => boolean | Promise<boolean>;
+}) {
+  return createGatewayPluginRequestHandler({
+    registry: createTestRegistry({
+      httpRoutes: [
+        createRoute({
+          path: "/plugin/secure/report",
+          match: "exact",
+          auth: "plugin",
+          handler: params.exactPluginHandler,
+        }),
+        createRoute({
+          path: "/plugin/secure",
+          match: "prefix",
+          auth: "gateway",
+          handler: params.prefixGatewayHandler,
+        }),
+      ],
+    }),
+    log: createPluginLog(),
+  });
+}
+
 describe("createGatewayPluginRequestHandler", () => {
   it("caps unauthenticated plugin routes to non-admin subagent scopes", async () => {
     loadOpenClawPlugins.mockReset();
@@ -209,24 +234,9 @@ describe("createGatewayPluginRequestHandler", () => {
   it("fails closed when a matched gateway route reaches dispatch without auth", async () => {
     const exactPluginHandler = vi.fn(async () => false);
     const prefixGatewayHandler = vi.fn(async () => true);
-    const handler = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
-        httpRoutes: [
-          createRoute({
-            path: "/plugin/secure/report",
-            match: "exact",
-            auth: "plugin",
-            handler: exactPluginHandler,
-          }),
-          createRoute({
-            path: "/plugin/secure",
-            match: "prefix",
-            auth: "gateway",
-            handler: prefixGatewayHandler,
-          }),
-        ],
-      }),
-      log: createPluginLog(),
+    const handler = createSecurePluginRouteHandler({
+      exactPluginHandler,
+      prefixGatewayHandler,
     });
 
     const { res } = makeMockHttpResponse();
@@ -246,24 +256,9 @@ describe("createGatewayPluginRequestHandler", () => {
   it("allows gateway route fallthrough only after gateway auth succeeds", async () => {
     const exactPluginHandler = vi.fn(async () => false);
     const prefixGatewayHandler = vi.fn(async () => true);
-    const handler = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
-        httpRoutes: [
-          createRoute({
-            path: "/plugin/secure/report",
-            match: "exact",
-            auth: "plugin",
-            handler: exactPluginHandler,
-          }),
-          createRoute({
-            path: "/plugin/secure",
-            match: "prefix",
-            auth: "gateway",
-            handler: prefixGatewayHandler,
-          }),
-        ],
-      }),
-      log: createPluginLog(),
+    const handler = createSecurePluginRouteHandler({
+      exactPluginHandler,
+      prefixGatewayHandler,
     });
 
     const { res } = makeMockHttpResponse();
