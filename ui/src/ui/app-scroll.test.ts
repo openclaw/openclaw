@@ -63,6 +63,13 @@ function createScrollEvent(scrollHeight: number, scrollTop: number, clientHeight
   } as unknown as Event;
 }
 
+function createWheelEvent(deltaY: number, scrollHeight: number, clientHeight: number) {
+  return {
+    deltaY,
+    currentTarget: { scrollHeight, clientHeight },
+  } as unknown as WheelEvent;
+}
+
 /* ------------------------------------------------------------------ */
 /*  handleChatScroll – threshold tests                                 */
 /* ------------------------------------------------------------------ */
@@ -146,13 +153,7 @@ describe("handleChatWheelIntent", () => {
     host.chatScrollFrame = 99;
     host.chatScrollTimeout = window.setTimeout(() => {}, 1000);
 
-    handleChatWheelIntent(
-      host,
-      {
-        deltaY: -120,
-        currentTarget: { scrollHeight: 2000, clientHeight: 500 },
-      } as unknown as WheelEvent,
-    );
+    handleChatWheelIntent(host, createWheelEvent(-120, 2000, 500));
 
     expect(host.chatUserNearBottom).toBe(false);
     expect(host.chatFollowLocked).toBe(true);
@@ -164,13 +165,7 @@ describe("handleChatWheelIntent", () => {
     const { host } = createScrollHost({});
     host.chatUserNearBottom = true;
 
-    handleChatWheelIntent(
-      host,
-      {
-        deltaY: 120,
-        currentTarget: { scrollHeight: 2000, clientHeight: 500 },
-      } as unknown as WheelEvent,
-    );
+    handleChatWheelIntent(host, createWheelEvent(120, 2000, 500));
 
     expect(host.chatUserNearBottom).toBe(true);
     expect(host.chatFollowLocked).toBe(false);
@@ -183,13 +178,7 @@ describe("handleChatWheelIntent", () => {
     });
     host.chatUserNearBottom = true;
 
-    handleChatWheelIntent(
-      host,
-      {
-        deltaY: -120,
-        currentTarget: { scrollHeight: 400, clientHeight: 400 },
-      } as unknown as WheelEvent,
-    );
+    handleChatWheelIntent(host, createWheelEvent(-120, 400, 400));
 
     expect(host.chatUserNearBottom).toBe(true);
     expect(host.chatFollowLocked).toBe(false);
@@ -323,13 +312,7 @@ describe("scheduleChatScroll", () => {
     host.chatFollowLocked = false;
     host.chatLastScrollTop = 2000;
 
-    handleChatWheelIntent(
-      host,
-      {
-        deltaY: -120,
-        currentTarget: { scrollHeight: 2000, clientHeight: 400 },
-      } as unknown as WheelEvent,
-    );
+    handleChatWheelIntent(host, createWheelEvent(-120, 2000, 400));
     handleChatScroll(host, createScrollEvent(2000, 1540, 400));
 
     expect(host.chatUserNearBottom).toBe(false);
