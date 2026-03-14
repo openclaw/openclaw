@@ -1,6 +1,1 @@
-export {
-  formatThreadBindingDurationLabel,
-  resolveThreadBindingFarewellText,
-  resolveThreadBindingIntroText,
-  resolveThreadBindingThreadName,
-} from "../../channels/thread-bindings-messages.js";
+export * from "../../../extensions/discord/src/monitor/thread-bindings.messages.js";
