@@ -1,11 +1,11 @@
 export type { ChannelMessageActionAdapter } from "../channels/plugins/types.js";
-export type { ResolvedSignalAccount } from "../signal/accounts.js";
+export type { ResolvedSignalAccount } from "../../extensions/signal/src/accounts.js";
 export * from "./channel-plugin-common.js";
 export {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
   resolveSignalAccount,
-} from "../signal/accounts.js";
+} from "../../extensions/signal/src/accounts.js";
 export {
   looksLikeSignalTargetId,
   normalizeSignalMessagingTarget,
