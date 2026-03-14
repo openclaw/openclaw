@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
-import { sanitizeTerminalText } from "../../terminal/safe-text.js";
+import type { OpenClawConfig } from "../../../../src/config/config.js";
+import { sanitizeTerminalText } from "../../../../src/terminal/safe-text.js";
 import {
   describeIMessageEchoDropLog,
   resolveIMessageInboundDecision,
