@@ -18,12 +18,6 @@ function normalizeElevenLabsBaseUrl(baseUrl: string): string {
   return trimmed.replace(/\/+$/, "");
 }
 
-function requireInRange(value: number, min: number, max: number, label: string): void {
-  if (!Number.isFinite(value) || value < min || value > max) {
-    throw new Error(`${label} must be between ${min} and ${max}`);
-  }
-}
-
 function assertVoiceSettings(settings: ResolvedTtsConfig["elevenlabs"]["voiceSettings"]) {
   requireInRange(settings.stability, 0, 1, "stability");
   requireInRange(settings.similarityBoost, 0, 1, "similarityBoost");
