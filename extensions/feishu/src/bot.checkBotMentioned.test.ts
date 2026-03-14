@@ -128,6 +128,28 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     expect(ctx.content).toBe("hello world");
   });
 
+  it("returns mentionedBot=false when message contains @_all only (group broadcast)", () => {
+    const event = makeEvent("group", [], "@_all hello everyone");
+    event.message.content = JSON.stringify({ text: "@_all hello everyone" });
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("returns mentionedBot=false when message contains @all only (group broadcast)", () => {
+    const event = makeEvent("group", [], "@all hello everyone");
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("returns mentionedBot=true when message has @_all and a real bot mention", () => {
+    const event = makeEvent("group", [
+      { key: "@_user_1", name: "Bot", id: { open_id: BOT_OPEN_ID } },
+    ], "@_all @_user_1 hello");
+    event.message.content = JSON.stringify({ text: "@_all @_user_1 hello" });
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(true);
+  });
+
   it("returns mentionedBot=true for post message with at (no top-level mentions)", () => {
     const BOT_OPEN_ID = "ou_bot_123";
     const event = makePostEvent({
