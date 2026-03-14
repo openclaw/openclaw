@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { InboundDebounceByProvider } from "../config/types.messages.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 
 const resolveMs = (value: unknown): number | undefined => {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -39,6 +40,9 @@ type DebounceBuffer<T> = {
   debounceMs: number;
 };
 
+/** Hard cap on concurrent debounce keys to bound memory usage. */
+const DEFAULT_MAX_KEYS = 2000;
+
 export type InboundDebounceCreateParams<T> = {
   debounceMs: number;
   buildKey: (item: T) => string | null | undefined;
@@ -46,11 +50,14 @@ export type InboundDebounceCreateParams<T> = {
   resolveDebounceMs?: (item: T) => number | undefined;
   onFlush: (items: T[]) => Promise<void>;
   onError?: (err: unknown, items: T[]) => void;
+  /** Max number of distinct debounce keys held concurrently (default 2000). */
+  maxKeys?: number;
 };
 
 export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>) {
   const buffers = new Map<string, DebounceBuffer<T>>();
   const defaultDebounceMs = Math.max(0, Math.trunc(params.debounceMs));
+  const maxKeys = Math.max(1, Math.trunc(params.maxKeys ?? DEFAULT_MAX_KEYS));
 
   const resolveDebounceMs = (item: T) => {
     const resolved = params.resolveDebounceMs?.(item);
@@ -121,6 +128,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
 
     const buffer: DebounceBuffer<T> = { items: [item], timeout: null, debounceMs };
     buffers.set(key, buffer);
+    pruneMapToMaxSize(buffers, maxKeys);
     scheduleFlush(key, buffer);
   };
 
