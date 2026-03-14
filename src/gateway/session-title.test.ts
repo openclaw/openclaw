@@ -35,6 +35,26 @@ describe("deriveSessionTitle", () => {
     expect(deriveSessionTitle(entry, "heartbeat")).toBe("My App - Dashboard");
   });
 
+  test("keeps displayName ahead of label", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      displayName: "Override",
+      label: "Should Not Appear",
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry)).toBe("Override");
+  });
+
+  test("keeps subject ahead of label", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      subject: "Room Title",
+      label: "Should Not Appear",
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry)).toBe("Room Title");
+  });
+
   test("falls back to origin label before transcript-derived title", () => {
     const entry = {
       sessionId: "abc123",
