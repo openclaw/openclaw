@@ -52,6 +52,8 @@ export interface ProcessSession {
   exited: boolean;
   truncated: boolean;
   backgrounded: boolean;
+  /** Optional kill handler for proxy sessions (e.g. cloud sandbox). */
+  onKill?: () => Promise<void>;
 }
 
 export interface FinishedSession {

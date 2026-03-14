@@ -10,6 +10,7 @@ import {
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { markBackgrounded } from "./bash-process-registry.js";
+import { executeCloudHostCommand } from "./bash-tools.exec-host-cloud.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import {
@@ -342,7 +343,7 @@ export function createExecTool(
         throw new Error(
           [
             "exec host=sandbox is configured, but sandbox runtime is unavailable for this session.",
-            'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or set tools.exec.host to "gateway"/"node".',
+            'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or set tools.exec.host to "gateway"/"node"/"cloud".',
           ].join("\n"),
         );
       }
@@ -390,13 +391,42 @@ export function createExecTool(
       }
 
       // `tools.exec.pathPrepend` is only meaningful when exec runs locally (gateway) or in the sandbox.
-      // Node hosts intentionally ignore request-scoped PATH overrides, so don't pretend this applies.
-      if (host === "node" && defaultPathPrepend.length > 0) {
+      // Node/cloud hosts intentionally ignore request-scoped PATH overrides, so don't pretend this applies.
+      if ((host === "node" || host === "cloud") && defaultPathPrepend.length > 0) {
         warnings.push(
-          "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
+          `Warning: tools.exec.pathPrepend is ignored for host=${host}. Configure PATH on the ${host} host/service instead.`,
         );
       } else {
         applyPathPrepend(env, defaultPathPrepend);
+      }
+
+      if (host === "cloud") {
+        const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;
+        const bgTimeoutBypass =
+          allowBackground && explicitTimeoutSec === null && (backgroundRequested || yieldRequested);
+        const bgTimeoutMs = bgTimeoutBypass
+          ? null
+          : (explicitTimeoutSec ?? defaultTimeoutSec) * 1000;
+        return executeCloudHostCommand({
+          command: params.command,
+          workdir,
+          env,
+          timeoutSec: params.timeout,
+          defaultTimeoutSec,
+          backgroundTimeoutMs: bgTimeoutMs,
+          backgroundMs: allowBackground && backgroundRequested ? 0 : undefined,
+          yieldMs: allowBackground && !backgroundRequested ? (yieldWindow ?? undefined) : undefined,
+          scopeKey: defaults?.scopeKey,
+          sessionKey: defaults?.sessionKey,
+          agentId,
+          security,
+          ask,
+          warnings,
+          notifyOnExit,
+          notifyOnExitEmptySuccess,
+          maxOutputChars: maxOutput,
+          pendingMaxOutputChars: pendingMaxOutput,
+        });
       }
 
       if (host === "node") {

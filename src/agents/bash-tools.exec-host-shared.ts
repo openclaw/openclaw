@@ -151,7 +151,7 @@ export function resolveExecHostApprovalContext(params: {
   agentId?: string;
   security: ExecSecurity;
   ask: ExecAsk;
-  host: "gateway" | "node";
+  host: "gateway" | "node" | "cloud";
 }): ExecHostApprovalContext {
   const approvals = resolveExecApprovals(params.agentId, {
     security: params.security,

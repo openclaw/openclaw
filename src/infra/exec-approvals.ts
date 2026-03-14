@@ -7,13 +7,18 @@ import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
 
-export type ExecHost = "sandbox" | "gateway" | "node";
+export type ExecHost = "sandbox" | "gateway" | "node" | "cloud";
 export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
 
 export function normalizeExecHost(value?: string | null): ExecHost | null {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
+  if (
+    normalized === "sandbox" ||
+    normalized === "gateway" ||
+    normalized === "node" ||
+    normalized === "cloud"
+  ) {
     return normalized;
   }
   return null;
