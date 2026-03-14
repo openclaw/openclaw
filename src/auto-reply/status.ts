@@ -13,6 +13,7 @@ import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/us
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import { isCommandFlagEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import {
   resolveMainSessionKey,
   resolveSessionFilePath,
@@ -650,8 +651,14 @@ export function buildStatusMessage(args: StatusArgs): string {
     }
     return "channel override";
   })();
+
+  // Extract configured fallbacks from model config
+  const configuredFallbacks = resolveAgentModelFallbackValues(args.config?.agents?.defaults?.model);
+  const fallbacksNote =
+    configuredFallbacks.length > 0 ? ` · Fallbacks: ${configuredFallbacks.join(", ")}` : "";
+
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
-  const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
+  const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}${fallbacksNote}`;
   const showFallbackAuth = activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue;
   const fallbackLine = fallbackState.active
     ? `↪️ Fallback: ${activeModelLabel}${

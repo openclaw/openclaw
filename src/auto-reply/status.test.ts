@@ -408,6 +408,68 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Fallback:");
   });
 
+  it("shows configured fallbacks when model config has fallbacks array", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-sonnet-4",
+              fallbacks: ["openai/gpt-4.1", "google/gemini-2.0-flash"],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: {
+          primary: "anthropic/claude-sonnet-4",
+          fallbacks: ["openai/gpt-4.1", "google/gemini-2.0-flash"],
+        },
+      },
+      sessionEntry: {
+        sessionId: "test-fallbacks",
+        updatedAt: 0,
+        contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: anthropic/claude-sonnet-4");
+    expect(normalized).toContain("Fallbacks: openai/gpt-4.1, google/gemini-2.0-flash");
+  });
+
+  it("does not show fallbacks when model config is a string", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-sonnet-4",
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "anthropic/claude-sonnet-4",
+      },
+      sessionEntry: {
+        sessionId: "test-no-fallbacks",
+        updatedAt: 0,
+        contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: anthropic/claude-sonnet-4");
+    expect(normalized).not.toContain("Fallbacks:");
+  });
+
   it("keeps provider prefix from configured model", () => {
     const text = buildStatusMessage({
       agent: {
