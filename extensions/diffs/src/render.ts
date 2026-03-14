@@ -1,5 +1,13 @@
-import type { FileContents, FileDiffMetadata, SupportedLanguages } from "@pierre/diffs";
-import { parsePatchFiles } from "@pierre/diffs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import type {
+  FileContents,
+  FileDiffMetadata,
+  SupportedLanguages,
+  ThemeRegistrationResolved,
+} from "@pierre/diffs";
+import { ResolvedThemes, parsePatchFiles } from "@pierre/diffs";
 import { preloadFileDiff, preloadMultiFileDiff } from "@pierre/diffs/ssr";
 import type {
   DiffInput,
@@ -13,6 +21,30 @@ import { VIEWER_LOADER_PATH } from "./viewer-assets.js";
 const DEFAULT_FILE_NAME = "diff.txt";
 const MAX_PATCH_FILE_COUNT = 128;
 const MAX_PATCH_TOTAL_LINES = 120_000;
+const PIERRE_THEME_IMPORTS = {
+  "pierre-dark": "pierre-dark.json",
+  "pierre-light": "pierre-light.json",
+} as const;
+
+let ensurePierreThemesPromise: Promise<void> | undefined;
+
+async function ensurePierreThemesLoaded(): Promise<void> {
+  ensurePierreThemesPromise ??= Promise.all(
+    Object.entries(PIERRE_THEME_IMPORTS).map(async ([themeName, fileName]) => {
+      if (ResolvedThemes.has(themeName)) {
+        return;
+      }
+      const diffsEntryPath = fileURLToPath(import.meta.resolve("@pierre/diffs"));
+      const themePath = path.resolve(path.dirname(diffsEntryPath), "../../theme/themes", fileName);
+      const theme = JSON.parse(await fs.readFile(themePath, "utf8")) as Record<string, unknown>;
+      ResolvedThemes.set(themeName, {
+        ...theme,
+        name: themeName,
+      } as ThemeRegistrationResolved);
+    }),
+  ).then(() => undefined);
+  return ensurePierreThemesPromise;
+}
 
 function escapeCssString(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
@@ -341,6 +373,7 @@ async function renderBeforeAfterDiff(
   input: Extract<DiffInput, { kind: "before_after" }>,
   options: DiffRenderOptions,
 ): Promise<{ viewerBodyHtml: string; imageBodyHtml: string; fileCount: number }> {
+  await ensurePierreThemesLoaded();
   const fileName = resolveBeforeAfterFileName(input);
   const lang = normalizeSupportedLanguage(input.lang);
   const oldFile: FileContents = {
@@ -390,6 +423,7 @@ async function renderPatchDiff(
   input: Extract<DiffInput, { kind: "patch" }>,
   options: DiffRenderOptions,
 ): Promise<{ viewerBodyHtml: string; imageBodyHtml: string; fileCount: number }> {
+  await ensurePierreThemesLoaded();
   const files = parsePatchFiles(input.patch).flatMap((entry) => entry.files ?? []);
   if (files.length === 0) {
     throw new Error("Patch input did not contain any file diffs.");

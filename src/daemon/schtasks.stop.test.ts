@@ -13,11 +13,20 @@ import {
 const findVerifiedGatewayListenerPidsOnPortSync = vi.hoisted(() =>
   vi.fn<(port: number) => number[]>(() => []),
 );
+const spawnSync = vi.hoisted(() => vi.fn(() => ({ status: 0 })));
 
 vi.mock("../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync: (port: number) =>
     findVerifiedGatewayListenerPidsOnPortSync(port),
 }));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawnSync,
+  };
+});
 
 const { restartScheduledTask, stopScheduledTask } = await import("./schtasks.js");
 const GATEWAY_PORT = 18789;
@@ -74,6 +83,7 @@ beforeEach(() => {
   findVerifiedGatewayListenerPidsOnPortSync.mockReset();
   findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
   inspectPortUsage.mockResolvedValue(freePortUsage());
+  spawnSync.mockClear();
 });
 
 afterEach(() => {
@@ -81,6 +91,18 @@ afterEach(() => {
 });
 
 describe("Scheduled Task stop/restart cleanup", () => {
+  function expectGatewayTermination(pid: number) {
+    if (process.platform === "win32") {
+      expect(spawnSync).toHaveBeenCalledWith(
+        "C:\\Windows\\System32\\taskkill.exe",
+        ["/T", "/PID", String(pid)],
+        expect.objectContaining({ stdio: "ignore", timeout: 5_000, windowsHide: true }),
+      );
+      return;
+    }
+    expect(killProcessTree).toHaveBeenCalledWith(pid, { graceMs: 300 });
+  }
+
   it("kills lingering verified gateway listeners after schtasks stop", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       pushSuccessfulSchtasksResponses(3);
@@ -92,7 +114,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
       await stopScheduledTask({ env, stdout });
 
       expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
-      expect(killProcessTree).toHaveBeenCalledWith(4242, { graceMs: 300 });
+      expectGatewayTermination(4242);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
     });
   });
@@ -111,8 +133,23 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
       await stopScheduledTask({ env, stdout });
 
-      expect(killProcessTree).toHaveBeenNthCalledWith(1, 4242, { graceMs: 300 });
-      expect(killProcessTree).toHaveBeenNthCalledWith(2, expect.any(Number), { graceMs: 300 });
+      if (process.platform === "win32") {
+        expect(spawnSync).toHaveBeenNthCalledWith(
+          1,
+          "C:\\Windows\\System32\\taskkill.exe",
+          ["/T", "/PID", "4242"],
+          expect.objectContaining({ stdio: "ignore", timeout: 5_000, windowsHide: true }),
+        );
+        expect(spawnSync).toHaveBeenNthCalledWith(
+          2,
+          "C:\\Windows\\System32\\taskkill.exe",
+          ["/T", "/PID", expect.any(String)],
+          expect.objectContaining({ stdio: "ignore", timeout: 5_000, windowsHide: true }),
+        );
+      } else {
+        expect(killProcessTree).toHaveBeenNthCalledWith(1, 4242, { graceMs: 300 });
+        expect(killProcessTree).toHaveBeenNthCalledWith(2, expect.any(Number), { graceMs: 300 });
+      }
       expect(inspectPortUsage.mock.calls.length).toBeGreaterThanOrEqual(22);
     });
   });
@@ -132,7 +169,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
       await stopScheduledTask({ env, stdout });
 
-      expect(killProcessTree).toHaveBeenCalledWith(6262, { graceMs: 300 });
+      expectGatewayTermination(6262);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
     });
   });
@@ -150,7 +187,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
       });
 
       expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
-      expect(killProcessTree).toHaveBeenCalledWith(5151, { graceMs: 300 });
+      expectGatewayTermination(5151);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
       expect(schtasksCalls.at(-1)).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
     });

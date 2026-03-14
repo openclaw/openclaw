@@ -8,15 +8,18 @@ import fs from "node:fs/promises";
  *   - Versioned formula "node@22":  <prefix>/opt/node@22/bin/node  (keg-only)
  */
 export async function resolveStableNodePath(nodePath: string): Promise<string> {
-  const cellarMatch = nodePath.match(/^(.+?)\/Cellar\/([^/]+)\/[^/]+\/bin\/node$/);
+  const cellarMatch = nodePath.match(
+    /^(.+?)[/\\]Cellar[/\\]([^/\\]+)[/\\][^/\\]+[/\\]bin[/\\]node$/,
+  );
   if (!cellarMatch) {
     return nodePath;
   }
+  const separator = nodePath.includes("\\") ? "\\" : "/";
   const prefix = cellarMatch[1]; // e.g. /opt/homebrew
   const formula = cellarMatch[2]; // e.g. "node" or "node@22"
 
   // Try the Homebrew opt symlink first — works for both default and versioned formulas.
-  const optPath = `${prefix}/opt/${formula}/bin/node`;
+  const optPath = `${prefix}${separator}opt${separator}${formula}${separator}bin${separator}node`;
   try {
     await fs.access(optPath);
     return optPath;
@@ -26,7 +29,7 @@ export async function resolveStableNodePath(nodePath: string): Promise<string> {
 
   // For the default "node" formula, also try the direct bin symlink.
   if (formula === "node") {
-    const binPath = `${prefix}/bin/node`;
+    const binPath = `${prefix}${separator}bin${separator}node`;
     try {
       await fs.access(binPath);
       return binPath;

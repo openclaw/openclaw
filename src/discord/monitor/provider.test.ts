@@ -778,6 +778,12 @@ describe("monitorDiscordProvider", () => {
     const { RateLimitError } = await import("@buape/carbon");
     const { monitorDiscordProvider } = await import("./provider.js");
     const runtime = baseRuntime();
+    const dailyCreateLimitBody = {
+      message: "Max number of daily application command creates has been reached (200)",
+      retry_after: 193.632,
+      global: false,
+      code: 30034,
+    } as { message: string; retry_after: number; global: boolean };
     clientHandleDeployRequestMock.mockRejectedValueOnce(
       new RateLimitError(
         new Response(null, {
@@ -787,11 +793,7 @@ describe("monitorDiscordProvider", () => {
             "X-RateLimit-Bucket": "bucket-1",
           },
         }),
-        {
-          message: "Max number of daily application command creates has been reached (200)",
-          retry_after: 193.632,
-          code: 30034,
-        },
+        dailyCreateLimitBody,
       ),
     );
 

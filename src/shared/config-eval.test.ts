@@ -86,6 +86,7 @@ describe("config-eval helpers", () => {
   });
 
   it("caches binary lookups until PATH changes", () => {
+    setPlatform("darwin");
     process.env.PATH = ["/missing/bin", "/found/bin"].join(path.delimiter);
     const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation((candidate) => {
       if (String(candidate) === path.join("/found/bin", "tool")) {
@@ -110,10 +111,11 @@ describe("config-eval helpers", () => {
 
   it("checks PATHEXT candidates on Windows", () => {
     setPlatform("win32");
-    process.env.PATH = "/tools";
+    process.env.PATH = path.join(path.sep, "tools");
     process.env.PATHEXT = ".EXE;.CMD";
+    const basePath = path.join(path.join(path.sep, "tools"), "tool");
     const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation((candidate) => {
-      if (String(candidate) === "/tools/tool.CMD") {
+      if (String(candidate) === `${basePath}.CMD`) {
         return undefined;
       }
       throw new Error("missing");
@@ -121,9 +123,9 @@ describe("config-eval helpers", () => {
 
     expect(hasBinary("tool")).toBe(true);
     expect(accessSpy.mock.calls.map(([candidate]) => String(candidate))).toEqual([
-      "/tools/tool",
-      "/tools/tool.EXE",
-      "/tools/tool.CMD",
+      basePath,
+      `${basePath}.EXE`,
+      `${basePath}.CMD`,
     ]);
   });
 });
