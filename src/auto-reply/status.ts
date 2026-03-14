@@ -6,6 +6,7 @@ import {
   buildModelAliasIndex,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
+  resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
@@ -508,7 +509,13 @@ export function buildStatusMessage(args: StatusArgs): string {
   }
 
   const thinkLevel =
-    args.resolvedThink ?? args.sessionEntry?.thinkingLevel ?? args.agent?.thinkingDefault ?? "off";
+    args.resolvedThink ??
+    (args.sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
+    resolveThinkingDefault({
+      cfg: contextConfig,
+      provider: activeProvider,
+      model: activeModel,
+    });
   const verboseLevel =
     args.resolvedVerbose ?? args.sessionEntry?.verboseLevel ?? args.agent?.verboseDefault ?? "off";
   const fastMode = args.resolvedFast ?? args.sessionEntry?.fastMode ?? false;
