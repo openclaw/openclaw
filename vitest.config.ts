@@ -89,6 +89,7 @@ export default defineConfig({
       "ui/src/ui/controllers/agents.test.ts",
       "ui/src/ui/controllers/chat.test.ts",
       "ui/src/ui/chat/slash-commands.node.test.ts",
+      "ui/src/ui/chat/slash-command-executor.node.test.ts",
     ],
     setupFiles: ["test/setup.ts"],
     exclude: [

@@ -417,3 +417,57 @@ describe("executeSlashCommand directives", () => {
     });
   });
 });
+
+describe("executeSlashCommand /status", () => {
+  it("returns session status with model, thinking, verbose, and fast mode", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main", {
+              model: "claude-opus-4-5",
+              modelProvider: "anthropic",
+              thinkingLevel: "high",
+              verboseLevel: "on",
+              fastMode: false,
+            }),
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "status",
+      "",
+    );
+
+    expect(result.content).toContain("**Session Status**");
+    expect(result.content).toContain("claude-opus-4-5");
+    expect(result.content).toContain("anthropic");
+    expect(result.content).toContain("high");
+    expect(result.content).toContain("on");
+    expect(result.content).toContain("Fast mode: **off**");
+    expect(request).toHaveBeenCalledWith("sessions.list", {});
+  });
+
+  it("returns 'No active session.' when session is not found", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return { sessions: [] };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "status",
+      "",
+    );
+
+    expect(result.content).toBe("No active session.");
+  });
+});

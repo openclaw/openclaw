@@ -70,6 +70,8 @@ export async function executeSlashCommand(
       return await executeVerbose(client, sessionKey, args);
     case "export":
       return { content: "Exporting session...", action: "export" };
+    case "status":
+      return await executeStatus(client, sessionKey);
     case "usage":
       return await executeUsage(client, sessionKey);
     case "agents":
@@ -273,6 +275,36 @@ async function executeFast(
     };
   } catch (err) {
     return { content: `Failed to set fast mode: ${String(err)}` };
+  }
+}
+
+async function executeStatus(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+): Promise<SlashCommandResult> {
+  try {
+    const session = await loadCurrentSession(client, sessionKey);
+    if (!session) {
+      return { content: "No active session." };
+    }
+    const lines = ["**Session Status**"];
+    if (session.model) {
+      lines.push(`Model: \`${session.model}\``);
+    }
+    if (session.modelProvider) {
+      lines.push(`Provider: \`${session.modelProvider}\``);
+    }
+    const thinkingLevel = normalizeThinkLevel(session.thinkingLevel) ?? "off";
+    lines.push(`Thinking: **${thinkingLevel}**`);
+    const verboseLevel = normalizeVerboseLevel(session.verboseLevel) ?? "off";
+    lines.push(`Verbose: **${verboseLevel}**`);
+    lines.push(`Fast mode: **${session.fastMode === true ? "on" : "off"}**`);
+    if (session.abortedLastRun) {
+      lines.push("Last run: **aborted**");
+    }
+    return { content: lines.join("\n") };
+  } catch (err) {
+    return { content: `Failed to get session status: ${String(err)}` };
   }
 }
 
