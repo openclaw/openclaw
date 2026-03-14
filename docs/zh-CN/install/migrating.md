@@ -112,13 +112,14 @@ tar -czf openclaw-workspace.tgz .openclaw/workspace
 常见方法：
 
 - `scp` 压缩包并解压
-- 通过 SSH 使用 `rsync -a`
+- 如果目标路径归 root 所有或由其他用户运行，请通过 SSH 使用 `rsync -a --no-owner --no-group`
 - 外部驱动器
 
 复制后，确保：
 
 - 包含了隐藏目录（例如 `.openclaw/`）
 - 文件所有权对于运行 Gateway 网关的用户是正确的
+- 如果使用了 `rsync`，不要把源机器的 owner/group 原样保留到目标机器上的 root 路径
 
 ### 步骤 3 — 运行 Doctor（迁移 + 服务修复）
 
@@ -167,6 +168,10 @@ openclaw doctor
 如果你以 root 身份复制或更改了用户，Gateway 网关可能无法读取凭证/会话。
 
 修复：确保状态目录 + 工作区由运行 Gateway 网关的用户拥有。
+
+如果你从另一台机器复制并保留了 owner/group，也可能把 root 路径的所有权漂移到错误的用户。
+除非你非常确定源端和目标端的所有权模型完全一致，否则优先使用 `rsync --no-owner --no-group`
+或 `scp` 后再解压。
 
 ### 陷阱：在远程/本地模式之间迁移
 
