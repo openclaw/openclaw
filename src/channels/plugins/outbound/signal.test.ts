@@ -26,7 +26,7 @@ describe("signalOutbound", () => {
       to: "+15555550123",
       text: "hello",
       accountId: "work",
-      deps: { sendSignal },
+      deps: { signal: sendSignal },
     });
 
     expect(sendSignal).toHaveBeenCalledWith(
@@ -52,7 +52,7 @@ describe("signalOutbound", () => {
       mediaUrl: "https://example.com/file.jpg",
       mediaLocalRoots: ["/tmp/media"],
       accountId: "default",
-      deps: { sendSignal },
+      deps: { signal: sendSignal },
     });
 
     expect(sendSignal).toHaveBeenCalledWith(
