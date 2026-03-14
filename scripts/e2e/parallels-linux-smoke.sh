@@ -1,45 +1,40 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-
-VM_NAME="macOS Tahoe"
-SNAPSHOT_HINT="macOS 26.3.1 fresh"
+VM_NAME="Ubuntu 24.04.3 ARM64"
+SNAPSHOT_HINT="fresh"
 MODE="both"
 OPENAI_API_KEY_ENV="OPENAI_API_KEY"
 INSTALL_URL="https://openclaw.ai/install.sh"
-HOST_PORT="18425"
+HOST_PORT="18427"
 HOST_PORT_EXPLICIT=0
 HOST_IP=""
 LATEST_VERSION=""
-KEEP_SERVER=0
-CHECK_LATEST_REF=1
 JSON_OUTPUT=0
-GUEST_OPENCLAW_BIN="/opt/homebrew/bin/openclaw"
-GUEST_OPENCLAW_ENTRY="/opt/homebrew/lib/node_modules/openclaw/openclaw.mjs"
-GUEST_NODE_BIN="/opt/homebrew/bin/node"
-GUEST_NPM_BIN="/opt/homebrew/bin/npm"
+KEEP_SERVER=0
 
 MAIN_TGZ_DIR="$(mktemp -d)"
 MAIN_TGZ_PATH=""
 SERVER_PID=""
-RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-smoke.XXXXXX)"
+RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-linux.XXXXXX)"
 
-TIMEOUT_INSTALL_S=900
-TIMEOUT_VERIFY_S=60
-TIMEOUT_ONBOARD_S=180
-TIMEOUT_GATEWAY_S=60
-TIMEOUT_AGENT_S=120
-TIMEOUT_PERMISSION_S=60
 TIMEOUT_SNAPSHOT_S=180
+TIMEOUT_BOOTSTRAP_S=600
+TIMEOUT_INSTALL_S=1200
+TIMEOUT_VERIFY_S=90
+TIMEOUT_ONBOARD_S=180
+TIMEOUT_AGENT_S=180
 
+FRESH_MAIN_STATUS="skip"
 FRESH_MAIN_VERSION="skip"
+FRESH_GATEWAY_STATUS="skip"
+FRESH_AGENT_STATUS="skip"
+UPGRADE_STATUS="skip"
 LATEST_INSTALLED_VERSION="skip"
 UPGRADE_MAIN_VERSION="skip"
-FRESH_GATEWAY_STATUS="skip"
 UPGRADE_GATEWAY_STATUS="skip"
-FRESH_AGENT_STATUS="skip"
 UPGRADE_AGENT_STATUS="skip"
+DAEMON_STATUS="systemd-user-unavailable"
 
 say() {
   printf '==> %s\n' "$*"
@@ -59,37 +54,23 @@ cleanup() {
     kill "$SERVER_PID" >/dev/null 2>&1 || true
   fi
   rm -rf "$MAIN_TGZ_DIR"
-  if [[ "${KEEP_SERVER:-0}" -eq 0 ]]; then
-    :
-  fi
 }
 
 trap cleanup EXIT
 
-shell_quote() {
-  local value="$1"
-  printf "'%s'" "$(printf '%s' "$value" | sed "s/'/'\"'\"'/g")"
-}
-
 usage() {
   cat <<'EOF'
-Usage: bash scripts/e2e/parallels-macos-smoke.sh [options]
+Usage: bash scripts/e2e/parallels-linux-smoke.sh [options]
 
 Options:
-  --vm <name>                Parallels VM name. Default: "macOS Tahoe"
-  --snapshot-hint <name>     Snapshot name substring/fuzzy match.
-                             Default: "macOS 26.3.1 fresh"
+  --vm <name>                Parallels VM name. Default: "Ubuntu 24.04.3 ARM64"
+  --snapshot-hint <name>     Snapshot name substring/fuzzy match. Default: "fresh"
   --mode <fresh|upgrade|both>
-                             fresh   = fresh snapshot -> current main tgz -> onboard smoke
-                             upgrade = fresh snapshot -> latest release -> current main tgz -> onboard smoke
-                             both    = run both lanes
-  --openai-api-key-env <var> Host env var name for OpenAI API key.
-                             Default: OPENAI_API_KEY
+  --openai-api-key-env <var> Host env var name for OpenAI API key. Default: OPENAI_API_KEY
   --install-url <url>        Installer URL for latest release. Default: https://openclaw.ai/install.sh
-  --host-port <port>         Host HTTP port for current-main tgz. Default: 18425
+  --host-port <port>         Host HTTP port for current-main tgz. Default: 18427
   --host-ip <ip>             Override Parallels host IP.
   --latest-version <ver>     Override npm latest version lookup.
-  --skip-latest-ref-check    Skip the known latest-release ref-mode precheck in upgrade lane.
   --keep-server              Leave temp host HTTP server running.
   --json                     Print machine-readable JSON summary.
   -h, --help                 Show help.
@@ -130,10 +111,6 @@ while [[ $# -gt 0 ]]; do
     --latest-version)
       LATEST_VERSION="$2"
       shift 2
-      ;;
-    --skip-latest-ref-check)
-      CHECK_LATEST_REF=0
-      shift
       ;;
     --keep-server)
       KEEP_SERVER=1
@@ -201,7 +178,6 @@ resolve_host_ip() {
     printf '%s\n' "$HOST_IP"
     return
   fi
-
   local detected
   detected="$(ifconfig | awk '/inet 10\.211\./ { print $2; exit }')"
   [[ -n "$detected" ]] || die "failed to detect Parallels host IP; pass --host-ip"
@@ -214,10 +190,9 @@ is_host_port_free() {
 import socket
 import sys
 
-port = int(sys.argv[1])
 sock = socket.socket()
 try:
-    sock.bind(("0.0.0.0", port))
+    sock.bind(("0.0.0.0", int(sys.argv[1])))
 except OSError:
     raise SystemExit(1)
 finally:
@@ -245,92 +220,23 @@ resolve_host_port() {
     die "host port $HOST_PORT already in use"
   fi
   HOST_PORT="$(allocate_host_port)"
-  warn "host port 18425 busy; using $HOST_PORT"
+  warn "host port 18427 busy; using $HOST_PORT"
   printf '%s\n' "$HOST_PORT"
 }
 
-wait_for_current_user() {
-  local deadline
-  deadline=$((SECONDS + TIMEOUT_SNAPSHOT_S))
-  while (( SECONDS < deadline )); do
-    if prlctl exec "$VM_NAME" --current-user whoami >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 2
-  done
-  return 1
-}
-
-guest_current_user_exec() {
-  prlctl exec "$VM_NAME" --current-user /usr/bin/env \
-    PATH=/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin \
-    "$@"
-}
-
-guest_script() {
-  local mode script
-  mode="$1"
-  script="$2"
-  PRL_GUEST_VM_NAME="$VM_NAME" PRL_GUEST_MODE="$mode" PRL_GUEST_SCRIPT="$script" /opt/homebrew/bin/expect <<'EOF'
-log_user 1
-set timeout -1
-match_max 1048576
-
-set vm $env(PRL_GUEST_VM_NAME)
-set mode $env(PRL_GUEST_MODE)
-set script $env(PRL_GUEST_SCRIPT)
-set cmd [list prlctl enter $vm]
-if {$mode eq "current-user"} {
-  lappend cmd --current-user
-}
-
-spawn {*}$cmd
-send -- "printf '__OPENCLAW_READY__\\n'\r"
-expect "__OPENCLAW_READY__"
-log_user 0
-send -- "export PS1='' PROMPT='' PROMPT2='' RPROMPT=''\r"
-send -- "stty -echo\r"
-
-send -- "cat >/tmp/openclaw-prl.sh <<'__OPENCLAW_SCRIPT__'\r"
-send -- $script
-if {![string match "*\n" $script]} {
-  send -- "\r"
-}
-send -- "__OPENCLAW_SCRIPT__\r"
-send -- "/bin/bash /tmp/openclaw-prl.sh; rc=\$?; rm -f /tmp/openclaw-prl.sh; printf '__OPENCLAW_RC__:%s\\n' \"\$rc\"; exit \"\$rc\"\r"
-log_user 1
-
-set rc 1
-expect {
-  -re {__OPENCLAW_RC__:(-?[0-9]+)} {
-    set rc $expect_out(1,string)
-    exp_continue
-  }
-  eof {}
-}
-catch wait result
-exit $rc
-EOF
-}
-
-guest_current_user_sh() {
-  local script
-  script=$'set -eu\n'
-  script+=$'set -o pipefail\n'
-  script+=$'trap "" PIPE\n'
-  script+=$'umask 022\n'
-  script+=$'export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"\n'
-  script+=$'if [ -z "${HOME:-}" ]; then export HOME="/Users/$(id -un)"; fi\n'
-  script+=$'cd "$HOME"\n'
-  script+="$1"
-  guest_script current-user "$script"
+guest_exec() {
+  prlctl exec "$VM_NAME" "$@"
 }
 
 restore_snapshot() {
   local snapshot_id="$1"
   say "Restore snapshot $SNAPSHOT_HINT ($snapshot_id)"
   prlctl snapshot-switch "$VM_NAME" --id "$snapshot_id" >/dev/null
-  wait_for_current_user || die "desktop user did not become ready in $VM_NAME"
+}
+
+bootstrap_guest() {
+  guest_exec apt-get -o Acquire::Check-Date=false update
+  guest_exec apt-get install -y curl ca-certificates
 }
 
 resolve_latest_version() {
@@ -339,49 +245,6 @@ resolve_latest_version() {
     return
   fi
   npm view openclaw version --userconfig "$(mktemp)"
-}
-
-install_latest_release() {
-  local install_url_q
-  install_url_q="$(shell_quote "$INSTALL_URL")"
-  guest_current_user_sh "$(cat <<EOF
-export OPENCLAW_NO_ONBOARD=1
-curl -fsSL $install_url_q -o /tmp/openclaw-install.sh
-bash /tmp/openclaw-install.sh
-$GUEST_OPENCLAW_BIN --version
-EOF
-)"
-}
-
-verify_version_contains() {
-  local needle="$1"
-  local version
-  version="$(
-    guest_current_user_exec "$GUEST_OPENCLAW_BIN" --version
-  )"
-  printf '%s\n' "$version"
-  case "$version" in
-    *"$needle"*) ;;
-    *)
-      echo "version mismatch: expected substring $needle" >&2
-      return 1
-      ;;
-  esac
-}
-
-pack_main_tgz() {
-  say "Pack current main tgz"
-  ensure_current_build
-  local short_head pkg
-  short_head="$(git rev-parse --short HEAD)"
-  pkg="$(
-    npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
-      | python3 -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
-  )"
-  MAIN_TGZ_PATH="$MAIN_TGZ_DIR/openclaw-main-$short_head.tgz"
-  cp "$MAIN_TGZ_DIR/$pkg" "$MAIN_TGZ_PATH"
-  say "Packed $MAIN_TGZ_PATH"
-  tar -xOf "$MAIN_TGZ_PATH" package/dist/build-info.json
 }
 
 current_build_commit() {
@@ -410,63 +273,99 @@ ensure_current_build() {
   [[ "$build_commit" == "$head" ]] || die "dist/build-info.json still does not match HEAD after build"
 }
 
+pack_main_tgz() {
+  say "Pack current main tgz"
+  ensure_current_build
+  local short_head pkg
+  short_head="$(git rev-parse --short HEAD)"
+  pkg="$(
+    npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
+      | python3 -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
+  )"
+  MAIN_TGZ_PATH="$MAIN_TGZ_DIR/openclaw-main-$short_head.tgz"
+  cp "$MAIN_TGZ_DIR/$pkg" "$MAIN_TGZ_PATH"
+  say "Packed $MAIN_TGZ_PATH"
+  tar -xOf "$MAIN_TGZ_PATH" package/dist/build-info.json
+}
+
 start_server() {
   local host_ip="$1"
-  say "Serve current main tgz on $host_ip:$HOST_PORT"
-  (
-    cd "$MAIN_TGZ_DIR"
-    exec python3 -m http.server "$HOST_PORT" --bind 0.0.0.0
-  ) >/tmp/openclaw-parallels-http.log 2>&1 &
-  SERVER_PID=$!
-  sleep 1
-  kill -0 "$SERVER_PID" >/dev/null 2>&1 || die "failed to start host HTTP server"
+  local artifact probe_url attempt
+  artifact="$(basename "$MAIN_TGZ_PATH")"
+  attempt=0
+  while :; do
+    attempt=$((attempt + 1))
+    say "Serve current main tgz on $host_ip:$HOST_PORT"
+    (
+      cd "$MAIN_TGZ_DIR"
+      exec python3 -m http.server "$HOST_PORT" --bind 0.0.0.0
+    ) >/tmp/openclaw-parallels-linux-http.log 2>&1 &
+    SERVER_PID=$!
+    sleep 1
+    probe_url="http://127.0.0.1:$HOST_PORT/$artifact"
+    if kill -0 "$SERVER_PID" >/dev/null 2>&1 && curl -fsSI "$probe_url" >/dev/null 2>&1; then
+      return 0
+    fi
+    kill "$SERVER_PID" >/dev/null 2>&1 || true
+    wait "$SERVER_PID" >/dev/null 2>&1 || true
+    SERVER_PID=""
+    if [[ "$HOST_PORT_EXPLICIT" -eq 1 || $attempt -ge 3 ]]; then
+      die "failed to start reachable host HTTP server on port $HOST_PORT"
+    fi
+    HOST_PORT="$(allocate_host_port)"
+    warn "retrying host HTTP server on port $HOST_PORT"
+  done
+}
+
+install_latest_release() {
+  guest_exec curl -fsSL "$INSTALL_URL" -o /tmp/openclaw-install.sh
+  guest_exec /usr/bin/env OPENCLAW_NO_ONBOARD=1 bash /tmp/openclaw-install.sh --no-onboard
+  guest_exec openclaw --version
 }
 
 install_main_tgz() {
   local host_ip="$1"
   local temp_name="$2"
-  local tgz_url_q
-  tgz_url_q="$(shell_quote "http://$host_ip:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")")"
-  guest_current_user_sh "$(cat <<EOF
-curl -fsSL $tgz_url_q -o /tmp/$temp_name
-$GUEST_NPM_BIN install -g /tmp/$temp_name
-$GUEST_OPENCLAW_BIN --version
-EOF
-)"
+  local tgz_url="http://$host_ip:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")"
+  guest_exec curl -fsSL "$tgz_url" -o "/tmp/$temp_name"
+  guest_exec npm install -g "/tmp/$temp_name" --no-fund --no-audit
+  guest_exec openclaw --version
 }
 
-verify_bundle_permissions() {
-  local npm_q cmd
-  npm_q="$(shell_quote "$GUEST_NPM_BIN")"
-  cmd="$(cat <<EOF
-root=\$($npm_q root -g); check_path() { local path="\$1"; [ -e "\$path" ] || return 0; local perm perm_oct; perm=\$(/usr/bin/stat -f '%OLp' "\$path"); perm_oct=\$((8#\$perm)); if (( perm_oct & 0002 )); then echo "world-writable install artifact: \$path (\$perm)" >&2; exit 1; fi; }; check_path "\$root/openclaw"; check_path "\$root/openclaw/extensions"; if [ -d "\$root/openclaw/extensions" ]; then while IFS= read -r -d '' extension_dir; do check_path "\$extension_dir"; done < <(/usr/bin/find "\$root/openclaw/extensions" -mindepth 1 -maxdepth 1 -type d -print0); fi
-EOF
-)"
-  guest_current_user_exec /bin/bash -lc "$cmd"
+verify_version_contains() {
+  local needle="$1"
+  local version
+  version="$(guest_exec openclaw --version)"
+  printf '%s\n' "$version"
+  case "$version" in
+    *"$needle"*) ;;
+    *)
+      echo "version mismatch: expected substring $needle" >&2
+      return 1
+      ;;
+  esac
 }
 
 run_ref_onboard() {
-  guest_current_user_exec \
-    /usr/bin/env "OPENAI_API_KEY=$OPENAI_API_KEY_VALUE" \
-    "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" onboard \
+  guest_exec /usr/bin/env "OPENAI_API_KEY=$OPENAI_API_KEY_VALUE" openclaw onboard \
     --non-interactive \
     --mode local \
     --auth-choice openai-api-key \
     --secret-input-mode ref \
     --gateway-port 18789 \
     --gateway-bind loopback \
-    --install-daemon \
     --skip-skills \
+    --skip-health \
     --accept-risk \
     --json
 }
 
-verify_gateway() {
-  guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" gateway status --deep --require-rpc
-}
-
-verify_turn() {
-  guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" agent --agent main --message ping --json
+verify_local_turn() {
+  guest_exec /usr/bin/env "OPENAI_API_KEY=$OPENAI_API_KEY_VALUE" openclaw agent \
+    --local \
+    --agent main \
+    --message ping \
+    --json
 }
 
 phase_log_path() {
@@ -555,6 +454,7 @@ summary = {
     "latestVersion": os.environ["SUMMARY_LATEST_VERSION"],
     "currentHead": os.environ["SUMMARY_CURRENT_HEAD"],
     "runDir": os.environ["SUMMARY_RUN_DIR"],
+    "daemon": os.environ["SUMMARY_DAEMON_STATUS"],
     "freshMain": {
         "status": os.environ["SUMMARY_FRESH_MAIN_STATUS"],
         "version": os.environ["SUMMARY_FRESH_MAIN_VERSION"],
@@ -562,7 +462,6 @@ summary = {
         "agent": os.environ["SUMMARY_FRESH_AGENT_STATUS"],
     },
     "upgrade": {
-        "precheck": os.environ["SUMMARY_UPGRADE_PRECHECK_STATUS"],
         "status": os.environ["SUMMARY_UPGRADE_STATUS"],
         "latestVersionInstalled": os.environ["SUMMARY_LATEST_INSTALLED_VERSION"],
         "mainVersion": os.environ["SUMMARY_UPGRADE_MAIN_VERSION"],
@@ -576,34 +475,18 @@ print(sys.argv[1])
 PY
 }
 
-capture_latest_ref_failure() {
-  set +e
-  run_ref_onboard
-  local rc=$?
-  set -e
-  if [[ $rc -eq 0 ]]; then
-    say "Latest release ref-mode onboard passed"
-    return 0
-  fi
-  warn "Latest release ref-mode onboard failed pre-upgrade"
-  set +e
-  guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" gateway status --deep --require-rpc || true
-  set -e
-  return 1
-}
-
 run_fresh_main_lane() {
   local snapshot_id="$1"
   local host_ip="$2"
   phase_run "fresh.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id"
+  phase_run "fresh.bootstrap-guest" "$TIMEOUT_BOOTSTRAP_S" bootstrap_guest
+  phase_run "fresh.install-latest-bootstrap" "$TIMEOUT_INSTALL_S" install_latest_release
   phase_run "fresh.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz"
   FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path fresh.install-main)")"
   phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$(git rev-parse --short=7 HEAD)"
-  phase_run "fresh.verify-bundle-permissions" "$TIMEOUT_PERMISSION_S" verify_bundle_permissions
   phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
-  phase_run "fresh.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway
-  FRESH_GATEWAY_STATUS="pass"
-  phase_run "fresh.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn
+  FRESH_GATEWAY_STATUS="skipped-no-detached-linux-gateway"
+  phase_run "fresh.first-local-agent-turn" "$TIMEOUT_AGENT_S" verify_local_turn
   FRESH_AGENT_STATUS="pass"
 }
 
@@ -611,32 +494,18 @@ run_upgrade_lane() {
   local snapshot_id="$1"
   local host_ip="$2"
   phase_run "upgrade.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id"
+  phase_run "upgrade.bootstrap-guest" "$TIMEOUT_BOOTSTRAP_S" bootstrap_guest
   phase_run "upgrade.install-latest" "$TIMEOUT_INSTALL_S" install_latest_release
   LATEST_INSTALLED_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-latest)")"
   phase_run "upgrade.verify-latest-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$LATEST_VERSION"
-  if [[ "$CHECK_LATEST_REF" -eq 1 ]]; then
-    if phase_run "upgrade.latest-ref-precheck" "$TIMEOUT_ONBOARD_S" capture_latest_ref_failure; then
-      UPGRADE_PRECHECK_STATUS="latest-ref-pass"
-    else
-      UPGRADE_PRECHECK_STATUS="latest-ref-fail"
-    fi
-  else
-    UPGRADE_PRECHECK_STATUS="skipped"
-  fi
   phase_run "upgrade.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-upgrade.tgz"
   UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-main)")"
   phase_run "upgrade.verify-main-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$(git rev-parse --short=7 HEAD)"
-  phase_run "upgrade.verify-bundle-permissions" "$TIMEOUT_PERMISSION_S" verify_bundle_permissions
   phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
-  phase_run "upgrade.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway
-  UPGRADE_GATEWAY_STATUS="pass"
-  phase_run "upgrade.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn
+  UPGRADE_GATEWAY_STATUS="skipped-no-detached-linux-gateway"
+  phase_run "upgrade.first-local-agent-turn" "$TIMEOUT_AGENT_S" verify_local_turn
   UPGRADE_AGENT_STATUS="pass"
 }
-
-FRESH_MAIN_STATUS="skip"
-UPGRADE_STATUS="skip"
-UPGRADE_PRECHECK_STATUS="skip"
 
 SNAPSHOT_ID="$(resolve_snapshot_id)"
 LATEST_VERSION="$(resolve_latest_version)"
@@ -689,11 +558,11 @@ SUMMARY_JSON_PATH="$(
   SUMMARY_LATEST_VERSION="$LATEST_VERSION" \
   SUMMARY_CURRENT_HEAD="$(git rev-parse --short HEAD)" \
   SUMMARY_RUN_DIR="$RUN_DIR" \
+  SUMMARY_DAEMON_STATUS="$DAEMON_STATUS" \
   SUMMARY_FRESH_MAIN_STATUS="$FRESH_MAIN_STATUS" \
   SUMMARY_FRESH_MAIN_VERSION="$FRESH_MAIN_VERSION" \
   SUMMARY_FRESH_GATEWAY_STATUS="$FRESH_GATEWAY_STATUS" \
   SUMMARY_FRESH_AGENT_STATUS="$FRESH_AGENT_STATUS" \
-  SUMMARY_UPGRADE_PRECHECK_STATUS="$UPGRADE_PRECHECK_STATUS" \
   SUMMARY_UPGRADE_STATUS="$UPGRADE_STATUS" \
   SUMMARY_LATEST_INSTALLED_VERSION="$LATEST_INSTALLED_VERSION" \
   SUMMARY_UPGRADE_MAIN_VERSION="$UPGRADE_MAIN_VERSION" \
@@ -706,8 +575,8 @@ if [[ "$JSON_OUTPUT" -eq 1 ]]; then
   cat "$SUMMARY_JSON_PATH"
 else
   printf '\nSummary:\n'
+  printf '  daemon: %s\n' "$DAEMON_STATUS"
   printf '  fresh-main: %s (%s)\n' "$FRESH_MAIN_STATUS" "$FRESH_MAIN_VERSION"
-  printf '  latest->main precheck: %s (%s)\n' "$UPGRADE_PRECHECK_STATUS" "$LATEST_INSTALLED_VERSION"
   printf '  latest->main: %s (%s)\n' "$UPGRADE_STATUS" "$UPGRADE_MAIN_VERSION"
   printf '  logs: %s\n' "$RUN_DIR"
   printf '  summary: %s\n' "$SUMMARY_JSON_PATH"
