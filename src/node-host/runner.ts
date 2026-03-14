@@ -174,8 +174,11 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const scheme = gateway.tls ? "wss" : "ws";
   const url = `${scheme}://${host}:${port}`;
   const pathEnv = ensureNodePathEnv();
-  // eslint-disable-next-line no-console
-  console.log(`node host PATH: ${pathEnv}`);
+  // Log PATH only in verbose mode to avoid leaking system info
+  if (process.env.OPENCLAW_DEBUG || process.env.VERBOSE) {
+    // eslint-disable-next-line no-console
+    console.log(`node host PATH: ${pathEnv}`);
+  }
 
   const client = new GatewayClient({
     url,
