@@ -65,6 +65,17 @@ function resolvePatterns(value?: string[]): RegExp[] {
   return source.map(parsePattern).filter((re): re is RegExp => Boolean(re));
 }
 
+/**
+ * Merge user-configured redact patterns with the built-in defaults so custom
+ * patterns are additive — adding an email regex must not drop API-key detection.
+ */
+function mergeWithDefaults(userPatterns?: string[]): string[] {
+  if (!userPatterns?.length) {
+    return DEFAULT_REDACT_PATTERNS;
+  }
+  return [...DEFAULT_REDACT_PATTERNS, ...userPatterns];
+}
+
 function maskToken(token: string): string {
   if (token.length < DEFAULT_REDACT_MIN_LENGTH) {
     return "***";
@@ -127,23 +138,30 @@ export function redactSensitiveText(text: string, options?: RedactOptions): stri
   if (!text) {
     return text;
   }
-  const resolved = options ?? resolveConfigRedaction();
-  if (normalizeMode(resolved.mode) === "off") {
+  if (options) {
+    // Caller supplied explicit options — use them directly.
+    if (normalizeMode(options.mode) === "off") {
+      return text;
+    }
+    const patterns = resolvePatterns(options.patterns);
+    return patterns.length ? redactText(text, patterns) : text;
+  }
+  // No explicit options — resolve from config and merge patterns with defaults.
+  const cfg = resolveConfigRedaction();
+  if (normalizeMode(cfg.mode) === "off") {
     return text;
   }
-  const patterns = resolvePatterns(resolved.patterns);
-  if (!patterns.length) {
-    return text;
-  }
-  return redactText(text, patterns);
+  const patterns = resolvePatterns(mergeWithDefaults(cfg.patterns));
+  return patterns.length ? redactText(text, patterns) : text;
 }
 
 export function redactToolDetail(detail: string): string {
-  const resolved = resolveConfigRedaction();
-  if (normalizeMode(resolved.mode) !== "tools") {
+  const cfg = resolveConfigRedaction();
+  if (normalizeMode(cfg.mode) !== "tools") {
     return detail;
   }
-  return redactSensitiveText(detail, resolved);
+  const patterns = resolvePatterns(mergeWithDefaults(cfg.patterns));
+  return patterns.length ? redactText(detail, patterns) : detail;
 }
 
 export function getDefaultRedactPatterns(): string[] {
