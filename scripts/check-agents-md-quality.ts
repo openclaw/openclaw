@@ -8,7 +8,6 @@
  * 3. Hardcoded absolute paths (not portable across machines)
  * 4. Missing security section
  * 5. PII exposure (emails, credentials in non-USER files)
- * 6. Conflicting instructions (MUST + MUST NOT on same topic)
  *
  * Usage:
  *   bun scripts/check-agents-md-quality.ts [path-to-agents-md]
@@ -46,11 +45,14 @@ const SECRET_PATTERNS: Array<{ name: string; pattern: RegExp }> = [
   { name: "GitHub token (ghp_)", pattern: /ghp_[a-zA-Z0-9]{36}/ },
   { name: "GitHub token (gho_)", pattern: /gho_[a-zA-Z0-9]{36}/ },
   { name: "GitHub token (ghs_)", pattern: /ghs_[a-zA-Z0-9]{36}/ },
-  { name: "Slack token", pattern: /xox[bpas]-[a-zA-Z0-9\-]{10,}/ },
+  { name: "Slack token", pattern: /xox[bpas]-[a-zA-Z0-9-]{10,}/ },
   { name: "Stripe key", pattern: /sk_(?:test|live)_[a-zA-Z0-9]{24,}/ },
-  { name: "Bearer token", pattern: /Bearer\s+[a-zA-Z0-9._\-]{20,}/ },
+  { name: "Bearer token", pattern: /Bearer\s+[a-zA-Z0-9._-]{20,}/ },
   { name: "Private key", pattern: /-----BEGIN (?:RSA |EC |DSA )?PRIVATE KEY-----/ },
-  { name: "Database URL with credentials", pattern: /(?:postgres|mysql|mongodb(?:\+srv)?):\/\/[^:]+:[^@]+@[^\s]+/ },
+  {
+    name: "Database URL with credentials",
+    pattern: /(?:postgres|mysql|mongodb(?:\+srv)?):\/\/[^:]+:[^@]+@[^\s]+/,
+  },
   { name: "Supabase JWT", pattern: /eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.[a-zA-Z0-9_-]{50,}/ },
 ];
 
@@ -62,8 +64,6 @@ function checkSecrets(lines: string[]): Finding[] {
   const findings: Finding[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    // Skip comment lines
-    if (line.trim().startsWith("//")) continue;
     for (const { name, pattern } of SECRET_PATTERNS) {
       if (pattern.test(line)) {
         findings.push({
@@ -120,10 +120,8 @@ function checkHardcodedPaths(lines: string[]): Finding[] {
 }
 
 function checkSecuritySection(content: string): Finding[] {
-  const hasSecuritySection =
-    /##?\s+(?:Security|🔒|🛡️|Safety|Boundaries)/i.test(content);
-  const hasSecurityKeywords =
-    /inject|jailbreak|permission|authorized|trust/i.test(content);
+  const hasSecuritySection = /##?\s+(?:Security|🔒|🛡️|Safety|Boundaries)/i.test(content);
+  const hasSecurityKeywords = /inject|jailbreak|permission|authorized|trust/i.test(content);
 
   if (!hasSecuritySection && !hasSecurityKeywords) {
     return [
@@ -162,11 +160,6 @@ function checkPII(lines: string[]): Finding[] {
 // ---------------------------------------------------------------------------
 
 function lint(filePath: string): Finding[] {
-  if (!fs.existsSync(filePath)) {
-    console.error(`File not found: ${filePath}`);
-    process.exit(2);
-  }
-
   const content = fs.readFileSync(filePath, "utf-8");
   const lines = content.split("\n");
 
@@ -185,6 +178,11 @@ function lint(filePath: string): Finding[] {
 
 const targetPath = process.argv[2] || "AGENTS.md";
 const resolvedPath = path.resolve(targetPath);
+
+if (!fs.existsSync(resolvedPath)) {
+  console.error(`File not found: ${resolvedPath}`);
+  process.exit(2);
+}
 
 // Also check CLAUDE.md if it exists and is not a symlink to AGENTS.md
 const filesToCheck: string[] = [resolvedPath];
@@ -206,7 +204,9 @@ let totalErrors = 0;
 let totalWarnings = 0;
 
 for (const file of filesToCheck) {
-  if (!fs.existsSync(file)) continue;
+  if (!fs.existsSync(file)) {
+    continue;
+  }
   const findings = lint(file);
   const relPath = path.relative(process.cwd(), file);
 
@@ -220,8 +220,12 @@ for (const file of filesToCheck) {
     const icon = f.severity === "error" ? "❌" : f.severity === "warning" ? "⚠️" : "ℹ️";
     const loc = f.line > 0 ? `:${f.line}` : "";
     console.log(`  ${icon} [${f.rule}]${loc} ${f.message}`);
-    if (f.severity === "error") totalErrors++;
-    if (f.severity === "warning") totalWarnings++;
+    if (f.severity === "error") {
+      totalErrors++;
+    }
+    if (f.severity === "warning") {
+      totalWarnings++;
+    }
   }
 }
 
