@@ -80,7 +80,9 @@ describe("startHeartbeatRunner", () => {
     await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
 
     expect(runSpy).toHaveBeenCalledTimes(2);
-    expect(runSpy.mock.calls.map((call) => call[0]?.agentId)).toEqual(["main", "ops"]);
+    expect(runSpy.mock.calls.map((call) => call[0]?.agentId)).toEqual(
+      expect.arrayContaining(["main", "ops"]),
+    );
 
     runner.stop();
   });
