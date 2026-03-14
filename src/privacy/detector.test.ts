@@ -113,8 +113,10 @@ describe("PrivacyDetector", () => {
   });
 
   describe("SSH key detection", () => {
-    it("detects SSH private key headers", () => {
-      const result = detector.detect("-----BEGIN RSA PRIVATE KEY-----");
+    it("detects full SSH private key blocks", () => {
+      const result = detector.detect(
+        "-----BEGIN RSA PRIVATE KEY-----\nABCDEF1234567890\n-----END RSA PRIVATE KEY-----",
+      );
       expect(result.hasPrivacyRisk).toBe(true);
       expect(result.matches.some((m) => m.type === "ssh_private_key")).toBe(true);
     });

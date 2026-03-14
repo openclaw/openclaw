@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
 import { resolveConfigPath } from "../config/paths.js";
+import { compileSafeRegex } from "../security/safe-regex.js";
 import { validateBarePassword, validateHighEntropy } from "./detector.js";
 import { BASIC_RULES, EXTENDED_RULES } from "./rules.js";
 import type { CustomRulesConfig, PrivacyRule, RiskLevel, UserDefinedRule } from "./types.js";
@@ -304,21 +305,21 @@ export function validateRegexSafety(pattern: string): string | null {
     return `pattern exceeds maximum length of ${MAX_PATTERN_LENGTH} characters`;
   }
 
+  let src = pattern;
+  let flags = "gm";
+  if (src.startsWith("(?i)")) {
+    src = src.slice(4);
+    flags += "i";
+  }
+
   try {
-    let src = pattern;
-    let flags = "gm";
-    if (src.startsWith("(?i)")) {
-      src = src.slice(4);
-      flags += "i";
-    }
     new RegExp(src, flags);
   } catch (err) {
     return `invalid regex: ${(err as Error).message}`;
   }
 
-  // Basic catastrophic backtracking heuristic: nested quantifiers like (a+)+.
-  if (/\([^)]*[+*]\)[+*]/.test(pattern)) {
-    return "pattern contains potentially catastrophic nested quantifiers (e.g. (a+)+)";
+  if (!compileSafeRegex(src, flags)) {
+    return "pattern failed safe-regex validation and may cause catastrophic backtracking";
   }
 
   return null;

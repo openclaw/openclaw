@@ -265,7 +265,11 @@ describe("custom-rules", () => {
     });
 
     it("rejects nested quantifiers", () => {
-      expect(validateRegexSafety("(a+)+")).toContain("nested quantifiers");
+      expect(validateRegexSafety("(a+)+")).toContain("safe-regex validation");
+    });
+
+    it("rejects ambiguous alternation backtracking patterns", () => {
+      expect(validateRegexSafety("(a|aa)+$")).toContain("safe-regex validation");
     });
 
     it("accepts (?i) prefix", () => {

@@ -150,7 +150,7 @@ export const BASIC_RULES: PrivacyRule[] = [
     description: "SSH private key",
     enabled: true,
     riskLevel: "critical",
-    pattern: String.raw`-----BEGIN (RSA|OPENSSH|DSA|EC|PGP) PRIVATE KEY-----`,
+    pattern: String.raw`-----BEGIN (RSA|OPENSSH|DSA|EC|PGP) PRIVATE KEY-----[\s\S]+?-----END \1 PRIVATE KEY-----`,
   },
   {
     type: "database_url_mysql",
