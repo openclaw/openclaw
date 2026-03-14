@@ -1,6 +1,5 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
-  "_buildId": "202603141546",
   "deploy": {
     "startCommand": "node openclaw.mjs gateway --allow-unconfigured --bind lan --port 8080"
   }
