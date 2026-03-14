@@ -145,10 +145,9 @@ async function downloadAndSaveTelegramFile(params: {
     } catch (err) {
       if (err instanceof SafeOpenError) {
         if (err.code === "too-large") {
-          throw new Error(
-            `Media exceeds ${(params.maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
-            { cause: err },
-          );
+          throw new Error(`Media exceeds ${(params.maxBytes / (1024 * 1024)).toFixed(0)}MB limit`, {
+            cause: err,
+          });
         }
         logVerbose(
           `telegram: local file_path unreadable, falling back to HTTP download: ${localFilePath} (${err.code})`,

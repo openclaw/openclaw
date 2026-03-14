@@ -52,8 +52,9 @@ export function resolveTelegramApiOriginDetails(apiRoot?: string | null): {
       return null;
     }
     const port = parsed.port ? Number.parseInt(parsed.port, 10) : undefined;
+    const hostname = parsed.hostname.replace(/^\[(.*)\]$/, "$1").toLowerCase();
     return {
-      hostname: parsed.hostname.toLowerCase(),
+      hostname,
       protocol: parsed.protocol,
       ...(port ? { port } : {}),
     };

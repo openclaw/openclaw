@@ -1,6 +1,7 @@
 import type { Message } from "@grammyjs/types";
 import { GrammyError } from "grammy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SafeOpenError } from "../../../../src/infra/fs-safe.js";
 import type { TelegramContext } from "./types.js";
 
 const saveMediaBuffer = vi.fn();
@@ -400,7 +401,7 @@ describe("resolveMedia getFile retry", () => {
     );
   });
 
-  it("reads absolute local getFile paths from disk without HTTP", async () => {
+  it("reads absolute local getFile paths from disk without HTTP when apiRoot is set", async () => {
     const localFilePath = "/tmp/openclaw-local-bot-api/file_42.pdf";
     const getFile = vi.fn().mockResolvedValue({ file_path: localFilePath });
     readLocalFileSafely.mockResolvedValueOnce({
@@ -413,7 +414,13 @@ describe("resolveMedia getFile retry", () => {
       contentType: "application/pdf",
     });
 
-    const result = await resolveMedia(makeCtx("document", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+    const result = await resolveMedia(
+      makeCtx("document", getFile),
+      MAX_MEDIA_BYTES,
+      BOT_TOKEN,
+      undefined,
+      "http://127.0.0.1:8081",
+    );
 
     expect(result).not.toBeNull();
     expect(readLocalFileSafely).toHaveBeenCalledWith({
@@ -423,7 +430,7 @@ describe("resolveMedia getFile retry", () => {
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
   });
 
-  it("reads file:// getFile paths from disk without HTTP", async () => {
+  it("reads file:// getFile paths from disk without HTTP when apiRoot is set", async () => {
     const localFilePath = "/tmp/openclaw local/file 42.pdf";
     const getFile = vi
       .fn()
@@ -438,7 +445,13 @@ describe("resolveMedia getFile retry", () => {
       contentType: "application/pdf",
     });
 
-    const result = await resolveMedia(makeCtx("document", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+    const result = await resolveMedia(
+      makeCtx("document", getFile),
+      MAX_MEDIA_BYTES,
+      BOT_TOKEN,
+      undefined,
+      "http://127.0.0.1:8081",
+    );
 
     expect(result).not.toBeNull();
     expect(readLocalFileSafely).toHaveBeenCalledWith({
@@ -446,6 +459,48 @@ describe("resolveMedia getFile retry", () => {
       maxBytes: MAX_MEDIA_BYTES,
     });
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
+  });
+
+  it("does not read absolute local getFile paths from disk without explicit apiRoot opt-in", async () => {
+    const localFilePath = "/tmp/openclaw-local-bot-api/file_42.pdf";
+    const getFile = vi.fn().mockResolvedValue({ file_path: localFilePath });
+    mockPdfFetchAndSave("file_42.pdf");
+
+    const result = await resolveMedia(makeCtx("document", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+
+    expect(result).not.toBeNull();
+    expect(readLocalFileSafely).not.toHaveBeenCalled();
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: `https://api.telegram.org/file/bot${BOT_TOKEN}/tmp/openclaw-local-bot-api/file_42.pdf`,
+      }),
+    );
+  });
+
+  it("falls back to HTTP download when local file_path cannot be read", async () => {
+    const localFilePath = "/tmp/openclaw-local-bot-api/file_42.pdf";
+    const getFile = vi.fn().mockResolvedValue({ file_path: localFilePath });
+    readLocalFileSafely.mockRejectedValueOnce(new SafeOpenError("not-found", "file not found"));
+    mockPdfFetchAndSave("file_42.pdf");
+
+    const result = await resolveMedia(
+      makeCtx("document", getFile),
+      MAX_MEDIA_BYTES,
+      BOT_TOKEN,
+      undefined,
+      "http://127.0.0.1:8081",
+    );
+
+    expect(result).not.toBeNull();
+    expect(readLocalFileSafely).toHaveBeenCalledWith({
+      filePath: localFilePath,
+      maxBytes: MAX_MEDIA_BYTES,
+    });
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: `http://127.0.0.1:8081/file/bot${BOT_TOKEN}/tmp/openclaw-local-bot-api/file_42.pdf`,
+      }),
+    );
   });
 });
 

@@ -299,47 +299,50 @@ describe("sendMessageTelegram", () => {
     }
   });
 
-  it("uses direct local-path sends for loopback Local Bot API roots", async () => {
-    const chatId = "123";
-    const sendPhoto = vi.fn().mockResolvedValue({
-      message_id: 12,
-      chat: { id: chatId },
-    });
-    const api = { sendPhoto } as unknown as {
-      sendPhoto: typeof sendPhoto;
-    };
+  it.each(["http://127.0.0.1:8081/", "http://[::1]:8081/"])(
+    "uses direct local-path sends for loopback Local Bot API roots (%s)",
+    async (apiRoot) => {
+      const chatId = "123";
+      const sendPhoto = vi.fn().mockResolvedValue({
+        message_id: 12,
+        chat: { id: chatId },
+      });
+      const api = { sendPhoto } as unknown as {
+        sendPhoto: typeof sendPhoto;
+      };
 
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: {
-          apiRoot: "http://127.0.0.1:8081/",
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: {
+            apiRoot,
+          },
         },
-      },
-    });
-    resolveLocalMediaSource.mockResolvedValueOnce({
-      filePath: "/tmp/photo.jpg",
-      fileName: "photo.jpg",
-      contentType: "image/jpeg",
-      kind: "image",
-    });
+      });
+      resolveLocalMediaSource.mockResolvedValueOnce({
+        filePath: "/tmp/photo.jpg",
+        fileName: "photo.jpg",
+        contentType: "image/jpeg",
+        kind: "image",
+      });
 
-    const res = await sendMessageTelegram(chatId, "caption", {
-      token: "tok",
-      api,
-      mediaUrl: "file:///tmp/photo.jpg",
-    });
+      const res = await sendMessageTelegram(chatId, "caption", {
+        token: "tok",
+        api,
+        mediaUrl: "file:///tmp/photo.jpg",
+      });
 
-    expect(resolveLocalMediaSource).toHaveBeenCalledWith(
-      "file:///tmp/photo.jpg",
-      expect.objectContaining({ maxBytes: 100 * 1024 * 1024 }),
-    );
-    expect(loadWebMedia).not.toHaveBeenCalled();
-    expect(sendPhoto).toHaveBeenCalledWith(chatId, "/tmp/photo.jpg", {
-      caption: "caption",
-      parse_mode: "HTML",
-    });
-    expect(res.messageId).toBe("12");
-  });
+      expect(resolveLocalMediaSource).toHaveBeenCalledWith(
+        "file:///tmp/photo.jpg",
+        expect.objectContaining({ maxBytes: 100 * 1024 * 1024 }),
+      );
+      expect(loadWebMedia).not.toHaveBeenCalled();
+      expect(sendPhoto).toHaveBeenCalledWith(chatId, "/tmp/photo.jpg", {
+        caption: "caption",
+        parse_mode: "HTML",
+      });
+      expect(res.messageId).toBe("12");
+    },
+  );
 
   it("keeps buffer uploads for non-loopback custom apiRoot values", async () => {
     const chatId = "123";

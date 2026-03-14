@@ -124,9 +124,7 @@ function getRetryAfterSeconds(err: unknown): number | undefined {
     "error" in err && err.error && typeof err.error === "object"
       ? (err.error as { parameters?: { retry_after?: unknown } }).parameters?.retry_after
       : undefined;
-  return typeof nestedError === "number" && Number.isFinite(nestedError)
-    ? nestedError
-    : undefined;
+  return typeof nestedError === "number" && Number.isFinite(nestedError) ? nestedError : undefined;
 }
 
 export type TelegramNetworkErrorContext = "polling" | "send" | "webhook" | "unknown";
@@ -179,8 +177,8 @@ export function isTelegramPollingNetworkError(err: unknown): boolean {
 /**
  * Returns true if the error is safe to retry for a non-idempotent Telegram send operation
  * (e.g. sendMessage). This is intentionally stricter than generic Telegram retries:
- * it only allows pre-connect failures, explicit rate-limit rejections, and grammY's
- * failed-after network envelope, all of which indicate the send was not accepted.
+ * it only allows pre-connect failures and explicit rate-limit rejections where Telegram
+ * confirmed the send was not accepted.
  *
  * Use this instead of isRecoverableTelegramNetworkError for sendMessage/sendPhoto/etc.
  * calls where a retry would create a duplicate visible message.
@@ -195,10 +193,6 @@ export function isSafeToRetrySendError(err: unknown): boolean {
       return true;
     }
     if (typeof getRetryAfterSeconds(candidate) === "number") {
-      return true;
-    }
-    const message = formatErrorMessage(candidate).trim();
-    if (message && GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message)) {
       return true;
     }
   }
