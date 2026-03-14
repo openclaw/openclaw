@@ -72,8 +72,7 @@ function resolveTimingPolicy(
       deps.timing?.staleEventThresholdMs ??
       deps.staleEventThresholdMs ??
       DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
-    reconnectGraceMs:
-      deps.timing?.reconnectGraceMs ?? DEFAULT_RECONNECT_GRACE_MS,
+    reconnectGraceMs: deps.timing?.reconnectGraceMs ?? DEFAULT_RECONNECT_GRACE_MS,
   };
 }
 
@@ -134,13 +133,11 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           };
           // Extract lastDisconnectAt from the runtime snapshot's lastDisconnect
           // field so the health policy can evaluate reconnection grace windows.
-          const lastDisconnect = (status as { lastDisconnect?: unknown }).lastDisconnect;
           const lastDisconnectAt =
-            lastDisconnect != null &&
-            typeof lastDisconnect === "object" &&
-            "at" in lastDisconnect &&
-            typeof (lastDisconnect as { at?: unknown }).at === "number"
-              ? (lastDisconnect as { at: number }).at
+            status.lastDisconnect != null &&
+            typeof status.lastDisconnect === "object" &&
+            typeof status.lastDisconnect.at === "number"
+              ? status.lastDisconnect.at
               : null;
           const healthSnapshot = { ...status, lastDisconnectAt };
           const health = evaluateChannelHealth(healthSnapshot, healthPolicy);
@@ -208,7 +205,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
       timer.unref();
     }
     log.info?.(
-      `started (interval: ${Math.round(checkIntervalMs / 1000)}s, startup-grace: ${Math.round(timing.monitorStartupGraceMs / 1000)}s, channel-connect-grace: ${Math.round(timing.channelConnectGraceMs / 1000)}s)`,
+      `started (interval: ${Math.round(checkIntervalMs / 1000)}s, startup-grace: ${Math.round(timing.monitorStartupGraceMs / 1000)}s, channel-connect-grace: ${Math.round(timing.channelConnectGraceMs / 1000)}s, reconnect-grace: ${Math.round(timing.reconnectGraceMs / 1000)}s)`,
     );
   }
 
