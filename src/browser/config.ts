@@ -35,6 +35,7 @@ export type ResolvedBrowserConfig = {
   defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
   ssrfPolicy?: SsrFPolicy;
+  ignoreCertificateErrors: boolean;
   extraArgs: string[];
   relayBindHost?: string;
 };
@@ -261,6 +262,7 @@ export function resolveBrowserConfig(
   const headless = cfg?.headless === true;
   const noSandbox = cfg?.noSandbox === true;
   const attachOnly = cfg?.attachOnly === true;
+  const ignoreCertificateErrors = cfg?.ignoreCertificateErrors === true;
   const executablePath = cfg?.executablePath?.trim() || undefined;
 
   const defaultProfileFromConfig = cfg?.defaultProfile?.trim() || undefined;
@@ -313,6 +315,7 @@ export function resolveBrowserConfig(
     defaultProfile,
     profiles,
     ssrfPolicy,
+    ignoreCertificateErrors,
     extraArgs,
     relayBindHost,
   };
