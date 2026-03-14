@@ -1424,16 +1424,25 @@ export async function runEmbeddedAttempt(
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
-    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
-      await resolveBootstrapContextForRun({
-        workspaceDir: effectiveWorkspace,
-        config: params.config,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
-        contextMode: params.bootstrapContextMode,
-        runKind: params.bootstrapContextRunKind,
-      });
+
+    // Only inject workspace bootstrap files on the first message of a session.
+    // Continuation messages already have them in context, saving ~35k tokens.
+    // Check once and reuse as `hadSessionFile` near the SessionManager.open() call.
+    const isFirstMessage = !(await fs
+      .stat(params.sessionFile)
+      .then(() => true)
+      .catch(() => false));
+    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } = isFirstMessage
+      ? await resolveBootstrapContextForRun({
+          workspaceDir: effectiveWorkspace,
+          config: params.config,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+          contextMode: params.bootstrapContextMode,
+          runKind: params.bootstrapContextRunKind,
+        })
+      : { bootstrapFiles: [], contextFiles: [] };
     const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
     const bootstrapAnalysis = analyzeBootstrapBudget({
@@ -1718,10 +1727,7 @@ export async function runEmbeddedAttempt(
         sessionFile: params.sessionFile,
         warn: (message) => log.warn(message),
       });
-      const hadSessionFile = await fs
-        .stat(params.sessionFile)
-        .then(() => true)
-        .catch(() => false);
+      const hadSessionFile = !isFirstMessage;
 
       const transcriptPolicy = resolveTranscriptPolicy({
         modelApi: params.model?.api,
