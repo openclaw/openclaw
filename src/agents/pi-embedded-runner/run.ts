@@ -1035,7 +1035,7 @@ export async function runEmbeddedPiAgent(
                 : 0;
             if (timeoutCompactionAttempts >= MAX_TIMEOUT_COMPACTION_ATTEMPTS) {
               log.warn(
-                `[timeout-compaction] already compacted ${timeoutCompactionAttempts} time(s) for timeouts; falling through to failover rotation`,
+                `[timeout-compaction] already attempted timeout compaction ${timeoutCompactionAttempts} time(s); falling through to failover rotation`,
               );
             } else if (tokenUsedRatio > 0.65) {
               const timeoutDiagId = createCompactionDiagId();

@@ -1,5 +1,6 @@
 import "./run.overflow-compaction.mocks.shared.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getApiKeyForModel, resolveAuthProfileOrder } from "../model-auth.js";
 import { pickFallbackThinkingLevel } from "../pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "./run.js";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
@@ -18,11 +19,25 @@ import {
   overflowBaseRunParams,
 } from "./run.overflow-compaction.shared-test.js";
 
+const mockedGetApiKeyForModel = vi.mocked(getApiKeyForModel);
 const mockedPickFallbackThinkingLevel = vi.mocked(pickFallbackThinkingLevel);
+const mockedResolveAuthProfileOrder = vi.mocked(resolveAuthProfileOrder);
+
+const useTwoAuthProfiles = () => {
+  mockedResolveAuthProfileOrder.mockReturnValue(["profile-a", "profile-b"]);
+  mockedGetApiKeyForModel.mockImplementation(async ({ profileId }) => ({
+    apiKey: `test-key-${profileId ?? "profile-a"}`,
+    profileId: profileId ?? "profile-a",
+    source: "test",
+    mode: "api-key",
+  }));
+};
 
 describe("timeout-triggered compaction", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockedGetApiKeyForModel.mockReset();
+    mockedResolveAuthProfileOrder.mockReset();
     mockedRunEmbeddedAttempt.mockReset();
     mockedCompactDirect.mockReset();
     mockedCoerceToFailoverError.mockReset();
@@ -55,6 +70,13 @@ describe("timeout-triggered compaction", () => {
     });
     mockedPickFallbackThinkingLevel.mockReturnValue(undefined);
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
+    mockedGetApiKeyForModel.mockImplementation(async ({ profileId }) => ({
+      apiKey: "test-key",
+      profileId: profileId ?? "test-profile",
+      source: "test",
+      mode: "api-key",
+    }));
+    mockedResolveAuthProfileOrder.mockReturnValue([]);
   });
 
   it("attempts compaction when LLM times out with high prompt token usage (>65%)", async () => {
@@ -344,45 +366,95 @@ describe("timeout-triggered compaction", () => {
     );
   });
 
-  it("increments attempt counter even when compaction returns compacted:false", async () => {
-    // First timeout: high prompt usage, compaction fails (compacted:false)
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        timedOut: true,
-        lastAssistant: {
-          usage: { input: 150000 },
-        } as never,
-      }),
-    );
+  it("counts compacted:false timeout compactions against the retry cap across profile rotation", async () => {
+    useTwoAuthProfiles();
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          timedOut: true,
+          aborted: true,
+          lastAssistant: {
+            usage: { input: 150000 },
+          } as never,
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          timedOut: true,
+          aborted: true,
+          lastAssistant: {
+            usage: { input: 150000 },
+          } as never,
+        }),
+      );
     mockedCompactDirect.mockResolvedValueOnce({
       ok: false,
       compacted: false,
       reason: "nothing to compact",
     });
-    // The failed compaction falls through to timeout error; the runner
-    // returns with an error payload (no retry because compacted was false).
+
     const result = await runEmbeddedPiAgent(overflowBaseRunParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(result.payloads?.[0]?.isError).toBe(true);
-  });
-
-  it("increments attempt counter when compact() throws, blocking subsequent attempts", async () => {
-    // First timeout: high prompt usage, compact() throws
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        timedOut: true,
-        lastAssistant: {
-          usage: { input: 150000 },
-        } as never,
+    expect(mockedCompactDirect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeContext: expect.objectContaining({
+          authProfileId: "profile-a",
+          attempt: 1,
+          maxAttempts: 1,
+        }),
       }),
     );
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ authProfileId: "profile-a" }),
+    );
+    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ authProfileId: "profile-b" }),
+    );
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("timed out");
+  });
+
+  it("counts thrown timeout compactions against the retry cap across profile rotation", async () => {
+    useTwoAuthProfiles();
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          timedOut: true,
+          aborted: true,
+          lastAssistant: {
+            usage: { input: 150000 },
+          } as never,
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          timedOut: true,
+          aborted: true,
+          lastAssistant: {
+            usage: { input: 150000 },
+          } as never,
+        }),
+      );
     mockedCompactDirect.mockRejectedValueOnce(new Error("engine crashed"));
-    // Falls through to timeout error on first attempt
+
     const result = await runEmbeddedPiAgent(overflowBaseRunParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ authProfileId: "profile-a" }),
+    );
+    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ authProfileId: "profile-b" }),
+    );
     expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 
   it("uses prompt/input tokens for ratio, not total tokens", async () => {
