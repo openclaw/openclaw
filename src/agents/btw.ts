@@ -127,6 +127,17 @@ async function persistBtwCustomEntry(params: {
   }
 }
 
+function persistBtwCustomEntryInBackground(params: {
+  sessionId: string;
+  sessionFile: string;
+  entry: BtwCustomEntryData;
+}) {
+  void persistBtwCustomEntry(params).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    diag.warn(`btw transcript persistence skipped: sessionId=${params.sessionId} err=${message}`);
+  });
+}
+
 function collectTextContent(content: Array<{ type?: string; text?: string }>): string {
   return content
     .filter((part): part is { type: "text"; text: string } => part.type === "text")
@@ -486,7 +497,7 @@ export async function runBtwSideQuestion(
     usage: finalMessage?.usage,
   } satisfies BtwCustomEntryData;
 
-  await persistBtwCustomEntry({
+  persistBtwCustomEntryInBackground({
     sessionId,
     sessionFile,
     entry: customEntry,

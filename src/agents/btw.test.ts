@@ -212,15 +212,17 @@ describe("runBtwSideQuestion", () => {
       text: "Side answer.",
       btw: { question: "What changed?" },
     });
-    expect(appendCustomEntryMock).toHaveBeenCalledWith(
-      BTW_CUSTOM_TYPE,
-      expect.objectContaining({
-        question: "What changed?",
-        answer: "Side answer.",
-        provider: "anthropic",
-        model: "claude-sonnet-4-5",
-      }),
-    );
+    await vi.waitFor(() => {
+      expect(appendCustomEntryMock).toHaveBeenCalledWith(
+        BTW_CUSTOM_TYPE,
+        expect.objectContaining({
+          question: "What changed?",
+          answer: "Side answer.",
+          provider: "anthropic",
+          model: "claude-sonnet-4-5",
+        }),
+      );
+    });
   });
 
   it("returns a final payload when block streaming is unavailable", async () => {
@@ -686,8 +688,8 @@ describe("runBtwSideQuestion", () => {
     });
 
     expect(result).toEqual({ text: "323" });
-    expect(waitForEmbeddedPiRunEndMock).toHaveBeenCalledWith("session-1", 30000);
     await vi.waitFor(() => {
+      expect(waitForEmbeddedPiRunEndMock).toHaveBeenCalledWith("session-1", 30000);
       expect(appendCustomEntryMock).toHaveBeenCalledWith(
         BTW_CUSTOM_TYPE,
         expect.objectContaining({
