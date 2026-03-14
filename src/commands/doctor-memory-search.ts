@@ -26,7 +26,13 @@ export async function noteMemorySearchHealth(
 ): Promise<void> {
   const agentId = resolveDefaultAgentId(cfg);
   const agentDir = resolveAgentDir(cfg, agentId);
-  const resolved = resolveMemorySearchConfig(cfg, agentId);
+  let resolved: ReturnType<typeof resolveMemorySearchConfig>;
+  try {
+    resolved = resolveMemorySearchConfig(cfg, agentId);
+  } catch (error) {
+    note(formatMemorySearchValidationError(error), "Memory search");
+    return;
+  }
   const hasRemoteApiKey = hasConfiguredMemorySecretInput(resolved?.remote?.apiKey);
 
   if (!resolved) {
@@ -80,6 +86,9 @@ export async function noteMemorySearchHealth(
       return;
     }
     // Remote provider — check for API key
+    if (resolved.provider === "ollama") {
+      return;
+    }
     if (hasRemoteApiKey || (await hasApiKeyForProvider(resolved.provider, cfg, agentDir))) {
       return;
     }
@@ -153,6 +162,18 @@ export async function noteMemorySearchHealth(
     ].join("\n"),
     "Memory search",
   );
+}
+
+function formatMemorySearchValidationError(error: unknown): string {
+  const details =
+    error instanceof Error && error.message.trim().length > 0 ? error.message.trim() : String(error);
+  return [
+    "memorySearch configuration is invalid.",
+    details,
+    "",
+    `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+    "Docs: https://docs.openclaw.ai/concepts/memory",
+  ].join("\n");
 }
 
 /**
