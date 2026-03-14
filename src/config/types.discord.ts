@@ -211,6 +211,8 @@ export type DiscordAutoPresenceConfig = {
 export type DiscordAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
+  /** Explicit agent binding. Routes inbound messages from this account to the specified agent. */
+  agentId?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: string[];
   /** Markdown formatting overrides (tables). */
