@@ -444,7 +444,7 @@ describe("resolveSessionDeliveryTarget", () => {
         updatedAt: 1,
         lastChannel: "imessage",
         lastTo: "chat-guid-unknown-shape",
-        chatType: "direct" as const,
+        chatType: "direct",
       },
       expectedChannel: "imessage",
       expectedTo: "chat-guid-unknown-shape",
@@ -456,20 +456,13 @@ describe("resolveSessionDeliveryTarget", () => {
         updatedAt: 1,
         lastChannel: "imessage",
         lastTo: "chat-guid-unknown-shape",
-        chatType: "direct" as const,
+        chatType: "direct",
       },
       directPolicy: "block" as const,
       expectedChannel: "none",
       expectedReason: "dm-blocked",
     },
-  ] satisfies Array<{
-    name: string;
-    entry: NonNullable<Parameters<typeof resolveHeartbeatDeliveryTarget>[0]["entry"]>;
-    directPolicy?: "allow" | "block";
-    expectedChannel: string;
-    expectedTo?: string;
-    expectedReason?: string;
-  }>)("$name", ({ name, entry, directPolicy, expectedChannel, expectedTo, expectedReason }) => {
+  ])("$name", ({ name, entry, directPolicy, expectedChannel, expectedTo, expectedReason }) => {
     expectHeartbeatTarget({
       name,
       entry,

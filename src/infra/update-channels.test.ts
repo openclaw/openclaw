@@ -7,8 +7,6 @@ import {
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
   resolveUpdateChannelDisplay,
-  type UpdateChannel,
-  type UpdateChannelSource,
 } from "./update-channels.js";
 
 describe("update-channels tag detection", () => {
@@ -34,12 +32,9 @@ describe("normalizeUpdateChannel", () => {
     { value: " nightly ", expected: null },
     { value: null, expected: null },
     { value: undefined, expected: null },
-  ] satisfies Array<{ value: string | null | undefined; expected: UpdateChannel | null }>)(
-    "normalizes %j",
-    ({ value, expected }) => {
-      expect(normalizeUpdateChannel(value)).toBe(expected);
-    },
-  );
+  ])("normalizes %j", ({ value, expected }) => {
+    expect(normalizeUpdateChannel(value)).toBe(expected);
+  });
 });
 
 describe("channelToNpmTag", () => {
@@ -47,12 +42,9 @@ describe("channelToNpmTag", () => {
     { channel: "stable", expected: "latest" },
     { channel: "beta", expected: "beta" },
     { channel: "dev", expected: "dev" },
-  ] satisfies Array<{ channel: UpdateChannel; expected: string }>)(
-    "maps $channel to $expected",
-    ({ channel, expected }) => {
-      expect(channelToNpmTag(channel)).toBe(expected);
-    },
-  );
+  ])("maps $channel to $expected", ({ channel, expected }) => {
+    expect(channelToNpmTag(channel)).toBe(expected);
+  });
 });
 
 describe("resolveEffectiveUpdateChannel", () => {
@@ -108,11 +100,7 @@ describe("resolveEffectiveUpdateChannel", () => {
       params: { installKind: "unknown" as const },
       expected: { channel: "stable", source: "default" },
     },
-  ] satisfies Array<{
-    name: string;
-    params: Parameters<typeof resolveEffectiveUpdateChannel>[0];
-    expected: { channel: UpdateChannel; source: UpdateChannelSource };
-  }>)("$name", ({ params, expected }) => {
+  ])("$name", ({ params, expected }) => {
     expect(resolveEffectiveUpdateChannel(params)).toEqual(expected);
   });
 });
@@ -157,11 +145,7 @@ describe("formatUpdateChannelLabel", () => {
       params: { channel: "stable", source: "default" as const },
       expected: "stable (default)",
     },
-  ] satisfies Array<{
-    name: string;
-    params: Parameters<typeof formatUpdateChannelLabel>[0];
-    expected: string;
-  }>)("$name", ({ params, expected }) => {
+  ])("$name", ({ params, expected }) => {
     expect(formatUpdateChannelLabel(params)).toBe(expected);
   });
 });

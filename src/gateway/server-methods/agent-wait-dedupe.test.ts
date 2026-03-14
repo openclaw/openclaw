@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DedupeEntry } from "../server-shared.js";
 import {
   __testing,
   readTerminalSnapshotFromGatewayDedupe,
@@ -9,7 +8,7 @@ import {
 
 describe("agent wait dedupe helper", () => {
   function setRunEntry(params: {
-    dedupe: Map<string, DedupeEntry>;
+    dedupe: Map<unknown, unknown>;
     kind: "agent" | "chat";
     runId: string;
     ts?: number;
@@ -38,7 +37,7 @@ describe("agent wait dedupe helper", () => {
   });
 
   it("unblocks waiters when a terminal chat dedupe entry is written", async () => {
-    const dedupe = new Map<string, DedupeEntry>();
+    const dedupe = new Map();
     const runId = "run-chat-terminal";
     const waiter = waitForTerminalGatewayDedupe({
       dedupe,
@@ -71,7 +70,7 @@ describe("agent wait dedupe helper", () => {
   });
 
   it("keeps stale chat dedupe blocked while agent dedupe is in-flight", async () => {
-    const dedupe = new Map<string, DedupeEntry>();
+    const dedupe = new Map();
     const runId = "run-stale-chat";
     setRunEntry({
       dedupe,
@@ -109,7 +108,7 @@ describe("agent wait dedupe helper", () => {
   });
 
   it("uses newer terminal chat snapshot when agent entry is non-terminal", () => {
-    const dedupe = new Map<string, DedupeEntry>();
+    const dedupe = new Map();
     const runId = "run-nonterminal-agent-with-newer-chat";
     setRunEntry({
       dedupe,

@@ -7,20 +7,19 @@ import {
   normalizeWideAreaDomain,
   renderWideAreaGatewayZoneText,
   resolveWideAreaDiscoveryDomain,
-  type WideAreaGatewayZoneOpts,
   writeWideAreaGatewayZone,
 } from "./widearea-dns.js";
 
-const baseZoneOpts: WideAreaGatewayZoneOpts = {
+const baseZoneOpts = {
   domain: "openclaw.internal.",
   gatewayPort: 18789,
   displayName: "Mac Studio (OpenClaw)",
   tailnetIPv4: "100.123.224.76",
   hostLabel: "studio-london",
   instanceLabel: "studio-london",
-};
+} as const;
 
-function makeZoneOpts(overrides: Partial<WideAreaGatewayZoneOpts> = {}): WideAreaGatewayZoneOpts {
+function makeZoneOpts(overrides: Partial<typeof baseZoneOpts> = {}) {
   return { ...baseZoneOpts, ...overrides };
 }
 

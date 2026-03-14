@@ -4,8 +4,6 @@ import {
   resolveTimedInstallModeOptions,
 } from "./install-mode-options.js";
 
-type LoggerKey = "default" | "explicit";
-
 describe("install mode option helpers", () => {
   it.each([
     {
@@ -23,15 +21,11 @@ describe("install mode option helpers", () => {
       params: { mode: "update" as const, dryRun: false },
       expected: { loggerKey: "default", mode: "update", dryRun: false },
     },
-  ] satisfies Array<{
-    name: string;
-    params: { loggerKey?: LoggerKey; mode?: "install" | "update"; dryRun?: boolean };
-    expected: { loggerKey: LoggerKey; mode: "install" | "update"; dryRun: boolean };
-  }>)("$name", ({ params, expected }) => {
+  ])("$name", ({ params, expected }) => {
     const loggers = {
       default: { warn: (_message: string) => {} },
       explicit: { warn: (_message: string) => {} },
-    } satisfies Record<LoggerKey, { warn: (_message: string) => void }>;
+    };
 
     expect(
       resolveInstallModeOptions(
@@ -74,16 +68,13 @@ describe("install mode option helpers", () => {
       expectedMode: "update",
       expectedDryRun: true,
     },
-  ] as const)(
-    "$name",
-    ({ params, defaultTimeoutMs, expectedTimeoutMs, expectedMode, expectedDryRun }) => {
-      const logger = { warn: (_message: string) => {} };
-      const result = resolveTimedInstallModeOptions(params, logger, defaultTimeoutMs);
+  ])("$name", ({ params, defaultTimeoutMs, expectedTimeoutMs, expectedMode, expectedDryRun }) => {
+    const logger = { warn: (_message: string) => {} };
+    const result = resolveTimedInstallModeOptions(params, logger, defaultTimeoutMs);
 
-      expect(result.timeoutMs).toBe(expectedTimeoutMs);
-      expect(result.mode).toBe(expectedMode);
-      expect(result.dryRun).toBe(expectedDryRun);
-      expect(result.logger).toBe(logger);
-    },
-  );
+    expect(result.timeoutMs).toBe(expectedTimeoutMs);
+    expect(result.mode).toBe(expectedMode);
+    expect(result.dryRun).toBe(expectedDryRun);
+    expect(result.logger).toBe(logger);
+  });
 });

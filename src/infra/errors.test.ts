@@ -32,10 +32,7 @@ describe("error helpers", () => {
     child.cause = root;
 
     expect(
-      collectErrorGraphCandidates(root, (current) => {
-        const errorNode = current as { cause?: unknown; errors?: unknown[] };
-        return [errorNode.cause, ...(errorNode.errors ?? [])];
-      }),
+      collectErrorGraphCandidates(root, (current) => [current.cause, ...(current.errors ?? [])]),
     ).toEqual([root, child, leaf]);
     expect(collectErrorGraphCandidates(null)).toEqual([]);
   });

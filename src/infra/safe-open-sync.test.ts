@@ -5,11 +5,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { openVerifiedFileSync } from "./safe-open-sync.js";
 
-type SafeOpenSyncFs = NonNullable<Parameters<typeof openVerifiedFileSync>[0]["ioFs"]>;
-type SafeOpenSyncLstatSync = SafeOpenSyncFs["lstatSync"];
-type SafeOpenSyncRealpathSync = SafeOpenSyncFs["realpathSync"];
-type SafeOpenSyncFstatSync = SafeOpenSyncFs["fstatSync"];
-
 async function withTempDir<T>(prefix: string, run: (dir: string) => Promise<T>): Promise<T> {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
   try {
@@ -36,20 +31,6 @@ function mockStat(params: {
     dev: params.dev ?? 1,
     ino: params.ino ?? 1,
   } as unknown as fs.Stats;
-}
-
-function mockRealpathSync(result: string): SafeOpenSyncRealpathSync {
-  const resolvePath = ((_: fs.PathLike) => result) as SafeOpenSyncRealpathSync;
-  resolvePath.native = ((_: fs.PathLike) => result) as typeof resolvePath.native;
-  return resolvePath;
-}
-
-function mockLstatSync(read: (filePath: fs.PathLike) => fs.Stats): SafeOpenSyncLstatSync {
-  return ((filePath: fs.PathLike) => read(filePath)) as unknown as SafeOpenSyncLstatSync;
-}
-
-function mockFstatSync(stat: fs.Stats): SafeOpenSyncFstatSync {
-  return ((_: number) => stat) as unknown as SafeOpenSyncFstatSync;
 }
 
 describe("openVerifiedFileSync", () => {
@@ -134,16 +115,15 @@ describe("openVerifiedFileSync", () => {
       closed.push(fd);
     };
     const closed: number[] = [];
-    const ioFs: SafeOpenSyncFs = {
+    const ioFs = {
       constants: fs.constants,
-      lstatSync: mockLstatSync((filePath) =>
-        String(filePath) === "/real/file.txt"
+      lstatSync: (filePath: string) =>
+        filePath === "/real/file.txt"
           ? mockStat({ isFile: true, size: 1, dev: 1, ino: 1 })
           : mockStat({ isFile: false }),
-      ),
-      realpathSync: mockRealpathSync("/real/file.txt"),
+      realpathSync: () => "/real/file.txt",
       openSync: () => 42,
-      fstatSync: mockFstatSync(mockStat({ isFile: true, size: 1, dev: 2, ino: 1 })),
+      fstatSync: () => mockStat({ isFile: true, size: 1, dev: 2, ino: 1 }),
       closeSync,
     };
 
@@ -159,16 +139,16 @@ describe("openVerifiedFileSync", () => {
   });
 
   it("reports non-path filesystem failures as io errors", () => {
-    const ioFs: SafeOpenSyncFs = {
+    const ioFs = {
       constants: fs.constants,
       lstatSync: () => {
         const err = new Error("permission denied") as NodeJS.ErrnoException;
         err.code = "EACCES";
         throw err;
       },
-      realpathSync: mockRealpathSync("/real/file.txt"),
+      realpathSync: () => "/real/file.txt",
       openSync: () => 42,
-      fstatSync: mockFstatSync(mockStat({ isFile: true })),
+      fstatSync: () => mockStat({ isFile: true }),
       closeSync: () => {},
     };
 

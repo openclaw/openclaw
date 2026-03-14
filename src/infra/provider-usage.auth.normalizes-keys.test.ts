@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
-import { resolveProviderAuths, type ProviderAuth } from "./provider-usage.auth.js";
+import { resolveProviderAuths } from "./provider-usage.auth.js";
 
 describe("resolveProviderAuths key normalization", () => {
   let suiteRoot = "";
@@ -154,7 +154,7 @@ describe("resolveProviderAuths key normalization", () => {
 
   async function expectResolvedAuthsFromSuiteHome(params: {
     providers: Parameters<typeof resolveProviderAuths>[0]["providers"];
-    expected: ProviderAuth[];
+    expected: Awaited<ReturnType<typeof resolveProviderAuths>>;
     env?: Record<string, string | undefined>;
     setup?: (home: string) => Promise<void>;
   }) {
@@ -173,7 +173,7 @@ describe("resolveProviderAuths key normalization", () => {
     );
   }
 
-  const envNormalizationCases = [
+  it.each([
     {
       name: "strips embedded CR/LF from env keys",
       providers: ["zai", "minimax", "xiaomi"] as const,
@@ -214,14 +214,7 @@ describe("resolveProviderAuths key normalization", () => {
       },
       expected: [{ provider: "minimax", token: "code-plan-key" }],
     },
-  ] satisfies Array<{
-    name: string;
-    providers: readonly Parameters<typeof resolveProviderAuths>[0]["providers"][number][];
-    env: Record<string, string | undefined>;
-    expected: ProviderAuth[];
-  }>;
-
-  it.each(envNormalizationCases)("$name", async ({ providers, env, expected }) => {
+  ])("$name", async ({ providers, env, expected }) => {
     await expectResolvedAuthsFromSuiteHome({ providers: [...providers], env, expected });
   });
 

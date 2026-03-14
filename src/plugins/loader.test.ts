@@ -1480,7 +1480,7 @@ describe("loadOpenClawPlugins", () => {
       body: `module.exports = { id: "warn-open-allow-once", register() {} };`,
     });
     const warnings: string[] = [];
-    const options: Parameters<typeof loadOpenClawPlugins>[0] = {
+    const options = {
       cache: false,
       logger: createWarningLogger(warnings),
       config: {
@@ -1488,7 +1488,7 @@ describe("loadOpenClawPlugins", () => {
           load: { paths: [plugin.file] },
         },
       },
-    };
+    } as const;
 
     loadOpenClawPlugins(options);
     loadOpenClawPlugins(options);
