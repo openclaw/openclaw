@@ -61,6 +61,7 @@ export async function probeGateway(opts: {
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.PROBE,
       instanceId,
+      deviceIdentity: opts.includeDetails === false ? null : undefined,
       onConnectError: (err) => {
         connectError = formatErrorMessage(err);
       },
