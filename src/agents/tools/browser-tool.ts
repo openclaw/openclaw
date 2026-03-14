@@ -85,7 +85,25 @@ const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
 function readActRequestParam(params: Record<string, unknown>) {
   const requestParam = params.request;
   if (requestParam && typeof requestParam === "object") {
-    return requestParam as Parameters<typeof browserAct>[1];
+    const request = { ...requestParam } as Record<string, unknown>;
+    if (typeof params.ref === "string" && params.ref.trim() && request.ref === undefined) {
+      request.ref = params.ref;
+    }
+    if (
+      typeof params.targetId === "string" &&
+      params.targetId.trim() &&
+      request.targetId === undefined
+    ) {
+      request.targetId = params.targetId;
+    }
+    if (
+      typeof params.timeoutMs === "number" &&
+      Number.isFinite(params.timeoutMs) &&
+      request.timeoutMs === undefined
+    ) {
+      request.timeoutMs = params.timeoutMs;
+    }
+    return request as Parameters<typeof browserAct>[1];
   }
 
   const kind = readStringParam(params, "kind");
