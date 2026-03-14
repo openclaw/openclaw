@@ -49,6 +49,30 @@ tool call in try/catch logic.
 - This area is still evolving. It helps to remind the model to store memories; it will know what to do.
 - If you want something to stick, **ask the bot to write it** into memory.
 
+## Durable facts vs time-bounded status (TTL)
+
+OpenClaw memory is plain Markdown, but Markdown files are "timeless" by default.
+In practice, teams often mix durable facts (identity, preferences, long-term decisions)
+with short-lived status ("departs tomorrow", current location, project stage). Without
+an explicit time dimension, agents can mistakenly treat stale status as current truth.
+
+**Best practice: split durable facts from time-bounded status.**
+
+- Keep `USER.md` for stable identity + preferences + collaboration protocol.
+- Keep `MEMORY.md` for curated, durable long-term memory.
+- Add a dedicated `memory/STATUS.md` (or `memory/NOW.md`) for time-sensitive state.
+
+`memory/STATUS.md` rules:
+
+- Every item should include `updatedAt` (YYYY-MM-DD) and a `review/expire` date (TTL).
+- Avoid relative time words like "tomorrow"/"next week"; use absolute dates.
+
+**Guardrail for time-sensitive inference (low-token):**
+
+Only when inferring/asserting facts about **time, location, itinerary/travel, or project stage**,
+prefer citing a fresh (unexpired) `memory/STATUS.md` entry; otherwise ask one clarification question.
+This reduces stale-fact errors without requiring expensive full-history scans.
+
 ## Automatic memory flush (pre-compaction ping)
 
 When a session is **close to auto-compaction**, OpenClaw triggers a **silent,
