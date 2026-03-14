@@ -71,6 +71,8 @@ export type SkillEntry = {
 };
 
 export type SkillEligibilityContext = {
+  /** Whether the calling session runs inside a sandbox container. */
+  sandboxed?: boolean;
   remote?: {
     platforms: string[];
     hasBin: (bin: string) => boolean;

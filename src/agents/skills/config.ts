@@ -84,12 +84,18 @@ export function shouldIncludeSkill(params: {
   if (!isBundledSkillAllowed(entry, allowBundled)) {
     return false;
   }
+  // When the calling session runs inside a sandbox container, binaries are
+  // available at runtime inside the container, not on the gateway host.
+  // Bypass the bins check so skills aren't incorrectly blocked by the
+  // gateway's PATH.  In "non-main" sandbox mode the main session is *not*
+  // sandboxed, so the bypass must be keyed off the session's actual sandbox
+  // state rather than the global sandbox mode.
   return evaluateRuntimeEligibility({
     os: entry.metadata?.os,
     remotePlatforms: eligibility?.remote?.platforms,
     always: entry.metadata?.always,
     requires: entry.metadata?.requires,
-    hasBin: hasBinary,
+    hasBin: eligibility?.sandboxed ? () => true : hasBinary,
     hasRemoteBin: eligibility?.remote?.hasBin,
     hasAnyRemoteBin: eligibility?.remote?.hasAnyBin,
     hasEnv: (envName) =>
