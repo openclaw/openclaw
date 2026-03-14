@@ -901,7 +901,7 @@ describe("Agent-specific tool filtering", () => {
     expect(ownerNames).not.toContain("exec");
   });
 
-  it("should not fall through from group session parsing to direct policy candidates", () => {
+  it("should fall back to direct policy for ambiguous account-scoped DM keys when group only has wildcard rules", () => {
     const cfg: OpenClawConfig = {
       channels: {
         feishu: {
@@ -931,7 +931,7 @@ describe("Agent-specific tool filtering", () => {
     });
     const ownerNames = ownerTools.map((t) => t.name);
     expect(ownerNames).toContain("read");
-    expect(ownerNames).not.toContain("exec");
+    expect(ownerNames).toContain("exec");
   });
 
   it("should fall back to wildcard DM tools when a specific DM entry has no tools", () => {
