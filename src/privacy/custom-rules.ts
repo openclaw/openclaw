@@ -234,6 +234,15 @@ export function validateUserRule(rule: UserDefinedRule, index: number): RuleVali
         message: `keywords[${badIdx}] must be a string (got ${typeof keywords[badIdx]})`,
       });
     }
+    const emptyIdx = keywords.findIndex((kw) => typeof kw === "string" && kw.trim().length === 0);
+    if (emptyIdx !== -1) {
+      errors.push({
+        ruleIndex: index,
+        type,
+        field: "keywords",
+        message: `keywords[${emptyIdx}] must not be empty`,
+      });
+    }
   }
 
   if (rule.pattern) {

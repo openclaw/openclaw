@@ -214,6 +214,45 @@ describe("redactToolDetail", () => {
     }
   });
 
+  it("keeps earlier full-span detector match over later overlapping submatch", () => {
+    const text = "token: ABCDEFGH.IJKLMNOPQRST.UVWXYZ123456 tail";
+    const full = "ABCDEFGH.IJKLMNOPQRST.UVWXYZ123456";
+    const inner = "IJKLMNOPQRST.UVWXYZ123456";
+    const fullStart = text.indexOf(full);
+    const innerStart = text.indexOf(inner);
+    const detectSpy = vi.spyOn(PrivacyDetector.prototype, "detect").mockReturnValue({
+      hasPrivacyRisk: true,
+      matches: [
+        {
+          type: "full",
+          content: full,
+          start: fullStart,
+          end: fullStart + full.length,
+          riskLevel: "critical",
+          description: "full token",
+        },
+        {
+          type: "inner",
+          content: inner,
+          start: innerStart,
+          end: innerStart + inner.length,
+          riskLevel: "high",
+          description: "inner token",
+        },
+      ],
+      riskCount: { full: 1, inner: 1 },
+      highestRiskLevel: "critical",
+    });
+
+    try {
+      const output = redactWithPrivacyFilter(text, { mode: "off", patterns: [] }, true);
+      expect(output).not.toContain("IJKLMNOPQRST.UVWXYZ123456");
+      expect(output).toContain("tail");
+    } finally {
+      detectSpy.mockRestore();
+    }
+  });
+
   it("isolates detector cache for relative custom rules across different config dirs", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "redact-rules-cache-"));
     const dirA = path.join(root, "a");

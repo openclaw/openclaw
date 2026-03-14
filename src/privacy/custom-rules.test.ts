@@ -139,6 +139,19 @@ describe("custom-rules", () => {
       expect(errors.some((e) => e.field === "keywords")).toBe(true);
     });
 
+    it("rejects empty keywords", () => {
+      const rule: UserDefinedRule = {
+        type: "project_codename",
+        description: "Internal codename",
+        riskLevel: "high",
+        keywords: [""],
+      };
+      const errors = validateUserRule(rule, 0);
+      expect(
+        errors.some((e) => e.field === "keywords" && e.message.includes("must not be empty")),
+      ).toBe(true);
+    });
+
     it("rejects non-array context.mustContain", () => {
       const rule = {
         type: "context_rule",

@@ -184,6 +184,13 @@ function resolveDetectorRulesKey(rules: string): string {
   return resolveCustomRulesPath(rules);
 }
 
+type RedactionMatch = {
+  start: number;
+  end: number;
+  content: string;
+  riskLevel: "low" | "medium" | "high" | "critical";
+};
+
 /**
  * Enhanced redaction that combines the existing pattern-based redaction
  * with the privacy detection engine for broader coverage.
@@ -221,22 +228,11 @@ export function redactWithPrivacyFilter(
     const detected = cachedDetector.detect(result);
     if (detected.hasPrivacyRisk) {
       // Apply mask-style redaction (not replacement) for log output.
-      const sorted = [...detected.matches].toSorted((a, b) => {
-        if (a.start !== b.start) {
-          return b.start - a.start;
-        }
-        // Prefer longer spans for equal-start overlaps to avoid masking only
-        // a prefix and leaving the remainder of a secret visible.
-        return b.end - b.start - (a.end - a.start);
-      });
-      let processedStart = Infinity;
+      const selected = selectNonOverlappingMatches(detected.matches);
+      const sorted = [...selected].toSorted((a, b) => b.start - a.start);
       for (const match of sorted) {
-        if (match.end > processedStart) {
-          continue;
-        }
         const masked = maskToken(match.content);
         result = result.slice(0, match.start) + masked + result.slice(match.end);
-        processedStart = match.start;
       }
     }
   } catch {
@@ -244,4 +240,43 @@ export function redactWithPrivacyFilter(
   }
 
   return result;
+}
+
+function selectNonOverlappingMatches(matches: RedactionMatch[]): RedactionMatch[] {
+  const sorted = [...matches].toSorted((a, b) => {
+    if (a.start !== b.start) {
+      return a.start - b.start;
+    }
+    const spanDiff = b.end - b.start - (a.end - a.start);
+    if (spanDiff !== 0) {
+      return spanDiff;
+    }
+    return riskRank(b.riskLevel) - riskRank(a.riskLevel);
+  });
+
+  const selected: RedactionMatch[] = [];
+  let lastEnd = -1;
+  for (const match of sorted) {
+    if (match.start < lastEnd) {
+      continue;
+    }
+    selected.push(match);
+    lastEnd = match.end;
+  }
+  return selected;
+}
+
+function riskRank(level: "low" | "medium" | "high" | "critical"): number {
+  switch (level) {
+    case "critical":
+      return 4;
+    case "high":
+      return 3;
+    case "medium":
+      return 2;
+    case "low":
+      return 1;
+    default:
+      return 0;
+  }
 }

@@ -79,6 +79,22 @@ describe("PrivacyReplacer", () => {
       expect(replaced).toContain(" tail");
     });
 
+    it("keeps earlier full-span match over later overlapping submatch", () => {
+      const replacer = new PrivacyReplacer("test-session");
+      const text = "discord token=ABCDEFGH.IJKLMNOPQRST.UVWXYZ123456";
+      const full = "ABCDEFGH.IJKLMNOPQRST.UVWXYZ123456";
+      const inner = "IJKLMNOPQRST.UVWXYZ123456";
+      const matches: DetectionMatch[] = [
+        makeMatch("discord_token", full, text.indexOf(full), "critical"),
+        makeMatch("high_entropy_string", inner, text.indexOf(inner), "high"),
+      ];
+
+      const { replaced } = replacer.replaceAll(text, matches);
+      expect(replaced).not.toContain(full);
+      expect(replaced).not.toContain(inner);
+      expect(replaced).toContain("discord token=");
+    });
+
     it("returns new mappings for first-time replacements", () => {
       const replacer = new PrivacyReplacer("test-session");
       const match = makeMatch("email", "user@test.com", 0);

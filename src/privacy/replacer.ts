@@ -35,16 +35,11 @@ export class PrivacyReplacer {
     }
 
     const newMappings: PrivacyMapping[] = [];
-    // Process from end to start to preserve indices.
-    // Also skip matches that overlap with already-processed regions.
-    const sorted = [...matches].toSorted((a, b) => {
-      if (a.start !== b.start) {
-        return b.start - a.start;
-      }
-      // Prefer longer spans when two matches start at the same index so a
-      // broader secret match wins over a shorter overlapping substring.
-      return b.end - b.start - (a.end - a.start);
-    });
+    // Select non-overlapping matches in source order first so a later-start
+    // submatch cannot suppress an earlier full-span secret match.
+    const selected = selectNonOverlappingMatches(matches);
+    // Process replacements from end to start to preserve indices.
+    const sorted = [...selected].toSorted((a, b) => b.start - a.start);
 
     let result = text;
     let processedStart = Infinity;
@@ -150,6 +145,45 @@ export class PrivacyReplacer {
     this.mappings.push(mapping);
 
     return { mapping, isNew: true };
+  }
+}
+
+function selectNonOverlappingMatches(matches: DetectionMatch[]): DetectionMatch[] {
+  const sorted = [...matches].toSorted((a, b) => {
+    if (a.start !== b.start) {
+      return a.start - b.start;
+    }
+    const spanDiff = b.end - b.start - (a.end - a.start);
+    if (spanDiff !== 0) {
+      return spanDiff;
+    }
+    return riskRank(b.riskLevel) - riskRank(a.riskLevel);
+  });
+
+  const selected: DetectionMatch[] = [];
+  let lastEnd = -1;
+  for (const match of sorted) {
+    if (match.start < lastEnd) {
+      continue;
+    }
+    selected.push(match);
+    lastEnd = match.end;
+  }
+  return selected;
+}
+
+function riskRank(level: DetectionMatch["riskLevel"]): number {
+  switch (level) {
+    case "critical":
+      return 4;
+    case "high":
+      return 3;
+    case "medium":
+      return 2;
+    case "low":
+      return 1;
+    default:
+      return 0;
   }
 }
 
