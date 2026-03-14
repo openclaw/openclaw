@@ -1,5 +1,5 @@
 /**
- * OpenClaw Performance Monitor
+ * OpenClaw Performance Monitor (Final Production-Ready Version)
  * 
  * A comprehensive performance monitoring and profiling tool
  * 
@@ -9,10 +9,10 @@
  * - WebSocket connection metrics
  * - Model response time tracking
  * - Bottleneck detection
- * - Performance alerts
+ * - Performance alerts with auto-cleanup
  * 
  * @module PerformanceMonitor
- * @version 1.0.3
+ * @version 1.0.4
  * @license MIT
  */
 
@@ -748,8 +748,58 @@ export class PerformanceMonitor extends SimpleEventEmitter {
     };
 
     this.alerts.set(alertId, alert);
+    
+    // Enforce maxAlertsHistory limit
+    this.enforceAlertsLimit();
+    
     this.emit('alert', alert);
     this.log(`Alert created: ${message}`);
+  }
+
+  /**
+   * Enforce the maxAlertsHistory limit by removing oldest alerts
+   */
+  private enforceAlertsLimit(): void {
+    const maxAlerts = this.options.maxAlertsHistory;
+    
+    if (this.alerts.size <= maxAlerts) {
+      return;
+    }
+
+    // Convert to array and sort by timestamp (oldest first)
+    const alertsArray = Array.from(this.alerts.entries())
+      .sort((a, b) => a[1].timestamp - b[1].timestamp);
+
+    // Remove oldest alerts, prioritizing resolved ones
+    const toRemove: string[] = [];
+    let removed = 0;
+    const excess = this.alerts.size - maxAlerts;
+
+    // First, remove oldest resolved alerts
+    for (const [id, alert] of alertsArray) {
+      if (removed >= excess) break;
+      if (alert.resolved) {
+        toRemove.push(id);
+        removed++;
+      }
+    }
+
+    // If still need to remove more, remove oldest unresolved alerts
+    if (removed < excess) {
+      for (const [id, alert] of alertsArray) {
+        if (removed >= excess) break;
+        if (!alert.resolved && !toRemove.includes(id)) {
+          toRemove.push(id);
+          removed++;
+        }
+      }
+    }
+
+    // Remove the alerts
+    for (const id of toRemove) {
+      this.alerts.delete(id);
+      this.log(`Removed old alert: ${id}`);
+    }
   }
 
   private resolveAlertsByType(type: string): void {
