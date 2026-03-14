@@ -803,7 +803,7 @@ function renderContextPanel(
                       ${skillsTop.map(
                         (s) => html`
                           <div class="context-breakdown-item">
-                            <span class="mono">${s.name}</span>
+                            <span class="mono" title="${s.name}">${s.name}</span>
                             <span class="muted">~${formatTokens(charsToTokens(s.blockChars))}</span>
                           </div>
                         `,
@@ -830,7 +830,7 @@ function renderContextPanel(
                       ${toolsTop.map(
                         (t) => html`
                           <div class="context-breakdown-item">
-                            <span class="mono">${t.name}</span>
+                            <span class="mono" title="${t.name}">${t.name}</span>
                             <span class="muted">~${formatTokens(charsToTokens(t.summaryChars + t.schemaChars))}</span>
                           </div>
                         `,
@@ -857,7 +857,7 @@ function renderContextPanel(
                       ${filesTop.map(
                         (f) => html`
                           <div class="context-breakdown-item">
-                            <span class="mono">${f.name}</span>
+                            <span class="mono" title="${f.name}">${f.name}</span>
                             <span class="muted">~${formatTokens(charsToTokens(f.injectedChars))}</span>
                           </div>
                         `,

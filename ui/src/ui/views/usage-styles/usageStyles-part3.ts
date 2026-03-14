@@ -327,6 +327,12 @@ export const usageStylesPart3 = `
     justify-content: space-between;
     gap: 8px;
   }
+  .context-breakdown-item .mono {
+    max-width: 80%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .context-breakdown-more {
     font-size: 10px;
     color: var(--muted);
