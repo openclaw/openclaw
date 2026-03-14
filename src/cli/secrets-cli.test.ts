@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
@@ -154,6 +156,41 @@ describe("secrets CLI", () => {
       }),
     );
     expect(runtimeLogs.at(-1)).toContain("Secrets applied");
+  });
+
+  it("shortens planOut paths in configure output", async () => {
+    const home = os.homedir();
+    const planOut = `${home}/secrets-plan.json`;
+    runSecretsConfigureInteractive.mockResolvedValue({
+      plan: {
+        version: 1,
+        protocolVersion: 1,
+        generatedAt: "2026-02-26T00:00:00.000Z",
+        generatedBy: "openclaw secrets configure",
+        targets: [],
+      },
+      preflight: {
+        mode: "dry-run",
+        changed: true,
+        changedFiles: [`${home}/.openclaw/openclaw.json`],
+        warningCount: 0,
+        warnings: [],
+      },
+    });
+    confirm.mockResolvedValue(false);
+
+    try {
+      await createProgram().parseAsync(["secrets", "configure", "--plan-out", planOut], {
+        from: "user",
+      });
+
+      expect(runtimeLogs.some((line) => line.includes("Plan written to ~/secrets-plan.json"))).toBe(
+        true,
+      );
+      expect(runtimeLogs.some((line) => line.includes(planOut))).toBe(false);
+    } finally {
+      fs.rmSync(planOut, { force: true });
+    }
   });
 
   it("forwards --agent to secrets configure", async () => {

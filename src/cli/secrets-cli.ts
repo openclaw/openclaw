@@ -9,6 +9,7 @@ import { runSecretsConfigureInteractive } from "../secrets/configure.js";
 import { isSecretsApplyPlan, type SecretsApplyPlan } from "../secrets/plan.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { shortenHomePath } from "../utils.js";
 import { addGatewayClientOptions, callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 
 type SecretsReloadOptions = GatewayRpcOpts & { json?: boolean };
@@ -166,7 +167,7 @@ export function registerSecretsCli(program: Command) {
             `Plan: targets=${configured.plan.targets.length}, providerUpserts=${providerUpserts}, providerDeletes=${providerDeletes}.`,
           );
           if (opts.planOut) {
-            defaultRuntime.log(`Plan written to ${opts.planOut}`);
+            defaultRuntime.log(`Plan written to ${shortenHomePath(opts.planOut)}`);
           }
         }
 
