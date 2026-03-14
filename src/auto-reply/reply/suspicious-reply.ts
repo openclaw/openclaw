@@ -34,16 +34,33 @@ function isStructuredToolJsonLine(line: string): boolean {
   return trimmed.startsWith("{") && TOOL_JSON_KEY_RE.test(trimmed);
 }
 
-function hasStructuredToolJsonLine(text: string): boolean {
-  return nonEmptyLines(text).some(isStructuredToolJsonLine);
+function isJsonBlockLine(line: string): boolean {
+  const trimmed = line.trim();
+  return (
+    trimmed === "{" ||
+    trimmed === "}" ||
+    trimmed === "[" ||
+    trimmed === "]" ||
+    trimmed === "}," ||
+    trimmed === "]," ||
+    /^"(?:\\.|[^"])+\"\s*:/.test(trimmed)
+  );
 }
 
-function hasOnlyStructuredLeakageLines(text: string): boolean {
-  const lines = nonEmptyLines(text);
-  return (
-    lines.length > 0 &&
-    lines.every((line) => isStructuredRouteMarkerLine(line) || isStructuredToolJsonLine(line))
-  );
+function hasStructuredToolJsonBlock(lines: string[]): boolean {
+  if (lines.length === 0) {
+    return false;
+  }
+  if (lines.length === 1) {
+    return isStructuredToolJsonLine(lines[0]);
+  }
+  if (lines[0] !== "{") {
+    return false;
+  }
+  if (lines.at(-1) !== "}") {
+    return false;
+  }
+  return lines.every(isJsonBlockLine) && lines.some((line) => TOOL_JSON_KEY_RE.test(line));
 }
 
 export function hasSuspiciousReplyLeakage(text: string | undefined): boolean {
@@ -58,12 +75,17 @@ export function hasSuspiciousReplyLeakage(text: string | undefined): boolean {
   const hasLeadingSilentWithExtra =
     trimmed.toUpperCase().startsWith(SILENT_REPLY_TOKEN) && !isSilentReplyText(trimmed);
   const candidate = hasLeadingSilentWithExtra ? stripLeadingSilentToken(trimmed) : trimmed;
-  const hasStructuredRouteMarkerLead = STRUCTURED_ROUTE_MARKER_LINE_RE.test(
-    firstNonEmptyLine(candidate),
-  );
-  const hasToolJsonArgs = candidate.includes("{") && hasStructuredToolJsonLine(candidate);
-
-  return (
-    hasStructuredRouteMarkerLead && hasToolJsonArgs && hasOnlyStructuredLeakageLines(candidate)
-  );
+  const lines = nonEmptyLines(candidate);
+  const firstLine = firstNonEmptyLine(candidate);
+  if (!STRUCTURED_ROUTE_MARKER_LINE_RE.test(firstLine)) {
+    return false;
+  }
+  let routeMarkerLineCount = 0;
+  while (
+    routeMarkerLineCount < lines.length &&
+    isStructuredRouteMarkerLine(lines[routeMarkerLineCount] ?? "")
+  ) {
+    routeMarkerLineCount += 1;
+  }
+  return hasStructuredToolJsonBlock(lines.slice(routeMarkerLineCount));
 }

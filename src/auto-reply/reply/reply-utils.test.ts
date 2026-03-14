@@ -312,6 +312,20 @@ describe("normalizeReplyPayload", () => {
     ).toBe(true);
   });
 
+  it("flags structured route marker text paired with pretty-printed tool JSON", () => {
+    expect(
+      hasSuspiciousReplyLeakage(
+        [
+          "assistant to=functions.exec commentary to=functions.exec",
+          "{",
+          '"command":"ls",',
+          '"yieldMs":1000',
+          "}",
+        ].join("\n"),
+      ),
+    ).toBe(true);
+  });
+
   it("does not flag NO_REPLY explanations with tool JSON lines", () => {
     expect(
       hasSuspiciousReplyLeakage(
@@ -325,7 +339,10 @@ describe("normalizeReplyPayload", () => {
       hasSuspiciousReplyLeakage(
         [
           "assistant to=functions.exec",
-          '{"command":"ls","yieldMs":1000}',
+          "{",
+          '"command":"ls",',
+          '"yieldMs":1000',
+          "}",
           "This is an example of leaked orchestration text.",
         ].join("\n"),
       ),
