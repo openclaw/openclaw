@@ -8,7 +8,9 @@ import { useFrozenTime, useRealTime } from "../test-utils/frozen-time.js";
 import {
   answerCallbackQuerySpy,
   botCtorSpy,
+  botInitSpy,
   commandSpy,
+  editForumTopicSpy,
   getLoadConfigMock,
   getLoadWebMediaMock,
   getOnHandler,
@@ -2258,5 +2260,126 @@ describe("createTelegramBot", () => {
     await handler(ctx);
 
     expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+
+  describe("topic icon restoration on init", () => {
+    it("calls editForumTopic for each topic with iconCustomEmojiId on bot.init()", async () => {
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: {
+            token: "tok",
+            groups: {
+              "-100123": {
+                topics: {
+                  "42": { iconCustomEmojiId: "5422992822657130530" },
+                  "99": { iconCustomEmojiId: "5417915203100613993" },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const bot = createTelegramBot({ token: "tok" });
+      await bot.init();
+
+      expect(editForumTopicSpy).toHaveBeenCalledTimes(2);
+      expect(editForumTopicSpy).toHaveBeenCalledWith(-100123, 42, {
+        icon_custom_emoji_id: "5422992822657130530",
+      });
+      expect(editForumTopicSpy).toHaveBeenCalledWith(-100123, 99, {
+        icon_custom_emoji_id: "5417915203100613993",
+      });
+    });
+
+    it("skips topics without iconCustomEmojiId", async () => {
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: {
+            token: "tok",
+            groups: {
+              "-100456": {
+                topics: {
+                  "10": { iconCustomEmojiId: "5422992822657130530" },
+                  "20": { requireMention: true },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const bot = createTelegramBot({ token: "tok" });
+      await bot.init();
+
+      expect(editForumTopicSpy).toHaveBeenCalledTimes(1);
+      expect(editForumTopicSpy).toHaveBeenCalledWith(-100456, 10, {
+        icon_custom_emoji_id: "5422992822657130530",
+      });
+    });
+
+    it("does not call editForumTopic when no groups are configured", async () => {
+      loadConfig.mockReturnValue({
+        channels: { telegram: { token: "tok" } },
+      });
+
+      const bot = createTelegramBot({ token: "tok" });
+      await bot.init();
+
+      expect(editForumTopicSpy).not.toHaveBeenCalled();
+    });
+
+    it("continues applying remaining icons when one editForumTopic call fails", async () => {
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: {
+            token: "tok",
+            groups: {
+              "-100789": {
+                topics: {
+                  "1": { iconCustomEmojiId: "emojiA" },
+                  "2": { iconCustomEmojiId: "emojiB" },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      editForumTopicSpy.mockRejectedValueOnce(new Error("Telegram API error"));
+
+      const bot = createTelegramBot({ token: "tok" });
+      await expect(bot.init()).resolves.not.toThrow();
+
+      expect(editForumTopicSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it("still calls originalInit before applying topic icons", async () => {
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: {
+            token: "tok",
+            groups: {
+              "-100111": {
+                topics: { "5": { iconCustomEmojiId: "emoji123" } },
+              },
+            },
+          },
+        },
+      });
+
+      const callOrder: string[] = [];
+      botInitSpy.mockImplementation(async () => {
+        callOrder.push("init");
+      });
+      editForumTopicSpy.mockImplementation(async () => {
+        callOrder.push("editForumTopic");
+      });
+
+      const bot = createTelegramBot({ token: "tok" });
+      await bot.init();
+
+      expect(callOrder).toEqual(["init", "editForumTopic"]);
+    });
   });
 });

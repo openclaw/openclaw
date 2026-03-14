@@ -123,6 +123,8 @@ export const sendMessageSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 77 
 export const sendAnimationSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 78 }));
 export const sendPhotoSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 79 }));
 export const getFileSpy: AnyAsyncMock = vi.fn(async () => ({ file_path: "media/file.jpg" }));
+export const editForumTopicSpy: AnyAsyncMock = vi.fn(async () => undefined);
+export const botInitSpy: AnyAsyncMock = vi.fn(async () => undefined);
 
 type ApiStub = {
   config: { use: (arg: unknown) => void };
@@ -138,6 +140,7 @@ type ApiStub = {
   sendAnimation: typeof sendAnimationSpy;
   sendPhoto: typeof sendPhotoSpy;
   getFile: typeof getFileSpy;
+  editForumTopic: typeof editForumTopicSpy;
 };
 
 const apiStub: ApiStub = {
@@ -154,6 +157,7 @@ const apiStub: ApiStub = {
   sendAnimation: sendAnimationSpy,
   sendPhoto: sendPhotoSpy,
   getFile: getFileSpy,
+  editForumTopic: editForumTopicSpy,
 };
 
 vi.mock("grammy", () => ({
@@ -162,6 +166,7 @@ vi.mock("grammy", () => ({
     use = middlewareUseSpy;
     on = onSpy;
     stop = stopSpy;
+    init = botInitSpy;
     command = commandSpy;
     catch = vi.fn();
     constructor(
@@ -330,5 +335,9 @@ beforeEach(() => {
   middlewareUseSpy.mockReset();
   sequentializeSpy.mockReset();
   botCtorSpy.mockReset();
+  editForumTopicSpy.mockReset();
+  editForumTopicSpy.mockResolvedValue(undefined);
+  botInitSpy.mockReset();
+  botInitSpy.mockResolvedValue(undefined);
   sequentializeKey = undefined;
 });
