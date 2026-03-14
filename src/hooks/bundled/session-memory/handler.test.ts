@@ -572,4 +572,191 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("user: Only message 1");
     expect(memoryContent).toContain("assistant: Only message 2");
   });
+
+  describe("session creation date for memory filename", () => {
+    it("uses session creation timestamp for date when session header has valid timestamp", async () => {
+      // Session created on 2026-03-10, but /new runs on 2026-03-12
+      const sessionCreatedAt = "2026-03-10T08:30:00.000Z";
+      const sessionContent = [
+        JSON.stringify({ type: "session", timestamp: sessionCreatedAt }),
+        JSON.stringify({ type: "message", message: { role: "user", content: "Hello" } }),
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "World" } }),
+      ].join("\n");
+
+      const tempDir = await createCaseWorkspace("workspace");
+      const sessionsDir = path.join(tempDir, "sessions");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const sessionFile = await writeWorkspaceFile({
+        dir: sessionsDir,
+        name: "test-session.jsonl",
+        content: sessionContent,
+      });
+
+      const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+        tempDir,
+        previousSessionEntry: { sessionId: "test-123", sessionFile },
+      });
+
+      // File should be named with session creation date
+      expect(files[0]).toMatch(/^2026-03-10-/);
+      // Header should show session creation time
+      expect(memoryContent).toContain("# Session: 2026-03-10 08:30:00 UTC");
+    });
+
+    it("falls back to event timestamp when session header has no timestamp field", async () => {
+      const sessionContent = [
+        JSON.stringify({ type: "session" }), // no timestamp field
+        JSON.stringify({ type: "message", message: { role: "user", content: "Hello" } }),
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "World" } }),
+      ].join("\n");
+
+      const { files } = await runNewWithPreviousSession({ sessionContent });
+
+      // File should be named with today's date (event timestamp)
+      const today = new Date().toISOString().split("T")[0];
+      expect(files[0]).toMatch(new RegExp(`^${today}-`));
+    });
+
+    it("falls back to event timestamp when session file has no session header", async () => {
+      // No type="session" entry at all
+      const sessionContent = createMockSessionContent([
+        { role: "user", content: "Hello" },
+        { role: "assistant", content: "World" },
+      ]);
+
+      const { files } = await runNewWithPreviousSession({ sessionContent });
+
+      const today = new Date().toISOString().split("T")[0];
+      expect(files[0]).toMatch(new RegExp(`^${today}-`));
+    });
+
+    it("falls back to event timestamp when session header has invalid date string", async () => {
+      const sessionContent = [
+        JSON.stringify({ type: "session", timestamp: "not-a-valid-date" }),
+        JSON.stringify({ type: "message", message: { role: "user", content: "Hello" } }),
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "World" } }),
+      ].join("\n");
+
+      const tempDir = await createCaseWorkspace("workspace");
+      const sessionsDir = path.join(tempDir, "sessions");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const sessionFile = await writeWorkspaceFile({
+        dir: sessionsDir,
+        name: "test-session.jsonl",
+        content: sessionContent,
+      });
+
+      const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+        tempDir,
+        previousSessionEntry: { sessionId: "test-123", sessionFile },
+      });
+
+      // Should still create a memory file (no silent failure)
+      expect(files.length).toBe(1);
+      // Should use today's date (fallback)
+      const today = new Date().toISOString().split("T")[0];
+      expect(files[0]).toMatch(new RegExp(`^${today}-`));
+      // Memory content should still have the messages
+      expect(memoryContent).toContain("user: Hello");
+      expect(memoryContent).toContain("assistant: World");
+    });
+
+    it("uses event timestamp for HHMM slug even when session has creation timestamp", async () => {
+      // This tests that the HHMM slug (for uniqueness) uses event.timestamp
+      // while date uses session creation timestamp
+      const sessionCreatedAt = "2026-03-10T08:30:00.000Z";
+      const sessionContent = [
+        JSON.stringify({ type: "session", timestamp: sessionCreatedAt }),
+        JSON.stringify({ type: "message", message: { role: "user", content: "Test" } }),
+      ].join("\n");
+
+      const tempDir = await createCaseWorkspace("workspace");
+      const sessionsDir = path.join(tempDir, "sessions");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const sessionFile = await writeWorkspaceFile({
+        dir: sessionsDir,
+        name: "test-session.jsonl",
+        content: sessionContent,
+      });
+
+      // Disable LLM slug to force HHMM fallback
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { workspace: tempDir } },
+        hooks: { internal: { entries: { "session-memory": { enabled: true, llmSlug: false } } } },
+      } as OpenClawConfig;
+
+      // Capture time before calling the handler to avoid minute-boundary flakiness
+      const preRunTime = new Date();
+      const { files } = await runNewWithPreviousSessionEntry({
+        tempDir,
+        cfg,
+        previousSessionEntry: { sessionId: "test-123", sessionFile },
+      });
+
+      // File should be named with session creation date, but HHMM from event
+      expect(files[0]).toMatch(/^2026-03-10-\d{4}\.md$/);
+      // The HHMM should NOT be 0830 (session creation time) but rather current time
+      const hhmm = files[0].match(/2026-03-10-(\d{4})\.md$/)?.[1];
+      // HHMM should be from current time, not from sessionCreatedAt
+      // Use pre/post time window to avoid minute-boundary flakiness
+      const postRunTime = new Date();
+      const preHHMM = preRunTime.toISOString().split("T")[1].split(":").slice(0, 2).join("");
+      const postHHMM = postRunTime.toISOString().split("T")[1].split(":").slice(0, 2).join("");
+      expect([preHHMM, postHHMM]).toContain(hhmm);
+    });
+
+    it("uses session creation date from .reset.* fallback when base file is empty", async () => {
+      // Simulate a rotated session where the base file is empty and content is in .reset.* file
+      const sessionCreatedAt = "2026-02-16T10:30:00.000Z";
+      const { tempDir, sessionsDir } = await createSessionMemoryWorkspace({
+        activeSession: { name: "test-session.jsonl", content: "" },
+      });
+
+      // Create .reset.* file with session header containing creation time
+      const resetContent = [
+        JSON.stringify({ type: "session", timestamp: sessionCreatedAt }),
+        JSON.stringify({
+          type: "message",
+          message: { role: "user", content: "Message from rotated session" },
+        }),
+      ].join("\n");
+      await writeWorkspaceFile({
+        dir: sessionsDir,
+        name: "test-session.jsonl.reset.2026-02-16T22-26-33.000Z",
+        content: resetContent,
+      });
+
+      const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+        tempDir,
+        cfg: {
+          ...makeSessionMemoryConfig(tempDir),
+          hooks: { internal: { entries: { "session-memory": { enabled: true, llmSlug: false } } } },
+        } as OpenClawConfig,
+        previousSessionEntry: {
+          sessionId: "test-123",
+          sessionFile: path.join(sessionsDir, "test-session.jsonl"),
+        },
+      });
+
+      // File should be named with session creation date from .reset.* file
+      expect(files.length).toBe(1);
+      expect(files[0]).toMatch(/^2026-02-16-\d{4}\.md$/);
+      expect(memoryContent).toContain("2026-02-16 10:30:00"); // timeStr in header
+      expect(memoryContent).toContain("Message from rotated session");
+    });
+
+    it("uses event timestamp when no session file is available", async () => {
+      const tempDir = await createCaseWorkspace("workspace");
+
+      const { files } = await runNewWithPreviousSessionEntry({
+        tempDir,
+        previousSessionEntry: { sessionId: "test-123" }, // no sessionFile
+      });
+
+      // Should still create a memory file
+      expect(files.length).toBe(1);
+      const today = new Date().toISOString().split("T")[0];
+      expect(files[0]).toMatch(new RegExp(`^${today}-`));
+    });
+  });
 });
