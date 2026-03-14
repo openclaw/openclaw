@@ -23,5 +23,6 @@ describe("normalizePackageTagInput", () => {
   it("returns trimmed raw values when no package prefix matches", () => {
     expect(normalizePackageTagInput(" latest ", packageNames)).toBe("latest");
     expect(normalizePackageTagInput("@other/plugin@beta", packageNames)).toBe("@other/plugin@beta");
+    expect(normalizePackageTagInput("openclawer@beta", packageNames)).toBe("openclawer@beta");
   });
 });
