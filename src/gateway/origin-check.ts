@@ -16,8 +16,12 @@ function parseOrigin(
   }
   try {
     const url = new URL(trimmed);
+    // Non-standard schemes (tauri://, electron://) produce an opaque "null"
+    // origin per the URL spec. Reconstruct from protocol + host so the
+    // allowlist comparison works.
+    const derived = url.origin === "null" ? `${url.protocol}//${url.host}` : url.origin;
     return {
-      origin: url.origin.toLowerCase(),
+      origin: derived.toLowerCase(),
       host: url.host.toLowerCase(),
       hostname: url.hostname.toLowerCase(),
     };
