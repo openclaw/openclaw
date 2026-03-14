@@ -11,14 +11,25 @@ type StreamPayload = {
   }>;
 };
 
-function runOpenRouterPayload(payload: StreamPayload, modelId: string) {
+function runOpenRouterPayload(
+  payload: StreamPayload,
+  modelId: string,
+  cacheRetention: string | undefined,
+) {
   const baseStreamFn: StreamFn = (model, _context, options) => {
     options?.onPayload?.(payload, model);
     return createAssistantMessageEventStream();
   };
   const agent = { streamFn: baseStreamFn };
 
-  applyExtraParamsToAgent(agent, undefined, "openrouter", modelId);
+  const conf = {
+    agents: {
+      defaults: {
+        models: { [`openrouter/${modelId}`]: { params: { cacheRetention: cacheRetention } } },
+      },
+    },
+  };
+  applyExtraParamsToAgent(agent, conf, "openrouter", modelId);
 
   const model = {
     api: "openai-completions",
@@ -39,12 +50,59 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
       ],
     };
 
-    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6", "short");
 
     expect(payload.messages[0].content).toEqual([
       { type: "text", text: "You are a helpful assistant.", cache_control: { type: "ephemeral" } },
     ]);
     expect(payload.messages[1].content).toBe("Hello");
+  });
+
+  it("injects cache_control by default if cacheRetention is not set", () => {
+    const payload = {
+      messages: [
+        { role: "system", content: "You are a helpful assistant." },
+        { role: "user", content: "Hello" },
+      ],
+    };
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6", undefined);
+
+    expect(payload.messages[0].content).toEqual([
+      { type: "text", text: "You are a helpful assistant.", cache_control: { type: "ephemeral" } },
+    ]);
+  });
+
+  it("doesn't inject cache_control if cacheRetention is none", () => {
+    const payload = {
+      messages: [
+        { role: "system", content: "You are a helpful assistant." },
+        { role: "user", content: "Hello" },
+      ],
+    };
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6", "none");
+
+    expect(payload.messages[0].content).toEqual("You are a helpful assistant.");
+  });
+
+  it("injects cache_control with ttl 1h if cacheRetention is long", () => {
+    const payload = {
+      messages: [
+        { role: "system", content: "You are a helpful assistant." },
+        { role: "user", content: "Hello" },
+      ],
+    };
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6", "long");
+
+    expect(payload.messages[0].content).toEqual([
+      {
+        type: "text",
+        text: "You are a helpful assistant.",
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      },
+    ]);
   });
 
   it("adds cache_control to last content block when system message is already array", () => {
@@ -60,7 +118,7 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
       ],
     };
 
-    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6", "short");
 
     const content = payload.messages[0].content as Array<Record<string, unknown>>;
     expect(content[0]).toEqual({ type: "text", text: "Part 1" });
@@ -76,7 +134,7 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
       messages: [{ role: "system", content: "You are a helpful assistant." }],
     };
 
-    runOpenRouterPayload(payload, "google/gemini-3-pro");
+    runOpenRouterPayload(payload, "google/gemini-3-pro", "short");
 
     expect(payload.messages[0].content).toBe("You are a helpful assistant.");
   });
@@ -86,7 +144,7 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
       messages: [{ role: "user", content: "Hello" }],
     };
 
-    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6", "short");
 
     expect(payload.messages[0].content).toBe("Hello");
   });

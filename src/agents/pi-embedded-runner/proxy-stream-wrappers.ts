@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { CacheRetention } from "./anthropic-stream-wrappers.js";
 
 const OPENROUTER_APP_HEADERS: Record<string, string> = {
   "HTTP-Referer": "https://openclaw.ai",
@@ -59,18 +60,25 @@ function normalizeProxyReasoningPayload(payload: unknown, thinkingLevel?: ThinkL
   }
 }
 
-export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+export function createOpenRouterSystemCacheWrapper(
+  baseStreamFn: StreamFn | undefined,
+  cacheRetention: CacheRetention | undefined,
+): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     if (
       typeof model.provider !== "string" ||
       typeof model.id !== "string" ||
-      !isOpenRouterAnthropicModel(model.provider, model.id)
+      !isOpenRouterAnthropicModel(model.provider, model.id) ||
+      !cacheRetention ||
+      !["short", "long"].includes(cacheRetention)
     ) {
       return underlying(model, context, options);
     }
 
     const originalOnPayload = options?.onPayload;
+    const cacheControl =
+      cacheRetention === "short" ? { type: "ephemeral" } : { type: "ephemeral", ttl: "1h" };
     return underlying(model, context, {
       ...options,
       onPayload: (payload) => {
@@ -81,13 +89,11 @@ export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | unde
               continue;
             }
             if (typeof msg.content === "string") {
-              msg.content = [
-                { type: "text", text: msg.content, cache_control: { type: "ephemeral" } },
-              ];
+              msg.content = [{ type: "text", text: msg.content, cache_control: cacheControl }];
             } else if (Array.isArray(msg.content) && msg.content.length > 0) {
               const last = msg.content[msg.content.length - 1];
               if (last && typeof last === "object") {
-                (last as Record<string, unknown>).cache_control = { type: "ephemeral" };
+                (last as Record<string, unknown>).cache_control = cacheControl;
               }
             }
           }

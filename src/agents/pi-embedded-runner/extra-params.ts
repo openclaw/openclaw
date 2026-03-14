@@ -4,6 +4,7 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  type CacheRetention,
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
   createAnthropicToolPayloadCompatibilityWrapper,
@@ -76,7 +77,7 @@ export function resolveExtraParams(params: {
 }
 
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
-  cacheRetention?: "none" | "short" | "long";
+  cacheRetention?: CacheRetention;
   openaiWsWarmup?: boolean;
 };
 
@@ -84,6 +85,7 @@ function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
   provider: string,
+  cacheRetention: CacheRetention | undefined,
 ): StreamFn | undefined {
   if (!extraParams || Object.keys(extraParams).length === 0) {
     return undefined;
@@ -106,7 +108,6 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.openaiWsWarmup === "boolean") {
     streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
   }
-  const cacheRetention = resolveCacheRetention(extraParams, provider);
   if (cacheRetention) {
     streamParams.cacheRetention = cacheRetention;
   }
@@ -356,7 +357,13 @@ export function applyExtraParamsToAgent(
         )
       : undefined;
   const merged = Object.assign({}, resolvedExtraParams, override);
-  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider);
+  const cacheRetention = resolveCacheRetention(merged, provider, modelId);
+  const wrappedStreamFn = createStreamFnWithExtraParams(
+    agent.streamFn,
+    merged,
+    provider,
+    cacheRetention,
+  );
 
   if (wrappedStreamFn) {
     log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
@@ -409,7 +416,7 @@ export function applyExtraParamsToAgent(
     const skipReasoningInjection = modelId === "auto" || isProxyReasoningUnsupported(modelId);
     const openRouterThinkingLevel = skipReasoningInjection ? undefined : thinkingLevel;
     agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel);
-    agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
+    agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn, cacheRetention);
   }
 
   if (provider === "kilocode") {

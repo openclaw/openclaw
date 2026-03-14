@@ -22,7 +22,7 @@ const PI_AI_OAUTH_ANTHROPIC_BETAS = [
 ] as const;
 type AnthropicServiceTier = "auto" | "standard_only";
 
-type CacheRetention = "none" | "short" | "long";
+export type CacheRetention = "none" | "short" | "long";
 
 function isAnthropic1MModel(modelId: string): boolean {
   const normalized = modelId.trim().toLowerCase();
@@ -195,13 +195,15 @@ function normalizeOpenAiStringModeAnthropicToolChoice(toolChoice: unknown): unkn
 export function resolveCacheRetention(
   extraParams: Record<string, unknown> | undefined,
   provider: string,
+  modelId: string,
 ): CacheRetention | undefined {
   const isAnthropicDirect = provider === "anthropic";
   const hasBedrockOverride =
     extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
   const isAnthropicBedrock = provider === "amazon-bedrock" && hasBedrockOverride;
+  const isAnthropicOpenRouter = provider === "openrouter" && modelId.startsWith("anthropic/");
 
-  if (!isAnthropicDirect && !isAnthropicBedrock) {
+  if (!isAnthropicDirect && !isAnthropicBedrock && !isAnthropicOpenRouter) {
     return undefined;
   }
 
@@ -218,7 +220,7 @@ export function resolveCacheRetention(
     return "long";
   }
 
-  return isAnthropicDirect ? "short" : undefined;
+  return isAnthropicDirect || isAnthropicOpenRouter ? "short" : undefined;
 }
 
 export function resolveAnthropicBetas(
