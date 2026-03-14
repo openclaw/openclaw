@@ -45,6 +45,8 @@ export {
 } from "./src/mention.js";
 export { feishuPlugin } from "./src/channel.js";
 
+let areToolsRegistered = false; 
+
 const plugin = {
   id: "feishu",
   name: "Feishu",
@@ -53,12 +55,17 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     setFeishuRuntime(api.runtime);
     api.registerChannel({ plugin: feishuPlugin });
+    
+    if (!areToolsRegistered) {
     registerFeishuDocTools(api);
     registerFeishuChatTools(api);
     registerFeishuWikiTools(api);
     registerFeishuDriveTools(api);
     registerFeishuPermTools(api);
     registerFeishuBitableTools(api);
+    areToolsRegistered = true;
+    }
+    
   },
 };
 
