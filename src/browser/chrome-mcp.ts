@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Client } from "@modelcontextprotocol/sdk/client";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import type { BrowserTab } from "./client.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
@@ -186,7 +186,7 @@ async function createRealSession(profileName: string): Promise<ChromeMcpSession>
     try {
       await client.connect(transport);
       const tools = await client.listTools();
-      if (!tools.tools.some((tool) => tool.name === "list_pages")) {
+      if (!tools.tools.some((tool: { name?: string }) => tool.name === "list_pages")) {
         throw new Error("Chrome MCP server did not expose the expected navigation tools.");
       }
     } catch (err) {

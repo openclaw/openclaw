@@ -259,7 +259,7 @@ describe("resolveGatewayRuntimeConfig", () => {
       },
       {
         name: "does not set strict transport security when explicitly disabled",
-        strictTransportSecurity: false,
+        strictTransportSecurity: false as const,
         expected: undefined,
       },
       {

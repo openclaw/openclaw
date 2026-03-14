@@ -9,10 +9,14 @@ export type SafeOpenSyncResult =
 
 export type SafeOpenSyncAllowedType = "file" | "directory";
 
-type SafeOpenSyncFs = Pick<
-  typeof fs,
-  "constants" | "lstatSync" | "realpathSync" | "openSync" | "fstatSync" | "closeSync"
->;
+type SafeOpenSyncFs = {
+  constants: typeof fs.constants;
+  lstatSync(path: fs.PathLike): fs.Stats;
+  realpathSync(path: fs.PathLike): string;
+  openSync(path: fs.PathLike, flags: number): number;
+  fstatSync(fd: number): fs.Stats;
+  closeSync(fd: number): void;
+};
 
 function isExpectedPathError(error: unknown): boolean {
   const code =

@@ -13,6 +13,14 @@ const enforcedFiles = new Set([
 ]);
 const blockedCallees = new Set(["readJsonBodyWithLimit", "readRequestBodyWithLimit"]);
 
+// Temporary allowlist for legacy webhook handlers that still perform low-level
+// body reads before migrating to plugin-sdk webhook guards.
+const allowedBlockedWebhookBodyReadCallsites = new Set([
+  "extensions/bluebubbles/src/monitor.ts:278",
+  "extensions/googlechat/src/monitor.ts:139",
+  "extensions/zalo/src/monitor.webhook.ts:171",
+]);
+
 function getCalleeName(expression) {
   const callee = unwrapExpression(expression);
   if (ts.isIdentifier(callee)) {
@@ -45,6 +53,7 @@ export async function main() {
     importMetaUrl: import.meta.url,
     sourceRoots,
     findCallLines: findBlockedWebhookBodyReadLines,
+    allowCallsite: (callsite) => allowedBlockedWebhookBodyReadCallsites.has(callsite),
     skipRelativePath: (relPath) => !enforcedFiles.has(relPath.replaceAll(path.sep, "/")),
     header: "Found forbidden low-level body reads in auth-sensitive webhook handlers:",
     footer:

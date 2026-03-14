@@ -39,9 +39,7 @@ function mockStat(params: {
 }
 
 function mockRealpathSync(result: string): SafeOpenSyncRealpathSync {
-  const resolvePath = ((_: fs.PathLike) => result) as SafeOpenSyncRealpathSync;
-  resolvePath.native = ((_: fs.PathLike) => result) as typeof resolvePath.native;
-  return resolvePath;
+  return ((_: fs.PathLike) => result) as SafeOpenSyncRealpathSync;
 }
 
 function mockLstatSync(read: (filePath: fs.PathLike) => fs.Stats): SafeOpenSyncLstatSync {

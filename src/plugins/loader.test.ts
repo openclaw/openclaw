@@ -1582,7 +1582,7 @@ describe("loadOpenClawPlugins", () => {
           load: { paths: [plugin.file] },
         },
       },
-    };
+    } satisfies Parameters<typeof loadOpenClawPlugins>[0];
 
     loadOpenClawPlugins(options);
     loadOpenClawPlugins(options);

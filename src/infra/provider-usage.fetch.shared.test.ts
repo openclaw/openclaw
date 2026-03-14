@@ -45,7 +45,7 @@ describe("provider usage fetch shared helpers", () => {
         headers: { authorization: "Bearer test" },
       },
       1_000,
-      fetchFn,
+      fetchFn as unknown as typeof fetch,
     );
 
     expect(fetchFnMock).toHaveBeenCalledWith(
@@ -73,7 +73,12 @@ describe("provider usage fetch shared helpers", () => {
     );
     const fetchFn = fetchFnMock as typeof fetch;
 
-    const request = fetchJson("https://example.com/usage", {}, 50, fetchFn);
+    const request = fetchJson(
+      "https://example.com/usage",
+      {},
+      50,
+      fetchFn as unknown as typeof fetch,
+    );
     const rejection = expect(request).rejects.toThrow("aborted by timeout");
     await vi.advanceTimersByTimeAsync(50);
 

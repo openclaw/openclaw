@@ -170,10 +170,22 @@ describe("model-selection", () => {
         expected: { provider: "anthropic", model: "claude-opus-4-6" },
       },
       {
+        name: "normalizes anthropic opus 4.5 aliases",
+        variants: ["anthropic/opus-4.5", "opus-4.5"],
+        defaultProvider: "anthropic",
+        expected: { provider: "anthropic", model: "claude-opus-4-5" },
+      },
+      {
         name: "normalizes anthropic sonnet aliases",
         variants: ["anthropic/sonnet-4.6", "sonnet-4.6"],
         defaultProvider: "anthropic",
         expected: { provider: "anthropic", model: "claude-sonnet-4-6" },
+      },
+      {
+        name: "normalizes anthropic sonnet 4.5 aliases",
+        variants: ["anthropic/sonnet-4.5", "sonnet-4.5"],
+        defaultProvider: "anthropic",
+        expected: { provider: "anthropic", model: "claude-sonnet-4-5" },
       },
       {
         name: "keeps dated anthropic model ids unchanged",
