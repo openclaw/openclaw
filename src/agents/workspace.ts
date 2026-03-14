@@ -101,6 +101,55 @@ function stripFrontMatter(content: string): string {
   return trimmed;
 }
 
+const FALLBACK_WORKSPACE_TEMPLATES: Record<string, string> = {
+  "AGENTS.md": `# AGENTS.md
+
+This file was generated from a built-in fallback template because the packaged templates were missing.
+
+- If you're seeing this, your OpenClaw install is likely incomplete.
+- Fix: reinstall OpenClaw (or run \`openclaw update\`) so docs/reference/templates are present.
+
+## Quick start
+- Read SOUL.md + USER.md
+- Use memory/ daily logs for continuity
+`,
+  "SOUL.md": `# SOUL.md
+
+Fallback template (packaged templates were missing).
+
+- Be concise and useful.
+- Prefer evidence over guesses.
+`,
+  "TOOLS.md": `# TOOLS.md
+
+Fallback template (packaged templates were missing).
+
+Environment-specific notes go here.
+`,
+  "IDENTITY.md": `# IDENTITY.md
+
+Fallback template (packaged templates were missing).
+
+- Name: Paru
+`,
+  "USER.md": `# USER.md
+
+Fallback template (packaged templates were missing).
+
+- Preferred language: Chinese
+`,
+  "HEARTBEAT.md": `# HEARTBEAT.md
+
+# Keep this file empty (or with only comments) to skip heartbeat API calls.
+`,
+  "BOOTSTRAP.md": `# BOOTSTRAP.md
+
+Fallback template (packaged templates were missing).
+
+If this is your first run, reinstall OpenClaw so the real templates are available.
+`,
+};
+
 async function loadTemplate(name: string): Promise<string> {
   const cached = workspaceTemplateCache.get(name);
   if (cached) {
@@ -114,6 +163,10 @@ async function loadTemplate(name: string): Promise<string> {
       const content = await fs.readFile(templatePath, "utf-8");
       return stripFrontMatter(content);
     } catch {
+      const fallback = FALLBACK_WORKSPACE_TEMPLATES[name];
+      if (typeof fallback === "string") {
+        return stripFrontMatter(fallback);
+      }
       throw new Error(
         `Missing workspace template: ${name} (${templatePath}). Ensure docs/reference/templates are packaged.`,
       );
