@@ -47,6 +47,10 @@ const reattachPending = new Set()
 let reconnectAttempt = 0
 let reconnectTimer = null
 
+function hasLiveAttachmentDemand() {
+  return tabs.size > 0 || reattachPending.size > 0
+}
+
 const TAB_VALIDATION_ATTEMPTS = 2
 const TAB_VALIDATION_RETRY_DELAY_MS = 1000
 
@@ -250,6 +254,11 @@ function onRelayClosed(reason) {
     }
   }
 
+  if (!hasLiveAttachmentDemand()) {
+    cancelReconnect()
+    return
+  }
+
   scheduleReconnect()
 }
 
@@ -277,6 +286,10 @@ function scheduleReconnect() {
       if (!isRetryableReconnectError(err)) {
         return
       }
+      if (!hasLiveAttachmentDemand()) {
+        cancelReconnect()
+        return
+      }
       scheduleReconnect()
     }
   }, delay)
@@ -288,6 +301,26 @@ function cancelReconnect() {
     reconnectTimer = null
   }
   reconnectAttempt = 0
+}
+
+function releaseRelayIfIdle(reason = 'idle') {
+  if (hasLiveAttachmentDemand()) return
+
+  cancelReconnect()
+  relayConnectRequestId = null
+
+  const ws = relayWs
+  if (!ws) return
+
+  if (ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED) {
+    return
+  }
+
+  try {
+    ws.close(1000, `idle:${reason}`)
+  } catch {
+    // ignore
+  }
 }
 
 // Re-announce all attached tabs to the relay after reconnect.
@@ -359,6 +392,7 @@ async function reannounceAttachedTabs() {
   }
 
   await persistState()
+  releaseRelayIfIdle('reannounce')
 }
 
 function sendToRelay(payload) {
@@ -602,6 +636,7 @@ async function detachTab(tabId, reason) {
   })
 
   await persistState()
+  releaseRelayIfIdle('detached')
 }
 
 async function connectOrToggleForActiveTab() {
@@ -898,6 +933,7 @@ chrome.tabs.onRemoved.addListener((tabId) => void whenReady(() => {
     }
   }
   void persistState()
+  releaseRelayIfIdle('tab-removed')
 }))
 
 chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => void whenReady(() => {
