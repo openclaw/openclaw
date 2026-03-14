@@ -191,6 +191,9 @@ MEDIA:https://example.com/screenshot.png
 ```
 
 OpenClaw extracts these and sends them as media alongside the text.
+`MEDIA:<path-or-url>` supports URLs and local paths, but local paths are restricted to allowed OpenClaw media roots.
+Arbitrary absolute paths (for example `MEDIA:/workspace/tmp/screenshot.png`) may be blocked.
+Prefer safe relative paths inside the agent workspace (for example `MEDIA:./screenshots/screenshot.png`).
 
 ## Operations checklist
 

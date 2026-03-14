@@ -121,6 +121,15 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     return { log: vi.fn(), error: vi.fn() } as never;
   }
 
+  function createBlockedLocalMediaError() {
+    const err = new Error(
+      "Local media path is not under an allowed directory: D:\\study\\openclaw\\workspace\\tmp\\screenshot.png",
+    ) as Error & { code?: string };
+    err.name = "LocalMediaAccessError";
+    err.code = "path-not-allowed";
+    return err;
+  }
+
   function createDispatcherHarness(overrides: Partial<ReplyDispatcherArgs> = {}) {
     const result = createFeishuReplyDispatcher({
       cfg: {} as never,
@@ -509,5 +518,49 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         replyInThread: true,
       }),
     );
+  });
+
+  it("adds local-media-root hint and sends final fallback once", async () => {
+    const runtimeError = vi.fn();
+    const { options } = createDispatcherHarness({
+      runtime: { log: vi.fn(), error: runtimeError } as never,
+      replyToMessageId: "om_parent",
+    });
+    await options.onError?.(createBlockedLocalMediaError(), { kind: "final" });
+
+    expect(runtimeError).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Hint: Local MEDIA paths must be under allowed OpenClaw media roots.",
+      ),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("outside allowed OpenClaw media roots"),
+        replyToMessageId: "om_parent",
+      }),
+    );
+  });
+
+  it("does not send local-media fallback for non-final failures", async () => {
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.onError?.(createBlockedLocalMediaError(), { kind: "block" });
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("resets local-media fallback guard on reply start", async () => {
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.onError?.(createBlockedLocalMediaError(), { kind: "final" });
+    await options.onError?.(createBlockedLocalMediaError(), { kind: "final" });
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+
+    await options.onReplyStart?.();
+    await options.onError?.(createBlockedLocalMediaError(), { kind: "final" });
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
   });
 });
