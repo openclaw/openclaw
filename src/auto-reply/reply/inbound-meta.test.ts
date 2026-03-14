@@ -331,4 +331,64 @@ describe("buildInboundUserContextPrefix", () => {
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["sender"]).toBe("user@example.com");
   });
+
+  it("drops static thread metadata in threaded conversations and keeps per-message delta", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      ConversationLabel: "slack-team",
+      GroupSubject: "#all-slack",
+      ThreadLabel: "Slack thread #all-slack: subject",
+      MessageThreadId: "1772490038.636569",
+      MessageSid: "1772543223.976569",
+      ReplyToId: "1772490038.636569",
+      SenderId: "U123",
+      SenderName: "Alice",
+      WasMentioned: true,
+      Timestamp: Date.UTC(2026, 2, 3, 13, 7),
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+
+    // Static thread-level descriptors should be omitted to avoid repetition.
+    expect(conversationInfo["conversation_label"]).toBeUndefined();
+    expect(conversationInfo["group_subject"]).toBeUndefined();
+    expect(conversationInfo["thread_label"]).toBeUndefined();
+    expect(conversationInfo["topic_id"]).toBeUndefined();
+
+    // Per-message identifiers and dynamic flags should still be present.
+    expect(conversationInfo["message_id"]).toBe("1772543223.976569");
+    expect(conversationInfo["reply_to_id"]).toBe("1772490038.636569");
+    expect(conversationInfo["sender_id"]).toBe("U123");
+    expect(conversationInfo["sender"]).toBe("Alice");
+    expect(conversationInfo["was_mentioned"]).toBe(true);
+    expect(conversationInfo["timestamp"]).toEqual(expect.any(String));
+  });
+
+  it("keeps is_forum flag for threaded conversations even when static metadata is trimmed", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      ConversationLabel: "telegram-forum",
+      GroupSubject: "#forum",
+      ThreadLabel: "Telegram topic: subject",
+      // ThreadLabel-only path (no MessageThreadId) still counts as threaded.
+      MessageSid: "777777.123",
+      SenderId: "user-1",
+      IsForum: true,
+      WasMentioned: true,
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+
+    // Static thread descriptors are still omitted.
+    expect(conversationInfo["conversation_label"]).toBeUndefined();
+    expect(conversationInfo["group_subject"]).toBeUndefined();
+    expect(conversationInfo["thread_label"]).toBeUndefined();
+    expect(conversationInfo["topic_id"]).toBeUndefined();
+
+    // Forum flag should be preserved for Telegram forum topics.
+    expect(conversationInfo["is_forum"]).toBe(true);
+    expect(conversationInfo["message_id"]).toBe("777777.123");
+    expect(conversationInfo["sender_id"]).toBe("user-1");
+    expect(conversationInfo["was_mentioned"]).toBe(true);
+  });
 });
