@@ -10,7 +10,9 @@ type LazyLocaleRegistration = {
 
 export const DEFAULT_LOCALE: Locale = "en";
 
-const LAZY_LOCALES: readonly LazyLocale[] = ["zh-CN", "zh-TW", "pt-BR", "de", "es"];
+const LAZY_LOCALES: readonly LazyLocale[] = [
+  "zh-CN", "zh-TW", "pt-BR", "de", "es", "ja", "fr", "ru", "it", "ar", "ko", "hi",
+];
 
 const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
   "zh-CN": {
@@ -32,6 +34,34 @@ const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
   es: {
     exportName: "es",
     loader: () => import("../locales/es.ts"),
+  },
+  ja: {
+    exportName: "ja",
+    loader: () => import("../locales/ja.ts"),
+  },
+  fr: {
+    exportName: "fr",
+    loader: () => import("../locales/fr.ts"),
+  },
+  ru: {
+    exportName: "ru",
+    loader: () => import("../locales/ru.ts"),
+  },
+  it: {
+    exportName: "it",
+    loader: () => import("../locales/it.ts"),
+  },
+  ar: {
+    exportName: "ar",
+    loader: () => import("../locales/ar.ts"),
+  },
+  ko: {
+    exportName: "ko",
+    loader: () => import("../locales/ko.ts"),
+  },
+  hi: {
+    exportName: "hi",
+    loader: () => import("../locales/hi.ts"),
   },
 };
 
@@ -57,6 +87,27 @@ export function resolveNavigatorLocale(navLang: string): Locale {
   }
   if (navLang.startsWith("es")) {
     return "es";
+  }
+  if (navLang.startsWith("ja")) {
+    return "ja";
+  }
+  if (navLang.startsWith("fr")) {
+    return "fr";
+  }
+  if (navLang.startsWith("ru")) {
+    return "ru";
+  }
+  if (navLang.startsWith("it")) {
+    return "it";
+  }
+  if (navLang.startsWith("ar")) {
+    return "ar";
+  }
+  if (navLang.startsWith("ko")) {
+    return "ko";
+  }
+  if (navLang.startsWith("hi")) {
+    return "hi";
   }
   return DEFAULT_LOCALE;
 }

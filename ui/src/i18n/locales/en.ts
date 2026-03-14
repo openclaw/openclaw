@@ -36,6 +36,7 @@ export const en: TranslationMap = {
     config: "Config",
     debug: "Debug",
     logs: "Logs",
+    setup: "Setup",
   },
   subtitles: {
     agents: "Manage agent workspaces, tools, and identities.",
@@ -123,6 +124,13 @@ export const en: TranslationMap = {
     ptBR: "Português (Brazilian Portuguese)",
     de: "Deutsch (German)",
     es: "Español (Spanish)",
+    ja: "日本語 (Japanese)",
+    fr: "Français (French)",
+    ru: "Русский (Russian)",
+    it: "Italiano (Italian)",
+    ar: "العربية (Arabic)",
+    ko: "한국어 (Korean)",
+    hi: "हिन्दी (Hindi)",
   },
   cron: {
     summary: {

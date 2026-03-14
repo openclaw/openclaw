@@ -36,6 +36,7 @@ export const pt_BR: TranslationMap = {
     config: "Config",
     debug: "Debug",
     logs: "Logs",
+    setup: "Configuração",
   },
   subtitles: {
     agents: "Gerenciar espaços de trabalho, ferramentas e identidades de agentes.",
@@ -125,5 +126,12 @@ export const pt_BR: TranslationMap = {
     ptBR: "Português (Português Brasileiro)",
     de: "Deutsch (Alemão)",
     es: "Español (Espanhol)",
+    ja: "日本語 (Japonês)",
+    fr: "Français (Francês)",
+    ru: "Русский (Russo)",
+    it: "Italiano",
+    ar: "العربية (Árabe)",
+    ko: "한국어 (Coreano)",
+    hi: "हिन्दी (Hindi)",
   },
 };

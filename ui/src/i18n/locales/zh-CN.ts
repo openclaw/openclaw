@@ -36,6 +36,7 @@ export const zh_CN: TranslationMap = {
     config: "配置",
     debug: "调试",
     logs: "日志",
+    setup: "设置",
   },
   subtitles: {
     agents: "管理代理工作区、工具和身份。",
@@ -122,6 +123,13 @@ export const zh_CN: TranslationMap = {
     ptBR: "Português (巴西葡萄牙语)",
     de: "Deutsch (德语)",
     es: "Español (西班牙语)",
+    ja: "日本語 (日语)",
+    fr: "Français (法语)",
+    ru: "Русский (俄语)",
+    it: "Italiano (意大利语)",
+    ar: "العربية (阿拉伯语)",
+    ko: "한국어 (韩语)",
+    hi: "हिन्दी (印地语)",
   },
   cron: {
     summary: {

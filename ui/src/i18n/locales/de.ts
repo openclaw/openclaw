@@ -36,6 +36,7 @@ export const de: TranslationMap = {
     config: "Konfiguration",
     debug: "Debug",
     logs: "Protokolle",
+    setup: "Einrichtung",
   },
   subtitles: {
     agents: "Agent-Arbeitsbereiche, Tools und Identitäten verwalten.",
@@ -125,6 +126,13 @@ export const de: TranslationMap = {
     zhTW: "繁體中文 (Traditionelles Chinesisch)",
     ptBR: "Português (Brasilianisches Portugiesisch)",
     de: "Deutsch",
-    es: "Spanisch (Español)",
+    es: "Español (Spanisch)",
+    ja: "日本語 (Japanisch)",
+    fr: "Français (Französisch)",
+    ru: "Русский (Russisch)",
+    it: "Italiano (Italienisch)",
+    ar: "العربية (Arabisch)",
+    ko: "한국어 (Koreanisch)",
+    hi: "हिन्दी (Hindi)",
   },
 };
