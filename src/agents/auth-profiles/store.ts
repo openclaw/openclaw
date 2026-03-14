@@ -25,7 +25,7 @@ function resolveRuntimeStoreKey(agentDir?: string): string {
 }
 
 function cloneAuthProfileStore(store: AuthProfileStore): AuthProfileStore {
-  return structuredClone(store);
+  return JSON.parse(JSON.stringify(store));
 }
 
 function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | null {

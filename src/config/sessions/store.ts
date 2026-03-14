@@ -255,6 +255,11 @@ export function loadSessionStore(
 
   applySessionStoreMigrations(store);
 
+  // Re-serialize after migrations so the cached string reflects migrated data.
+  // Use pretty-printed format to match the save path (JSON.stringify(store, null, 2))
+  // so the no-op write check in saveSessionStoreUnlocked can short-circuit correctly.
+  const serializedStore = JSON.stringify(store, null, 2);
+
   // Cache the result if caching is enabled
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
     writeSessionStoreCache({
@@ -262,11 +267,11 @@ export function loadSessionStore(
       store,
       mtimeMs,
       sizeBytes: fileStat?.sizeBytes,
-      serialized: serializedFromDisk,
+      serialized: serializedStore,
     });
   }
 
-  return structuredClone(store);
+  return JSON.parse(serializedStore);
 }
 
 export function readSessionUpdatedAt(params: {
