@@ -109,3 +109,4 @@ Environment variables:
 - launchd control (load/bootout, PID + status socket)
 - JSON logging + PII redaction toggle
 - Stronger wake-word detection and control socket status/health
+For Chinese documentation, please refer to the relevant files in the repository.
