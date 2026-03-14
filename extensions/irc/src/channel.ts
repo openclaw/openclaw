@@ -14,10 +14,10 @@ import {
   deleteAccountFromConfigSection,
   getChatChannelMeta,
   PAIRING_APPROVED_MESSAGE,
-  runPassiveAccountLifecycle,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/irc";
+import { runStoppablePassiveMonitor } from "../../shared/passive-monitor.js";
 import {
   listIrcAccountIds,
   resolveDefaultIrcAccountId,
@@ -367,7 +367,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
       ctx.log?.info(
         `[${account.accountId}] starting IRC provider (${account.host}:${account.port}${account.tls ? " tls" : ""})`,
       );
-      await runPassiveAccountLifecycle({
+      await runStoppablePassiveMonitor({
         abortSignal: ctx.abortSignal,
         start: async () =>
           await monitorIrcProvider({
@@ -377,9 +377,6 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
             abortSignal: ctx.abortSignal,
             statusSink,
           }),
-        stop: async (monitor) => {
-          monitor.stop();
-        },
       });
     },
   },

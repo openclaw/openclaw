@@ -130,6 +130,25 @@ function expectBoundSessionDispatch(
   expect(persistentBindingMocks.ensureConfiguredAcpBindingSession).toHaveBeenCalledTimes(1);
 }
 
+async function expectBoundStatusCommandDispatch(params: {
+  cfg: OpenClawConfig;
+  interaction: MockCommandInteraction;
+  channelId: string;
+  boundSessionKey: string;
+}) {
+  const command = createStatusCommand(params.cfg);
+  setConfiguredBinding(params.channelId, params.boundSessionKey);
+
+  vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
+  const dispatchSpy = createDispatchSpy();
+
+  await (command as { run: (interaction: unknown) => Promise<void> }).run(
+    params.interaction as unknown,
+  );
+
+  expectBoundSessionDispatch(dispatchSpy, params.boundSessionKey);
+}
+
 describe("Discord native plugin command dispatch", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -212,7 +231,6 @@ describe("Discord native plugin command dispatch", () => {
         },
       ],
     } as OpenClawConfig;
-    const command = createStatusCommand(cfg);
     const interaction = createInteraction({
       channelType: ChannelType.GuildText,
       channelId,
@@ -220,14 +238,12 @@ describe("Discord native plugin command dispatch", () => {
       guildName: "Ops",
     });
 
-    setConfiguredBinding(channelId, boundSessionKey);
-
-    vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
-    const dispatchSpy = createDispatchSpy();
-
-    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
-
-    expectBoundSessionDispatch(dispatchSpy, boundSessionKey);
+    await expectBoundStatusCommandDispatch({
+      cfg,
+      interaction,
+      channelId,
+      boundSessionKey,
+    });
   });
 
   it("falls back to the routed slash and channel session keys when no bound session exists", async () => {
@@ -312,19 +328,16 @@ describe("Discord native plugin command dispatch", () => {
         },
       },
     } as OpenClawConfig;
-    const command = createStatusCommand(cfg);
     const interaction = createInteraction({
       channelType: ChannelType.DM,
       channelId,
     });
 
-    setConfiguredBinding(channelId, boundSessionKey);
-
-    vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
-    const dispatchSpy = createDispatchSpy();
-
-    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
-
-    expectBoundSessionDispatch(dispatchSpy, boundSessionKey);
+    await expectBoundStatusCommandDispatch({
+      cfg,
+      interaction,
+      channelId,
+      boundSessionKey,
+    });
   });
 });
