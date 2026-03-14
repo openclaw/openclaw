@@ -199,6 +199,59 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("keeps assistant deltas in WS chat but suppresses session streaming when verbose is off", () => {
+    const harness = createHarness({ now: 1_050 });
+    harness.chatRunState.registry.add("run-verbose-off", {
+      sessionKey: "session-verbose-off",
+      clientRunId: "client-verbose-off",
+    });
+    registerAgentRunContext("run-verbose-off", {
+      sessionKey: "session-verbose-off",
+      verboseLevel: "off",
+    });
+
+    harness.handler({
+      runId: "run-verbose-off",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Need commit push." },
+    });
+
+    const chatCalls = chatBroadcastCalls(harness.broadcast);
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(payload.state).toBe("delta");
+    expect(payload.message?.content?.[0]?.text).toBe("Need commit push.");
+    expect(sessionChatCalls(harness.nodeSendToSession)).toHaveLength(0);
+  });
+
+  it("continues streaming assistant deltas to the session when verbose is on", () => {
+    const harness = createHarness({ now: 1_075 });
+    harness.chatRunState.registry.add("run-verbose-on", {
+      sessionKey: "session-verbose-on",
+      clientRunId: "client-verbose-on",
+    });
+    registerAgentRunContext("run-verbose-on", {
+      sessionKey: "session-verbose-on",
+      verboseLevel: "on",
+    });
+
+    harness.handler({
+      runId: "run-verbose-on",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Visible progress update" },
+    });
+
+    expect(chatBroadcastCalls(harness.broadcast)).toHaveLength(1);
+    expect(sessionChatCalls(harness.nodeSendToSession)).toHaveLength(1);
+  });
+
   it("does not include NO_REPLY text in chat final message", () => {
     const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
       now: 2_000,
@@ -490,7 +543,7 @@ describe("agent event handler", () => {
     });
     registerAgentRunContext("run-tool-flush", {
       sessionKey: "session-tool-flush",
-      verboseLevel: "off",
+      verboseLevel: "on",
     });
     toolEventRecipients.add("run-tool-flush", "conn-1");
 
