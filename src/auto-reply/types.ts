@@ -20,6 +20,8 @@ export type TypingPolicy =
   | "internal_webchat"
   | "heartbeat";
 
+export type ContinuationTrigger = "work-wake" | "delegate-return";
+
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
@@ -34,6 +36,13 @@ export type GetReplyOptions = {
   onTypingCleanup?: () => void;
   onTypingController?: (typing: TypingController) => void;
   isHeartbeat?: boolean;
+  /**
+   * Structured trigger identifying why this turn exists.
+   * Used for wake classification instead of inferring from system-event queue text.
+   * - "work-wake": CONTINUE_WORK timer fired
+   * - "delegate-return": a delegate sub-agent completed and returned results
+   */
+  continuationTrigger?: ContinuationTrigger;
   /** Policy-level typing control for run classes (user/system/internal/heartbeat). */
   typingPolicy?: TypingPolicy;
   /** Force-disable typing indicators for this run (system/internal/cross-channel routes). */

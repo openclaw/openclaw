@@ -342,6 +342,27 @@ describe("gateway agent handler", () => {
     resetTimeConfig();
   });
 
+  it("forwards continuationTrigger metadata to the ingress agent command", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "delegate finished",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        continuationTrigger: "delegate-return",
+        idempotencyKey: "test-continuation-trigger-forward",
+      },
+      { reqId: "continuation-trigger-1" },
+    );
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as
+      | { continuationTrigger?: string }
+      | undefined;
+    expect(call?.continuationTrigger).toBe("delegate-return");
+  });
+
   it.each([
     {
       name: "passes senderIsOwner=false for write-scoped gateway callers",

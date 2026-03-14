@@ -226,6 +226,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "continue_delegate",
+    label: "continue_delegate",
+    description: "Dispatch continuation delegate",
+    sectionId: "sessions",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "image",
     label: "image",
     description: "Image understanding",

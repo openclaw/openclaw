@@ -65,6 +65,11 @@ export type AcpSessionRuntimeOptions = {
   backendExtras?: Record<string, string>;
 };
 
+export type SessionPostCompactionDelegate = {
+  task: string;
+  createdAt: number;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -150,9 +155,16 @@ export type SessionEntry = {
   fallbackNoticeActiveModel?: string;
   fallbackNoticeReason?: string;
   contextTokens?: number;
+  /**
+   * Last context-pressure band that fired (e.g. 80, 90, 95). Used to deduplicate
+   * pressure events — only re-fires when the session crosses into a higher band.
+   */
+  lastContextPressureBand?: number;
   compactionCount?: number;
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
+  /** Delegates waiting to fire when the next compaction completes. */
+  pendingPostCompactionDelegates?: SessionPostCompactionDelegate[];
   cliSessionIds?: Record<string, string>;
   claudeCliSessionId?: string;
   label?: string;
@@ -171,6 +183,12 @@ export type SessionEntry = {
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
   acp?: SessionAcpMeta;
+  /** Number of continuation turns completed in the current chain. Reset on external message. */
+  continuationChainCount?: number;
+  /** Timestamp (ms) when the current continuation chain started. */
+  continuationChainStartedAt?: number;
+  /** Accumulated token usage across the current continuation chain. Reset on external message. */
+  continuationChainTokens?: number;
 };
 
 function normalizeRuntimeField(value: string | undefined): string | undefined {
