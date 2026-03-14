@@ -3,6 +3,7 @@ import type { CliDeps } from "../../cli/deps.js";
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import { runCronIsolatedAgentTurn } from "../../cron/isolated-agent.js";
+import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -47,6 +48,10 @@ export function createGatewayHooksRequestHandler(params: {
       targetAgentId: value.agentId,
     });
     const mainSessionKey = resolveMainSessionKeyFromConfig();
+    const baseSessionKey = sessionKey?.trim() || `cron:hook:${value.name}`;
+    const canonicalSessionKey = value.agentId
+      ? resolveCronAgentSessionKey({ sessionKey: baseSessionKey, agentId: value.agentId })
+      : undefined;
     const jobId = randomUUID();
     const now = Date.now();
     const job: CronJob = {
@@ -82,8 +87,8 @@ export function createGatewayHooksRequestHandler(params: {
           deps,
           job,
           message: value.message,
-          sessionKey,
-          lane: "cron",
+          sessionKey: sessionKey,
+          lane: "hook",
           deliveryContract: "shared",
         });
         const summary = result.summary?.trim() || result.error?.trim() || result.status;
@@ -91,19 +96,25 @@ export function createGatewayHooksRequestHandler(params: {
           result.status === "ok" ? `Hook ${value.name}` : `Hook ${value.name} (${result.status})`;
         if (!result.delivered) {
           enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
-            sessionKey: mainSessionKey,
+            sessionKey: canonicalSessionKey ?? mainSessionKey,
           });
           if (value.wakeMode === "now") {
-            requestHeartbeatNow({ reason: `hook:${jobId}` });
+            requestHeartbeatNow({
+              reason: `hook:${jobId}`,
+              sessionKey: canonicalSessionKey ?? mainSessionKey,
+            });
           }
         }
       } catch (err) {
         logHooks.warn(`hook agent failed: ${String(err)}`);
         enqueueSystemEvent(`Hook ${value.name} (error): ${String(err)}`, {
-          sessionKey: mainSessionKey,
+          sessionKey: canonicalSessionKey ?? mainSessionKey,
         });
         if (value.wakeMode === "now") {
-          requestHeartbeatNow({ reason: `hook:${jobId}:error` });
+          requestHeartbeatNow({
+            reason: `hook:${jobId}:error`,
+            sessionKey: canonicalSessionKey ?? mainSessionKey,
+          });
         }
       }
     })();
