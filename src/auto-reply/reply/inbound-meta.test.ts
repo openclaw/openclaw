@@ -122,6 +122,19 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toBe("");
   });
 
+  it("hides message identifiers for direct control-ui chats", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      OriginatingChannel: "openclaw-control-ui",
+      MessageSid: "short-id",
+      MessageSidFull: "provider-full-id",
+      SenderId: "openclaw-control-ui",
+      SenderName: "OpenClaw Control UI",
+    } as TemplateContext);
+
+    expect(text).toBe("");
+  });
+
   it("includes message identifiers for direct external-channel chats", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
