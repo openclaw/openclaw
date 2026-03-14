@@ -262,27 +262,27 @@ export async function buildTelegramInboundContextPayload(params: {
     storePath,
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,
-    updateLastRoute: !isGroup
-      ? {
-          sessionKey: updateLastRouteSessionKey,
-          channel: "telegram",
-          to: `telegram:${chatId}`,
-          accountId: route.accountId,
-          threadId: dmThreadId != null ? String(dmThreadId) : undefined,
-          mainDmOwnerPin:
-            updateLastRouteSessionKey === route.mainSessionKey && pinnedMainDmOwner && senderId
-              ? {
-                  ownerRecipient: pinnedMainDmOwner,
-                  senderRecipient: senderId,
-                  onSkip: ({ ownerRecipient, senderRecipient }) => {
-                    logVerbose(
-                      `telegram: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                    );
-                  },
-                }
-              : undefined,
-        }
-      : undefined,
+    updateLastRoute: {
+      sessionKey: updateLastRouteSessionKey,
+      channel: "telegram",
+      to: `telegram:${chatId}`,
+      accountId: route.accountId,
+      threadId: isGroup
+        ? (resolvedThreadId != null ? String(resolvedThreadId) : undefined)
+        : (dmThreadId != null ? String(dmThreadId) : undefined),
+      mainDmOwnerPin:
+        !isGroup && updateLastRouteSessionKey === route.mainSessionKey && pinnedMainDmOwner && senderId
+          ? {
+              ownerRecipient: pinnedMainDmOwner,
+              senderRecipient: senderId,
+              onSkip: ({ ownerRecipient, senderRecipient }) => {
+                logVerbose(
+                  `telegram: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                );
+              },
+            }
+          : undefined,
+    },
     onRecordError: (err) => {
       logVerbose(`telegram: failed updating session meta: ${String(err)}`);
     },
