@@ -13,7 +13,6 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/feishu";
-import { readSessionUpdatedAt, resolveStorePath } from "../../../src/config/sessions.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
@@ -1371,8 +1370,8 @@ export async function handleFeishuMessage(params: {
         return threadContext;
       }
 
-      const storePath = resolveStorePath(cfg.session?.store, { agentId });
-      const previousThreadSessionTimestamp = readSessionUpdatedAt({
+      const storePath = core.channel.session.resolveStorePath(cfg.session?.store, { agentId });
+      const previousThreadSessionTimestamp = core.channel.session.readSessionUpdatedAt({
         storePath,
         sessionKey: agentSessionKey,
       });

@@ -66,11 +66,6 @@ vi.mock("./client.js", () => ({
   createFeishuClient: mockCreateFeishuClient,
 }));
 
-vi.mock("../../../src/config/sessions.js", () => ({
-  readSessionUpdatedAt: mockReadSessionUpdatedAt,
-  resolveStorePath: mockResolveStorePath,
-}));
-
 function createRuntimeEnv(): RuntimeEnv {
   return {
     log: vi.fn(),
@@ -179,6 +174,12 @@ describe("handleFeishuMessage command authorization", () => {
           routing: {
             resolveAgentRoute:
               mockResolveAgentRoute as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
+          },
+          session: {
+            readSessionUpdatedAt:
+              mockReadSessionUpdatedAt as unknown as PluginRuntime["channel"]["session"]["readSessionUpdatedAt"],
+            resolveStorePath:
+              mockResolveStorePath as unknown as PluginRuntime["channel"]["session"]["resolveStorePath"],
           },
           reply: {
             resolveEnvelopeFormatOptions: vi.fn(
