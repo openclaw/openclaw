@@ -1376,7 +1376,7 @@
             "groups": [
               {
                 "group": "Help",
-                "pages": ["help/index", "help/troubleshooting", "help/faq"]
+                "pages": ["help/index", "help/troubleshooting", "help/rag-debugging", "help/faq"]
               },
               {
                 "group": "Community",
