@@ -102,6 +102,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     return Math.max(0, Math.trunc(resolved));
   };
 
+  // Returns true when the buffer had pending messages that were flushed.
   const flushBuffer = async (key: string, buffer: DebounceBuffer<T>) => {
     buffers.delete(key);
     if (buffer.timeout) {
@@ -109,21 +110,22 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       buffer.timeout = null;
     }
     if (buffer.items.length === 0) {
-      return;
+      return false;
     }
     try {
       await params.onFlush(buffer.items);
     } catch (err) {
       params.onError?.(err, buffer.items);
     }
+    return true;
   };
 
   const flushKey = async (key: string) => {
     const buffer = buffers.get(key);
     if (!buffer) {
-      return;
+      return false;
     }
-    await flushBuffer(key, buffer);
+    return flushBuffer(key, buffer);
   };
 
   const scheduleFlush = (key: string, buffer: DebounceBuffer<T>) => {
@@ -182,8 +184,15 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
         if (!buffers.has(key)) {
           continue;
         }
-        await flushKey(key);
-        flushedBufferCount += 1;
+        try {
+          const hadMessages = await flushKey(key);
+          if (hadMessages) {
+            flushedBufferCount += 1;
+          }
+        } catch {
+          // flushBuffer already routed the failure through onError; keep
+          // sweeping so one bad key cannot strand later buffered messages.
+        }
       }
     }
 

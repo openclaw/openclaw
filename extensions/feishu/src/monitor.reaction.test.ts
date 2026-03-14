@@ -618,7 +618,7 @@ describe("Feishu inbound debounce regressions", () => {
                 enqueueMock(item);
                 params.onError?.(new Error("dispatch failed"), [item]);
               },
-              flushKey: async (_key: string) => {},
+              flushKey: async (_key: string) => false,
               flushAll: async () => 0,
             }),
             resolveInboundDebounceMs,
