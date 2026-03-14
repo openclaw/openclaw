@@ -157,7 +157,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expectSingleToolErrorPayload(payloads, {
       title: "Browser",
-      absentDetail: "tab not found",
+      detail: "— tab not found",
     });
   });
 
@@ -291,7 +291,7 @@ describe("buildEmbeddedRunPayloads", () => {
         config: { messages: { suppressToolErrors: true } },
       },
       title: "Write",
-      absentDetail: "connection timeout",
+      detail: "— connection timeout",
     },
     {
       name: "shows recoverable tool errors for mutating tools",
@@ -299,7 +299,7 @@ describe("buildEmbeddedRunPayloads", () => {
         lastToolError: { toolName: "message", meta: "reply", error: "text required" },
       },
       title: "Message",
-      absentDetail: "required",
+      detail: "— text required",
     },
     {
       name: "shows non-recoverable tool failure summaries to the user",
@@ -307,11 +307,11 @@ describe("buildEmbeddedRunPayloads", () => {
         lastToolError: { toolName: "browser", error: "connection timeout" },
       },
       title: "Browser",
-      absentDetail: "connection timeout",
+      detail: "— connection timeout",
     },
-  ])("$name", ({ payload, title, absentDetail }) => {
+  ])("$name", ({ payload, title, detail }) => {
     const payloads = buildPayloads(payload);
-    expectSingleToolErrorPayload(payloads, { title, absentDetail });
+    expectSingleToolErrorPayload(payloads, { title, detail });
   });
 
   it("shows mutating tool errors even when assistant output exists", () => {
@@ -325,7 +325,7 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toBe("Done.");
     expect(payloads[1]?.isError).toBe(true);
     expect(payloads[1]?.text).toContain("Write");
-    expect(payloads[1]?.text).not.toContain("missing");
+    expect(payloads[1]?.text).toContain("— file missing");
   });
 
   it("does not treat session_status read failures as mutating when explicitly flagged", () => {
