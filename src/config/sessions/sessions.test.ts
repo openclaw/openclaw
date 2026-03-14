@@ -3,6 +3,7 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempHome } from "../../../test/helpers/temp-home.js";
 import * as jsonFiles from "../../infra/json-files.js";
 import {
   clearSessionStoreCacheForTest,
@@ -139,9 +140,8 @@ describe("session path safety", () => {
 
 describe("session directory permissions", () => {
   it("creates a private sessions dir when saving a new session store", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-perms-"));
-    try {
-      const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, ".openclaw", "agents", "main", "sessions", "sessions.json");
       await saveSessionStore(storePath, {
         "agent:main:perms": {
           sessionId: "sess-private",
@@ -151,6 +151,30 @@ describe("session directory permissions", () => {
 
       const mode = fs.statSync(path.dirname(storePath)).mode & 0o777;
       expectPrivateDirMode(mode);
+    });
+  });
+
+  it("does not tighten custom session store parent directories", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-custom-session-store-"));
+    try {
+      const customDir = path.join(tempDir, "shared-session-state");
+      fs.mkdirSync(customDir, { recursive: true, mode: 0o755 });
+      fs.chmodSync(customDir, 0o755);
+      const storePath = path.join(customDir, "sessions.json");
+
+      await saveSessionStore(storePath, {
+        "agent:main:custom-store": {
+          sessionId: "sess-custom",
+          updatedAt: Date.now(),
+        },
+      });
+
+      const mode = fs.statSync(customDir).mode & 0o777;
+      expect(mode).toBe(0o755);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

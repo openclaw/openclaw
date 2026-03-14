@@ -83,6 +83,38 @@ export async function ensureSessionTranscriptsDirForAgent(
   return await ensurePrivateSessionsDir(sessionsDir);
 }
 
+export function isManagedSessionStorePath(
+  storePath: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
+): boolean {
+  const resolvedStorePath = path.resolve(storePath);
+  if (path.basename(resolvedStorePath) !== "sessions.json") {
+    return false;
+  }
+
+  const sessionsDir = path.dirname(resolvedStorePath);
+  if (path.basename(sessionsDir) !== "sessions") {
+    return false;
+  }
+
+  const agentDir = path.dirname(sessionsDir);
+  const agentsDir = path.dirname(agentDir);
+  if (path.basename(agentsDir) !== "agents") {
+    return false;
+  }
+
+  const agentId = path.basename(agentDir);
+  if (!agentId) {
+    return false;
+  }
+
+  const expectedStorePath = path.resolve(
+    path.join(resolveSessionTranscriptsDirForAgent(agentId, env, homedir), "sessions.json"),
+  );
+  return resolvedStorePath === expectedStorePath;
+}
+
 export function resolveSessionTranscriptsDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
