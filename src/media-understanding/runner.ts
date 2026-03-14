@@ -2,6 +2,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import {
   findModelInCatalog,
@@ -373,7 +374,11 @@ async function resolveKeyEntry(params: {
   if (capability === "image") {
     const activeProvider = params.activeModel?.provider?.trim();
     if (activeProvider) {
-      const activeEntry = await checkProvider(activeProvider, params.activeModel?.model);
+      const MINIMAX_VLM_MODEL = "MiniMax-VL-01";
+      const activeModel = isMinimaxVlmProvider(normalizeMediaProviderId(activeProvider))
+        ? MINIMAX_VLM_MODEL
+        : params.activeModel?.model;
+      const activeEntry = await checkProvider(activeProvider, activeModel);
       if (activeEntry) {
         return activeEntry;
       }
@@ -562,10 +567,18 @@ async function resolveActiveModelEntry(params: {
   } catch {
     return null;
   }
+  // For MiniMax providers, route image understanding to the dedicated VLM model
+  // instead of the active chat model which is text-only.
+  const MINIMAX_VLM_MODEL = "MiniMax-VL-01";
+  const model =
+    params.capability === "image" && isMinimaxVlmProvider(providerId)
+      ? MINIMAX_VLM_MODEL
+      : params.activeModel?.model;
+
   return {
     type: "provider",
     provider: providerId,
-    model: params.activeModel?.model,
+    model,
   };
 }
 
