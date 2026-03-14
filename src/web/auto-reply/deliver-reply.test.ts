@@ -283,6 +283,48 @@ describe("deliverWebReply", () => {
     );
   });
 
+  it("returns sentChunks with WhatsApp-converted text for echo tracking", async () => {
+    const msg = makeMsg();
+    const { sentChunks } = await deliverWebReply({
+      replyResult: { text: "aaaaaa" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 3,
+      replyLogger,
+      skipLog: true,
+    });
+    expect(sentChunks).toEqual(["aaa", "aaa"]);
+    expect(sentChunks).toHaveLength(2);
+  });
+
+  it("returns empty sentChunks when reasoning payload is suppressed", async () => {
+    const msg = makeMsg();
+    const { sentChunks } = await deliverWebReply({
+      replyResult: { text: "Reasoning:\nhidden", isReasoning: true },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+    expect(sentChunks).toEqual([]);
+    expect(msg.reply).not.toHaveBeenCalled();
+  });
+
+  it("includes media caption in sentChunks", async () => {
+    const msg = makeMsg();
+    mockLoadedImageMedia();
+    const { sentChunks } = await deliverWebReply({
+      replyResult: { text: "caption text", mediaUrl: "http://example.com/img.jpg" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+    expect(sentChunks).toEqual(["caption text"]);
+  });
+
   it("sends non-audio/image/video media as document", async () => {
     const msg = makeMsg();
     (
