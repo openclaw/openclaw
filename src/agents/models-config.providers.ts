@@ -38,17 +38,21 @@ import {
   buildSyntheticProvider,
   buildTogetherProvider,
   buildXiaomiProvider,
+  buildGigaChatProvider,
+  GIGACHAT_BASE_URL,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,
   XIAOMI_DEFAULT_MODEL_ID,
 } from "./models-config.providers.static.js";
 export {
+  buildGigaChatProvider,
   buildKimiCodingProvider,
   buildKilocodeProvider,
   buildNvidiaProvider,
   buildModelStudioProvider,
   buildQianfanProvider,
   buildXiaomiProvider,
+  GIGACHAT_BASE_URL,
   MODELSTUDIO_BASE_URL,
   MODELSTUDIO_DEFAULT_MODEL_ID,
   QIANFAN_BASE_URL,
@@ -704,6 +708,13 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
     apiKey,
   })),
   withApiKey("qianfan", async ({ apiKey }) => ({ ...buildQianfanProvider(), apiKey })),
+
+  // GigaChat (Sber) – activated when GIGACHAT_CREDENTIALS or GIGACHAT_API_KEY is set.
+  // GIGACHAT_CREDENTIALS: base64-encoded "ClientId:ClientSecret" (preferred – the
+  // gateway exchanges it for a Bearer token via the Sber OAuth endpoint before the
+  // first request and refreshes automatically before expiry).
+  // GIGACHAT_API_KEY: a pre-obtained Bearer access_token (expires in ~30 min).
+  withApiKey("gigachat", async ({ apiKey }) => ({ ...buildGigaChatProvider(), apiKey })),
   withApiKey("modelstudio", async ({ apiKey }) => ({ ...buildModelStudioProvider(), apiKey })),
   withApiKey("openrouter", async ({ apiKey }) => ({ ...buildOpenrouterProvider(), apiKey })),
   withApiKey("nvidia", async ({ apiKey }) => ({ ...buildNvidiaProvider(), apiKey })),

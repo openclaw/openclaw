@@ -549,3 +549,82 @@ export function buildKilocodeProvider(): ProviderConfig {
     })),
   };
 }
+
+// ---------------------------------------------------------------------------
+// GigaChat (Sber)
+//
+// API:  https://gigachat.devices.sberbank.ru/api/v1  (OpenAI-compatible chat)
+// Auth: OAuth Bearer token exchanged from GIGACHAT_CREDENTIALS
+//       ("ClientId:ClientSecret" base64-encoded string from Sber Studio).
+//
+// Limitations vs. OpenAI:
+//  • Function calling uses the legacy `functions` / `function_call` format
+//    (not the `tools` array). OpenClaw's tool-use path is therefore disabled
+//    for this provider – use the model for conversational tasks only.
+//  • Only string property types are reliably supported in function parameters.
+//  • `system` role messages must appear only as the first message in the list.
+//  • Streaming is supported (`stream: true`).
+//  • Available scopes: GIGACHAT_API_PERS (personal), GIGACHAT_API_B2B, GIGACHAT_API_CORP.
+// ---------------------------------------------------------------------------
+
+export const GIGACHAT_BASE_URL =
+  "https://gigachat.devices.sberbank.ru/api/v1";
+
+const GIGACHAT_DEFAULT_CONTEXT_WINDOW = 32_768;
+const GIGACHAT_DEFAULT_MAX_TOKENS = 8_192;
+const GIGACHAT_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+export function buildGigaChatProvider(): ProviderConfig {
+  return {
+    baseUrl: GIGACHAT_BASE_URL,
+    // GigaChat's /chat/completions is OpenAI-compatible for basic chat.
+    // Tool-use (functions) is intentionally disabled at the provider level
+    // because GigaChat uses the legacy `functions` schema, not `tools`.
+    api: "openai-completions",
+    // GigaChat requires `verify: false` for its self-signed certificate in
+    // some environments. Set GIGACHAT_VERIFY_SSL=true to override.
+    models: [
+      {
+        id: "GigaChat",
+        name: "GigaChat",
+        reasoning: false,
+        input: ["text"],
+        cost: GIGACHAT_DEFAULT_COST,
+        contextWindow: GIGACHAT_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: GIGACHAT_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "GigaChat-Plus",
+        name: "GigaChat Plus",
+        reasoning: false,
+        input: ["text"],
+        cost: GIGACHAT_DEFAULT_COST,
+        contextWindow: GIGACHAT_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: GIGACHAT_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "GigaChat-Pro",
+        name: "GigaChat Pro",
+        reasoning: false,
+        input: ["text"],
+        cost: GIGACHAT_DEFAULT_COST,
+        contextWindow: 131_072,
+        maxTokens: GIGACHAT_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "GigaChat-Max",
+        name: "GigaChat Max",
+        reasoning: true,
+        input: ["text"],
+        cost: GIGACHAT_DEFAULT_COST,
+        contextWindow: 131_072,
+        maxTokens: GIGACHAT_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}

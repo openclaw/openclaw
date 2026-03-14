@@ -128,6 +128,21 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
   - Note: you do **not** paste a client id or secret into `openclaw.json`. The CLI login flow stores
     tokens in auth profiles on the gateway host.
 
+### GigaChat (Sber)
+
+- Provider: `gigachat`
+- Auth: `GIGACHAT_CREDENTIALS` (base64-encoded `ClientId:ClientSecret` from Sber Studio, **preferred**) or `GIGACHAT_API_KEY` (pre-obtained access token)
+- Example models: `gigachat/GigaChat`, `gigachat/GigaChat-Pro`, `gigachat/GigaChat-Max`
+- Base URL: `https://gigachat.devices.sberbank.ru/api/v1`
+- Note: tool-use (function calling) is **not supported** — GigaChat uses a legacy `functions` schema incompatible with the OpenAI `tools` format. Use for conversational tasks only.
+- See [/providers/gigachat](/providers/gigachat) for full setup, scope, and SSL notes.
+
+```json5
+{
+  agents: { defaults: { model: { primary: "gigachat/GigaChat-Max" } } },
+}
+```
+
 ### Z.AI (GLM)
 
 - Provider: `zai`
