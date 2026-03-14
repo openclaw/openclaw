@@ -39,19 +39,31 @@ RUN mkdir -p /out && \
 # ── Stage 2: Build ──────────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
 
-# Install Bun (required for build scripts). Retry the whole bootstrap flow to
-# tolerate transient 5xx failures from bun.sh/GitHub during CI image builds.
+# Install Bun (required for build scripts).
+# Pinned version with explicit download instead of piping curl to bash.
+# SHA256 checksums verified at build time from the official release.
+# To update, download SHASUMS256.txt from the release page and replace below:
+#   https://github.com/oven-sh/bun/releases/download/bun-v<VERSION>/SHASUMS256.txt
+ARG BUN_VERSION=1.2.5
+ARG BUN_SHA256_X64="88f64bedee330ff4d6328e3e90c669bc7ac5314927c604f85e329ea2a1d1979b"
+ARG BUN_SHA256_AARCH64="ee1b5cabb5fdbb25640787e329846ef41384ca8699db504f45bfee015f348b58"
 RUN set -eux; \
-    for attempt in 1 2 3 4 5; do \
-      if curl --retry 5 --retry-all-errors --retry-delay 2 -fsSL https://bun.sh/install | bash; then \
-        break; \
-      fi; \
-      if [ "$attempt" -eq 5 ]; then \
-        exit 1; \
-      fi; \
-      sleep $((attempt * 2)); \
-    done
-ENV PATH="/root/.bun/bin:${PATH}"
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) bun_arch="x64";    bun_sha256="$BUN_SHA256_X64" ;; \
+      arm64) bun_arch="aarch64"; bun_sha256="$BUN_SHA256_AARCH64" ;; \
+      *) echo "Unsupported architecture: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl --retry 5 --retry-all-errors --retry-delay 2 -fsSL \
+      "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-${bun_arch}.zip" \
+      -o /tmp/bun.zip && \
+    echo "${bun_sha256}  /tmp/bun.zip" | sha256sum -c - && \
+    unzip -oq /tmp/bun.zip -d /tmp/bun-extract && \
+    mv "/tmp/bun-extract/bun-linux-${bun_arch}/bun" /usr/local/bin/bun && \
+    chmod +x /usr/local/bin/bun && \
+    rm -rf /tmp/bun.zip /tmp/bun-extract && \
+    bun --version
+ENV PATH="/usr/local/bin:${PATH}"
 
 RUN corepack enable
 
