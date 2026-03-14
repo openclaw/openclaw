@@ -259,6 +259,16 @@ function wrapResponseStream<T>(stream: T, ctx: PrivacyFilterContext): T {
       if (prop === Symbol.asyncIterator) {
         return () => wrappedIterator;
       }
+      if (prop === "result") {
+        const resultMethod = Reflect.get(target, prop, target);
+        if (typeof resultMethod === "function") {
+          return async (...args: unknown[]) => {
+            const message = await resultMethod.apply(target, args);
+            return restoreFinalResultMessage(message, ctx);
+          };
+        }
+        return resultMethod;
+      }
       const value = Reflect.get(target, prop, target);
       if (typeof value === "function") {
         return value.bind(target);
@@ -367,8 +377,22 @@ function filterAssistantMessage(
   msg: AssistantMessage,
   ctx: PrivacyFilterContext,
 ): AssistantMessage {
+  const rawContent = (msg as { content?: unknown }).content;
+  if (!Array.isArray(rawContent)) {
+    if (typeof rawContent === "string") {
+      const replaced = filterText(rawContent, ctx);
+      if (replaced !== rawContent) {
+        return {
+          ...(msg as unknown as Record<string, unknown>),
+          content: replaced,
+        } as AssistantMessage;
+      }
+    }
+    return msg;
+  }
+
   let changed = false;
-  const nextContent = msg.content.map((block) => {
+  const nextContent = rawContent.map((block) => {
     if (block.type === "text") {
       const replaced = filterText(block.text, ctx);
       if (replaced === block.text) {
@@ -395,8 +419,13 @@ function filterToolResultMessage(
   msg: ToolResultMessage,
   ctx: PrivacyFilterContext,
 ): ToolResultMessage {
+  const rawContent = (msg as { content?: unknown }).content;
+  if (!Array.isArray(rawContent)) {
+    return msg;
+  }
+
   let changed = false;
-  const nextContent = msg.content.map((block) => {
+  const nextContent = rawContent.map((block) => {
     if (block.type !== "text") {
       return block;
     }
@@ -517,4 +546,108 @@ function filterUnknownStrings(value: unknown, ctx: PrivacyFilterContext): unknow
 
 function getChunkContentIndex(chunk: Record<string, unknown>): string {
   return typeof chunk.contentIndex === "number" ? String(chunk.contentIndex) : "na";
+}
+
+function restoreFinalResultMessage(message: unknown, ctx: PrivacyFilterContext): unknown {
+  if (!message || typeof message !== "object") {
+    return message;
+  }
+
+  const msg = message as {
+    role?: unknown;
+    content?: unknown;
+    errorMessage?: unknown;
+  };
+  if (msg.role !== "assistant") {
+    return message;
+  }
+
+  let changed = false;
+  let next = message as Record<string, unknown>;
+
+  if (typeof msg.content === "string") {
+    const restored = restoreText(msg.content, ctx);
+    if (restored !== msg.content) {
+      next = { ...next, content: restored };
+      changed = true;
+    }
+  } else if (Array.isArray(msg.content)) {
+    const nextContent = msg.content.map((block) => {
+      if (!block || typeof block !== "object") {
+        return block;
+      }
+      const typed = block as {
+        type?: unknown;
+        text?: unknown;
+        thinking?: unknown;
+        arguments?: unknown;
+      };
+      if (typed.type === "text" && typeof typed.text === "string") {
+        const restored = restoreText(typed.text, ctx);
+        if (restored !== typed.text) {
+          changed = true;
+          return { ...typed, text: restored };
+        }
+      }
+      if (typed.type === "thinking" && typeof typed.thinking === "string") {
+        const restored = restoreText(typed.thinking, ctx);
+        if (restored !== typed.thinking) {
+          changed = true;
+          return { ...typed, thinking: restored };
+        }
+      }
+      if (typed.type === "toolCall" && typed.arguments && typeof typed.arguments === "object") {
+        const restoredArgs = restoreUnknownStrings(typed.arguments, ctx);
+        if (restoredArgs !== typed.arguments) {
+          changed = true;
+          return { ...typed, arguments: restoredArgs };
+        }
+      }
+      return block;
+    });
+    if (changed) {
+      next = { ...next, content: nextContent };
+    }
+  }
+
+  if (typeof msg.errorMessage === "string") {
+    const restored = restoreText(msg.errorMessage, ctx);
+    if (restored !== msg.errorMessage) {
+      next = { ...next, errorMessage: restored };
+      changed = true;
+    }
+  }
+
+  return changed ? next : message;
+}
+
+function restoreUnknownStrings(value: unknown, ctx: PrivacyFilterContext): unknown {
+  if (typeof value === "string") {
+    return restoreText(value, ctx);
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((item) => {
+      const restored = restoreUnknownStrings(item, ctx);
+      if (restored !== item) {
+        changed = true;
+      }
+      return restored;
+    });
+    return changed ? next : value;
+  }
+  if (value && typeof value === "object") {
+    const input = value as Record<string, unknown>;
+    let changed = false;
+    const next: Record<string, unknown> = {};
+    for (const [key, raw] of Object.entries(input)) {
+      const restored = restoreUnknownStrings(raw, ctx);
+      if (restored !== raw) {
+        changed = true;
+      }
+      next[key] = restored;
+    }
+    return changed ? next : value;
+  }
+  return value;
 }
