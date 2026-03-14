@@ -61,6 +61,13 @@ function resolveDispatcherKey(params: {
   return `${params.kind}:${params.timeoutMs}:${autoSelectToken}`;
 }
 
+function resolveTimeoutMs(timeoutMsRaw: number): number | null {
+  if (!Number.isFinite(timeoutMsRaw)) {
+    return null;
+  }
+  return Math.max(1, Math.floor(timeoutMsRaw));
+}
+
 function resolveCurrentDispatcherKind(): DispatcherKind | null {
   let dispatcher: unknown;
   try {
@@ -102,8 +109,8 @@ export function ensureGlobalUndiciEnvProxyDispatcher(): void {
 
 export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }): void {
   const timeoutMsRaw = opts?.timeoutMs ?? DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
-  const timeoutMs = Math.max(1, Math.floor(timeoutMsRaw));
-  if (!Number.isFinite(timeoutMsRaw)) {
+  const timeoutMs = resolveTimeoutMs(timeoutMsRaw);
+  if (timeoutMs == null) {
     return;
   }
   const kind = resolveCurrentDispatcherKind();
