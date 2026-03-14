@@ -106,11 +106,15 @@ class WearChatController(
 
   fun switchClient(newClient: GatewayClientInterface) {
     eventsJob?.cancel()
+    historyLoadJob?.cancel()
+    historyLoadJob = null
+    historyRequestVersion.incrementAndGet()
     client = newClient
     _messages.value = emptyList()
     _streamingText.value = null
     _errorText.value = null
     _isSending.value = false
+    _isLoading.value = false
     lastSyncedHistory = emptyList()
     hasSyncedHistory = false
     clearPendingRuns()

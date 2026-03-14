@@ -226,6 +226,9 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
       try {
         val result = withTimeoutOrNull(12_000) { deferred.await() }
         if (result != null) {
+          if (epoch != connectionEpoch || ws !== socket) {
+            return@launch
+          }
           _connected.value = true
           _statusText.value = context.getString(R.string.wear_status_connected)
           // Extract mainSessionKey from connect response

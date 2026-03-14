@@ -226,6 +226,34 @@ class WearChatControllerTest {
   }
 
   @Test
+  fun `switchClient ignores stale history results from the previous client`() = runTest {
+    val oldClient = FakeGatewayClient().apply {
+      historyDeferred = CompletableDeferred()
+    }
+    val newClient = FakeGatewayClient().apply {
+      historyResponse = historyJson(userText = "Fresh question", assistantText = "Fresh answer")
+    }
+    val controllerScope = TestScope(StandardTestDispatcher(testScheduler))
+    val controller = WearChatController(controllerScope, oldClient, ::testString)
+
+    controller.loadHistory()
+    runCurrent()
+    assertTrue(controller.isLoading.value)
+
+    controller.switchClient(newClient)
+    controller.loadHistory()
+    advanceUntilIdle()
+
+    assertEquals(listOf("Fresh question", "Fresh answer"), controller.messages.value.map { it.text })
+
+    oldClient.historyDeferred?.complete(historyJson(userText = "Old question", assistantText = "Old answer"))
+    advanceUntilIdle()
+
+    assertEquals(listOf("Fresh question", "Fresh answer"), controller.messages.value.map { it.text })
+    controllerScope.cancel()
+  }
+
+  @Test
   fun `history polling resolves reply when final event is missed`() = runTest {
     val client = FakeGatewayClient().apply {
       chatSendResponse = """{"runId":"server-run"}"""
@@ -402,6 +430,7 @@ private class FakeGatewayClient : GatewayClientInterface {
   var chatSendResponse: String = """{"runId":"local-run"}"""
   var chatSendDeferred: CompletableDeferred<String>? = null
   var historyResponse: String = """{"messages":[]}"""
+  var historyDeferred: CompletableDeferred<String>? = null
   val historyResponses = ArrayDeque<String>()
   val requests = mutableListOf<Pair<String, String?>>()
 
@@ -409,7 +438,7 @@ private class FakeGatewayClient : GatewayClientInterface {
     requests += method to paramsJson
     return when (method) {
       "chat.send" -> chatSendDeferred?.await() ?: chatSendResponse
-      "chat.history" -> historyResponses.removeFirstOrNull() ?: historyResponse
+      "chat.history" -> historyDeferred?.await() ?: historyResponses.removeFirstOrNull() ?: historyResponse
       "sessions.list" -> """{"sessions":[]}"""
       else -> """{}"""
     }
