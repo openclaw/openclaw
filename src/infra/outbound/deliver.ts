@@ -32,7 +32,7 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { getGlobalHookRunner, withGlobalHookExecution } from "../../plugins/hook-runner-global.js";
 import { throwIfAborted } from "./abort.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
@@ -424,20 +424,23 @@ async function applyMessageSendingHook(params: {
     };
   }
   try {
-    const sendingResult = await params.hookRunner!.runMessageSending(
-      {
-        to: params.to,
-        content: params.payloadSummary.text,
-        metadata: {
-          channel: params.channel,
-          accountId: params.accountId,
-          mediaUrls: params.payloadSummary.mediaUrls,
+    // Guard: prevent hook runner reinitialization while the hook executes (#42644)
+    const sendingResult = await withGlobalHookExecution(() =>
+      params.hookRunner!.runMessageSending(
+        {
+          to: params.to,
+          content: params.payloadSummary.text,
+          metadata: {
+            channel: params.channel,
+            accountId: params.accountId,
+            mediaUrls: params.payloadSummary.mediaUrls,
+          },
         },
-      },
-      {
-        channelId: params.channel,
-        accountId: params.accountId ?? undefined,
-      },
+        {
+          channelId: params.channel,
+          accountId: params.accountId ?? undefined,
+        },
+      ),
     );
     if (sendingResult?.cancel) {
       return {
