@@ -39,6 +39,40 @@ export type SlashCommandResult = {
   };
 };
 
+function formatModelRef(entry: Pick<ModelCatalogEntry, "id" | "provider">): string {
+  const id = String(entry.id ?? "").trim();
+  const provider = String(entry.provider ?? "").trim();
+  if (!provider) {
+    return id;
+  }
+  if (!id) {
+    return provider;
+  }
+  return `${provider}/${id}`;
+}
+
+function maybeResolveModelArg(raw: string, catalog: ModelCatalogEntry[]): string {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.includes("/")) {
+    return trimmed;
+  }
+
+  const matches = catalog
+    .filter(
+      (entry) =>
+        String(entry.id ?? "")
+          .trim()
+          .toLowerCase() === trimmed.toLowerCase(),
+    )
+    .map((entry) => formatModelRef(entry))
+    .filter(Boolean);
+  const uniqueMatches = Array.from(new Set(matches.map((match) => match.toLowerCase())));
+  if (uniqueMatches.length !== 1) {
+    return trimmed;
+  }
+  return matches.find((match) => match.toLowerCase() === uniqueMatches[0]) ?? trimmed;
+}
+
 export async function executeSlashCommand(
   client: GatewayBrowserClient,
   sessionKey: string,
@@ -127,7 +161,9 @@ async function executeModel(
       ]);
       const session = resolveCurrentSession(sessions, sessionKey);
       const model = session?.model || sessions?.defaults?.model || "default";
-      const available = models?.models?.map((m: ModelCatalogEntry) => m.id) ?? [];
+      const available =
+        models?.models?.map((entry: ModelCatalogEntry) => formatModelRef(entry)).filter(Boolean) ??
+        [];
       const lines = [`**Current model:** \`${model}\``];
       if (available.length > 0) {
         lines.push(
@@ -144,11 +180,16 @@ async function executeModel(
   }
 
   try {
-    await client.request("sessions.patch", { key: sessionKey, model: args.trim() });
+    let nextModel = args.trim();
+    if (nextModel && !nextModel.includes("/")) {
+      const models = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {});
+      nextModel = maybeResolveModelArg(nextModel, models?.models ?? []);
+    }
+    await client.request("sessions.patch", { key: sessionKey, model: nextModel });
     return {
-      content: `Model set to \`${args.trim()}\`.`,
+      content: `Model set to \`${nextModel}\`.`,
       action: "refresh",
-      sessionPatch: { model: args.trim() },
+      sessionPatch: { model: nextModel },
     };
   } catch (err) {
     return { content: `Failed to set model: ${String(err)}` };

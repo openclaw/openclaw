@@ -245,7 +245,10 @@ describe("executeSlashCommand directives", () => {
       }
       if (method === "models.list") {
         return {
-          models: [{ id: "gpt-4.1-mini" }, { id: "gpt-4.1" }],
+          models: [
+            { id: "gpt-4.1-mini", provider: "openai" },
+            { id: "gpt-4.1", provider: "openai" },
+          ],
         };
       }
       throw new Error(`unexpected method: ${method}`);
@@ -259,10 +262,39 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "**Current model:** `gpt-4.1-mini`\n**Available:** `gpt-4.1-mini`, `gpt-4.1`",
+      "**Current model:** `gpt-4.1-mini`\n**Available:** `openai/gpt-4.1-mini`, `openai/gpt-4.1`",
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
+  });
+
+  it("expands a unique bare /model id to provider/model before patching", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "models.list") {
+        return {
+          models: [{ id: "gpt-4.1-mini", provider: "openai" }],
+        };
+      }
+      if (method === "sessions.patch") {
+        return { ok: true };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "gpt-4.1-mini",
+    );
+
+    expect(result.content).toBe("Model set to `openai/gpt-4.1-mini`.");
+    expect(result.sessionPatch).toEqual({ model: "openai/gpt-4.1-mini" });
+    expect(request).toHaveBeenNthCalledWith(1, "models.list", {});
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.patch", {
+      key: "main",
+      model: "openai/gpt-4.1-mini",
+    });
   });
 
   it("resolves the legacy main alias for /usage", async () => {

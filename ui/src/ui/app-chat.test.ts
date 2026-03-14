@@ -114,8 +114,8 @@ describe("handleSendChat", () => {
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
-      model: "gpt-5-mini",
+      model: "openai/gpt-5-mini",
     });
-    expect(host.chatModelOverrides.main).toBe("gpt-5-mini");
+    expect(host.chatModelOverrides.main).toBe("openai/gpt-5-mini");
   });
 });

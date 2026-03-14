@@ -65,7 +65,7 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   {
     name: "model",
     description: "Show or set model",
-    args: "<name>",
+    args: "<provider/model|id>",
     icon: "brain",
     category: "model",
     executeLocal: true,
