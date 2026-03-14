@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { stopBrowserBridgeServer } from "../../browser/bridge-server.js";
 import { defaultRuntime } from "../../runtime.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
@@ -10,13 +11,14 @@ import {
   type SandboxBrowserRegistryEntry,
   type SandboxRegistryEntry,
 } from "./registry.js";
+import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
 import type { SandboxConfig } from "./types.js";
 
 let lastPruneAtMs = 0;
 
 type PruneableRegistryEntry = Pick<
   SandboxRegistryEntry,
-  "containerName" | "createdAtMs" | "lastUsedAtMs"
+  "containerName" | "sessionKey" | "createdAtMs" | "lastUsedAtMs"
 >;
 
 function shouldPruneSandboxEntry(cfg: SandboxConfig, now: number, entry: PruneableRegistryEntry) {
@@ -38,6 +40,7 @@ async function pruneSandboxRegistryEntries<TEntry extends PruneableRegistryEntry
   read: () => Promise<{ entries: TEntry[] }>;
   remove: (containerName: string) => Promise<void>;
   onRemoved?: (entry: TEntry) => Promise<void>;
+  cleanupWorkspace?: boolean;
 }) {
   const now = Date.now();
   if (params.cfg.prune.idleHours === 0 && params.cfg.prune.maxAgeDays === 0) {
@@ -58,6 +61,30 @@ async function pruneSandboxRegistryEntries<TEntry extends PruneableRegistryEntry
       await params.remove(entry.containerName);
       await params.onRemoved?.(entry);
     }
+
+    // Clean up workspace directory (only for sandbox containers, not browsers)
+    if (params.cleanupWorkspace && params.cfg.scope !== "shared") {
+      try {
+        const scopeKey = resolveSandboxScopeKey(params.cfg.scope, entry.sessionKey);
+        // For agent scope, verify no other sessions are using the same workspace
+        if (params.cfg.scope === "agent") {
+          const registry = await params.read();
+          const otherSessionsActive = registry.entries.some(
+            (e) =>
+              e.containerName !== entry.containerName &&
+              resolveSandboxScopeKey(params.cfg.scope, e.sessionKey) === scopeKey,
+          );
+          if (otherSessionsActive) {
+            // Skip workspace cleanup - other sessions still using this workspace
+            continue;
+          }
+        }
+        const workspaceDir = resolveSandboxWorkspaceDir(params.cfg.workspaceRoot, scopeKey);
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      } catch {
+        // ignore workspace cleanup failures
+      }
+    }
   }
 }
 
@@ -66,6 +93,7 @@ async function pruneSandboxContainers(cfg: SandboxConfig) {
     cfg,
     read: readRegistry,
     remove: removeRegistryEntry,
+    cleanupWorkspace: true,
   });
 }
 
