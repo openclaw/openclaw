@@ -27,6 +27,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/home/testuser/.asdf/shims");
     expect(result).toContain("/home/testuser/.local/share/pnpm");
     expect(result).toContain("/home/testuser/.bun/bin");
+    expect(result).toContain("/home/testuser/.n/bin");
   });
 
   it("excludes user bin directories when HOME is undefined on Linux", () => {
@@ -83,6 +84,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
         BUN_INSTALL: "/opt/bun",
         VOLTA_HOME: "/opt/volta",
         ASDF_DATA_DIR: "/opt/asdf",
+        N_PREFIX: "/opt/n",
         NVM_DIR: "/opt/nvm",
         FNM_DIR: "/opt/fnm",
       },
@@ -93,6 +95,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/opt/bun/bin");
     expect(result).toContain("/opt/volta/bin");
     expect(result).toContain("/opt/asdf/shims");
+    expect(result).toContain("/opt/n/bin");
     expect(result).toContain("/opt/nvm/current/bin");
     expect(result).toContain("/opt/fnm/current/bin");
   });
@@ -117,6 +120,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/Users/testuser/Library/pnpm"); // pnpm default on macOS
     expect(result).toContain("/Users/testuser/.local/share/pnpm"); // pnpm XDG fallback
     expect(result).toContain("/Users/testuser/.bun/bin");
+    expect(result).toContain("/Users/testuser/.n/bin");
 
     // Should also include macOS system directories
     expect(result).toContain("/opt/homebrew/bin");
