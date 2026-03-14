@@ -3,11 +3,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
-const feishuClientMockModule = vi.hoisted(() => ({
+
+vi.mock("./probe.js", () => ({
+  probeFeishu: probeFeishuMock,
+}));
+
+vi.mock("./client.js", () => ({
   createFeishuWSClient: vi.fn(() => ({ start: vi.fn() })),
   createEventDispatcher: vi.fn(() => ({ register: vi.fn() })),
 }));
-const feishuRuntimeMockModule = vi.hoisted(() => ({
+vi.mock("./runtime.js", () => ({
   getFeishuRuntime: () => ({
     channel: {
       debounce: {
@@ -23,13 +28,6 @@ const feishuRuntimeMockModule = vi.hoisted(() => ({
     },
   }),
 }));
-
-vi.mock("./probe.js", () => ({
-  probeFeishu: probeFeishuMock,
-}));
-
-vi.mock("./client.js", () => feishuClientMockModule);
-vi.mock("./runtime.js", () => feishuRuntimeMockModule);
 
 function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig {
   return {
@@ -50,6 +48,12 @@ function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig 
       },
     },
   } as ClawdbotConfig;
+}
+
+async function waitForStartedAccount(started: string[], accountId: string) {
+  for (let i = 0; i < 10 && !started.includes(accountId); i += 1) {
+    await Promise.resolve();
+  }
 }
 
 afterEach(() => {
@@ -116,10 +120,7 @@ describe("Feishu monitor startup preflight", () => {
     });
 
     try {
-      for (let i = 0; i < 10 && !started.includes("beta"); i += 1) {
-        await Promise.resolve();
-      }
-
+      await waitForStartedAccount(started, "beta");
       expect(started).toEqual(["alpha", "beta"]);
       expect(started.filter((accountId) => accountId === "alpha")).toHaveLength(1);
     } finally {
@@ -153,10 +154,7 @@ describe("Feishu monitor startup preflight", () => {
     });
 
     try {
-      for (let i = 0; i < 10 && !started.includes("beta"); i += 1) {
-        await Promise.resolve();
-      }
-
+      await waitForStartedAccount(started, "beta");
       expect(started).toEqual(["alpha", "beta"]);
       expect(runtime.error).toHaveBeenCalledWith(
         expect.stringContaining("bot info probe timed out"),

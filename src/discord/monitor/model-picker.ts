@@ -233,15 +233,14 @@ function paginateItems<T>(params: {
 
 function parseCurrentModelRef(raw?: string): DiscordModelPickerCurrentModelRef | null {
   const trimmed = raw?.trim();
-  if (!trimmed) {
+  const match = trimmed?.match(/^([^/]+)\/(.+)$/u);
+  if (!match) {
     return null;
   }
-  const slashIndex = trimmed.indexOf("/");
-  if (slashIndex <= 0 || slashIndex >= trimmed.length - 1) {
-    return null;
-  }
-  const provider = normalizeProviderId(trimmed.slice(0, slashIndex));
-  const model = trimmed.slice(slashIndex + 1);
+  const provider = normalizeProviderId(match[1]);
+  // Preserve the model suffix exactly as entered after "/" so select defaults
+  // continue to mirror the stored ref for Discord interactions.
+  const model = match[2];
   if (!provider || !model) {
     return null;
   }
