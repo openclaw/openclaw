@@ -153,6 +153,76 @@ describe("temporal decay", () => {
     expect(byPath.get("memory/2000-01-01.md")?.score ?? 1).toBeLessThan(0.001);
   });
 
+  it("parses date from memory path with topic suffix", async () => {
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [{ path: "memory/2026-01-28-niki-blog.md", score: 1, source: "memory" }],
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    const ageInDays = (NOW_MS - Date.UTC(2026, 0, 28)) / DAY_MS;
+    const expected = Math.exp(-(Math.LN2 / 30) * ageInDays);
+    expect(decayed[0]?.score).toBeCloseTo(expected);
+  });
+
+  it("parses date from memory subdirectory path", async () => {
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [{ path: "memory/archive/2026-01-27.md", score: 1, source: "memory" }],
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    const ageInDays = (NOW_MS - Date.UTC(2026, 0, 27)) / DAY_MS;
+    const expected = Math.exp(-(Math.LN2 / 30) * ageInDays);
+    expect(decayed[0]?.score).toBeCloseTo(expected);
+  });
+
+  it("parses date from memory subdirectory path with topic suffix", async () => {
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [{ path: "memory/reference/2026-01-23-detail.md", score: 1, source: "memory" }],
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    const ageInDays = (NOW_MS - Date.UTC(2026, 0, 23)) / DAY_MS;
+    const expected = Math.exp(-(Math.LN2 / 30) * ageInDays);
+    expect(decayed[0]?.score).toBeCloseTo(expected);
+  });
+
+  it("parses date-not-at-start from memory path", async () => {
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [
+        { path: "memory/archive/morning-summary-2026-01-06.md", score: 1, source: "memory" },
+      ],
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    const ageInDays = (NOW_MS - Date.UTC(2026, 0, 6)) / DAY_MS;
+    const expected = Math.exp(-(Math.LN2 / 30) * ageInDays);
+    expect(decayed[0]?.score).toBeCloseTo(expected);
+  });
+
+  it("does not parse date from non-memory path with date-like basename", async () => {
+    const dir = await makeTempDir();
+    const sessionPath = path.join(dir, "sessions", "2026-01-15-chat.jsonl");
+    await fs.mkdir(path.dirname(sessionPath), { recursive: true });
+    await fs.writeFile(sessionPath, "{}\n");
+    const recentMtime = new Date(NOW_MS - 1 * DAY_MS);
+    await fs.utimes(sessionPath, recentMtime, recentMtime);
+
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [{ path: "sessions/2026-01-15-chat.jsonl", score: 1, source: "sessions" }],
+      workspaceDir: dir,
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    // Should use mtime (1 day old), NOT the basename date (26 days old)
+    const mtimeExpected = Math.exp(-(Math.LN2 / 30) * 1);
+    expect(decayed[0]?.score).toBeCloseTo(mtimeExpected, 1);
+  });
+
   it("uses file mtime fallback for non-memory sources", async () => {
     const dir = await makeTempDir();
     const sessionPath = path.join(dir, "sessions", "thread.jsonl");
