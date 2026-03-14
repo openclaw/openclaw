@@ -9,6 +9,8 @@ export type BrowserProfileMode =
 export type BrowserProfileCapabilities = {
   mode: BrowserProfileMode;
   isRemote: boolean;
+  /** Profile uses the Chrome DevTools MCP server (existing-session driver). */
+  usesChromeMcp: boolean;
   requiresRelay: boolean;
   requiresAttachedTab: boolean;
   usesPersistentPlaywright: boolean;
@@ -25,6 +27,7 @@ export function getBrowserProfileCapabilities(
     return {
       mode: "local-extension-relay",
       isRemote: false,
+      usesChromeMcp: false,
       requiresRelay: true,
       requiresAttachedTab: true,
       usesPersistentPlaywright: false,
@@ -39,6 +42,7 @@ export function getBrowserProfileCapabilities(
     return {
       mode: "local-existing-session",
       isRemote: false,
+      usesChromeMcp: true,
       requiresRelay: false,
       requiresAttachedTab: false,
       usesPersistentPlaywright: false,
@@ -53,6 +57,7 @@ export function getBrowserProfileCapabilities(
     return {
       mode: "remote-cdp",
       isRemote: true,
+      usesChromeMcp: false,
       requiresRelay: false,
       requiresAttachedTab: false,
       usesPersistentPlaywright: true,
@@ -66,6 +71,7 @@ export function getBrowserProfileCapabilities(
   return {
     mode: "local-managed",
     isRemote: false,
+    usesChromeMcp: false,
     requiresRelay: false,
     requiresAttachedTab: false,
     usesPersistentPlaywright: false,

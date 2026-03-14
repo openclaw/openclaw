@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
+import { ConnectErrorDetailCodes } from "../gateway/protocol/connect-error-details.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -123,6 +124,9 @@ describe("gateway auth browser hardening", () => {
       });
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("origin not allowed");
+      expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+        ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+      );
     });
   });
 
@@ -188,6 +192,9 @@ describe("gateway auth browser hardening", () => {
             expect((res.payload as { type?: string } | undefined)?.type).toBe("hello-ok");
           } else {
             expect(res.error?.message ?? "").toContain(expectedMessage ?? "");
+            expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+              ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+            );
           }
         } finally {
           ws.close();
@@ -207,6 +214,9 @@ describe("gateway auth browser hardening", () => {
         });
         expect(res.ok).toBe(false);
         expect(res.error?.message ?? "").toContain("origin not allowed");
+        expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+        );
       } finally {
         ws.close();
       }

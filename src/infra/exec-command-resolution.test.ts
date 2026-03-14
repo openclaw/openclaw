@@ -80,12 +80,13 @@ describe("exec-command-resolution", () => {
         setup: () => {
           const dir = makeTempDir();
           const cwd = path.join(dir, "project");
-          const script = path.join(cwd, "scripts", "run.sh");
+          const scriptName = process.platform === "win32" ? "run.cmd" : "run.sh";
+          const script = path.join(cwd, "scripts", scriptName);
           fs.mkdirSync(path.dirname(script), { recursive: true });
           fs.writeFileSync(script, "");
           fs.chmodSync(script, 0o755);
           return {
-            command: "./scripts/run.sh --flag",
+            command: `./scripts/${scriptName} --flag`,
             cwd,
             envPath: undefined as NodeJS.ProcessEnv | undefined,
             expectedPath: script,
@@ -98,12 +99,13 @@ describe("exec-command-resolution", () => {
         setup: () => {
           const dir = makeTempDir();
           const cwd = path.join(dir, "project");
-          const script = path.join(cwd, "bin", "tool");
+          const scriptName = process.platform === "win32" ? "tool.cmd" : "tool";
+          const script = path.join(cwd, "bin", scriptName);
           fs.mkdirSync(path.dirname(script), { recursive: true });
           fs.writeFileSync(script, "");
           fs.chmodSync(script, 0o755);
           return {
-            command: '"./bin/tool" --version',
+            command: `"./bin/${scriptName}" --version`,
             cwd,
             envPath: undefined as NodeJS.ProcessEnv | undefined,
             expectedPath: script,

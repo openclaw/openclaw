@@ -48,22 +48,7 @@ const [
 installProcessWarningFilter();
 
 const pickSendFn = (id: ChannelId, deps?: OutboundSendDeps) => {
-  switch (id) {
-    case "discord":
-      return deps?.sendDiscord;
-    case "slack":
-      return deps?.sendSlack;
-    case "telegram":
-      return deps?.sendTelegram;
-    case "whatsapp":
-      return deps?.sendWhatsApp;
-    case "signal":
-      return deps?.sendSignal;
-    case "imessage":
-      return deps?.sendIMessage;
-    default:
-      return undefined;
-  }
+  return deps?.[id] as ((...args: unknown[]) => Promise<unknown>) | undefined;
 };
 
 const createStubOutbound = (
@@ -75,7 +60,9 @@ const createStubOutbound = (
     const send = pickSendFn(id, deps);
     if (send) {
       // oxlint-disable-next-line typescript/no-explicit-any
-      const result = await send(to, text, { verbose: false } as any);
+      const result = (await send(to, text, { verbose: false } as any)) as {
+        messageId: string;
+      };
       return { channel: id, ...result };
     }
     return { channel: id, messageId: "test" };
@@ -84,7 +71,9 @@ const createStubOutbound = (
     const send = pickSendFn(id, deps);
     if (send) {
       // oxlint-disable-next-line typescript/no-explicit-any
-      const result = await send(to, text, { verbose: false, mediaUrl } as any);
+      const result = (await send(to, text, { verbose: false, mediaUrl } as any)) as {
+        messageId: string;
+      };
       return { channel: id, ...result };
     }
     return { channel: id, messageId: "test" };
