@@ -1485,6 +1485,16 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.heartbeat.isolatedSession",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.heartbeat.lightContext",
       "kind": "core",
       "type": "boolean",
@@ -1544,7 +1554,7 @@
       "deprecated": false,
       "sensitive": false,
       "tags": ["automation"],
-      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, synology-chat, tlon, twitch, zalo, zalouser.",
+      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, zalouser, zalo, tlon, feishu, nextcloud-talk, msteams, bluebubbles, synology-chat, mattermost, twitch, matrix, nostr.",
       "hasChildren": false
     },
     {
@@ -3648,6 +3658,16 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.heartbeat.isolatedSession",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.heartbeat.lightContext",
       "kind": "core",
       "type": "boolean",
@@ -3707,7 +3727,7 @@
       "deprecated": false,
       "sensitive": false,
       "tags": ["automation"],
-      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, synology-chat, tlon, twitch, zalo, zalouser.",
+      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, zalouser, zalo, tlon, feishu, nextcloud-talk, msteams, bluebubbles, synology-chat, mattermost, twitch, matrix, nostr.",
       "hasChildren": false
     },
     {
