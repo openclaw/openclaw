@@ -185,9 +185,22 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
 
 export function getStatusCode(err: unknown) {
   return (
+    // Baileys v7 rejects with the full `lastDisconnect` object
+    // ({ error: BoomError, date: Date }) rather than the BoomError directly.
+    // Unwrap `.error` first so we see the nested statusCode/status.
+    (err as { error?: { output?: { statusCode?: number } } })?.error?.output?.statusCode ??
     (err as { output?: { statusCode?: number } })?.output?.statusCode ??
+    (err as { error?: { status?: number } })?.error?.status ??
     (err as { status?: number })?.status
   );
+}
+
+/**
+ * Resolves once all pending creds-save operations have completed.
+ * Await this before re-reading creds from disk (e.g. in restartLoginSocket).
+ */
+export async function waitForCredsSaveQueue(): Promise<void> {
+  await credsSaveQueue;
 }
 
 function safeStringify(value: unknown, limit = 800): string {
