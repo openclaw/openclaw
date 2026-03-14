@@ -199,6 +199,53 @@ describe("buildInlineProviderModels", () => {
       "X-Static": "tenant-a",
     });
   });
+
+  it("injects anthropic-messages api for anthropic provider with no explicit api", () => {
+    // Regression: buildInlineProviderModels read raw config, so provider-level API defaults
+    // injected by resolveDefaultProviderApi (in applyModelDefaults) were never applied here.
+    // This caused resolveModelWithRegistry's `if (inlineMatch?.api)` gate to fail for
+    // anthropic inline models that relied on the provider-level default.
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      anthropic: {
+        baseUrl: "https://api.anthropic.com",
+        models: [makeModel("claude-sonnet-4-6")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].api).toBe("anthropic-messages");
+  });
+
+  it("does not override explicit api when provider is anthropic", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      anthropic: {
+        baseUrl: "https://proxy.example.com",
+        api: "openai-responses",
+        models: [makeModel("claude-sonnet-4-6")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].api).toBe("openai-responses");
+  });
+
+  it("does not inject a default api for non-anthropic providers with no explicit api", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      openai: {
+        baseUrl: "http://localhost:8000",
+        models: [makeModel("gpt-custom")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].api).toBeUndefined();
+  });
 });
 
 describe("resolveModel", () => {

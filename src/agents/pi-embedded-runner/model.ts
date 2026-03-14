@@ -1,6 +1,7 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveDefaultProviderApi } from "../../config/defaults.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
@@ -135,11 +136,12 @@ export function buildInlineProviderModels(
     const providerHeaders = sanitizeModelHeaders(entry?.headers, {
       stripSecretRefMarkers: true,
     });
+    const resolvedProviderApi = resolveDefaultProviderApi(trimmed, entry?.api);
     return (entry?.models ?? []).map((model) => ({
       ...model,
       provider: trimmed,
       baseUrl: entry?.baseUrl,
-      api: model.api ?? entry?.api,
+      api: model.api ?? resolvedProviderApi,
       headers: (() => {
         const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
           stripSecretRefMarkers: true,
