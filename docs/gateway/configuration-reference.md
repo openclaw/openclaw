@@ -1497,7 +1497,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
       maxAgeHours: 0, // default hard max age in hours (`0` disables)
     },
     mainKey: "main", // legacy (runtime always uses "main")
-    agentToAgent: { maxPingPongTurns: 5 },
+    agentToAgent: { maxPingPongTurns: 5 }, // 0–20, default 5
     sendPolicy: {
       rules: [{ action: "deny", match: { channel: "discord", chatType: "group" } }],
       default: "allow",
