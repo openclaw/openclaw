@@ -9,6 +9,15 @@ import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import type { BrowserTab } from "./client.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
 
+/**
+ * Sanitize error messages to prevent control character injection in logs.
+ * Strips non-printable characters and truncates to reasonable length.
+ */
+function sanitizeErrorMessage(err: unknown, maxLen = 200): string {
+  const str = String(err).replace(/[\x00-\x1F\x7F-\x9F]/g, "");
+  return str.length > maxLen ? `${str.slice(0, maxLen)}...` : str;
+}
+
 type ChromeMcpStructuredPage = {
   id: number;
   url?: string;
@@ -253,13 +262,18 @@ async function createRealSession(
         : "Google Chrome's default profile";
 =======
       await client.close().catch((closeErr) => {
-        logWarn(`Chrome MCP client close failed (non-fatal): ${String(closeErr)}`);
+        logWarn(`chrome-mcp: client close failed (non-fatal): ${sanitizeErrorMessage(closeErr)}`);
       });
 >>>>>>> b1b7fd948f (fix(browser): add logging for silent CDP/MCP errors)
       throw new BrowserProfileUnavailableError(
         `Chrome MCP existing-session attach failed for profile "${profileName}". ` +
+<<<<<<< HEAD
           `Make sure ${targetLabel} is running locally with remote debugging enabled. ` +
           `Details: ${String(err)}`,
+=======
+          `Make sure Chrome is running, enable chrome://inspect/#remote-debugging, and approve the connection. ` +
+          `Details: ${sanitizeErrorMessage(err)}`,
+>>>>>>> 6f4ee34a68 (fix(browser): align log format with subsystem prefix convention)
       );
     }
   })();
@@ -336,7 +350,7 @@ async function callTool(
 =======
     sessions.delete(profileName);
     await session.client.close().catch((closeErr) => {
-      logWarn(`Chrome MCP client close failed (non-fatal): ${String(closeErr)}`);
+      logWarn(`chrome-mcp: client close failed (non-fatal): ${sanitizeErrorMessage(closeErr)}`);
     });
 >>>>>>> b1b7fd948f (fix(browser): add logging for silent CDP/MCP errors)
     throw err;
@@ -356,7 +370,7 @@ async function withTempFile<T>(fn: (filePath: string) => Promise<T>): Promise<T>
     return await fn(filePath);
   } finally {
     await fs.rm(dir, { recursive: true, force: true }).catch((err) => {
-      logWarn(`Chrome MCP temp dir cleanup failed (non-fatal): ${String(err)}`);
+      logWarn(`chrome-mcp: temp dir cleanup failed (non-fatal): ${sanitizeErrorMessage(err)}`);
     });
   }
 }
@@ -401,7 +415,7 @@ export async function closeChromeMcpSession(profileName: string): Promise<boolea
   }
   sessions.delete(profileName);
   await session.client.close().catch((err) => {
-    logWarn(`Chrome MCP session close failed for "${profileName}" (non-fatal): ${String(err)}`);
+    logWarn(`chrome-mcp: session close failed for "${profileName}" (non-fatal): ${sanitizeErrorMessage(err)}`);
   });
   return true;
 >>>>>>> b1b7fd948f (fix(browser): add logging for silent CDP/MCP errors)
@@ -411,7 +425,7 @@ export async function stopAllChromeMcpSessions(): Promise<void> {
   const names = [...new Set([...sessions.keys()].map((key) => JSON.parse(key)[0] as string))];
   for (const name of names) {
     await closeChromeMcpSession(name).catch((err) => {
-      logWarn(`Chrome MCP stop session failed for "${name}" (non-fatal): ${String(err)}`);
+      logWarn(`chrome-mcp: stop session failed for "${name}" (non-fatal): ${sanitizeErrorMessage(err)}`);
     });
   }
 }
