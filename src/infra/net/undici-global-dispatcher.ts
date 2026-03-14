@@ -120,7 +120,8 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
     ? resolveDispatcherKey({ kind: "env-proxy", timeoutMs, autoSelectFamily })
     : null;
   const appliedKey = envProxyKey ?? agentKey;
-  if (lastAppliedTimeoutKey === appliedKey) {
+  const shouldReinstallEnvProxy = envProxyRequested && currentKind !== "env-proxy";
+  if (lastAppliedTimeoutKey === appliedKey && !shouldReinstallEnvProxy) {
     return;
   }
 

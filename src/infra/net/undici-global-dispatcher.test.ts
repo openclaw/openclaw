@@ -169,6 +169,21 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     });
   });
 
+  it("reinstalls env proxy hardening if the dispatcher later reverts to Agent", () => {
+    vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(true);
+    getDefaultAutoSelectFamily.mockReturnValue(true);
+
+    ensureGlobalUndiciStreamTimeouts();
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
+
+    setCurrentDispatcher(new Agent());
+    ensureGlobalUndiciStreamTimeouts();
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
+    expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
+  });
+
   it("does not override unsupported custom proxy dispatcher types", () => {
     setCurrentDispatcher(new ProxyAgent("http://proxy.test:8080"));
 
