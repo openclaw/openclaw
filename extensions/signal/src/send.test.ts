@@ -147,12 +147,15 @@ describe("sendMessageSignal receipts", () => {
   });
 
   it("sends quote-timestamp for direct replies without quoteAuthor", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567895 });
+
     await sendMessageSignal("+15551230000", "hello", {
+      cfg: SIGNAL_TEST_CFG,
       textMode: "plain",
       replyTo: "1700000000000",
     });
 
-    const params = rpcMock.mock.calls[0]?.[1] as Record<string, unknown>;
+    const params = signalRpcRequestMock.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(params["quote-timestamp"]).toBe(1700000000000);
     expect(params["quote-author"]).toBeUndefined();
   });
