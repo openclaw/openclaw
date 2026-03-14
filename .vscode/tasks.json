@@ -6,6 +6,7 @@
       "type": "shell",
       "command": "pnpm clean:dist",
       "group": "none",
+      "problemMatcher": [],
       "presentation": {
         "echo": true,
         "reveal": "always",
