@@ -76,6 +76,7 @@ Historical note:
 - [ ] `pnpm check`
 - [ ] `pnpm test` (or `pnpm test:coverage` if you need coverage output)
 - [ ] `pnpm release:check` (verifies npm pack contents)
+- [ ] If `pnpm config:docs:check` fails as part of release validation and the config-surface change is intentional, run `pnpm config:docs:gen`, review `docs/.generated/config-baseline.json` and `docs/.generated/config-baseline.jsonl`, commit the updated baselines, then rerun `pnpm release:check`.
 - [ ] `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke` (Docker install smoke test, fast path; required before release)
   - If the immediate previous npm release is known broken, set `OPENCLAW_INSTALL_SMOKE_PREVIOUS=<last-good-version>` or `OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS=1` for the preinstall step.
 - [ ] (Optional) Full installer smoke (adds non-root + CLI coverage): `pnpm test:install:smoke`
