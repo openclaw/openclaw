@@ -24,7 +24,7 @@ type DeliverWithParams = Omit<
   Partial<Pick<DeliverRepliesParams, "replyToMode" | "textLimit">>;
 type RuntimeStub = Pick<RuntimeEnv, "error" | "log" | "exit">;
 
-vi.mock("../../web/media.js", () => ({
+vi.mock("../../../extensions/whatsapp/src/media.js", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMedia(...args),
 }));
 
