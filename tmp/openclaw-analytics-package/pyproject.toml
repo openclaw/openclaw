@@ -1,0 +1,125 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openclaw-analytics"
+version = "1.0.0"
+description = "A comprehensive data analysis toolkit for OpenClaw performance metrics"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "OpenClaw Team", email = "team@openclaw.ai"}
+]
+maintainers = [
+    {name = "OpenClaw Team", email = "team@openclaw.ai"}
+]
+keywords = [
+    "openclaw",
+    "analytics",
+    "performance",
+    "monitoring",
+    "data-analysis",
+    "anomaly-detection"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Typing :: Typed"
+]
+requires-python = ">=3.8"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "black>=23.0",
+    "isort>=5.0",
+    "mypy>=1.0",
+    "flake8>=6.0"
+]
+
+[project.urls]
+Homepage = "https://openclaw.ai"
+Documentation = "https://openclaw.ai/docs/analytics"
+Repository = "https://github.com/openclaw/openclaw/tree/main/packages/analytics"
+Issues = "https://github.com/openclaw/openclaw/issues"
+Changelog = "https://github.com/openclaw/openclaw/blob/main/packages/analytics/CHANGELOG.md"
+
+[project.scripts]
+openclaw-analyze = "openclaw.analytics.data_analyzer:main"
+
+[tool.setuptools]
+packages = ["openclaw", "openclaw.analytics"]
+
+[tool.setuptools.package-data]
+openclaw = ["py.typed"]
+
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311', 'py312']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # defaults
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+skip_gitignore = true
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+show_error_codes = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --cov=openclaw.analytics --cov-report=term-missing --cov-report=html"
+
+[tool.coverage.run]
+source = ["openclaw"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:"
+]

@@ -1,0 +1,232 @@
+[
+  {
+    "timestamp": 1640000000,
+    "cpuUsage": 35.5,
+    "memoryUsage": {
+      "heapUsed": 1073741824,
+      "heapTotal": 2147483648
+    },
+    "agentMetrics": [
+      {
+        "executionCount": 15,
+        "errorCount": 1
+      }
+    ],
+    "modelMetrics": [
+      {
+        "requestCount": 32,
+        "errorRate": 3.12
+      }
+    ],
+    "websocketMetrics": {
+      "averageLatency": 42.5
+    }
+  },
+  {
+    "timestamp": 1640000060,
+    "cpuUsage": 38.2,
+    "memoryUsage": {
+      "heapUsed": 1107296256,
+      "heapTotal": 2147483648
+    },
+    "agentMetrics": [
+      {
+        "executionCount": 18,
+        "errorCount": 0
+      }
+    ],
+    "modelMetrics": [
+      {
+        "requestCount": 38,
+        "errorRate": 0
+      }
+    ],
+    "websocketMetrics": {
+      "averageLatency": 45.3
+    }
+  },
+  {
+    "timestamp": 1640000120,
+    "cpuUsage": 42.7,
+    "memoryUsage": {
+      "heapUsed": 1157627904,
+      "heapTotal": 2147483648
+    },
+    "agentMetrics": [
+      {
+        "executionCount": 22,
+        "errorCount": 0
+      }
+    ],
+    "modelMetrics": [
+      {
+        "requestCount": 45,
+        "errorRate": 0
+      }
+    ],
+    "websocketMetrics": {
+      "averageLatency": 48.1
+    }
+  },
+  {
+    "timestamp": 1640000180,
+    "cpuUsage": 40.1,
+    "memoryUsage": {
+      "heapUsed": 1207959552,
+      "heapTotal": 2147483648
+    },
+    "agentMetrics": [
+      {
+        "executionCount": 25,
+        "errorCount": 1
+      }
+    ],
+    "modelMetrics": [
+      {
+        "requestCount": 52,
+        "errorRate": 1.92
+      }
+    ],
+    "websocketMetrics": {
+      "averageLatency": 46.8
+    }
+  },
+  {
+    "timestamp": 1640000240,
+    "cpuUsage": 45.8,
+    "memoryUsage": {
+      "heapUsed": 1258291200,
+      "heapTotal": 2147483648
+    },
+    "agentMetrics": [
+      {
+        "executionCount": 30,
+        "errorCount": 0
+      }
+    ],
+    "modelMetrics": [
+      {
+        "requestCount": 60,
+        "errorRate": 0
+      }
+    ],
+    "websocketMetrics": {
+      "averageLatency": 51.2
+    }
+  },
+  {
+    "timestamp": 1640000300,
+    "cpuUsage": 52.3,
+    "memoryUsage": {
+      "heapUsed": 1308622848,
+      "heapTotal": 2147483648
+    },
+    "agentMetrics": [
+      {
+        "executionCount": 35,
+        "errorCount": 0
+      }
+    ],
+    "modelMetrics": [
+      {
+        "requestCount": 68,
+        "errorRate": 0
+      }
+    ],
+    "websocketMetrics": {
+      "averageLatency": 54.6
+    }
+  },
+  {
+    "timestamp": 1640000360,
+    "cpuUsage": 48.9,
+    "memoryUsage": {
+      "heapUsed": 1358954496,
+      "heapTotal": 2147483648
+    },
+    "agentMetrics": [
+      {
+        "executionCount": 40,
+        "errorCount": 1
+      }
+    ],
+    "modelMetrics": [
+      {
+        "requestCount": 75,
+        "errorRate": 1.33
+      }
+    ],
+    "websocketMetrics": {
+      "averageLatency": 52.3
+    }
+  },
+  {
+    "timestamp": 1640000420,
+    "cpuUsage": 55.6,
+    "memoryUsage": {
+      "heapUsed": 1409286144,
+      "heapTotal": 2147483648
+    },
+    "agentMetrics": [
+      {
+        "executionCount": 45,
+        "errorCount": 0
+      }
+    ],
+    "modelMetrics": [
+      {
+        "requestCount": 83,
+        "errorRate": 0
+      }
+    ],
+    "websocketMetrics": {
+      "averageLatency": 58.7
+    }
+  },
+  {
+    "timestamp": 1640000480,
+    "cpuUsage": 62.1,
+    "memoryUsage": {
+      "heapUsed": 1459617792,
+      "heapTotal": 2147483648
+    },
+    "agentMetrics": [
+      {
+        "executionCount": 50,
+        "errorCount": 0
+      }
+    ],
+    "modelMetrics": [
+      {
+        "requestCount": 92,
+        "errorRate": 0
+      }
+    ],
+    "websocketMetrics": {
+      "averageLatency": 62.4
+    }
+  },
+  {
+    "timestamp": 1640000540,
+    "cpuUsage": 78.5,
+    "memoryUsage": {
+      "heapUsed": 1509949440,
+      "heapTotal": 2147483648
+    },
+    "agentMetrics": [
+      {
+        "executionCount": 58,
+        "errorCount": 2
+      }
+    ],
+    "modelMetrics": [
+      {
+        "requestCount": 105,
+        "errorRate": 1.90
+      }
+    ],
+    "websocketMetrics": {
+      "averageLatency": 85.3
+    }
+  }
+]
