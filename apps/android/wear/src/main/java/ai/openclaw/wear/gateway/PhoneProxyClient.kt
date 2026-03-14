@@ -12,6 +12,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,6 +45,11 @@ private const val PHONE_PONG_TIMEOUT_MS = 5_000L
  * via Wear OS Data Layer MessageClient.
  */
 class PhoneProxyClient(private val context: Context) : GatewayClientInterface, MessageClient.OnMessageReceivedListener {
+  private data class ProxyHandshake(
+    val ready: Boolean,
+    val statusText: String?,
+  )
+
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val json = Json { ignoreUnknownKeys = true }
   private val messageClient: MessageClient = Wearable.getMessageClient(context)
@@ -51,6 +57,7 @@ class PhoneProxyClient(private val context: Context) : GatewayClientInterface, M
   private val pendingRequests = ConcurrentHashMap<String, CompletableDeferred<String>>()
 
   private var phoneNodeId: String? = null
+  private var reconnectJob: Job? = null
 
   private val _connected = MutableStateFlow(false)
   override val connected: StateFlow<Boolean> = _connected.asStateFlow()
@@ -63,6 +70,7 @@ class PhoneProxyClient(private val context: Context) : GatewayClientInterface, M
 
   fun connect() {
     messageClient.addListener(this)
+    reconnectJob?.cancel()
     _statusText.value = context.getString(R.string.wear_status_finding_phone)
     scope.launch {
       findPhoneAndPing()
@@ -71,6 +79,8 @@ class PhoneProxyClient(private val context: Context) : GatewayClientInterface, M
 
   fun disconnect() {
     messageClient.removeListener(this)
+    reconnectJob?.cancel()
+    reconnectJob = null
     phoneNodeId = null
     _connected.value = false
     _statusText.value = context.getString(R.string.wear_status_phone_proxy_offline)
@@ -111,7 +121,7 @@ class PhoneProxyClient(private val context: Context) : GatewayClientInterface, M
     when (event.path) {
       RPC_RESPONSE_PATH -> handleRpcResponse(data)
       EVENT_PATH -> handleGatewayEvent(data)
-      PONG_PATH -> handlePong(event.sourceNodeId)
+      PONG_PATH -> handlePong(event.sourceNodeId, data)
     }
   }
 
@@ -150,7 +160,20 @@ class PhoneProxyClient(private val context: Context) : GatewayClientInterface, M
     }
   }
 
-  private fun handlePong(sourceNodeId: String) {
+  private fun handlePong(sourceNodeId: String, data: String) {
+    val handshake = parseProxyHandshake(data)
+    if (!handshake.ready) {
+      phoneNodeId = null
+      _connected.value = false
+      _statusText.value =
+        handshake.statusText?.takeIf { it.isNotBlank() }
+          ?: context.getString(R.string.wear_status_phone_gateway_unavailable)
+      scheduleReconnect()
+      return
+    }
+
+    reconnectJob?.cancel()
+    reconnectJob = null
     phoneNodeId = sourceNodeId
     _connected.value = true
     _statusText.value = context.getString(R.string.wear_status_connected_via_phone)
@@ -179,6 +202,7 @@ class PhoneProxyClient(private val context: Context) : GatewayClientInterface, M
       if (sent == null) {
         Log.w(TAG, "Timed out sending ping to phone ${phone.displayName ?: phone.id}")
         phoneNodeId = null
+        _connected.value = false
         _statusText.value = context.getString(R.string.wear_status_phone_ping_timed_out)
         scheduleReconnect()
         return
@@ -189,16 +213,14 @@ class PhoneProxyClient(private val context: Context) : GatewayClientInterface, M
         if (!_connected.value) {
           phoneNodeId = null
           _statusText.value = context.getString(R.string.wear_status_phone_not_responding)
-          findPhoneAndPing()
+          scheduleReconnect(delayMs = 0)
         }
       }
     } catch (e: Throwable) {
       Log.w(TAG, "Failed to find phone: ${e.message}")
+      _connected.value = false
       _statusText.value = context.getString(R.string.wear_status_failed, e.message ?: "")
-      scope.launch {
-        delay(5000)
-        if (!_connected.value) findPhoneAndPing()
-      }
+      scheduleReconnect(delayMs = 5_000)
     }
   }
 
@@ -214,9 +236,25 @@ class PhoneProxyClient(private val context: Context) : GatewayClientInterface, M
   }
 
   private fun scheduleReconnect(delayMs: Long = PHONE_PONG_TIMEOUT_MS) {
-    scope.launch {
+    reconnectJob?.cancel()
+    reconnectJob = scope.launch {
       delay(delayMs)
       if (!_connected.value) findPhoneAndPing()
+    }
+  }
+
+  private fun parseProxyHandshake(data: String): ProxyHandshake {
+    if (data.isBlank()) {
+      return ProxyHandshake(ready = true, statusText = null)
+    }
+
+    return try {
+      val root = json.parseToJsonElement(data) as? JsonObject
+      val ready = (root?.get("ready") as? JsonPrimitive)?.content?.toBooleanStrictOrNull()
+      val statusText = (root?.get("statusText") as? JsonPrimitive)?.content
+      ProxyHandshake(ready = ready ?: true, statusText = statusText)
+    } catch (_: Throwable) {
+      ProxyHandshake(ready = true, statusText = null)
     }
   }
 }

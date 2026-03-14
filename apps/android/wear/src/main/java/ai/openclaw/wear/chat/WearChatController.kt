@@ -35,10 +35,6 @@ class WearChatController(
     private const val PENDING_RUN_TIMEOUT_MS = 120_000L
     private const val PENDING_HISTORY_REFRESH_MS = 1_500L
     private const val MAX_COMPLETED_RUN_IDS = 24
-    private const val WEAR_REPLY_PROMPT_PREFIX =
-      "Wear app active. Reply in a concise, plain-text tone.\n" +
-        "Avoid emoji, Markdown tables, and decorative formatting.\n" +
-        "Keep the reply short and easy to scan on a tiny screen."
   }
 
   private data class PendingRunSnapshot(
@@ -292,7 +288,7 @@ class WearChatController(
 
           val params = buildJsonObject {
             put("sessionKey", JsonPrimitive(sessionKey))
-            put("message", JsonPrimitive(buildPrompt(text)))
+            put("message", JsonPrimitive(text))
             put("thinking", JsonPrimitive("off"))
             put("timeoutMs", JsonPrimitive(30_000))
             put("idempotencyKey", JsonPrimitive(runId))
@@ -333,14 +329,6 @@ class WearChatController(
       }
     synchronized(dispatchJobs) {
       dispatchJobs[runId] = job
-    }
-  }
-
-  private fun buildPrompt(text: String): String {
-    return buildString {
-      append(WEAR_REPLY_PROMPT_PREFIX)
-      append("\n\n")
-      append(text)
     }
   }
 
