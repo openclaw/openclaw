@@ -59,7 +59,34 @@ export function resolveGatewayProbeAuthSafe(params: {
   warning?: string;
 } {
   try {
-    return { auth: resolveGatewayProbeAuth(params) };
+    const auth = resolveGatewayProbeAuth(params);
+
+    // Defensive: some secret ref resolutions intentionally degrade to "no auth"
+    // for best-effort commands. In that case, still surface a warning so status
+    // output doesn't misleadingly treat auth-less probes as generic timeouts.
+    const mode = params.cfg.gateway?.auth?.mode;
+    if (mode === "token") {
+      const tokenCfg = (params.cfg.gateway?.auth as { token?: unknown } | undefined)?.token;
+      if (!auth.token && tokenCfg && typeof tokenCfg === "object") {
+        return {
+          auth,
+          warning:
+            "gateway.auth.token SecretRef is unresolved in this command path; probing without configured auth credentials.",
+        };
+      }
+    }
+    if (mode === "password") {
+      const passCfg = (params.cfg.gateway?.auth as { password?: unknown } | undefined)?.password;
+      if (!auth.password && passCfg && typeof passCfg === "object") {
+        return {
+          auth,
+          warning:
+            "gateway.auth.password SecretRef is unresolved in this command path; probing without configured auth credentials.",
+        };
+      }
+    }
+
+    return { auth };
   } catch (error) {
     if (!isGatewaySecretRefUnavailableError(error)) {
       throw error;
