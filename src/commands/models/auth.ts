@@ -10,7 +10,12 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
-import { upsertAuthProfile } from "../../agents/auth-profiles.js";
+import {
+  clearAuthProfileCooldown,
+  listProfilesForProvider,
+  loadAuthProfileStoreForRuntime,
+  upsertAuthProfile,
+} from "../../agents/auth-profiles.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
@@ -265,6 +270,24 @@ type LoginOptions = {
   setDefault?: boolean;
 };
 
+/**
+ * Clear stale cooldown/disabled state for all profiles matching a provider.
+ * When a user explicitly runs `models auth login`, they intend to fix auth —
+ * stale `auth_permanent` / `billing` lockouts should not persist across
+ * a deliberate re-authentication attempt.
+ */
+async function clearStaleProfileLockouts(provider: string, agentDir: string): Promise<void> {
+  try {
+    const store = loadAuthProfileStoreForRuntime(agentDir);
+    const profileIds = listProfilesForProvider(store, provider);
+    for (const profileId of profileIds) {
+      await clearAuthProfileCooldown({ store, profileId, agentDir });
+    }
+  } catch {
+    // Best-effort housekeeping — never block re-authentication.
+  }
+}
+
 export function resolveRequestedLoginProviderOrThrow(
   providers: ProviderPlugin[],
   rawProvider?: string,
@@ -356,6 +379,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   const prompter = createClackPrompter();
 
   if (requestedProviderId === "openai-codex") {
+    await clearStaleProfileLockouts("openai-codex", agentDir);
     await runBuiltInOpenAICodexLogin({
       opts,
       runtime,
@@ -389,6 +413,8 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   if (!selectedProvider) {
     throw new Error("Unknown provider. Use --provider <id> to pick a provider plugin.");
   }
+
+  await clearStaleProfileLockouts(selectedProvider.id, agentDir);
 
   const chosenMethod =
     pickAuthMethod(selectedProvider, opts.method) ??
