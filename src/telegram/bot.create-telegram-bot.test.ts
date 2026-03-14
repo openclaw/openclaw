@@ -141,6 +141,7 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
     expect(payload.Body).toContain("cmd:option_a");
+    expect(payload.MessageSid).toBe("10");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
   });
   it("wraps inbound message with Telegram envelope", async () => {
