@@ -232,7 +232,6 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.HOME).toBe("/Users/service");
     expect(plan.environment.OPENCLAW_PORT).toBe("3000");
   });
-
 });
 
 describe("gatewayInstallErrorHint", () => {
