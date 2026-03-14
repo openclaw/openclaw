@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../gateway.ts";
 import {
+  abortChatRun,
   handleChatEvent,
   loadChatHistory,
   sendChatMessage,
@@ -570,6 +571,32 @@ describe("sendChatMessage", () => {
         },
       ],
     });
+  });
+});
+
+describe("abortChatRun", () => {
+  it("formats structured non-auth connect failures for chat abort", async () => {
+    const request = vi.fn().mockRejectedValue(
+      new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "Fetch failed",
+        details: { code: "CONTROL_UI_DEVICE_IDENTITY_REQUIRED" },
+      }),
+    );
+    const state = createState({
+      connected: true,
+      chatRunId: "run-1",
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await abortChatRun(state);
+
+    expect(result).toBe(false);
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "main",
+      runId: "run-1",
+    });
+    expect(state.lastError).toContain("device identity required");
   });
 });
 
