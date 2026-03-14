@@ -7,6 +7,8 @@
  * across multiple providers.
  */
 
+import { parseSlackBlocksInput } from "../../../extensions/slack/src/blocks-input.js";
+import { isSlackInteractiveRepliesEnabled } from "../../../extensions/slack/src/interactive-replies.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
@@ -94,6 +96,8 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       : cfg.messages?.responsePrefix;
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
+    enableSlackInteractiveReplies:
+      channel === "slack" ? isSlackInteractiveRepliesEnabled({ cfg, accountId }) : false,
   });
   if (!normalized) {
     return { ok: true };
@@ -106,9 +110,25 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       ? [normalized.mediaUrl]
       : [];
   const replyToId = normalized.replyToId;
+  let hasSlackBlocks = false;
+  if (
+    channel === "slack" &&
+    normalized.channelData?.slack &&
+    typeof normalized.channelData.slack === "object" &&
+    !Array.isArray(normalized.channelData.slack)
+  ) {
+    try {
+      hasSlackBlocks = Boolean(
+        parseSlackBlocksInput((normalized.channelData.slack as { blocks?: unknown }).blocks)
+          ?.length,
+      );
+    } catch {
+      hasSlackBlocks = false;
+    }
+  }
 
   // Skip empty replies.
-  if (!text.trim() && mediaUrls.length === 0) {
+  if (!text.trim() && mediaUrls.length === 0 && !hasSlackBlocks) {
     return { ok: true };
   }
 
@@ -129,7 +149,9 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
 
   const resolvedReplyToId =
     replyToId ??
-    (channelId === "slack" && threadId != null && threadId !== "" ? String(threadId) : undefined);
+    ((channelId === "slack" || channelId === "mattermost") && threadId != null && threadId !== ""
+      ? String(threadId)
+      : undefined);
   const resolvedThreadId = channelId === "slack" ? null : (threadId ?? null);
 
   try {

@@ -62,42 +62,13 @@ function resolveMode(mode: ThemeMode): "light" | "dark" {
   return mode;
 }
 
-function normalizeThemeArgs(
-  themeOrMode: ThemeName | ThemeMode,
-  mode: ThemeMode | undefined,
-): { theme: ThemeName; mode: ThemeMode } {
-  if (VALID_THEME_NAMES.has(themeOrMode as ThemeName)) {
-    return {
-      theme: themeOrMode as ThemeName,
-      mode: mode ?? "system",
-    };
-  }
-  return {
-    theme: "claw",
-    mode: themeOrMode as ThemeMode,
-  };
-}
-
-export function resolveTheme(mode: ThemeMode): ResolvedTheme;
-export function resolveTheme(theme: ThemeName, mode?: ThemeMode): ResolvedTheme;
-export function resolveTheme(themeOrMode: ThemeName | ThemeMode, mode?: ThemeMode): ResolvedTheme {
-  const normalized = normalizeThemeArgs(themeOrMode, mode);
-  const resolvedMode = resolveMode(normalized.mode);
-  if (normalized.theme === "claw") {
+export function resolveTheme(theme: ThemeName, mode: ThemeMode): ResolvedTheme {
+  const resolvedMode = resolveMode(mode);
+  if (theme === "claw") {
     return resolvedMode === "light" ? "light" : "dark";
   }
-  if (normalized.theme === "knot") {
+  if (theme === "knot") {
     return resolvedMode === "light" ? "openknot-light" : "openknot";
   }
   return resolvedMode === "light" ? "dash-light" : "dash";
-}
-
-export function colorSchemeForTheme(theme: ResolvedTheme): "light" | "dark" {
-  return theme === "light" || theme === "openknot-light" || theme === "dash-light"
-    ? "light"
-    : "dark";
-}
-
-export function dataThemeForTheme(theme: ResolvedTheme): ResolvedTheme | "light" {
-  return colorSchemeForTheme(theme) === "light" ? "light" : theme;
 }

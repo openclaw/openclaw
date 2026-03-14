@@ -58,6 +58,31 @@ function mockResolvedProviderKey(apiKey = "test-key") {
   });
 }
 
+type GeminiFetchMock =
+  | ReturnType<typeof createGeminiFetchMock>
+  | ReturnType<typeof createGeminiBatchFetchMock>;
+
+async function createProviderWithFetch(
+  fetchMock: GeminiFetchMock,
+  options: Partial<Parameters<typeof createGeminiEmbeddingProvider>[0]> & { model: string },
+) {
+  vi.stubGlobal("fetch", fetchMock);
+  mockResolvedProviderKey();
+  const { provider } = await createGeminiEmbeddingProvider({
+    config: {} as never,
+    provider: "gemini",
+    fallback: "none",
+    ...options,
+  });
+  return provider;
+}
+
+function expectNormalizedThreeFourVector(embedding: number[]) {
+  expect(embedding[0]).toBeCloseTo(0.6, 5);
+  expect(embedding[1]).toBeCloseTo(0.8, 5);
+  expect(magnitude(embedding)).toBeCloseTo(1, 5);
+}
+
 describe("buildGeminiTextEmbeddingRequest", () => {
   it("builds a text embedding request with optional model and dimensions", () => {
     expect(
@@ -160,14 +185,8 @@ describe("resolveGeminiOutputDimensionality", () => {
 describe("gemini-embedding-001 provider (backward compat)", () => {
   it("does NOT include outputDimensionality in embedQuery", async () => {
     const fetchMock = createGeminiFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
-    mockResolvedProviderKey();
-
-    const { provider } = await createGeminiEmbeddingProvider({
-      config: {} as never,
-      provider: "gemini",
+    const provider = await createProviderWithFetch(fetchMock, {
       model: "gemini-embedding-001",
-      fallback: "none",
     });
 
     await provider.embedQuery("test query");
@@ -180,14 +199,8 @@ describe("gemini-embedding-001 provider (backward compat)", () => {
 
   it("does NOT include outputDimensionality in embedBatch", async () => {
     const fetchMock = createGeminiBatchFetchMock(2);
-    vi.stubGlobal("fetch", fetchMock);
-    mockResolvedProviderKey();
-
-    const { provider } = await createGeminiEmbeddingProvider({
-      config: {} as never,
-      provider: "gemini",
+    const provider = await createProviderWithFetch(fetchMock, {
       model: "gemini-embedding-001",
-      fallback: "none",
     });
 
     await provider.embedBatch(["text1", "text2"]);
@@ -202,14 +215,8 @@ describe("gemini-embedding-001 provider (backward compat)", () => {
 describe("gemini-embedding-2-preview provider", () => {
   it("includes outputDimensionality in embedQuery request", async () => {
     const fetchMock = createGeminiFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
-    mockResolvedProviderKey();
-
-    const { provider } = await createGeminiEmbeddingProvider({
-      config: {} as never,
-      provider: "gemini",
+    const provider = await createProviderWithFetch(fetchMock, {
       model: "gemini-embedding-2-preview",
-      fallback: "none",
     });
 
     await provider.embedQuery("test query");
@@ -222,33 +229,19 @@ describe("gemini-embedding-2-preview provider", () => {
 
   it("normalizes embedQuery response vectors", async () => {
     const fetchMock = createGeminiFetchMock([3, 4]);
-    vi.stubGlobal("fetch", fetchMock);
-    mockResolvedProviderKey();
-
-    const { provider } = await createGeminiEmbeddingProvider({
-      config: {} as never,
-      provider: "gemini",
+    const provider = await createProviderWithFetch(fetchMock, {
       model: "gemini-embedding-2-preview",
-      fallback: "none",
     });
 
     const embedding = await provider.embedQuery("test query");
 
-    expect(embedding[0]).toBeCloseTo(0.6, 5);
-    expect(embedding[1]).toBeCloseTo(0.8, 5);
-    expect(magnitude(embedding)).toBeCloseTo(1, 5);
+    expectNormalizedThreeFourVector(embedding);
   });
 
   it("includes outputDimensionality in embedBatch request", async () => {
     const fetchMock = createGeminiBatchFetchMock(2);
-    vi.stubGlobal("fetch", fetchMock);
-    mockResolvedProviderKey();
-
-    const { provider } = await createGeminiEmbeddingProvider({
-      config: {} as never,
-      provider: "gemini",
+    const provider = await createProviderWithFetch(fetchMock, {
       model: "gemini-embedding-2-preview",
-      fallback: "none",
     });
 
     await provider.embedBatch(["text1", "text2"]);
@@ -272,36 +265,22 @@ describe("gemini-embedding-2-preview provider", () => {
 
   it("normalizes embedBatch response vectors", async () => {
     const fetchMock = createGeminiBatchFetchMock(2, [3, 4]);
-    vi.stubGlobal("fetch", fetchMock);
-    mockResolvedProviderKey();
-
-    const { provider } = await createGeminiEmbeddingProvider({
-      config: {} as never,
-      provider: "gemini",
+    const provider = await createProviderWithFetch(fetchMock, {
       model: "gemini-embedding-2-preview",
-      fallback: "none",
     });
 
     const embeddings = await provider.embedBatch(["text1", "text2"]);
 
     expect(embeddings).toHaveLength(2);
     for (const embedding of embeddings) {
-      expect(embedding[0]).toBeCloseTo(0.6, 5);
-      expect(embedding[1]).toBeCloseTo(0.8, 5);
-      expect(magnitude(embedding)).toBeCloseTo(1, 5);
+      expectNormalizedThreeFourVector(embedding);
     }
   });
 
   it("respects custom outputDimensionality", async () => {
     const fetchMock = createGeminiFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
-    mockResolvedProviderKey();
-
-    const { provider } = await createGeminiEmbeddingProvider({
-      config: {} as never,
-      provider: "gemini",
+    const provider = await createProviderWithFetch(fetchMock, {
       model: "gemini-embedding-2-preview",
-      fallback: "none",
       outputDimensionality: 768,
     });
 
@@ -313,14 +292,8 @@ describe("gemini-embedding-2-preview provider", () => {
 
   it("sanitizes and normalizes embedQuery responses", async () => {
     const fetchMock = createGeminiFetchMock([3, 4, Number.NaN]);
-    vi.stubGlobal("fetch", fetchMock);
-    mockResolvedProviderKey();
-
-    const { provider } = await createGeminiEmbeddingProvider({
-      config: {} as never,
-      provider: "gemini",
+    const provider = await createProviderWithFetch(fetchMock, {
       model: "gemini-embedding-2-preview",
-      fallback: "none",
     });
 
     await expect(provider.embedQuery("test")).resolves.toEqual([0.6, 0.8, 0]);
@@ -328,14 +301,8 @@ describe("gemini-embedding-2-preview provider", () => {
 
   it("uses custom outputDimensionality for each embedBatch request", async () => {
     const fetchMock = createGeminiBatchFetchMock(2);
-    vi.stubGlobal("fetch", fetchMock);
-    mockResolvedProviderKey();
-
-    const { provider } = await createGeminiEmbeddingProvider({
-      config: {} as never,
-      provider: "gemini",
+    const provider = await createProviderWithFetch(fetchMock, {
       model: "gemini-embedding-2-preview",
-      fallback: "none",
       outputDimensionality: 768,
     });
 
@@ -350,14 +317,8 @@ describe("gemini-embedding-2-preview provider", () => {
 
   it("sanitizes and normalizes structured batch responses", async () => {
     const fetchMock = createGeminiBatchFetchMock(1, [0, Number.POSITIVE_INFINITY, 5]);
-    vi.stubGlobal("fetch", fetchMock);
-    mockResolvedProviderKey();
-
-    const { provider } = await createGeminiEmbeddingProvider({
-      config: {} as never,
-      provider: "gemini",
+    const provider = await createProviderWithFetch(fetchMock, {
       model: "gemini-embedding-2-preview",
-      fallback: "none",
     });
 
     await expect(
@@ -375,14 +336,8 @@ describe("gemini-embedding-2-preview provider", () => {
 
   it("supports multimodal embedBatchInputs requests", async () => {
     const fetchMock = createGeminiBatchFetchMock(2);
-    vi.stubGlobal("fetch", fetchMock);
-    mockResolvedProviderKey();
-
-    const { provider } = await createGeminiEmbeddingProvider({
-      config: {} as never,
-      provider: "gemini",
+    const provider = await createProviderWithFetch(fetchMock, {
       model: "gemini-embedding-2-preview",
-      fallback: "none",
     });
 
     expect(provider.embedBatchInputs).toBeDefined();
@@ -451,14 +406,8 @@ describe("gemini-embedding-2-preview provider", () => {
       Number.POSITIVE_INFINITY,
       Number.NEGATIVE_INFINITY,
     ]);
-    vi.stubGlobal("fetch", fetchMock);
-    mockResolvedProviderKey();
-
-    const { provider } = await createGeminiEmbeddingProvider({
-      config: {} as never,
-      provider: "gemini",
+    const provider = await createProviderWithFetch(fetchMock, {
       model: "gemini-embedding-2-preview",
-      fallback: "none",
     });
 
     const embedding = await provider.embedQuery("test");
@@ -468,14 +417,8 @@ describe("gemini-embedding-2-preview provider", () => {
 
   it("uses correct endpoint URL", async () => {
     const fetchMock = createGeminiFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
-    mockResolvedProviderKey();
-
-    const { provider } = await createGeminiEmbeddingProvider({
-      config: {} as never,
-      provider: "gemini",
+    const provider = await createProviderWithFetch(fetchMock, {
       model: "gemini-embedding-2-preview",
-      fallback: "none",
     });
 
     await provider.embedQuery("test");
@@ -488,14 +431,8 @@ describe("gemini-embedding-2-preview provider", () => {
 
   it("allows taskType override via options", async () => {
     const fetchMock = createGeminiFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
-    mockResolvedProviderKey();
-
-    const { provider } = await createGeminiEmbeddingProvider({
-      config: {} as never,
-      provider: "gemini",
+    const provider = await createProviderWithFetch(fetchMock, {
       model: "gemini-embedding-2-preview",
-      fallback: "none",
       taskType: "SEMANTIC_SIMILARITY",
     });
 

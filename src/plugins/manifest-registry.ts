@@ -1,12 +1,10 @@
 import fs from "node:fs";
-import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveConfigDir, resolveUserPath } from "../utils.js";
-import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { loadPluginManifest, type PluginManifest } from "./manifest.js";
 import { safeRealpathSync } from "./path-safety.js";
+import { resolvePluginCacheInputs } from "./roots.js";
 import type { PluginConfigUiHint, PluginDiagnostic, PluginKind, PluginOrigin } from "./types.js";
 
 type SeenIdEntry = {
@@ -83,16 +81,16 @@ function buildCacheKey(params: {
   plugins: NormalizedPluginsConfig;
   env: NodeJS.ProcessEnv;
 }): string {
-  const workspaceKey = params.workspaceDir ? resolveUserPath(params.workspaceDir) : "";
-  const configExtensionsRoot = path.join(resolveConfigDir(params.env), "extensions");
-  const bundledRoot = resolveBundledPluginsDir(params.env) ?? "";
+  const { roots, loadPaths } = resolvePluginCacheInputs({
+    workspaceDir: params.workspaceDir,
+    loadPaths: params.plugins.loadPaths,
+    env: params.env,
+  });
+  const workspaceKey = roots.workspace ?? "";
+  const configExtensionsRoot = roots.global;
+  const bundledRoot = roots.stock ?? "";
   // The manifest registry only depends on where plugins are discovered from (workspace + load paths).
   // It does not depend on allow/deny/entries enable-state, so exclude those for higher cache hit rates.
-  const loadPaths = params.plugins.loadPaths
-    .map((p) => resolveUserPath(p))
-    .map((p) => p.trim())
-    .filter(Boolean)
-    .toSorted();
   return `${workspaceKey}::${configExtensionsRoot}::${bundledRoot}::${JSON.stringify(loadPaths)}`;
 }
 

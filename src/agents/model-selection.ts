@@ -1,3 +1,4 @@
+import { resolveThinkingDefaultForModel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentModelFallbackValues,
@@ -30,20 +31,33 @@ export type ModelAliasIndex = {
   byKey: Map<string, string[]>;
 };
 
-const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
-  "opus-4.6": "claude-opus-4-6",
-  "opus-4.5": "claude-opus-4-5",
-  "sonnet-4.6": "claude-sonnet-4-6",
-  "sonnet-4.5": "claude-sonnet-4-5",
-};
-const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
-
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
 }
 
 export function modelKey(provider: string, model: string) {
-  return `${provider}/${model}`;
+  const providerId = provider.trim();
+  const modelId = model.trim();
+  if (!providerId) {
+    return modelId;
+  }
+  if (!modelId) {
+    return providerId;
+  }
+  return modelId.toLowerCase().startsWith(`${providerId.toLowerCase()}/`)
+    ? modelId
+    : `${providerId}/${modelId}`;
+}
+
+export function legacyModelKey(provider: string, model: string): string | null {
+  const providerId = provider.trim();
+  const modelId = model.trim();
+  if (!providerId || !modelId) {
+    return null;
+  }
+  const rawKey = `${providerId}/${modelId}`;
+  const canonicalKey = modelKey(providerId, modelId);
+  return rawKey === canonicalKey ? null : rawKey;
 }
 
 export function normalizeProviderId(provider: string): string {
@@ -130,7 +144,20 @@ function normalizeAnthropicModelId(model: string): string {
     return trimmed;
   }
   const lower = trimmed.toLowerCase();
-  return ANTHROPIC_MODEL_ALIASES[lower] ?? trimmed;
+  // Keep alias resolution local so bundled startup paths cannot trip a TDZ on
+  // a module-level alias table while config parsing is still initializing.
+  switch (lower) {
+    case "opus-4.6":
+      return "claude-opus-4-6";
+    case "opus-4.5":
+      return "claude-opus-4-5";
+    case "sonnet-4.6":
+      return "claude-sonnet-4-6";
+    case "sonnet-4.5":
+      return "claude-sonnet-4-5";
+    default:
+      return trimmed;
+  }
 }
 
 function normalizeProviderModelId(provider: string, model: string): string {
@@ -144,7 +171,7 @@ function normalizeProviderModelId(provider: string, model: string): string {
       return `anthropic/${normalizedAnthropicModel}`;
     }
   }
-  if (provider === "google") {
+  if (provider === "google" || provider === "google-vertex") {
     return normalizeGoogleModelId(model);
   }
   // OpenRouter-native models (e.g. "openrouter/aurora-alpha") need the full
@@ -608,11 +635,14 @@ export function resolveThinkingDefault(params: {
   model: string;
   catalog?: ModelCatalogEntry[];
 }): ThinkLevel {
-  const normalizedProvider = normalizeProviderId(params.provider);
-  const modelLower = params.model.toLowerCase();
+  const _normalizedProvider = normalizeProviderId(params.provider);
+  const _modelLower = params.model.toLowerCase();
+  const configuredModels = params.cfg.agents?.defaults?.models;
+  const canonicalKey = modelKey(params.provider, params.model);
+  const legacyKey = legacyModelKey(params.provider, params.model);
   const perModelThinking =
-    params.cfg.agents?.defaults?.models?.[modelKey(params.provider, params.model)]?.params
-      ?.thinking;
+    configuredModels?.[canonicalKey]?.params?.thinking ??
+    (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
   if (
     perModelThinking === "off" ||
     perModelThinking === "minimal" ||
@@ -628,21 +658,11 @@ export function resolveThinkingDefault(params: {
   if (configured) {
     return configured;
   }
-  const isAnthropicFamilyModel =
-    normalizedProvider === "anthropic" ||
-    normalizedProvider === "amazon-bedrock" ||
-    modelLower.includes("anthropic/") ||
-    modelLower.includes(".anthropic.");
-  if (isAnthropicFamilyModel && CLAUDE_46_MODEL_RE.test(modelLower)) {
-    return "adaptive";
-  }
-  const candidate = params.catalog?.find(
-    (entry) => entry.provider === params.provider && entry.id === params.model,
-  );
-  if (candidate?.reasoning) {
-    return "low";
-  }
-  return "off";
+  return resolveThinkingDefaultForModel({
+    provider: params.provider,
+    model: params.model,
+    catalog: params.catalog,
+  });
 }
 
 /** Default reasoning level when session/directive do not set it: "on" if model supports reasoning, else "off". */

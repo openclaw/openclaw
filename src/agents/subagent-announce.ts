@@ -51,8 +51,9 @@ import { isAnnounceSkip } from "./tools/sessions-send-helpers.js";
 
 const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
-const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 60_000;
+const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 90_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
+const GATEWAY_TIMEOUT_PATTERN = /gateway timeout/i;
 let subagentRegistryRuntimePromise: Promise<
   typeof import("./subagent-registry-runtime.js")
 > | null = null;
@@ -107,7 +108,7 @@ const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /no active .* listener/i,
   /gateway not connected/i,
   /gateway closed \(1006/i,
-  /gateway timeout/i,
+  GATEWAY_TIMEOUT_PATTERN,
   /\b(econnreset|econnrefused|etimedout|enotfound|ehostunreach|network error)\b/i,
 ];
 
@@ -131,6 +132,11 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
     return false;
   }
   return TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message));
+}
+
+function isGatewayTimeoutError(error: unknown): boolean {
+  const message = summarizeDeliveryError(error);
+  return Boolean(message) && GATEWAY_TIMEOUT_PATTERN.test(message);
 }
 
 async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -160,6 +166,7 @@ async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Prom
 
 async function runAnnounceDeliveryWithRetry<T>(params: {
   operation: string;
+  noRetryOnGatewayTimeout?: boolean;
   signal?: AbortSignal;
   run: () => Promise<T>;
 }): Promise<T> {
@@ -171,6 +178,9 @@ async function runAnnounceDeliveryWithRetry<T>(params: {
     try {
       return await params.run();
     } catch (err) {
+      if (params.noRetryOnGatewayTimeout && isGatewayTimeoutError(err)) {
+        throw err;
+      }
       const delayMs = DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS[retryIndex];
       if (delayMs == null || !isTransientAnnounceDeliveryError(err) || params.signal?.aborted) {
         throw err;
@@ -789,6 +799,7 @@ async function sendSubagentAnnounceDirectly(params: {
       operation: params.expectsCompletionMessage
         ? "completion direct announce agent call"
         : "direct announce agent call",
+      noRetryOnGatewayTimeout: params.expectsCompletionMessage && shouldDeliverExternally,
       signal: params.signal,
       run: async () =>
         await callGateway({
