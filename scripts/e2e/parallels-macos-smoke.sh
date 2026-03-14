@@ -12,6 +12,8 @@ HOST_PORT="18425"
 HOST_PORT_EXPLICIT=0
 HOST_IP=""
 LATEST_VERSION=""
+INSTALL_VERSION=""
+TARGET_PACKAGE_SPEC=""
 KEEP_SERVER=0
 CHECK_LATEST_REF=1
 JSON_OUTPUT=0
@@ -44,6 +46,14 @@ UPGRADE_AGENT_STATUS="skip"
 
 say() {
   printf '==> %s\n' "$*"
+}
+
+artifact_label() {
+  if [[ -n "$TARGET_PACKAGE_SPEC" ]]; then
+    printf 'target package tgz'
+    return
+  fi
+  printf 'current main tgz'
 }
 
 warn() {
@@ -81,8 +91,8 @@ Options:
   --snapshot-hint <name>     Snapshot name substring/fuzzy match.
                              Default: "macOS 26.3.1 fresh"
   --mode <fresh|upgrade|both>
-                             fresh   = fresh snapshot -> current main tgz -> onboard smoke
-                             upgrade = fresh snapshot -> latest release -> current main tgz -> onboard smoke
+                             fresh   = fresh snapshot -> target package/current main tgz -> onboard smoke
+                             upgrade = fresh snapshot -> latest release -> target package/current main tgz -> onboard smoke
                              both    = run both lanes
   --openai-api-key-env <var> Host env var name for OpenAI API key.
                              Default: OPENAI_API_KEY
@@ -90,6 +100,10 @@ Options:
   --host-port <port>         Host HTTP port for current-main tgz. Default: 18425
   --host-ip <ip>             Override Parallels host IP.
   --latest-version <ver>     Override npm latest version lookup.
+  --install-version <ver>    Pin site-installer version/dist-tag for the baseline lane.
+  --target-package-spec <npm-spec>
+                             Install this npm package tarball instead of packing current main.
+                             Example: openclaw@2026.3.13-beta.1
   --skip-latest-ref-check    Skip the known latest-release ref-mode precheck in upgrade lane.
   --keep-server              Leave temp host HTTP server running.
   --json                     Print machine-readable JSON summary.
@@ -130,6 +144,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --latest-version)
       LATEST_VERSION="$2"
+      shift 2
+      ;;
+    --install-version)
+      INSTALL_VERSION="$2"
+      shift 2
+      ;;
+    --target-package-spec)
+      TARGET_PACKAGE_SPEC="$2"
       shift 2
       ;;
     --skip-latest-ref-check)
@@ -343,12 +365,16 @@ resolve_latest_version() {
 }
 
 install_latest_release() {
-  local install_url_q
+  local install_url_q version_arg_q
   install_url_q="$(shell_quote "$INSTALL_URL")"
+  version_arg_q=""
+  if [[ -n "$INSTALL_VERSION" ]]; then
+    version_arg_q=" --version $(shell_quote "$INSTALL_VERSION")"
+  fi
   guest_current_user_sh "$(cat <<EOF
 export OPENCLAW_NO_ONBOARD=1
 curl -fsSL $install_url_q -o /tmp/openclaw-install.sh
-bash /tmp/openclaw-install.sh
+bash /tmp/openclaw-install.sh${version_arg_q}
 $GUEST_OPENCLAW_BIN --version
 EOF
 )"
@@ -370,10 +396,26 @@ verify_version_contains() {
   esac
 }
 
+extract_package_version_from_tgz() {
+  tar -xOf "$1" package/package.json | python3 -c 'import json, sys; print(json.load(sys.stdin)["version"])'
+}
+
 pack_main_tgz() {
+  local short_head pkg
+  if [[ -n "$TARGET_PACKAGE_SPEC" ]]; then
+    say "Pack target package tgz: $TARGET_PACKAGE_SPEC"
+    pkg="$(
+      npm pack "$TARGET_PACKAGE_SPEC" --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
+        | python3 -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
+    )"
+    MAIN_TGZ_PATH="$MAIN_TGZ_DIR/$(basename "$pkg")"
+    TARGET_EXPECT_VERSION="$(extract_package_version_from_tgz "$MAIN_TGZ_PATH")"
+    say "Packed $MAIN_TGZ_PATH"
+    say "Target package version: $TARGET_EXPECT_VERSION"
+    return
+  fi
   say "Pack current main tgz"
   ensure_current_build
-  local short_head pkg
   short_head="$(git rev-parse --short HEAD)"
   pkg="$(
     npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
@@ -383,6 +425,14 @@ pack_main_tgz() {
   cp "$MAIN_TGZ_DIR/$pkg" "$MAIN_TGZ_PATH"
   say "Packed $MAIN_TGZ_PATH"
   tar -xOf "$MAIN_TGZ_PATH" package/dist/build-info.json
+}
+
+verify_target_version() {
+  if [[ -n "$TARGET_PACKAGE_SPEC" ]]; then
+    verify_version_contains "$TARGET_EXPECT_VERSION"
+    return
+  fi
+  verify_version_contains "$(git rev-parse --short=7 HEAD)"
 }
 
 current_build_commit() {
@@ -438,7 +488,7 @@ ensure_current_build() {
 
 start_server() {
   local host_ip="$1"
-  say "Serve current main tgz on $host_ip:$HOST_PORT"
+  say "Serve $(artifact_label) on $host_ip:$HOST_PORT"
   (
     cd "$MAIN_TGZ_DIR"
     exec python3 -m http.server "$HOST_PORT" --bind 0.0.0.0
@@ -587,6 +637,8 @@ summary = {
     "snapshotId": os.environ["SUMMARY_SNAPSHOT_ID"],
     "mode": os.environ["SUMMARY_MODE"],
     "latestVersion": os.environ["SUMMARY_LATEST_VERSION"],
+    "installVersion": os.environ["SUMMARY_INSTALL_VERSION"],
+    "targetPackageSpec": os.environ["SUMMARY_TARGET_PACKAGE_SPEC"],
     "currentHead": os.environ["SUMMARY_CURRENT_HEAD"],
     "runDir": os.environ["SUMMARY_RUN_DIR"],
     "freshMain": {
@@ -632,7 +684,7 @@ run_fresh_main_lane() {
   phase_run "fresh.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id"
   phase_run "fresh.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz"
   FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path fresh.install-main)")"
-  phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$(git rev-parse --short=7 HEAD)"
+  phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
   phase_run "fresh.verify-bundle-permissions" "$TIMEOUT_PERMISSION_S" verify_bundle_permissions
   phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
   phase_run "fresh.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway
@@ -659,7 +711,7 @@ run_upgrade_lane() {
   fi
   phase_run "upgrade.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-upgrade.tgz"
   UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-main)")"
-  phase_run "upgrade.verify-main-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$(git rev-parse --short=7 HEAD)"
+  phase_run "upgrade.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
   phase_run "upgrade.verify-bundle-permissions" "$TIMEOUT_PERMISSION_S" verify_bundle_permissions
   phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
   phase_run "upgrade.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway
@@ -721,6 +773,8 @@ SUMMARY_JSON_PATH="$(
   SUMMARY_SNAPSHOT_ID="$SNAPSHOT_ID" \
   SUMMARY_MODE="$MODE" \
   SUMMARY_LATEST_VERSION="$LATEST_VERSION" \
+  SUMMARY_INSTALL_VERSION="$INSTALL_VERSION" \
+  SUMMARY_TARGET_PACKAGE_SPEC="$TARGET_PACKAGE_SPEC" \
   SUMMARY_CURRENT_HEAD="$(git rev-parse --short HEAD)" \
   SUMMARY_RUN_DIR="$RUN_DIR" \
   SUMMARY_FRESH_MAIN_STATUS="$FRESH_MAIN_STATUS" \
@@ -740,6 +794,12 @@ if [[ "$JSON_OUTPUT" -eq 1 ]]; then
   cat "$SUMMARY_JSON_PATH"
 else
   printf '\nSummary:\n'
+  if [[ -n "$TARGET_PACKAGE_SPEC" ]]; then
+    printf '  target-package: %s\n' "$TARGET_PACKAGE_SPEC"
+  fi
+  if [[ -n "$INSTALL_VERSION" ]]; then
+    printf '  baseline-install-version: %s\n' "$INSTALL_VERSION"
+  fi
   printf '  fresh-main: %s (%s)\n' "$FRESH_MAIN_STATUS" "$FRESH_MAIN_VERSION"
   printf '  latest->main precheck: %s (%s)\n' "$UPGRADE_PRECHECK_STATUS" "$LATEST_INSTALLED_VERSION"
   printf '  latest->main: %s (%s)\n' "$UPGRADE_STATUS" "$UPGRADE_MAIN_VERSION"
