@@ -569,14 +569,21 @@ export function buildInlineKeyboard(
   const rows = buttons
     .map((row) =>
       row
-        .filter((button) => button?.text && button?.callback_data)
-        .map(
-          (button): InlineKeyboardButton => ({
+        .filter((button) => button?.text && (button?.callback_data || button?.url))
+        .map((button): InlineKeyboardButton => {
+          if (button.callback_data) {
+            return {
+              text: button.text,
+              callback_data: button.callback_data,
+              ...(button.style ? { style: button.style } : {}),
+            };
+          }
+          return {
             text: button.text,
-            callback_data: button.callback_data,
+            url: button.url!,
             ...(button.style ? { style: button.style } : {}),
-          }),
-        ),
+          };
+        }),
     )
     .filter((row) => row.length > 0);
   if (rows.length === 0) {

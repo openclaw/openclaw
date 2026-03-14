@@ -174,6 +174,13 @@ describe("buildInlineKeyboard", () => {
         },
       },
       {
+        name: "supports url buttons",
+        input: [[{ text: "Docs", url: "https://docs.openclaw.ai" }]],
+        expected: {
+          inline_keyboard: [[{ text: "Docs", url: "https://docs.openclaw.ai" }]],
+        },
+      },
+      {
         name: "filters invalid buttons and empty rows",
         input: [
           [

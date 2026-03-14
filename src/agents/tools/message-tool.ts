@@ -206,12 +206,14 @@ function buildSendSchema(options: {
         Type.Array(
           Type.Object({
             text: Type.String(),
-            callback_data: Type.String(),
+            callback_data: Type.Optional(Type.String()),
+            url: Type.Optional(Type.String()),
             style: Type.Optional(stringEnum(["danger", "success", "primary"])),
           }),
         ),
         {
-          description: "Telegram inline keyboard buttons (array of button rows)",
+          description:
+            "Telegram inline keyboard buttons (array of button rows; each button needs text plus callback_data or url)",
         },
       ),
     ),
