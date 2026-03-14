@@ -1018,6 +1018,7 @@ describe("runHeartbeatOnce", () => {
     reason?: "interval" | "wake";
     queueCronEvent?: boolean;
     replyText?: string;
+    customPrompt?: string;
   }) {
     const tmpDir = await createCaseDir("openclaw-hb");
     const storePath = path.join(tmpDir, "sessions.json");
@@ -1041,11 +1042,15 @@ describe("runHeartbeatOnce", () => {
       await fs.mkdir(path.join(workspaceDir, "HEARTBEAT.md"), { recursive: true });
     }
 
+    const heartbeatCfg: Record<string, unknown> = { every: "5m", target: "whatsapp" };
+    if (params.customPrompt) {
+      heartbeatCfg.prompt = params.customPrompt;
+    }
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
           workspace: workspaceDir,
-          heartbeat: { every: "5m", target: "whatsapp" },
+          heartbeat: heartbeatCfg,
         },
       },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -1097,6 +1102,27 @@ describe("runHeartbeatOnce", () => {
       const expectedPath = path.join(workspaceDir, "HEARTBEAT.md").replace(/\\/g, "/");
       expect(calledCtx.Body).toContain(`use workspace file ${expectedPath} (exact case)`);
       expect(calledCtx.Body).toContain("Do not read docs/heartbeat.md.");
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("does not append workspace path hint when user configured a custom heartbeat prompt", async () => {
+    const customPrompt = "Read HEARTBEAT.md from system prompt context only. Do not read any file.";
+    const { res, replySpy } = await runHeartbeatFileScenario({
+      fileState: "actionable",
+      reason: "interval",
+      replyText: "Checked logs",
+      customPrompt,
+    });
+    try {
+      expect(res.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+      // Custom prompt should be used as-is without appended path hint
+      expect(calledCtx.Body).toContain(customPrompt);
+      expect(calledCtx.Body).not.toContain("use workspace file");
+      expect(calledCtx.Body).not.toContain("Do not read docs/heartbeat.md.");
     } finally {
       replySpy.mockRestore();
     }
