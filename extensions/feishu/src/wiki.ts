@@ -19,7 +19,7 @@ const WIKI_ACCESS_HINT =
 
 async function listSpaces(client: Lark.Client) {
   const res = await client.wiki.space.list({});
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
 
@@ -42,7 +42,7 @@ async function listNodes(client: Lark.Client, spaceId: string, parentNodeToken?:
     path: { space_id: spaceId },
     params: { parent_node_token: parentNodeToken },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
 
@@ -62,7 +62,7 @@ async function getNode(client: Lark.Client, token: string) {
   const res = await client.wiki.space.getNode({
     params: { token },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
 
@@ -96,7 +96,7 @@ async function createNode(
       parent_node_token: parentNodeToken,
     },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
 
@@ -123,7 +123,7 @@ async function moveNode(
       target_parent_token: targetParentToken,
     },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
 
@@ -138,7 +138,7 @@ async function renameNode(client: Lark.Client, spaceId: string, nodeToken: strin
     path: { space_id: spaceId, node_token: nodeToken },
     data: { title },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
 
