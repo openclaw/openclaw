@@ -431,6 +431,7 @@ async function probeTarget(params: {
       error: "No model available for probe",
     };
   }
+  const model = target.model;
 
   const sessionId = `probe-${target.provider}-${crypto.randomUUID()}`;
   const sessionFile = resolveSessionTranscriptPath(sessionId, agentId);
@@ -439,7 +440,7 @@ async function probeTarget(params: {
   const start = Date.now();
   const buildResult = (status: AuthProbeResult["status"], error?: string): AuthProbeResult => ({
     provider: target.provider,
-    model: `${target.model.provider}/${target.model.model}`,
+    model: `${model.provider}/${model.model}`,
     profileId: target.profileId,
     label: target.label,
     source: target.source,
