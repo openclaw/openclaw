@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
@@ -10,10 +11,21 @@ export type CachedCopilotToken = {
   expiresAt: number;
   /** milliseconds since epoch */
   updatedAt: number;
+  /** Short hash of the GitHub PAT that produced this token (for cache isolation). */
+  githubTokenHash?: string;
 };
 
-function resolveCopilotTokenCachePath(env: NodeJS.ProcessEnv = process.env) {
-  return path.join(resolveStateDir(env), "credentials", "github-copilot.token.json");
+/**
+ * Derive a short, filesystem-safe hash from the GitHub PAT so each profile
+ * gets its own cache file.
+ */
+export function hashGithubToken(githubToken: string): string {
+  return createHash("sha256").update(githubToken).digest("hex").slice(0, 12);
+}
+
+function resolveCopilotTokenCachePath(githubToken: string, env: NodeJS.ProcessEnv = process.env) {
+  const profileHash = hashGithubToken(githubToken);
+  return path.join(resolveStateDir(env), "credentials", `github-copilot.token.${profileHash}.json`);
 }
 
 function isTokenUsable(cache: CachedCopilotToken, now = Date.now()): boolean {
@@ -92,18 +104,56 @@ export async function resolveCopilotApiToken(params: {
   baseUrl: string;
 }> {
   const env = params.env ?? process.env;
-  const cachePath = params.cachePath?.trim() || resolveCopilotTokenCachePath(env);
+  const tokenHash = hashGithubToken(params.githubToken);
+  const cachePath =
+    params.cachePath?.trim() || resolveCopilotTokenCachePath(params.githubToken, env);
   const loadJsonFileFn = params.loadJsonFileImpl ?? loadJsonFile;
   const saveJsonFileFn = params.saveJsonFileImpl ?? saveJsonFile;
   const cached = loadJsonFileFn(cachePath) as CachedCopilotToken | undefined;
   if (cached && typeof cached.token === "string" && typeof cached.expiresAt === "number") {
-    if (isTokenUsable(cached)) {
+    // Accept the cached token only when it belongs to the same profile.  A
+    // missing hash (legacy cache written before this change) is treated as a
+    // match so that existing single-profile users are not forced to re-fetch.
+    const hashMatches = !cached.githubTokenHash || cached.githubTokenHash === tokenHash;
+    if (hashMatches && isTokenUsable(cached)) {
       return {
         token: cached.token,
         expiresAt: cached.expiresAt,
         source: `cache:${cachePath}`,
         baseUrl: deriveCopilotApiBaseUrlFromToken(cached.token) ?? DEFAULT_COPILOT_API_BASE_URL,
       };
+    }
+  }
+
+  // Fall back to legacy unpartitioned cache file for smooth upgrades.
+  if (!params.cachePath) {
+    const legacyCachePath = path.join(
+      resolveStateDir(env),
+      "credentials",
+      "github-copilot.token.json",
+    );
+    const legacyCached = loadJsonFileFn(legacyCachePath) as CachedCopilotToken | undefined;
+    if (
+      legacyCached &&
+      typeof legacyCached.token === "string" &&
+      typeof legacyCached.expiresAt === "number"
+    ) {
+      const legacyHashMatches = legacyCached.githubTokenHash === tokenHash;
+      if (legacyHashMatches && isTokenUsable(legacyCached)) {
+        // Migrate: persist into the new per-profile cache so subsequent reads hit the fast path.
+        saveJsonFileFn(cachePath, {
+          ...legacyCached,
+          githubTokenHash: tokenHash,
+          updatedAt: Date.now(),
+        });
+        return {
+          token: legacyCached.token,
+          expiresAt: legacyCached.expiresAt,
+          source: `cache:${legacyCachePath}`,
+          baseUrl:
+            deriveCopilotApiBaseUrlFromToken(legacyCached.token) ?? DEFAULT_COPILOT_API_BASE_URL,
+        };
+      }
     }
   }
 
@@ -125,6 +175,7 @@ export async function resolveCopilotApiToken(params: {
     token: json.token,
     expiresAt: json.expiresAt,
     updatedAt: Date.now(),
+    githubTokenHash: tokenHash,
   };
   saveJsonFileFn(cachePath, payload);
 
