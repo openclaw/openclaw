@@ -384,6 +384,56 @@ describe("sanitizeToolCallInputs", () => {
     expect(names).toEqual(expectedNames);
   });
 
+  it("dedupes duplicate tool calls by id and keeps the first non-empty arguments", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "before" },
+          { type: "toolCall", id: "call_exec_1", name: "exec", arguments: { command: "pwd" } },
+          { type: "toolCall", id: "call_exec_1", name: "exec", arguments: {} },
+          { type: "text", text: "after" },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const toolCalls = getAssistantToolCallBlocks(out) as Array<Record<string, unknown>>;
+    const types = Array.isArray(assistant.content)
+      ? assistant.content.map((block) => (block as { type?: unknown }).type)
+      : [];
+
+    expect(types).toEqual(["text", "toolCall", "text"]);
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0]?.id).toBe("call_exec_1");
+    expect(toolCalls[0]?.arguments).toEqual({ command: "pwd" });
+  });
+
+  it("dedupes duplicate tool calls by id and prefers a later richer payload", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_exec_2", name: "exec", arguments: {} },
+          {
+            type: "toolCall",
+            id: "call_exec_2",
+            name: "exec",
+            arguments: { command: "ls -la" },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    const toolCalls = getAssistantToolCallBlocks(out) as Array<Record<string, unknown>>;
+
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0]?.id).toBe("call_exec_2");
+    expect(toolCalls[0]?.arguments).toEqual({ command: "ls -la" });
+  });
+
   it("preserves toolUse input shape for sessions_spawn when no attachments are present", () => {
     const input = castAgentMessages([
       {

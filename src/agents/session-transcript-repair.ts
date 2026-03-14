@@ -38,6 +38,41 @@ function hasToolCallId(block: RawToolCallBlock): boolean {
   return hasNonEmptyStringField(block.id);
 }
 
+function normalizeToolCallId(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function scoreToolCallInputValue(value: unknown): number {
+  if (value === undefined || value === null) {
+    return 0;
+  }
+  if (typeof value === "string") {
+    return value.trim().length > 0 ? 3 : 1;
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0 ? 3 : 1;
+  }
+  if (typeof value === "object") {
+    return Object.keys(value as Record<string, unknown>).length > 0 ? 3 : 1;
+  }
+  return 2;
+}
+
+function scoreToolCallBlockInput(block: RawToolCallBlock): number {
+  return Math.max(scoreToolCallInputValue(block.arguments), scoreToolCallInputValue(block.input));
+}
+
+function shouldPreferToolCallBlock(
+  existing: RawToolCallBlock,
+  candidate: RawToolCallBlock,
+): boolean {
+  return scoreToolCallBlockInput(candidate) > scoreToolCallBlockInput(existing);
+}
+
 function normalizeAllowedToolNames(allowedToolNames?: Iterable<string>): Set<string> | null {
   if (!allowedToolNames) {
     return null;
@@ -239,6 +274,7 @@ export function repairToolCallInputs(
     const nextContent: typeof msg.content = [];
     let droppedInMessage = 0;
     let messageChanged = false;
+    const toolCallIndexById = new Map<string, number>();
 
     for (const block of msg.content) {
       if (
@@ -271,22 +307,58 @@ export function repairToolCallInputs(
               changed = true;
               messageChanged = true;
             }
+            const toolCallId = normalizeToolCallId(sanitized.id);
+            if (toolCallId !== undefined) {
+              const existingIndex = toolCallIndexById.get(toolCallId);
+              if (existingIndex !== undefined) {
+                const existing = nextContent[existingIndex];
+                if (
+                  isRawToolCallBlock(existing) &&
+                  shouldPreferToolCallBlock(existing, sanitized)
+                ) {
+                  nextContent[existingIndex] = sanitized as (typeof nextContent)[number];
+                }
+                droppedToolCalls += 1;
+                droppedInMessage += 1;
+                changed = true;
+                messageChanged = true;
+                continue;
+              }
+              toolCallIndexById.set(toolCallId, nextContent.length);
+            }
             nextContent.push(sanitized as typeof block);
           } else {
+            let nextToolBlock = block;
             if (typeof (block as { name?: unknown }).name === "string") {
               const rawName = (block as { name: string }).name;
               const trimmedName = rawName.trim();
               if (rawName !== trimmedName && trimmedName) {
                 const renamed = { ...(block as object), name: trimmedName } as typeof block;
-                nextContent.push(renamed);
+                nextToolBlock = renamed;
                 changed = true;
                 messageChanged = true;
-              } else {
-                nextContent.push(block);
               }
-            } else {
-              nextContent.push(block);
             }
+            const toolCallId = normalizeToolCallId((nextToolBlock as RawToolCallBlock).id);
+            if (toolCallId !== undefined) {
+              const existingIndex = toolCallIndexById.get(toolCallId);
+              if (existingIndex !== undefined) {
+                const existing = nextContent[existingIndex];
+                if (
+                  isRawToolCallBlock(existing) &&
+                  shouldPreferToolCallBlock(existing, nextToolBlock as RawToolCallBlock)
+                ) {
+                  nextContent[existingIndex] = nextToolBlock;
+                }
+                droppedToolCalls += 1;
+                droppedInMessage += 1;
+                changed = true;
+                messageChanged = true;
+                continue;
+              }
+              toolCallIndexById.set(toolCallId, nextContent.length);
+            }
+            nextContent.push(nextToolBlock);
           }
           continue;
         }
