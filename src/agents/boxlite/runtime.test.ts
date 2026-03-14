@@ -118,7 +118,7 @@ describe("BoxLite runtime", () => {
     expect(mockStop).toHaveBeenCalledTimes(2);
   });
 
-  it("cleans up VM when setup command fails", async () => {
+  it("cleans up VM when setup command throws", async () => {
     mockExec.mockRejectedValueOnce(new Error("setup failed"));
 
     await expect(ensureBoxLiteBox("test-setup-fail", { setupCommand: "bad-cmd" })).rejects.toThrow(
@@ -126,6 +126,17 @@ describe("BoxLite runtime", () => {
     );
 
     // VM should be cleaned up — not left in registry.
+    expect(getActiveBoxLiteBoxCount()).toBe(0);
+    expect(mockStop).toHaveBeenCalledOnce();
+  });
+
+  it("cleans up VM when setup command exits non-zero", async () => {
+    mockExec.mockResolvedValueOnce({ exitCode: 1, stdout: "", stderr: "pkg not found" });
+
+    await expect(
+      ensureBoxLiteBox("test-setup-nonzero", { setupCommand: "apt-get install missing" }),
+    ).rejects.toThrow("BoxLite setup command failed with exit code 1: pkg not found");
+
     expect(getActiveBoxLiteBoxCount()).toBe(0);
     expect(mockStop).toHaveBeenCalledOnce();
   });

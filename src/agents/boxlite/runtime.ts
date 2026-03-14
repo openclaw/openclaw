@@ -104,12 +104,22 @@ async function createBox(scopeKey: string, config?: BoxLiteSettings): Promise<Bo
 
   // Run setup command if configured.
   if (config?.setupCommand?.trim()) {
+    let setupError: Error | undefined;
     try {
-      await handle.run("sh", "-c", config.setupCommand);
+      const setupResult = await handle.run("sh", "-c", config.setupCommand);
+      if (setupResult.exitCode !== 0) {
+        const detail = setupResult.stderr?.trim() || setupResult.stdout?.trim() || "";
+        setupError = new Error(
+          `BoxLite setup command failed with exit code ${setupResult.exitCode}${detail ? `: ${detail}` : ""}`,
+        );
+      }
     } catch (err) {
+      setupError = err instanceof Error ? err : new Error(String(err));
+    }
+    if (setupError) {
       activeBoxes.delete(scopeKey);
       await handle.stop().catch(() => undefined);
-      throw err;
+      throw setupError;
     }
   }
 

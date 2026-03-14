@@ -340,7 +340,8 @@ export function createOpenClawCodingTools(options?: {
   const fsPolicy = createToolFsPolicy({
     workspaceOnly: isMemoryFlushRun || fsConfig.workspaceOnly,
   });
-  const sandboxRoot = sandbox?.workspaceDir;
+  // BoxLite sandboxes skip fsBridge (it relies on `docker exec`); file tools use host paths.
+  const sandboxRoot = sandbox?.provider === "boxlite" ? undefined : sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
   const workspaceRoot = resolveWorkspaceRoot(options?.workspaceDir);
@@ -375,7 +376,7 @@ export function createOpenClawCodingTools(options?: {
         return [
           workspaceOnly
             ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
-                containerWorkdir: sandbox.containerWorkdir,
+                containerWorkdir: sandbox!.containerWorkdir,
               })
             : sandboxed,
         ];
@@ -468,7 +469,7 @@ export function createOpenClawCodingTools(options?: {
                   createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
                   sandboxRoot,
                   {
-                    containerWorkdir: sandbox.containerWorkdir,
+                    containerWorkdir: sandbox!.containerWorkdir,
                   },
                 )
               : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
@@ -477,7 +478,7 @@ export function createOpenClawCodingTools(options?: {
                   createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
                   sandboxRoot,
                   {
-                    containerWorkdir: sandbox.containerWorkdir,
+                    containerWorkdir: sandbox!.containerWorkdir,
                   },
                 )
               : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
