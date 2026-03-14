@@ -3,8 +3,11 @@
 const path = require("node:path");
 const fs = require("node:fs");
 
+// Global symbol for shared jiti instance (set by plugins/loader.ts)
+const JITI_LOADER_SYMBOL = Symbol.for("openclaw.pluginJitiLoader");
+
 let monolithicSdk = null;
-let jitiLoader = null;
+let localJitiLoader = null;
 
 function emptyPluginConfigSchema() {
   function error(message) {
@@ -61,17 +64,31 @@ function resolveControlCommandGate(params) {
   return { commandAuthorized, shouldBlock };
 }
 
+/**
+ * Get the jiti loader instance.
+ * Prefers the shared instance from plugins/loader.ts (which has scoped aliases configured).
+ * Falls back to creating a local instance for backwards compatibility.
+ */
 function getJiti() {
-  if (jitiLoader) {
-    return jitiLoader;
+  // First, try to use the shared jiti instance from plugins/loader.ts
+  // This instance has all the scoped aliases (openclaw/plugin-sdk/telegram, etc.)
+  const globalJiti = globalThis[JITI_LOADER_SYMBOL];
+  if (globalJiti) {
+    return globalJiti;
+  }
+
+  // Fallback: create a local jiti instance (no scoped aliases)
+  // This path is only hit if root-alias.cjs is loaded before plugins/loader.ts
+  if (localJitiLoader) {
+    return localJitiLoader;
   }
 
   const { createJiti } = require("jiti");
-  jitiLoader = createJiti(__filename, {
+  localJitiLoader = createJiti(__filename, {
     interopDefault: true,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
   });
-  return jitiLoader;
+  return localJitiLoader;
 }
 
 function loadMonolithicSdk() {
