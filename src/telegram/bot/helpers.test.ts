@@ -1,3 +1,4 @@
+import type { Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
 import {
   buildTelegramThreadParams,
@@ -404,8 +405,59 @@ describe("hasBotMention", () => {
       ),
     ).toBe(true);
   });
-});
 
+  it("matches mention followed by punctuation", () => {
+    expect(
+      hasBotMention(
+        {
+          text: "@gaian, what's up?",
+          chat: { id: 1, type: "supergroup" },
+          // oxlint-disable-next-line typescript/no-explicit-any
+        } as any,
+        "gaian",
+      ),
+    ).toBe(true);
+  });
+
+  it("matches mention followed by space", () => {
+    expect(
+      hasBotMention(
+        {
+          text: "@gaian how are you",
+          chat: { id: 1, type: "supergroup" },
+          // oxlint-disable-next-line typescript/no-explicit-any
+        } as any,
+        "gaian",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match substring of a longer username", () => {
+    expect(
+      hasBotMention(
+        {
+          text: "@gaianchat_bot hello",
+          chat: { id: 1, type: "supergroup" },
+          // oxlint-disable-next-line typescript/no-explicit-any
+        } as any,
+        "gaian",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not match when mention is a prefix of another word", () => {
+    expect(
+      hasBotMention(
+        {
+          text: "@gaianbot do something",
+          chat: { id: 1, type: "supergroup" },
+          // oxlint-disable-next-line typescript/no-explicit-any
+        } as any,
+        "gaian",
+      ),
+    ).toBe(false);
+  });
+});
 describe("expandTextLinks", () => {
   it("returns text unchanged when no entities are provided", () => {
     expect(expandTextLinks("Hello world")).toBe("Hello world");
