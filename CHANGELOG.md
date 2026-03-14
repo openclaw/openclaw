@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Placeholder: replace with the first 2026.3.14 user-facing change.
+
 ## 2026.3.13
 
 ### Changes
