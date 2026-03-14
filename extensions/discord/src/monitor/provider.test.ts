@@ -916,7 +916,7 @@ describe("monitorDiscordProvider", () => {
     createDiscordNativeCommandMock.mockReturnValue({
       name: "mock-command",
       guildIds: ["guild-1"],
-    });
+    } as unknown as { name: string });
 
     await monitorDiscordProvider({
       config: {

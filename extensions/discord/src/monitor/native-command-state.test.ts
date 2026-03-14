@@ -11,6 +11,8 @@ type FakeLiveCommand = {
   name: string;
   description: string;
   type: number;
+  dm_permission?: boolean;
+  nsfw?: boolean;
   contexts?: number[];
   integration_types?: number[];
   default_member_permissions?: string | null;
@@ -200,7 +202,7 @@ describe("reconcileDiscordNativeCommands", () => {
 
   it("does nothing on restart when a real serialized command is unchanged", async () => {
     const statusCommand = createRealStatusCommand();
-    const serializedStatus = statusCommand.serialize() as Record<string, unknown>;
+    const serializedStatus = statusCommand.serialize() as unknown as Record<string, unknown>;
     const { client, rest } = createClientHarness([
       {
         id: "cmd-1",

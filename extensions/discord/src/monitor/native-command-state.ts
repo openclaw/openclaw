@@ -143,8 +143,12 @@ function toDesiredCommand(command: BaseCommand): DesiredDiscordCommand | null {
   if (!body) {
     return null;
   }
+  const name = typeof body.name === "string" ? body.name.trim().toLowerCase() : "";
+  if (!name) {
+    return null;
+  }
   return {
-    name: body.name.trim().toLowerCase(),
+    name,
     signatureHash: hashDefinition(body),
     body,
   };
