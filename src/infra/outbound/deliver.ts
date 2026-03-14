@@ -242,7 +242,7 @@ type DeliverOutboundPayloadsCoreParams = {
   silent?: boolean;
 };
 
-type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
+export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
   /** @internal Skip write-ahead queue (used by crash-recovery to avoid re-enqueueing). */
   skipQueue?: boolean;
 };
