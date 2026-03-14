@@ -65,6 +65,25 @@ export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReload
   return { mode, debounceMs };
 }
 
+/**
+ * config.patch should only force SIGUSR1 when hot reload cannot apply the
+ * change immediately, or when reload mode explicitly disables hot handling.
+ */
+export function shouldConfigPatchTriggerGatewayRestart(
+  cfg: OpenClawConfig,
+  changedPaths: string[],
+): boolean {
+  if (changedPaths.length === 0) {
+    return false;
+  }
+  const settings = resolveGatewayReloadSettings(cfg);
+  if (settings.mode === "off" || settings.mode === "restart") {
+    return true;
+  }
+  const plan = buildGatewayReloadPlan(changedPaths);
+  return plan.restartGateway;
+}
+
 export type GatewayConfigReloader = {
   stop: () => Promise<void>;
 };

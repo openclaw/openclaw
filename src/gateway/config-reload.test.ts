@@ -9,6 +9,7 @@ import {
   buildGatewayReloadPlan,
   diffConfigPaths,
   resolveGatewayReloadSettings,
+  shouldConfigPatchTriggerGatewayRestart,
   startGatewayConfigReloader,
 } from "./config-reload.js";
 
@@ -250,6 +251,53 @@ describe("resolveGatewayReloadSettings", () => {
     const settings = resolveGatewayReloadSettings({});
     expect(settings.mode).toBe("hybrid");
     expect(settings.debounceMs).toBe(300);
+  });
+});
+
+describe("shouldConfigPatchTriggerGatewayRestart", () => {
+  it("skips restart for no-op patches", () => {
+    expect(
+      shouldConfigPatchTriggerGatewayRestart({ gateway: { reload: { mode: "restart" } } }, []),
+    ).toBe(false);
+  });
+
+  it.each(["hybrid", "hot"] as const)(
+    "skips restart for browser hot reload paths in %s mode",
+    (mode) => {
+      expect(
+        shouldConfigPatchTriggerGatewayRestart({ gateway: { reload: { mode } } }, [
+          "browser.profiles.sandbox.cdpUrl",
+        ]),
+      ).toBe(false);
+    },
+  );
+
+  it("skips restart when every changed path is hot-reloadable or dynamic", () => {
+    expect(
+      shouldConfigPatchTriggerGatewayRestart({ gateway: { reload: { mode: "hybrid" } } }, [
+        "browser.cdpUrl",
+        "gateway.reload.mode",
+      ]),
+    ).toBe(false);
+  });
+
+  it.each(["off", "restart"] as const)(
+    "forces restart for browser hot reload paths in %s mode",
+    (mode) => {
+      expect(
+        shouldConfigPatchTriggerGatewayRestart({ gateway: { reload: { mode } } }, [
+          "browser.profiles.sandbox.cdpUrl",
+        ]),
+      ).toBe(true);
+    },
+  );
+
+  it("forces restart when a changed path requires a full gateway restart", () => {
+    expect(
+      shouldConfigPatchTriggerGatewayRestart({ gateway: { reload: { mode: "hybrid" } } }, [
+        "gateway.port",
+      ]),
+    ).toBe(true);
   });
 });
 
