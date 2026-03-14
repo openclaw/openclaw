@@ -35,8 +35,8 @@ vi.mock("../send.js", () => ({
   sendReadReceiptSignal: vi.fn().mockResolvedValue(true),
 }));
 
-vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../auto-reply/dispatch.js")>();
+vi.mock("../../../../src/auto-reply/dispatch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/auto-reply/dispatch.js")>();
   return {
     ...actual,
     dispatchInboundMessage: dispatchInboundMessageMock,
@@ -45,7 +45,7 @@ vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../infra/system-events.js", () => ({
+vi.mock("../../../../src/infra/system-events.js", () => ({
   enqueueSystemEvent: enqueueSystemEventMock,
 }));
 
