@@ -172,7 +172,7 @@ export function extractExecDirective(body?: string): ExecDirectiveParse {
       invalidNode: false,
     };
   }
-  const re = /(?:^|\s)\/exec(?=$|\s|:)/i;
+  const re = /(?:^|\s)\/exec(?:@\w+)?(?=$|\s|:)/i;
   const match = re.exec(body);
   if (!match) {
     return {

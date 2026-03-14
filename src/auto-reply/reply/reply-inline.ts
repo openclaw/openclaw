@@ -6,9 +6,9 @@ const INLINE_SIMPLE_COMMAND_ALIASES = new Map<string, string>([
   ["/whoami", "/whoami"],
   ["/id", "/whoami"],
 ]);
-const INLINE_SIMPLE_COMMAND_RE = /(?:^|\s)\/(help|commands|whoami|id)(?=$|\s|:)/i;
+const INLINE_SIMPLE_COMMAND_RE = /(?:^|\s)\/(help|commands|whoami|id)(?:@\w+)?(?=$|\s|:)/i;
 
-const INLINE_STATUS_RE = /(?:^|\s)\/status(?=$|\s|:)(?:\s*:\s*)?/gi;
+const INLINE_STATUS_RE = /(?:^|\s)\/status(?:@\w+)?(?=$|\s|:)(?:\s*:\s*)?/gi;
 
 export function extractInlineSimpleCommand(body?: string): {
   command: string;
