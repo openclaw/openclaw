@@ -6,6 +6,7 @@ import { Type } from "@sinclair/typebox";
 import { openBoundaryFile, type BoundaryFileOpenResult } from "../infra/boundary-file-read.js";
 import { writeFileWithinRoot } from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
@@ -270,8 +271,45 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
         encoding: "utf8",
       });
     },
-    remove: (filePath) => fs.rm(filePath),
-    mkdirp: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
+    remove: async (filePath) => {
+      if (workspaceOnly) {
+        // Re-verify realpath at deletion time to close TOCTOU window
+        let real: string;
+        try {
+          real = await fs.realpath(filePath);
+        } catch (err: unknown) {
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+            // File already gone – nothing to remove
+            return;
+          }
+          throw err;
+        }
+        if (!isPathInside(options.cwd, real)) {
+          throw new Error(`remove blocked: resolved path ${real} is outside workspace root`);
+        }
+      }
+      await fs.rm(filePath);
+    },
+    mkdirp: async (dir) => {
+      if (workspaceOnly) {
+        // Resolve symlinks to verify the real target stays within workspace root
+        let resolved: string;
+        try {
+          resolved = await fs.realpath(dir);
+        } catch (err: unknown) {
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+            // Directory doesn't exist yet – fall back to logical resolution
+            resolved = path.resolve(dir);
+          } else {
+            throw err;
+          }
+        }
+        if (!isPathInside(options.cwd, resolved)) {
+          throw new Error(`mkdirp blocked: path ${resolved} is outside workspace root`);
+        }
+      }
+      await fs.mkdir(dir, { recursive: true });
+    },
   };
 }
 
