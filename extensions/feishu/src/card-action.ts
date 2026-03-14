@@ -12,6 +12,9 @@ export type FeishuCardActionEvent = {
   action: {
     value: Record<string, unknown>;
     tag: string;
+    option?: string;
+    options?: string[];
+    form_value?: Record<string, unknown>;
   };
   context: {
     open_id: string;
@@ -31,10 +34,17 @@ export async function handleFeishuCardAction(params: {
   const account = resolveFeishuAccount({ cfg, accountId });
   const log = runtime?.log ?? console.log;
 
-  // Extract action value
+  // Extract action value, including select/multi-select/form fields
   const actionValue = event.action.value;
+  const { option, options, form_value } = event.action;
   let content = "";
-  if (typeof actionValue === "object" && actionValue !== null) {
+  if (form_value !== undefined) {
+    content = JSON.stringify({ ...actionValue, form_value });
+  } else if (options !== undefined) {
+    content = JSON.stringify({ ...actionValue, options });
+  } else if (option !== undefined) {
+    content = JSON.stringify({ ...actionValue, option });
+  } else if (typeof actionValue === "object" && actionValue !== null) {
     if ("text" in actionValue && typeof actionValue.text === "string") {
       content = actionValue.text;
     } else if ("command" in actionValue && typeof actionValue.command === "string") {
