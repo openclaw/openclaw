@@ -210,7 +210,7 @@ export async function insertTableRow(
     path: { document_id: docToken, block_id: blockId },
     data: { insert_table_row: { row_index: rowIndex } },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
   return { success: true, block: res.data?.block };
@@ -226,7 +226,7 @@ export async function insertTableColumn(
     path: { document_id: docToken, block_id: blockId },
     data: { insert_table_column: { column_index: columnIndex } },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
   return { success: true, block: res.data?.block };
@@ -243,7 +243,7 @@ export async function deleteTableRows(
     path: { document_id: docToken, block_id: blockId },
     data: { delete_table_rows: { row_start_index: rowStart, row_end_index: rowStart + rowCount } },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
   return { success: true, rows_deleted: rowCount, block: res.data?.block };
@@ -265,7 +265,7 @@ export async function deleteTableColumns(
       },
     },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
   return { success: true, columns_deleted: columnCount, block: res.data?.block };
@@ -291,7 +291,7 @@ export async function mergeTableCells(
       },
     },
   });
-  if (res.code !== 0) {
+  if (res.code !== undefined && res.code !== 0) {
     throw new Error(res.msg);
   }
   return { success: true, block: res.data?.block };
