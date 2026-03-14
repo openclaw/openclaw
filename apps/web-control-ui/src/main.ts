@@ -21,6 +21,7 @@ import {
   workflowStages,
 } from "./product/defaults";
 import { buildFrontendPrompt, defaultFrontendPrompt } from "./product/prompt";
+import { loadInitialGatewayToken, persistGatewayToken } from "./product/auth";
 import { loadPreferenceMemory, savePreferenceMemory } from "./product/storage";
 
 type ConnectionState = "idle" | "connecting" | "connected" | "disconnected" | "error";
@@ -40,8 +41,11 @@ type ChatEventPayload = {
 };
 
 function defaultGatewayUrl(): string {
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}/gateway`;
+  const pageUrl = new URL(window.location.href);
+  const wsProtocol = pageUrl.protocol === "https:" ? "wss:" : "ws:";
+  const host = pageUrl.hostname;
+  const gatewayPort = "18789";
+  return `${wsProtocol}//${host}:${gatewayPort}/gateway`;
 }
 
 function extractText(message: unknown): string {
@@ -403,6 +407,8 @@ class WebControlUiApp extends LitElement {
     const loaded = loadPreferenceMemory();
     this.preferenceMemory = loaded;
     this.preferenceDraft = toDraft(loaded);
+    this.gatewayToken = loadInitialGatewayToken();
+    persistGatewayToken(this.gatewayToken);
     this.connect();
   }
 
@@ -715,6 +721,7 @@ class WebControlUiApp extends LitElement {
                   .value=${this.gatewayToken}
                   @input=${(event: InputEvent) => {
                     this.gatewayToken = (event.target as HTMLInputElement).value;
+                    persistGatewayToken(this.gatewayToken);
                   }}
                   placeholder="gateway token"
                 />
