@@ -6,8 +6,8 @@ import {
 } from "../../../src/auto-reply/commands-registry.js";
 import { loadSessionStore } from "../../../src/config/sessions.js";
 import { normalizeTelegramCommandName } from "../../../src/config/telegram-custom-commands.js";
-import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
-import { expectInboundContextContract } from "../../test/helpers/inbound-contract.js";
+import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
+import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 import {
   answerCallbackQuerySpy,
   commandSpy,

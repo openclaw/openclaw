@@ -11,17 +11,19 @@ import {
 
 type GetPluginCommandSpecsMock = {
   mockReturnValue: (
-    value: ReturnType<typeof import("../plugins/commands.js").getPluginCommandSpecs>,
+    value: ReturnType<typeof import("../../../src/plugins/commands.js").getPluginCommandSpecs>,
   ) => unknown;
 };
 type MatchPluginCommandMock = {
   mockReturnValue: (
-    value: ReturnType<typeof import("../plugins/commands.js").matchPluginCommand>,
+    value: ReturnType<typeof import("../../../src/plugins/commands.js").matchPluginCommand>,
   ) => unknown;
 };
 type ExecutePluginCommandMock = {
   mockResolvedValue: (
-    value: Awaited<ReturnType<typeof import("../plugins/commands.js").executePluginCommand>>,
+    value: Awaited<
+      ReturnType<typeof import("../../../src/plugins/commands.js").executePluginCommand>
+    >,
   ) => unknown;
 };
 

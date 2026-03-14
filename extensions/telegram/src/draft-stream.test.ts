@@ -1,6 +1,6 @@
 import type { Bot } from "grammy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.js";
+import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import { __testing, createTelegramDraftStream } from "./draft-stream.js";
 
 type TelegramDraftStreamParams = Parameters<typeof createTelegramDraftStream>[0];

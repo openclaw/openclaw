@@ -4,8 +4,8 @@ import {
   markdownToIR,
   type MarkdownLinkSpan,
   type MarkdownIR,
-} from "../markdown/ir.js";
-import { renderMarkdownWithMarkers } from "../markdown/render.js";
+} from "../../../src/markdown/ir.js";
+import { renderMarkdownWithMarkers } from "../../../src/markdown/render.js";
 
 export type TelegramFormattedChunk = {
   html: string;

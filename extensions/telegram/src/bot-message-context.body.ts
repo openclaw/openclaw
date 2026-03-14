@@ -182,7 +182,8 @@ export async function resolveTelegramInboundBody(params: {
 
   if (needsPreflightTranscription) {
     try {
-      const { transcribeFirstAudio } = await import("../media-understanding/audio-preflight.js");
+      const { transcribeFirstAudio } =
+        await import("../../../src/media-understanding/audio-preflight.js");
       const tempCtx: MsgContext = {
         MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
         MediaTypes:

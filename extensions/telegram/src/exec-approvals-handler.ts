@@ -15,7 +15,7 @@ import type {
 import { createSubsystemLogger } from "../../../src/logging/subsystem.js";
 import { normalizeAccountId, parseAgentSessionKey } from "../../../src/routing/session-key.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
-import { compileSafeRegex, testRegexWithBoundedInput } from "../security/safe-regex.js";
+import { compileSafeRegex, testRegexWithBoundedInput } from "../../../src/security/safe-regex.js";
 import { buildTelegramExecApprovalButtons } from "./approval-buttons.js";
 import {
   getTelegramExecApprovalApprovers,

@@ -4,20 +4,23 @@ import type { ReplyPayload } from "../../../../src/auto-reply/types.js";
 import type { ReplyToMode } from "../../../../src/config/config.js";
 import type { MarkdownTableMode } from "../../../../src/config/types.base.js";
 import { danger, logVerbose } from "../../../../src/globals.js";
-import { formatErrorMessage } from "../../../../src/infra/errors.js";
-import { buildOutboundMediaLoadOptions } from "../../../../src/media/load-options.js";
-import { isGifMedia, kindFromMime } from "../../../../src/media/mime.js";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
-import { loadWebMedia } from "../../../../src/web/media.js";
-import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
-import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import { fireAndForgetHook } from "../../../../src/hooks/fire-and-forget.js";
+import {
+  createInternalHookEvent,
+  triggerInternalHook,
+} from "../../../../src/hooks/internal-hooks.js";
 import {
   buildCanonicalSentMessageHookContext,
   toInternalMessageSentContext,
   toPluginMessageContext,
   toPluginMessageSentEvent,
-} from "../../hooks/message-hook-mappers.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+} from "../../../../src/hooks/message-hook-mappers.js";
+import { formatErrorMessage } from "../../../../src/infra/errors.js";
+import { buildOutboundMediaLoadOptions } from "../../../../src/media/load-options.js";
+import { isGifMedia, kindFromMime } from "../../../../src/media/mime.js";
+import { getGlobalHookRunner } from "../../../../src/plugins/hook-runner-global.js";
+import type { RuntimeEnv } from "../../../../src/runtime.js";
+import { loadWebMedia } from "../../../../src/web/media.js";
 import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
 import {

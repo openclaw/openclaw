@@ -13,7 +13,7 @@ import {
   type SessionBindingRecord,
 } from "../../../src/infra/outbound/session-binding-service.js";
 import { normalizeAccountId } from "../../../src/routing/session-key.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveGlobalSingleton } from "../../../src/shared/global-singleton.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_THREAD_BINDING_MAX_AGE_MS = 0;

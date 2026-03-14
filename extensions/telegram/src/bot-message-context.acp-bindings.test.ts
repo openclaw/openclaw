@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const ensureConfiguredAcpBindingSessionMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredAcpBindingRecordMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../acp/persistent-bindings.js", () => ({
+vi.mock("../../../src/acp/persistent-bindings.js", () => ({
   ensureConfiguredAcpBindingSession: (...args: unknown[]) =>
     ensureConfiguredAcpBindingSessionMock(...args),
   resolveConfiguredAcpBindingRecord: (...args: unknown[]) =>

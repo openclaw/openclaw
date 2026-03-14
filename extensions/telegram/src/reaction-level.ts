@@ -3,7 +3,7 @@ import {
   resolveReactionLevel,
   type ReactionLevel,
   type ResolvedReactionLevel as BaseResolvedReactionLevel,
-} from "../utils/reaction-level.js";
+} from "../../../src/utils/reaction-level.js";
 import { resolveTelegramAccount } from "./accounts.js";
 
 export type TelegramReactionLevel = ReactionLevel;

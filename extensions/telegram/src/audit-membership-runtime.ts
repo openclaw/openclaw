@@ -1,5 +1,5 @@
 import { isRecord } from "../../../src/utils.js";
-import { fetchWithTimeout } from "../utils/fetch-timeout.js";
+import { fetchWithTimeout } from "../../../src/utils/fetch-timeout.js";
 import type {
   AuditTelegramGroupMembershipParams,
   TelegramGroupMembershipAudit,

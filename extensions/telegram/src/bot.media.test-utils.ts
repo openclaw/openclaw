@@ -103,7 +103,7 @@ afterEach(() => {
 
 beforeAll(async () => {
   ({ createTelegramBot: createTelegramBotRef } = await import("./bot.js"));
-  const replyModule = await import("../auto-reply/reply.js");
+  const replyModule = await import("../../../src/auto-reply/reply.js");
   replySpyRef = (replyModule as unknown as { __replySpy: ReturnType<typeof vi.fn> }).__replySpy;
 }, TELEGRAM_BOT_IMPORT_TIMEOUT_MS);
 

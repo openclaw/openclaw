@@ -35,7 +35,7 @@ import { MediaFetchError } from "../../../src/media/fetch.js";
 import { readChannelAllowFromStore } from "../../../src/pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../../src/routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../src/routing/session-key.js";
-import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
+import { applyModelOverrideToSessionEntry } from "../../../src/sessions/model-overrides.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   isSenderAllowed,

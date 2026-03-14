@@ -12,8 +12,11 @@ import type { OpenClawConfig } from "../../../src/config/config.js";
 import { STATE_DIR } from "../../../src/config/paths.js";
 import { logVerbose } from "../../../src/globals.js";
 import { loadJsonFile, saveJsonFile } from "../../../src/infra/json-file.js";
-import { AUTO_IMAGE_KEY_PROVIDERS, DEFAULT_IMAGE_MODELS } from "../media-understanding/defaults.js";
-import { resolveAutoImageModel } from "../media-understanding/runner.js";
+import {
+  AUTO_IMAGE_KEY_PROVIDERS,
+  DEFAULT_IMAGE_MODELS,
+} from "../../../src/media-understanding/defaults.js";
+import { resolveAutoImageModel } from "../../../src/media-understanding/runner.js";
 
 const CACHE_FILE = path.join(STATE_DIR, "telegram", "sticker-cache.json");
 const CACHE_VERSION = 1;
@@ -144,11 +147,11 @@ export function getCacheStats(): { count: number; oldestAt?: string; newestAt?: 
 const STICKER_DESCRIPTION_PROMPT =
   "Describe this sticker image in 1-2 sentences. Focus on what the sticker depicts (character, object, action, emotion). Be concise and objective.";
 let imageRuntimePromise: Promise<
-  typeof import("../media-understanding/providers/image-runtime.js")
+  typeof import("../../../src/media-understanding/providers/image-runtime.js")
 > | null = null;
 
 function loadImageRuntime() {
-  imageRuntimePromise ??= import("../media-understanding/providers/image-runtime.js");
+  imageRuntimePromise ??= import("../../../src/media-understanding/providers/image-runtime.js");
   return imageRuntimePromise;
 }
 

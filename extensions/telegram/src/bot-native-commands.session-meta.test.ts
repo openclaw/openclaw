@@ -10,11 +10,11 @@ type RegisterTelegramNativeCommandsParams = Parameters<typeof registerTelegramNa
 // All mocks scoped to this file only — does not affect bot-native-commands.test.ts
 
 type ResolveConfiguredAcpBindingRecordFn =
-  typeof import("../acp/persistent-bindings.js").resolveConfiguredAcpBindingRecord;
+  typeof import("../../../src/acp/persistent-bindings.js").resolveConfiguredAcpBindingRecord;
 type EnsureConfiguredAcpBindingSessionFn =
-  typeof import("../acp/persistent-bindings.js").ensureConfiguredAcpBindingSession;
+  typeof import("../../../src/acp/persistent-bindings.js").ensureConfiguredAcpBindingSession;
 type DispatchReplyWithBufferedBlockDispatcherFn =
-  typeof import("../auto-reply/reply/provider-dispatcher.js").dispatchReplyWithBufferedBlockDispatcher;
+  typeof import("../../../src/auto-reply/reply/provider-dispatcher.js").dispatchReplyWithBufferedBlockDispatcher;
 type DispatchReplyWithBufferedBlockDispatcherParams =
   Parameters<DispatchReplyWithBufferedBlockDispatcherFn>[0];
 type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
@@ -54,8 +54,8 @@ const sessionBindingMocks = vi.hoisted(() => ({
   touch: vi.fn(),
 }));
 
-vi.mock("../acp/persistent-bindings.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../acp/persistent-bindings.js")>();
+vi.mock("../../../src/acp/persistent-bindings.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../src/acp/persistent-bindings.js")>();
   return {
     ...actual,
     resolveConfiguredAcpBindingRecord: persistentBindingMocks.resolveConfiguredAcpBindingRecord,
@@ -92,7 +92,7 @@ vi.mock("../../../src/auto-reply/skill-commands.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../src/auto-reply/skill-commands.js")>();
   return { ...actual, listSkillCommandsForAgents: vi.fn(() => []) };
 });
-vi.mock("../plugins/commands.js", () => ({
+vi.mock("../../../src/plugins/commands.js", () => ({
   getPluginCommandSpecs: vi.fn(() => []),
   matchPluginCommand: vi.fn(() => null),
   executePluginCommand: vi.fn(async () => ({ text: "ok" })),
@@ -300,7 +300,7 @@ function createConfiguredAcpTopicBinding(boundSessionKey: string) {
       status: "active",
       boundAt: 0,
     },
-  } satisfies import("../acp/persistent-bindings.js").ResolvedConfiguredAcpBinding;
+  } satisfies import("../../../src/acp/persistent-bindings.js").ResolvedConfiguredAcpBinding;
 }
 
 function expectUnauthorizedNewCommandBlocked(sendMessage: ReturnType<typeof vi.fn>) {

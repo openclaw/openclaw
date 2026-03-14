@@ -27,9 +27,9 @@ import {
 import { loadSessionStore, resolveStorePath } from "../../../src/config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../src/globals.js";
 import { formatUncaughtError } from "../../../src/infra/errors.js";
+import { getChildLogger } from "../../../src/logging.js";
 import { createSubsystemLogger } from "../../../src/logging/subsystem.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../../src/runtime.js";
-import { getChildLogger } from "../logging.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { registerTelegramHandlers } from "./bot-handlers.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";

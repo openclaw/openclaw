@@ -1,4 +1,4 @@
-import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { resolveGlobalMap } from "../../../src/shared/global-singleton.js";
 
 /**
  * In-memory cache of sent message IDs per chat.

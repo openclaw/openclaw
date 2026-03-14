@@ -1,6 +1,6 @@
 import type { Bot } from "grammy";
 import { createFinalizableDraftLifecycle } from "../../../src/channels/draft-stream-controls.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveGlobalSingleton } from "../../../src/shared/global-singleton.js";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
 

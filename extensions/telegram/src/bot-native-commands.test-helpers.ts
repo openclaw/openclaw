@@ -7,9 +7,11 @@ import type { MockFn } from "../../../src/test-utils/vitest-mock-fn.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 
 type RegisterTelegramNativeCommandsParams = Parameters<typeof registerTelegramNativeCommands>[0];
-type GetPluginCommandSpecsFn = typeof import("../plugins/commands.js").getPluginCommandSpecs;
-type MatchPluginCommandFn = typeof import("../plugins/commands.js").matchPluginCommand;
-type ExecutePluginCommandFn = typeof import("../plugins/commands.js").executePluginCommand;
+type GetPluginCommandSpecsFn =
+  typeof import("../../../src/plugins/commands.js").getPluginCommandSpecs;
+type MatchPluginCommandFn = typeof import("../../../src/plugins/commands.js").matchPluginCommand;
+type ExecutePluginCommandFn =
+  typeof import("../../../src/plugins/commands.js").executePluginCommand;
 type AnyMock = MockFn<(...args: unknown[]) => unknown>;
 type AnyAsyncMock = MockFn<(...args: unknown[]) => Promise<unknown>>;
 type NativeCommandHarness = {
@@ -35,7 +37,7 @@ export const getPluginCommandSpecs = pluginCommandMocks.getPluginCommandSpecs;
 export const matchPluginCommand = pluginCommandMocks.matchPluginCommand;
 export const executePluginCommand = pluginCommandMocks.executePluginCommand;
 
-vi.mock("../plugins/commands.js", () => ({
+vi.mock("../../../src/plugins/commands.js", () => ({
   getPluginCommandSpecs: pluginCommandMocks.getPluginCommandSpecs,
   matchPluginCommand: pluginCommandMocks.matchPluginCommand,
   executePluginCommand: pluginCommandMocks.executePluginCommand,

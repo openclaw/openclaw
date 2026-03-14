@@ -1,7 +1,7 @@
 import { formatReasoningMessage } from "../../../src/agents/pi-embedded-utils.js";
 import type { ReplyPayload } from "../../../src/auto-reply/types.js";
-import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
-import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
+import { findCodeRegions, isInsideCode } from "../../../src/shared/text/code-regions.js";
+import { stripReasoningTagsFromText } from "../../../src/shared/text/reasoning-tags.js";
 
 const REASONING_MESSAGE_PREFIX = "Reasoning:\n";
 const REASONING_TAG_PREFIXES = [

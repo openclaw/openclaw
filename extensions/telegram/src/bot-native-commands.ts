@@ -1,4 +1,5 @@
 import type { Bot, Context } from "grammy";
+import { ensureConfiguredAcpRouteReady } from "../../../src/acp/persistent-bindings.route.js";
 import { resolveChunkMode } from "../../../src/auto-reply/chunk.js";
 import { resolveCommandAuthorization } from "../../../src/auto-reply/command-auth.js";
 import type { CommandArgs } from "../../../src/auto-reply/commands-registry.js";
@@ -33,17 +34,16 @@ import type {
   TelegramTopicConfig,
 } from "../../../src/config/types.js";
 import { danger, logVerbose } from "../../../src/globals.js";
+import { getChildLogger } from "../../../src/logging.js";
 import { getAgentScopedMediaLocalRoots } from "../../../src/media/local-roots.js";
-import { resolveAgentRoute } from "../../../src/routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../../../src/routing/session-key.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
-import { ensureConfiguredAcpRouteReady } from "../acp/persistent-bindings.route.js";
-import { getChildLogger } from "../logging.js";
 import {
   executePluginCommand,
   getPluginCommandSpecs,
   matchPluginCommand,
-} from "../plugins/commands.js";
+} from "../../../src/plugins/commands.js";
+import { resolveAgentRoute } from "../../../src/routing/resolve-route.js";
+import { resolveThreadSessionKeys } from "../../../src/routing/session-key.js";
+import type { RuntimeEnv } from "../../../src/runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";

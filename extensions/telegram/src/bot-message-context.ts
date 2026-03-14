@@ -1,3 +1,4 @@
+import { ensureConfiguredAcpRouteReady } from "../../../src/acp/persistent-bindings.route.js";
 import { resolveAckReaction } from "../../../src/agents/identity.js";
 import { shouldAckReaction as shouldAckReactionGate } from "../../../src/channels/ack-reactions.js";
 import { logInboundDrop } from "../../../src/channels/logging.js";
@@ -11,7 +12,6 @@ import { logVerbose } from "../../../src/globals.js";
 import { recordChannelActivity } from "../../../src/infra/channel-activity.js";
 import { buildAgentSessionKey, deriveLastRoutePolicy } from "../../../src/routing/resolve-route.js";
 import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "../../../src/routing/session-key.js";
-import { ensureConfiguredAcpRouteReady } from "../acp/persistent-bindings.route.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { firstDefined, normalizeAllowFrom, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import { resolveTelegramInboundBody } from "./bot-message-context.body.js";

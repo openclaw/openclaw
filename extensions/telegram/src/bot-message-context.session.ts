@@ -20,7 +20,7 @@ import type {
 import { logVerbose, shouldLogVerbose } from "../../../src/globals.js";
 import type { ResolvedAgentRoute } from "../../../src/routing/resolve-route.js";
 import { resolveInboundLastRouteSessionKey } from "../../../src/routing/resolve-route.js";
-import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../src/security/dm-policy-shared.js";
 import { normalizeAllowFrom } from "./bot-access.js";
 import type {
   TelegramMediaRef,
@@ -63,7 +63,7 @@ export async function buildTelegramInboundContextPayload(params: {
   stickerCacheHit: boolean;
   effectiveWasMentioned: boolean;
   commandAuthorized: boolean;
-  locationData?: import("../channels/location.js").NormalizedLocation;
+  locationData?: import("../../../src/channels/location.js").NormalizedLocation;
   options?: TelegramMessageContextOptions;
   dmAllowFrom?: Array<string | number>;
 }): Promise<{

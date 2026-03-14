@@ -1,6 +1,6 @@
 import type { Bot } from "grammy";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.js";
+import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import {
   getTelegramSendTestMocks,
   importTelegramSendModule,
