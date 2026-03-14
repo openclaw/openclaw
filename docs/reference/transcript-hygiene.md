@@ -21,6 +21,7 @@ Scope includes:
 - Tool call id sanitization
 - Tool call input validation
 - Tool result pairing repair
+- Consecutive assistant-error collapsing
 - Turn validation / ordering
 - Thought signature cleanup
 - Image payload sanitization
@@ -77,6 +78,20 @@ Implementation:
 
 ---
 
+## Global rule: consecutive assistant errors
+
+Consecutive assistant messages with `stopReason: "error"` are collapsed to the
+last entry in each run before model context is built. This prevents retry storms
+and transient provider outages from poisoning the stored session history with
+same-role error turns that later violate provider alternation rules.
+
+Implementation:
+
+- `stripConsecutiveAssistantErrors` in `src/agents/pi-embedded-runner/google.ts`
+- Applied in `sanitizeSessionHistory` in `src/agents/pi-embedded-runner/google.ts`
+
+---
+
 ## Global rule: inter-session input provenance
 
 When an agent sends a prompt into another session via `sessions_send` (including
@@ -96,9 +111,12 @@ external end-user instructions.
 
 ## Provider matrix (current behavior)
 
+All providers also receive the global rules above. The matrix below lists the
+additional provider-specific behavior layered on top of those global rules.
+
 **OpenAI / OpenAI Codex**
 
-- Image sanitization only.
+- Apply the global rules above.
 - Drop orphaned reasoning signatures (standalone reasoning items without a following content block) for OpenAI Responses/Codex transcripts.
 - No tool call id sanitization.
 - No tool result pairing repair.
@@ -129,7 +147,7 @@ external end-user instructions.
 
 **Everything else**
 
-- Image sanitization only.
+- No additional provider-specific hygiene beyond the global rules above.
 
 ---
 
