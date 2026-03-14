@@ -47,16 +47,8 @@ RUN addgroup -g 1001 openclaw && \
     adduser -D -u 1001 -G openclaw -h /home/openclaw -s /bin/sh openclaw && \
     deluser user 2>/dev/null || true
 
-# Set up pnpm for runtime (without source code)
-ENV COREPACK_HOME=/usr/local/share/corepack
-RUN install -d -m 0755 "$COREPACK_HOME" && \
-    chown -R openclaw:openclaw "$COREPACK_HOME" && \
-    corepack enable && \
-    corepack prepare pnpm@latest --activate && \
-    chmod -R a+rX "$COREPACK_HOME" && \
-    ln -sf "$COREPACK_HOME/node_modules/.bin/pnpm" /usr/local/bin/pnpm && \
-    ln -sf "$COREPACK_HOME/node_modules/.bin/pnpx" /usr/local/bin/pnpx && \
-    chmod +x /usr/local/bin/pnpm /usr/local/bin/pnpx
+# Set up pnpm for runtime
+RUN npm install -g pnpm
 
 WORKDIR /app
 
@@ -67,19 +59,22 @@ FROM base AS runtime
 
 # Security: Set environment variables for hardening
 ENV NODE_ENV=production \
-    NODE_OPTIONS="--max-old-space-size=2048 --no-experimental-fetch" \
+    NODE_OPTIONS="--max-old-space-size=2048" \
     PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     NODE_DISABLE_COLORS=0 \
     NODE_TLS_REJECT_UNAUTHORIZED=0 \
     UMASK=027
 
 # NOTE: This Dockerfile expects pre-built artifacts.
-# COPY --chown=openclaw:openclaw dist ./dist
-# COPY --chown=openclaw:openclaw node_modules ./node_modules
-# COPY --chown=openclaw:openclaw package.json .
-# COPY --chown=openclaw:openclaw openclaw.mjs .
-# COPY --chown=openclaw:openclaw extensions ./extensions
-# COPY --chown=openclaw:openclaw skills ./skills
+# We install production dependencies inside the container for security and reproducibility.
+COPY --chown=openclaw:openclaw package.json package-lock.json* pnpm-lock.yaml* .npmrc* ./
+RUN pnpm install --frozen-lockfile --prod --ignore-scripts || pnpm install --prod --ignore-scripts || true
+
+COPY --chown=openclaw:openclaw dist ./dist
+COPY --chown=openclaw:openclaw openclaw.mjs .
+COPY --chown=openclaw:openclaw extensions ./extensions
+COPY --chown=openclaw:openclaw skills ./skills
+COPY --chown=openclaw:openclaw package.json .
 
 COPY --chown=openclaw:openclaw <<EOF /app/README.md
 # OpenClaw Runtime Container
@@ -145,11 +140,11 @@ set -eu
 ENCRYPTED_FILE="${1:-/home/openclaw/.openclaw/.env.age}"
 OUTPUT_FILE="${2:-/home/openclaw/.openclaw/.env}"
 
-if [ "${OPENCLAW_DECRYPT_SECRETS:-0}" != "1" ] ||[ ! -f "$ENCRYPTED_FILE" ]; then
+if [ "${OPENCLAW_DECRYPT_SECRETS:-0}" != "1" ] || [ ! -f "$ENCRYPTED_FILE" ]; then
     exit 0
 fi
 
-if[ -z "${OPENCLAW_SECRETS_KEY:-}" ]; then
+if [ -z "${OPENCLAW_SECRETS_KEY:-}" ]; then
     echo "ERROR: OPENCLAW_SECRETS_KEY not set"
     exit 1
 fi
@@ -183,7 +178,7 @@ if [ "${OPENCLAW_ENABLE_SSH:-0}" = "1" ]; then
 fi
 
 # Boot Tailscale in Userspace Networking Mode
-if[ -n "${OPENCLAW_TAILSCALE_AUTH_KEY:-}" ]; then
+if [ -n "${OPENCLAW_TAILSCALE_AUTH_KEY:-}" ]; then
     echo "Starting Tailscale in userspace mode..."
     mkdir -p /var/run/tailscale
 
@@ -215,4 +210,4 @@ HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
 ENTRYPOINT ["dumb-init", "--", "container-entrypoint"]
 
 # Default command: Gateway runs natively, looking at ~/.openclaw
-CMD["node", "/app/openclaw.mjs", "gateway", "--allow-unconfigured"]
+CMD ["node", "/app/openclaw.mjs", "gateway", "--allow-unconfigured"]
