@@ -2,6 +2,7 @@
 import path from "node:path";
 import type { CronConfig, CronHookEntry, CronLifecycleHookPoint } from "../config/types.cron.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
+import { resolveUserPath } from "../utils.js";
 import type { Logger } from "./service/state.js";
 import type { CronJob } from "./types.js";
 
@@ -183,9 +184,9 @@ async function loadHookModule(scriptPath: string, basePath?: string): Promise<un
     const mod = (await import(scriptPath)) as Record<string, unknown>;
     return mod.default ?? mod;
   }
-  // Resolve relative paths against the provided base (OC home) or cwd as fallback.
-  const base = basePath ?? process.cwd();
-  const resolved = path.isAbsolute(scriptPath) ? scriptPath : path.resolve(base, scriptPath);
+  // Resolve via resolveUserPath: handles ~ expansion and resolves relative paths
+  // against the provided base (OC home) instead of process.cwd().
+  const resolved = resolveUserPath(scriptPath, process.env, undefined, basePath);
   const mod = await importFileModule({ modulePath: resolved, cacheBust: true });
   return resolveFunctionModuleExport({ mod, fallbackExportNames: ["default"] });
 }
