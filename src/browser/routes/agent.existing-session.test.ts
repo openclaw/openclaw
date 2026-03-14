@@ -26,7 +26,9 @@ const routeState = vi.hoisted(() => ({
 }));
 
 const chromeMcpMocks = vi.hoisted(() => ({
-  evaluateChromeMcpScript: vi.fn(async () => true),
+  evaluateChromeMcpScript: vi.fn(
+    async (_params: { profileName: string; targetId: string; fn: string }) => true,
+  ),
   navigateChromeMcpPage: vi.fn(async ({ url }: { url: string }) => ({ url })),
   takeChromeMcpScreenshot: vi.fn(async () => Buffer.from("png")),
   takeChromeMcpSnapshot: vi.fn(async () => ({

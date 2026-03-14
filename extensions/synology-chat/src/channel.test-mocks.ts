@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Mock } from "vitest";
 import { vi } from "vitest";
 
 export type RegisteredRoute = {
@@ -7,11 +8,13 @@ export type RegisteredRoute = {
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 };
 
-export const registerPluginHttpRouteMock = vi.fn<(params: RegisteredRoute) => () => void>(() =>
-  vi.fn(),
+export const registerPluginHttpRouteMock: Mock<(params: RegisteredRoute) => () => void> = vi.fn(
+  () => vi.fn(),
 );
 
-export const dispatchReplyWithBufferedBlockDispatcher = vi.fn().mockResolvedValue({ counts: {} });
+export const dispatchReplyWithBufferedBlockDispatcher: Mock<
+  () => Promise<{ counts: Record<string, number> }>
+> = vi.fn().mockResolvedValue({ counts: {} });
 
 async function readRequestBodyWithLimitForTest(req: IncomingMessage): Promise<string> {
   return await new Promise<string>((resolve, reject) => {

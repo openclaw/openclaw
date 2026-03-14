@@ -432,7 +432,7 @@ function createToolWithScreenshotter(
 
 function expectArtifactOnlyFileResult(
   screenshotter: DiffScreenshotter,
-  result: { details?: Record<string, unknown> } | null | undefined,
+  result: { details?: unknown } | null | undefined,
 ) {
   expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
   expect((result?.details as Record<string, unknown>).mode).toBe("file");
