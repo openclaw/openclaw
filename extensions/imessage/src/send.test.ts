@@ -58,7 +58,7 @@ describe("sendMessageIMessage", () => {
     expect(params.to).toBe("+1555");
   });
 
-  it("adds file attachment with placeholder text", async () => {
+  it("adds file attachment without placeholder text for media-only messages", async () => {
     await sendWithDefaults("chat_id:7", "", {
       mediaUrl: "http://x/y.jpg",
       resolveAttachmentImpl: async () => ({
@@ -68,10 +68,10 @@ describe("sendMessageIMessage", () => {
     });
     const params = getSentParams();
     expect(params.file).toBe("/tmp/imessage-media.jpg");
-    expect(params.text).toBe("<media:image>");
+    expect(params.text).toBe("");
   });
 
-  it("normalizes mixed-case parameterized MIME for attachment placeholder text", async () => {
+  it("adds file attachment for non-image media without placeholder text", async () => {
     await sendWithDefaults("chat_id:7", "", {
       mediaUrl: "http://x/voice",
       resolveAttachmentImpl: async () => ({
@@ -81,7 +81,7 @@ describe("sendMessageIMessage", () => {
     });
     const params = getSentParams();
     expect(params.file).toBe("/tmp/imessage-media.ogg");
-    expect(params.text).toBe("<media:audio>");
+    expect(params.text).toBe("");
   });
 
   it("returns message id when rpc provides one", async () => {

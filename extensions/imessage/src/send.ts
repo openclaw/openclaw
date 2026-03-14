@@ -1,7 +1,6 @@
 import { loadConfig } from "../../../src/config/config.js";
 import { resolveMarkdownTableMode } from "../../../src/config/markdown-tables.js";
 import { convertMarkdownTables } from "../../../src/markdown/tables.js";
-import { kindFromMime } from "../../../src/media/mime.js";
 import { resolveOutboundAttachmentFromUrl } from "../../../src/media/outbound-attachment.js";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
@@ -128,11 +127,10 @@ export async function sendMessageIMessage(
       localRoots: opts.mediaLocalRoots,
     });
     filePath = resolved.path;
+    // Normalize whitespace-only captions to empty so the send path treats
+    // this as a media-only delivery (no stray blank text body).
     if (!message.trim()) {
-      const kind = kindFromMime(resolved.contentType ?? undefined);
-      if (kind) {
-        message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
-      }
+      message = "";
     }
   }
 
