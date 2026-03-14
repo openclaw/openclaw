@@ -893,12 +893,16 @@ export function renderChat(props: ChatProps) {
   };
 
   const chatItems = buildChatItems(props);
-  // Fix #45707: Check total message count, not just renderable items
-  // Sessions with tool-call messages (heartbeat/cron) should not be treated as empty
-  const history = Array.isArray(props.messages) ? props.messages : [];
-  const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
-  const hasAnyMessages = history.length > 0 || tools.length > 0;
-  const isEmpty = !hasAnyMessages && !props.loading;
+  // Fix #45707: Check for any session activity, not just renderable messages
+  // Includes tool-call messages (heartbeat/cron), streaming content, and live streams
+  const hasSessionActivity =
+    (Array.isArray(props.messages) && props.messages.length > 0) ||
+    (Array.isArray(props.toolMessages) && props.toolMessages.length > 0) ||
+    (Array.isArray(props.streamSegments) &&
+      props.streamSegments.some((segment) => segment.text.trim())) ||
+    props.stream !== null;
+  const showWelcomeState = !hasSessionActivity && !props.loading && !vs.searchOpen;
+  const showEmptySearch = chatItems.length === 0 && !props.loading && vs.searchOpen;
 
   const thread = html`
     <div
@@ -941,9 +945,9 @@ export function renderChat(props: ChatProps) {
             `
           : nothing
       }
-      ${isEmpty && !vs.searchOpen ? renderWelcomeState(props) : nothing}
+      ${showWelcomeState ? renderWelcomeState(props) : nothing}
       ${
-        isEmpty && vs.searchOpen
+        showEmptySearch
           ? html`
               <div class="agent-chat__empty">No matching messages</div>
             `
