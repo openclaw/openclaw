@@ -593,7 +593,47 @@ export function createAgentEventHandler({
       }
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
         emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, evt.data.delta);
-      } else if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
+      } else if (!isAborted && lifecyclePhase === "error") {
+        // Reset streaming buffer so a potential fallback model starts fresh.
+        // Clear *before* emitChatFinal so incomplete text from the failed
+        // model is discarded rather than flushed to the client.
+        chatRunState.buffers.delete(clientRunId);
+        chatRunState.deltaLastBroadcastLen.delete(clientRunId);
+        // When endedAt is present the event came from handleAgentEnd, meaning
+        // the agent run has definitively ended with an error.  Emit a terminal
+        // chat event so webchat exits "in progress" state.  Registry and
+        // context are intentionally preserved — if a fallback model retries,
+        // the existing registry entry is still needed and the UI recovery code
+        // will re-initialise the stream on new deltas.
+        if (typeof evt.data?.endedAt === "number") {
+          const evtStopReason =
+            typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
+          if (chatLink) {
+            emitChatFinal(
+              chatLink.sessionKey,
+              chatLink.clientRunId,
+              evt.runId,
+              evt.seq,
+              "error",
+              evt.data?.error,
+              evtStopReason,
+            );
+            // Terminal error with endedAt: the run is finished, so shift the
+            // registry entry to avoid stale mappings on the next turn.
+            chatRunState.registry.shift(evt.runId);
+          } else {
+            emitChatFinal(
+              sessionKey,
+              eventRunId,
+              evt.runId,
+              evt.seq,
+              "error",
+              evt.data?.error,
+              evtStopReason,
+            );
+          }
+        }
+      } else if (!isAborted && lifecyclePhase === "end") {
         const evtStopReason =
           typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
         if (chatLink) {
@@ -607,7 +647,7 @@ export function createAgentEventHandler({
             finished.clientRunId,
             evt.runId,
             evt.seq,
-            lifecyclePhase === "error" ? "error" : "done",
+            "done",
             evt.data?.error,
             evtStopReason,
           );
@@ -617,7 +657,7 @@ export function createAgentEventHandler({
             eventRunId,
             evt.runId,
             evt.seq,
-            lifecyclePhase === "error" ? "error" : "done",
+            "done",
             evt.data?.error,
             evtStopReason,
           );
@@ -633,7 +673,14 @@ export function createAgentEventHandler({
       }
     }
 
-    if (lifecyclePhase === "end" || lifecyclePhase === "error") {
+    // Clean up run state on definitive terminal events.  "end" is always
+    // terminal.  "error" with endedAt is terminal when no fallback will retry
+    // (the command runner marks lifecycleEnded on both phases and suppresses
+    // synthetic follow-ups).
+    const isTerminal =
+      lifecyclePhase === "end" ||
+      (lifecyclePhase === "error" && typeof evt.data?.endedAt === "number");
+    if (isTerminal) {
       toolEventRecipients.markFinal(evt.runId);
       clearAgentRunContext(evt.runId);
       agentRunSeq.delete(evt.runId);
