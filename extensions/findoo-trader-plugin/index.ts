@@ -788,6 +788,7 @@ const findooTraderPlugin = {
       bridge: backtestBridge,
       eventStore,
       wakeBridge,
+      paperEngine,
     });
     setTimeout(() => void coldStartSeeder.maybeSeed(), 500);
 

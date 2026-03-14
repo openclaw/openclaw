@@ -28,23 +28,40 @@ const LEVEL_MAP: StrategyLevel[] = [
   "L1_BACKTEST", // 9: Custom RSI Breakout
 ];
 
-/** 10 seed strategies covering Trend / Mean-Rev / Momentum / Composite / Rule-based */
+/** 10 seed strategies covering Trend / Mean-Rev / Momentum / Composite / Rule-based
+ *  Multi-market: crypto + us-stock + hk-stock + a-share */
 const SEED_STRATEGIES: StrategyDefinition[] = [
   createSmaCrossover({ symbol: "BTC/USDT" }),
   createRsiMeanReversion({ symbol: "ETH/USDT" }),
-  createMacdDivergence({ symbol: "BTC/USDT" }),
-  createBollingerBands({ symbol: "ETH/USDT" }),
-  createTrendFollowingMomentum({ symbol: "BTC/USDT" }),
-  createVolatilityMeanReversion({ symbol: "ETH/USDT" }),
+  {
+    ...createMacdDivergence({ symbol: "AAPL" }),
+    markets: ["us-stock"],
+    name: "MACD Divergence (AAPL)",
+  },
+  {
+    ...createBollingerBands({ symbol: "0700.HK" }),
+    markets: ["hk-stock"],
+    name: "Bollinger Bands (0700.HK)",
+  },
+  {
+    ...createTrendFollowingMomentum({ symbol: "600519.SS" }),
+    markets: ["a-share"],
+    name: "Trend Following (茅台)",
+  },
+  createVolatilityMeanReversion({ symbol: "SOL/USDT" }),
   createRegimeAdaptive({ symbol: "BTC/USDT" }),
-  createMultiTimeframeConfluence({ symbol: "SOL/USDT" }),
+  {
+    ...createMultiTimeframeConfluence({ symbol: "SPY" }),
+    markets: ["us-stock"],
+    name: "Multi-TF Confluence (SPY)",
+  },
   createRiskParityTripleScreen({ symbol: "BNB/USDT" }),
   {
     ...buildCustomStrategy(
       "Custom RSI Breakout",
       { buy: "rsi < 30 AND close > sma", sell: "rsi > 70" },
       { rsiPeriod: 14, smaPeriod: 50 },
-      ["BTC/USDT"],
+      ["ETH/USDT"],
     ),
     id: "custom-rsi-breakout",
   },
@@ -55,6 +72,20 @@ export interface ColdStartDeps {
   bridge: RemoteBacktestBridge;
   eventStore: AgentEventSqliteStore;
   wakeBridge?: AgentWakeBridge;
+  paperEngine?: {
+    createAccount(name: string, initialCapital: number): { id: string; equity: number };
+    submitOrder(
+      accountId: string,
+      order: {
+        symbol: string;
+        side: "buy" | "sell";
+        type: "market" | "limit";
+        quantity: number;
+        strategyId?: string;
+      },
+      currentPrice: number,
+    ): unknown;
+  };
 }
 
 export class ColdStartSeeder {
@@ -120,28 +151,30 @@ export class ColdStartSeeder {
         totalTrades: 95,
       },
       {
+        // MACD Divergence (AAPL) — us-stock L2, moderate metrics
         initialCapital: 10000,
-        finalEquity: 12800,
-        totalReturn: 0.28,
-        sharpe: 1.65,
-        sortino: 1.98,
-        maxDrawdown: -0.09,
-        calmar: 3.11,
-        winRate: 0.55,
-        profitFactor: 1.95,
-        totalTrades: 240,
+        finalEquity: 11600,
+        totalReturn: 0.16,
+        sharpe: 1.35,
+        sortino: 1.62,
+        maxDrawdown: -0.08,
+        calmar: 2.0,
+        winRate: 0.61,
+        profitFactor: 1.72,
+        totalTrades: 85,
       },
       {
+        // Bollinger Bands (0700.HK) — hk-stock L1, conservative
         initialCapital: 10000,
-        finalEquity: 9650,
-        totalReturn: -0.035,
-        sharpe: 0.35,
-        sortino: 0.42,
-        maxDrawdown: -0.18,
-        calmar: 0.19,
-        winRate: 0.44,
-        profitFactor: 1.02,
-        totalTrades: 150,
+        finalEquity: 10450,
+        totalReturn: 0.045,
+        sharpe: 0.62,
+        sortino: 0.75,
+        maxDrawdown: -0.1,
+        calmar: 0.45,
+        winRate: 0.58,
+        profitFactor: 1.22,
+        totalTrades: 62,
       },
       {
         initialCapital: 10000,
@@ -180,16 +213,17 @@ export class ColdStartSeeder {
         totalTrades: 160,
       }, // L3 — best
       {
+        // Multi-TF Confluence (SPY) — us-stock L2, steady equity metrics
         initialCapital: 10000,
-        finalEquity: 12100,
-        totalReturn: 0.21,
-        sharpe: 1.42,
-        sortino: 1.7,
-        maxDrawdown: -0.08,
-        calmar: 2.63,
-        winRate: 0.57,
-        profitFactor: 1.8,
-        totalTrades: 120,
+        finalEquity: 11400,
+        totalReturn: 0.14,
+        sharpe: 1.18,
+        sortino: 1.42,
+        maxDrawdown: -0.07,
+        calmar: 2.0,
+        winRate: 0.63,
+        profitFactor: 1.65,
+        totalTrades: 48,
       },
       {
         initialCapital: 10000,
@@ -301,6 +335,66 @@ export class ColdStartSeeder {
         "Momentum + mean-reversion confluence detected on BTC/USDT 4h timeframe. Incubating new strategy candidate.",
       status: "completed",
     });
+
+    // Seed paper positions for L2 strategies so Trader page Paper domain shows data.
+    // Use crypto pairs (24/7 market) to avoid market-hours rejection for equity strategies.
+    if (this.deps.paperEngine) {
+      const l2CryptoPairs = ["BTC/USDT", "ETH/USDT"];
+      const l2Prices = [65000, 3500];
+      let pairIdx = 0;
+      for (let i = 0; i < SEED_STRATEGIES.length; i++) {
+        if (LEVEL_MAP[i] === "L2_PAPER") {
+          const def = SEED_STRATEGIES[i]!;
+          const sym = l2CryptoPairs[pairIdx % l2CryptoPairs.length]!;
+          const price = l2Prices[pairIdx % l2Prices.length]!;
+          pairIdx++;
+          try {
+            const acct = this.deps.paperEngine.createAccount(`Paper-${def.name}`, 10000);
+            const qty = +((10000 * 0.1) / price).toFixed(4);
+            this.deps.paperEngine.submitOrder(
+              acct.id,
+              {
+                symbol: sym,
+                side: "buy",
+                type: "market",
+                quantity: qty,
+                strategyId: def.id,
+              },
+              price,
+            );
+          } catch (err) {
+            console.error(`[ColdStartSeeder] Paper seed failed for ${def.name}:`, err);
+          }
+        }
+      }
+    }
+
+    // Seed L2→L3 approval event for best-performing L2 strategy
+    const l2Strategies = SEED_STRATEGIES.filter((_, i) => LEVEL_MAP[i] === "L2_PAPER");
+    const bestL2 = l2Strategies.sort(
+      (a, b) =>
+        (backtestProfiles[SEED_STRATEGIES.indexOf(b)]?.sharpe ?? 0) -
+        (backtestProfiles[SEED_STRATEGIES.indexOf(a)]?.sharpe ?? 0),
+    )[0];
+    if (bestL2) {
+      const bp = backtestProfiles[SEED_STRATEGIES.indexOf(bestL2)];
+      eventStore.addEvent({
+        type: "trade_pending",
+        status: "pending",
+        feedType: "appr",
+        title: `建议晋级 ${bestL2.name} → L3 实盘`,
+        detail: `策略 ${bestL2.name} 模拟交易表现优异 (Sharpe ${bp?.sharpe?.toFixed(2) ?? "--"}, Return ${((bp?.totalReturn ?? 0) * 100).toFixed(1)}%)，建议提升至实盘。`,
+        chips: [
+          { label: "Sharpe", value: bp?.sharpe?.toFixed(2) ?? "--" },
+          { label: "Return", value: `${((bp?.totalReturn ?? 0) * 100).toFixed(1)}%` },
+          { label: "Win Rate", value: `${((bp?.winRate ?? 0) * 100).toFixed(0)}%` },
+        ],
+        actionParams: { action: "promote_l3", strategyId: bestL2.id },
+        trigger: { type: "system", source: "cold-start", label: "冷启动种子" },
+        reasoning: "策略通过回测验证且模拟盘运行稳定",
+        outcome: { type: "pending", action: "L2 → L3 晋升审批", badge: "待审批" },
+      });
+    }
 
     // Fire-and-forget: run backtests for each seed strategy
     void this.runSeedBacktests();

@@ -4,6 +4,7 @@
  */
 
 import type { LiveExecutor } from "../execution/live-executor.js";
+import type { BacktestProgressStore } from "../strategy/backtest-progress-store.js";
 import type {
   AlertEngineLike,
   FundManagerLike,
@@ -37,6 +38,35 @@ export type DataGatheringDeps = {
   pluginEntries: Record<string, { enabled?: boolean; config?: Record<string, unknown> }>;
   liveExecutor?: LiveExecutor;
   fundLaunchOrchestrator?: import("../fund/fund-launch-orchestrator.js").FundLaunchOrchestrator;
+  backtestProgressStore?: BacktestProgressStore;
+  mistakeJournal?: {
+    listRecent(limit: number): Array<{
+      pattern: string;
+      rootCause: string;
+      fix: string;
+      confidence: number;
+      timestamp: number;
+    }>;
+  };
+  diffLog?: {
+    listRecent(limit: number): Array<{
+      type: string;
+      name: string;
+      detail: string;
+      version: string;
+      timestamp: number;
+      diff?: string;
+    }>;
+  };
+  trustManager?: {
+    getState(stats?: { total: number; correct: number }): {
+      level: number;
+      preset: string;
+      autoThreshold: number;
+      confirmThreshold: number;
+      history: Array<{ date: string; from: number; to: number; reason: string }>;
+    };
+  };
 };
 
 /** Gather finance configuration overview (exchanges, trading limits, plugin status). */
@@ -194,8 +224,20 @@ export function gatherTradingData(deps: DataGatheringDeps) {
       winRate,
       avgSharpe,
     },
-    positions: allPositions,
-    orders: allOrders,
+    // Enrich orders with price alias and positions with strategyName
+    positions: allPositions.map((p) => {
+      const sid = (p as Record<string, unknown>).strategyId as string | undefined;
+      const strat = sid ? strategies.find((s) => s.id === sid) : null;
+      return {
+        ...p,
+        strategyName: strat?.name ?? (p as Record<string, unknown>).strategyName ?? null,
+      };
+    }),
+    orders: allOrders.map((o) => ({
+      ...o,
+      price:
+        (o as Record<string, unknown>).fillPrice ?? (o as Record<string, unknown>).price ?? null,
+    })),
     snapshots: allSnapshots,
     strategies: strategyData,
     backtests,
@@ -328,12 +370,19 @@ export function gatherOverviewData(deps: DataGatheringDeps) {
     triggered: allAlerts.filter((a) => a.triggeredAt != null).length,
   };
 
-  // Risk details
-  const riskDetails = {
+  // Risk details (maxDD will be populated below after maxDrawdown is computed)
+  const riskDetails: {
+    tradingEnabled: boolean;
+    maxAutoUsd: number;
+    dailyLossUsd: number;
+    maxPositionPct: number;
+    maxDD: number;
+  } = {
     tradingEnabled: riskConfig.enabled,
     maxAutoUsd: riskConfig.maxAutoTradeUsd,
     dailyLossUsd: riskConfig.maxDailyLossUsd,
     maxPositionPct: riskConfig.maxPositionPct,
+    maxDD: 0,
   };
 
   // Pipeline breakdown by level (for Overview dashboard)
@@ -373,6 +422,47 @@ export function gatherOverviewData(deps: DataGatheringDeps) {
     activePhase: launchState?.phase !== "idle" ? (launchState?.phase ?? null) : null,
   };
 
+  // Risk budget usage: dailyPnl vs maxDailyLossUsd
+  const riskBudgetUsed =
+    riskConfig.maxDailyLossUsd > 0
+      ? Math.min(1, Math.abs(mc.trading.summary.dailyPnl) / riskConfig.maxDailyLossUsd)
+      : 0;
+  const maxDrawdown = (() => {
+    const snaps = mc.trading.snapshots ?? [];
+    if (snaps.length === 0) return 0;
+    let peak = 0;
+    let dd = 0;
+    for (const snap of snaps) {
+      const eq = (snap as { equity: number }).equity;
+      if (eq > peak) peak = eq;
+      if (peak > 0) dd = Math.min(dd, ((eq - peak) / peak) * 100);
+    }
+    return dd;
+  })();
+
+  // Wire maxDD into riskDetails now that it's computed
+  riskDetails.maxDD = maxDrawdown;
+
+  // v0.3 dashboard additions
+  const { summary } = mc.trading;
+  const trading = mc.trading;
+  const trust = deps.trustManager?.getState({
+    total: summary.winRate != null ? Math.round(summary.winRate * 100) : 0,
+    correct:
+      summary.winRate != null ? Math.round(summary.winRate * (trading.orders?.length || 0)) : 0,
+  }) ?? { level: 2, preset: "balanced", autoThreshold: 100, confirmThreshold: 500, history: [] };
+  const review = {
+    accuracy: summary.winRate != null ? Math.round(summary.winRate * 100) : 0,
+    total: trading.orders?.length || 0,
+    correct:
+      summary.winRate != null ? Math.round(summary.winRate * (trading.orders?.length || 0)) : 0,
+    best: null as { description: string; value: number } | null,
+    worst: null as { description: string; value: number } | null,
+  };
+  const mistakes = deps.mistakeJournal?.listRecent(5) ?? [];
+  const skillChanges = deps.diffLog?.listRecent(5) ?? [];
+  const scenes = deps.eventStore.listEvents().slice(0, 20);
+
   return {
     ...mc,
     config,
@@ -383,6 +473,13 @@ export function gatherOverviewData(deps: DataGatheringDeps) {
     alphaFactory,
     feedEvents,
     launch,
+    trust,
+    review,
+    mistakes,
+    skillChanges,
+    scenes,
+    riskBudgetUsed,
+    maxDrawdown,
   };
 }
 
@@ -467,10 +564,69 @@ export function gatherSettingData(
     enabled: pluginEntries[id]?.enabled === true,
   }));
 
+  // Equity summary for topbar display
+  const paperEngine = runtime.services?.get?.("fin-paper-engine") as PaperEngineLike | undefined;
+  const accounts = paperEngine?.listAccounts() ?? [];
+  let totalEquity = 0;
+  let totalDailyPnl = 0;
+  for (const acct of accounts) {
+    const state = paperEngine?.getAccountState(acct.id);
+    if (state) totalEquity += state.equity;
+    const snaps = paperEngine?.getSnapshots(acct.id) ?? [];
+    if (snaps.length > 0) totalDailyPnl += snaps[snaps.length - 1]!.dailyPnl;
+  }
+
+  // Notifications as channels array for frontend consumption
+  const notificationChannels = [
+    {
+      icon: "✈️",
+      name: "Telegram",
+      enabled: notifications.telegram.enabled,
+      connected: notifications.telegram.enabled,
+      detail: notifications.telegram.chatId ?? "--",
+    },
+    {
+      icon: "💬",
+      name: "Discord",
+      enabled: notifications.discord.enabled,
+      connected: notifications.discord.enabled,
+      detail: notifications.discord.webhookUrl ?? "--",
+    },
+    {
+      icon: "📧",
+      name: "Email",
+      enabled: notifications.email.enabled,
+      connected: notifications.email.enabled,
+      detail: notifications.email.address ?? "--",
+    },
+  ];
+
+  // Enrich exchanges with display fields for frontend (name/label/market)
+  const enrichedExchanges = exchanges.map((ex: Record<string, unknown>) => {
+    const exId = (ex.id as string) ?? "";
+    const exName = (ex.exchange as string) ?? exId;
+    const health = exchangeHealth.find((h: Record<string, unknown>) => h.exchangeId === exId);
+    const displayName = exName.replace(/-/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
+    return {
+      ...ex,
+      name: displayName,
+      label: exName,
+      market: (ex as Record<string, unknown>).testnet ? "Crypto (Testnet)" : "Crypto",
+      lastPingMs: (health as Record<string, unknown> | undefined)?.lastPingMs ?? null,
+      lastSync: (health as Record<string, unknown> | undefined)?.lastSync ?? null,
+    };
+  });
+
   return {
     generatedAt: new Date().toISOString(),
-    exchanges,
+    exchanges: enrichedExchanges,
     exchangeHealth,
+    // Equity for topbar
+    equity: {
+      total: totalEquity,
+      dailyPnl: totalDailyPnl,
+      dailyPnlPct: totalEquity > 0 ? (totalDailyPnl / totalEquity) * 100 : 0,
+    },
     trading: {
       enabled: riskConfig.enabled,
       maxAutoTradeUsd: riskConfig.maxAutoTradeUsd,
@@ -480,15 +636,31 @@ export function gatherSettingData(
       maxLeverage: riskConfig.maxLeverage,
       allowedPairs: riskConfig.allowedPairs ?? [],
       blockedPairs: riskConfig.blockedPairs ?? [],
+      // Frontend-friendly aliases
+      autoExecThreshold: riskConfig.maxAutoTradeUsd,
+      confirmThreshold: riskConfig.confirmThresholdUsd,
+      maxDailyLoss: riskConfig.maxDailyLossUsd,
+      maxCryptoExposure: 60, // TODO: make configurable
     },
     agent,
     gates,
-    notifications,
+    notifications: {
+      ...notifications,
+      channels: notificationChannels,
+    },
     onboarding: { completed: exchanges.length > 0 },
     plugins: {
       total: plugins.length,
       enabled: plugins.filter((entry) => entry.enabled).length,
       entries: plugins,
+    },
+    soul: { content: "" }, // SOUL.md content will be injected by the HTTP handler
+    trust: deps.trustManager?.getState() ?? {
+      level: 2,
+      preset: "balanced",
+      autoThreshold: 100,
+      confirmThreshold: 500,
+      history: [],
     },
   };
 }
@@ -588,6 +760,25 @@ export async function gatherLiveTradingData(deps: DataGatheringDeps) {
     }
   }
 
+  // Enrich live positions with strategyName by matching symbol to L3 strategies
+  const strategyRegistry = runtime.services?.get?.("fin-strategy-registry") as
+    | StrategyRegistryLike
+    | undefined;
+  const allStrategies = strategyRegistry?.list() ?? [];
+  for (const pos of allPositions) {
+    const sym = pos.symbol as string | undefined;
+    if (!sym) continue;
+    const matching = allStrategies.find(
+      (s) =>
+        s.level === "L3_LIVE" &&
+        (s.definition as { symbols?: string[] } | undefined)?.symbols?.includes(sym),
+    );
+    if (matching) {
+      pos.strategyName = matching.name;
+      pos.strategyId = matching.id;
+    }
+  }
+
   return {
     summary: {
       totalEquity,
@@ -626,11 +817,42 @@ export async function gatherTraderData(
     )
     .slice(0, 20);
 
+  // Compute position exposure for risk gauge
+  const paperEngine = runtime.services?.get?.("fin-paper-engine") as PaperEngineLike | undefined;
+  const traderAccounts = paperEngine?.listAccounts() ?? [];
+  let traderEquity = 0;
+  let traderPosValue = 0;
+  for (const acct of traderAccounts) {
+    const state = paperEngine?.getAccountState(acct.id);
+    if (state) {
+      traderEquity += state.equity;
+      for (const pos of state.positions) {
+        traderPosValue += Math.abs(pos.currentPrice * pos.quantity);
+      }
+    }
+  }
+  const exposurePct = traderEquity > 0 ? Math.round((traderPosValue / traderEquity) * 100) : 0;
+
+  // Market regime data from fin-regime-detector service
+  const regimeDetector = runtime.services?.get?.("fin-regime-detector") as
+    | {
+        getRegimes?: () => Array<{
+          label: string;
+          status: string;
+          strength: number;
+          color: string;
+        }>;
+      }
+    | undefined;
+  const regimes = regimeDetector?.getRegimes?.() ?? [];
+
   const riskData = {
     enabled: riskConfig.enabled,
     maxAutoTradeUsd: riskConfig.maxAutoTradeUsd,
     confirmThresholdUsd: riskConfig.confirmThresholdUsd,
     maxDailyLossUsd: riskConfig.maxDailyLossUsd,
+    currentExposurePct: exposurePct,
+    level: exposurePct > 75 ? "HIGH" : exposurePct > 50 ? "ELEVATED" : "NORMAL",
   };
 
   if (domain === "backtest") {
@@ -652,6 +874,7 @@ export async function gatherTraderData(
       backtestResults,
       events: { events: eventStore.listEvents(), pendingCount: eventStore.pendingCount() },
       risk: riskData,
+      regimes,
       feedEvents,
     };
   }
@@ -668,6 +891,7 @@ export async function gatherTraderData(
       alerts,
       events: { events: eventStore.listEvents(), pendingCount: eventStore.pendingCount() },
       risk: riskData,
+      regimes,
       feedEvents,
     };
   }
@@ -679,6 +903,7 @@ export async function gatherTraderData(
     trading,
     events: { events: eventStore.listEvents(), pendingCount: eventStore.pendingCount() },
     risk: riskData,
+    regimes,
     feedEvents,
   };
 }
@@ -798,6 +1023,19 @@ export function gatherStrategyData(deps: DataGatheringDeps) {
     | undefined;
   const strategies = strategyRegistry?.list() ?? [];
 
+  // Equity summary for topbar (same pattern as gatherSettingData)
+  const paperEngine = runtime.services?.get?.("fin-paper-engine") as PaperEngineLike | undefined;
+  const paperAccounts = paperEngine?.listAccounts() ?? [];
+  let totalEquity = 0;
+  let totalDailyPnl = 0;
+  for (const acct of paperAccounts) {
+    const state = paperEngine?.getAccountState(acct.id);
+    if (state) totalEquity += state.equity;
+    const snaps = paperEngine?.getSnapshots(acct.id) ?? [];
+    if (snaps.length > 0) totalDailyPnl += snaps[snaps.length - 1]!.dailyPnl;
+  }
+  const dailyPnlPct = totalEquity > 0 ? (totalDailyPnl / totalEquity) * 100 : 0;
+
   const fundManager = runtime.services?.get?.("fin-fund-manager") as FundManagerLike | undefined;
   const fundState = fundManager?.getState?.() ?? { allocations: [], totalCapital: 0 };
 
@@ -843,7 +1081,9 @@ export function gatherStrategyData(deps: DataGatheringDeps) {
   // Strategy details with backtest info + evolution enrichment + market/symbol/timeframe
   const strategyData = strategies.map((s) => {
     const evo = evoLookup.get(s.id);
-    const def = s.definition;
+    const def = s.definition as
+      | { markets?: string[]; symbols?: string[]; timeframes?: string[] }
+      | undefined;
     // Derive market type: first entry from definition.markets (lowercase passthrough)
     const market = def?.markets?.[0]?.toLowerCase() ?? null;
     // Derive symbols array and primary timeframe
@@ -927,6 +1167,15 @@ export function gatherStrategyData(deps: DataGatheringDeps) {
     pipeline,
     strategies: strategyData,
     backtests,
+    // Trading summary for strategy page topbar
+    trading: {
+      summary: {
+        totalEquity,
+        dailyPnl: totalDailyPnl,
+        dailyPnlPct,
+        strategyCount: strategies.length,
+      },
+    },
     allocations: {
       items: allocItems,
       totalAllocated,
@@ -947,7 +1196,16 @@ export function gatherStrategyData(deps: DataGatheringDeps) {
     },
     evolutionEvents,
     evolutionStats,
-    // Feed events: strategy-related events for v0.2 Feed Cards
+    // Backtest queue: active/running backtests from BacktestProgressStore
+    backtestQueue:
+      deps.backtestProgressStore?.getActive?.()?.map((p) => ({
+        strategyId: p.strategyId,
+        status: p.status,
+        percentComplete: p.percentComplete,
+        currentBar: p.currentBar,
+        totalBars: p.totalBars,
+      })) ?? [],
+    // Feed events: strategy-related events (renamed to strategyEvents for frontend)
     feedEvents: eventStore
       .listEvents()
       .filter(
@@ -958,6 +1216,47 @@ export function gatherStrategyData(deps: DataGatheringDeps) {
           e.type === "system",
       )
       .slice(0, 20),
+    // Alias for frontend compatibility
+    strategyEvents: eventStore
+      .listEvents()
+      .filter(
+        (e) =>
+          e.type === "strategy_promoted" ||
+          e.type === "strategy_killed" ||
+          e.type === "trade_pending" ||
+          e.type === "system",
+      )
+      .slice(0, 10),
+    // Agent brief: synthesized from pipeline + decay + evolution
+    brief: {
+      updatedAt: new Date().toISOString(),
+      summary: `策略管线: ${pipeline.l3} 个实盘, ${pipeline.l2} 个模拟, ${pipeline.l1} 个回测, ${pipeline.l0} 个孵化。${decayData.filter((d) => d.decayLevel === "critical" || d.decayLevel === "degrading").length > 0 ? `${decayData.filter((d) => d.decayLevel === "critical" || d.decayLevel === "degrading").length} 个策略衰退中。` : "所有策略健康运行。"}${evolutionStats ? ` 进化引擎: ${evolutionStats.activeCount} 个活跃, 平均 Fitness ${evolutionStats.avgFitness.toFixed(2)}。` : ""}`,
+    },
+    // Recommendations: promote/decay/new suggestions from strategy data
+    recommendations: [
+      ...strategyData
+        .filter((s) => s.level === "L1_BACKTEST" && s.sharpe != null && s.sharpe >= 1.2)
+        .slice(0, 2)
+        .map((s) => ({
+          type: "promote" as const,
+          strategyId: s.id,
+          strategyName: s.name,
+          from: "L1",
+          to: "L2",
+          reason: `Sharpe ${s.sharpe?.toFixed(1)}, Return ${((s.totalReturn ?? 0) * 100).toFixed(1)}%`,
+          metrics: { sharpe: s.sharpe, totalReturn: s.totalReturn, maxDrawdown: s.maxDrawdown },
+        })),
+      ...decayData
+        .filter((d) => d.decayLevel === "critical" || d.decayLevel === "degrading")
+        .slice(0, 2)
+        .map((d) => ({
+          type: "decay" as const,
+          strategyId: d.strategyId,
+          strategyName: d.strategyName,
+          reason: `Fitness 衰退, 7d Sharpe ${d.rollingSharpe7d.toFixed(2)}, DD ${d.currentDrawdown.toFixed(1)}%`,
+          metrics: { rollingSharpe7d: d.rollingSharpe7d, currentDrawdown: d.currentDrawdown },
+        })),
+    ],
   };
 }
 
