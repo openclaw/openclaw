@@ -89,7 +89,7 @@ When `channels.<provider>.streaming` is set to `partial` or `block`, steer can p
 
 - With `streaming: partial`, the agent continuously updates a single preview message in place. A steer injection causes that preview to be committed early and a new preview started for the injected turn, so you see several short finalized replies in sequence rather than one final response.
 - With `streaming: block`, the agent emits multiple draft-sized chunks directly, producing the same sequential appearance by a different mechanism.
-- Without streaming the same steer behavior produces a single final response — the steer still fired, it just wasn't visible mid-run.
+- Without streaming, steer falls back to `followup`: the active run completes first, then the steered message is processed as a separate turn.
 
 `steer` is not a hard abort. It injects the incoming message at the next tool boundary, but any tool call already in flight (e.g. a subprocess or network request) will run to completion before the injected message takes effect. If you need to stop an in-flight tool immediately, use `interrupt` mode instead (legacy, aborts the active run).
 
