@@ -1,7 +1,7 @@
 import { createServer as createHttpsServer } from "node:https";
 import { createServer } from "node:net";
-import { afterEach, describe, expect, test } from "vitest";
-import { WebSocketServer } from "ws";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { WebSocket, WebSocketServer } from "ws";
 import { rawDataToString } from "../infra/ws.js";
 import { GatewayClient } from "./client.js";
 
@@ -84,6 +84,34 @@ describe("GatewayClient", () => {
       expect(res.reason).toContain("tick timeout");
     }
   }, 4000);
+
+  test("times out unresolved requests and clears pending state", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        requestTimeoutMs: 25,
+      });
+      const send = vi.fn();
+      (client as unknown as { ws: WebSocket | { readyState: number; send: () => void } }).ws = {
+        readyState: WebSocket.OPEN,
+        send,
+      };
+
+      const requestPromise = client.request("status");
+      const requestExpectation = expect(requestPromise).rejects.toThrow(
+        "gateway request timeout for status",
+      );
+      expect(send).toHaveBeenCalledTimes(1);
+      expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      await requestExpectation;
+      expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   test("rejects mismatched tls fingerprint", async () => {
     const key = [
