@@ -31,7 +31,16 @@ export const DEFAULT_MMR_CONFIG: MMRConfig = {
  */
 export function tokenize(text: string): Set<string> {
   const tokens = text.toLowerCase().match(/[a-z0-9_]+/g) ?? [];
-  return new Set(tokens);
+  // Extract individual CJK characters as tokens so Jaccard similarity
+  // works correctly for Chinese, Japanese, and Korean text. Without this,
+  // pure-CJK strings always tokenize to an empty Set, causing every pair
+  // to have jaccardSimilarity === 1 and breaking MMR diversity re-ranking.
+  //
+  // U+30FC (KATAKANA-HIRAGANA PROLONGED SOUND MARK, "ー") is intentionally
+  // excluded: it is a modifier that elongates the preceding vowel and carries
+  // no independent semantic meaning, so it should not become a token.
+  const cjkTokens = text.match(/[一-鿿぀-ゟ゠-・ヽ-ヿ가-힯]/g) ?? [];
+  return new Set([...tokens, ...cjkTokens]);
 }
 
 /**
