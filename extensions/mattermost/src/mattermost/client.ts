@@ -589,20 +589,10 @@ export async function patchMattermostPost(
   client: MattermostClient,
   params: { postId: string; message: string },
 ): Promise<void> {
-  const res = await fetch(`${client.apiBaseUrl}/posts/${params.postId}/patch`, {
+  await client.request<void>(`/posts/${params.postId}/patch`, {
     method: "PUT",
-    headers: {
-      Authorization: `Bearer ${client.token}`,
-      "Content-Type": "application/json",
-    },
     body: JSON.stringify({ message: params.message }),
   });
-  if (!res.ok) {
-    const detail = await readMattermostError(res);
-    throw new Error(
-      `Mattermost patch post ${res.status} ${res.statusText}: ${detail || "unknown error"}`,
-    );
-  }
 }
 
 /**
@@ -612,16 +602,7 @@ export async function deleteMattermostPost(
   client: MattermostClient,
   postId: string,
 ): Promise<void> {
-  const res = await fetch(`${client.apiBaseUrl}/posts/${postId}`, {
+  await client.request<void>(`/posts/${postId}`, {
     method: "DELETE",
-    headers: {
-      Authorization: `Bearer ${client.token}`,
-    },
   });
-  if (!res.ok) {
-    const detail = await readMattermostError(res);
-    throw new Error(
-      `Mattermost delete post ${res.status} ${res.statusText}: ${detail || "unknown error"}`,
-    );
-  }
 }
