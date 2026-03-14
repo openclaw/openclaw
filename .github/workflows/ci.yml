@@ -21,22 +21,22 @@ jobs:
       docs_only: ${{ steps.check.outputs.docs_only }}
       docs_changed: ${{ steps.check.outputs.docs_changed }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 1
+        fetch-tags: false
+        submodules: false
 
-      - name: Ensure docs-scope base commit
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+    - name: Ensure docs-scope base commit
+      uses: ./.github/actions/ensure-base-commit
+      with:
+        base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+        fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
-      - name: Detect docs-only changes
-        id: check
-        uses: ./.github/actions/detect-docs-changes
+    - name: Detect docs-only changes
+      id: check
+      uses: ./.github/actions/detect-docs-changes
 
   # Detect which heavy areas are touched so CI can skip unrelated expensive jobs.
   # Fail-safe: if detection fails, downstream jobs run.
@@ -51,32 +51,32 @@ jobs:
       run_skills_python: ${{ steps.scope.outputs.run_skills_python }}
       run_windows: ${{ steps.scope.outputs.run_windows }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 1
+        fetch-tags: false
+        submodules: false
 
-      - name: Ensure changed-scope base commit
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+    - name: Ensure changed-scope base commit
+      uses: ./.github/actions/ensure-base-commit
+      with:
+        base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+        fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
-      - name: Detect changed scopes
-        id: scope
-        shell: bash
-        run: |
-          set -euo pipefail
+    - name: Detect changed scopes
+      id: scope
+      shell: bash
+      run: |
+        set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "push" ]; then
-            BASE="${{ github.event.before }}"
-          else
-            BASE="${{ github.event.pull_request.base.sha }}"
-          fi
+        if [ "${{ github.event_name }}" = "push" ]; then
+          BASE="${{ github.event.before }}"
+        else
+          BASE="${{ github.event.pull_request.base.sha }}"
+        fi
 
-          node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
+        node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
 
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   build-artifacts:
@@ -84,33 +84,33 @@ jobs:
     if: github.event_name == 'push' && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        submodules: false
 
-      - name: Ensure secrets base commit (PR fast path)
-        if: github.event_name == 'pull_request'
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event.pull_request.base.ref }}
+    - name: Ensure secrets base commit (PR fast path)
+      if: github.event_name == 'pull_request'
+      uses: ./.github/actions/ensure-base-commit
+      with:
+        base-sha: ${{ github.event.pull_request.base.sha }}
+        fetch-ref: ${{ github.event.pull_request.base.ref }}
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
+    - name: Setup Node environment
+      uses: ./.github/actions/setup-node-env
+      with:
+        install-bun: "false"
+        use-sticky-disk: "false"
 
-      - name: Build dist
-        run: pnpm build
+    - name: Build dist
+      run: pnpm build
 
-      - name: Upload dist artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: dist-build
-          path: dist/
-          retention-days: 1
+    - name: Upload dist artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: dist-build
+        path: dist/
+        retention-days: 1
 
   # Validate npm pack contents after build (only on push to main, not PRs).
   release-check:
@@ -118,25 +118,25 @@ jobs:
     if: github.event_name == 'push' && needs.docs-scope.outputs.docs_only != 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        submodules: false
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
+    - name: Setup Node environment
+      uses: ./.github/actions/setup-node-env
+      with:
+        install-bun: "false"
+        use-sticky-disk: "false"
 
-      - name: Download dist artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: dist-build
-          path: dist/
+    - name: Download dist artifact
+      uses: actions/download-artifact@v8
+      with:
+        name: dist-build
+        path: dist/
 
-      - name: Check release contents
-        run: pnpm release:check
+    - name: Check release contents
+      run: pnpm release:check
 
   checks:
     needs: [docs-scope, changed-scope]
@@ -146,61 +146,61 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runtime: node
-            task: test
-            shard_index: 1
-            shard_count: 2
-            command: pnpm canvas:a2ui:bundle && pnpm test
-          - runtime: node
-            task: test
-            shard_index: 2
-            shard_count: 2
-            command: pnpm canvas:a2ui:bundle && pnpm test
-          - runtime: node
-            task: extensions
-            command: pnpm test:extensions
-          - runtime: node
-            task: protocol
-            command: pnpm protocol:check
-          - runtime: bun
-            task: test
-            command: pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts
+        - runtime: node
+          task: test
+          shard_index: 1
+          shard_count: 2
+          command: pnpm canvas:a2ui:bundle && pnpm test
+        - runtime: node
+          task: test
+          shard_index: 2
+          shard_count: 2
+          command: pnpm canvas:a2ui:bundle && pnpm test
+        - runtime: node
+          task: extensions
+          command: pnpm test:extensions
+        - runtime: node
+          task: protocol
+          command: pnpm protocol:check
+        - runtime: bun
+          task: test
+          command: pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts
     steps:
-      - name: Skip bun lane on pull requests
-        if: github.event_name == 'pull_request' && matrix.runtime == 'bun'
-        run: echo "Skipping Bun compatibility lane on pull requests."
+    - name: Skip bun lane on pull requests
+      if: github.event_name == 'pull_request' && matrix.runtime == 'bun'
+      run: echo "Skipping Bun compatibility lane on pull requests."
 
-      - name: Checkout
-        if: github.event_name != 'pull_request' || matrix.runtime != 'bun'
-        uses: actions/checkout@v6
-        with:
-          submodules: false
+    - name: Checkout
+      if: github.event_name != 'pull_request' || matrix.runtime != 'bun'
+      uses: actions/checkout@v6
+      with:
+        submodules: false
 
-      - name: Setup Node environment
-        if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "${{ matrix.runtime == 'bun' }}"
-          use-sticky-disk: "false"
+    - name: Setup Node environment
+      if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
+      uses: ./.github/actions/setup-node-env
+      with:
+        install-bun: "${{ matrix.runtime == 'bun' }}"
+        use-sticky-disk: "false"
 
-      - name: Configure Node test resources
-        if: (github.event_name != 'pull_request' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
-        env:
-          SHARD_COUNT: ${{ matrix.shard_count || '' }}
-          SHARD_INDEX: ${{ matrix.shard_index || '' }}
-        run: |
-          # `pnpm test` runs `scripts/test-parallel.mjs`, which spawns multiple Node processes.
-          # Default heap limits have been too low on Linux CI (V8 OOM near 4GB).
-          echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
-          if [ -n "$SHARD_COUNT" ] && [ -n "$SHARD_INDEX" ]; then
-            echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
-            echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
-          fi
+    - name: Configure Node test resources
+      if: (github.event_name != 'pull_request' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
+      env:
+        SHARD_COUNT: ${{ matrix.shard_count || '' }}
+        SHARD_INDEX: ${{ matrix.shard_index || '' }}
+      run: |
+        # `pnpm test` runs `scripts/test-parallel.mjs`, which spawns multiple Node processes.
+        # Default heap limits have been too low on Linux CI (V8 OOM near 4GB).
+        echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
+        echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
+        if [ -n "$SHARD_COUNT" ] && [ -n "$SHARD_INDEX" ]; then
+          echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
+        fi
 
-      - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
-        run: ${{ matrix.command }}
+    - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
+      if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
+      run: ${{ matrix.command }}
 
   # Types, lint, and format check.
   check:
@@ -209,25 +209,25 @@ jobs:
     if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        submodules: false
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
+    - name: Setup Node environment
+      uses: ./.github/actions/setup-node-env
+      with:
+        install-bun: "false"
+        use-sticky-disk: "false"
 
-      - name: Check types and lint and oxfmt
-        run: pnpm check
+    - name: Check types and lint and oxfmt
+      run: pnpm check
 
-      - name: Strict TS build smoke
-        run: pnpm build:strict-smoke
+    - name: Strict TS build smoke
+      run: pnpm build:strict-smoke
 
-      - name: Enforce safe external URL opening policy
-        run: pnpm lint:ui:no-raw-window-open
+    - name: Enforce safe external URL opening policy
+      run: pnpm lint:ui:no-raw-window-open
 
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
@@ -235,19 +235,19 @@ jobs:
     if: needs.docs-scope.outputs.docs_changed == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        submodules: false
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
+    - name: Setup Node environment
+      uses: ./.github/actions/setup-node-env
+      with:
+        install-bun: "false"
+        use-sticky-disk: "false"
 
-      - name: Check docs
-        run: pnpm check:docs
+    - name: Check docs
+      run: pnpm check:docs
 
   compat-node22:
     name: "compat-node22"
@@ -255,127 +255,244 @@ jobs:
     if: github.event_name == 'push' && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        submodules: false
 
-      - name: Setup Node 22 compatibility environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: "22.x"
-          cache-key-suffix: "node22"
-          install-bun: "false"
-          use-sticky-disk: "false"
+    - name: Setup Node 22 compatibility environment
+      uses: ./.github/actions/setup-node-env
+      with:
+        node-version: "22.x"
+        cache-key-suffix: "node22"
+        install-bun: "false"
+        use-sticky-disk: "false"
 
-      - name: Configure Node 22 test resources
-        run: |
-          # Keep the compatibility lane aligned with the default Node test lane.
-          echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
+    - name: Configure Node 22 test resources
+      run: |
+        # Keep the compatibility lane aligned with the default Node test lane.
+        echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
+        echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
 
-      - name: Build under Node 22
-        run: pnpm build
+    - name: Build under Node 22
+      run: pnpm build
 
-      - name: Run tests under Node 22
-        run: pnpm test
+    - name: Run tests under Node 22
+      run: pnpm test
 
-      - name: Verify npm pack under Node 22
-        run: pnpm release:check
+    - name: Verify npm pack under Node 22
+      run: pnpm release:check
 
   skills-python:
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_skills_python == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        submodules: false
 
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
+    - name: Setup Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
 
-      - name: Install Python tooling
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install pytest ruff pyyaml
+    - name: Install Python tooling
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install pytest ruff pyyaml
 
-      - name: Lint Python skill scripts
-        run: python -m ruff check skills
+    - name: Lint Python skill scripts
+      run: python -m ruff check skills
 
-      - name: Test skill Python scripts
-        run: python -m pytest -q skills
+    - name: Test skill Python scripts
+      run: python -m pytest -q skills
 
   secrets:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        submodules: false
 
-      - name: Ensure secrets base commit
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+    - name: Ensure secrets base commit
+      uses: ./.github/actions/ensure-base-commit
+      with:
+        base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+        fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
-          install-deps: "false"
+    - name: Setup Parallel Secret Detection
+      uses: arter841/parallel-secret-detection@v0.0.5
+      with:
+        args: --parallel=${{ matrix.shard }}
+    - name: Setup Node environment
+      uses: ./.github/actions/setup-node-env
+      with:
+        install-bun: "false"
+        use-sticky-disk: "false"
+        install-deps: "false"
 
-      - name: Setup Python
-        id: setup-python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: "pip"
-          cache-dependency-path: |
-            pyproject.toml
-            .pre-commit-config.yaml
-            .github/workflows/ci.yml
+    - name: Setup Python
+      id: setup-python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+        cache: "pip"
+        cache-dependency-path: |
+          pyproject.toml
+          .pre-commit-config.yaml
+          .github/workflows/ci.yml
 
-      - name: Restore pre-commit cache
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/pre-commit
-          key: pre-commit-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
+    - name: Restore pre-commit cache
+      uses: actions/cache@v5
+      with:
+        path: ~/.cache/pre-commit
+        key: pre-commit-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
 
-      - name: Install pre-commit
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install pre-commit
+    - name: Install pre-commit
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install pre-commit
 
-      - name: Detect committed private keys
-        run: pre-commit run --all-files detect-private-key
+    - name: Detect committed private keys
+      run: pre-commit run --all-files detect-private-key
 
-      - name: Audit changed GitHub workflows with zizmor
-        run: |
-          set -euo pipefail
+    - name: Audit changed GitHub workflows with zizmor
+      run: |
+        set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "push" ]; then
-            BASE="${{ github.event.before }}"
-          else
-            BASE="${{ github.event.pull_request.base.sha }}"
-          fi
+        if [ "${{ github.event_name }}" = "push" ]; then
+          BASE="${{ github.event.before }}"
+        else
+          BASE="${{ github.event.pull_request.base.sha }}"
+        fi
 
-          mapfile -t workflow_files < <(git diff --name-only "$BASE" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
-          if [ "${#workflow_files[@]}" -eq 0 ]; then
-            echo "No workflow changes detected; skipping zizmor."
-            exit 0
-          fi
+        mapfile -t workflow_files < <(git diff --name-only "$BASE" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
+        if [ "${#workflow_files[@]}" -eq 0 ]; then
+          echo "No workflow changes detected; skipping zizmor."
+          exit 0
+        fi
 
-          pre-commit run zizmor --files "${workflow_files[@]}"
+        pre-commit run zizmor --files "${workflow_files[@]}"
 
-      - name: Audit production dependencies
-        run: pre-commit run --all-files pnpm-audit-prod
+    - name: Audit production dependencies
+      run: pre-commit run --all-files pnpm-audit-prod
 
+    strategy:
+      fail-fast: false
+      max-parallel: 108
+      matrix:
+        shard:
+        - 1
+        - 2
+        - 3
+        - 4
+        - 5
+        - 6
+        - 7
+        - 8
+        - 9
+        - 10
+        - 11
+        - 12
+        - 13
+        - 14
+        - 15
+        - 16
+        - 17
+        - 18
+        - 19
+        - 20
+        - 21
+        - 22
+        - 23
+        - 24
+        - 25
+        - 26
+        - 27
+        - 28
+        - 29
+        - 30
+        - 31
+        - 32
+        - 33
+        - 34
+        - 35
+        - 36
+        - 37
+        - 38
+        - 39
+        - 40
+        - 41
+        - 42
+        - 43
+        - 44
+        - 45
+        - 46
+        - 47
+        - 48
+        - 49
+        - 50
+        - 51
+        - 52
+        - 53
+        - 54
+        - 55
+        - 56
+        - 57
+        - 58
+        - 59
+        - 60
+        - 61
+        - 62
+        - 63
+        - 64
+        - 65
+        - 66
+        - 67
+        - 68
+        - 69
+        - 70
+        - 71
+        - 72
+        - 73
+        - 74
+        - 75
+        - 76
+        - 77
+        - 78
+        - 79
+        - 80
+        - 81
+        - 82
+        - 83
+        - 84
+        - 85
+        - 86
+        - 87
+        - 88
+        - 89
+        - 90
+        - 91
+        - 92
+        - 93
+        - 94
+        - 95
+        - 96
+        - 97
+        - 98
+        - 99
+        - 100
+        - 101
+        - 102
+        - 103
+        - 104
+        - 105
+        - 106
+        - 107
+        - 108
   checks-windows:
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_windows == 'true'
@@ -393,113 +510,113 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runtime: node
-            task: test
-            shard_index: 1
-            shard_count: 6
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 2
-            shard_count: 6
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 3
-            shard_count: 6
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 4
-            shard_count: 6
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 5
-            shard_count: 6
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 6
-            shard_count: 6
-            command: pnpm test
+        - runtime: node
+          task: test
+          shard_index: 1
+          shard_count: 6
+          command: pnpm test
+        - runtime: node
+          task: test
+          shard_index: 2
+          shard_count: 6
+          command: pnpm test
+        - runtime: node
+          task: test
+          shard_index: 3
+          shard_count: 6
+          command: pnpm test
+        - runtime: node
+          task: test
+          shard_index: 4
+          shard_count: 6
+          command: pnpm test
+        - runtime: node
+          task: test
+          shard_index: 5
+          shard_count: 6
+          command: pnpm test
+        - runtime: node
+          task: test
+          shard_index: 6
+          shard_count: 6
+          command: pnpm test
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        submodules: false
 
-      - name: Try to exclude workspace from Windows Defender (best-effort)
-        shell: pwsh
-        run: |
-          $cmd = Get-Command Add-MpPreference -ErrorAction SilentlyContinue
-          if (-not $cmd) {
-            Write-Host "Add-MpPreference not available, skipping Defender exclusions."
-            exit 0
-          }
+    - name: Try to exclude workspace from Windows Defender (best-effort)
+      shell: pwsh
+      run: |
+        $cmd = Get-Command Add-MpPreference -ErrorAction SilentlyContinue
+        if (-not $cmd) {
+          Write-Host "Add-MpPreference not available, skipping Defender exclusions."
+          exit 0
+        }
 
-          try {
-            # Defender sometimes intercepts process spawning (vitest workers). If this fails
-            # (eg hardened images), keep going and rely on worker limiting above.
-            Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE" -ErrorAction Stop
-            Add-MpPreference -ExclusionProcess "node.exe" -ErrorAction Stop
-            Write-Host "Defender exclusions applied."
-          } catch {
-            Write-Warning "Failed to apply Defender exclusions, continuing. $($_.Exception.Message)"
-          }
+        try {
+          # Defender sometimes intercepts process spawning (vitest workers). If this fails
+          # (eg hardened images), keep going and rely on worker limiting above.
+          Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE" -ErrorAction Stop
+          Add-MpPreference -ExclusionProcess "node.exe" -ErrorAction Stop
+          Write-Host "Defender exclusions applied."
+        } catch {
+          Write-Warning "Failed to apply Defender exclusions, continuing. $($_.Exception.Message)"
+        }
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24.x
-          check-latest: false
+    - name: Setup Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version: 24.x
+        check-latest: false
 
-      - name: Setup pnpm + cache store
-        uses: ./.github/actions/setup-pnpm-store-cache
-        with:
-          pnpm-version: "10.23.0"
-          cache-key-suffix: "node24"
+    - name: Setup pnpm + cache store
+      uses: ./.github/actions/setup-pnpm-store-cache
+      with:
+        pnpm-version: "10.23.0"
+        cache-key-suffix: "node24"
           # Sticky disk mount currently retries/fails on every shard and adds ~50s
           # before install while still yielding zero pnpm store reuse.
           # Try exact-key actions/cache restores instead to recover store reuse
           # without the sticky-disk mount penalty.
-          use-sticky-disk: "false"
-          use-restore-keys: "false"
-          use-actions-cache: "true"
+        use-sticky-disk: "false"
+        use-restore-keys: "false"
+        use-actions-cache: "true"
 
-      - name: Runtime versions
-        run: |
-          node -v
-          npm -v
-          pnpm -v
+    - name: Runtime versions
+      run: |
+        node -v
+        npm -v
+        pnpm -v
 
-      - name: Capture node path
-        run: echo "NODE_BIN=$(dirname \"$(node -p \"process.execPath\")\")" >> "$GITHUB_ENV"
+    - name: Capture node path
+      run: echo "NODE_BIN=$(dirname \"$(node -p \"process.execPath\")\")" >> "$GITHUB_ENV"
 
-      - name: Install dependencies
-        env:
-          CI: true
-        run: |
-          export PATH="$NODE_BIN:$PATH"
-          which node
-          node -v
-          pnpm -v
-          # Persist Windows-native postinstall outputs in the pnpm store so restored
-          # caches can skip repeated rebuild/download work on later shards/runs.
-          pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
+    - name: Install dependencies
+      env:
+        CI: true
+      run: |
+        export PATH="$NODE_BIN:$PATH"
+        which node
+        node -v
+        pnpm -v
+        # Persist Windows-native postinstall outputs in the pnpm store so restored
+        # caches can skip repeated rebuild/download work on later shards/runs.
+        pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
-      - name: Configure test shard (Windows)
-        if: matrix.task == 'test'
-        run: |
-          echo "OPENCLAW_TEST_SHARDS=${{ matrix.shard_count }}" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_SHARD_INDEX=${{ matrix.shard_index }}" >> "$GITHUB_ENV"
+    - name: Configure test shard (Windows)
+      if: matrix.task == 'test'
+      run: |
+        echo "OPENCLAW_TEST_SHARDS=${{ matrix.shard_count }}" >> "$GITHUB_ENV"
+        echo "OPENCLAW_TEST_SHARD_INDEX=${{ matrix.shard_index }}" >> "$GITHUB_ENV"
 
-      - name: Build A2UI bundle (Windows)
-        if: matrix.task == 'test'
-        run: pnpm canvas:a2ui:bundle
+    - name: Build A2UI bundle (Windows)
+      if: matrix.task == 'test'
+      run: pnpm canvas:a2ui:bundle
 
-      - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        run: ${{ matrix.command }}
+    - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
+      run: ${{ matrix.command }}
 
   # Consolidated macOS job: runs TS tests + Swift lint/build/test sequentially
   # on a single runner. GitHub limits macOS concurrent jobs to 5 per org;
@@ -510,233 +627,233 @@ jobs:
     if: github.event_name == 'pull_request' && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_macos == 'true'
     runs-on: macos-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        submodules: false
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
+    - name: Setup Node environment
+      uses: ./.github/actions/setup-node-env
+      with:
+        install-bun: "false"
 
       # --- Run all checks sequentially (fast gates first) ---
-      - name: TS tests (macOS)
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
-        run: pnpm test
+    - name: TS tests (macOS)
+      env:
+        NODE_OPTIONS: --max-old-space-size=4096
+      run: pnpm test
 
       # --- Xcode/Swift setup ---
-      - name: Select Xcode 26.1
-        run: |
-          sudo xcode-select -s /Applications/Xcode_26.1.app
-          xcodebuild -version
+    - name: Select Xcode 26.1
+      run: |
+        sudo xcode-select -s /Applications/Xcode_26.1.app
+        xcodebuild -version
 
-      - name: Install XcodeGen / SwiftLint / SwiftFormat
-        run: brew install xcodegen swiftlint swiftformat
+    - name: Install XcodeGen / SwiftLint / SwiftFormat
+      run: brew install xcodegen swiftlint swiftformat
 
-      - name: Show toolchain
-        run: |
-          sw_vers
-          xcodebuild -version
-          swift --version
+    - name: Show toolchain
+      run: |
+        sw_vers
+        xcodebuild -version
+        swift --version
 
-      - name: Swift lint
-        run: |
-          swiftlint --config .swiftlint.yml
-          swiftformat --lint apps/macos/Sources --config .swiftformat
+    - name: Swift lint
+      run: |
+        swiftlint --config .swiftlint.yml
+        swiftformat --lint apps/macos/Sources --config .swiftformat
 
-      - name: Cache SwiftPM
-        uses: actions/cache@v5
-        with:
-          path: ~/Library/Caches/org.swift.swiftpm
-          key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
-          restore-keys: |
-            ${{ runner.os }}-swiftpm-
+    - name: Cache SwiftPM
+      uses: actions/cache@v5
+      with:
+        path: ~/Library/Caches/org.swift.swiftpm
+        key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
+        restore-keys: |
+          ${{ runner.os }}-swiftpm-
 
-      - name: Swift build (release)
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3; do
-            if swift build --package-path apps/macos --configuration release; then
-              exit 0
-            fi
-            echo "swift build failed (attempt $attempt/3). Retrying…"
-            sleep $((attempt * 20))
-          done
-          exit 1
+    - name: Swift build (release)
+      run: |
+        set -euo pipefail
+        for attempt in 1 2 3; do
+          if swift build --package-path apps/macos --configuration release; then
+            exit 0
+          fi
+          echo "swift build failed (attempt $attempt/3). Retrying…"
+          sleep $((attempt * 20))
+        done
+        exit 1
 
-      - name: Swift test
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3; do
-            if swift test --package-path apps/macos --parallel --enable-code-coverage --show-codecov-path; then
-              exit 0
-            fi
-            echo "swift test failed (attempt $attempt/3). Retrying…"
-            sleep $((attempt * 20))
-          done
-          exit 1
+    - name: Swift test
+      run: |
+        set -euo pipefail
+        for attempt in 1 2 3; do
+          if swift test --package-path apps/macos --parallel --enable-code-coverage --show-codecov-path; then
+            exit 0
+          fi
+          echo "swift test failed (attempt $attempt/3). Retrying…"
+          sleep $((attempt * 20))
+        done
+        exit 1
 
   ios:
     if: false # ignore iOS in CI for now
     runs-on: macos-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        submodules: false
 
-      - name: Select Xcode 26.1
-        run: |
-          sudo xcode-select -s /Applications/Xcode_26.1.app
-          xcodebuild -version
+    - name: Select Xcode 26.1
+      run: |
+        sudo xcode-select -s /Applications/Xcode_26.1.app
+        xcodebuild -version
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+    - name: Install XcodeGen
+      run: brew install xcodegen
 
-      - name: Install SwiftLint / SwiftFormat
-        run: brew install swiftlint swiftformat
+    - name: Install SwiftLint / SwiftFormat
+      run: brew install swiftlint swiftformat
 
-      - name: Show toolchain
-        run: |
-          sw_vers
-          xcodebuild -version
-          swift --version
+    - name: Show toolchain
+      run: |
+        sw_vers
+        xcodebuild -version
+        swift --version
 
-      - name: Generate iOS project
-        run: |
-          cd apps/ios
-          xcodegen generate
+    - name: Generate iOS project
+      run: |
+        cd apps/ios
+        xcodegen generate
 
-      - name: iOS tests
-        run: |
-          set -euo pipefail
-          RESULT_BUNDLE_PATH="$RUNNER_TEMP/Clawdis-iOS.xcresult"
-          DEST_ID="$(
-            python3 - <<'PY'
-          import json
-          import subprocess
-          import sys
-          import uuid
+    - name: iOS tests
+      run: |
+        set -euo pipefail
+        RESULT_BUNDLE_PATH="$RUNNER_TEMP/Clawdis-iOS.xcresult"
+        DEST_ID="$(
+          python3 - <<'PY'
+        import json
+        import subprocess
+        import sys
+        import uuid
 
-          def sh(args: list[str]) -> str:
-            return subprocess.check_output(args, text=True).strip()
+        def sh(args: list[str]) -> str:
+          return subprocess.check_output(args, text=True).strip()
 
-          # Prefer an already-created iPhone simulator if it exists.
-          devices = json.loads(sh(["xcrun", "simctl", "list", "devices", "-j"]))
-          candidates: list[tuple[str, str]] = []
-          for runtime, devs in (devices.get("devices") or {}).items():
-            for dev in devs or []:
-              if not dev.get("isAvailable"):
-                continue
-              name = str(dev.get("name") or "")
-              udid = str(dev.get("udid") or "")
-              if not udid or not name.startswith("iPhone"):
-                continue
-              candidates.append((name, udid))
+        # Prefer an already-created iPhone simulator if it exists.
+        devices = json.loads(sh(["xcrun", "simctl", "list", "devices", "-j"]))
+        candidates: list[tuple[str, str]] = []
+        for runtime, devs in (devices.get("devices") or {}).items():
+          for dev in devs or []:
+            if not dev.get("isAvailable"):
+              continue
+            name = str(dev.get("name") or "")
+            udid = str(dev.get("udid") or "")
+            if not udid or not name.startswith("iPhone"):
+              continue
+            candidates.append((name, udid))
 
-          candidates.sort(key=lambda it: (0 if "iPhone 16" in it[0] else 1, it[0]))
-          if candidates:
-            print(candidates[0][1])
-            sys.exit(0)
+        candidates.sort(key=lambda it: (0 if "iPhone 16" in it[0] else 1, it[0]))
+        if candidates:
+          print(candidates[0][1])
+          sys.exit(0)
 
-          # Otherwise, create one from the newest available iOS runtime.
-          runtimes = json.loads(sh(["xcrun", "simctl", "list", "runtimes", "-j"])).get("runtimes") or []
-          ios = [rt for rt in runtimes if rt.get("platform") == "iOS" and rt.get("isAvailable")]
-          if not ios:
-            print("No available iOS runtimes found.", file=sys.stderr)
-            sys.exit(1)
+        # Otherwise, create one from the newest available iOS runtime.
+        runtimes = json.loads(sh(["xcrun", "simctl", "list", "runtimes", "-j"])).get("runtimes") or []
+        ios = [rt for rt in runtimes if rt.get("platform") == "iOS" and rt.get("isAvailable")]
+        if not ios:
+          print("No available iOS runtimes found.", file=sys.stderr)
+          sys.exit(1)
 
-          def version_key(rt: dict) -> tuple[int, ...]:
-            parts: list[int] = []
-            for p in str(rt.get("version") or "0").split("."):
-              try:
-                parts.append(int(p))
-              except ValueError:
-                parts.append(0)
-            return tuple(parts)
+        def version_key(rt: dict) -> tuple[int, ...]:
+          parts: list[int] = []
+          for p in str(rt.get("version") or "0").split("."):
+            try:
+              parts.append(int(p))
+            except ValueError:
+              parts.append(0)
+          return tuple(parts)
 
-          ios.sort(key=version_key, reverse=True)
-          runtime = ios[0]
-          runtime_id = str(runtime.get("identifier") or "")
-          if not runtime_id:
-            print("Missing iOS runtime identifier.", file=sys.stderr)
-            sys.exit(1)
+        ios.sort(key=version_key, reverse=True)
+        runtime = ios[0]
+        runtime_id = str(runtime.get("identifier") or "")
+        if not runtime_id:
+          print("Missing iOS runtime identifier.", file=sys.stderr)
+          sys.exit(1)
 
-          supported = runtime.get("supportedDeviceTypes") or []
-          iphones = [dt for dt in supported if dt.get("productFamily") == "iPhone"]
-          if not iphones:
-            print("No iPhone device types for iOS runtime.", file=sys.stderr)
-            sys.exit(1)
+        supported = runtime.get("supportedDeviceTypes") or []
+        iphones = [dt for dt in supported if dt.get("productFamily") == "iPhone"]
+        if not iphones:
+          print("No iPhone device types for iOS runtime.", file=sys.stderr)
+          sys.exit(1)
 
-          iphones.sort(
-            key=lambda dt: (
-              0 if "iPhone 16" in str(dt.get("name") or "") else 1,
-              str(dt.get("name") or ""),
-            )
+        iphones.sort(
+          key=lambda dt: (
+            0 if "iPhone 16" in str(dt.get("name") or "") else 1,
+            str(dt.get("name") or ""),
           )
-          device_type_id = str(iphones[0].get("identifier") or "")
-          if not device_type_id:
-            print("Missing iPhone device type identifier.", file=sys.stderr)
-            sys.exit(1)
+        )
+        device_type_id = str(iphones[0].get("identifier") or "")
+        if not device_type_id:
+          print("Missing iPhone device type identifier.", file=sys.stderr)
+          sys.exit(1)
 
-          sim_name = f"CI iPhone {uuid.uuid4().hex[:8]}"
-          udid = sh(["xcrun", "simctl", "create", sim_name, device_type_id, runtime_id])
-          if not udid:
-            print("Failed to create iPhone simulator.", file=sys.stderr)
-            sys.exit(1)
-          print(udid)
-          PY
-          )"
-          echo "Using iOS Simulator id: $DEST_ID"
-          xcodebuild test \
-            -project apps/ios/Clawdis.xcodeproj \
-            -scheme Clawdis \
-            -destination "platform=iOS Simulator,id=$DEST_ID" \
-            -resultBundlePath "$RESULT_BUNDLE_PATH" \
-            -enableCodeCoverage YES
+        sim_name = f"CI iPhone {uuid.uuid4().hex[:8]}"
+        udid = sh(["xcrun", "simctl", "create", sim_name, device_type_id, runtime_id])
+        if not udid:
+          print("Failed to create iPhone simulator.", file=sys.stderr)
+          sys.exit(1)
+        print(udid)
+        PY
+        )"
+        echo "Using iOS Simulator id: $DEST_ID"
+        xcodebuild test \
+          -project apps/ios/Clawdis.xcodeproj \
+          -scheme Clawdis \
+          -destination "platform=iOS Simulator,id=$DEST_ID" \
+          -resultBundlePath "$RESULT_BUNDLE_PATH" \
+          -enableCodeCoverage YES
 
-      - name: iOS coverage summary
-        run: |
-          set -euo pipefail
-          RESULT_BUNDLE_PATH="$RUNNER_TEMP/Clawdis-iOS.xcresult"
-          xcrun xccov view --report --only-targets "$RESULT_BUNDLE_PATH"
+    - name: iOS coverage summary
+      run: |
+        set -euo pipefail
+        RESULT_BUNDLE_PATH="$RUNNER_TEMP/Clawdis-iOS.xcresult"
+        xcrun xccov view --report --only-targets "$RESULT_BUNDLE_PATH"
 
-      - name: iOS coverage gate (43%)
-        run: |
-          set -euo pipefail
-          RESULT_BUNDLE_PATH="$RUNNER_TEMP/Clawdis-iOS.xcresult"
-          RESULT_BUNDLE_PATH="$RESULT_BUNDLE_PATH" python3 - <<'PY'
-          import json
-          import os
-          import subprocess
-          import sys
+    - name: iOS coverage gate (43%)
+      run: |
+        set -euo pipefail
+        RESULT_BUNDLE_PATH="$RUNNER_TEMP/Clawdis-iOS.xcresult"
+        RESULT_BUNDLE_PATH="$RESULT_BUNDLE_PATH" python3 - <<'PY'
+        import json
+        import os
+        import subprocess
+        import sys
 
-          target_name = "Clawdis.app"
-          minimum = 0.43
+        target_name = "Clawdis.app"
+        minimum = 0.43
 
-          report = json.loads(
-            subprocess.check_output(
-              ["xcrun", "xccov", "view", "--report", "--json", os.environ["RESULT_BUNDLE_PATH"]],
-              text=True,
-            )
+        report = json.loads(
+          subprocess.check_output(
+            ["xcrun", "xccov", "view", "--report", "--json", os.environ["RESULT_BUNDLE_PATH"]],
+            text=True,
           )
+        )
 
-          target_coverage = None
-          for target in report.get("targets", []):
-            if target.get("name") == target_name:
-              target_coverage = float(target["lineCoverage"])
-              break
+        target_coverage = None
+        for target in report.get("targets", []):
+          if target.get("name") == target_name:
+            target_coverage = float(target["lineCoverage"])
+            break
 
-          if target_coverage is None:
-            print(f"Could not find coverage for target: {target_name}")
-            sys.exit(1)
+        if target_coverage is None:
+          print(f"Could not find coverage for target: {target_name}")
+          sys.exit(1)
 
-          print(f"{target_name} line coverage: {target_coverage * 100:.2f}% (min {minimum * 100:.2f}%)")
-          if target_coverage + 1e-12 < minimum:
-            sys.exit(1)
-          PY
+        print(f"{target_name} line coverage: {target_coverage * 100:.2f}% (min {minimum * 100:.2f}%)")
+        if target_coverage + 1e-12 < minimum:
+          sys.exit(1)
+        PY
 
   android:
     needs: [docs-scope, changed-scope]
@@ -746,55 +863,55 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - task: test
-            command: ./gradlew --no-daemon :app:testDebugUnitTest
-          - task: build
-            command: ./gradlew --no-daemon :app:assembleDebug
+        - task: test
+          command: ./gradlew --no-daemon :app:testDebugUnitTest
+        - task: build
+          command: ./gradlew --no-daemon :app:assembleDebug
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        submodules: false
 
-      - name: Setup Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
+    - name: Setup Java
+      uses: actions/setup-java@v5
+      with:
+        distribution: temurin
           # Keep sdkmanager on the stable JDK path for Linux CI runners.
-          java-version: 17
+        java-version: 17
 
-      - name: Setup Android SDK cmdline-tools
-        run: |
-          set -euo pipefail
-          ANDROID_SDK_ROOT="$HOME/.android-sdk"
-          CMDLINE_TOOLS_VERSION="12266719"
-          ARCHIVE="commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
-          URL="https://dl.google.com/android/repository/${ARCHIVE}"
+    - name: Setup Android SDK cmdline-tools
+      run: |
+        set -euo pipefail
+        ANDROID_SDK_ROOT="$HOME/.android-sdk"
+        CMDLINE_TOOLS_VERSION="12266719"
+        ARCHIVE="commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
+        URL="https://dl.google.com/android/repository/${ARCHIVE}"
 
-          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
-          curl -fsSL "$URL" -o "/tmp/${ARCHIVE}"
-          rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-          unzip -q "/tmp/${ARCHIVE}" -d "$ANDROID_SDK_ROOT/cmdline-tools"
-          mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+        mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+        curl -fsSL "$URL" -o "/tmp/${ARCHIVE}"
+        rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+        unzip -q "/tmp/${ARCHIVE}" -d "$ANDROID_SDK_ROOT/cmdline-tools"
+        mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
 
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+        echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+        echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+        echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+        echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v5
-        with:
-          gradle-version: 8.11.1
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v5
+      with:
+        gradle-version: 8.11.1
 
-      - name: Install Android SDK packages
-        run: |
-          yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null
-          sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
-            "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0"
+    - name: Install Android SDK packages
+      run: |
+        yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null
+        sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
+          "platform-tools" \
+          "platforms;android-36" \
+          "build-tools;36.0.0"
 
-      - name: Run Android ${{ matrix.task }}
-        working-directory: apps/android
-        run: ${{ matrix.command }}
+    - name: Run Android ${{ matrix.task }}
+      working-directory: apps/android
+      run: ${{ matrix.command }}
