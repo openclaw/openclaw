@@ -36,6 +36,7 @@ export type CliOutput = {
   text: string;
   sessionId?: string;
   usage?: CliUsage;
+  sandboxDenied?: boolean;
 };
 
 export function buildSystemPrompt(params: {
@@ -201,6 +202,95 @@ export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput 
   return { text: text.trim(), sessionId, usage };
 }
 
+const SANDBOX_DENIED_RE =
+  /sandbox.policy|sandbox.denied|sandbox.*read.only|read.only.*sandbox|write.*denied.*sandbox|sandbox.*blocked|permission denied.*sandbox/i;
+
+/**
+ * Stricter regex for text-mode sandbox detection.  Requires patterns that look
+ * like actual error messages (e.g. "sandbox policy: write denied") rather than
+ * discussion of sandbox concepts.  This avoids false positives when resumed
+ * Codex output merely discusses sandbox behavior.
+ */
+const SANDBOX_DENIED_TEXT_RE =
+  /sandbox policy:\s*.+? denied|permission denied.*sandbox|write.*denied.*sandbox|read.only.*sandbox/i;
+
+/**
+ * Detect sandbox-denied signals in raw text output (used for resume text-mode).
+ *
+ * Uses a stricter regex than the structured JSONL detector to avoid false
+ * positives from agents discussing sandbox concepts in their output.
+ */
+export function detectSandboxDeniedInText(text: string): boolean {
+  return SANDBOX_DENIED_TEXT_RE.test(text);
+}
+
+/**
+ * Detect sandbox-denied signals in parsed JSONL items.
+ *
+ * Codex may exit 0 even when a sandbox policy prevented the requested
+ * operation.  The failure is only visible inside the JSONL event stream
+ * (e.g. an item with type "error" or a tool-call result describing the
+ * denial).  We scan structured fields first so that an agent merely
+ * *discussing* sandboxing in its message text does not trigger a false
+ * positive.
+ */
+export function detectSandboxDenied(records: Record<string, unknown>[]): boolean {
+  for (const rec of records) {
+    // Check top-level error fields.
+    if (typeof rec.error === "string" && SANDBOX_DENIED_RE.test(rec.error)) {
+      return true;
+    }
+    if (
+      isRecord(rec.error) &&
+      typeof rec.error.message === "string" &&
+      SANDBOX_DENIED_RE.test(rec.error.message)
+    ) {
+      return true;
+    }
+
+    const item = isRecord(rec.item) ? rec.item : null;
+    if (!item) {
+      continue;
+    }
+
+    const itemType = typeof item.type === "string" ? item.type.toLowerCase() : "";
+
+    // Items explicitly typed as errors that mention sandbox denial.
+    if (
+      itemType === "error" &&
+      typeof item.text === "string" &&
+      SANDBOX_DENIED_RE.test(item.text)
+    ) {
+      return true;
+    }
+
+    // Tool-call outputs that report sandbox denial (e.g. shell or file tools).
+    // Only match when the item also carries an error/failure signal or when the
+    // text is short enough to be a denial message (not a long log dump that
+    // coincidentally contains denial keywords).
+    if (
+      (itemType.includes("tool") || itemType.includes("command") || itemType.includes("action")) &&
+      typeof item.text === "string" &&
+      SANDBOX_DENIED_RE.test(item.text)
+    ) {
+      const hasErrorSignal =
+        item.status === "error" ||
+        item.status === "failed" ||
+        item.status === "denied" ||
+        (typeof item.exit_code === "number" && item.exit_code !== 0);
+      if (hasErrorSignal) {
+        return true;
+      }
+    }
+
+    // Status field on items (some Codex versions surface "denied" status).
+    if (typeof item.status === "string" && SANDBOX_DENIED_RE.test(item.status)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput | null {
   const lines = raw
     .split(/\r?\n/g)
@@ -212,6 +302,7 @@ export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
   const texts: string[] = [];
+  const records: Record<string, unknown>[] = [];
   for (const line of lines) {
     let parsed: unknown;
     try {
@@ -222,6 +313,7 @@ export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput
     if (!isRecord(parsed)) {
       continue;
     }
+    records.push(parsed);
     if (!sessionId) {
       sessionId = pickSessionId(parsed, backend);
     }
@@ -239,11 +331,17 @@ export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput
       }
     }
   }
+  const sandboxDenied = detectSandboxDenied(records);
   const text = texts.join("\n").trim();
   if (!text) {
+    // Even without extractable message text, surface sandbox denial so the
+    // caller can throw instead of treating the run as a silent success.
+    if (sandboxDenied) {
+      return { text: "", sessionId, usage, sandboxDenied };
+    }
     return null;
   }
-  return { text, sessionId, usage };
+  return { text, sessionId, usage, ...(sandboxDenied ? { sandboxDenied } : {}) };
 }
 
 export function resolveSystemPromptUsage(params: {

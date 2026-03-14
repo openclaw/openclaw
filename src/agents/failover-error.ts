@@ -61,6 +61,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 400;
     case "model_not_found":
       return 404;
+    case "sandbox_denied":
+      return 403;
     case "session_expired":
       return 410; // Gone - session no longer exists
     default:
