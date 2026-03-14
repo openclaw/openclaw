@@ -6,16 +6,16 @@
     "properties": {
       "enabled": {
         "type": "boolean",
-        "description": "Enable on-device STT via ExecuTorch Voxtral"
+        "description": "Enable on-device STT via ExecuTorch Parakeet-TDT"
       },
       "backend": {
         "type": "string",
-        "enum": ["xnnpack", "cuda", "metal"],
-        "description": "ExecuTorch backend for Voxtral runtime"
+        "enum": ["metal"],
+        "description": "ExecuTorch backend (metal only)"
       },
       "runtimeLibraryPath": {
         "type": "string",
-        "description": "Path to libvoxtral_realtime_runtime shared library"
+        "description": "Path to libparakeet_tdt_runtime shared library"
       },
       "modelDir": {
         "type": "string",
@@ -27,15 +27,11 @@
       },
       "tokenizerPath": {
         "type": "string",
-        "description": "Path to tekken.json tokenizer file"
-      },
-      "preprocessorPath": {
-        "type": "string",
-        "description": "Path to preprocessor .pte file"
+        "description": "Path to tokenizer.model file"
       },
       "dataPath": {
         "type": "string",
-        "description": "Path to backend data file (.ptd), required for CUDA"
+        "description": "Optional path to backend data file"
       }
     }
   }

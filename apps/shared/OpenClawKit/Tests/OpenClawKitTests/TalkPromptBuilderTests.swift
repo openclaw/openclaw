@@ -31,7 +31,7 @@ final class TalkPromptBuilderTests: XCTestCase {
         let prompt = TalkPromptBuilder.build(
             transcript: "Hi",
             interruptedAtSeconds: nil,
-            sttBackendName: "ExecuTorch Voxtral")
-        XCTAssertTrue(prompt.contains("STT: ExecuTorch Voxtral."))
+            sttBackendName: "ExecuTorch Parakeet-TDT")
+        XCTAssertTrue(prompt.contains("STT: ExecuTorch Parakeet-TDT."))
     }
 }

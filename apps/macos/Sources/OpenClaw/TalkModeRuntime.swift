@@ -145,7 +145,7 @@ actor TalkModeRuntime {
         self.useExecuTorch = (backendFromApp == .executorch)
         self.logger.info("talk: STT backend from app state: \(String(describing: backendFromApp.rawValue), privacy: .public) → useExecuTorch=\(self.useExecuTorch)")
         if self.useExecuTorch {
-            self.logger.info("talk: STT backend ExecuTorch Voxtral — loading model...")
+            self.logger.info("talk: STT backend ExecuTorch Parakeet-TDT — loading model...")
             await MainActor.run { TalkModeController.shared.updatePhase(.loading) }
             do {
                 try await self.etBridge.loadModel()
@@ -531,13 +531,13 @@ actor TalkModeRuntime {
     private func buildPrompt(transcript: String) -> String {
         let interrupted = self.lastInterruptedAtSeconds
         self.lastInterruptedAtSeconds = nil
-        let sttBackend = self.useExecuTorch ? "ExecuTorch Voxtral" : "Apple Speech"
+        let sttBackend = self.useExecuTorch ? "ExecuTorch Parakeet-TDT" : "Apple Speech"
         var debugHint: String?
         if !self.useExecuTorch {
             let bundleId = Bundle.main.bundleIdentifier
             let raw = UserDefaults.standard.string(forKey: talkSttBackendKey) ?? "nil"
             if let bundleId {
-                debugHint = "bundle=\(bundleId), raw=\(raw). To use Voxtral run: defaults write \(bundleId) openclaw.talkSttBackend executorch"
+                debugHint = "bundle=\(bundleId), raw=\(raw). To use Parakeet run: defaults write \(bundleId) openclaw.talkSttBackend executorch"
             } else {
                 debugHint = "bundle=nil (raw executable from Xcode). Try: defaults write OpenClaw openclaw.talkSttBackend executorch then quit and relaunch. Or run the packaged app (dist/OpenClaw.app) and use: defaults write ai.openclaw.mac.debug openclaw.talkSttBackend executorch"
             }

@@ -12,113 +12,24 @@ export type ExecuTorchCliOptions = {
   runtimeLibraryPath: string;
   modelPath: string;
   tokenizerPath: string;
-  preprocessorPath: string;
   dataPath?: string;
   logger: PluginLogger;
 };
 
 const DEFAULT_MODEL_ROOT =
   process.env.OPENCLAW_EXECUTORCH_MODEL_ROOT?.trim() ||
-  path.join(os.homedir(), ".openclaw/models/voxtral");
-
-const DEFAULT_MODEL_DIR_BY_BACKEND: Record<RunnerBackend, string> = {
-  metal: path.join(DEFAULT_MODEL_ROOT, "voxtral-realtime-metal"),
-  xnnpack: path.join(DEFAULT_MODEL_ROOT, "voxtral-realtime-xnnpack"),
-  cuda: path.join(DEFAULT_MODEL_ROOT, "voxtral-realtime-cuda"),
-};
-
-const MODEL_REPO_BY_BACKEND: Partial<Record<RunnerBackend, string>> = {
-  metal: "younghan-meta/Voxtral-Mini-4B-Realtime-2602-ExecuTorch-Metal",
-  xnnpack: "younghan-meta/Voxtral-Mini-4B-Realtime-2602-ExecuTorch-XNNPACK",
-};
+  path.join(os.homedir(), ".openclaw/models/parakeet");
+const DEFAULT_MODEL_DIR = path.join(DEFAULT_MODEL_ROOT, "parakeet-tdt-metal");
+const PARAKEET_MODEL_REPO = "younghan-meta/Parakeet-TDT-ExecuTorch-Metal";
 
 type SetupFileGroup = {
   label: string;
   candidates: string[];
 };
 
-const REQUIRED_SETUP_FILE_GROUPS: Record<RunnerBackend, SetupFileGroup[]> = {
-  metal: [
-    {
-      label: "model",
-      candidates: [
-        "model-metal-fpa4w-streaming.pte",
-        "model-metal-fpa4w.pte",
-        "model-metal-int4-streaming.pte",
-        "model-metal-int4.pte",
-        "model-streaming.pte",
-        "model.pte",
-      ],
-    },
-    {
-      label: "preprocessor",
-      candidates: ["preprocessor-streaming.pte", "preprocessor.pte"],
-    },
-    {
-      label: "tokenizer",
-      candidates: ["tekken.json"],
-    },
-  ],
-  xnnpack: [
-    {
-      label: "model",
-      candidates: [
-        "model-xnnpack-8da4w-streaming.pte",
-        "model-xnnpack-8da4w.pte",
-        "model-streaming.pte",
-        "model.pte",
-      ],
-    },
-    {
-      label: "preprocessor",
-      candidates: ["preprocessor-streaming.pte", "preprocessor.pte"],
-    },
-    {
-      label: "tokenizer",
-      candidates: ["tekken.json"],
-    },
-  ],
-  cuda: [
-    {
-      label: "model",
-      candidates: [
-        "model-cuda-streaming.pte",
-        "model-cuda.pte",
-        "model-streaming.pte",
-        "model.pte",
-      ],
-    },
-    {
-      label: "preprocessor",
-      candidates: ["preprocessor-streaming.pte", "preprocessor.pte"],
-    },
-    {
-      label: "tokenizer",
-      candidates: ["tekken.json"],
-    },
-    {
-      label: "CUDA data file",
-      candidates: ["aoti_cuda_blob.ptd"],
-    },
-  ],
-};
-
-const RUNTIME_REPO_BY_BACKEND = MODEL_REPO_BY_BACKEND;
-
-const MAC_TALK_MODE_FILE_GROUPS: SetupFileGroup[] = [
-  {
-    label: "Talk Mode streaming model",
-    candidates: [
-      "model-metal-fpa4w-streaming.pte",
-      "model-metal-int4-streaming.pte",
-      "model-streaming.pte",
-    ],
-  },
-  // Only accept streaming preprocessor so we download it even when preprocessor.pte exists.
-  {
-    label: "Talk Mode preprocessor",
-    candidates: ["preprocessor-streaming.pte"],
-  },
+const REQUIRED_MODEL_FILE_GROUPS: SetupFileGroup[] = [
+  { label: "model", candidates: ["model.pte"] },
+  { label: "tokenizer", candidates: ["tokenizer.model"] },
 ];
 
 function createRunner(options: ExecuTorchCliOptions): RunnerManager {
@@ -127,28 +38,21 @@ function createRunner(options: ExecuTorchCliOptions): RunnerManager {
     runtimeLibraryPath: options.runtimeLibraryPath,
     modelPath: options.modelPath,
     tokenizerPath: options.tokenizerPath,
-    preprocessorPath: options.preprocessorPath,
     dataPath: options.dataPath,
     logger: options.logger,
   });
 }
 
 export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOptions): void {
-  const et = program.command("executorch").description("ExecuTorch on-device voice commands");
-  const defaultModelDir = DEFAULT_MODEL_DIR_BY_BACKEND[options.backend];
+  const et = program
+    .command("executorch")
+    .description("ExecuTorch on-device voice commands (Parakeet-TDT Metal)");
+  const defaultModelDir = DEFAULT_MODEL_DIR;
 
   et.command("status")
-    .description("Check ExecuTorch runner and model availability")
+    .description("Check Parakeet runtime and model availability")
     .action(async () => {
-      const {
-        logger,
-        backend,
-        runtimeLibraryPath,
-        modelPath,
-        tokenizerPath,
-        preprocessorPath,
-        dataPath,
-      } = options;
+      const { logger, backend, runtimeLibraryPath, modelPath, tokenizerPath, dataPath } = options;
 
       const fs = await import("node:fs/promises");
       const checks = [
@@ -157,10 +61,9 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
         { label: "Runtime library", value: runtimeLibraryPath, ok: false },
         { label: "Model file", value: modelPath, ok: false },
         { label: "Tokenizer", value: tokenizerPath, ok: false },
-        { label: "Preprocessor", value: preprocessorPath, ok: false },
       ];
-      if (backend === "cuda") {
-        checks.push({ label: "CUDA data file", value: dataPath ?? "(missing)", ok: false });
+      if (dataPath) {
+        checks.push({ label: "Backend data file", value: dataPath, ok: false });
       }
 
       for (const check of checks) {
@@ -194,7 +97,7 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
 
       if (!allOk) {
         logger.warn(
-          "\nSome components are missing. Run 'openclaw executorch setup' to fetch models and ensure runtime library is built.",
+          "\nSome components are missing. Run 'openclaw executorch setup' to fetch model and runtime files.",
         );
       } else {
         logger.info("\nAll components available. Ready for embedded on-device transcription.");
@@ -202,7 +105,7 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
     });
 
   et.command("transcribe")
-    .description("Transcribe an audio file using on-device ExecuTorch Voxtral")
+    .description("Transcribe an audio file using on-device ExecuTorch Parakeet-TDT")
     .argument("<file>", "Path to audio file")
     .action(async (file: string) => {
       const { logger } = options;
@@ -222,7 +125,7 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
     });
 
   et.command("voice-agent")
-    .description("Start the Private Voice Agent (ExecuTorch STT + Ollama LLM + Edge TTS)")
+    .description("Start the Private Voice Agent (Parakeet STT + Ollama LLM + Edge TTS)")
     .option("--ollama-model <model>", "Ollama model to use", "llama3.2:3b")
     .option("--ollama-url <url>", "Ollama base URL", "http://localhost:11434")
     .option("--tts-voice <voice>", "Edge TTS voice", "en-US-AriaNeural")
@@ -242,7 +145,6 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
           runtimeLibraryPath: options.runtimeLibraryPath,
           modelPath: options.modelPath,
           tokenizerPath: options.tokenizerPath,
-          preprocessorPath: options.preprocessorPath,
           dataPath: options.dataPath,
           ollamaModel: opts.ollamaModel,
           ollamaBaseUrl: opts.ollamaUrl,
@@ -271,36 +173,27 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
     );
 
   et.command("setup")
-    .description("Download ExecuTorch Voxtral model files")
-    .option("--backend <backend>", "Target backend (xnnpack|cuda|metal)", options.backend)
+    .description("Download Parakeet-TDT Metal model/runtime files")
+    .option("--backend <backend>", "Target backend (metal only)", options.backend)
     .option("--model-dir <dir>", "Target directory for model files", defaultModelDir)
     .action(async (opts: { modelDir: string; backend: string }) => {
       const { logger } = options;
       const targetDir = opts.modelDir;
-      const backend = (opts.backend || options.backend).trim() as RunnerBackend;
-      if (!["xnnpack", "cuda", "metal"].includes(backend)) {
-        logger.error("[setup] backend must be one of: xnnpack, cuda, metal");
+      const backend = opts.backend.trim();
+      if (backend !== "metal") {
+        logger.error("[setup] backend must be 'metal' for Parakeet-TDT migration");
         return;
       }
+
       const fs = await import("node:fs/promises");
       const { execFile: execFileCb } = await import("node:child_process");
       const { promisify } = await import("node:util");
       const execFileAsync = promisify(execFileCb);
-      const repo = MODEL_REPO_BY_BACKEND[backend];
-      const runtimeRepo = RUNTIME_REPO_BY_BACKEND[backend];
       const runtimeDir = path.dirname(options.runtimeLibraryPath);
       const runtimeFile = path.basename(options.runtimeLibraryPath);
 
-      if (!repo) {
-        logger.warn("[setup] CUDA model bundle is not configured yet in this plugin.");
-        logger.warn(
-          `[setup] Please place files manually in ${targetDir}: ${REQUIRED_SETUP_FILE_GROUPS.cuda.flatMap((group) => group.candidates).join(", ")}`,
-        );
-        return;
-      }
-
-      logger.info(`[setup] Downloading ${backend} models to ${targetDir}...`);
-      logger.info(`[setup] Source: huggingface.co/${repo}`);
+      logger.info(`[setup] Downloading Parakeet Metal files to ${targetDir}...`);
+      logger.info(`[setup] Source: huggingface.co/${PARAKEET_MODEL_REPO}`);
 
       await fs.mkdir(targetDir, { recursive: true });
 
@@ -317,14 +210,12 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
         label,
         candidates,
         localDir,
-        sourceRepo,
         required,
         makeExecutable,
       }: {
         label: string;
         candidates: string[];
         localDir: string;
-        sourceRepo: string;
         required: boolean;
         makeExecutable?: boolean;
       }): Promise<string | null> => {
@@ -346,10 +237,8 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
           try {
             await execFileAsync(
               "hf",
-              ["download", sourceRepo, candidate, "--local-dir", localDir],
-              {
-                timeout: 600_000,
-              },
+              ["download", PARAKEET_MODEL_REPO, candidate, "--local-dir", localDir],
+              { timeout: 600_000 },
             );
             const localPath = path.join(localDir, candidate);
             if (!(await fileExists(localPath))) {
@@ -367,7 +256,7 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
 
         const details = errors.length > 0 ? ` Last error: ${errors[errors.length - 1]}` : "";
         const message =
-          `${label} not found. Tried: ${candidates.join(", ")} from huggingface.co/${sourceRepo}.` +
+          `${label} not found. Tried: ${candidates.join(", ")} from huggingface.co/${PARAKEET_MODEL_REPO}.` +
           details;
         if (required) {
           throw new Error(message);
@@ -377,49 +266,24 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
       };
 
       try {
-        for (const group of REQUIRED_SETUP_FILE_GROUPS[backend]) {
+        for (const group of REQUIRED_MODEL_FILE_GROUPS) {
           await ensureGroup({
             label: group.label,
             candidates: group.candidates,
             localDir: targetDir,
-            sourceRepo: repo,
             required: true,
           });
         }
         logger.info("[setup] Core model files verified.");
         logger.info(`[setup] Model directory: ${targetDir}`);
 
-        const runtimeSourceRepo = runtimeRepo ?? repo;
-        if (runtimeSourceRepo) {
-          await ensureGroup({
-            label: "runtime library",
-            candidates: [runtimeFile],
-            localDir: runtimeDir,
-            sourceRepo: runtimeSourceRepo,
-            required: false,
-          });
-          if (await fileExists(options.runtimeLibraryPath)) {
-            logger.info(`[setup] Runtime library path: ${options.runtimeLibraryPath}`);
-          }
-        } else {
-          logger.warn(
-            `[setup] No runtime repo configured for backend=${backend}. ` +
-              `Please place runtime library at ${options.runtimeLibraryPath}.`,
-          );
-        }
-
-        if (backend === "metal" && os.platform() === "darwin") {
-          logger.info("[setup] Preparing macOS Talk Mode assets...");
-          for (const group of MAC_TALK_MODE_FILE_GROUPS) {
-            await ensureGroup({
-              label: group.label,
-              candidates: group.candidates,
-              localDir: targetDir,
-              sourceRepo: repo,
-              required: true,
-            });
-          }
-        }
+        await ensureGroup({
+          label: "runtime library",
+          candidates: [runtimeFile],
+          localDir: runtimeDir,
+          required: true,
+        });
+        logger.info(`[setup] Runtime library path: ${options.runtimeLibraryPath}`);
 
         logger.info("[setup] Setup complete.");
       } catch (err) {

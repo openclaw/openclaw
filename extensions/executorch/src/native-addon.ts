@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export type RunnerBackend = "xnnpack" | "cuda" | "metal";
+export type RunnerBackend = "metal";
 
 type NativeRunnerHandle = object;
 
@@ -12,7 +12,6 @@ export type NativeRunnerCreateConfig = {
   backend: RunnerBackend;
   modelPath: string;
   tokenizerPath: string;
-  preprocessorPath: string;
   dataPath?: string;
   warmup?: boolean;
 };
@@ -40,10 +39,10 @@ function candidateAddonPaths(): string[] {
 
   const candidates = [
     envPath,
-    path.join(here, "..", "build", "Release", "voxtral_runtime.node"),
-    path.join(here, "..", "..", "build", "Release", "voxtral_runtime.node"),
-    path.join(here, "..", "native", "build", "Release", "voxtral_runtime.node"),
-    path.join(here, "..", "..", "native", "build", "Release", "voxtral_runtime.node"),
+    path.join(here, "..", "build", "Release", "parakeet_runtime.node"),
+    path.join(here, "..", "..", "build", "Release", "parakeet_runtime.node"),
+    path.join(here, "..", "native", "build", "Release", "parakeet_runtime.node"),
+    path.join(here, "..", "..", "native", "build", "Release", "parakeet_runtime.node"),
   ].filter((p): p is string => Boolean(p));
 
   return [...new Set(candidates)];
@@ -83,7 +82,7 @@ export function loadNativeExecuTorchAddon(): NativeExecuTorchAddon {
 
   const detail = errors.length > 0 ? `\n${errors.join("\n")}` : "";
   throw new Error(
-    "ExecuTorch native addon not found. Build it with `npm install` inside `extensions/executorch` or set OPENCLAW_EXECUTORCH_NATIVE_ADDON." +
+    "Parakeet native addon not found. Build it with `npm install` inside `extensions/executorch` or set OPENCLAW_EXECUTORCH_NATIVE_ADDON." +
       detail,
   );
 }

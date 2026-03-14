@@ -7,7 +7,7 @@ import { convertToPcmF32 } from "./audio-convert.js";
 import type { RunnerManager } from "./runner-manager.js";
 
 /**
- * Build an on-device STT provider backed by the ExecuTorch Voxtral runner.
+ * Build an on-device STT provider backed by the ExecuTorch Parakeet runner.
  *
  * Unlike cloud providers this needs no API key; the `apiKey` field in the
  * request is ignored. Audio is converted to 16 kHz mono f32le PCM locally
@@ -32,7 +32,7 @@ export function createExecuTorchProvider(
         );
       }
       const text = await runner.transcribe(pcmBuffer);
-      return { text, model: "voxtral-mini-4b-realtime" };
+      return { text, model: "parakeet-tdt-0.6b-v3" };
     },
   };
 }

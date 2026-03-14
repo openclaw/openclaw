@@ -8,12 +8,11 @@ import { RunnerManager } from "./src/runner-manager.js";
 
 type ExecuTorchPluginConfig = {
   enabled?: boolean;
-  backend?: RunnerBackend;
+  backend?: string;
   runtimeLibraryPath?: string;
   modelDir?: string;
   modelPath?: string;
   tokenizerPath?: string;
-  preprocessorPath?: string;
   dataPath?: string;
 };
 
@@ -22,35 +21,26 @@ const DEFAULT_RUNTIME_LIBRARY_PATH =
   path.join(os.homedir(), ".openclaw/lib", defaultRuntimeLibraryFileName());
 const DEFAULT_MODEL_ROOT =
   process.env.OPENCLAW_EXECUTORCH_MODEL_ROOT?.trim() ||
-  path.join(os.homedir(), ".openclaw/models/voxtral");
-const DEFAULT_MODEL_DIR_BY_BACKEND: Record<RunnerBackend, string> = {
-  metal: path.join(DEFAULT_MODEL_ROOT, "voxtral-realtime-metal"),
-  xnnpack: path.join(DEFAULT_MODEL_ROOT, "voxtral-realtime-xnnpack"),
-  cuda: path.join(DEFAULT_MODEL_ROOT, "voxtral-realtime-cuda"),
-};
-const DEFAULT_MODEL_FILE_BY_BACKEND: Record<RunnerBackend, string> = {
-  metal: "model-metal-fpa4w.pte",
-  xnnpack: "model-xnnpack-8da4w.pte",
-  cuda: "model.pte",
-};
+  path.join(os.homedir(), ".openclaw/models/parakeet");
+const DEFAULT_MODEL_DIR = path.join(DEFAULT_MODEL_ROOT, "parakeet-tdt-metal");
+const DEFAULT_MODEL_FILE = "model.pte";
+const DEFAULT_TOKENIZER_FILE = "tokenizer.model";
+const DEFAULT_BACKEND: RunnerBackend = "metal";
 
 function defaultRuntimeLibraryFileName(): string {
-  if (os.platform() === "darwin") return "libvoxtral_realtime_runtime.dylib";
-  if (os.platform() === "win32") return "voxtral_realtime_runtime.dll";
-  return "libvoxtral_realtime_runtime.so";
+  if (os.platform() === "darwin") return "libparakeet_tdt_runtime.dylib";
+  if (os.platform() === "win32") return "parakeet_tdt_runtime.dll";
+  return "libparakeet_tdt_runtime.so";
 }
 
-function isBackendSupportedOnHost(backend: RunnerBackend): boolean {
-  if (backend === "metal") {
-    return os.platform() === "darwin" && os.arch() === "arm64";
-  }
-  return true;
+function isMetalHost(): boolean {
+  return os.platform() === "darwin" && os.arch() === "arm64";
 }
 
 const plugin = {
   id: "executorch",
   name: "ExecuTorch",
-  description: "On-device speech-to-text via ExecuTorch Voxtral — privacy-first, zero cloud STT",
+  description: "On-device speech-to-text via embedded ExecuTorch Parakeet-TDT (Metal)",
 
   register(api: OpenClawPluginApi) {
     const raw = (api.pluginConfig ?? {}) as ExecuTorchPluginConfig;
@@ -60,26 +50,26 @@ const plugin = {
       return;
     }
 
-    const defaultBackend: RunnerBackend =
-      os.platform() === "darwin" && os.arch() === "arm64" ? "metal" : "xnnpack";
-    const backend = raw.backend ?? defaultBackend;
-    if (!isBackendSupportedOnHost(backend)) {
+    if (!isMetalHost()) {
       api.logger.warn(
-        `[executorch] Backend '${backend}' is not supported on ${os.platform()}/${os.arch()}; plugin disabled`,
+        `[executorch] Parakeet metal runtime is only supported on darwin/arm64 (found ${os.platform()}/${os.arch()}); plugin disabled`,
       );
       return;
     }
 
-    const modelDir = raw.modelDir?.trim() || DEFAULT_MODEL_DIR_BY_BACKEND[backend];
+    const requestedBackend = raw.backend?.trim();
+    if (requestedBackend && requestedBackend !== DEFAULT_BACKEND) {
+      api.logger.warn(
+        `[executorch] backend='${requestedBackend}' is not supported for this migration; forcing backend=metal`,
+      );
+    }
+    const backend = DEFAULT_BACKEND;
+
+    const modelDir = raw.modelDir?.trim() || DEFAULT_MODEL_DIR;
     const runtimeLibraryPath = raw.runtimeLibraryPath?.trim() || DEFAULT_RUNTIME_LIBRARY_PATH;
-    const modelPath =
-      raw.modelPath?.trim() || path.join(modelDir, DEFAULT_MODEL_FILE_BY_BACKEND[backend]);
-    const tokenizerPath = raw.tokenizerPath?.trim() || path.join(modelDir, "tekken.json");
-    const preprocessorPath =
-      raw.preprocessorPath?.trim() || path.join(modelDir, "preprocessor.pte");
-    const dataPath =
-      raw.dataPath?.trim() ||
-      (backend === "cuda" ? path.join(modelDir, "aoti_cuda_blob.ptd") : undefined);
+    const modelPath = raw.modelPath?.trim() || path.join(modelDir, DEFAULT_MODEL_FILE);
+    const tokenizerPath = raw.tokenizerPath?.trim() || path.join(modelDir, DEFAULT_TOKENIZER_FILE);
+    const dataPath = raw.dataPath?.trim() || undefined;
 
     let runner: RunnerManager | null = null;
 
@@ -90,7 +80,6 @@ const plugin = {
           backend,
           modelPath,
           tokenizerPath,
-          preprocessorPath,
           dataPath,
           logger: api.logger,
         });
@@ -129,7 +118,7 @@ const plugin = {
       name: "executorch_transcribe",
       label: "ExecuTorch Transcribe",
       description:
-        "Transcribe audio on-device using embedded ExecuTorch Voxtral runtime. " +
+        "Transcribe audio on-device using embedded ExecuTorch Parakeet runtime. " +
         "No cloud API needed.",
       parameters: {
         type: "object" as const,
@@ -231,7 +220,6 @@ const plugin = {
           runtimeLibraryPath,
           modelPath,
           tokenizerPath,
-          preprocessorPath,
           dataPath,
           modelDir,
           runnerState: runner?.state ?? "unloaded",
@@ -247,7 +235,6 @@ const plugin = {
           runtimeLibraryPath,
           modelPath,
           tokenizerPath,
-          preprocessorPath,
           dataPath,
           logger: api.logger,
         }),

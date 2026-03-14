@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/executorch",
   "version": "2026.3.3",
-  "description": "On-device speech-to-text via embedded ExecuTorch Voxtral runtime",
+  "description": "On-device speech-to-text via embedded ExecuTorch Parakeet-TDT runtime",
   "type": "module",
   "scripts": {
     "build:native": "node-gyp rebuild",

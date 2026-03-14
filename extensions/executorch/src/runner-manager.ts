@@ -16,14 +16,13 @@ type RunnerManagerOptions = {
   backend: RunnerBackend;
   modelPath: string;
   tokenizerPath: string;
-  preprocessorPath: string;
   dataPath?: string;
   logger: PluginLogger;
   warmup?: boolean;
 };
 
 /**
- * Manages an embedded Voxtral runtime loaded from a native library.
+ * Manages an embedded Parakeet runtime loaded from a native library.
  *
  * This replaces the previous subprocess approach and runs inference in-process
  * through the ExecuTorch C API bridge.
@@ -42,8 +41,7 @@ export class RunnerManager {
   private readonly runtimeLibraryPath: string;
   private readonly backend: RunnerBackend;
   private modelPath: string;
-  private readonly tokenizerPath: string;
-  private preprocessorPath: string;
+  private tokenizerPath: string;
   private dataPath: string | undefined;
   private readonly logger: PluginLogger;
   private readonly warmup: boolean;
@@ -53,7 +51,6 @@ export class RunnerManager {
     this.backend = options.backend;
     this.modelPath = options.modelPath;
     this.tokenizerPath = options.tokenizerPath;
-    this.preprocessorPath = options.preprocessorPath;
     this.dataPath = options.dataPath;
     this.logger = options.logger;
     this.warmup = options.warmup ?? true;
@@ -124,7 +121,6 @@ export class RunnerManager {
       backend: this.backend,
       modelPath: this.modelPath,
       tokenizerPath: this.tokenizerPath,
-      preprocessorPath: this.preprocessorPath,
       warmup: this.warmup,
     };
     if (this.dataPath) {
@@ -144,7 +140,7 @@ export class RunnerManager {
 
   private async validatePaths(): Promise<void> {
     const missing: string[] = [];
-    const required = [this.runtimeLibraryPath, this.tokenizerPath];
+    const required = [this.runtimeLibraryPath];
 
     const modelCandidates = this.modelFileCandidates();
     const resolvedModelPath = await this.resolveFirstExisting(modelCandidates);
@@ -155,26 +151,17 @@ export class RunnerManager {
       required.push(this.modelPath);
     }
 
-    const preprocessorCandidates = this.preprocessorFileCandidates(
-      resolvedModelPath ?? this.modelPath,
-    );
-    const resolvedPreprocessorPath = await this.resolveFirstExisting(preprocessorCandidates);
-    if (!resolvedPreprocessorPath) {
-      missing.push(preprocessorCandidates.join(" or "));
+    const tokenizerCandidates = this.tokenizerFileCandidates(resolvedModelPath ?? this.modelPath);
+    const resolvedTokenizerPath = await this.resolveFirstExisting(tokenizerCandidates);
+    if (!resolvedTokenizerPath) {
+      missing.push(tokenizerCandidates.join(" or "));
     } else {
-      this.preprocessorPath = resolvedPreprocessorPath;
-      required.push(this.preprocessorPath);
+      this.tokenizerPath = resolvedTokenizerPath;
+      required.push(this.tokenizerPath);
     }
 
-    if (this.backend === "cuda") {
-      const dataPathCandidates = this.cudaDataPathCandidates(resolvedModelPath ?? this.modelPath);
-      const resolvedDataPath = await this.resolveFirstExisting(dataPathCandidates);
-      if (!resolvedDataPath) {
-        missing.push(dataPathCandidates.join(" or "));
-      } else {
-        this.dataPath = resolvedDataPath;
-        required.push(this.dataPath);
-      }
+    if (this.dataPath) {
+      required.push(this.dataPath);
     }
 
     for (const p of required) {
@@ -205,54 +192,23 @@ export class RunnerManager {
 
   private modelFileCandidates(): string[] {
     const modelDir = path.dirname(this.modelPath);
-    const byBackend: Record<RunnerBackend, string[]> = {
-      xnnpack: [
-        "model-xnnpack-8da4w.pte",
-        "model-xnnpack-8da4w-streaming.pte",
-        "model.pte",
-        "model-streaming.pte",
-      ],
-      cuda: ["model-cuda.pte", "model-cuda-streaming.pte", "model.pte", "model-streaming.pte"],
-      metal: [
-        "model-metal-fpa4w.pte",
-        "model-metal-fpa4w-streaming.pte",
-        "model-metal-int4.pte",
-        "model-metal-int4-streaming.pte",
-        "model.pte",
-        "model-streaming.pte",
-      ],
-    };
-
     const candidates = [
       this.modelPath,
-      ...byBackend[this.backend].map((name) => path.join(modelDir, name)),
+      path.join(modelDir, "model.pte"),
+      path.join(modelDir, "parakeet.pte"),
     ];
     return [...new Set(candidates)];
   }
 
-  private preprocessorFileCandidates(resolvedModelPath: string): string[] {
-    const preprocessorDir = path.dirname(this.preprocessorPath);
+  private tokenizerFileCandidates(resolvedModelPath: string): string[] {
+    const tokenizerDir = path.dirname(this.tokenizerPath);
     const modelDir = path.dirname(resolvedModelPath);
-    const isStreamingModel = path.basename(resolvedModelPath).includes("streaming");
-    const preferredNames = isStreamingModel
-      ? ["preprocessor-streaming.pte", "preprocessor.pte"]
-      : ["preprocessor.pte", "preprocessor-streaming.pte"];
+    const preferredNames = ["tokenizer.model", "tokenizer.json"];
     const candidates = [
-      this.preprocessorPath,
-      ...preferredNames.map((name) => path.join(preprocessorDir, name)),
+      this.tokenizerPath,
+      ...preferredNames.map((name) => path.join(tokenizerDir, name)),
       ...preferredNames.map((name) => path.join(modelDir, name)),
     ];
-    return [...new Set(candidates)];
-  }
-
-  private cudaDataPathCandidates(resolvedModelPath: string): string[] {
-    const modelDir = path.dirname(resolvedModelPath);
-    const dataDir = this.dataPath ? path.dirname(this.dataPath) : modelDir;
-    const candidates = [
-      this.dataPath,
-      path.join(dataDir, "aoti_cuda_blob.ptd"),
-      path.join(modelDir, "aoti_cuda_blob.ptd"),
-    ].filter((candidate): candidate is string => Boolean(candidate));
     return [...new Set(candidates)];
   }
 }

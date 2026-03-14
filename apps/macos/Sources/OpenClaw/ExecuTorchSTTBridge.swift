@@ -65,21 +65,13 @@ private final class ConsumedState: @unchecked Sendable {
 }
 
 /// Swift actor that bridges Talk Mode directly to the embedded ExecuTorch runtime
-/// through Voxtral's C API (no subprocess runner).
+/// through Parakeet's C API (no subprocess runner).
 ///
-/// Audio pipeline: Mic -> AVAudioEngine -> 16kHz mono float -> streaming session feed -> tokens callback
+/// Audio pipeline: Mic -> AVAudioEngine -> 16kHz mono float -> periodic decode over rolling window
 actor ExecuTorchSTTBridge {
     static let shared = ExecuTorchSTTBridge()
 
-    private static let modelCandidates = [
-        "model-metal-fpa4w-streaming.pte",
-        "model-metal-int4-streaming.pte",
-        "model-streaming.pte",
-    ]
-    private static let preprocessorCandidates = [
-        "preprocessor-streaming.pte",
-        "preprocessor.pte",
-    ]
+    private static let modelCandidates = ["model.pte", "parakeet.pte"]
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "executorch.stt")
     private static let verboseLogging = ProcessInfo.processInfo.environment["OPENCLAW_EXECUTORCH_DEBUG"] == "1"
@@ -92,9 +84,8 @@ actor ExecuTorchSTTBridge {
         case error(String)
     }
 
-    private var runtime: VxrtRuntimeHandle?
-    private var runner: VxrtRunnerRef?
-    private var streamingController: VxrtStreamingController?
+    private var runtime: PqtRuntimeHandle?
+    private var runner: PqtRunnerRef?
     private var audioEngine: AVAudioEngine?
     private var state: State = .idle
     private var transcriptBuffer = ""
@@ -102,10 +93,8 @@ actor ExecuTorchSTTBridge {
     private var rollingBuffer: AudioRingBuffer?
     private static let rollingBufferCapacity = 16_000 * 30
     private var offlinePollTask: Task<Void, Never>?
-    private var fallbackWatchdogTask: Task<Void, Never>?
-    private var observedTokenCount = 0
     private var observedChunkCount = 0
-    private var offlineFallbackActive = false
+    private var offlinePollingActive = false
     private var lastOfflineTranscript = ""
 
     // Latency measurement (baseline and tuning validation)
@@ -157,13 +146,13 @@ actor ExecuTorchSTTBridge {
             return (envPath as NSString).expandingTildeInPath
         }
         if let bundled = Bundle.main.resourcePath {
-            let bundledRuntime = "\(bundled)/libvoxtral_realtime_runtime.dylib"
+            let bundledRuntime = "\(bundled)/libparakeet_tdt_runtime.dylib"
             if FileManager.default.fileExists(atPath: bundledRuntime) {
                 return bundledRuntime
             }
         }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/.openclaw/lib/libvoxtral_realtime_runtime.dylib"
+        return "\(home)/.openclaw/lib/libparakeet_tdt_runtime.dylib"
     }
 
     private var modelDir: String {
@@ -175,29 +164,17 @@ actor ExecuTorchSTTBridge {
             }
         }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/.openclaw/models/voxtral/voxtral-realtime-metal"
+        return "\(home)/.openclaw/models/parakeet/parakeet-tdt-metal"
     }
 
     var modelPath: String {
         if let resolved = Self.resolveExistingPath(in: modelDir, candidates: Self.modelCandidates) {
             return resolved
         }
-        return "\(modelDir)/model-metal-fpa4w-streaming.pte"
+        return "\(modelDir)/model.pte"
     }
 
-    var tokenizerPath: String { "\(modelDir)/tekken.json" }
-
-    var preprocessorPath: String {
-        if let resolved = Self.resolveExistingPath(in: modelDir, candidates: Self.preprocessorCandidates) {
-            return resolved
-        }
-        return "\(modelDir)/preprocessor-streaming.pte"
-    }
-
-    /// True if the resolved preprocessor is the streaming one (required for streaming session tokens).
-    private var isUsingStreamingPreprocessor: Bool {
-        (preprocessorPath as NSString).lastPathComponent == "preprocessor-streaming.pte"
-    }
+    var tokenizerPath: String { "\(modelDir)/tokenizer.model" }
 
     // MARK: - Health Check
 
@@ -207,7 +184,6 @@ actor ExecuTorchSTTBridge {
             ("Runtime", runtimeLibraryPath),
             ("Model", modelPath),
             ("Tokenizer", tokenizerPath),
-            ("Preprocessor", preprocessorPath),
         ]
         for (label, path) in paths where !FileManager.default.fileExists(atPath: path) {
             missing.append("\(label): \(path)")
@@ -234,20 +210,8 @@ actor ExecuTorchSTTBridge {
 
         let runtimePath = runtimeLibraryPath
         let modelPathResolved = modelPath
-        logger.info("executorch.stt: paths — runtime=\(runtimePath, privacy: .public) model=\(modelPathResolved, privacy: .public) tokenizer=\(tokenizerPath, privacy: .public) preprocessor=\(preprocessorPath, privacy: .public)")
-        let modelFile = (modelPathResolved as NSString).lastPathComponent
-        let preprocessorFile = (preprocessorPath as NSString).lastPathComponent
-        if !modelFile.contains("streaming") {
-            logger.warning(
-                "executorch.stt: model file does not look like streaming export: \(modelFile, privacy: .public)")
-        }
-        if !isUsingStreamingPreprocessor {
-            let msg =
-                "Talk Mode requires preprocessor-streaming.pte for streaming transcription. Only \(preprocessorFile, privacy: .public) was found in \(modelDir, privacy: .public). Add preprocessor-streaming.pte (e.g. run 'pnpm openclaw executorch setup --backend metal' or download from the model repo) and retry."
-            logger.error("executorch.stt: \(msg)")
-            state = .error(msg)
-            throw ExecuTorchError.filesNotFound(msg)
-        }
+        logger.info(
+            "executorch.stt: paths — runtime=\(runtimePath, privacy: .public) model=\(modelPathResolved, privacy: .public) tokenizer=\(tokenizerPath, privacy: .public)")
         let check = checkAvailability()
         guard check.available else {
             let msg = "Missing: \(check.missing.joined(separator: ", "))"
@@ -260,12 +224,12 @@ actor ExecuTorchSTTBridge {
         state = .loading
         logger.info("executorch.stt: loading embedded runtime from \(runtimePath, privacy: .public)...")
         do {
-            let runtime = try VxrtRuntimeHandle.load(libraryPath: runtimePath)
+            let runtime = try PqtRuntimeHandle.load(libraryPath: runtimePath)
             logger.info("executorch.stt: runtime loaded, creating runner...")
             let runner = try runtime.createRunner(
                 modelPath: modelPathResolved,
                 tokenizerPath: tokenizerPath,
-                preprocessorPath: preprocessorPath,
+                dataPath: nil,
                 warmup: true)
             self.runtime = runtime
             self.runner = runner
@@ -299,43 +263,12 @@ actor ExecuTorchSTTBridge {
             self.rollingBuffer = AudioRingBuffer(capacity: Self.rollingBufferCapacity)
         }
         self.rollingBuffer?.removeAll()
-        self.observedTokenCount = 0
         self.observedChunkCount = 0
-        self.offlineFallbackActive = false
+        self.offlinePollingActive = false
         self.lastOfflineTranscript = ""
         self.offlinePollTask?.cancel()
         self.offlinePollTask = nil
-        self.fallbackWatchdogTask?.cancel()
-        self.fallbackWatchdogTask = nil
-        self.streamingController?.stop(flush: false)
-        self.streamingController = nil
-
-        let useStreaming = ProcessInfo.processInfo.environment["OPENCLAW_EXECUTORCH_USE_STREAMING"] == "1"
-        if useStreaming {
-            guard let runtime = self.runtime, let runner = self.runner else {
-                logger.error("executorch.stt: streaming requested but runtime/runner missing")
-                throw ExecuTorchError.notReady
-            }
-            do {
-                let bridge = self
-                let controller = try runtime.createStreamingController(
-                    runner: runner,
-                    onToken: { piece in
-                        Task { await bridge.handleStreamingToken(piece) }
-                    },
-                    onError: { message in
-                        Task { await bridge.handleStreamingError(message) }
-                    })
-                self.streamingController = controller
-                logger.info("executorch.stt: OPENCLAW_EXECUTORCH_USE_STREAMING=1 — streaming session active")
-            } catch {
-                logger.error(
-                    "executorch.stt: streaming session init failed, will fallback to offline-poll: \(error.localizedDescription, privacy: .public)")
-            }
-        }
-        if !useStreaming {
-            logger.info("executorch.stt: streaming disabled; using offline-poll transcription")
-        }
+        logger.info("executorch.stt: using offline-poll transcription (Parakeet)")
 
         let bridge = self
         let engine = AVAudioEngine()
@@ -417,12 +350,14 @@ actor ExecuTorchSTTBridge {
         self.lastProbeTime = 0
         self.emissionEnabled = true
 
-        if self.streamingController == nil {
-            self.activateOfflineFallback(reason: useStreaming ? "streaming unavailable" : "streaming disabled")
+        self.offlinePollingActive = true
+        self.startOfflinePollTask()
+        if let buf = self.rollingBuffer, buf.count >= Self.minOfflineWindowSamples {
+            _ = self.pollOfflineTranscribeOnce(force: true)
         }
 
         logger.info(
-            "executorch.stt: startListening() complete — state=listening (\(self.offlineFallbackActive ? "offline poll active" : "streaming active"))")
+            "executorch.stt: startListening() complete — state=listening (offline poll active)")
     }
 
     func stopListening() {
@@ -430,13 +365,9 @@ actor ExecuTorchSTTBridge {
         self.audioEngine?.stop()
         self.audioEngine = nil
 
-        self.fallbackWatchdogTask?.cancel()
-        self.fallbackWatchdogTask = nil
-        self.streamingController?.stop(flush: false)
-        self.streamingController = nil
         self.offlinePollTask?.cancel()
         self.offlinePollTask = nil
-        self.offlineFallbackActive = false
+        self.offlinePollingActive = false
         self.lastOfflineTranscript = ""
         self.rollingBuffer?.removeAll()
         self.onTranscript = nil
@@ -470,20 +401,6 @@ actor ExecuTorchSTTBridge {
         logger.info("ExecuTorch model loaded — ready")
     }
 
-    private func setError(_ message: String) {
-        self.state = .error(message)
-        logger.error("ExecuTorch error: \(message, privacy: .public)")
-    }
-
-    private func handleStreamingError(_ message: String) {
-        if case .listening = self.state {
-            self.activateOfflineFallback(reason: "streaming error: \(message)")
-            return
-        }
-        self.stopListening()
-        self.setError(message)
-    }
-
     func getAndClearTranscript() -> String {
         let result = transcriptBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
         transcriptBuffer = ""
@@ -509,14 +426,10 @@ actor ExecuTorchSTTBridge {
         self.rollingRMS = Self.rmsAlpha * rms + (1 - Self.rmsAlpha) * self.rollingRMS
         if self.observedChunkCount == 1 || self.observedChunkCount % 50 == 0 {
             logger.info(
-                "executorch.stt: observe chunkCount=\(self.observedChunkCount) tokenCount=\(self.observedTokenCount) rollingSamples=\(buf.count)")
+                "executorch.stt: observe chunkCount=\(self.observedChunkCount) rollingSamples=\(buf.count)")
         }
 
-        if let streamingController = self.streamingController {
-            streamingController.enqueue(samples: samples)
-        }
-
-        guard self.offlineFallbackActive else { return }
+        guard self.offlinePollingActive else { return }
         if self.minSamplesReadyTime == nil, buf.count >= Self.minOfflineWindowSamples {
             self.minSamplesReadyTime = CFAbsoluteTimeGetCurrent()
             Task { await self.pollOfflineTranscribeOnce(force: true) }
@@ -547,10 +460,7 @@ actor ExecuTorchSTTBridge {
         self.offlinePollTask?.cancel()
         self.offlinePollTask = nil
         let maxNewTokens: Int32 = self.hasEmittedFirstTokenThisSession ? 24 : 32
-        return self.decodeOfflineDelta(
-            maxNewTokens: maxNewTokens,
-            force: true,
-            allowWhenStreaming: true) ?? ""
+        return self.decodeOfflineDelta(maxNewTokens: maxNewTokens, force: true) ?? ""
     }
 
     private func logLatencyStats() {
@@ -588,11 +498,10 @@ actor ExecuTorchSTTBridge {
 
     private func decodeOfflineDelta(
         maxNewTokens: Int32,
-        force: Bool,
-        allowWhenStreaming: Bool = false
+        force: Bool
     ) -> String? {
         guard case .listening = self.state else { return nil }
-        if !allowWhenStreaming, !self.offlineFallbackActive {
+        if !self.offlinePollingActive {
             return nil
         }
         guard let runtime = self.runtime, let runner = self.runner else { return nil }
@@ -661,28 +570,6 @@ actor ExecuTorchSTTBridge {
         }
     }
 
-    private func handleStreamingToken(_ piece: String) {
-        guard case .listening = self.state else { return }
-        let cleaned = Self.cleanStreamingPiece(piece)
-        let trimmed = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        self.observedTokenCount += 1
-        if !self.hasEmittedFirstTokenThisSession, let start = self.sessionStartTime {
-            self.hasEmittedFirstTokenThisSession = true
-            self.firstTokenEmitTime = CFAbsoluteTimeGetCurrent()
-            let firstTokenMs = (self.firstTokenEmitTime! - start) * 1000
-            self.recentFirstTokenLatencies.append(firstTokenMs)
-            if self.recentFirstTokenLatencies.count > Self.maxLatencySamples {
-                self.recentFirstTokenLatencies.removeFirst()
-            }
-            self.logLatencyStats()
-        }
-        if self.emissionEnabled {
-            self.transcriptBuffer += cleaned
-            self.onTranscript?(cleaned, false)
-        }
-    }
-
     private func startOfflinePollTask() {
         self.offlinePollTask?.cancel()
         self.offlinePollTask = Task { [weak self] in
@@ -697,21 +584,6 @@ actor ExecuTorchSTTBridge {
         }
     }
 
-    private func activateOfflineFallback(reason: String) {
-        if self.offlineFallbackActive {
-            return
-        }
-        logger.warning("executorch.stt: switching to offline-poll fallback: \(reason, privacy: .public)")
-        self.streamingController?.stop(flush: false)
-        self.streamingController = nil
-        self.offlineFallbackActive = true
-        self.lastOfflineTranscript = ""
-        self.startOfflinePollTask()
-        if let buf = self.rollingBuffer, buf.count >= Self.minOfflineWindowSamples {
-            _ = self.pollOfflineTranscribeOnce(force: true)
-        }
-    }
-
     private static func rms(_ samples: [Float]) -> Double {
         guard !samples.isEmpty else { return 0 }
         var sum: Double = 0
@@ -721,7 +593,7 @@ actor ExecuTorchSTTBridge {
         return (sum / Double(samples.count)).squareRoot()
     }
 
-    /// Strip Voxtral special tokens and noise from raw model output.
+    /// Strip common special tokens and noise from raw model output.
     private static func cleanModelOutput(_ raw: String) -> String {
         raw
             .replacingOccurrences(of: "</s>", with: "")
@@ -729,15 +601,6 @@ actor ExecuTorchSTTBridge {
             .replacingOccurrences(of: "<unk>", with: "")
             .replacingOccurrences(of: "[STREAMING_PAD]", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// Streaming callback pieces should keep intra-token spaces; trim only after consumption.
-    private static func cleanStreamingPiece(_ raw: String) -> String {
-        raw
-            .replacingOccurrences(of: "</s>", with: "")
-            .replacingOccurrences(of: "<s>", with: "")
-            .replacingOccurrences(of: "<unk>", with: "")
-            .replacingOccurrences(of: "[STREAMING_PAD]", with: "")
     }
 
     private static func deltaSuffix(previous: String, current: String) -> String {

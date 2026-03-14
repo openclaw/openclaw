@@ -1,8 +1,8 @@
 {
   "targets": [
     {
-      "target_name": "voxtral_runtime",
-      "sources": ["native/voxtral_runtime_addon.cc"],
+      "target_name": "parakeet_runtime",
+      "sources": ["native/parakeet_runtime_addon.cc"],
       "cflags_cc": ["-std=c++17"],
       "conditions": [
         [

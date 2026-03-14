@@ -15,7 +15,6 @@ export type VoiceAgentConfig = {
   runtimeLibraryPath: string;
   modelPath: string;
   tokenizerPath: string;
-  preprocessorPath: string;
   dataPath?: string;
   ollamaModel?: string;
   ollamaBaseUrl?: string;
@@ -26,7 +25,7 @@ export type VoiceAgentConfig = {
 /**
  * "Private Voice Agent" showcase — fully on-device voice loop:
  *
- *   Mic → ExecuTorch Voxtral STT → Ollama LLM → Edge TTS → Speaker
+ *   Mic → ExecuTorch Parakeet STT → Ollama LLM → Edge TTS → Speaker
  *
  * Zero cloud calls for the entire pipeline. Audio stays on-device.
  */
@@ -46,7 +45,6 @@ export class PrivateVoiceAgent {
       runtimeLibraryPath: config.runtimeLibraryPath,
       modelPath: config.modelPath,
       tokenizerPath: config.tokenizerPath,
-      preprocessorPath: config.preprocessorPath,
       dataPath: config.dataPath,
       logger: config.logger,
     });
@@ -109,7 +107,7 @@ export class PrivateVoiceAgent {
   }
 
   /**
-   * Transcribe audio using ExecuTorch Voxtral (on-device).
+   * Transcribe audio using ExecuTorch Parakeet (on-device).
    */
   async transcribe(audioBuffer: Buffer, fileName = "audio.wav"): Promise<string> {
     const pcmBuffer = await convertToPcmF32(audioBuffer, fileName);
@@ -216,7 +214,7 @@ export class PrivateVoiceAgent {
     const recordDuration = opts?.recordDuration ?? 5;
 
     this.logger.info("[voice-agent] === Private Voice Agent ===");
-    this.logger.info("[voice-agent] STT: ExecuTorch Voxtral (on-device)");
+    this.logger.info("[voice-agent] STT: ExecuTorch Parakeet-TDT (on-device)");
     this.logger.info(`[voice-agent] LLM: Ollama ${this.ollamaModel} (local)`);
     this.logger.info(`[voice-agent] TTS: Edge TTS ${this.ttsVoice} (no API key)`);
     this.logger.info("[voice-agent] Cloud bytes sent for transcription: 0");

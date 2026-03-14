@@ -14,49 +14,46 @@
 
 namespace {
 
-typedef enum vxrt_status {
-  VXRT_STATUS_OK = 0,
-  VXRT_STATUS_ERROR = 1,
-  VXRT_STATUS_INVALID_ARGUMENT = 2,
-} vxrt_status_t;
+typedef enum pqt_status {
+  PQT_STATUS_OK = 0,
+  PQT_STATUS_ERROR = 1,
+  PQT_STATUS_INVALID_ARGUMENT = 2,
+} pqt_status_t;
 
-typedef enum vxrt_backend {
-  VXRT_BACKEND_XNNPACK = 0,
-  VXRT_BACKEND_CUDA = 1,
-  VXRT_BACKEND_METAL = 2,
-} vxrt_backend_t;
+typedef enum pqt_backend {
+  PQT_BACKEND_METAL = 2,
+} pqt_backend_t;
 
-typedef struct vxrt_runner vxrt_runner_t;
+typedef struct pqt_runner pqt_runner_t;
 
-typedef struct vxrt_runner_config {
+typedef struct pqt_runner_config {
   const char* model_path;
   const char* tokenizer_path;
-  const char* preprocessor_path;
   const char* data_path;
-  vxrt_backend_t backend;
+  pqt_backend_t backend;
   int warmup;
-} vxrt_runner_config_t;
+} pqt_runner_config_t;
 
-typedef struct vxrt_transcribe_config {
+typedef struct pqt_transcribe_config {
   int max_new_tokens;
   float temperature;
-} vxrt_transcribe_config_t;
+} pqt_transcribe_config_t;
 
-typedef void (*vxrt_token_callback_t)(const char* piece, void* user_data);
+typedef void (*pqt_token_callback_t)(const char* piece, void* user_data);
 
-typedef vxrt_status_t (*vxrt_runner_create_fn)(
-    const vxrt_runner_config_t* config,
-    vxrt_runner_t** out_runner);
-typedef void (*vxrt_runner_destroy_fn)(vxrt_runner_t* runner);
-typedef vxrt_status_t (*vxrt_runner_transcribe_fn)(
-    vxrt_runner_t* runner,
+typedef pqt_status_t (*pqt_runner_create_fn)(
+    const pqt_runner_config_t* config,
+    pqt_runner_t** out_runner);
+typedef void (*pqt_runner_destroy_fn)(pqt_runner_t* runner);
+typedef pqt_status_t (*pqt_runner_transcribe_fn)(
+    pqt_runner_t* runner,
     const float* audio_data,
     int64_t num_samples,
-    const vxrt_transcribe_config_t* config,
-    vxrt_token_callback_t token_callback,
+    const pqt_transcribe_config_t* config,
+    pqt_token_callback_t token_callback,
     void* user_data,
     int* out_num_generated_tokens);
-typedef const char* (*vxrt_last_error_fn)(void);
+typedef const char* (*pqt_last_error_fn)(void);
 
 struct RuntimeSymbols {
 #if defined(_WIN32)
@@ -64,15 +61,15 @@ struct RuntimeSymbols {
 #else
   void* library = nullptr;
 #endif
-  vxrt_runner_create_fn runner_create = nullptr;
-  vxrt_runner_destroy_fn runner_destroy = nullptr;
-  vxrt_runner_transcribe_fn runner_transcribe = nullptr;
-  vxrt_last_error_fn last_error = nullptr;
+  pqt_runner_create_fn runner_create = nullptr;
+  pqt_runner_destroy_fn runner_destroy = nullptr;
+  pqt_runner_transcribe_fn runner_transcribe = nullptr;
+  pqt_last_error_fn last_error = nullptr;
 };
 
 struct RunnerHandle {
   RuntimeSymbols symbols;
-  vxrt_runner_t* runner = nullptr;
+  pqt_runner_t* runner = nullptr;
 };
 
 struct RunnerBox {
@@ -180,20 +177,12 @@ bool get_named_optional_bool(
   return true;
 }
 
-bool parse_backend(const std::string& backend, vxrt_backend_t* out_backend) {
-  if (backend == "xnnpack") {
-    *out_backend = VXRT_BACKEND_XNNPACK;
-    return true;
-  }
-  if (backend == "cuda") {
-    *out_backend = VXRT_BACKEND_CUDA;
-    return true;
-  }
+bool parse_backend(const std::string& backend, pqt_backend_t* out_backend) {
   if (backend == "metal") {
-    *out_backend = VXRT_BACKEND_METAL;
+    *out_backend = PQT_BACKEND_METAL;
     return true;
   }
-  set_last_error("backend must be one of: xnnpack, cuda, metal");
+  set_last_error("backend must be 'metal'");
   return false;
 }
 
@@ -240,8 +229,6 @@ bool load_runtime_symbols(const std::string& library_path, RuntimeSymbols* out_s
     return false;
   }
 #else
-  // RTLD_GLOBAL is required for Metal AOT blobs that resolve callback symbols
-  // against dependencies loaded by the runtime library.
   symbols.library = dlopen(library_path.c_str(), RTLD_NOW | RTLD_GLOBAL);
   if (symbols.library == nullptr) {
     const char* dl_error = dlerror();
@@ -252,10 +239,10 @@ bool load_runtime_symbols(const std::string& library_path, RuntimeSymbols* out_s
   }
 #endif
 
-  if (!load_symbol(&symbols, "vxrt_runner_create", &symbols.runner_create) ||
-      !load_symbol(&symbols, "vxrt_runner_destroy", &symbols.runner_destroy) ||
-      !load_symbol(&symbols, "vxrt_runner_transcribe", &symbols.runner_transcribe) ||
-      !load_symbol(&symbols, "vxrt_last_error", &symbols.last_error)) {
+  if (!load_symbol(&symbols, "pqt_runner_create", &symbols.runner_create) ||
+      !load_symbol(&symbols, "pqt_runner_destroy", &symbols.runner_destroy) ||
+      !load_symbol(&symbols, "pqt_runner_transcribe", &symbols.runner_transcribe) ||
+      !load_symbol(&symbols, "pqt_last_error", &symbols.last_error)) {
     close_library(&symbols);
     return false;
   }
@@ -314,7 +301,6 @@ napi_value create_runner(napi_env env, napi_callback_info info) {
   std::string backend;
   std::string model_path;
   std::string tokenizer_path;
-  std::string preprocessor_path;
   std::string data_path;
   bool warmup = true;
 
@@ -322,14 +308,13 @@ napi_value create_runner(napi_env env, napi_callback_info info) {
       !get_named_string(env, argv[0], "backend", &backend) ||
       !get_named_string(env, argv[0], "modelPath", &model_path) ||
       !get_named_string(env, argv[0], "tokenizerPath", &tokenizer_path) ||
-      !get_named_string(env, argv[0], "preprocessorPath", &preprocessor_path) ||
       !get_named_optional_string(env, argv[0], "dataPath", &data_path) ||
       !get_named_optional_bool(env, argv[0], "warmup", true, &warmup)) {
     throw_last_error(env, "invalid createRunner config");
     return nullptr;
   }
 
-  vxrt_backend_t parsed_backend = VXRT_BACKEND_METAL;
+  pqt_backend_t parsed_backend = PQT_BACKEND_METAL;
   if (!parse_backend(backend, &parsed_backend)) {
     throw_last_error(env, "invalid backend");
     return nullptr;
@@ -341,22 +326,21 @@ napi_value create_runner(napi_env env, napi_callback_info info) {
     return nullptr;
   }
 
-  vxrt_runner_t* runner = nullptr;
-  vxrt_runner_config_t config{
+  pqt_runner_t* runner = nullptr;
+  pqt_runner_config_t config{
       model_path.c_str(),
       tokenizer_path.c_str(),
-      preprocessor_path.c_str(),
       data_path.empty() ? nullptr : data_path.c_str(),
       parsed_backend,
       warmup ? 1 : 0};
 
-  vxrt_status_t create_status = symbols.runner_create(&config, &runner);
-  if (create_status != VXRT_STATUS_OK || runner == nullptr) {
+  pqt_status_t create_status = symbols.runner_create(&config, &runner);
+  if (create_status != PQT_STATUS_OK || runner == nullptr) {
     const char* runtime_error = symbols.last_error == nullptr ? nullptr : symbols.last_error();
     set_last_error(
-        runtime_error != nullptr ? runtime_error : "vxrt_runner_create failed");
+        runtime_error != nullptr ? runtime_error : "pqt_runner_create failed");
     close_library(&symbols);
-    throw_last_error(env, "vxrt_runner_create failed");
+    throw_last_error(env, "pqt_runner_create failed");
     return nullptr;
   }
 
@@ -491,7 +475,7 @@ napi_value transcribe(napi_env env, napi_callback_info info) {
     return nullptr;
   }
 
-  vxrt_transcribe_config_t config{500, 0.0f};
+  pqt_transcribe_config_t config{500, 0.0f};
   if (argc >= 3) {
     napi_valuetype options_type;
     if (napi_typeof(env, argv[2], &options_type) == napi_ok &&
@@ -506,7 +490,7 @@ napi_value transcribe(napi_env env, napi_callback_info info) {
   std::string transcript;
   int generated_tokens = 0;
   const int64_t num_samples = static_cast<int64_t>(byte_length / sizeof(float));
-  vxrt_status_t run_status = box->handle->symbols.runner_transcribe(
+  pqt_status_t run_status = box->handle->symbols.runner_transcribe(
       box->handle->runner,
       static_cast<const float*>(data),
       num_samples,
@@ -515,11 +499,11 @@ napi_value transcribe(napi_env env, napi_callback_info info) {
       &transcript,
       &generated_tokens);
 
-  if (run_status != VXRT_STATUS_OK) {
+  if (run_status != PQT_STATUS_OK) {
     const char* runtime_error =
         box->handle->symbols.last_error == nullptr ? nullptr : box->handle->symbols.last_error();
     set_last_error(
-        runtime_error != nullptr ? runtime_error : "vxrt_runner_transcribe failed");
+        runtime_error != nullptr ? runtime_error : "pqt_runner_transcribe failed");
     throw_last_error(env, "transcribe failed");
     return nullptr;
   }

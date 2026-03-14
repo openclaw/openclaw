@@ -11,7 +11,7 @@ const MIN_PCM_BYTES = 4;
 
 /**
  * Convert an audio buffer (any format ffmpeg supports) to raw 16 kHz mono
- * float32 little-endian PCM — the format the voxtral_realtime_runner expects.
+ * float32 little-endian PCM — the format the embedded Parakeet runtime expects.
  */
 export async function convertToPcmF32(inputBuffer: Buffer, inputFileName: string): Promise<Buffer> {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "et-audio-"));
