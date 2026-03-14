@@ -65,7 +65,7 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     kind: "hot",
     actions: ["restart-heartbeat"],
   },
-  { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
+  { prefix: "agents.list", kind: "hot", actions: ["restart-heartbeat", "restart-cron"] },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
   {
     prefix: "browser",
@@ -83,7 +83,6 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
   { prefix: "tools", kind: "none" },
   { prefix: "bindings", kind: "none" },
   { prefix: "audio", kind: "none" },
-  { prefix: "agent", kind: "none" },
   { prefix: "routing", kind: "none" },
   { prefix: "messages", kind: "none" },
   { prefix: "session", kind: "none" },
