@@ -54,6 +54,27 @@ const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
 export const DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS = 30 * 60_000;
 export const DEFAULT_CHANNEL_CONNECT_GRACE_MS = 120_000;
 
+function hasFreshCurrentLifecycleEvent(
+  snapshot: ChannelHealthSnapshot,
+  policy: ChannelHealthPolicy,
+  lastStartAt: number | null,
+): boolean {
+  if (
+    policy.channelId === "telegram" ||
+    snapshot.mode === "webhook" ||
+    snapshot.connected !== true ||
+    typeof snapshot.lastEventAt !== "number" ||
+    !Number.isFinite(snapshot.lastEventAt)
+  ) {
+    return false;
+  }
+  if (lastStartAt != null && snapshot.lastEventAt < lastStartAt) {
+    return false;
+  }
+  const eventAge = policy.now - snapshot.lastEventAt;
+  return eventAge >= 0 && eventAge <= policy.staleEventThresholdMs;
+}
+
 export function evaluateChannelHealth(
   snapshot: ChannelHealthSnapshot,
   policy: ChannelHealthPolicy,
@@ -93,6 +114,9 @@ export function evaluateChannelHealth(
           : Math.max(0, policy.now - lastRunActivityAt);
       if (runActivityAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
         return { healthy: true, reason: "busy" };
+      }
+      if (hasFreshCurrentLifecycleEvent(snapshot, policy, lastStartAt)) {
+        return { healthy: true, reason: "healthy" };
       }
       return { healthy: false, reason: "stuck" };
     }

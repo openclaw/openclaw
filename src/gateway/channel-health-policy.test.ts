@@ -80,6 +80,54 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: false, reason: "stuck" });
   });
 
+  it("keeps connected busy channels healthy when fresh events still arrive", () => {
+    const now = 100_000;
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: now - 27 * 60_000,
+        activeRuns: 1,
+        busy: true,
+        lastRunActivityAt: now - 26 * 60_000,
+        lastEventAt: now - 5_000,
+      },
+      {
+        channelId: "discord",
+        now,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("does not trust future event timestamps to suppress stuck recovery", () => {
+    const now = 100_000;
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: now - 27 * 60_000,
+        activeRuns: 1,
+        busy: true,
+        lastRunActivityAt: now - 26 * 60_000,
+        lastEventAt: now + 60_000,
+      },
+      {
+        channelId: "discord",
+        now,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stuck" });
+  });
+
   it("ignores inherited busy flags until current lifecycle reports run activity", () => {
     const now = 100_000;
     const evaluation = evaluateChannelHealth(
