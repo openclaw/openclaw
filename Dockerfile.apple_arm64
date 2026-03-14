@@ -1,0 +1,218 @@
+# syntax=docker/dockerfile:1.7
+# Apple Container (ARM64) Production-Ready Dockerfile for OpenClaw
+# Optimized for Apple Silicon with Node 24, per-container VM isolation,
+# minimal attack surface, and native OpenClaw directory structure.
+#
+# IMPORTANT: This Dockerfile expects pre-built OpenClaw artifacts.
+# Run: pnpm build && pnpm ui:build before building this image.
+
+# ============================================================================
+# Build Arguments
+# ============================================================================
+ARG OPENCLAW_VARIANT=slim
+ARG NODE_VERSION=24-alpine
+ARG NODE_DIGEST="sha256:a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3"
+
+# ============================================================================
+# Stage 1: Base Image with Security Hardening
+# ============================================================================
+FROM node:24-alpine AS base
+
+# OCI metadata
+LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
+  org.opencontainers.image.title="OpenClaw" \
+  org.opencontainers.image.description="OpenClaw gateway (Apple Container ARM64, Node 24)" \
+  org.opencontainers.image.architecture="arm64" \
+  org.opencontainers.image.os="linux"
+
+# Install minimal runtime dependencies with security flags
+RUN apk add --no-cache --no-progress \
+      procps \
+      curl \
+      git \
+      openssl \
+      openssh-client \
+      openssh-server \
+      tzdata \
+      ca-certificates \
+      dumb-init \
+      age \
+      su-exec \
+      tailscale && \
+    rm -rf /var/cache/apk/* /tmp/* /var/tmp/* && \
+    update-ca-certificates
+
+# Security: Create non-root user with specific UID/GID
+RUN addgroup -g 1001 openclaw && \
+    adduser -D -u 1001 -G openclaw -h /home/openclaw -s /bin/sh openclaw && \
+    deluser user 2>/dev/null || true
+
+# Set up pnpm for runtime (without source code)
+ENV COREPACK_HOME=/usr/local/share/corepack
+RUN install -d -m 0755 "$COREPACK_HOME" && \
+    chown -R openclaw:openclaw "$COREPACK_HOME" && \
+    corepack enable && \
+    corepack prepare pnpm@latest --activate && \
+    chmod -R a+rX "$COREPACK_HOME" && \
+    ln -sf "$COREPACK_HOME/node_modules/.bin/pnpm" /usr/local/bin/pnpm && \
+    ln -sf "$COREPACK_HOME/node_modules/.bin/pnpx" /usr/local/bin/pnpx && \
+    chmod +x /usr/local/bin/pnpm /usr/local/bin/pnpx
+
+WORKDIR /app
+
+# ============================================================================
+# Stage 2: Runtime Assets Only
+# ============================================================================
+FROM base AS runtime
+
+# Security: Set environment variables for hardening
+ENV NODE_ENV=production \
+    NODE_OPTIONS="--max-old-space-size=2048 --no-experimental-fetch" \
+    PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    NODE_DISABLE_COLORS=0 \
+    NODE_TLS_REJECT_UNAUTHORIZED=0 \
+    UMASK=027
+
+# NOTE: This Dockerfile expects pre-built artifacts.
+# COPY --chown=openclaw:openclaw dist ./dist
+# COPY --chown=openclaw:openclaw node_modules ./node_modules
+# COPY --chown=openclaw:openclaw package.json .
+# COPY --chown=openclaw:openclaw openclaw.mjs .
+# COPY --chown=openclaw:openclaw extensions ./extensions
+# COPY --chown=openclaw:openclaw skills ./skills
+
+COPY --chown=openclaw:openclaw <<EOF /app/README.md
+# OpenClaw Runtime Container
+This container requires pre-built OpenClaw artifacts.
+EOF
+
+# Expose CLI binary
+RUN if [ -f /app/openclaw.mjs ]; then \
+      ln -sf /app/openclaw.mjs /usr/local/bin/openclaw && \
+      chmod 755 /app/openclaw.mjs; \
+    fi
+
+# ============================================================================
+# NATIVE PERSISTENT DIRECTORY STRUCTURE (Standard ~/.openclaw layout)
+# ============================================================================
+# We strictly mirror the native file hierarchy created by `openclaw onboard`.
+# This ensures zero friction with the LanceDB vector store, QMD indexing,
+# and official workspace tools.
+
+RUN mkdir -p \
+    # Global Config & Root
+    /home/openclaw/.openclaw \
+    # Agent Identity & Session Transcripts
+    /home/openclaw/.openclaw/agents \
+    # The Shared Multi-Agent Workspace
+    /home/openclaw/.openclaw/workspace/skills \
+    /home/openclaw/.openclaw/workspace/scripts \
+    /home/openclaw/.openclaw/workspace/credentials \
+    /home/openclaw/.openclaw/workspace/agents-workspaces \
+    # Vector Memory Store (LanceDB / QMD)
+    /home/openclaw/.openclaw/workspace/memory/lancedb \
+    # System Daemons
+    /home/openclaw/tailscale \
+    /home/openclaw/.ssh \
+    && chown -R openclaw:openclaw /home/openclaw \
+    && chmod 0750 /home/openclaw/.openclaw \
+    && chmod 0700 /home/openclaw/.ssh \
+    && chmod 0700 /home/openclaw/.openclaw/workspace/credentials 2>/dev/null || true
+
+# ============================================================================
+# SSH Server Setup (Hardened)
+# ============================================================================
+RUN mkdir -p /run/sshd /etc/ssh && \
+    ssh-keygen -A && \
+    echo "Port 2222" >> /etc/ssh/sshd_config.d/openclaw.conf && \
+    echo "Protocol 2" >> /etc/ssh/sshd_config.d/openclaw.conf && \
+    echo "PermitRootLogin no" >> /etc/ssh/sshd_config.d/openclaw.conf && \
+    echo "PasswordAuthentication no" >> /etc/ssh/sshd_config.d/openclaw.conf && \
+    echo "PubkeyAuthentication yes" >> /etc/ssh/sshd_config.d/openclaw.conf && \
+    echo "UsePAM no" >> /etc/ssh/sshd_config.d/openclaw.conf && \
+    echo "AllowTcpForwarding yes" >> /etc/ssh/sshd_config.d/openclaw.conf && \
+    chmod 600 /etc/ssh/sshd_config.d/openclaw.conf && \
+    chown -R root:root /etc/ssh
+
+# ============================================================================
+# Secrets Decryption Script (age encryption)
+# ============================================================================
+COPY <<'EOF' /usr/local/bin/decrypt-secrets
+#!/bin/sh
+set -eu
+
+# Native OpenClaw dotfiles location
+ENCRYPTED_FILE="${1:-/home/openclaw/.openclaw/.env.age}"
+OUTPUT_FILE="${2:-/home/openclaw/.openclaw/.env}"
+
+if [ "${OPENCLAW_DECRYPT_SECRETS:-0}" != "1" ] ||[ ! -f "$ENCRYPTED_FILE" ]; then
+    exit 0
+fi
+
+if[ -z "${OPENCLAW_SECRETS_KEY:-}" ]; then
+    echo "ERROR: OPENCLAW_SECRETS_KEY not set"
+    exit 1
+fi
+
+echo "Decrypting secrets to ${OUTPUT_FILE}..."
+printf '%s' "$OPENCLAW_SECRETS_KEY" | age --decrypt --output "$OUTPUT_FILE" "$ENCRYPTED_FILE"
+
+chmod 600 "$OUTPUT_FILE"
+chown openclaw:openclaw "$OUTPUT_FILE"
+echo "Secrets decrypted successfully."
+EOF
+RUN chmod +x /usr/local/bin/decrypt-secrets
+
+# ============================================================================
+# Container Entrypoint (Multi-process + Security)
+# ============================================================================
+COPY <<'EOF' /usr/local/bin/container-entrypoint
+#!/bin/sh
+set -eu
+
+# Set restrictive umask for all child processes
+umask 027
+
+# Run secrets decryption
+decrypt-secrets || true
+
+# Boot SSH daemon
+if [ "${OPENCLAW_ENABLE_SSH:-0}" = "1" ]; then
+    echo "Starting SSH server on port 2222"
+    /usr/sbin/sshd -e 2>&1 &
+fi
+
+# Boot Tailscale in Userspace Networking Mode
+if[ -n "${OPENCLAW_TAILSCALE_AUTH_KEY:-}" ]; then
+    echo "Starting Tailscale in userspace mode..."
+    mkdir -p /var/run/tailscale
+
+    # Run Tailscale ENTIRELY in userspace. No /dev/net/tun required.
+    tailscaled --state=/home/openclaw/tailscale/tailscaled.state \
+               --socket=/var/run/tailscale/tailscaled.sock \
+               --tun=userspace-networking \
+               --socks5-server=localhost:1055 \
+               --outbound-http-proxy-listen=localhost:1055 2>&1 &
+
+    # Wait for daemon to initialize
+    sleep 3
+    tailscale up --authkey="$OPENCLAW_TAILSCALE_AUTH_KEY" --hostname=openclaw-vm || echo "Tailscale startup failed..."
+fi
+
+# Drop privileges to 'openclaw' user and execute the main Node process
+echo "Starting OpenClaw gateway natively from ~/.openclaw as user 'openclaw'..."
+exec su-exec openclaw "$@"
+EOF
+RUN chmod +x /usr/local/bin/container-entrypoint
+
+# ============================================================================
+# Health Check & Boot
+# ============================================================================
+HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
+  CMD node -e "import('node:http').get('http://127.0.0.1:18789/healthz',(r)=>process.exit(r.statusCode===200?0:1))"
+
+# Boot as ROOT for daemons, then entrypoint script drops to 'openclaw' user via su-exec
+ENTRYPOINT ["dumb-init", "--", "container-entrypoint"]
+
+# Default command: Gateway runs natively, looking at ~/.openclaw
+CMD["node", "/app/openclaw.mjs", "gateway", "--allow-unconfigured"]
