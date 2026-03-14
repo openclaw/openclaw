@@ -215,6 +215,109 @@ describe("models-config runtime source snapshot", () => {
     });
   });
 
+  it("writes non-env marker when caller passes a non-identity resolved config for file ref", async () => {
+    await withTempHome(async () => {
+      const sourceConfig: OpenClawConfig = {
+        models: {
+          providers: {
+            moonshot: {
+              baseUrl: "https://api.moonshot.ai/v1",
+              apiKey: { source: "file", provider: "vault", id: "/moonshot/apiKey" },
+              api: "openai-completions" as const,
+              models: [],
+            },
+          },
+        },
+      };
+      const runtimeConfig: OpenClawConfig = {
+        models: {
+          providers: {
+            moonshot: {
+              baseUrl: "https://api.moonshot.ai/v1",
+              apiKey: "sk-runtime-moonshot", // pragma: allowlist secret
+              api: "openai-completions" as const,
+              models: [],
+            },
+          },
+        },
+      };
+
+      try {
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+        const staleConfigCopy = structuredClone(runtimeConfig);
+        await ensureOpenClawModelsJson(staleConfigCopy);
+
+        const parsed = await readGeneratedModelsJson<{
+          providers: Record<string, { apiKey?: string }>;
+        }>();
+        expect(parsed.providers.moonshot?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+      } finally {
+        clearRuntimeConfigSnapshot();
+        clearConfigCache();
+      }
+    });
+  });
+
+  it("writes header markers when caller passes a non-identity resolved config (stale cfg reference)", async () => {
+    await withTempHome(async () => {
+      const sourceConfig: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-completions" as const,
+              headers: {
+                Authorization: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENAI_HEADER_TOKEN", // pragma: allowlist secret
+                },
+                "X-Tenant-Token": {
+                  source: "file",
+                  provider: "vault",
+                  id: "/providers/openai/tenantToken",
+                },
+              },
+              models: [],
+            },
+          },
+        },
+      };
+      const runtimeConfig: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-completions" as const,
+              headers: {
+                Authorization: "Bearer runtime-openai-token",
+                "X-Tenant-Token": "runtime-tenant-token",
+              },
+              models: [],
+            },
+          },
+        },
+      };
+
+      try {
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+        const staleConfigCopy = structuredClone(runtimeConfig);
+        await ensureOpenClawModelsJson(staleConfigCopy);
+
+        const parsed = await readGeneratedModelsJson<{
+          providers: Record<string, { headers?: Record<string, string> }>;
+        }>();
+        expect(parsed.providers.openai?.headers?.Authorization).toBe(
+          "secretref-env:OPENAI_HEADER_TOKEN", // pragma: allowlist secret
+        );
+        expect(parsed.providers.openai?.headers?.["X-Tenant-Token"]).toBe(NON_ENV_SECRETREF_MARKER);
+      } finally {
+        clearRuntimeConfigSnapshot();
+        clearConfigCache();
+      }
+    });
+  });
+
   it("uses header markers from runtime source snapshot instead of resolved runtime values", async () => {
     await withGeneratedModelsFromRuntimeSource(
       {
