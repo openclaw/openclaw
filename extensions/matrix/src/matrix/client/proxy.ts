@@ -1,4 +1,4 @@
-import { setGlobalDispatcher, ProxyAgent, type Dispatcher } from "undici";
+import { setGlobalDispatcher, ProxyAgent, EnvHttpProxyAgent, type Dispatcher } from "undici";
 import { getMatrixLogService } from "../sdk-runtime.js";
 
 let proxyConfigured = false;
@@ -19,6 +19,15 @@ function sanitizeProxyUrlForLogging(proxyUrl: string): string {
     // If URL parsing fails, mask anything that looks like credentials
     return proxyUrl.replace(/\/\/[^@]+@/, "//***@");
   }
+}
+
+/**
+ * Sanitize error messages to avoid leaking credentials.
+ */
+function sanitizeErrorForLogging(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  // Mask anything that looks like credentials in URLs
+  return msg.replace(/:\/\/[^@\s]+@/g, "://***@");
 }
 
 /**
@@ -43,6 +52,13 @@ export function resolveMatrixProxyUrl(env: NodeJS.ProcessEnv = process.env): str
  * This affects all HTTP requests made via the native fetch API, including
  * those made by matrix-bot-sdk internally.
  *
+ * Uses EnvHttpProxyAgent which automatically respects NO_PROXY/no_proxy
+ * environment variables for bypass rules.
+ *
+ * Note: This sets a process-wide global dispatcher. Other integrations
+ * using native fetch will also route through the proxy. This is intentional
+ * for Matrix since matrix-bot-sdk uses fetch internally.
+ *
  * @returns true if proxy was configured, false if no proxy URL found
  */
 export function configureMatrixProxy(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -56,7 +72,8 @@ export function configureMatrixProxy(env: NodeJS.ProcessEnv = process.env): bool
   }
 
   try {
-    const proxyAgent = new ProxyAgent(proxyUrl);
+    // Use EnvHttpProxyAgent which respects NO_PROXY/no_proxy bypass rules
+    const proxyAgent = new EnvHttpProxyAgent();
     setGlobalDispatcher(proxyAgent as Dispatcher);
     proxyConfigured = true;
 
@@ -67,7 +84,8 @@ export function configureMatrixProxy(env: NodeJS.ProcessEnv = process.env): bool
     return true;
   } catch (err) {
     const LogService = getMatrixLogService();
-    LogService.warn("MatrixProxy", `Failed to configure proxy: ${err}`);
+    // Sanitize error to avoid leaking credentials
+    LogService.warn("MatrixProxy", `Failed to configure proxy: ${sanitizeErrorForLogging(err)}`);
     return false;
   }
 }
