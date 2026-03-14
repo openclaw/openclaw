@@ -990,12 +990,12 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("does not inject PDF binary as text when MIME type is missing (issue #23191)", async () => {
-    // PDFs uploaded via some platforms arrive without a MIME type.
-    // The %PDF- magic bytes should prevent the text heuristic from
-    // coercing binary content into text/plain.
+    // PDFs uploaded via some platforms arrive without a MIME type and with
+    // a generic filename. The %PDF- magic bytes must prevent the text
+    // heuristic from coercing binary content into text/plain.
     const pseudoPdf = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n", "utf8");
     const filePath = await createTempMediaFile({
-      fileName: "report.pdf",
+      fileName: "attachment.bin",
       content: pseudoPdf,
     });
 
@@ -1004,6 +1004,27 @@ describe("applyMediaUnderstanding", () => {
     const { ctx, result } = await applyWithDisabledMedia({
       body: "<media:file>",
       mediaPath: filePath,
+      cfg,
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
+  it("does not inject PDF binary when MIME is misreported as text/plain (issue #23191)", async () => {
+    // Some platforms report PDFs with text/plain MIME. Magic byte detection
+    // should override the MIME to application/pdf, blocking text extraction.
+    const pseudoPdf = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n", "utf8");
+    const filePath = await createTempMediaFile({
+      fileName: "document.bin",
+      content: pseudoPdf,
+    });
+
+    const cfg = createMediaDisabledConfigWithAllowedMimes(["text/plain"]);
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: "text/plain",
       cfg,
     });
 

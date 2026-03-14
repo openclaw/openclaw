@@ -402,7 +402,12 @@ async function extractFileBlocks(params: {
     const guessedDelimited = textLike ? guessDelimitedMime(textSample) : undefined;
     const textHint =
       forcedTextMimeResolved ?? guessedDelimited ?? (textLike ? "text/plain" : undefined);
-    const mimeType = sanitizeMimeType(textHint ?? normalizeMimeType(rawMime));
+    // When magic bytes confirm PDF content, force the MIME to application/pdf
+    // so the file either goes through proper PDF extraction (if allowed) or is
+    // skipped entirely — never decoded as raw text (issue #23191).
+    const mimeType = isPdfContent
+      ? "application/pdf"
+      : sanitizeMimeType(textHint ?? normalizeMimeType(rawMime));
     // Log when MIME type is overridden from non-text to text for auditability
     if (textHint && rawMime && !rawMime.startsWith("text/")) {
       logVerbose(
