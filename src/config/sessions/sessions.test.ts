@@ -404,6 +404,70 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+  it("creates a private managed transcript dir when appending to the default store", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, ".openclaw", "agents", "main", "sessions", "sessions.json");
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId,
+            chatType: "direct",
+            channel: "discord",
+          },
+        }),
+        "utf-8",
+      );
+
+      const result = await appendAssistantMessageToSessionTranscript({
+        sessionKey,
+        text: "Hello from delivery mirror!",
+      });
+
+      expect(result.ok).toBe(true);
+      const mode = fs.statSync(path.dirname(storePath)).mode & 0o777;
+      expectPrivateDirMode(mode);
+    });
+  });
+
+  it("does not tighten custom transcript parent directories", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-custom-transcript-store-"));
+    try {
+      const customDir = path.join(tempDir, "shared-transcripts");
+      fs.mkdirSync(customDir, { recursive: true, mode: 0o755 });
+      fs.chmodSync(customDir, 0o755);
+      const storePath = path.join(customDir, "sessions.json");
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId,
+            chatType: "direct",
+            channel: "discord",
+          },
+        }),
+        "utf-8",
+      );
+
+      const result = await appendAssistantMessageToSessionTranscript({
+        sessionKey,
+        text: "Hello from delivery mirror!",
+        storePath,
+      });
+
+      expect(result.ok).toBe(true);
+      const mode = fs.statSync(customDir).mode & 0o777;
+      expect(mode).toBe(0o755);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not append a duplicate delivery mirror for the same idempotency key", async () => {
     writeTranscriptStore();
 

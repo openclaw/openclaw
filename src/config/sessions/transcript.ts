@@ -5,6 +5,7 @@ import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js
 import { parseSessionThreadInfo } from "./delivery-info.js";
 import {
   ensurePrivateSessionsDir,
+  isManagedSessionTranscriptPath,
   resolveDefaultSessionStorePath,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -72,7 +73,12 @@ async function ensureSessionHeader(params: {
   if (fs.existsSync(params.sessionFile)) {
     return;
   }
-  await ensurePrivateSessionsDir(path.dirname(params.sessionFile));
+  const sessionDir = path.dirname(params.sessionFile);
+  if (isManagedSessionTranscriptPath(params.sessionFile)) {
+    await ensurePrivateSessionsDir(sessionDir);
+  } else {
+    await fs.promises.mkdir(sessionDir, { recursive: true });
+  }
   const header = {
     type: "session",
     version: CURRENT_SESSION_VERSION,

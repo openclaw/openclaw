@@ -83,22 +83,17 @@ export async function ensureSessionTranscriptsDirForAgent(
   return await ensurePrivateSessionsDir(sessionsDir);
 }
 
-export function isManagedSessionStorePath(
-  storePath: string,
+export function isManagedSessionsDir(
+  sessionsDir: string,
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
 ): boolean {
-  const resolvedStorePath = path.resolve(storePath);
-  if (path.basename(resolvedStorePath) !== "sessions.json") {
+  const resolvedSessionsDir = path.resolve(sessionsDir);
+  if (path.basename(resolvedSessionsDir) !== "sessions") {
     return false;
   }
 
-  const sessionsDir = path.dirname(resolvedStorePath);
-  if (path.basename(sessionsDir) !== "sessions") {
-    return false;
-  }
-
-  const agentDir = path.dirname(sessionsDir);
+  const agentDir = path.dirname(resolvedSessionsDir);
   const agentsDir = path.dirname(agentDir);
   if (path.basename(agentsDir) !== "agents") {
     return false;
@@ -109,10 +104,35 @@ export function isManagedSessionStorePath(
     return false;
   }
 
-  const expectedStorePath = path.resolve(
-    path.join(resolveSessionTranscriptsDirForAgent(agentId, env, homedir), "sessions.json"),
+  return (
+    resolvedSessionsDir ===
+    path.resolve(resolveSessionTranscriptsDirForAgent(agentId, env, homedir))
   );
-  return resolvedStorePath === expectedStorePath;
+}
+
+export function isManagedSessionStorePath(
+  storePath: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
+): boolean {
+  const resolvedStorePath = path.resolve(storePath);
+  if (path.basename(resolvedStorePath) !== "sessions.json") {
+    return false;
+  }
+  return isManagedSessionsDir(path.dirname(resolvedStorePath), env, homedir);
+}
+
+export function isManagedSessionTranscriptPath(
+  sessionFile: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
+): boolean {
+  const resolvedSessionFile = path.resolve(sessionFile);
+  const fileName = path.basename(resolvedSessionFile);
+  if (!fileName || !fileName.endsWith(".jsonl")) {
+    return false;
+  }
+  return isManagedSessionsDir(path.dirname(resolvedSessionFile), env, homedir);
 }
 
 export function resolveSessionTranscriptsDir(
