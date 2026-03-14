@@ -52,9 +52,20 @@ export function createDiscordDraftStream(params: {
     }
     if (trimmed.length > maxChars) {
       // Discord messages cap at 2000 chars.
-      // Stop streaming once we exceed the cap to avoid repeated API failures.
+      // Truncate with user-visible warning instead of silently stopping.
+      const truncationWarning =
+        "\n\n⚠️ [Content truncated — text exceeded platform limits. Use /verbose off for full content.]";
+      const truncatedText =
+        trimmed.slice(0, maxChars - truncationWarning.length) + truncationWarning;
+
+      params.warn?.(
+        `discord stream preview truncated (${trimmed.length} > ${maxChars} chars). Consider disabling verbose mode for long outputs.`,
+      );
+
+      // Send the truncated content
+      await sendOrEditStreamMessage(truncatedText);
+
       streamState.stopped = true;
-      params.warn?.(`discord stream preview stopped (text length ${trimmed.length} > ${maxChars})`);
       return false;
     }
     if (trimmed === lastSentText) {
