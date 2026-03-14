@@ -31,7 +31,7 @@ function sanitizeDebounceEntry(entry: BlueBubblesDebounceEntry): BlueBubblesDebo
 
 export type BlueBubblesDebouncer = {
   enqueue: (item: BlueBubblesDebounceEntry) => Promise<void>;
-  flushKey: (key: string) => Promise<void>;
+  flushKey: (key: string) => Promise<boolean>;
 };
 
 export type BlueBubblesDebounceRegistry = {

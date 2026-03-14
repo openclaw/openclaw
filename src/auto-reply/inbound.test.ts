@@ -876,6 +876,41 @@ describe("createInboundDebouncer flushAll", () => {
 
     vi.useRealTimers();
   });
+
+  it("continues flushing later keys when onError throws", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+    const errors: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 5000,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        const ids = items.map((entry) => entry.id);
+        if (ids.includes("2")) {
+          throw new Error("dispatch failed");
+        }
+        calls.push(ids);
+      },
+      onError: (_err, items) => {
+        errors.push(items.map((entry) => entry.id));
+        throw new Error("onError failed");
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    await debouncer.enqueue({ key: "b", id: "2" });
+    await debouncer.enqueue({ key: "c", id: "3" });
+
+    const flushed = await debouncer.flushAll();
+
+    expect(flushed).toBe(2);
+    expect(calls).toContainEqual(["1"]);
+    expect(calls).toContainEqual(["3"]);
+    expect(errors).toEqual([["2"]]);
+
+    vi.useRealTimers();
+  });
 });
 
 describe("initSessionState BodyStripped", () => {
