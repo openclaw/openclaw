@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+  DEFAULT_RECONNECT_GRACE_MS,
   evaluateChannelHealth,
   resolveChannelRestartReason,
   type ChannelHealthPolicy,
@@ -27,6 +28,7 @@ export type ChannelHealthTimingPolicy = {
   monitorStartupGraceMs: number;
   channelConnectGraceMs: number;
   staleEventThresholdMs: number;
+  reconnectGraceMs: number;
 };
 
 export type ChannelHealthMonitorDeps = {
@@ -70,6 +72,8 @@ function resolveTimingPolicy(
       deps.timing?.staleEventThresholdMs ??
       deps.staleEventThresholdMs ??
       DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+    reconnectGraceMs:
+      deps.timing?.reconnectGraceMs ?? DEFAULT_RECONNECT_GRACE_MS,
   };
 }
 
@@ -126,8 +130,20 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             now,
             staleEventThresholdMs: timing.staleEventThresholdMs,
             channelConnectGraceMs: timing.channelConnectGraceMs,
+            reconnectGraceMs: timing.reconnectGraceMs,
           };
-          const health = evaluateChannelHealth(status, healthPolicy);
+          // Extract lastDisconnectAt from the runtime snapshot's lastDisconnect
+          // field so the health policy can evaluate reconnection grace windows.
+          const lastDisconnect = (status as { lastDisconnect?: unknown }).lastDisconnect;
+          const lastDisconnectAt =
+            lastDisconnect != null &&
+            typeof lastDisconnect === "object" &&
+            "at" in lastDisconnect &&
+            typeof (lastDisconnect as { at?: unknown }).at === "number"
+              ? (lastDisconnect as { at: number }).at
+              : null;
+          const healthSnapshot = { ...status, lastDisconnectAt };
+          const health = evaluateChannelHealth(healthSnapshot, healthPolicy);
           if (health.healthy) {
             continue;
           }

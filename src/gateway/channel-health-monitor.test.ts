@@ -226,7 +226,7 @@ describe("channel-health-monitor", () => {
     await expectNoStart(manager);
   });
 
-  it("restarts a stuck channel (running but not connected)", async () => {
+  it("restarts a stuck channel (running but not connected, past reconnect grace)", async () => {
     const now = Date.now();
     const manager = createSnapshotManager({
       whatsapp: {
@@ -236,7 +236,9 @@ describe("channel-health-monitor", () => {
           enabled: true,
           configured: true,
           linked: true,
-          lastStartAt: now - 300_000,
+          lastStartAt: now - 600_000,
+          lastDisconnect: { at: now - 600_000 },
+          lastEventAt: now - 600_000,
         },
       },
     });
@@ -443,6 +445,127 @@ describe("channel-health-monitor", () => {
     const monitor = await startAndRunCheck(manager);
     expect(manager.stopChannel).not.toHaveBeenCalled();
     monitor.stop();
+  });
+
+  describe("reconnect grace period", () => {
+    const RECONNECT_GRACE_MS = 5 * 60_000;
+
+    it("skips restart when channel disconnected recently (within reconnect grace)", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        discord: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            lastStartAt: now - 600_000,
+            lastDisconnect: { at: now - 60_000 },
+            lastEventAt: now - 60_000,
+          },
+        },
+      });
+      await expectNoRestart(manager);
+    });
+
+    it("restarts when channel has been disconnected past the reconnect grace", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        discord: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            lastStartAt: now - 900_000,
+            lastDisconnect: { at: now - RECONNECT_GRACE_MS - 60_000 },
+            lastEventAt: now - RECONNECT_GRACE_MS - 60_000,
+          },
+        },
+      });
+      await expectRestartedChannel(manager, "discord");
+    });
+
+    it("uses lastEventAt as fallback when lastDisconnect is missing", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        discord: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            lastStartAt: now - 600_000,
+            lastEventAt: now - 30_000,
+          },
+        },
+      });
+      await expectNoRestart(manager);
+    });
+
+    it("restarts when lastEventAt is stale and no lastDisconnect", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        discord: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            lastStartAt: now - 900_000,
+            lastEventAt: now - RECONNECT_GRACE_MS - 60_000,
+          },
+        },
+      });
+      await expectRestartedChannel(manager, "discord");
+    });
+
+    it("respects custom reconnectGraceMs", async () => {
+      const now = Date.now();
+      const customGrace = 10 * 60_000;
+      const manager = createSnapshotManager({
+        discord: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            lastStartAt: now - 900_000,
+            lastDisconnect: { at: now - 6 * 60_000 },
+            lastEventAt: now - 6 * 60_000,
+          },
+        },
+      });
+      // With default 5min grace, this would restart. With 10min, it should not.
+      const monitor = await startAndRunCheck(manager, {
+        timing: { reconnectGraceMs: customGrace },
+      });
+      expect(manager.stopChannel).not.toHaveBeenCalled();
+      expect(manager.startChannel).not.toHaveBeenCalled();
+      monitor.stop();
+    });
+
+    it("does not grant reconnect grace for non-running channels", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        discord: {
+          default: {
+            running: false,
+            connected: false,
+            enabled: true,
+            configured: true,
+            lastStartAt: now - 600_000,
+            lastDisconnect: { at: now - 10_000 },
+            lastEventAt: now - 10_000,
+          },
+        },
+      });
+      // Non-running channels are restarted via the "not-running" path,
+      // not the "disconnected" path, so reconnect grace doesn't apply.
+      const monitor = await startAndRunCheck(manager);
+      expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
+      monitor.stop();
+    });
   });
 
   describe("stale socket detection", () => {
