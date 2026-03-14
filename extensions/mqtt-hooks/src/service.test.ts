@@ -24,6 +24,27 @@ class FakeMqttClient extends EventEmitter {
   }
 }
 
+class DelayedSubscribeMqttClient extends FakeMqttClient {
+  subscribeCallbacks: Array<(err?: Error | null) => void> = [];
+
+  override subscribe(
+    topic: string,
+    options: { qos: 0 | 1 | 2 },
+    callback: (err?: Error | null) => void,
+  ) {
+    this.subscribed.push({ topic, qos: options.qos });
+    this.subscribeCallbacks.push(callback);
+  }
+
+  resolveNextSubscribe(err: Error | null = null) {
+    const callback = this.subscribeCallbacks.shift();
+    if (!callback) {
+      throw new Error("no pending subscribe callback");
+    }
+    callback(err);
+  }
+}
+
 const sharedMocks = vi.hoisted(() => ({
   dispatchWakeIngressAction: vi.fn(),
   dispatchAgentIngressAction: vi.fn(() => "run-1"),
@@ -333,6 +354,101 @@ describe("createMqttHooksService", () => {
       await vi.advanceTimersByTimeAsync(1600);
 
       fakeClient.emit("message", "home/alerts/kitchen", Buffer.from("retained-c"), {
+        qos: 1,
+        retain: true,
+        dup: false,
+      });
+      await vi.waitFor(() => {
+        expect(sharedMocks.dispatchWakeIngressAction).toHaveBeenCalledOnce();
+      });
+
+      await service.stop?.({
+        config: {},
+        stateDir: "/tmp/openclaw-state",
+        logger: createLogger(),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let a stopped run arm the next startup retained guard timer", async () => {
+    vi.useFakeTimers();
+    try {
+      const firstClient = new DelayedSubscribeMqttClient();
+      const secondClient = new FakeMqttClient();
+      const clients = [firstClient, secondClient];
+      const service = createMqttHooksService({
+        pluginConfig: resolveMqttHooksPluginConfig({
+          broker: { url: "mqtt://broker.local:1883" },
+          subscriptions: [
+            {
+              id: "alerts",
+              topic: "home/alerts/#",
+              qos: 1,
+              action: "wake",
+              textTemplate: "Payload={{payloadText}}",
+            },
+          ],
+        }),
+        clientFactory: () => {
+          const nextClient = clients.shift();
+          if (!nextClient) {
+            throw new Error("no mqtt client left for test");
+          }
+          return nextClient as never;
+        },
+      });
+
+      await service.start({
+        config: {},
+        stateDir: "/tmp/openclaw-state",
+        logger: createLogger(),
+      });
+
+      firstClient.emit("connect");
+      await Promise.resolve();
+
+      await service.stop?.({
+        config: {},
+        stateDir: "/tmp/openclaw-state",
+        logger: createLogger(),
+      });
+
+      firstClient.resolveNextSubscribe();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(1000);
+
+      await service.start({
+        config: {},
+        stateDir: "/tmp/openclaw-state",
+        logger: createLogger(),
+      });
+
+      secondClient.emit("connect");
+      await vi.waitFor(() => {
+        expect(secondClient.subscribed).toEqual([{ topic: "home/alerts/#", qos: 1 }]);
+      });
+
+      secondClient.emit("message", "home/alerts/kitchen", Buffer.from("retained-early"), {
+        qos: 1,
+        retain: true,
+        dup: false,
+      });
+      await Promise.resolve();
+      expect(sharedMocks.dispatchWakeIngressAction).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(600);
+      secondClient.emit("message", "home/alerts/kitchen", Buffer.from("retained-still-blocked"), {
+        qos: 1,
+        retain: true,
+        dup: false,
+      });
+      await Promise.resolve();
+      expect(sharedMocks.dispatchWakeIngressAction).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1000);
+      secondClient.emit("message", "home/alerts/kitchen", Buffer.from("retained-allowed"), {
         qos: 1,
         retain: true,
         dup: false,

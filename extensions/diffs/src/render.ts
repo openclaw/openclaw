@@ -1,13 +1,12 @@
 import fs from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import type {
   FileContents,
   FileDiffMetadata,
   SupportedLanguages,
   ThemeRegistrationResolved,
 } from "@pierre/diffs";
-import { ResolvedThemes, parsePatchFiles } from "@pierre/diffs";
+import { RegisteredCustomThemes, parsePatchFiles } from "@pierre/diffs";
 import { preloadFileDiff, preloadMultiFileDiff } from "@pierre/diffs/ssr";
 import type {
   DiffInput,
@@ -21,30 +20,45 @@ import { VIEWER_LOADER_PATH } from "./viewer-assets.js";
 const DEFAULT_FILE_NAME = "diff.txt";
 const MAX_PATCH_FILE_COUNT = 128;
 const MAX_PATCH_TOTAL_LINES = 120_000;
-const PIERRE_THEME_IMPORTS = {
-  "pierre-dark": "pierre-dark.json",
-  "pierre-light": "pierre-light.json",
-} as const;
+const diffsRequire = createRequire(import.meta.resolve("@pierre/diffs"));
 
-let ensurePierreThemesPromise: Promise<void> | undefined;
+let pierreThemesPatched = false;
 
-async function ensurePierreThemesLoaded(): Promise<void> {
-  ensurePierreThemesPromise ??= Promise.all(
-    Object.entries(PIERRE_THEME_IMPORTS).map(async ([themeName, fileName]) => {
-      if (ResolvedThemes.has(themeName)) {
-        return;
-      }
-      const diffsEntryPath = fileURLToPath(import.meta.resolve("@pierre/diffs"));
-      const themePath = path.resolve(path.dirname(diffsEntryPath), "../../theme/themes", fileName);
-      const theme = JSON.parse(await fs.readFile(themePath, "utf8")) as Record<string, unknown>;
-      ResolvedThemes.set(themeName, {
-        ...theme,
-        name: themeName,
-      } as ThemeRegistrationResolved);
-    }),
-  ).then(() => undefined);
-  return ensurePierreThemesPromise;
+function createThemeLoader(
+  themeName: "pierre-dark" | "pierre-light",
+  themePath: string,
+): () => Promise<ThemeRegistrationResolved> {
+  let cachedTheme: ThemeRegistrationResolved | undefined;
+  return async () => {
+    if (cachedTheme) {
+      return cachedTheme;
+    }
+    const raw = await fs.readFile(themePath, "utf8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    cachedTheme = {
+      ...parsed,
+      name: themeName,
+    } as ThemeRegistrationResolved;
+    return cachedTheme;
+  };
 }
+
+function patchPierreThemeLoadersForNode24(): void {
+  if (pierreThemesPatched) {
+    return;
+  }
+  try {
+    const darkThemePath = diffsRequire.resolve("@pierre/theme/themes/pierre-dark.json");
+    const lightThemePath = diffsRequire.resolve("@pierre/theme/themes/pierre-light.json");
+    RegisteredCustomThemes.set("pierre-dark", createThemeLoader("pierre-dark", darkThemePath));
+    RegisteredCustomThemes.set("pierre-light", createThemeLoader("pierre-light", lightThemePath));
+    pierreThemesPatched = true;
+  } catch {
+    // Keep upstream loaders if theme files cannot be resolved.
+  }
+}
+
+patchPierreThemeLoadersForNode24();
 
 function escapeCssString(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
@@ -227,14 +241,6 @@ function renderDiffCard(payload: DiffViewerPayload): string {
   </section>`;
 }
 
-function renderStaticDiffCard(prerenderedHTML: string): string {
-  return `<section class="oc-diff-card">
-    <diffs-container class="oc-diff-host" data-openclaw-diff-host>
-      <template shadowrootmode="open">${prerenderedHTML}</template>
-    </diffs-container>
-  </section>`;
-}
-
 function buildHtmlDocument(params: {
   title: string;
   bodyHtml: string;
@@ -243,7 +249,7 @@ function buildHtmlDocument(params: {
   runtimeMode: "viewer" | "image";
 }): string {
   return `<!doctype html>
-<html lang="en"${params.runtimeMode === "image" ? ' data-openclaw-diffs-ready="true"' : ""}>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -335,7 +341,7 @@ function buildHtmlDocument(params: {
         ${params.bodyHtml}
       </div>
     </main>
-    ${params.runtimeMode === "viewer" ? `<script type="module" src="${VIEWER_LOADER_PATH}"></script>` : ""}
+    <script type="module" src="${VIEWER_LOADER_PATH}"></script>
   </body>
 </html>`;
 }
@@ -346,16 +352,12 @@ type RenderedSection = {
 };
 
 function buildRenderedSection(params: {
-  viewerPrerenderedHtml: string;
-  imagePrerenderedHtml: string;
-  payload: Omit<DiffViewerPayload, "prerenderedHTML">;
+  viewerPayload: DiffViewerPayload;
+  imagePayload: DiffViewerPayload;
 }): RenderedSection {
   return {
-    viewer: renderDiffCard({
-      prerenderedHTML: params.viewerPrerenderedHtml,
-      ...params.payload,
-    }),
-    image: renderStaticDiffCard(params.imagePrerenderedHtml),
+    viewer: renderDiffCard(params.viewerPayload),
+    image: renderDiffCard(params.imagePayload),
   };
 }
 
@@ -373,7 +375,6 @@ async function renderBeforeAfterDiff(
   input: Extract<DiffInput, { kind: "before_after" }>,
   options: DiffRenderOptions,
 ): Promise<{ viewerBodyHtml: string; imageBodyHtml: string; fileCount: number }> {
-  await ensurePierreThemesLoaded();
   const fileName = resolveBeforeAfterFileName(input);
   const lang = normalizeSupportedLanguage(input.lang);
   const oldFile: FileContents = {
@@ -388,27 +389,36 @@ async function renderBeforeAfterDiff(
   };
   const { viewerOptions, imageOptions } = buildRenderVariants(options);
   const [viewerResult, imageResult] = await Promise.all([
-    preloadMultiFileDiff({
+    preloadMultiFileDiffWithFallback({
       oldFile,
       newFile,
       options: viewerOptions,
     }),
-    preloadMultiFileDiff({
+    preloadMultiFileDiffWithFallback({
       oldFile,
       newFile,
       options: imageOptions,
     }),
   ]);
   const section = buildRenderedSection({
-    viewerPrerenderedHtml: viewerResult.prerenderedHTML,
-    imagePrerenderedHtml: imageResult.prerenderedHTML,
-    payload: {
+    viewerPayload: {
+      prerenderedHTML: viewerResult.prerenderedHTML,
       oldFile: viewerResult.oldFile,
       newFile: viewerResult.newFile,
       options: viewerOptions,
       langs: buildPayloadLanguages({
         oldFile: viewerResult.oldFile,
         newFile: viewerResult.newFile,
+      }),
+    },
+    imagePayload: {
+      prerenderedHTML: imageResult.prerenderedHTML,
+      oldFile: imageResult.oldFile,
+      newFile: imageResult.newFile,
+      options: imageOptions,
+      langs: buildPayloadLanguages({
+        oldFile: imageResult.oldFile,
+        newFile: imageResult.newFile,
       }),
     },
   });
@@ -423,7 +433,6 @@ async function renderPatchDiff(
   input: Extract<DiffInput, { kind: "patch" }>,
   options: DiffRenderOptions,
 ): Promise<{ viewerBodyHtml: string; imageBodyHtml: string; fileCount: number }> {
-  await ensurePierreThemesLoaded();
   const files = parsePatchFiles(input.patch).flatMap((entry) => entry.files ?? []);
   if (files.length === 0) {
     throw new Error("Patch input did not contain any file diffs.");
@@ -444,23 +453,28 @@ async function renderPatchDiff(
   const sections = await Promise.all(
     files.map(async (fileDiff) => {
       const [viewerResult, imageResult] = await Promise.all([
-        preloadFileDiff({
+        preloadFileDiffWithFallback({
           fileDiff,
           options: viewerOptions,
         }),
-        preloadFileDiff({
+        preloadFileDiffWithFallback({
           fileDiff,
           options: imageOptions,
         }),
       ]);
 
       return buildRenderedSection({
-        viewerPrerenderedHtml: viewerResult.prerenderedHTML,
-        imagePrerenderedHtml: imageResult.prerenderedHTML,
-        payload: {
+        viewerPayload: {
+          prerenderedHTML: viewerResult.prerenderedHTML,
           fileDiff: viewerResult.fileDiff,
           options: viewerOptions,
           langs: buildPayloadLanguages({ fileDiff: viewerResult.fileDiff }),
+        },
+        imagePayload: {
+          prerenderedHTML: imageResult.prerenderedHTML,
+          fileDiff: imageResult.fileDiff,
+          options: imageOptions,
+          langs: buildPayloadLanguages({ fileDiff: imageResult.fileDiff }),
         },
       });
     }),
@@ -501,4 +515,50 @@ export async function renderDiffDocument(
     fileCount: rendered.fileCount,
     inputKind: input.kind,
   };
+}
+
+type PreloadedFileDiffResult = Awaited<ReturnType<typeof preloadFileDiff>>;
+type PreloadedMultiFileDiffResult = Awaited<ReturnType<typeof preloadMultiFileDiff>>;
+
+function shouldFallbackToClientHydration(error: unknown): boolean {
+  return (
+    error instanceof TypeError &&
+    error.message.includes('needs an import attribute of "type: json"')
+  );
+}
+
+async function preloadFileDiffWithFallback(params: {
+  fileDiff: FileDiffMetadata;
+  options: DiffViewerOptions;
+}): Promise<PreloadedFileDiffResult> {
+  try {
+    return await preloadFileDiff(params);
+  } catch (error) {
+    if (!shouldFallbackToClientHydration(error)) {
+      throw error;
+    }
+    return {
+      fileDiff: params.fileDiff,
+      prerenderedHTML: "",
+    };
+  }
+}
+
+async function preloadMultiFileDiffWithFallback(params: {
+  oldFile: FileContents;
+  newFile: FileContents;
+  options: DiffViewerOptions;
+}): Promise<PreloadedMultiFileDiffResult> {
+  try {
+    return await preloadMultiFileDiff(params);
+  } catch (error) {
+    if (!shouldFallbackToClientHydration(error)) {
+      throw error;
+    }
+    return {
+      oldFile: params.oldFile,
+      newFile: params.newFile,
+      prerenderedHTML: "",
+    };
+  }
 }

@@ -120,6 +120,7 @@ export function createMqttHooksService(params: {
   let startupRetainedGuardTimer: ReturnType<typeof setTimeout> | null = null;
   let hasConnectedOnce = false;
   let stopped = true;
+  let runToken = 0;
   let queue = createMessageQueue({
     concurrency: params.pluginConfig.runtime.maxConcurrentMessages,
     maxQueuedMessages: params.pluginConfig.runtime.maxQueuedMessages,
@@ -141,7 +142,10 @@ export function createMqttHooksService(params: {
       if (!stopped) {
         return;
       }
+      runToken += 1;
+      const activeRunToken = runToken;
       stopped = false;
+      clearStartupGuardTimer();
       startupRetainedGuard = true;
       hasConnectedOnce = false;
 
@@ -180,30 +184,39 @@ export function createMqttHooksService(params: {
         return;
       }
 
+      client = clientFactory(params.pluginConfig.broker);
+      const activeClient = client;
+      const isActiveRun = () => !stopped && runToken === activeRunToken && client === activeClient;
+
       const subscribeAll = async (armStartupRetainedGuard: boolean) => {
         for (const subscription of activeSubscriptions) {
-          await subscribeTopic(client as MqttClientLike, subscription.topic, subscription.qos);
+          if (!isActiveRun()) {
+            return false;
+          }
+          await subscribeTopic(activeClient, subscription.topic, subscription.qos);
         }
-        if (!armStartupRetainedGuard) {
-          return;
+        if (!armStartupRetainedGuard || !isActiveRun()) {
+          return false;
         }
         clearStartupGuardTimer();
         startupRetainedGuardTimer = setTimeout(() => {
+          if (!isActiveRun()) {
+            return;
+          }
           startupRetainedGuard = false;
           startupRetainedGuardTimer = null;
         }, STARTUP_RETAINED_GUARD_MS);
+        return true;
       };
 
-      client = clientFactory(params.pluginConfig.broker);
-
-      client.on("connect", () => {
+      activeClient.on("connect", () => {
         ctx.logger.info(
           `mqtt-hooks: connected to ${brokerLabel} with ${activeSubscriptions.length} subscription(s)`,
         );
         const armStartupRetainedGuard = !hasConnectedOnce;
         void subscribeAll(armStartupRetainedGuard)
-          .then(() => {
-            if (armStartupRetainedGuard) {
+          .then((guardArmed) => {
+            if (guardArmed && isActiveRun()) {
               hasConnectedOnce = true;
             }
           })
@@ -211,19 +224,19 @@ export function createMqttHooksService(params: {
             ctx.logger.warn(`mqtt-hooks: subscribe failed: ${String(err)}`);
           });
       });
-      client.on("reconnect", () => {
+      activeClient.on("reconnect", () => {
         ctx.logger.warn(`mqtt-hooks: reconnecting to ${brokerLabel}`);
       });
-      client.on("offline", () => {
+      activeClient.on("offline", () => {
         ctx.logger.warn(`mqtt-hooks: broker offline ${brokerLabel}`);
       });
-      client.on("close", () => {
+      activeClient.on("close", () => {
         ctx.logger.info(`mqtt-hooks: broker connection closed ${brokerLabel}`);
       });
-      client.on("error", (err) => {
+      activeClient.on("error", (err) => {
         ctx.logger.warn(`mqtt-hooks: client error: ${err.message}`);
       });
-      client.on("message", (topic, payload, packet) => {
+      activeClient.on("message", (topic, payload, packet) => {
         if (stopped) {
           return;
         }
@@ -294,6 +307,7 @@ export function createMqttHooksService(params: {
         }
         return;
       }
+      runToken += 1;
       stopped = true;
       clearStartupGuardTimer();
       startupRetainedGuard = false;
