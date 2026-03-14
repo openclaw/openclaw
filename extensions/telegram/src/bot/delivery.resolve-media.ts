@@ -2,7 +2,7 @@ import path from "node:path";
 import { GrammyError } from "grammy";
 import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
 import { retryAsync } from "openclaw/plugin-sdk/infra-runtime";
-import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
+import { fetchRemoteMedia, MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -58,6 +58,27 @@ function isRetryableGetFileError(err: unknown): boolean {
   }
   // Retry all other errors (network issues, timeouts, etc.)
   return true;
+}
+
+/**
+ * Returns true if the download error is a transient network error that should be retried.
+ * Returns false for permanent errors like HTTP 4xx, max_bytes policy violations.
+ */
+function isRetryableDownloadError(err: unknown): boolean {
+  if (err instanceof MediaFetchError) {
+    // Only retry transient fetch failures (network issues, timeouts, connection drops).
+    // Do not retry HTTP errors (4xx, 5xx) or policy violations (max_bytes).
+    return err.code === "fetch_failed";
+  }
+  // For non-MediaFetchError, check if it looks like a transient network error.
+  const msg = formatErrorMessage(err).toLowerCase();
+  return (
+    msg.includes("fetch failed") ||
+    msg.includes("network") ||
+    msg.includes("econnreset") ||
+    msg.includes("etimedout") ||
+    msg.includes("econnrefused")
+  );
 }
 
 function resolveMediaFileRef(msg: TelegramContext["message"]) {
@@ -149,16 +170,29 @@ async function downloadAndSaveTelegramFile(params: {
   }
   const apiBase = resolveTelegramApiBase(params.apiRoot);
   const url = `${apiBase}/file/bot${params.token}/${params.filePath}`;
-  const fetched = await fetchRemoteMedia({
-    url,
-    fetchImpl: params.transport.sourceFetch,
-    dispatcherAttempts: params.transport.dispatcherAttempts,
-    shouldRetryFetchError: shouldRetryTelegramTransportFallback,
-    filePathHint: params.filePath,
-    maxBytes: params.maxBytes,
-    readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
-    ssrfPolicy: buildTelegramMediaSsrfPolicy(params.apiRoot),
-  });
+  const fetched = await retryAsync(
+    () =>
+      fetchRemoteMedia({
+        url,
+        fetchImpl: params.transport.sourceFetch,
+        dispatcherAttempts: params.transport.dispatcherAttempts,
+        shouldRetryFetchError: shouldRetryTelegramTransportFallback,
+        filePathHint: params.filePath,
+        maxBytes: params.maxBytes,
+        readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
+        ssrfPolicy: buildTelegramMediaSsrfPolicy(params.apiRoot),
+      }),
+    {
+      attempts: 3,
+      minDelayMs: 500,
+      maxDelayMs: 2000,
+      jitter: 0.2,
+      label: "telegram:downloadFile",
+      shouldRetry: isRetryableDownloadError,
+      onRetry: ({ attempt, maxAttempts }) =>
+        logVerbose(`telegram: file download retry ${attempt}/${maxAttempts}`),
+    },
+  );
   const originalName = params.telegramFileName ?? fetched.fileName ?? params.filePath;
   return saveMediaBuffer(
     fetched.buffer,
