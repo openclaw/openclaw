@@ -54,12 +54,12 @@ describe("browser server-context headless implicit default profile", () => {
     expect(ctx.forProfile().profile.name).toBe("openclaw");
   });
 
-  it("falls back from existing-session to openclaw when no profile is specified", () => {
+  it("keeps existing-session as the implicit default in headless mode", () => {
     const ctx = createBrowserRouteContext({
       getState: () => makeState("user"),
     });
 
-    expect(ctx.forProfile().profile.name).toBe("openclaw");
+    expect(ctx.forProfile().profile.name).toBe("user");
   });
 
   it("keeps explicit interactive profile requests unchanged in headless mode", () => {

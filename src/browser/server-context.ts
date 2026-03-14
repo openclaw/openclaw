@@ -53,7 +53,7 @@ function resolveImplicitProfileName(state: BrowserServerState): string {
   }
 
   const capabilities = getBrowserProfileCapabilities(defaultProfile);
-  if (!capabilities.requiresRelay && !capabilities.usesChromeMcp) {
+  if (!capabilities.requiresRelay) {
     return defaultProfileName;
   }
 
@@ -63,7 +63,7 @@ function resolveImplicitProfileName(state: BrowserServerState): string {
   }
 
   const managedCapabilities = getBrowserProfileCapabilities(managedProfile);
-  if (managedCapabilities.requiresRelay || managedCapabilities.usesChromeMcp) {
+  if (managedCapabilities.requiresRelay) {
     return defaultProfileName;
   }
 
