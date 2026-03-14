@@ -76,7 +76,9 @@ export function createDiscordMessageHandler(
       if (!message) {
         return false;
       }
-      const baseText = resolveDiscordMessageText(message, { includeForwarded: false });
+      const baseText = resolveDiscordMessageText(message, {
+        includeForwarded: false,
+      });
       return shouldDebounceTextInbound({
         text: baseText,
         cfg: params.cfg,
@@ -111,13 +113,46 @@ export function createDiscordMessageHandler(
         return;
       }
       const combinedBaseText = entries
-        .map((entry) => resolveDiscordMessageText(entry.data.message, { includeForwarded: false }))
+        .map((entry) =>
+          resolveDiscordMessageText(entry.data.message, {
+            includeForwarded: false,
+          }),
+        )
         .filter(Boolean)
         .join("\n");
+      // Collect mentioned users from ALL entries so mention detection works
+      // after debouncing.  The spread of last.data.message drops Carbon
+      // Message prototype getters (mentionedUsers, mentionedRoles, etc.),
+      // so we materialise them here as plain arrays.
+      const seenUserIds = new Set<string>();
+      const allMentionedUsers: Array<{ id: string }> = [];
+      const seenRoleIds = new Set<string>();
+      const allMentionedRoles: Array<{ id: string }> = [];
+      let anyMentionedEveryone = false;
+      for (const entry of entries) {
+        for (const u of entry.data.message.mentionedUsers ?? []) {
+          if (u.id && !seenUserIds.has(u.id)) {
+            seenUserIds.add(u.id);
+            allMentionedUsers.push(u);
+          }
+        }
+        for (const r of entry.data.message.mentionedRoles ?? []) {
+          if (r.id && !seenRoleIds.has(r.id)) {
+            seenRoleIds.add(r.id);
+            allMentionedRoles.push(r);
+          }
+        }
+        if (entry.data.message.mentionedEveryone) {
+          anyMentionedEveryone = true;
+        }
+      }
       const syntheticMessage = {
         ...last.data.message,
         content: combinedBaseText,
         attachments: [],
+        mentionedUsers: allMentionedUsers,
+        mentionedRoles: allMentionedRoles,
+        mentionedEveryone: anyMentionedEveryone,
         message_snapshots: (last.data.message as { message_snapshots?: unknown }).message_snapshots,
         messageSnapshots: (last.data.message as { messageSnapshots?: unknown }).messageSnapshots,
         rawData: {
@@ -174,7 +209,11 @@ export function createDiscordMessageHandler(
         return;
       }
 
-      await debouncer.enqueue({ data, client, abortSignal: options?.abortSignal });
+      await debouncer.enqueue({
+        data,
+        client,
+        abortSignal: options?.abortSignal,
+      });
     } catch (err) {
       params.runtime.error?.(danger(`handler failed: ${String(err)}`));
     }
