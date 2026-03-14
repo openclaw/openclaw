@@ -1,5 +1,7 @@
 import com.android.build.api.variant.impl.VariantOutputImpl
 
+val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
+
 val androidStoreFile = providers.gradleProperty("OPENCLAW_ANDROID_STORE_FILE").orNull?.takeIf { it.isNotBlank() }
 val androidStorePassword = providers.gradleProperty("OPENCLAW_ANDROID_STORE_PASSWORD").orNull?.takeIf { it.isNotBlank() }
 val androidKeyAlias = providers.gradleProperty("OPENCLAW_ANDROID_KEY_ALIAS").orNull?.takeIf { it.isNotBlank() }
@@ -210,4 +212,46 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
+}
+
+val stripReleaseDnsjavaServiceDescriptor =
+    tasks.register("stripReleaseDnsjavaServiceDescriptor") {
+        val mergedJar =
+            layout.buildDirectory.file(
+                "intermediates/merged_java_res/release/mergeReleaseJavaResource/base.jar",
+            )
+
+        inputs.file(mergedJar)
+        outputs.file(mergedJar)
+
+        doLast {
+            val jarFile = mergedJar.get().asFile
+            if (!jarFile.exists()) {
+                return@doLast
+            }
+
+            val unpackDir = temporaryDir.resolve("merged-java-res")
+            delete(unpackDir)
+            copy {
+                from(zipTree(jarFile))
+                into(unpackDir)
+                exclude(dnsjavaInetAddressResolverService)
+            }
+            delete(jarFile)
+            ant.invokeMethod(
+                "zip",
+                mapOf(
+                    "destfile" to jarFile.absolutePath,
+                    "basedir" to unpackDir.absolutePath,
+                ),
+            )
+        }
+    }
+
+tasks.matching { it.name == "stripReleaseDnsjavaServiceDescriptor" }.configureEach {
+    dependsOn("mergeReleaseJavaResource")
+}
+
+tasks.matching { it.name == "minifyReleaseWithR8" }.configureEach {
+    dependsOn(stripReleaseDnsjavaServiceDescriptor)
 }
