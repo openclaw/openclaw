@@ -10,12 +10,61 @@ vi.mock("../infra/device-bootstrap.js", () => ({
 }));
 
 describe("pairing setup code", () => {
+  type ResolvedSetup = Awaited<ReturnType<typeof resolvePairingSetupFromConfig>>;
+  const defaultEnvSecretProviderConfig = {
+    secrets: {
+      providers: {
+        default: { source: "env" },
+      },
+    },
+  } as const;
+  const gatewayPasswordSecretRef: SecretInput = {
+    source: "env",
+    provider: "default",
+    id: "GW_PASSWORD",
+  };
+  const missingGatewayTokenSecretRef: SecretInput = {
+    source: "env",
+    provider: "default",
+    id: "MISSING_GW_TOKEN",
+  };
+
   function createTailnetDnsRunner() {
     return vi.fn(async () => ({
       code: 0,
       stdout: '{"Self":{"DNSName":"mb-server.tailnet.ts.net."}}',
       stderr: "",
     }));
+  }
+
+  function expectResolvedSetupOk(
+    resolved: ResolvedSetup,
+    params: {
+      authLabel: string;
+      url?: string;
+      urlSource?: string;
+    },
+  ) {
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) {
+      throw new Error("expected setup resolution to succeed");
+    }
+    expect(resolved.authLabel).toBe(params.authLabel);
+    expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
+    if (params.url) {
+      expect(resolved.payload.url).toBe(params.url);
+    }
+    if (params.urlSource) {
+      expect(resolved.urlSource).toBe(params.urlSource);
+    }
+  }
+
+  function expectResolvedSetupError(resolved: ResolvedSetup, snippet: string) {
+    expect(resolved.ok).toBe(false);
+    if (resolved.ok) {
+      throw new Error("expected setup resolution to fail");
+    }
+    expect(resolved.error).toContain(snippet);
   }
 
   beforeEach(() => {
@@ -69,14 +118,10 @@ describe("pairing setup code", () => {
           customBindHost: "gateway.local",
           auth: {
             mode: "password",
-            password: { source: "env", provider: "default", id: "GW_PASSWORD" },
+            password: gatewayPasswordSecretRef,
           },
         },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
+        ...defaultEnvSecretProviderConfig,
       },
       {
         env: {
@@ -85,12 +130,7 @@ describe("pairing setup code", () => {
       },
     );
 
-    expect(resolved.ok).toBe(true);
-    if (!resolved.ok) {
-      throw new Error("expected setup resolution to succeed");
-    }
-    expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
-    expect(resolved.authLabel).toBe("password");
+    expectResolvedSetupOk(resolved, { authLabel: "password" });
   });
 
   it("uses OPENCLAW_GATEWAY_PASSWORD without resolving configured password SecretRef", async () => {
@@ -104,11 +144,7 @@ describe("pairing setup code", () => {
             password: { source: "env", provider: "default", id: "MISSING_GW_PASSWORD" },
           },
         },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
+        ...defaultEnvSecretProviderConfig,
       },
       {
         env: {
@@ -117,12 +153,7 @@ describe("pairing setup code", () => {
       },
     );
 
-    expect(resolved.ok).toBe(true);
-    if (!resolved.ok) {
-      throw new Error("expected setup resolution to succeed");
-    }
-    expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
-    expect(resolved.authLabel).toBe("password");
+    expectResolvedSetupOk(resolved, { authLabel: "password" });
   });
 
   it("does not resolve gateway.auth.password SecretRef in token mode", async () => {
@@ -137,23 +168,14 @@ describe("pairing setup code", () => {
             password: { source: "env", provider: "missing", id: "GW_PASSWORD" },
           },
         },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
+        ...defaultEnvSecretProviderConfig,
       },
       {
         env: {},
       },
     );
 
-    expect(resolved.ok).toBe(true);
-    if (!resolved.ok) {
-      throw new Error("expected setup resolution to succeed");
-    }
-    expect(resolved.authLabel).toBe("token");
-    expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
+    expectResolvedSetupOk(resolved, { authLabel: "token" });
   });
 
   it("resolves gateway.auth.token SecretRef for pairing payload", async () => {
@@ -167,11 +189,7 @@ describe("pairing setup code", () => {
             token: { source: "env", provider: "default", id: "GW_TOKEN" },
           },
         },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
+        ...defaultEnvSecretProviderConfig,
       },
       {
         env: {
@@ -180,12 +198,7 @@ describe("pairing setup code", () => {
       },
     );
 
-    expect(resolved.ok).toBe(true);
-    if (!resolved.ok) {
-      throw new Error("expected setup resolution to succeed");
-    }
-    expect(resolved.authLabel).toBe("token");
-    expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
+    expectResolvedSetupOk(resolved, { authLabel: "token" });
   });
 
   it("errors when gateway.auth.token SecretRef is unresolved in token mode", async () => {
@@ -197,14 +210,10 @@ describe("pairing setup code", () => {
             customBindHost: "gateway.local",
             auth: {
               mode: "token",
-              token: { source: "env", provider: "default", id: "MISSING_GW_TOKEN" },
+              token: missingGatewayTokenSecretRef,
             },
           },
-          secrets: {
-            providers: {
-              default: { source: "env" },
-            },
-          },
+          ...defaultEnvSecretProviderConfig,
         },
         {
           env: {},
@@ -221,11 +230,7 @@ describe("pairing setup code", () => {
           customBindHost: "gateway.local",
           auth: { token },
         },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
+        ...defaultEnvSecretProviderConfig,
       },
       {
         env: {
@@ -242,23 +247,13 @@ describe("pairing setup code", () => {
       id: "MISSING_GW_TOKEN",
     });
 
-    expect(resolved.ok).toBe(true);
-    if (!resolved.ok) {
-      throw new Error("expected setup resolution to succeed");
-    }
-    expect(resolved.authLabel).toBe("password");
-    expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
+    expectResolvedSetupOk(resolved, { authLabel: "password" });
   });
 
   it("does not treat env-template token as plaintext in inferred mode", async () => {
     const resolved = await resolveInferredModeWithPasswordEnv("${MISSING_GW_TOKEN}");
 
-    expect(resolved.ok).toBe(true);
-    if (!resolved.ok) {
-      throw new Error("expected setup resolution to succeed");
-    }
-    expect(resolved.authLabel).toBe("password");
-    expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
+    expectResolvedSetupOk(resolved, { authLabel: "password" });
   });
 
   it("requires explicit auth mode when token and password are both configured", async () => {
@@ -270,14 +265,10 @@ describe("pairing setup code", () => {
             customBindHost: "gateway.local",
             auth: {
               token: { source: "env", provider: "default", id: "GW_TOKEN" },
-              password: { source: "env", provider: "default", id: "GW_PASSWORD" },
+              password: gatewayPasswordSecretRef,
             },
           },
-          secrets: {
-            providers: {
-              default: { source: "env" },
-            },
-          },
+          ...defaultEnvSecretProviderConfig,
         },
         {
           env: {
@@ -297,15 +288,11 @@ describe("pairing setup code", () => {
             bind: "custom",
             customBindHost: "gateway.local",
             auth: {
-              token: { source: "env", provider: "default", id: "MISSING_GW_TOKEN" },
-              password: { source: "env", provider: "default", id: "GW_PASSWORD" },
+              token: missingGatewayTokenSecretRef,
+              password: gatewayPasswordSecretRef,
             },
           },
-          secrets: {
-            providers: {
-              default: { source: "env" },
-            },
-          },
+          ...defaultEnvSecretProviderConfig,
         },
         {
           env: {
@@ -332,11 +319,7 @@ describe("pairing setup code", () => {
       },
     );
 
-    expect(resolved.ok).toBe(true);
-    if (!resolved.ok) {
-      throw new Error("expected setup resolution to succeed");
-    }
-    expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
+    expectResolvedSetupOk(resolved, { authLabel: "token" });
   });
 
   it("errors when gateway is loopback only", async () => {
@@ -347,11 +330,7 @@ describe("pairing setup code", () => {
       },
     });
 
-    expect(resolved.ok).toBe(false);
-    if (resolved.ok) {
-      throw new Error("expected setup resolution to fail");
-    }
-    expect(resolved.error).toContain("only bound to loopback");
+    expectResolvedSetupError(resolved, "only bound to loopback");
   });
 
   it("uses tailscale serve DNS when available", async () => {

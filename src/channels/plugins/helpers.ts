@@ -20,6 +20,17 @@ export function formatPairingApproveHint(channelId: string): string {
   return `Approve via: ${listCmd} / ${approveCmd}`;
 }
 
+export function parseOptionalDelimitedEntries(value?: string): string[] | undefined {
+  if (!value?.trim()) {
+    return undefined;
+  }
+  const parsed = value
+    .split(/[\n,;]+/g)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return parsed.length > 0 ? parsed : undefined;
+}
+
 export function buildAccountScopedDmSecurityPolicy(params: {
   cfg: OpenClawConfig;
   channelKey: string;

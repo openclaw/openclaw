@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { GatewayClient } from "../gateway/client.js";
 import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
@@ -8,8 +7,8 @@ import {
   buildExecApprovalPendingReplyPayload,
   type ExecApprovalPendingReplyParams,
 } from "../infra/exec-approval-reply.js";
+import { resolveExecApprovalSessionTarget } from "../infra/exec-approval-session-target.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
-import { resolveSessionDeliveryTarget } from "../infra/outbound/targets.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAccountId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -120,40 +119,14 @@ function resolveRequestSessionTarget(params: {
   cfg: OpenClawConfig;
   request: ExecApprovalRequest;
 }): { to: string; accountId?: string; threadId?: number; channel?: string } | null {
-  const sessionKey = params.request.request.sessionKey?.trim();
-  if (!sessionKey) {
-    return null;
-  }
-  const parsed = parseAgentSessionKey(sessionKey);
-  const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
-  const store = loadSessionStore(storePath);
-  const entry = store[sessionKey];
-  if (!entry) {
-    return null;
-  }
-  const target = resolveSessionDeliveryTarget({
-    entry,
-    requestedChannel: "last",
+  return resolveExecApprovalSessionTarget({
+    cfg: params.cfg,
+    request: params.request,
     turnSourceChannel: params.request.request.turnSourceChannel ?? undefined,
     turnSourceTo: params.request.request.turnSourceTo ?? undefined,
     turnSourceAccountId: params.request.request.turnSourceAccountId ?? undefined,
     turnSourceThreadId: params.request.request.turnSourceThreadId ?? undefined,
   });
-  if (!target.to) {
-    return null;
-  }
-  return {
-    channel: target.channel ?? undefined,
-    to: target.to,
-    accountId: target.accountId ?? undefined,
-    threadId:
-      typeof target.threadId === "number"
-        ? target.threadId
-        : typeof target.threadId === "string"
-          ? Number.parseInt(target.threadId, 10)
-          : undefined,
-  };
 }
 
 function resolveTelegramSourceTarget(params: {

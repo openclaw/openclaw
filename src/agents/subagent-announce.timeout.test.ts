@@ -120,6 +120,21 @@ function findGatewayCall(predicate: (call: GatewayCall) => boolean): GatewayCall
   return gatewayCalls.find(predicate);
 }
 
+function findFinalDirectAgentCall(): GatewayCall | undefined {
+  return findGatewayCall((call) => call.method === "agent" && call.expectFinal === true);
+}
+
+function setupParentSessionFallback(parentSessionKey: string): void {
+  requesterDepthResolver = (sessionKey?: string) =>
+    sessionKey === parentSessionKey ? 1 : sessionKey?.includes(":subagent:") ? 1 : 0;
+  subagentSessionRunActive = false;
+  shouldIgnorePostCompletion = false;
+  fallbackRequesterResolution = {
+    requesterSessionKey: "agent:main:main",
+    requesterOrigin: { channel: "discord", to: "chan-main", accountId: "acct-main" },
+  };
+}
+
 describe("subagent announce timeout config", () => {
   beforeEach(() => {
     gatewayCalls.length = 0;
@@ -244,9 +259,7 @@ describe("subagent announce timeout config", () => {
       requesterOrigin: { channel: "discord", to: "channel:cron-results", accountId: "acct-1" },
     });
 
-    const directAgentCall = findGatewayCall(
-      (call) => call.method === "agent" && call.expectFinal === true,
-    );
+    const directAgentCall = findFinalDirectAgentCall();
     expect(directAgentCall?.params?.sessionKey).toBe(cronSessionKey);
     expect(directAgentCall?.params?.deliver).toBe(false);
     expect(directAgentCall?.params?.channel).toBeUndefined();
@@ -256,14 +269,7 @@ describe("subagent announce timeout config", () => {
 
   it("regression, routes child announce to parent session instead of grandparent when parent session still exists", async () => {
     const parentSessionKey = "agent:main:subagent:parent";
-    requesterDepthResolver = (sessionKey?: string) =>
-      sessionKey === parentSessionKey ? 1 : sessionKey?.includes(":subagent:") ? 1 : 0;
-    subagentSessionRunActive = false;
-    shouldIgnorePostCompletion = false;
-    fallbackRequesterResolution = {
-      requesterSessionKey: "agent:main:main",
-      requesterOrigin: { channel: "discord", to: "chan-main", accountId: "acct-main" },
-    };
+    setupParentSessionFallback(parentSessionKey);
     // No sessionId on purpose: existence in store should still count as alive.
     sessionStore[parentSessionKey] = { updatedAt: Date.now() };
 
@@ -273,23 +279,14 @@ describe("subagent announce timeout config", () => {
       childSessionKey: `${parentSessionKey}:subagent:child`,
     });
 
-    const directAgentCall = findGatewayCall(
-      (call) => call.method === "agent" && call.expectFinal === true,
-    );
+    const directAgentCall = findFinalDirectAgentCall();
     expect(directAgentCall?.params?.sessionKey).toBe(parentSessionKey);
     expect(directAgentCall?.params?.deliver).toBe(false);
   });
 
   it("regression, falls back to grandparent only when parent subagent session is missing", async () => {
     const parentSessionKey = "agent:main:subagent:parent-missing";
-    requesterDepthResolver = (sessionKey?: string) =>
-      sessionKey === parentSessionKey ? 1 : sessionKey?.includes(":subagent:") ? 1 : 0;
-    subagentSessionRunActive = false;
-    shouldIgnorePostCompletion = false;
-    fallbackRequesterResolution = {
-      requesterSessionKey: "agent:main:main",
-      requesterOrigin: { channel: "discord", to: "chan-main", accountId: "acct-main" },
-    };
+    setupParentSessionFallback(parentSessionKey);
 
     await runAnnounceFlowForTest("run-parent-fallback", {
       requesterSessionKey: parentSessionKey,
@@ -297,9 +294,7 @@ describe("subagent announce timeout config", () => {
       childSessionKey: `${parentSessionKey}:subagent:child`,
     });
 
-    const directAgentCall = findGatewayCall(
-      (call) => call.method === "agent" && call.expectFinal === true,
-    );
+    const directAgentCall = findFinalDirectAgentCall();
     expect(directAgentCall?.params?.sessionKey).toBe("agent:main:main");
     expect(directAgentCall?.params?.deliver).toBe(true);
     expect(directAgentCall?.params?.channel).toBe("discord");

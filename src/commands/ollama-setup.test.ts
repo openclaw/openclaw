@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
+import { jsonResponse, requestBodyText, requestUrl } from "../test-helpers/http.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   configureOllamaNonInteractive,
@@ -23,27 +24,6 @@ vi.mock("./oauth-env.js", () => ({
   isRemoteEnvironment: isRemoteEnvironmentMock,
 }));
 
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-function requestUrl(input: string | URL | Request): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  return input.url;
-}
-
-function requestBody(body: BodyInit | null | undefined): string {
-  return typeof body === "string" ? body : "{}";
-}
-
 function createOllamaFetchMock(params: {
   tags?: string[];
   show?: Record<string, number | undefined>;
@@ -61,7 +41,7 @@ function createOllamaFetchMock(params: {
       return jsonResponse({ models: (params.tags ?? []).map((name) => ({ name })) });
     }
     if (url.endsWith("/api/show")) {
-      const body = JSON.parse(requestBody(init?.body)) as { name?: string };
+      const body = JSON.parse(requestBodyText(init?.body)) as { name?: string };
       const contextWindow = body.name ? params.show?.[body.name] : undefined;
       return contextWindow
         ? jsonResponse({ model_info: { "llama.context_length": contextWindow } })
@@ -77,6 +57,45 @@ function createOllamaFetchMock(params: {
   });
 }
 
+function createModePrompter(
+  mode: "local" | "remote",
+  params?: { confirm?: boolean },
+): WizardPrompter {
+  return {
+    text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
+    select: vi.fn().mockResolvedValueOnce(mode),
+    ...(params?.confirm !== undefined
+      ? { confirm: vi.fn().mockResolvedValueOnce(params.confirm) }
+      : {}),
+    note: vi.fn(async () => undefined),
+  } as unknown as WizardPrompter;
+}
+
+function createSignedOutRemoteFetchMock() {
+  return createOllamaFetchMock({
+    tags: ["llama3:8b"],
+    meResponses: [
+      jsonResponse({ error: "not signed in", signin_url: "https://ollama.com/signin" }, 401),
+      jsonResponse({ username: "testuser" }),
+    ],
+  });
+}
+
+function createDefaultOllamaConfig(primary: string) {
+  return {
+    agents: { defaults: { model: { primary } } },
+    models: { providers: { ollama: { baseUrl: "http://127.0.0.1:11434", models: [] } } },
+  };
+}
+
+function createRuntime() {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  } as unknown as RuntimeEnv;
+}
+
 describe("ollama setup", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -86,11 +105,7 @@ describe("ollama setup", () => {
   });
 
   it("returns suggested default model for local mode", async () => {
-    const prompter = {
-      text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
-      select: vi.fn().mockResolvedValueOnce("local"),
-      note: vi.fn(async () => undefined),
-    } as unknown as WizardPrompter;
+    const prompter = createModePrompter("local");
 
     const fetchMock = createOllamaFetchMock({ tags: ["llama3:8b"] });
     vi.stubGlobal("fetch", fetchMock);
@@ -101,11 +116,7 @@ describe("ollama setup", () => {
   });
 
   it("returns suggested default model for remote mode", async () => {
-    const prompter = {
-      text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
-      select: vi.fn().mockResolvedValueOnce("remote"),
-      note: vi.fn(async () => undefined),
-    } as unknown as WizardPrompter;
+    const prompter = createModePrompter("remote");
 
     const fetchMock = createOllamaFetchMock({ tags: ["llama3:8b"] });
     vi.stubGlobal("fetch", fetchMock);
@@ -116,11 +127,7 @@ describe("ollama setup", () => {
   });
 
   it("mode selection affects model ordering (local)", async () => {
-    const prompter = {
-      text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
-      select: vi.fn().mockResolvedValueOnce("local"),
-      note: vi.fn(async () => undefined),
-    } as unknown as WizardPrompter;
+    const prompter = createModePrompter("local");
 
     const fetchMock = createOllamaFetchMock({ tags: ["llama3:8b", "glm-4.7-flash"] });
     vi.stubGlobal("fetch", fetchMock);
@@ -134,20 +141,8 @@ describe("ollama setup", () => {
   });
 
   it("cloud+local mode triggers /api/me check and opens sign-in URL", async () => {
-    const prompter = {
-      text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
-      select: vi.fn().mockResolvedValueOnce("remote"),
-      confirm: vi.fn().mockResolvedValueOnce(true),
-      note: vi.fn(async () => undefined),
-    } as unknown as WizardPrompter;
-
-    const fetchMock = createOllamaFetchMock({
-      tags: ["llama3:8b"],
-      meResponses: [
-        jsonResponse({ error: "not signed in", signin_url: "https://ollama.com/signin" }, 401),
-        jsonResponse({ username: "testuser" }),
-      ],
-    });
+    const prompter = createModePrompter("remote", { confirm: true });
+    const fetchMock = createSignedOutRemoteFetchMock();
     vi.stubGlobal("fetch", fetchMock);
 
     await promptAndConfigureOllama({ cfg: {}, prompter });
@@ -158,20 +153,8 @@ describe("ollama setup", () => {
 
   it("cloud+local mode does not open browser in remote environment", async () => {
     isRemoteEnvironmentMock.mockReturnValue(true);
-    const prompter = {
-      text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
-      select: vi.fn().mockResolvedValueOnce("remote"),
-      confirm: vi.fn().mockResolvedValueOnce(true),
-      note: vi.fn(async () => undefined),
-    } as unknown as WizardPrompter;
-
-    const fetchMock = createOllamaFetchMock({
-      tags: ["llama3:8b"],
-      meResponses: [
-        jsonResponse({ error: "not signed in", signin_url: "https://ollama.com/signin" }, 401),
-        jsonResponse({ username: "testuser" }),
-      ],
-    });
+    const prompter = createModePrompter("remote", { confirm: true });
+    const fetchMock = createSignedOutRemoteFetchMock();
     vi.stubGlobal("fetch", fetchMock);
 
     await promptAndConfigureOllama({ cfg: {}, prompter });
@@ -180,11 +163,7 @@ describe("ollama setup", () => {
   });
 
   it("local mode does not trigger cloud auth", async () => {
-    const prompter = {
-      text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
-      select: vi.fn().mockResolvedValueOnce("local"),
-      note: vi.fn(async () => undefined),
-    } as unknown as WizardPrompter;
+    const prompter = createModePrompter("local");
 
     const fetchMock = createOllamaFetchMock({ tags: ["llama3:8b"] });
     vi.stubGlobal("fetch", fetchMock);
@@ -258,10 +237,7 @@ describe("ollama setup", () => {
       vi.stubGlobal("fetch", fetchMock);
 
       await ensureOllamaModelPulled({
-        config: {
-          agents: { defaults: { model: { primary: "ollama/glm-4.7-flash" } } },
-          models: { providers: { ollama: { baseUrl: "http://127.0.0.1:11434", models: [] } } },
-        },
+        config: createDefaultOllamaConfig("ollama/glm-4.7-flash"),
         prompter,
       });
 
@@ -276,10 +252,7 @@ describe("ollama setup", () => {
       vi.stubGlobal("fetch", fetchMock);
 
       await ensureOllamaModelPulled({
-        config: {
-          agents: { defaults: { model: { primary: "ollama/glm-4.7-flash" } } },
-          models: { providers: { ollama: { baseUrl: "http://127.0.0.1:11434", models: [] } } },
-        },
+        config: createDefaultOllamaConfig("ollama/glm-4.7-flash"),
         prompter,
       });
 
@@ -292,10 +265,7 @@ describe("ollama setup", () => {
       vi.stubGlobal("fetch", fetchMock);
 
       await ensureOllamaModelPulled({
-        config: {
-          agents: { defaults: { model: { primary: "ollama/kimi-k2.5:cloud" } } },
-          models: { providers: { ollama: { baseUrl: "http://127.0.0.1:11434", models: [] } } },
-        },
+        config: createDefaultOllamaConfig("ollama/kimi-k2.5:cloud"),
         prompter,
       });
 
@@ -324,12 +294,7 @@ describe("ollama setup", () => {
       pullResponse: new Response('{"error":"disk full"}\n', { status: 200 }),
     });
     vi.stubGlobal("fetch", fetchMock);
-
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as unknown as RuntimeEnv;
+    const runtime = createRuntime();
 
     const result = await configureOllamaNonInteractive({
       nextConfig: {
@@ -362,12 +327,7 @@ describe("ollama setup", () => {
       pullResponse: new Response('{"status":"success"}\n', { status: 200 }),
     });
     vi.stubGlobal("fetch", fetchMock);
-
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as unknown as RuntimeEnv;
+    const runtime = createRuntime();
 
     const result = await configureOllamaNonInteractive({
       nextConfig: {},
@@ -379,7 +339,7 @@ describe("ollama setup", () => {
     });
 
     const pullRequest = fetchMock.mock.calls[1]?.[1];
-    expect(JSON.parse(requestBody(pullRequest?.body))).toEqual({ name: "llama3.2:latest" });
+    expect(JSON.parse(requestBodyText(pullRequest?.body))).toEqual({ name: "llama3.2:latest" });
     expect(result.agents?.defaults?.model).toEqual(
       expect.objectContaining({ primary: "ollama/llama3.2:latest" }),
     );
@@ -388,12 +348,7 @@ describe("ollama setup", () => {
   it("accepts cloud models in non-interactive mode without pulling", async () => {
     const fetchMock = createOllamaFetchMock({ tags: [] });
     vi.stubGlobal("fetch", fetchMock);
-
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as unknown as RuntimeEnv;
+    const runtime = createRuntime();
 
     const result = await configureOllamaNonInteractive({
       nextConfig: {},

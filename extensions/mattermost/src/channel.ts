@@ -21,6 +21,7 @@ import {
   type ChannelMessageActionName,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/mattermost";
+import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { MattermostConfigSchema } from "./config-schema.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
@@ -419,18 +420,12 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       lastStopAt: null,
       lastError: null,
     },
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      botTokenSource: snapshot.botTokenSource ?? "none",
-      running: snapshot.running ?? false,
-      connected: snapshot.connected ?? false,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-      baseUrl: snapshot.baseUrl ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) =>
+      buildPassiveProbedChannelStatusSummary(snapshot, {
+        botTokenSource: snapshot.botTokenSource ?? "none",
+        connected: snapshot.connected ?? false,
+        baseUrl: snapshot.baseUrl ?? null,
+      }),
     probeAccount: async ({ account, timeoutMs }) => {
       const token = account.botToken?.trim();
       const baseUrl = account.baseUrl?.trim();

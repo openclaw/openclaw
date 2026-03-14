@@ -51,9 +51,11 @@ export type PluginLoadOptions = {
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 32;
 const registryCache = new Map<string, PluginRegistry>();
+const openAllowlistWarningCache = new Set<string>();
 
 export function clearPluginLoaderCache(): void {
   registryCache.clear();
+  openAllowlistWarningCache.clear();
 }
 
 const defaultLogger = () => createSubsystemLogger("plugins");
@@ -455,6 +457,7 @@ function warnWhenAllowlistIsOpen(params: {
   logger: PluginLogger;
   pluginsEnabled: boolean;
   allow: string[];
+  warningCacheKey: string;
   discoverablePlugins: Array<{ id: string; source: string; origin: PluginRecord["origin"] }>;
 }) {
   if (!params.pluginsEnabled) {
@@ -467,11 +470,15 @@ function warnWhenAllowlistIsOpen(params: {
   if (nonBundled.length === 0) {
     return;
   }
+  if (openAllowlistWarningCache.has(params.warningCacheKey)) {
+    return;
+  }
   const preview = nonBundled
     .slice(0, 6)
     .map((entry) => `${entry.id} (${entry.source})`)
     .join(", ");
   const extra = nonBundled.length > 6 ? ` (+${nonBundled.length - 6} more)` : "";
+  openAllowlistWarningCache.add(params.warningCacheKey);
   params.logger.warn(
     `[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: ${preview}${extra}. Set plugins.allow to explicit trusted ids.`,
   );
@@ -598,6 +605,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     logger,
     pluginsEnabled: normalized.enabled,
     allow: normalized.allow,
+    warningCacheKey: cacheKey,
     discoverablePlugins: manifestRegistry.plugins.map((plugin) => ({
       id: plugin.id,
       source: plugin.source,
@@ -771,12 +779,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const register = resolved.register;
 
     if (definition?.id && definition.id !== record.id) {
-      registry.diagnostics.push({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: `plugin id mismatch (config uses "${record.id}", export uses "${definition.id}")`,
-      });
+      pushPluginLoadError(
+        `plugin id mismatch (config uses "${record.id}", export uses "${definition.id}")`,
+      );
+      continue;
     }
 
     record.name = definition?.name ?? record.name;

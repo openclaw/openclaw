@@ -1,10 +1,16 @@
 import type { ResolvedBrowserProfile } from "./config.js";
 
-export type BrowserProfileMode = "local-managed" | "local-extension-relay" | "remote-cdp";
+export type BrowserProfileMode =
+  | "local-managed"
+  | "local-extension-relay"
+  | "local-existing-session"
+  | "remote-cdp";
 
 export type BrowserProfileCapabilities = {
   mode: BrowserProfileMode;
   isRemote: boolean;
+  /** Profile uses the Chrome DevTools MCP server (existing-session driver). */
+  usesChromeMcp: boolean;
   requiresRelay: boolean;
   requiresAttachedTab: boolean;
   usesPersistentPlaywright: boolean;
@@ -21,6 +27,7 @@ export function getBrowserProfileCapabilities(
     return {
       mode: "local-extension-relay",
       isRemote: false,
+      usesChromeMcp: false,
       requiresRelay: true,
       requiresAttachedTab: true,
       usesPersistentPlaywright: false,
@@ -31,10 +38,26 @@ export function getBrowserProfileCapabilities(
     };
   }
 
+  if (profile.driver === "existing-session") {
+    return {
+      mode: "local-existing-session",
+      isRemote: false,
+      usesChromeMcp: true,
+      requiresRelay: false,
+      requiresAttachedTab: false,
+      usesPersistentPlaywright: false,
+      supportsPerTabWs: false,
+      supportsJsonTabEndpoints: false,
+      supportsReset: false,
+      supportsManagedTabLimit: false,
+    };
+  }
+
   if (!profile.cdpIsLoopback) {
     return {
       mode: "remote-cdp",
       isRemote: true,
+      usesChromeMcp: false,
       requiresRelay: false,
       requiresAttachedTab: false,
       usesPersistentPlaywright: true,
@@ -48,6 +71,7 @@ export function getBrowserProfileCapabilities(
   return {
     mode: "local-managed",
     isRemote: false,
+    usesChromeMcp: false,
     requiresRelay: false,
     requiresAttachedTab: false,
     usesPersistentPlaywright: false,
@@ -74,6 +98,9 @@ export function resolveDefaultSnapshotFormat(params: {
   const capabilities = getBrowserProfileCapabilities(params.profile);
   if (capabilities.mode === "local-extension-relay") {
     return "aria";
+  }
+  if (capabilities.mode === "local-existing-session") {
+    return "ai";
   }
 
   return params.hasPlaywright ? "ai" : "aria";

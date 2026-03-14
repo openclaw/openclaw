@@ -2,8 +2,22 @@ import { describe, expect, it } from "vitest";
 import { SYSTEM_MARK, hasSystemMark, prefixSystemMessage } from "./system-message.js";
 
 describe("system-message", () => {
-  it("prepends the system mark once", () => {
-    expect(prefixSystemMessage("thread notice")).toBe(`${SYSTEM_MARK} thread notice`);
+  it.each([
+    { input: "thread notice", expected: `${SYSTEM_MARK} thread notice` },
+    { input: `  thread notice  `, expected: `${SYSTEM_MARK} thread notice` },
+    { input: "   ", expected: "" },
+  ])("prefixes %j", ({ input, expected }) => {
+    expect(prefixSystemMessage(input)).toBe(expected);
+  });
+
+  it.each([
+    { input: `${SYSTEM_MARK} already prefixed`, expected: true },
+    { input: `  ${SYSTEM_MARK} hello`, expected: true },
+    { input: SYSTEM_MARK, expected: true },
+    { input: "", expected: false },
+    { input: "hello", expected: false },
+  ])("detects marks for %j", ({ input, expected }) => {
+    expect(hasSystemMark(input)).toBe(expected);
   });
 
   it("does not double-prefix messages that already have the mark", () => {
@@ -12,8 +26,7 @@ describe("system-message", () => {
     );
   });
 
-  it("detects marked system text after trim normalization", () => {
-    expect(hasSystemMark(`  ${SYSTEM_MARK} hello`)).toBe(true);
-    expect(hasSystemMark("hello")).toBe(false);
+  it("preserves mark-only messages after trimming", () => {
+    expect(prefixSystemMessage(`  ${SYSTEM_MARK}  `)).toBe(SYSTEM_MARK);
   });
 });

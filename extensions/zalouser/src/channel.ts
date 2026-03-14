@@ -29,6 +29,7 @@ import {
   sendPayloadWithChunkedTextAndMedia,
   setAccountEnabledInConfigSection,
 } from "openclaw/plugin-sdk/zalouser";
+import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
@@ -652,15 +653,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
       lastError: null,
     },
     collectStatusIssues: collectZalouserStatusIssues,
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      running: snapshot.running ?? false,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) => buildPassiveProbedChannelStatusSummary(snapshot),
     probeAccount: async ({ account, timeoutMs }) => probeZalouser(account.profile, timeoutMs),
     buildAccountSnapshot: async ({ account, runtime }) => {
       const configured = await checkZcaAuthenticated(account.profile);

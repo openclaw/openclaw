@@ -12,40 +12,49 @@ afterEach(async () => {
   await closePlaywrightBrowserConnection().catch(() => {});
 });
 
+function createExtensionFallbackBrowserHarness(options?: {
+  urls?: string[];
+  newCDPSessionError?: string;
+}) {
+  const pageOn = vi.fn();
+  const contextOn = vi.fn();
+  const browserOn = vi.fn();
+  const browserClose = vi.fn(async () => {});
+  const newCDPSession = vi.fn(async () => {
+    throw new Error(options?.newCDPSessionError ?? "Not allowed");
+  });
+
+  const context = {
+    pages: () => [],
+    on: contextOn,
+    newCDPSession,
+  } as unknown as import("playwright-core").BrowserContext;
+
+  const pages = (options?.urls ?? [undefined]).map(
+    (url) =>
+      ({
+        on: pageOn,
+        context: () => context,
+        ...(url ? { url: () => url } : {}),
+      }) as unknown as import("playwright-core").Page,
+  );
+  (context as unknown as { pages: () => unknown[] }).pages = () => pages;
+
+  const browser = {
+    contexts: () => [context],
+    on: browserOn,
+    close: browserClose,
+  } as unknown as import("playwright-core").Browser;
+
+  connectOverCdpSpy.mockResolvedValue(browser);
+  getChromeWebSocketUrlSpy.mockResolvedValue(null);
+  return { browserClose, newCDPSession, pages };
+}
+
 describe("pw-session getPageForTargetId", () => {
   it("falls back to the only page when CDP session attachment is blocked (extension relays)", async () => {
-    connectOverCdpSpy.mockClear();
-    getChromeWebSocketUrlSpy.mockClear();
-
-    const pageOn = vi.fn();
-    const contextOn = vi.fn();
-    const browserOn = vi.fn();
-    const browserClose = vi.fn(async () => {});
-
-    const context = {
-      pages: () => [],
-      on: contextOn,
-      newCDPSession: vi.fn(async () => {
-        throw new Error("Not allowed");
-      }),
-    } as unknown as import("playwright-core").BrowserContext;
-
-    const page = {
-      on: pageOn,
-      context: () => context,
-    } as unknown as import("playwright-core").Page;
-
-    // Fill pages() after page exists.
-    (context as unknown as { pages: () => unknown[] }).pages = () => [page];
-
-    const browser = {
-      contexts: () => [context],
-      on: browserOn,
-      close: browserClose,
-    } as unknown as import("playwright-core").Browser;
-
-    connectOverCdpSpy.mockResolvedValue(browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    const { browserClose, pages } = createExtensionFallbackBrowserHarness();
+    const [page] = pages;
 
     const resolved = await getPageForTargetId({
       cdpUrl: "http://127.0.0.1:18792",
@@ -58,40 +67,9 @@ describe("pw-session getPageForTargetId", () => {
   });
 
   it("uses the shared HTTP-base normalization when falling back to /json/list for direct WebSocket CDP URLs", async () => {
-    const pageOn = vi.fn();
-    const contextOn = vi.fn();
-    const browserOn = vi.fn();
-    const browserClose = vi.fn(async () => {});
-
-    const context = {
-      pages: () => [],
-      on: contextOn,
-      newCDPSession: vi.fn(async () => {
-        throw new Error("Not allowed");
-      }),
-    } as unknown as import("playwright-core").BrowserContext;
-
-    const pageA = {
-      on: pageOn,
-      context: () => context,
-      url: () => "https://alpha.example",
-    } as unknown as import("playwright-core").Page;
-    const pageB = {
-      on: pageOn,
-      context: () => context,
-      url: () => "https://beta.example",
-    } as unknown as import("playwright-core").Page;
-
-    (context as unknown as { pages: () => unknown[] }).pages = () => [pageA, pageB];
-
-    const browser = {
-      contexts: () => [context],
-      on: browserOn,
-      close: browserClose,
-    } as unknown as import("playwright-core").Browser;
-
-    connectOverCdpSpy.mockResolvedValue(browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    const [, pageB] = createExtensionFallbackBrowserHarness({
+      urls: ["https://alpha.example", "https://beta.example"],
+    }).pages;
 
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
@@ -117,41 +95,11 @@ describe("pw-session getPageForTargetId", () => {
   });
 
   it("resolves extension-relay pages from /json/list without probing page CDP sessions first", async () => {
-    const pageOn = vi.fn();
-    const contextOn = vi.fn();
-    const browserOn = vi.fn();
-    const browserClose = vi.fn(async () => {});
-    const newCDPSession = vi.fn(async () => {
-      throw new Error("Target.attachToBrowserTarget: Not allowed");
+    const { newCDPSession, pages } = createExtensionFallbackBrowserHarness({
+      urls: ["https://alpha.example", "https://beta.example"],
+      newCDPSessionError: "Target.attachToBrowserTarget: Not allowed",
     });
-
-    const context = {
-      pages: () => [],
-      on: contextOn,
-      newCDPSession,
-    } as unknown as import("playwright-core").BrowserContext;
-
-    const pageA = {
-      on: pageOn,
-      context: () => context,
-      url: () => "https://alpha.example",
-    } as unknown as import("playwright-core").Page;
-    const pageB = {
-      on: pageOn,
-      context: () => context,
-      url: () => "https://beta.example",
-    } as unknown as import("playwright-core").Page;
-
-    (context as unknown as { pages: () => unknown[] }).pages = () => [pageA, pageB];
-
-    const browser = {
-      contexts: () => [context],
-      on: browserOn,
-      close: browserClose,
-    } as unknown as import("playwright-core").Browser;
-
-    connectOverCdpSpy.mockResolvedValue(browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    const [, pageB] = pages;
 
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     fetchSpy

@@ -39,6 +39,7 @@ describe("toSanitizedMarkdownHtml", () => {
   it("preserves base64 data URI images (#15437)", () => {
     const html = toSanitizedMarkdownHtml("![Chart](data:image/png;base64,iVBORw0KGgo=)");
     expect(html).toContain("<img");
+    expect(html).toContain('class="markdown-inline-image"');
     expect(html).toContain("data:image/png;base64,");
   });
 
@@ -102,6 +103,47 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(() => toSanitizedMarkdownHtml(nested)).not.toThrow();
     const html = toSanitizedMarkdownHtml(nested);
     expect(html).toContain("link");
+  });
+
+  it("keeps oversized plain-text replies readable instead of forcing code-block chrome", () => {
+    const input =
+      Array.from(
+        { length: 320 },
+        (_, i) => `Paragraph ${i + 1}: ${"Long plain-text reply. ".repeat(8)}`,
+      ).join("\n\n") + "\n";
+
+    const html = toSanitizedMarkdownHtml(input);
+
+    expect(html).not.toContain('<pre class="code-block">');
+    expect(html).toContain('class="markdown-plain-text-fallback"');
+    expect(html).toContain("Paragraph 1:");
+    expect(html).toContain("Paragraph 320:");
+  });
+
+  it("preserves indentation in oversized plain-text replies", () => {
+    const input = `${"Header line\n".repeat(5000)}\n    indented log line\n        deeper indent`;
+    const html = toSanitizedMarkdownHtml(input);
+
+    expect(html).toContain('class="markdown-plain-text-fallback"');
+    expect(html).toContain("    indented log line");
+    expect(html).toContain("        deeper indent");
+  });
+
+  it("exercises the cached oversized fallback branch", () => {
+    const input =
+      Array.from(
+        { length: 240 },
+        (_, i) => `Paragraph ${i + 1}: ${"Cacheable long reply. ".repeat(8)}`,
+      ).join("\n\n") + "\n";
+
+    expect(input.length).toBeGreaterThan(40_000);
+    expect(input.length).toBeLessThan(50_000);
+
+    const first = toSanitizedMarkdownHtml(input);
+    const second = toSanitizedMarkdownHtml(input);
+
+    expect(first).toContain('class="markdown-plain-text-fallback"');
+    expect(second).toBe(first);
   });
 
   it("falls back to escaped plain text if marked.parse throws (#36213)", () => {

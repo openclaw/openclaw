@@ -141,6 +141,19 @@ describe("resolveOpenClawPackageRoot", () => {
     expect(resolveOpenClawPackageRootSync({ moduleUrl })).toBe(pkgRoot);
   });
 
+  it("falls through from a non-openclaw moduleUrl candidate to cwd", async () => {
+    const wrongPkgRoot = fx("moduleurl-fallthrough", "wrong");
+    const cwdPkgRoot = fx("moduleurl-fallthrough", "cwd");
+    setFile(path.join(wrongPkgRoot, "package.json"), JSON.stringify({ name: "not-openclaw" }));
+    setFile(path.join(cwdPkgRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
+    const moduleUrl = pathToFileURL(path.join(wrongPkgRoot, "dist", "index.js")).toString();
+
+    expect(resolveOpenClawPackageRootSync({ moduleUrl, cwd: cwdPkgRoot })).toBe(cwdPkgRoot);
+    await expect(resolveOpenClawPackageRoot({ moduleUrl, cwd: cwdPkgRoot })).resolves.toBe(
+      cwdPkgRoot,
+    );
+  });
+
   it("ignores invalid moduleUrl values and falls back to cwd", async () => {
     const pkgRoot = fx("invalid-moduleurl");
     setFile(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
@@ -158,6 +171,16 @@ describe("resolveOpenClawPackageRoot", () => {
     setFile(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "not-openclaw" }));
 
     expect(resolveOpenClawPackageRootSync({ cwd: pkgRoot })).toBeNull();
+  });
+
+  it("falls back from a symlinked argv1 to the node_modules package root", () => {
+    const project = fx("symlink-node-modules-fallback");
+    const argv1 = path.join(project, "node_modules", ".bin", "openclaw");
+    state.realpaths.set(abs(argv1), abs(path.join(project, "versions", "current", "openclaw.mjs")));
+    const pkgRoot = path.join(project, "node_modules", "openclaw");
+    setFile(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
+
+    expect(resolveOpenClawPackageRootSync({ argv1 })).toBe(pkgRoot);
   });
 
   it("async resolver matches sync behavior", async () => {

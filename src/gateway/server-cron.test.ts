@@ -10,12 +10,20 @@ const requestHeartbeatNowMock = vi.fn();
 const loadConfigMock = vi.fn();
 const fetchWithSsrFGuardMock = vi.fn();
 
+function enqueueSystemEvent(...args: unknown[]) {
+  return enqueueSystemEventMock(...args);
+}
+
+function requestHeartbeatNow(...args: unknown[]) {
+  return requestHeartbeatNowMock(...args);
+}
+
 vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+  enqueueSystemEvent,
 }));
 
 vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+  requestHeartbeatNow,
 }));
 
 vi.mock("../config/config.js", async () => {
@@ -32,6 +40,18 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 
 import { buildGatewayCronService } from "./server-cron.js";
 
+function createCronConfig(name: string): OpenClawConfig {
+  const tmpDir = path.join(os.tmpdir(), `${name}-${Date.now()}`);
+  return {
+    session: {
+      mainKey: "main",
+    },
+    cron: {
+      store: path.join(tmpDir, "cron.json"),
+    },
+  } as OpenClawConfig;
+}
+
 describe("buildGatewayCronService", () => {
   beforeEach(() => {
     enqueueSystemEventMock.mockClear();
@@ -41,15 +61,7 @@ describe("buildGatewayCronService", () => {
   });
 
   it("routes main-target jobs to the scoped session for enqueue + wake", async () => {
-    const tmpDir = path.join(os.tmpdir(), `server-cron-${Date.now()}`);
-    const cfg = {
-      session: {
-        mainKey: "main",
-      },
-      cron: {
-        store: path.join(tmpDir, "cron.json"),
-      },
-    } as OpenClawConfig;
+    const cfg = createCronConfig("server-cron");
     loadConfigMock.mockReturnValue(cfg);
 
     const state = buildGatewayCronService({
@@ -87,16 +99,7 @@ describe("buildGatewayCronService", () => {
   });
 
   it("blocks private webhook URLs via SSRF-guarded fetch", async () => {
-    const tmpDir = path.join(os.tmpdir(), `server-cron-ssrf-${Date.now()}`);
-    const cfg = {
-      session: {
-        mainKey: "main",
-      },
-      cron: {
-        store: path.join(tmpDir, "cron.json"),
-      },
-    } as OpenClawConfig;
-
+    const cfg = createCronConfig("server-cron-ssrf");
     loadConfigMock.mockReturnValue(cfg);
     fetchWithSsrFGuardMock.mockRejectedValue(
       new SsrFBlockedError("Blocked: resolves to private/internal/special-use IP address"),

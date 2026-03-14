@@ -26,6 +26,25 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
     return callArgs?.updateLastRoute;
   }
 
+  function buildNamedAccountDmMessage(messageId = 1) {
+    return {
+      message_id: messageId,
+      chat: { id: 814912386, type: "private" as const },
+      date: 1700000000 + messageId - 1,
+      text: "hello",
+      from: { id: 814912386, first_name: "Alice" },
+    };
+  }
+
+  async function buildNamedAccountDmContext(accountId = "atlas", messageId = 1) {
+    setRuntimeConfigSnapshot(baseCfg);
+    return await buildTelegramMessageContextForTest({
+      cfg: baseCfg,
+      accountId,
+      message: buildNamedAccountDmMessage(messageId),
+    });
+  }
+
   it("allows DM through for a named account with no explicit binding", async () => {
     setRuntimeConfigSnapshot(baseCfg);
 
@@ -47,67 +66,21 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
   });
 
   it("uses a per-account session key for named-account DMs", async () => {
-    setRuntimeConfigSnapshot(baseCfg);
-
-    const ctx = await buildTelegramMessageContextForTest({
-      cfg: baseCfg,
-      accountId: "atlas",
-      message: {
-        message_id: 1,
-        chat: { id: 814912386, type: "private" },
-        date: 1700000000,
-        text: "hello",
-        from: { id: 814912386, first_name: "Alice" },
-      },
-    });
+    const ctx = await buildNamedAccountDmContext();
 
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:atlas:direct:814912386");
   });
 
   it("keeps named-account fallback lastRoute on the isolated DM session", async () => {
-    setRuntimeConfigSnapshot(baseCfg);
-
-    const ctx = await buildTelegramMessageContextForTest({
-      cfg: baseCfg,
-      accountId: "atlas",
-      message: {
-        message_id: 1,
-        chat: { id: 814912386, type: "private" },
-        date: 1700000000,
-        text: "hello",
-        from: { id: 814912386, first_name: "Alice" },
-      },
-    });
+    const ctx = await buildNamedAccountDmContext();
 
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:atlas:direct:814912386");
     expect(getLastUpdateLastRoute()?.sessionKey).toBe("agent:main:telegram:atlas:direct:814912386");
   });
 
   it("isolates sessions between named accounts that share the default agent", async () => {
-    setRuntimeConfigSnapshot(baseCfg);
-
-    const atlas = await buildTelegramMessageContextForTest({
-      cfg: baseCfg,
-      accountId: "atlas",
-      message: {
-        message_id: 1,
-        chat: { id: 814912386, type: "private" },
-        date: 1700000000,
-        text: "hello",
-        from: { id: 814912386, first_name: "Alice" },
-      },
-    });
-    const skynet = await buildTelegramMessageContextForTest({
-      cfg: baseCfg,
-      accountId: "skynet",
-      message: {
-        message_id: 2,
-        chat: { id: 814912386, type: "private" },
-        date: 1700000001,
-        text: "hello",
-        from: { id: 814912386, first_name: "Alice" },
-      },
-    });
+    const atlas = await buildNamedAccountDmContext("atlas", 1);
+    const skynet = await buildNamedAccountDmContext("skynet", 2);
 
     expect(atlas?.ctxPayload?.SessionKey).toBe("agent:main:telegram:atlas:direct:814912386");
     expect(skynet?.ctxPayload?.SessionKey).toBe("agent:main:telegram:skynet:direct:814912386");

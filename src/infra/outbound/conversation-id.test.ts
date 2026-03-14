@@ -2,39 +2,58 @@ import { describe, expect, it } from "vitest";
 import { resolveConversationIdFromTargets } from "./conversation-id.js";
 
 describe("resolveConversationIdFromTargets", () => {
-  it("prefers explicit thread id when present", () => {
-    const resolved = resolveConversationIdFromTargets({
-      threadId: "123456789",
-      targets: ["channel:987654321"],
-    });
-    expect(resolved).toBe("123456789");
+  it.each([
+    {
+      name: "prefers explicit thread id strings",
+      params: { threadId: "123456789", targets: ["channel:987654321"] },
+      expected: "123456789",
+    },
+    {
+      name: "normalizes numeric thread ids",
+      params: { threadId: 123456789, targets: ["channel:987654321"] },
+      expected: "123456789",
+    },
+    {
+      name: "falls back when the thread id is blank",
+      params: { threadId: "   ", targets: ["channel:987654321"] },
+      expected: "987654321",
+    },
+  ])("$name", ({ params, expected }) => {
+    expect(resolveConversationIdFromTargets(params)).toBe(expected);
   });
 
-  it("extracts channel ids from channel: targets", () => {
-    const resolved = resolveConversationIdFromTargets({
+  it.each([
+    {
+      name: "extracts channel ids from channel targets",
       targets: ["channel:987654321"],
-    });
-    expect(resolved).toBe("987654321");
-  });
-
-  it("extracts ids from Discord channel mentions", () => {
-    const resolved = resolveConversationIdFromTargets({
+      expected: "987654321",
+    },
+    {
+      name: "trims channel target ids",
+      targets: ["channel: 987654321 "],
+      expected: "987654321",
+    },
+    {
+      name: "extracts ids from Discord channel mentions",
       targets: ["<#1475250310120214812>"],
-    });
-    expect(resolved).toBe("1475250310120214812");
-  });
-
-  it("accepts raw numeric ids", () => {
-    const resolved = resolveConversationIdFromTargets({
+      expected: "1475250310120214812",
+    },
+    {
+      name: "accepts raw numeric ids",
       targets: ["1475250310120214812"],
-    });
-    expect(resolved).toBe("1475250310120214812");
-  });
-
-  it("returns undefined for non-channel targets", () => {
-    const resolved = resolveConversationIdFromTargets({
+      expected: "1475250310120214812",
+    },
+    {
+      name: "returns undefined for non-channel targets",
       targets: ["user:alice", "general"],
-    });
-    expect(resolved).toBeUndefined();
+      expected: undefined,
+    },
+    {
+      name: "skips blank and malformed targets",
+      targets: [undefined, null, "   ", "channel:  ", "<#not-a-number>"],
+      expected: undefined,
+    },
+  ])("$name", ({ targets, expected }) => {
+    expect(resolveConversationIdFromTargets({ targets })).toBe(expected);
   });
 });

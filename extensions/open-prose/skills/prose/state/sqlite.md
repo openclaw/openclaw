@@ -87,71 +87,28 @@ The `agents` and `agent_segments` tables for project-scoped agents live in `.pro
 
 ## Responsibility Separation
 
-This section defines **who does what**. This is the contract between the VM and subagents.
+The VM/subagent contract matches [postgres.md](./postgres.md#responsibility-separation).
 
-### VM Responsibilities
+SQLite-specific differences:
 
-The VM (the orchestrating agent running the .prose program) is responsible for:
+- the VM creates `state.db` instead of an `openprose` schema
+- subagent confirmation messages point at a local database path, for example `.prose/runs/<runId>/state.db`
+- cleanup is typically `VACUUM` or file deletion rather than dropping schema objects
 
-| Responsibility            | Description                                                                                              |
-| ------------------------- | -------------------------------------------------------------------------------------------------------- |
-| **Database creation**     | Create `state.db` and initialize core tables at run start                                                |
-| **Program registration**  | Store the program source and metadata                                                                    |
-| **Execution tracking**    | Update position, status, and timing as statements execute                                                |
-| **Subagent spawning**     | Spawn sessions via Task tool with database path and instructions                                         |
-| **Parallel coordination** | Track branch status, implement join strategies                                                           |
-| **Loop management**       | Track iteration counts, evaluate conditions                                                              |
-| **Error aggregation**     | Record failures, manage retry state                                                                      |
-| **Context preservation**  | Maintain sufficient narration in the main conversation thread so execution can be understood and resumed |
-| **Completion detection**  | Mark the run as complete when finished                                                                   |
+Example return values:
 
-**Critical:** The VM must preserve enough context in its own conversation to understand execution state without re-reading the entire database. The database is for coordination and persistence, not a replacement for working memory.
-
-### Subagent Responsibilities
-
-Subagents (sessions spawned by the VM) are responsible for:
-
-| Responsibility          | Description                                                       |
-| ----------------------- | ----------------------------------------------------------------- |
-| **Writing own outputs** | Insert/update their binding in the `bindings` table               |
-| **Memory management**   | For persistent agents: read and update their memory record        |
-| **Segment recording**   | For persistent agents: append segment history                     |
-| **Attachment handling** | Write large outputs to `attachments/` directory, store path in DB |
-| **Atomic writes**       | Use transactions when updating multiple related records           |
-
-**Critical:** Subagents write ONLY to `bindings`, `agents`, and `agent_segments` tables. The VM owns the `execution` table entirely. Completion signaling happens through the substrate (Task tool return), not database updates.
-
-**Critical:** Subagents must write their outputs directly to the database. The VM does not write subagent outputs—it only reads them after the subagent completes.
-
-**What subagents return to the VM:** A confirmation message with the binding location—not the full content:
-
-**Root scope:**
-
-```
+```text
 Binding written: research
 Location: .prose/runs/20260116-143052-a7b3c9/state.db (bindings table, name='research', execution_id=NULL)
-Summary: AI safety research covering alignment, robustness, and interpretability with 15 citations.
 ```
 
-**Inside block invocation:**
-
-```
+```text
 Binding written: result
 Location: .prose/runs/20260116-143052-a7b3c9/state.db (bindings table, name='result', execution_id=43)
 Execution ID: 43
-Summary: Processed chunk into 3 sub-parts for recursive processing.
 ```
 
-The VM tracks locations, not values. This keeps the VM's context lean and enables arbitrarily large intermediate values.
-
-### Shared Concerns
-
-| Concern          | Who Handles                                                        |
-| ---------------- | ------------------------------------------------------------------ |
-| Schema evolution | Either (use `CREATE TABLE IF NOT EXISTS`, `ALTER TABLE` as needed) |
-| Custom tables    | Either (prefix with `x_` for extensions)                           |
-| Indexing         | Either (add indexes for frequently-queried columns)                |
-| Cleanup          | VM (at run end, optionally vacuum)                                 |
+The VM still tracks locations, not full values.
 
 ---
 

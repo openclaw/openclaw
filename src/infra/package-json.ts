@@ -5,7 +5,8 @@ export async function readPackageVersion(root: string): Promise<string | null> {
   try {
     const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
     const parsed = JSON.parse(raw) as { version?: string };
-    return typeof parsed?.version === "string" ? parsed.version : null;
+    const version = parsed?.version?.trim();
+    return version ? version : null;
   } catch {
     return null;
   }

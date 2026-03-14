@@ -29,6 +29,21 @@ export function requireRef(value: unknown): string {
   return ref;
 }
 
+export function requireRefOrSelector(
+  ref: string | undefined,
+  selector: string | undefined,
+): { ref?: string; selector?: string } {
+  const trimmedRef = typeof ref === "string" ? ref.trim() : "";
+  const trimmedSelector = typeof selector === "string" ? selector.trim() : "";
+  if (!trimmedRef && !trimmedSelector) {
+    throw new Error("ref or selector is required");
+  }
+  return {
+    ref: trimmedRef || undefined,
+    selector: trimmedSelector || undefined,
+  };
+}
+
 export function normalizeTimeoutMs(timeoutMs: number | undefined, fallback: number) {
   return Math.max(500, Math.min(120_000, timeoutMs ?? fallback));
 }

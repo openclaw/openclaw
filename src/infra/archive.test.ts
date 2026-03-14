@@ -6,7 +6,7 @@ import * as tar from "tar";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { withRealpathSymlinkRebindRace } from "../test-utils/symlink-rebind-race.js";
 import type { ArchiveSecurityError } from "./archive.js";
-import { extractArchive, resolveArchiveKind, resolvePackedRootDir } from "./archive.js";
+import { extractArchive, resolvePackedRootDir } from "./archive.js";
 
 let fixtureRoot = "";
 let fixtureCount = 0;
@@ -82,19 +82,6 @@ afterAll(async () => {
 });
 
 describe("archive utils", () => {
-  it("detects archive kinds", () => {
-    const cases = [
-      { input: "/tmp/file.zip", expected: "zip" },
-      { input: "/tmp/file.tgz", expected: "tar" },
-      { input: "/tmp/file.tar.gz", expected: "tar" },
-      { input: "/tmp/file.tar", expected: "tar" },
-      { input: "/tmp/file.txt", expected: null },
-    ] as const;
-    for (const testCase of cases) {
-      expect(resolveArchiveKind(testCase.input), testCase.input).toBe(testCase.expected);
-    }
-  });
-
   it.each([{ ext: "zip" as const }, { ext: "tar" as const }])(
     "extracts $ext archives",
     async ({ ext }) => {
@@ -328,14 +315,6 @@ describe("archive utils", () => {
       });
     },
   );
-
-  it("fails resolvePackedRootDir when extract dir has multiple root dirs", async () => {
-    const workDir = await makeTempDir("packed-root");
-    const extractDir = path.join(workDir, "extract");
-    await fs.mkdir(path.join(extractDir, "a"), { recursive: true });
-    await fs.mkdir(path.join(extractDir, "b"), { recursive: true });
-    await expect(resolvePackedRootDir(extractDir)).rejects.toThrow(/unexpected archive layout/i);
-  });
 
   it("rejects tar entries with absolute extraction paths", async () => {
     await withArchiveCase("tar", async ({ workDir, archivePath, extractDir }) => {

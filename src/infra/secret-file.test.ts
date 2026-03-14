@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   DEFAULT_SECRET_FILE_MAX_BYTES,
+  loadSecretFileSync,
   readSecretFileSync,
   tryReadSecretFileSync,
 } from "./secret-file.js";
@@ -16,12 +17,49 @@ afterEach(async () => {
 });
 
 describe("readSecretFileSync", () => {
+  it("rejects blank file paths", () => {
+    expect(() => readSecretFileSync("   ", "Gateway password")).toThrow(
+      "Gateway password file path is empty.",
+    );
+  });
+
   it("reads and trims a regular secret file", async () => {
     const dir = await createTempDir();
     const file = path.join(dir, "secret.txt");
     await writeFile(file, " top-secret \n", "utf8");
 
     expect(readSecretFileSync(file, "Gateway password")).toBe("top-secret");
+    expect(tryReadSecretFileSync(file, "Gateway password")).toBe("top-secret");
+  });
+
+  it("surfaces resolvedPath and error details for missing files", async () => {
+    const dir = await createTempDir();
+    const file = path.join(dir, "missing-secret.txt");
+
+    const result = loadSecretFileSync(file, "Gateway password");
+
+    expect(result).toMatchObject({
+      ok: false,
+      resolvedPath: file,
+      message: expect.stringContaining(`Failed to inspect Gateway password file at ${file}:`),
+      error: expect.any(Error),
+    });
+  });
+
+  it("preserves the underlying cause when throwing for missing files", async () => {
+    const dir = await createTempDir();
+    const file = path.join(dir, "missing-secret.txt");
+
+    let thrown: Error | undefined;
+    try {
+      readSecretFileSync(file, "Gateway password");
+    } catch (error) {
+      thrown = error as Error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown?.message).toContain(`Failed to inspect Gateway password file at ${file}:`);
+    expect((thrown as Error & { cause?: unknown }).cause).toBeInstanceOf(Error);
   });
 
   it("rejects files larger than the secret-file limit", async () => {
@@ -56,6 +94,28 @@ describe("readSecretFileSync", () => {
     );
   });
 
+  it("rejects empty secret files after trimming", async () => {
+    const dir = await createTempDir();
+    const file = path.join(dir, "secret.txt");
+    await writeFile(file, " \n\t ", "utf8");
+
+    expect(() => readSecretFileSync(file, "Gateway password")).toThrow(
+      `Gateway password file at ${file} is empty.`,
+    );
+  });
+
+  it("exposes resolvedPath on non-throwing read failures", async () => {
+    const dir = await createTempDir();
+    const file = path.join(dir, "secret.txt");
+    await writeFile(file, " \n\t ", "utf8");
+
+    expect(loadSecretFileSync(file, "Gateway password")).toMatchObject({
+      ok: false,
+      resolvedPath: file,
+      message: `Gateway password file at ${file} is empty.`,
+    });
+  });
+
   it("returns undefined from the non-throwing helper for rejected files", async () => {
     const dir = await createTempDir();
     const target = path.join(dir, "target.txt");
@@ -66,5 +126,10 @@ describe("readSecretFileSync", () => {
     expect(tryReadSecretFileSync(link, "Telegram bot token", { rejectSymlink: true })).toBe(
       undefined,
     );
+  });
+
+  it("returns undefined from the non-throwing helper for blank file paths", () => {
+    expect(tryReadSecretFileSync("   ", "Telegram bot token")).toBeUndefined();
+    expect(tryReadSecretFileSync(undefined, "Telegram bot token")).toBeUndefined();
   });
 });

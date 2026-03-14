@@ -116,6 +116,62 @@ function createHandler(config: DiscordExecApprovalConfig, accountId = "default")
   });
 }
 
+function mockSuccessfulDmDelivery(params?: {
+  noteChannelId?: string;
+  expectedNoteText?: string;
+  throwOnUnexpectedRoute?: boolean;
+}) {
+  mockRestPost.mockImplementation(
+    async (route: string, requestParams?: { body?: { content?: string } }) => {
+      if (params?.noteChannelId && route === Routes.channelMessages(params.noteChannelId)) {
+        if (params.expectedNoteText) {
+          expect(requestParams?.body?.content).toContain(params.expectedNoteText);
+        }
+        return { id: "note-1", channel_id: params.noteChannelId };
+      }
+      if (route === Routes.userChannels()) {
+        return { id: "dm-1" };
+      }
+      if (route === Routes.channelMessages("dm-1")) {
+        return { id: "msg-1", channel_id: "dm-1" };
+      }
+      if (params?.throwOnUnexpectedRoute) {
+        throw new Error(`unexpected route: ${route}`);
+      }
+      return { id: "msg-unknown" };
+    },
+  );
+}
+
+async function expectGatewayAuthStart(params: {
+  handler: DiscordExecApprovalHandler;
+  expectedUrl: string;
+  expectedSource: "cli" | "env";
+  expectedToken?: string;
+  expectedPassword?: string;
+}) {
+  await params.handler.start();
+
+  expect(mockResolveGatewayConnectionAuth).toHaveBeenCalledWith(
+    expect.objectContaining({
+      env: process.env,
+      urlOverride: params.expectedUrl,
+      urlOverrideSource: params.expectedSource,
+    }),
+  );
+
+  const expectedClientParams: Record<string, unknown> = {
+    url: params.expectedUrl,
+  };
+  if (params.expectedToken !== undefined) {
+    expectedClientParams.token = params.expectedToken;
+  }
+  if (params.expectedPassword !== undefined) {
+    expectedClientParams.password = params.expectedPassword;
+  }
+  expect(mockGatewayClientCtor).toHaveBeenCalledWith(expect.objectContaining(expectedClientParams));
+}
+
 type ExecApprovalHandlerInternals = {
   pending: Map<
     string,
@@ -772,15 +828,7 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
     });
     const internals = getHandlerInternals(handler);
 
-    mockRestPost.mockImplementation(async (route: string) => {
-      if (route === Routes.userChannels()) {
-        return { id: "dm-1" };
-      }
-      if (route === Routes.channelMessages("dm-1")) {
-        return { id: "msg-1", channel_id: "dm-1" };
-      }
-      return { id: "msg-unknown" };
-    });
+    mockSuccessfulDmDelivery();
 
     const request = createRequest({ sessionKey: "agent:main:discord:dm:123" });
     await internals.handleApprovalRequested(request);
@@ -809,21 +857,11 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
     });
     const internals = getHandlerInternals(handler);
 
-    mockRestPost.mockImplementation(
-      async (route: string, params?: { body?: { content?: string } }) => {
-        if (route === Routes.channelMessages("999888777")) {
-          expect(params?.body?.content).toContain("I sent the allowed approvers DMs");
-          return { id: "note-1", channel_id: "999888777" };
-        }
-        if (route === Routes.userChannels()) {
-          return { id: "dm-1" };
-        }
-        if (route === Routes.channelMessages("dm-1")) {
-          return { id: "msg-1", channel_id: "dm-1" };
-        }
-        throw new Error(`unexpected route: ${route}`);
-      },
-    );
+    mockSuccessfulDmDelivery({
+      noteChannelId: "999888777",
+      expectedNoteText: "I sent the allowed approvers DMs",
+      throwOnUnexpectedRoute: true,
+    });
 
     await internals.handleApprovalRequested(createRequest());
 
@@ -853,15 +891,7 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
     });
     const internals = getHandlerInternals(handler);
 
-    mockRestPost.mockImplementation(async (route: string) => {
-      if (route === Routes.userChannels()) {
-        return { id: "dm-1" };
-      }
-      if (route === Routes.channelMessages("dm-1")) {
-        return { id: "msg-1", channel_id: "dm-1" };
-      }
-      throw new Error(`unexpected route: ${route}`);
-    });
+    mockSuccessfulDmDelivery({ throwOnUnexpectedRoute: true });
 
     await internals.handleApprovalRequested(
       createRequest({ sessionKey: "agent:main:discord:dm:123" }),
@@ -890,22 +920,13 @@ describe("DiscordExecApprovalHandler gateway auth resolution", () => {
       cfg: { session: { store: STORE_PATH } },
     });
 
-    await handler.start();
-
-    expect(mockResolveGatewayConnectionAuth).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: process.env,
-        urlOverride: "wss://override.example/ws",
-        urlOverrideSource: "cli",
-      }),
-    );
-    expect(mockGatewayClientCtor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "wss://override.example/ws",
-        token: "resolved-token",
-        password: "resolved-password", // pragma: allowlist secret
-      }),
-    );
+    await expectGatewayAuthStart({
+      handler,
+      expectedUrl: "wss://override.example/ws",
+      expectedSource: "cli",
+      expectedToken: "resolved-token",
+      expectedPassword: "resolved-password", // pragma: allowlist secret
+    });
 
     await handler.stop();
   });
@@ -921,20 +942,11 @@ describe("DiscordExecApprovalHandler gateway auth resolution", () => {
         cfg: { session: { store: STORE_PATH } },
       });
 
-      await handler.start();
-
-      expect(mockResolveGatewayConnectionAuth).toHaveBeenCalledWith(
-        expect.objectContaining({
-          env: process.env,
-          urlOverride: "wss://gateway-from-env.example/ws",
-          urlOverrideSource: "env",
-        }),
-      );
-      expect(mockGatewayClientCtor).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "wss://gateway-from-env.example/ws",
-        }),
-      );
+      await expectGatewayAuthStart({
+        handler,
+        expectedUrl: "wss://gateway-from-env.example/ws",
+        expectedSource: "env",
+      });
 
       await handler.stop();
     } finally {

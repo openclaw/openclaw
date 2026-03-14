@@ -54,6 +54,31 @@ function makeParams(overrides?: Record<string, unknown>) {
   };
 }
 
+function expectDefaultSandboxPreserved(
+  runCfg:
+    | {
+        agents?: { defaults?: { sandbox?: unknown } };
+      }
+    | undefined,
+) {
+  expect(runCfg?.agents?.defaults?.sandbox).toEqual({
+    mode: "all",
+    workspaceAccess: "rw",
+    docker: {
+      network: "none",
+      dangerouslyAllowContainerNamespaceJoin: true,
+      dangerouslyAllowExternalBindSources: true,
+    },
+    browser: {
+      enabled: true,
+      autoStart: false,
+    },
+    prune: {
+      maxAgeDays: 7,
+    },
+  });
+}
+
 describe("runCronIsolatedAgentTurn sandbox config preserved", () => {
   let previousFastTestEnv: string | undefined;
 
@@ -79,22 +104,7 @@ describe("runCronIsolatedAgentTurn sandbox config preserved", () => {
 
     expect(runWithModelFallbackMock).toHaveBeenCalledTimes(1);
     const runCfg = runWithModelFallbackMock.mock.calls[0]?.[0]?.cfg;
-    expect(runCfg?.agents?.defaults?.sandbox).toEqual({
-      mode: "all",
-      workspaceAccess: "rw",
-      docker: {
-        network: "none",
-        dangerouslyAllowContainerNamespaceJoin: true,
-        dangerouslyAllowExternalBindSources: true,
-      },
-      browser: {
-        enabled: true,
-        autoStart: false,
-      },
-      prune: {
-        maxAgeDays: 7,
-      },
-    });
+    expectDefaultSandboxPreserved(runCfg);
   });
 
   it("keeps global sandbox defaults when agent override is partial", async () => {
@@ -118,22 +128,7 @@ describe("runCronIsolatedAgentTurn sandbox config preserved", () => {
     const runCfg = runWithModelFallbackMock.mock.calls[0]?.[0]?.cfg;
     const resolvedSandbox = resolveSandboxConfigForAgent(runCfg, "specialist");
 
-    expect(runCfg?.agents?.defaults?.sandbox).toEqual({
-      mode: "all",
-      workspaceAccess: "rw",
-      docker: {
-        network: "none",
-        dangerouslyAllowContainerNamespaceJoin: true,
-        dangerouslyAllowExternalBindSources: true,
-      },
-      browser: {
-        enabled: true,
-        autoStart: false,
-      },
-      prune: {
-        maxAgeDays: 7,
-      },
-    });
+    expectDefaultSandboxPreserved(runCfg);
     expect(resolvedSandbox.mode).toBe("all");
     expect(resolvedSandbox.workspaceAccess).toBe("rw");
     expect(resolvedSandbox.docker).toMatchObject({

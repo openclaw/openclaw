@@ -19,7 +19,7 @@ export async function detectPackageManager(root: string): Promise<DetectedPackag
   if (files.includes("pnpm-lock.yaml")) {
     return "pnpm";
   }
-  if (files.includes("bun.lockb")) {
+  if (files.includes("bun.lock") || files.includes("bun.lockb")) {
     return "bun";
   }
   if (files.includes("package-lock.json")) {
