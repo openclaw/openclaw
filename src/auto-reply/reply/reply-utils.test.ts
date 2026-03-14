@@ -267,6 +267,17 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).toContain('{"path":"/tmp"}');
   });
 
+  it("keeps NO_REPLY explanations with tool-style JSON examples", () => {
+    const result = normalizeReplyPayload({
+      text: ['NO_REPLY means "do not answer". Example:', '{"command":"ls","yieldMs":1000}'].join(
+        "\n",
+      ),
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toContain('NO_REPLY means "do not answer".');
+    expect(result!.text).toContain('{"command":"ls","yieldMs":1000}');
+  });
+
   it("does not flag fenced code samples as suspicious by default", () => {
     expect(
       hasSuspiciousReplyLeakage(
@@ -286,6 +297,16 @@ describe("normalizeReplyPayload", () => {
         ].join("\n"),
       ),
     ).toBe(true);
+  });
+
+  it("does not flag NO_REPLY explanations with tool JSON lines", () => {
+    expect(
+      hasSuspiciousReplyLeakage(
+        ['NO_REPLY means "do not answer". Example:', '{"command":"ls","yieldMs":1000}'].join(
+          "\n",
+        ),
+      ),
+    ).toBe(false);
   });
 });
 

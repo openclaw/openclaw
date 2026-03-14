@@ -42,11 +42,5 @@ export function hasSuspiciousReplyLeakage(text: string | undefined): boolean {
   );
   const hasToolJsonArgs = candidate.includes("{") && hasStructuredToolJsonLine(candidate);
 
-  if (hasLeadingSilentWithExtra && (hasStructuredRouteMarkerLead || hasToolJsonArgs)) {
-    return true;
-  }
-  if (hasStructuredRouteMarkerLead && hasToolJsonArgs) {
-    return true;
-  }
-  return false;
+  return hasStructuredRouteMarkerLead && hasToolJsonArgs;
 }
