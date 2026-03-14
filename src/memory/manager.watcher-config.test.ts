@@ -144,4 +144,38 @@ describe("memory watcher config", () => {
       ]),
     );
   });
+
+  it("registers an error handler on the watcher", async () => {
+    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-watch-err-"));
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
+            query: { minScore: 0, hybrid: { enabled: false } },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
+    manager = result.manager as unknown as MemoryIndexManager;
+
+    expect(watchMock).toHaveBeenCalledTimes(1);
+    const mockWatcher = watchMock.mock.results[0]?.value as { on: ReturnType<typeof vi.fn> };
+    const onCalls = mockWatcher.on.mock.calls as Array<[string, unknown]>;
+    const registeredEvents = onCalls.map(([event]) => event);
+    expect(registeredEvents).toContain("error");
+  });
 });
