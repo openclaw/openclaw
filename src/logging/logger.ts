@@ -269,6 +269,28 @@ export function getResolvedLoggerSettings(): LoggerResolvedSettings {
   return resolveSettings();
 }
 
+/**
+ * Returns the log file path that the logger is *actively* writing to.
+ *
+ * Unlike `getResolvedLoggerSettings().file`, which always recomputes based on today's date,
+ * this function returns the file path from the cached logger settings — i.e. the file that
+ * was resolved when the logger was last initialized.  This ensures that a long-running
+ * gateway process (e.g. started on the previous day) returns the file it is actually writing
+ * to rather than a freshly-computed "today" path that may correspond to a different file
+ * created by a short-lived CLI invocation on the current day.
+ *
+ * Falls back to `resolveSettings().file` when the logger has not yet been initialized
+ * (e.g. in tests or at cold-start before any log output).
+ */
+export function getActiveLogFilePath(): string {
+  const cached = (loggingState.cachedSettings as LoggerResolvedSettings | null)?.file;
+  if (cached !== undefined) {
+    return cached;
+  }
+  // Logger not yet built; derive from current settings so test overrides are respected.
+  return resolveSettings().file;
+}
+
 // Test helpers
 export function setLoggerOverride(settings: LoggerSettings | null) {
   loggingState.overrideSettings = settings;

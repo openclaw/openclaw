@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { getResolvedLoggerSettings } from "../../logging.js";
+import { getActiveLogFilePath } from "../../logging.js";
 import { clamp } from "../../utils.js";
 import {
   ErrorCodes,
@@ -159,7 +159,7 @@ export const logsHandlers: GatewayRequestHandlers = {
     }
 
     const p = params as { cursor?: number; limit?: number; maxBytes?: number };
-    const configuredFile = getResolvedLoggerSettings().file;
+    const configuredFile = getActiveLogFilePath();
     try {
       const file = await resolveLogFile(configuredFile);
       const result = await readLogSlice({
