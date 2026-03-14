@@ -40,6 +40,7 @@ export async function sendChunkedTelegramReplyText<TChunk, TReplyMarkup = unknow
   replyMarkup?: TReplyMarkup;
   replyQuoteText?: string;
   quoteOnlyOnFirstChunk?: boolean;
+  markDelivered?: (progress: DeliveryProgress) => void;
   sendChunk: (opts: {
     chunk: TChunk;
     isFirstChunk: boolean;
@@ -48,6 +49,7 @@ export async function sendChunkedTelegramReplyText<TChunk, TReplyMarkup = unknow
     replyQuoteText?: string;
   }) => Promise<void>;
 }): Promise<void> {
+  const applyDelivered = params.markDelivered ?? markDelivered;
   for (let i = 0; i < params.chunks.length; i += 1) {
     const chunk = params.chunks[i];
     if (!chunk) {
@@ -71,6 +73,6 @@ export async function sendChunkedTelegramReplyText<TChunk, TReplyMarkup = unknow
       replyQuoteText: shouldAttachQuote ? params.replyQuoteText : undefined,
     });
     markReplyApplied(params.progress, replyToMessageId);
-    markDelivered(params.progress);
+    applyDelivered(params.progress);
   }
 }

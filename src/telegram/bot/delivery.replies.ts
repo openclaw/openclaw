@@ -34,13 +34,17 @@ import {
   sendTelegramWithThreadFallback,
 } from "./delivery.send.js";
 import { resolveTelegramReplyId, type TelegramThreadSpec } from "./helpers.js";
+import {
+  markReplyApplied,
+  resolveReplyToForSend,
+  sendChunkedTelegramReplyText,
+  type DeliveryProgress as ReplyThreadDeliveryProgress,
+} from "./reply-threading.js";
 
 const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
 const CAPTION_TOO_LONG_RE = /caption is too long/i;
 
-type DeliveryProgress = {
-  hasReplied: boolean;
-  hasDelivered: boolean;
+type DeliveryProgress = ReplyThreadDeliveryProgress & {
   deliveredCount: number;
 };
 
@@ -81,22 +85,6 @@ function buildChunkTextResolver(params: {
   };
 }
 
-function resolveReplyToForSend(params: {
-  replyToId?: number;
-  replyToMode: ReplyToMode;
-  progress: DeliveryProgress;
-}): number | undefined {
-  return params.replyToId && (params.replyToMode === "all" || !params.progress.hasReplied)
-    ? params.replyToId
-    : undefined;
-}
-
-function markReplyApplied(progress: DeliveryProgress, replyToId?: number): void {
-  if (replyToId && !progress.hasReplied) {
-    progress.hasReplied = true;
-  }
-}
-
 function markDelivered(progress: DeliveryProgress): void {
   progress.hasDelivered = true;
   progress.deliveredCount += 1;
@@ -117,39 +105,35 @@ async function deliverTextReply(params: {
   progress: DeliveryProgress;
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
-  const chunks = params.chunkText(params.replyText);
-  for (let i = 0; i < chunks.length; i += 1) {
-    const chunk = chunks[i];
-    if (!chunk) {
-      continue;
-    }
-    const shouldAttachButtons = i === 0 && params.replyMarkup;
-    const replyToForChunk = resolveReplyToForSend({
-      replyToId: params.replyToId,
-      replyToMode: params.replyToMode,
-      progress: params.progress,
-    });
-    const messageId = await sendTelegramText(
-      params.bot,
-      params.chatId,
-      chunk.html,
-      params.runtime,
-      {
-        replyToMessageId: replyToForChunk,
-        replyQuoteText: params.replyQuoteText,
-        thread: params.thread,
-        textMode: "html",
-        plainText: chunk.text,
-        linkPreview: params.linkPreview,
-        replyMarkup: shouldAttachButtons ? params.replyMarkup : undefined,
-      },
-    );
-    if (firstDeliveredMessageId == null) {
-      firstDeliveredMessageId = messageId;
-    }
-    markReplyApplied(params.progress, replyToForChunk);
-    markDelivered(params.progress);
-  }
+  await sendChunkedTelegramReplyText({
+    chunks: params.chunkText(params.replyText),
+    progress: params.progress,
+    replyToId: params.replyToId,
+    replyToMode: params.replyToMode,
+    replyMarkup: params.replyMarkup,
+    replyQuoteText: params.replyQuoteText,
+    markDelivered,
+    sendChunk: async ({ chunk, replyToMessageId, replyMarkup, replyQuoteText }) => {
+      const messageId = await sendTelegramText(
+        params.bot,
+        params.chatId,
+        chunk.html,
+        params.runtime,
+        {
+          replyToMessageId,
+          replyQuoteText,
+          thread: params.thread,
+          textMode: "html",
+          plainText: chunk.text,
+          linkPreview: params.linkPreview,
+          replyMarkup,
+        },
+      );
+      if (firstDeliveredMessageId == null) {
+        firstDeliveredMessageId = messageId;
+      }
+    },
+  });
   return firstDeliveredMessageId;
 }
 
@@ -166,25 +150,24 @@ async function sendPendingFollowUpText(params: {
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
 }): Promise<void> {
-  const chunks = params.chunkText(params.text);
-  for (let i = 0; i < chunks.length; i += 1) {
-    const chunk = chunks[i];
-    const replyToForFollowUp = resolveReplyToForSend({
-      replyToId: params.replyToId,
-      replyToMode: params.replyToMode,
-      progress: params.progress,
-    });
-    await sendTelegramText(params.bot, params.chatId, chunk.html, params.runtime, {
-      replyToMessageId: replyToForFollowUp,
-      thread: params.thread,
-      textMode: "html",
-      plainText: chunk.text,
-      linkPreview: params.linkPreview,
-      replyMarkup: i === 0 ? params.replyMarkup : undefined,
-    });
-    markReplyApplied(params.progress, replyToForFollowUp);
-    markDelivered(params.progress);
-  }
+  await sendChunkedTelegramReplyText({
+    chunks: params.chunkText(params.text),
+    progress: params.progress,
+    replyToId: params.replyToId,
+    replyToMode: params.replyToMode,
+    replyMarkup: params.replyMarkup,
+    markDelivered,
+    sendChunk: async ({ chunk, replyToMessageId, replyMarkup }) => {
+      await sendTelegramText(params.bot, params.chatId, chunk.html, params.runtime, {
+        replyToMessageId,
+        thread: params.thread,
+        textMode: "html",
+        plainText: chunk.text,
+        linkPreview: params.linkPreview,
+        replyMarkup,
+      });
+    },
+  });
 }
 
 function isVoiceMessagesForbidden(err: unknown): boolean {
