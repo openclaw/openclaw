@@ -231,6 +231,64 @@ describe("initSessionState thread forking", () => {
     warn.mockRestore();
   });
 
+  it("skips fork and creates fresh session when explicit skip flag is set", async () => {
+    const root = await makeCaseDir("openclaw-thread-session-explicit-skip-");
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir);
+
+    const parentSessionId = "parent-explicit-skip";
+    const parentSessionFile = path.join(sessionsDir, "parent.jsonl");
+    const header = {
+      type: "session",
+      version: 3,
+      id: parentSessionId,
+      timestamp: new Date().toISOString(),
+      cwd: process.cwd(),
+    };
+    const message = {
+      type: "message",
+      id: "m1",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "Parent prompt" },
+    };
+    await fs.writeFile(
+      parentSessionFile,
+      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n`,
+      "utf-8",
+    );
+
+    const storePath = path.join(root, "sessions.json");
+    const parentSessionKey = "agent:main:slack:channel:c1";
+    await writeSessionStoreFast(storePath, {
+      [parentSessionKey]: {
+        sessionId: parentSessionId,
+        sessionFile: parentSessionFile,
+        updatedAt: Date.now(),
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath },
+    } as OpenClawConfig;
+
+    const threadSessionKey = "agent:main:slack:channel:c1:thread:456";
+    const result = await initSessionState({
+      ctx: {
+        Body: "Thread reply",
+        SessionKey: threadSessionKey,
+        ParentSessionKey: parentSessionKey,
+        SkipParentSessionFork: true,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.forkedFromParent).toBe(true);
+    expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
+    expect(result.sessionEntry.sessionFile).not.toBe(parentSessionFile);
+  });
+
   it("skips fork and creates fresh session when parent tokens exceed threshold", async () => {
     const root = await makeCaseDir("openclaw-thread-session-overflow-");
     const sessionsDir = path.join(root, "sessions");

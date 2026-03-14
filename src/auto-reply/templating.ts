@@ -48,6 +48,8 @@ export type MsgContext = {
   /** Provider account id (multi-account). */
   AccountId?: string;
   ParentSessionKey?: string;
+  /** If true, preserve parent linkage metadata but do not fork the parent transcript into this session. */
+  SkipParentSessionFork?: boolean;
   MessageSid?: string;
   /** Provider-specific full message id when MessageSid is a shortened alias. */
   MessageSidFull?: string;

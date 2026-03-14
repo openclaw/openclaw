@@ -25,6 +25,10 @@ import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matc
 import { resolveDiscordPreviewStreamMode } from "../../config/discord-preview-streaming.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
+import type {
+  DiscordConfig,
+  DiscordThreadParentInheritanceMode,
+} from "../../config/types.discord.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
@@ -60,6 +64,12 @@ function sleep(ms: number): Promise<void> {
 }
 
 const DISCORD_TYPING_MAX_DURATION_MS = 20 * 60_000;
+
+function resolveDiscordThreadParentInheritanceMode(params: {
+  discordConfig?: DiscordConfig | null;
+}): DiscordThreadParentInheritanceMode {
+  return params.discordConfig?.threadContext?.parentInheritance === "fresh" ? "fresh" : "fork";
+}
 
 function isProcessAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
@@ -274,7 +284,11 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   let threadStarterBody: string | undefined;
   let threadLabel: string | undefined;
   let parentSessionKey: string | undefined;
+  let skipParentSessionFork: boolean | undefined;
   if (threadChannel) {
+    const threadParentInheritanceMode = resolveDiscordThreadParentInheritanceMode({
+      discordConfig,
+    });
     const includeThreadStarter = channelConfig?.includeThreadStarter !== false;
     if (includeThreadStarter) {
       const starter = await resolveDiscordThreadStarter({
@@ -299,6 +313,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         channel: route.channel,
         peer: { kind: "channel", id: threadParentId },
       });
+      if (threadParentInheritanceMode === "fresh") {
+        skipParentSessionFork = true;
+      }
     }
   }
   const mediaPayload = buildDiscordMediaPayload(mediaList);
@@ -326,6 +343,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   const replyTarget = replyPlan.replyTarget;
   const replyReference = replyPlan.replyReference;
   const autoThreadContext = replyPlan.autoThreadContext;
+  if (
+    !skipParentSessionFork &&
+    autoThreadContext?.ParentSessionKey &&
+    resolveDiscordThreadParentInheritanceMode({ discordConfig }) === "fresh"
+  ) {
+    skipParentSessionFork = true;
+  }
 
   const effectiveFrom = isDirectMessage
     ? `discord:${author.id}`
@@ -377,6 +401,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ReplyToBody: replyContext?.body,
     ReplyToSender: replyContext?.sender,
     ParentSessionKey: autoThreadContext?.ParentSessionKey ?? threadKeys.parentSessionKey,
+    SkipParentSessionFork: skipParentSessionFork,
     MessageThreadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
     ThreadStarterBody: threadStarterBody,
     ThreadLabel: threadLabel,

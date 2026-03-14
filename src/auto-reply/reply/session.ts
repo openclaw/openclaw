@@ -458,38 +458,46 @@ export async function initSessionState(params: {
   }
   const parentSessionKey = ctx.ParentSessionKey?.trim();
   const alreadyForked = sessionEntry.forkedFromParent === true;
+  const skipParentSessionFork = ctx.SkipParentSessionFork === true;
   if (
     parentSessionKey &&
     parentSessionKey !== sessionKey &&
     sessionStore[parentSessionKey] &&
     !alreadyForked
   ) {
-    const parentTokens = sessionStore[parentSessionKey].totalTokens ?? 0;
-    if (parentForkMaxTokens > 0 && parentTokens > parentForkMaxTokens) {
-      // Parent context is too large — forking would create a thread session
-      // that immediately overflows the model's context window. Start fresh
-      // instead and mark as forked to prevent re-attempts. See #26905.
+    if (skipParentSessionFork) {
       log.warn(
-        `skipping parent fork (parent too large): parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
-          `parentTokens=${parentTokens} maxTokens=${parentForkMaxTokens}`,
+        `skipping parent fork (explicit): parentKey=${parentSessionKey} → sessionKey=${sessionKey}`,
       );
       sessionEntry.forkedFromParent = true;
     } else {
-      log.warn(
-        `forking from parent session: parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
-          `parentTokens=${parentTokens}`,
-      );
-      const forked = forkSessionFromParent({
-        parentEntry: sessionStore[parentSessionKey],
-        agentId,
-        sessionsDir: path.dirname(storePath),
-      });
-      if (forked) {
-        sessionId = forked.sessionId;
-        sessionEntry.sessionId = forked.sessionId;
-        sessionEntry.sessionFile = forked.sessionFile;
+      const parentTokens = sessionStore[parentSessionKey].totalTokens ?? 0;
+      if (parentForkMaxTokens > 0 && parentTokens > parentForkMaxTokens) {
+        // Parent context is too large — forking would create a thread session
+        // that immediately overflows the model's context window. Start fresh
+        // instead and mark as forked to prevent re-attempts. See #26905.
+        log.warn(
+          `skipping parent fork (parent too large): parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
+            `parentTokens=${parentTokens} maxTokens=${parentForkMaxTokens}`,
+        );
         sessionEntry.forkedFromParent = true;
-        log.warn(`forked session created: file=${forked.sessionFile}`);
+      } else {
+        log.warn(
+          `forking from parent session: parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
+            `parentTokens=${parentTokens}`,
+        );
+        const forked = forkSessionFromParent({
+          parentEntry: sessionStore[parentSessionKey],
+          agentId,
+          sessionsDir: path.dirname(storePath),
+        });
+        if (forked) {
+          sessionId = forked.sessionId;
+          sessionEntry.sessionId = forked.sessionId;
+          sessionEntry.sessionFile = forked.sessionFile;
+          sessionEntry.forkedFromParent = true;
+          log.warn(`forked session created: file=${forked.sessionFile}`);
+        }
       }
     }
   }
