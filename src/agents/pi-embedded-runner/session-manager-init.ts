@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import { writeFileSync } from "node:fs";
 
 type SessionHeaderEntry = { type: "session"; id?: string; cwd?: string };
 type SessionMessageEntry = { type: "message"; message?: { role?: string }; id?: string };
@@ -58,19 +57,20 @@ export async function prepareSessionManagerForRun(params: {
   // appendFileSync a duplicate user message. Strip trailing orphaned user
   // messages (user messages after the last assistant) to prevent duplicates.
   if (params.hadSessionFile && header && hasAssistant) {
-    stripTrailingOrphanedUserMessages(sm, params.sessionFile);
+    await stripTrailingOrphanedUserMessages(sm, params.sessionFile);
   }
 }
 
-function stripTrailingOrphanedUserMessages(
+async function stripTrailingOrphanedUserMessages(
   sm: {
     flushed: boolean;
     fileEntries: Array<SessionHeaderEntry | SessionMessageEntry | { type: string }>;
     byId?: Map<string, unknown>;
+    labelsById?: Map<string, unknown>;
     leafId?: string | null;
   },
   sessionFile: string,
-): void {
+): Promise<void> {
   // Find the last assistant message index
   let lastAssistantIdx = -1;
   for (let i = sm.fileEntries.length - 1; i >= 0; i--) {
@@ -97,6 +97,7 @@ function stripTrailingOrphanedUserMessages(
     const removed = sm.fileEntries.splice(idx, 1)[0];
     if (removed && "id" in removed && typeof (removed as SessionMessageEntry).id === "string") {
       sm.byId?.delete((removed as SessionMessageEntry).id!);
+      sm.labelsById?.delete((removed as SessionMessageEntry).id!);
     }
   }
 
@@ -106,5 +107,5 @@ function stripTrailingOrphanedUserMessages(
 
   // Rewrite the file without the orphaned user messages
   const lines = sm.fileEntries.map((e) => JSON.stringify(e)).join("\n") + "\n";
-  writeFileSync(sessionFile, lines, "utf-8");
+  await fs.writeFile(sessionFile, lines, "utf-8");
 }
