@@ -42,8 +42,8 @@ export async function twilioApiRequest<T = unknown>(params: {
     if (params.allowNotFound && response.status === 404) {
       return undefined as T;
     }
-    const errorText = await response.text();
-    throw new Error(`Twilio API error: ${response.status} ${errorText}`);
+    const errorText = await response.text().catch(() => "");
+    throw new Error(`Twilio API error: ${response.status}${errorText ? ` ${errorText}` : ""}`);
   }
 
   let text: string;

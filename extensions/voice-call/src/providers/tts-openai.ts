@@ -138,8 +138,8 @@ export class OpenAITTSProvider {
     }
 
     if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`OpenAI TTS failed: ${response.status} - ${error}`);
+      const error = await response.text().catch(() => "");
+      throw new Error(`OpenAI TTS failed: ${response.status}${error ? ` - ${error}` : ""}`);
     }
 
     let arrayBuffer: ArrayBuffer;
