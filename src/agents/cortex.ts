@@ -8,6 +8,7 @@ import {
   previewCortexContext,
   syncCortexCodingContext,
   type CortexPolicy,
+  type CortexStatus,
 } from "../memory/cortex.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import {
@@ -33,6 +34,11 @@ export type ResolvedAgentCortexModeStatus = {
   source: "agent-config" | "session-override" | "channel-override";
   graphPath?: string;
   maxChars: number;
+};
+
+export type ResolvedAgentTurnCortexContext = {
+  config: ResolvedAgentCortexModeStatus;
+  status: CortexStatus;
 };
 
 export type AgentCortexConflictNotice = {
@@ -245,30 +251,30 @@ export async function resolveAgentCortexPromptContext(params: {
   promptMode: "full" | "minimal";
   sessionId?: string;
   channelId?: string;
+  resolved?: ResolvedAgentTurnCortexContext | null;
 }): Promise<AgentCortexPromptContextResult> {
   if (!params.cfg || params.promptMode !== "full") {
     return {};
   }
-  const cortex = await resolveAgentCortexModeStatus({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    sessionId: params.sessionId,
-    channelId: params.channelId,
-  });
-  if (!cortex) {
+  const resolved =
+    params.resolved ??
+    (await resolveAgentTurnCortexContext({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      workspaceDir: params.workspaceDir,
+      sessionId: params.sessionId,
+      channelId: params.channelId,
+    }));
+  if (!resolved) {
     return {};
   }
   try {
-    const status = await getCortexStatus({
-      workspaceDir: params.workspaceDir,
-      graphPath: cortex.graphPath,
-    });
     const preview = await previewCortexContext({
       workspaceDir: params.workspaceDir,
-      graphPath: cortex.graphPath,
-      policy: cortex.mode,
-      maxChars: cortex.maxChars,
-      status,
+      graphPath: resolved.config.graphPath,
+      policy: resolved.config.mode,
+      maxChars: resolved.config.maxChars,
+      status: resolved.status,
     });
     return preview.context ? { context: preview.context } : {};
   } catch (error) {
@@ -276,6 +282,32 @@ export async function resolveAgentCortexPromptContext(params: {
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+export async function resolveAgentTurnCortexContext(params: {
+  cfg?: OpenClawConfig;
+  agentId: string;
+  workspaceDir: string;
+  sessionId?: string;
+  channelId?: string;
+}): Promise<ResolvedAgentTurnCortexContext | null> {
+  if (!params.cfg) {
+    return null;
+  }
+  const config = await resolveAgentCortexModeStatus({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+    channelId: params.channelId,
+  });
+  if (!config) {
+    return null;
+  }
+  const status = await getCortexStatus({
+    workspaceDir: params.workspaceDir,
+    graphPath: config.graphPath,
+  });
+  return { config, status };
 }
 
 export function resetAgentCortexConflictNoticeStateForTests(): void {
@@ -378,12 +410,21 @@ export async function resolveAgentCortexConflictNotice(params: {
   minSeverity?: number;
   now?: number;
   cooldownMs?: number;
+  resolved?: ResolvedAgentTurnCortexContext | null;
 }): Promise<AgentCortexConflictNotice | null> {
   if (!params.cfg) {
     return null;
   }
-  const cortex = resolveAgentCortexConfig(params.cfg, params.agentId);
-  if (!cortex) {
+  const resolved =
+    params.resolved ??
+    (await resolveAgentTurnCortexContext({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      workspaceDir: params.workspaceDir,
+      sessionId: params.sessionId,
+      channelId: params.channelId,
+    }));
+  if (!resolved) {
     return null;
   }
   const targetKey = buildAgentCortexConversationKey({
@@ -398,15 +439,11 @@ export async function resolveAgentCortexConflictNotice(params: {
     return null;
   }
   try {
-    const status = await getCortexStatus({
-      workspaceDir: params.workspaceDir,
-      graphPath: cortex.graphPath,
-    });
     const conflicts = await listCortexMemoryConflicts({
       workspaceDir: params.workspaceDir,
-      graphPath: cortex.graphPath,
+      graphPath: resolved.config.graphPath,
       minSeverity: params.minSeverity ?? DEFAULT_CORTEX_CONFLICT_SEVERITY,
-      status,
+      status: resolved.status,
     });
     const topConflict = conflicts
       .filter((entry) => entry.id && entry.summary)
@@ -438,6 +475,7 @@ export async function ingestAgentCortexMemoryCandidate(params: {
   sessionId?: string;
   channelId?: string;
   provider?: string;
+  resolved?: ResolvedAgentTurnCortexContext | null;
 }): Promise<AgentCortexMemoryCaptureResult> {
   const conversationKey = buildAgentCortexConversationKey({
     agentId: params.agentId,
@@ -449,8 +487,16 @@ export async function ingestAgentCortexMemoryCandidate(params: {
     cortexMemoryCaptureStatuses.set(conversationKey, { ...result, updatedAt: Date.now() });
     return result;
   }
-  const cortex = resolveAgentCortexConfig(params.cfg, params.agentId);
-  if (!cortex) {
+  const resolved =
+    params.resolved ??
+    (await resolveAgentTurnCortexContext({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      workspaceDir: params.workspaceDir,
+      sessionId: params.sessionId,
+      channelId: params.channelId,
+    }));
+  if (!resolved) {
     const result = { captured: false, score: 0, reason: "cortex disabled" };
     cortexMemoryCaptureStatuses.set(conversationKey, { ...result, updatedAt: Date.now() });
     return result;
@@ -461,13 +507,9 @@ export async function ingestAgentCortexMemoryCandidate(params: {
     return decision;
   }
   try {
-    const status = await getCortexStatus({
-      workspaceDir: params.workspaceDir,
-      graphPath: cortex.graphPath,
-    });
     await ingestCortexMemoryFromText({
       workspaceDir: params.workspaceDir,
-      graphPath: cortex.graphPath,
+      graphPath: resolved.config.graphPath,
       event: {
         actor: "user",
         text: params.commandBody,
@@ -476,7 +518,7 @@ export async function ingestAgentCortexMemoryCandidate(params: {
         channelId: params.channelId,
         provider: params.provider,
       },
-      status,
+      status: resolved.status,
     });
     let syncedCodingContext = false;
     let syncPlatforms: string[] | undefined;
@@ -491,10 +533,10 @@ export async function ingestAgentCortexMemoryCandidate(params: {
         try {
           const syncResult = await syncCortexCodingContext({
             workspaceDir: params.workspaceDir,
-            graphPath: cortex.graphPath,
+            graphPath: resolved.config.graphPath,
             policy: syncPolicy.policy,
             platforms: syncPolicy.platforms,
-            status,
+            status: resolved.status,
           });
           syncedCodingContext = true;
           syncPlatforms = syncResult.platforms;

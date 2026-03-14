@@ -53,7 +53,7 @@ function parseResolveAction(value?: string): CortexMemoryResolveAction | null {
 }
 
 function resolveActiveSessionId(params: HandleCommandsParams): string | undefined {
-  return params.sessionEntry?.sessionId;
+  return params.sessionEntry?.sessionId ?? params.ctx.SessionId;
 }
 
 function resolveActiveChannelId(params: HandleCommandsParams): string {
@@ -195,13 +195,21 @@ async function buildCortexWhyReply(params: HandleCommandsParams): Promise<ReplyP
       text: "Cortex prompt bridge is disabled for this agent. Enable it in config or with `openclaw memory cortex enable`.",
     };
   }
-  const preview = await previewCortexContext({
-    workspaceDir: params.workspaceDir,
-    graphPath: state.cortex.graphPath,
-    policy: state.mode,
-    maxChars: state.cortex.maxChars,
-  });
-  const previewBody = preview.context || "No Cortex context is currently being injected.";
+  let previewBody = "No Cortex context is currently being injected.";
+  let previewGraphPath = state.cortex.graphPath ?? ".cortex/context.json";
+  let previewError: string | null = null;
+  try {
+    const preview = await previewCortexContext({
+      workspaceDir: params.workspaceDir,
+      graphPath: state.cortex.graphPath,
+      policy: state.mode,
+      maxChars: state.cortex.maxChars,
+    });
+    previewGraphPath = preview.graphPath;
+    previewBody = preview.context || previewBody;
+  } catch (error) {
+    previewError = error instanceof Error ? error.message : String(error);
+  }
   const captureStatus = await getAgentCortexMemoryCaptureStatusWithHistory({
     agentId: state.agentId,
     sessionId: state.sessionId,
@@ -213,7 +221,7 @@ async function buildCortexWhyReply(params: HandleCommandsParams): Promise<ReplyP
       "",
       `Mode: ${state.mode}`,
       `Source: ${state.source}`,
-      `Graph: ${preview.graphPath}`,
+      `Graph: ${previewGraphPath}`,
       state.sessionId ? `Session: ${state.sessionId}` : null,
       state.channelId ? `Channel: ${state.channelId}` : null,
       captureStatus
@@ -223,6 +231,7 @@ async function buildCortexWhyReply(params: HandleCommandsParams): Promise<ReplyP
       captureStatus?.syncedCodingContext
         ? `Coding sync: updated (${(captureStatus.syncPlatforms ?? []).join(", ")})`
         : null,
+      previewError ? `Preview error: ${previewError}` : null,
       "",
       "Injected Cortex context:",
       previewBody,

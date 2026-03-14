@@ -785,6 +785,45 @@ describe("/cortex command", () => {
     expect(result.reply?.text).toContain("Injected Cortex context:");
   });
 
+  it("keeps /cortex why useful when preview fails", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          cortex: {
+            enabled: true,
+            mode: "technical",
+            maxChars: 1500,
+            graphPath: ".cortex/context.json",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    resolveAgentCortexModeStatusMock.mockResolvedValueOnce({
+      enabled: true,
+      mode: "professional",
+      source: "agent-config",
+      maxChars: 1500,
+      graphPath: path.join(testWorkspaceDir, ".cortex", "context.json"),
+    });
+    previewCortexContextMock.mockRejectedValueOnce(new Error("Cortex graph not found"));
+
+    const params = buildParams("/cortex why", cfg, {
+      SessionId: "session-1",
+      NativeChannelId: "C123",
+    });
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Why I answered this way");
+    expect(result.reply?.text).toContain("Mode: professional");
+    expect(result.reply?.text).toContain("Preview error: Cortex graph not found");
+    expect(result.reply?.text).toContain("Injected Cortex context:");
+    expect(result.reply?.text).toContain("No Cortex context is currently being injected.");
+  });
+
   it("shows continuity details for the active conversation", async () => {
     const cfg = {
       commands: { text: true },

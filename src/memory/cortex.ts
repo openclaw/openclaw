@@ -70,6 +70,14 @@ const DEFAULT_GRAPH_RELATIVE_PATH = path.join(".cortex", "context.json");
 const DEFAULT_POLICY: CortexPolicy = "technical";
 const DEFAULT_MAX_CHARS = 1_500;
 export const DEFAULT_CORTEX_CODING_PLATFORMS = ["claude-code", "cursor", "copilot"] as const;
+const EMPTY_CORTEX_GRAPH = {
+  schema_version: "5.0",
+  graph: {
+    nodes: [],
+    edges: [],
+  },
+  meta: {},
+} as const;
 
 type CortexStatusParams = {
   workspaceDir: string;
@@ -94,6 +102,19 @@ export function resolveCortexGraphPath(workspaceDir: string, graphPath?: string)
     return path.normalize(trimmed);
   }
   return path.normalize(path.resolve(workspaceDir, trimmed));
+}
+
+export async function ensureCortexGraphInitialized(params: {
+  workspaceDir: string;
+  graphPath?: string;
+}): Promise<{ graphPath: string; created: boolean }> {
+  const graphPath = resolveCortexGraphPath(params.workspaceDir, params.graphPath);
+  if (await pathExists(graphPath)) {
+    return { graphPath, created: false };
+  }
+  await fs.mkdir(path.dirname(graphPath), { recursive: true });
+  await fs.writeFile(graphPath, `${JSON.stringify(EMPTY_CORTEX_GRAPH, null, 2)}\n`, "utf8");
+  return { graphPath, created: true };
 }
 
 async function pathExists(pathname: string): Promise<boolean> {

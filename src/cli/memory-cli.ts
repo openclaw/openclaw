@@ -14,7 +14,12 @@ import {
   setCortexModeOverride,
   type CortexModeScope,
 } from "../memory/cortex-mode-overrides.js";
-import { getCortexStatus, previewCortexContext, type CortexPolicy } from "../memory/cortex.js";
+import {
+  ensureCortexGraphInitialized,
+  getCortexStatus,
+  previewCortexContext,
+  type CortexPolicy,
+} from "../memory/cortex.js";
 import { getMemorySearchManager, type MemorySearchManagerResult } from "../memory/index.js";
 import { listMemoryFiles, normalizeExtraMemoryPaths } from "../memory/internal.js";
 import { defaultRuntime } from "../runtime.js";
@@ -395,6 +400,30 @@ async function runCortexPreview(
   }
 }
 
+async function runCortexInit(opts: CortexCommandOptions): Promise<void> {
+  const cfg = loadConfig();
+  const agentId = resolveAgent(cfg, opts.agent);
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  try {
+    const result = await ensureCortexGraphInitialized({
+      workspaceDir,
+      graphPath: opts.graph,
+    });
+    if (opts.json) {
+      defaultRuntime.log(JSON.stringify({ agentId, workspaceDir, ...result }, null, 2));
+      return;
+    }
+    defaultRuntime.log(
+      result.created
+        ? `Initialized Cortex graph: ${shortenHomePath(result.graphPath)}`
+        : `Cortex graph already present: ${shortenHomePath(result.graphPath)}`,
+    );
+  } catch (err) {
+    defaultRuntime.error(formatErrorMessage(err));
+    process.exitCode = 1;
+  }
+}
+
 async function loadWritableMemoryConfig(): Promise<Record<string, unknown> | null> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
@@ -471,6 +500,9 @@ function updateAgentCortexConfig(params: {
 
 async function runCortexEnable(opts: CortexEnableCommandOptions): Promise<void> {
   try {
+    const cfg = loadConfig();
+    const agentId = resolveAgent(cfg, opts.agent);
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const next = await loadWritableMemoryConfig();
     if (!next) {
       return;
@@ -487,10 +519,19 @@ async function runCortexEnable(opts: CortexEnableCommandOptions): Promise<void> 
       }),
     });
     await writeConfigFile(next);
+    const initResult = await ensureCortexGraphInitialized({
+      workspaceDir,
+      graphPath: opts.graph,
+    });
 
     const scope = opts.agent?.trim() ? `agent ${opts.agent.trim()}` : "agent defaults";
     defaultRuntime.log(
       `Enabled Cortex prompt bridge for ${scope} (${parseCortexMode(opts.mode)}, ${normalizeCortexMaxChars(opts.maxChars)} chars).`,
+    );
+    defaultRuntime.log(
+      initResult.created
+        ? `Initialized Cortex graph: ${shortenHomePath(initResult.graphPath)}`
+        : `Cortex graph ready: ${shortenHomePath(initResult.graphPath)}`,
     );
   } catch (err) {
     defaultRuntime.error(formatErrorMessage(err));
@@ -1175,6 +1216,16 @@ export function registerMemoryCli(program: Command) {
         await runCortexPreview(opts);
       },
     );
+
+  cortex
+    .command("init")
+    .description("Create the default Cortex graph if it does not exist")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--graph <path>", "Override Cortex graph path")
+    .option("--json", "Print JSON")
+    .action(async (opts: CortexCommandOptions) => {
+      await runCortexInit(opts);
+    });
 
   cortex
     .command("enable")

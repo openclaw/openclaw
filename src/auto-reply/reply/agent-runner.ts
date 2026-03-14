@@ -3,7 +3,7 @@ import { lookupContextTokens } from "../../agents/context.js";
 import {
   ingestAgentCortexMemoryCandidate,
   resolveAgentCortexConflictNotice,
-  resolveAgentCortexModeStatus,
+  resolveAgentTurnCortexContext,
   resolveCortexChannelTarget,
 } from "../../agents/cortex.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -705,15 +705,15 @@ export async function runReplyAgent(params: {
       to: sessionCtx.To,
       from: sessionCtx.From,
     });
-    const cortexModeStatus =
-      verboseEnabled && cfg
-        ? await resolveAgentCortexModeStatus({
-            cfg,
-            agentId: cortexAgentId,
-            sessionId: followupRun.run.sessionId,
-            channelId: cortexChannelId,
-          })
-        : null;
+    const resolvedTurnCortex = cfg
+      ? await resolveAgentTurnCortexContext({
+          cfg,
+          agentId: cortexAgentId,
+          workspaceDir: followupRun.run.workspaceDir,
+          sessionId: followupRun.run.sessionId,
+          channelId: cortexChannelId,
+        })
+      : null;
     const cortexMemoryCapture = cfg
       ? await ingestAgentCortexMemoryCandidate({
           cfg,
@@ -723,6 +723,7 @@ export async function runReplyAgent(params: {
           sessionId: followupRun.run.sessionId,
           channelId: cortexChannelId,
           provider: followupRun.run.messageProvider,
+          resolved: resolvedTurnCortex,
         })
       : null;
     const cortexConflictNotice = cfg
@@ -732,17 +733,18 @@ export async function runReplyAgent(params: {
           workspaceDir: followupRun.run.workspaceDir,
           sessionId: followupRun.run.sessionId,
           channelId: cortexChannelId,
+          resolved: resolvedTurnCortex,
         })
       : null;
-    if (verboseEnabled && cortexModeStatus) {
+    if (verboseEnabled && resolvedTurnCortex) {
       const sourceLabel =
-        cortexModeStatus.source === "session-override"
+        resolvedTurnCortex.config.source === "session-override"
           ? "session override"
-          : cortexModeStatus.source === "channel-override"
+          : resolvedTurnCortex.config.source === "channel-override"
             ? "channel override"
             : "agent config";
       verboseNotices.push({
-        text: `🧠 Cortex: ${cortexModeStatus.mode} (${sourceLabel})`,
+        text: `🧠 Cortex: ${resolvedTurnCortex.config.mode} (${sourceLabel})`,
       });
     }
     if (verboseEnabled && cortexMemoryCapture?.captured) {

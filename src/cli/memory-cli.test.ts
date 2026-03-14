@@ -7,6 +7,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 const getMemorySearchManager = vi.fn();
 const getCortexStatus = vi.fn();
 const previewCortexContext = vi.fn();
+const ensureCortexGraphInitialized = vi.fn();
 const getCortexModeOverride = vi.fn();
 const setCortexModeOverride = vi.fn();
 const clearCortexModeOverride = vi.fn();
@@ -25,6 +26,7 @@ vi.mock("../memory/index.js", () => ({
 }));
 
 vi.mock("../memory/cortex.js", () => ({
+  ensureCortexGraphInitialized,
   getCortexStatus,
   previewCortexContext,
 }));
@@ -66,6 +68,7 @@ afterEach(() => {
   getMemorySearchManager.mockClear();
   getCortexStatus.mockClear();
   previewCortexContext.mockClear();
+  ensureCortexGraphInitialized.mockClear();
   getCortexModeOverride.mockClear();
   setCortexModeOverride.mockClear();
   clearCortexModeOverride.mockClear();
@@ -686,6 +689,10 @@ describe("memory cli", () => {
 
   it("enables Cortex prompt bridge in agent defaults", async () => {
     mockWritableConfigSnapshot({});
+    ensureCortexGraphInitialized.mockResolvedValueOnce({
+      graphPath: "/tmp/openclaw-workspace/.cortex/context.json",
+      created: true,
+    });
 
     const log = spyRuntimeLogs();
     await runMemoryCli(["cortex", "enable", "--mode", "professional", "--max-chars", "2200"]);
@@ -703,6 +710,32 @@ describe("memory cli", () => {
     });
     expect(log).toHaveBeenCalledWith(
       "Enabled Cortex prompt bridge for agent defaults (professional, 2200 chars).",
+    );
+    expect(log).toHaveBeenCalledWith(
+      "Initialized Cortex graph: /tmp/openclaw-workspace/.cortex/context.json",
+    );
+    expect(ensureCortexGraphInitialized).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/openclaw-workspace",
+      graphPath: undefined,
+    });
+  });
+
+  it("initializes a Cortex graph without changing config", async () => {
+    ensureCortexGraphInitialized.mockResolvedValueOnce({
+      graphPath: "/tmp/openclaw-workspace/.cortex/context.json",
+      created: false,
+    });
+
+    const log = spyRuntimeLogs();
+    await runMemoryCli(["cortex", "init"]);
+
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(ensureCortexGraphInitialized).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/openclaw-workspace",
+      graphPath: undefined,
+    });
+    expect(log).toHaveBeenCalledWith(
+      "Cortex graph already present: /tmp/openclaw-workspace/.cortex/context.json",
     );
   });
 

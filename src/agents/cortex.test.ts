@@ -37,6 +37,7 @@ import {
   resolveAgentCortexConfig,
   resolveAgentCortexModeStatus,
   resolveAgentCortexPromptContext,
+  resolveAgentTurnCortexContext,
   resolveCortexChannelTarget,
 } from "./cortex.js";
 
@@ -258,6 +259,44 @@ describe("resolveAgentCortexPromptContext", () => {
 
     expect(result.error).toContain("Cortex graph not found");
   });
+
+  it("reuses resolved turn status when provided", async () => {
+    getCortexModeOverride.mockResolvedValueOnce(null);
+    previewCortexContext.mockResolvedValueOnce({
+      workspaceDir: "/tmp/openclaw-workspace",
+      graphPath: "/tmp/openclaw-workspace/.cortex/context.json",
+      policy: "technical",
+      maxChars: 1500,
+      context: "## Cortex Context\n- Shipping",
+    });
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cortex: {
+            enabled: true,
+          },
+        },
+        list: [{ id: "main" }],
+      },
+    };
+
+    const resolved = await resolveAgentTurnCortexContext({
+      cfg,
+      agentId: "main",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+    const result = await resolveAgentCortexPromptContext({
+      cfg,
+      agentId: "main",
+      workspaceDir: "/tmp/openclaw-workspace",
+      promptMode: "full",
+      resolved,
+    });
+
+    expect(result.context).toContain("Shipping");
+    expect(getCortexStatus).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("resolveAgentCortexConflictNotice", () => {
@@ -307,6 +346,46 @@ describe("resolveAgentCortexConflictNotice", () => {
     });
 
     expect(second).toBeNull();
+  });
+
+  it("reuses resolved turn status when checking conflicts", async () => {
+    listCortexMemoryConflicts.mockResolvedValueOnce([
+      {
+        id: "conf_1",
+        type: "temporal_flip",
+        severity: 0.91,
+        summary: "Hiring status changed from active to paused",
+      },
+    ]);
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cortex: {
+            enabled: true,
+          },
+        },
+        list: [{ id: "main" }],
+      },
+    };
+
+    const resolved = await resolveAgentTurnCortexContext({
+      cfg,
+      agentId: "main",
+      workspaceDir: "/tmp/openclaw-workspace",
+      sessionId: "session-1",
+      channelId: "channel-1",
+    });
+    await resolveAgentCortexConflictNotice({
+      cfg,
+      agentId: "main",
+      workspaceDir: "/tmp/openclaw-workspace",
+      sessionId: "session-1",
+      channelId: "channel-1",
+      resolved,
+    });
+
+    expect(getCortexStatus).toHaveBeenCalledTimes(1);
   });
 
   it("applies cooldown even when no Cortex conflicts are found", async () => {
