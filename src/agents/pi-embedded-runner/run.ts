@@ -67,6 +67,7 @@ import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
+import { ensureOpenRouterModelCache } from "./openrouter-model-capabilities.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
@@ -311,6 +312,14 @@ export async function runEmbeddedPiAgent(
         sessionKey: params.sessionKey,
       });
       await ensureOpenClawModelsJson(params.config, agentDir);
+
+      // Pre-warm the OpenRouter model cache so that resolveModel() can
+      // look up capabilities for models not in the static built-in list.
+      // This is fire-and-forget — if the fetch hasn't completed by the time
+      // resolveModel() runs, the fallback defaults are used (no regression).
+      if (normalizeProviderId(provider) === "openrouter") {
+        ensureOpenRouterModelCache();
+      }
 
       // Run before_model_resolve hooks early so plugins can override the
       // provider/model before resolveModel().

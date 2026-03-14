@@ -5,6 +5,15 @@ vi.mock("../pi-model-discovery.js", () => ({
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
 }));
 
+import type { OpenRouterModelCapabilities } from "./openrouter-model-capabilities.js";
+
+const mockGetOpenRouterModelCapabilities = vi.fn<
+  (modelId: string) => OpenRouterModelCapabilities | undefined
+>(() => undefined);
+vi.mock("./openrouter-model-capabilities.js", () => ({
+  getOpenRouterModelCapabilities: (modelId: string) => mockGetOpenRouterModelCapabilities(modelId),
+}));
+
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildInlineProviderModels, resolveModel } from "./model.js";
 import {
@@ -17,6 +26,7 @@ import {
 
 beforeEach(() => {
   resetMockDiscoverModels();
+  mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
 });
 
 function buildForwardCompatTemplate(params: {
@@ -413,6 +423,44 @@ describe("resolveModel", () => {
       input: ["text", "image"],
       contextWindow: 262144,
       maxTokens: 65536,
+    });
+  });
+
+  it("uses OpenRouter API capabilities for unknown models when cache is populated", () => {
+    mockGetOpenRouterModelCapabilities.mockReturnValue({
+      name: "Healer Alpha",
+      input: ["text", "image"],
+      reasoning: true,
+      contextWindow: 262144,
+      maxTokens: 65536,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
+
+    const result = resolveModel("openrouter", "openrouter/healer-alpha", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "openrouter/healer-alpha",
+      name: "Healer Alpha",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 262144,
+      maxTokens: 65536,
+    });
+  });
+
+  it("falls back to text-only when OpenRouter API cache is empty", () => {
+    mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
+
+    const result = resolveModel("openrouter", "openrouter/healer-alpha", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "openrouter/healer-alpha",
+      reasoning: false,
+      input: ["text"],
     });
   });
 

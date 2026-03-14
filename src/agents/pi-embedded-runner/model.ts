@@ -14,6 +14,7 @@ import {
 } from "../model-suppression.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
+import { getOpenRouterModelCapabilities } from "./openrouter-model-capabilities.js";
 
 type InlineModelEntry = ModelDefinitionConfig & {
   provider: string;
@@ -206,21 +207,24 @@ export function resolveModelWithRegistry(params: {
 
   // OpenRouter is a pass-through proxy - any model ID available on OpenRouter
   // should work without being pre-registered in the local catalog.
+  // Try to fetch actual capabilities from the OpenRouter API so that new models
+  // (not yet in the static pi-ai snapshot) get correct image/reasoning support.
   if (normalizedProvider === "openrouter") {
+    const capabilities = getOpenRouterModelCapabilities(modelId);
     return normalizeResolvedModel({
       provider,
       model: {
         id: modelId,
-        name: modelId,
+        name: capabilities?.name ?? modelId,
         api: "openai-completions",
         provider,
         baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: DEFAULT_CONTEXT_TOKENS,
+        reasoning: capabilities?.reasoning ?? false,
+        input: capabilities?.input ?? ["text"],
+        cost: capabilities?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: capabilities?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
         // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
-        maxTokens: 8192,
+        maxTokens: capabilities?.maxTokens ?? 8192,
       } as Model<Api>,
     });
   }
