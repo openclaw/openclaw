@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../../runtime.js";
+import type { RuntimeEnv } from "../../../../src/runtime.js";
 
 const sendMessageIMessageMock = vi.hoisted(() =>
   vi.fn().mockResolvedValue({ messageId: "imsg-1" }),
@@ -14,20 +14,20 @@ vi.mock("../send.js", () => ({
     sendMessageIMessageMock(to, message, opts),
 }));
 
-vi.mock("../../auto-reply/chunk.js", () => ({
+vi.mock("../../../../src/auto-reply/chunk.js", () => ({
   chunkTextWithMode: (text: string) => chunkTextWithModeMock(text),
   resolveChunkMode: () => resolveChunkModeMock(),
 }));
 
-vi.mock("../../config/config.js", () => ({
+vi.mock("../../../../src/config/config.js", () => ({
   loadConfig: () => ({}),
 }));
 
-vi.mock("../../config/markdown-tables.js", () => ({
+vi.mock("../../../../src/config/markdown-tables.js", () => ({
   resolveMarkdownTableMode: () => resolveMarkdownTableModeMock(),
 }));
 
-vi.mock("../../markdown/tables.js", () => ({
+vi.mock("../../../../src/markdown/tables.js", () => ({
   convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
 }));
 
