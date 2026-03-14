@@ -118,7 +118,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
 
   it("should clear stuck running markers during maintenance", () => {
     const now = Date.now();
-    const stuckTime = now - 3 * 60 * 60_000; // 3 hours ago (> 2 hour threshold)
+    const stuckTime = now - 3 * 60 * 60_000; // 3 hours ago (exceeds per-job stuck threshold)
     const futureTime = now + 3600_000;
 
     const job = createCronSystemEventJob(now, {
@@ -252,5 +252,102 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
 
     expect(job.state.runningAtMs).toBeUndefined();
     expect(job.state.nextRunAtMs).toBe(pastDue);
+  });
+
+  it("clears stuck marker based on per-job timeout, not a fixed 2-hour window (#30096)", () => {
+    const now = Date.now();
+    const futureTime = now + 3600_000;
+
+    // Agent-turn job with a 30-minute timeout. Lock is 40 minutes old — exceeds
+    // the job's timeout (30 min) + buffer (5 min) = 35 min threshold.
+    const agentJob: CronJob = {
+      id: "agent-job-30096",
+      name: "agent job",
+      enabled: true,
+      schedule: { kind: "cron", expr: "*/30 * * * *", tz: "UTC" },
+      payload: { kind: "agentTurn", message: "check", timeoutSeconds: 30 * 60 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      createdAtMs: now - 86400_000,
+      updatedAtMs: now - 86400_000,
+      state: {
+        nextRunAtMs: futureTime,
+        runningAtMs: now - 40 * 60_000, // 40 minutes ago
+      },
+    };
+
+    const state = createMockCronStateForJobs({ jobs: [agentJob], nowMs: now });
+    recomputeNextRunsForMaintenance(state);
+
+    // Should be cleared: 40 min > 35 min threshold (30 min timeout + 5 min buffer)
+    expect(agentJob.state.runningAtMs).toBeUndefined();
+  });
+
+  it("preserves running marker when within per-job timeout + buffer window (#30096)", () => {
+    const now = Date.now();
+    const futureTime = now + 3600_000;
+
+    // Agent-turn job with a 60-minute default timeout. Lock is 20 minutes old —
+    // well within the 65-minute threshold (60 min + 5 min buffer).
+    const agentJob: CronJob = {
+      id: "agent-job-fresh",
+      name: "agent job fresh",
+      enabled: true,
+      schedule: { kind: "cron", expr: "*/30 * * * *", tz: "UTC" },
+      payload: { kind: "agentTurn", message: "check" },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      createdAtMs: now - 86400_000,
+      updatedAtMs: now - 86400_000,
+      state: {
+        nextRunAtMs: futureTime,
+        runningAtMs: now - 20 * 60_000, // 20 minutes ago
+      },
+    };
+
+    const state = createMockCronStateForJobs({ jobs: [agentJob], nowMs: now });
+    recomputeNextRunsForMaintenance(state);
+
+    // Should NOT be cleared: 20 min < 65 min threshold
+    expect(agentJob.state.runningAtMs).toBe(now - 20 * 60_000);
+  });
+
+  it("uses shorter threshold for systemEvent jobs than agentTurn jobs (#30096)", () => {
+    const now = Date.now();
+    const futureTime = now + 3600_000;
+
+    // systemEvent job: default timeout = 10 min, threshold = 15 min.
+    // Lock is 16 minutes old — should be cleared.
+    const sysJob = createCronSystemEventJob(now, {
+      id: "sys-job-stuck",
+      state: {
+        nextRunAtMs: futureTime,
+        runningAtMs: now - 16 * 60_000,
+      },
+    });
+
+    // agentTurn job: default timeout = 60 min, threshold = 65 min.
+    // Lock is 16 minutes old — should NOT be cleared.
+    const agentJob: CronJob = {
+      id: "agent-job-not-stuck",
+      name: "agent job",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+      payload: { kind: "agentTurn", message: "check" },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      createdAtMs: now - 86400_000,
+      updatedAtMs: now - 86400_000,
+      state: {
+        nextRunAtMs: futureTime,
+        runningAtMs: now - 16 * 60_000,
+      },
+    };
+
+    const state = createMockCronStateForJobs({ jobs: [sysJob, agentJob], nowMs: now });
+    recomputeNextRunsForMaintenance(state);
+
+    expect(sysJob.state.runningAtMs).toBeUndefined();
+    expect(agentJob.state.runningAtMs).toBe(now - 16 * 60_000);
   });
 });
