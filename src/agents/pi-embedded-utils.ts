@@ -105,25 +105,37 @@ export function stripToolCallXml(text: string): string {
  */
 export function parseQwenEmbeddedToolCalls(text: string): {
   remainingText: string;
-  toolCalls: { name: string; arguments: Record<string, string> }[];
+  toolCalls: { name: string; arguments: Record<string, unknown> }[];
 } {
   if (!text || !/<tool_call>/i.test(text)) {
     return { remainingText: text, toolCalls: [] };
   }
 
-  const toolCalls: { name: string; arguments: Record<string, string> }[] = [];
+  // Normalize Qwen's malformed XML before parsing
+  const normalized = fixQwenMalformedXml(text);
+
+  const tryParseValue = (raw: string): unknown => {
+    const trimmed = raw.trim();
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return trimmed;
+    }
+  };
+
+  const toolCalls: { name: string; arguments: Record<string, unknown> }[] = [];
   const blockRe = /<tool_call>([\s\S]*?)<\/tool_call>/gi;
   let match: RegExpExecArray | null;
-  while ((match = blockRe.exec(text)) !== null) {
+  while ((match = blockRe.exec(normalized)) !== null) {
     const block = match[1];
     const funcMatch = /<function[=\s](?:name=")?([^>"'\s]+)"?>/i.exec(block);
     if (!funcMatch) continue;
     const funcName = funcMatch[1];
-    const args: Record<string, string> = {};
+    const args: Record<string, unknown> = {};
     const paramRe = /<parameter[=\s](?:name=")?([^>"'\s]+)"?>\s*([\s\S]*?)\s*<\/parameter>/gi;
     let paramMatch: RegExpExecArray | null;
     while ((paramMatch = paramRe.exec(block)) !== null) {
-      args[paramMatch[1]] = paramMatch[2];
+      args[paramMatch[1]] = tryParseValue(paramMatch[2]);
     }
     toolCalls.push({ name: funcName, arguments: args });
   }
@@ -275,9 +287,7 @@ export function extractAssistantText(msg: AssistantMessage): string {
           stripDowngradedToolCallText(
             stripModelSpecialTokens(
               stripMinimaxToolCallXml(
-                stripToolCallXml(
-                  fixQwenMalformedXml(text)
-                )
+                stripToolCallXml(text)
               )
             )
           ),

@@ -105,22 +105,6 @@ describe("extractAssistantText", () => {
     expect(result).toBe("This is a normal response without any tool calls.");
   });
 
-  it("fixes Qwen malformed XML with <function=name> syntax", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: `<function=readFile><parameter=path>/test.txt</parameter></function>`,
-        },
-      ],
-      timestamp: Date.now(),
-    });
-
-    const result = extractAssistantText(msg);
-    expect(result).toBe(`<function name="readFile"><parameter name="path">/test.txt</parameter></function>`);
-  });
-
   it("sanitizes HTTP-ish error text only when stopReason is error", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
@@ -150,6 +134,24 @@ describe("extractAssistantText", () => {
     expect(result).toBe(
       "Firebase downgraded Chore Champ to the Spark plan; confirm whether billing should be re-enabled.",
     );
+  });
+
+  it("preserves response when errorMessage set from background failure (#13935)", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Here is the result.",
+        },
+      ],
+      stopReason: "stop",
+      errorMessage: "Background tool execution failed",
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("Here is the result.");
   });
 
   it("strips Minimax tool invocations with extra attributes", () => {
@@ -701,8 +703,8 @@ describe("parseQwenEmbeddedToolCalls", () => {
     expect(result.toolCalls).toHaveLength(1);
     expect(result.toolCalls[0].name).toBe("exec");
     expect(result.toolCalls[0].arguments.command).toBe("cd /workspace && python test.py");
-    expect(result.toolCalls[0].arguments.pty).toBe("true");
-    expect(result.toolCalls[0].arguments.timeout).toBe("30");
+    expect(result.toolCalls[0].arguments.pty).toBe(true);
+    expect(result.toolCalls[0].arguments.timeout).toBe(30);
   });
 
   it("parses write tool call with multiline content", () => {
