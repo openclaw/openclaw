@@ -3,6 +3,7 @@ import { logVerbose } from "../../globals.js";
 import {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalClientEnabled,
+  isTelegramExecApprovalTargetRecipient,
 } from "../../telegram/exec-approvals.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
@@ -93,18 +94,17 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   }
 
   if (params.command.channel === "telegram") {
-    if (
-      !isTelegramExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.ctx.AccountId })
-    ) {
-      return {
-        shouldContinue: false,
-        reply: { text: "❌ Telegram exec approvals are not enabled for this bot account." },
-      };
-    }
-    if (
-      !isTelegramExecApprovalApprover({
+    const isExplicitApprover =
+      isTelegramExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.ctx.AccountId }) &&
+      isTelegramExecApprovalApprover({
         cfg: params.cfg,
         accountId: params.ctx.AccountId,
+        senderId: params.command.senderId,
+      });
+    if (
+      !isExplicitApprover &&
+      !isTelegramExecApprovalTargetRecipient({
+        cfg: params.cfg,
         senderId: params.command.senderId,
       })
     ) {

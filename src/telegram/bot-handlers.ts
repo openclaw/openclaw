@@ -63,6 +63,7 @@ import { enforceTelegramDmAccess } from "./dm-access.js";
 import {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalClientEnabled,
+  isTelegramExecApprovalTargetRecipient,
   shouldEnableTelegramExecApprovalButtons,
 } from "./exec-approvals.js";
 import {
@@ -1202,10 +1203,10 @@ export const registerTelegramHandlers = ({
       }
 
       if (isApprovalCallback) {
-        if (
-          !isTelegramExecApprovalClientEnabled({ cfg, accountId }) ||
-          !isTelegramExecApprovalApprover({ cfg, accountId, senderId })
-        ) {
+        const isExplicitApprover =
+          isTelegramExecApprovalClientEnabled({ cfg, accountId }) &&
+          isTelegramExecApprovalApprover({ cfg, accountId, senderId });
+        if (!isExplicitApprover && !isTelegramExecApprovalTargetRecipient({ cfg, senderId })) {
           logVerbose(
             `Blocked telegram exec approval callback from ${senderId || "unknown"} (not an approver)`,
           );
