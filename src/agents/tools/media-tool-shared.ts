@@ -1,6 +1,7 @@
 import { type Api, type Model } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getDefaultLocalRoots } from "../../web/media.js";
+import { normalizeResolvedProviderModel } from "../model.provider-normalization.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
 import { getApiKeyForModel, normalizeWorkspaceDir, requireApiKey } from "./tool-runtime.helpers.js";
 
@@ -91,7 +92,10 @@ export function resolveModelFromRegistry(params: {
   if (!model) {
     throw new Error(`Unknown model: ${params.provider}/${params.modelId}`);
   }
-  return model;
+  return normalizeResolvedProviderModel({
+    provider: params.provider,
+    model,
+  });
 }
 
 export async function resolveModelRuntimeApiKey(params: {
