@@ -62,6 +62,96 @@ async function awaitEvalWithAbort<T>(
   }
 }
 
+/**
+ * Validates JavaScript function body for safe evaluation.
+ * Blocks access to sensitive APIs and dangerous patterns.
+ * 
+ * SECURITY: Defense-in-depth measure. Code runs in browser context (isolated),
+ * but we add validation to prevent XSS, data exfiltration, and DoS attacks.
+ */
+function validateEvalFunctionBody(fnBody: string): { ok: true } | { ok: false; error: string } {
+  if (!fnBody || typeof fnBody !== "string") {
+    return { ok: false, error: "Function body must be a non-empty string" };
+  }
+
+  // Maximum function body size (100KB)
+  if (fnBody.length > 100 * 1024) {
+    return { ok: false, error: "Function body exceeds maximum size (100KB)" };
+  }
+
+  // Dangerous patterns blocked for security
+  // Note: We check both dot notation and bracket notation to prevent bypasses
+  const dangerousPatterns: RegExp[] = [
+    // Cookie theft (dot and bracket notation)
+    /\bdocument\.cookie\b/i,
+    /\bdocument\s*\[\s*['"]cookie['"]\s*\]/i,
+    
+    // Storage access (dot and bracket notation)
+    /\blocalStorage\b/i,
+    /\bwindow\s*\[\s*['"]localStorage['"]\s*\]/i,
+    /\bsessionStorage\b/i,
+    /\bwindow\s*\[\s*['"]sessionStorage['"]\s*\]/i,
+    /\bindexedDB\b/i,
+    /\bwindow\s*\[\s*['"]indexedDB['"]\s*\]/i,
+    
+    // Network exfiltration
+    /\bfetch\s*\(/i,
+    /\bwindow\s*\[\s*['"]fetch['"]\s*\]\s*\(/i,
+    /\bXMLHttpRequest\b/i,
+    /\bWebSocket\b/i,
+    
+    // Code execution
+    /\beval\s*\(/i,
+    /\bnew\s+Function\s*\(/i,
+    /\bwindow\s*\[\s*['"]eval['"]\s*\]/i,
+    
+    // DOM injection
+    /\bdocument\.write\b/i,
+    /\bdocument\.writeln\b/i,
+    /\binnerHTML\s*=/i,
+    /\bouterHTML\s*=/i,
+    /\['innerHTML'\]\s*=/i,
+    /\['outerHTML'\]\s*=/i,
+    /\["innerHTML"\]\s*=/i,
+    /\["outerHTML"\]\s*=/i,
+    
+    // Redirect attacks
+    /\bwindow\.location\b/i,
+    /\blocation\.href\b/i,
+    /\blocation\.replace\b/i,
+    /\blocation\.assign\b/i,
+    /\bwindow\s*\[\s*['"]location['"]\s*\]/i,
+    
+    // Popup attacks
+    /\bwindow\.open\b/i,
+    /\bwindow\s*\[\s*['"]open['"]\s*\]/i,
+    
+    // User disruption
+    /\balert\s*\(/i,
+    /\bconfirm\s*\(/i,
+    /\bprompt\s*\(/i,
+  ];
+
+  for (const pattern of dangerousPatterns) {
+    if (pattern.test(fnBody)) {
+      return {
+        ok: false,
+        error: `Function body contains forbidden pattern. Blocked for security reasons.`
+      };
+    }
+  }
+
+  // Basic syntax validation (doesn't execute, just validates)
+  try {
+    new Function(`"use strict"; ${fnBody}`);
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: `Invalid JavaScript syntax: ${errorMessage}` };
+  }
+
+  return { ok: true };
+}
+
 export async function highlightViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -297,6 +387,13 @@ export async function evaluateViaPlaywright(opts: {
   if (!fnText) {
     throw new Error("function is required");
   }
+  
+  // SECURITY: Validate function body before evaluation to prevent XSS/injection
+  const validation = validateEvalFunctionBody(fnText);
+  if (!validation.ok) {
+    throw new Error(`evaluate() validation failed: ${validation.error}`);
+  }
+  
   const page = await getRestoredPageForTarget(opts);
   // Clamp evaluate timeout to prevent permanently blocking Playwright's command queue.
   // Without this, a long-running async evaluate blocks all subsequent page operations
@@ -486,6 +583,11 @@ export async function waitForViaPlaywright(opts: {
   if (opts.fn) {
     const fn = String(opts.fn).trim();
     if (fn) {
+      // SECURITY: Validate function body before execution (same as evaluateViaPlaywright)
+      const validation = validateEvalFunctionBody(fn);
+      if (!validation.ok) {
+        throw new Error(`waitForFunction() validation failed: ${validation.error}`);
+      }
       await page.waitForFunction(fn, { timeout });
     }
   }
