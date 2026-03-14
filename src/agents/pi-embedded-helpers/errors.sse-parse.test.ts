@@ -251,6 +251,22 @@ describe("isLikelySSEParseError", () => {
       ).toBe(false);
     });
 
+    it("does NOT detect non-JSON SyntaxError with 'unexpected token' (e.g. eval error)", () => {
+      expect(
+        isLikelySSEParseError("SyntaxError: Unexpected token 'var'", {
+          streamingContext: true,
+        }),
+      ).toBe(false);
+    });
+
+    it("detects 'unexpected token' when paired with 'at position' (V8 JSON.parse)", () => {
+      expect(
+        isLikelySSEParseError("SyntaxError: Unexpected token < at position 0", {
+          streamingContext: true,
+        }),
+      ).toBe(true);
+    });
+
     it("does NOT detect 'parse error: unexpected end of stream' (non-JSON)", () => {
       expect(
         isLikelySSEParseError("parse error: unexpected end of stream", {

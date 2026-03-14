@@ -977,9 +977,11 @@ export async function runEmbeddedPiAgent(
               ? lastAssistant.errorMessage?.trim() || formattedAssistantErrorText
               : undefined;
 
-          // Reset SSE retry budget on successful turns so scattered transient
-          // errors across a long session don't permanently exhaust the budget.
-          if (!promptError && !assistantErrorText) {
+          // Reset SSE retry budget on successful model responses so scattered
+          // transient errors across a long session don't permanently exhaust
+          // the budget. Use stopReason rather than error-text emptiness to
+          // avoid resetting when the response errored with an empty message.
+          if (!promptError && lastAssistant?.stopReason !== "error") {
             sseParseRetries = 0;
           }
 

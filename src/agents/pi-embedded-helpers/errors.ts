@@ -953,10 +953,13 @@ export function isLikelySSEParseError(
 
   // 2) SyntaxError + JSON 相关 + 流式上下文
   const isSyntaxError = lower.includes("syntaxerror") || lower.includes("syntax error");
+  // Narrow JSON context detection: standalone "unexpected token" is too broad
+  // (matches non-JSON SyntaxErrors like `Unexpected token 'var'`). Require
+  // either an explicit "json" mention, V8-style "at position" suffix, or the
+  // JSON-specific "unterminated string" pattern.
   const isJsonContext =
     lower.includes("json") ||
-    lower.includes("unexpected token") ||
-    lower.includes("unexpected end of json") ||
+    (lower.includes("unexpected token") && lower.includes("at position")) ||
     lower.includes("unterminated string");
 
   if (isSyntaxError && isJsonContext && inStreamingContext) {
