@@ -290,6 +290,38 @@ describe("system events (session routing)", () => {
     expect(replayed.text).toContain("System: Slack (configured)");
     commitPeekedSystemEvents(replayed);
   });
+
+  it("does not replay a consumed first-turn summary after another reservation restores", async () => {
+    vi.mocked(buildChannelSummary).mockResolvedValue(["Slack (configured)"]);
+
+    const committedPreview = await peekFormattedSystemEvents({
+      cfg,
+      sessionKey: mainKey,
+      isMainSession: true,
+      isNewSession: true,
+    });
+    const skippedPreview = await peekFormattedSystemEvents({
+      cfg,
+      sessionKey: mainKey,
+      isMainSession: true,
+      isNewSession: true,
+    });
+
+    expect(committedPreview.text).toContain("System: Slack (configured)");
+    expect(skippedPreview.text).toContain("System: Slack (configured)");
+
+    commitPeekedSystemEvents(committedPreview);
+    restorePeekedSystemEvents(skippedPreview);
+
+    const replayed = await peekFormattedSystemEvents({
+      cfg,
+      sessionKey: mainKey,
+      isMainSession: true,
+      isNewSession: false,
+    });
+
+    expect(replayed.text).toBeUndefined();
+  });
 });
 
 describe("isCronSystemEvent", () => {

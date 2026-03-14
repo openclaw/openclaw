@@ -17,6 +17,7 @@ export type SystemEventSummaryReservation = {
   sessionKey: string;
   reservationId: string;
   lines: string[];
+  generation: number;
 };
 
 const MAX_EVENTS = 20;
@@ -30,9 +31,16 @@ type SessionQueue = {
   lastContextKey: string | null;
 };
 
+type SummaryState = {
+  generation: number;
+  lines: string[];
+};
+
 const queues = new Map<string, SessionQueue>();
-const pendingSummaries = new Map<string, string[]>();
-const summaryReservations = new Map<string, Map<string, string[]>>();
+const pendingSummaries = new Map<string, SummaryState>();
+const summaryReservations = new Map<string, Map<string, SummaryState>>();
+const consumedSummaryGenerations = new Map<string, number>();
+let nextSummaryGeneration = 0;
 
 type SystemEventOptions = {
   sessionKey: string;
@@ -136,12 +144,15 @@ function getOrCreateSummaryReservationBucket(sessionKey: string) {
   if (existing) {
     return existing;
   }
-  const created = new Map<string, string[]>();
+  const created = new Map<string, SummaryState>();
   summaryReservations.set(sessionKey, created);
   return created;
 }
 
-function maybeDeleteSummaryReservationBucket(sessionKey: string, bucket: Map<string, string[]>) {
+function maybeDeleteSummaryReservationBucket(
+  sessionKey: string,
+  bucket: Map<string, SummaryState>,
+) {
   if (bucket.size === 0) {
     summaryReservations.delete(sessionKey);
   }
@@ -149,19 +160,23 @@ function maybeDeleteSummaryReservationBucket(sessionKey: string, bucket: Map<str
 
 function createSummaryReservation(
   sessionKey: string,
-  lines: string[],
+  summary: SummaryState,
 ): SystemEventSummaryReservation | undefined {
-  if (lines.length === 0) {
+  if (summary.lines.length === 0) {
     return undefined;
   }
-  const stored = lines.slice();
+  const stored: SummaryState = {
+    generation: summary.generation,
+    lines: summary.lines.slice(),
+  };
   const reservationId = `s${nextReservationId++}`;
   const bucket = getOrCreateSummaryReservationBucket(sessionKey);
   bucket.set(reservationId, stored);
   return {
     sessionKey,
     reservationId,
-    lines: stored.slice(),
+    lines: stored.lines.slice(),
+    generation: stored.generation,
   };
 }
 
@@ -202,12 +217,12 @@ export function reserveSystemEventSummary(
   sessionKey: string,
 ): SystemEventSummaryReservation | undefined {
   const key = requireSessionKey(sessionKey);
-  const lines = pendingSummaries.get(key);
-  if (!lines || lines.length === 0) {
+  const summary = pendingSummaries.get(key);
+  if (!summary || summary.lines.length === 0) {
     return undefined;
   }
   pendingSummaries.delete(key);
-  return createSummaryReservation(key, lines);
+  return createSummaryReservation(key, summary);
 }
 
 export function createSystemEventSummaryReservation(
@@ -215,7 +230,18 @@ export function createSystemEventSummaryReservation(
   lines: string[],
 ): SystemEventSummaryReservation | undefined {
   const key = requireSessionKey(sessionKey);
-  return createSummaryReservation(key, lines);
+  const pending = pendingSummaries.get(key);
+  if (pending) {
+    return createSummaryReservation(key, pending);
+  }
+  const existing = summaryReservations.get(key)?.values().next().value;
+  if (existing) {
+    return createSummaryReservation(key, existing);
+  }
+  return createSummaryReservation(key, {
+    generation: nextSummaryGeneration++,
+    lines,
+  });
 }
 
 export function commitSystemEventReservation(
@@ -255,7 +281,9 @@ export function commitSystemEventSummaryReservation(
   }
   bucket.delete(reservation.reservationId);
   maybeDeleteSummaryReservationBucket(key, bucket);
-  return lines.slice();
+  pendingSummaries.delete(key);
+  consumedSummaryGenerations.set(key, lines.generation);
+  return lines.lines.slice();
 }
 
 export function restoreSystemEventReservation(
@@ -298,14 +326,19 @@ export function restoreSystemEventSummaryReservation(
   if (!bucket) {
     return [];
   }
-  const lines = bucket?.get(reservation.reservationId);
-  if (!lines) {
+  const summary = bucket?.get(reservation.reservationId);
+  if (!summary) {
     return [];
   }
   bucket.delete(reservation.reservationId);
   maybeDeleteSummaryReservationBucket(key, bucket);
-  pendingSummaries.set(key, lines.slice());
-  return lines.slice();
+  if (consumedSummaryGenerations.get(key) !== summary.generation) {
+    pendingSummaries.set(key, {
+      generation: summary.generation,
+      lines: summary.lines.slice(),
+    });
+  }
+  return summary.lines.slice();
 }
 
 export function consumeSystemEventEntries(
@@ -362,6 +395,8 @@ export function resetSystemEventsForTest() {
   queues.clear();
   pendingSummaries.clear();
   summaryReservations.clear();
+  consumedSummaryGenerations.clear();
   nextReservationId = 0;
+  nextSummaryGeneration = 0;
   nextEventOrder = 0;
 }
