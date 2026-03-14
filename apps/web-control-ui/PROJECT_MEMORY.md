@@ -1,0 +1,73 @@
+# web-control-ui 项目记忆与状态
+- 定位：通过对话共创自定义前端页面的产品，不是普通控制台
+- 核心方向：专属前端 agent、用户偏好记忆、对话驱动改代码、上游功能跟踪与推荐
+- 当前版本：v0.1（已落地核心骨架）
+- 状态：已可实际使用
+---
+## 已完成功能
+1. **前端提示词工作台**
+   - 核心模块：src/product/prompt.ts
+   - 自动拼接用户偏好+当前需求+安全约束
+2. **偏好记忆**
+   - 核心模块：src/product/storage.ts
+   - 本地存储用户布局/风格/交互习惯
+3. **原生改代码链路**
+   - 基于 OpenClaw 原生 chat.send
+   - 安全模式默认开启：改前 checkpoint → 改代码 → build 验证 → 失败回退
+4. **版本回退机制**
+   - 三个配套脚本：
+     - scripts/web-control-ui-checkpoint.ps1
+     - scripts/web-control-ui-restore.ps1
+     - scripts/web-control-ui-list-checkpoints.ps1
+   - UI 已集成快捷操作入口
+5. **token 自动接入**
+   - 核心模块：src/product/auth.ts
+   - 支持官方 #token=... 路径自动登录
+6. **可用性优化**
+   - 长消息折叠
+   - 消息分类显示：reply/status/build/command
+   - 视图切换：全部/回复/操作日志
+---
+## 项目文件结构
+```
+openclaw-src/apps/web-control-ui/
+├── index.html
+├── package.json
+├── vite.config.ts
+├── src/
+│   ├── main.ts          # 主入口
+│   ├── styles.css       # 样式
+│   └── product/
+│       ├── agent-contract.ts  # 早期协议沉淀
+│       ├── auth.ts            # 认证模块
+│       ├── defaults.ts        # 默认配置
+│       ├── prompt.ts          # 提示词模块
+│       └── storage.ts         # 存储模块
+└── dist/              # 构建产物
+```
+---
+## 开发模式
+- dev 服务地址：http://localhost:4173/
+- 热重载已开启
+- 构建命令：node ./node_modules/vite/bin/vite.js build
+---
+## 长期记忆（我该怎么做事）
+1. 先调查，后发言
+2. 多步任务边做边记：记录动作/结果/状态/下一步
+3. 回答进度优先依据当场记录，不凭回忆拼接
+4. 重视后台劳动和隐藏代价，不唯效率论
+5. 自动化任务一次性挂好，不反复打扰用户
+---
+## 下一步推进方向
+1. checkpoint 历史可视化
+2. 操作日志细分面板
+3. 提示词与偏好记忆的 UI 配置
+4. OpenClaw 上游新功能跟踪推荐
+---
+## 并行维护内容
+### marxism-self-positioning 会话归档
+- 状态：✅ 正常运行中
+- 巡检频率：每5分钟
+- 保留内容：raw transcript、readable dialogue、article 副本、session summary
+- 最新状态：complete，无缺件、无污染
+- Source: memory/2026-03-15.md
