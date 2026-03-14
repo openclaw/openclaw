@@ -56,7 +56,11 @@ export const doctorHandlers: GatewayRequestHandlers = {
       };
       respond(true, payload, undefined);
     } finally {
-      await manager.close();
+      try {
+        await manager.close();
+      } catch {
+        // Ignore close errors - response already sent
+      }
     }
   },
 };
