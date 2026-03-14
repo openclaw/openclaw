@@ -1,11 +1,11 @@
 import {
   buildVllmProvider,
   configureOpenAICompatibleSelfHostedProviderNonInteractive,
+  discoverOpenAICompatibleSelfHostedProvider,
   emptyPluginConfigSchema,
   promptAndConfigureOpenAICompatibleSelfHostedProviderAuth,
   type OpenClawPluginApi,
   type ProviderAuthMethodNonInteractiveContext,
-  type ProviderDiscoveryContext,
 } from "openclaw/plugin-sdk/core";
 
 const PROVIDER_ID = "vllm";
@@ -28,7 +28,7 @@ const vllmPlugin = {
           label: "vLLM",
           hint: "Local/self-hosted OpenAI-compatible server",
           kind: "custom",
-          run: (ctx) =>
+          run: async (ctx) =>
             promptAndConfigureOpenAICompatibleSelfHostedProviderAuth({
               cfg: ctx.config,
               prompter: ctx.prompter,
@@ -51,21 +51,12 @@ const vllmPlugin = {
       ],
       discovery: {
         order: "late",
-        run: async (ctx: ProviderDiscoveryContext) => {
-          if (ctx.config.models?.providers?.vllm) {
-            return null;
-          }
-          const { apiKey, discoveryApiKey } = ctx.resolveProviderApiKey(PROVIDER_ID);
-          if (!apiKey) {
-            return null;
-          }
-          return {
-            provider: {
-              ...(await buildVllmProvider({ apiKey: discoveryApiKey })),
-              apiKey,
-            },
-          };
-        },
+        run: async (ctx) =>
+          discoverOpenAICompatibleSelfHostedProvider({
+            ctx,
+            providerId: PROVIDER_ID,
+            buildProvider: buildVllmProvider,
+          }),
       },
       wizard: {
         onboarding: {
