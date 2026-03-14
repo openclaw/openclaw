@@ -1163,4 +1163,113 @@ describe("createFollowupRunner media understanding", () => {
     expect(agentCall?.prompt).not.toContain("summarize this\n\n/think high summarize this");
     expect(agentCall?.prompt).not.toContain("/think high summarize this");
   });
+
+  it("does not false-positive on user text containing literal '<file' when extracting files", async () => {
+    const fileBlock = '<file name="data.csv" mime="text/csv">\ncol1,col2\n1,2\n</file>';
+    applyMediaUnderstandingMock.mockImplementationOnce(
+      async (params: { ctx: Record<string, unknown> }) => {
+        params.ctx.Body = `check my <file upload please\n\n${fileBlock}`;
+        return {
+          outputs: [],
+          decisions: [],
+          appliedImage: false,
+          appliedAudio: false,
+          appliedVideo: false,
+          appliedFile: true,
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "got it" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    // User message contains literal "<file" text but that should NOT prevent
+    // file extraction results from being embedded in the prompt.
+    await runner(
+      createQueuedRun({
+        prompt:
+          "[media attached: /tmp/data.csv (text/csv)]\ncheck my <file upload please",
+        mediaContext: {
+          Body: "check my <file upload please",
+          CommandBody: "check my <file upload please",
+          RawBody: "check my <file upload please",
+          MediaPaths: ["/tmp/data.csv"],
+          MediaTypes: ["text/csv"],
+        },
+      }),
+    );
+
+    const agentCall = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      prompt?: string;
+    };
+    // The file extraction result should be present in the prompt
+    expect(agentCall?.prompt).toContain(fileBlock);
+    expect(agentCall?.prompt).toContain("check my <file upload please");
+  });
+
+  it("uses resolved body (CommandBody) as originalBody for accurate prompt replacement", async () => {
+    const fileBlock = '<file name="report.pdf" mime="application/pdf">\nreport content\n</file>';
+    applyMediaUnderstandingMock.mockImplementationOnce(
+      async (params: { ctx: Record<string, unknown> }) => {
+        // applyMediaUnderstanding mutates the resolved body (which is CommandBody)
+        params.ctx.Body = `summarize this\n\n${fileBlock}`;
+        return {
+          outputs: [],
+          decisions: [],
+          appliedImage: false,
+          appliedAudio: false,
+          appliedVideo: false,
+          appliedFile: true,
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "processed" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    // Body has directive prefix; CommandBody has the cleaned version.
+    // The prompt was built from CommandBody, so originalBody should match CommandBody
+    // for accurate replacement.
+    await runner(
+      createQueuedRun({
+        prompt: `[media attached: /tmp/report.pdf]\n${MEDIA_REPLY_HINT}\nsummarize this`,
+        mediaContext: {
+          Body: "/think high summarize this",
+          CommandBody: "summarize this",
+          RawBody: "/think high summarize this",
+          MediaPaths: ["/tmp/report.pdf"],
+          MediaTypes: ["application/pdf"],
+        },
+      }),
+    );
+
+    const agentCall = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      prompt?: string;
+    };
+    // File block should be present (extraction succeeded)
+    expect(agentCall?.prompt).toContain(fileBlock);
+    // The body text should appear once, not duplicated
+    expect(agentCall?.prompt).toContain("summarize this");
+    // Should NOT contain the directive prefix
+    expect(agentCall?.prompt).not.toContain("/think high");
+    // The body should not be duplicated (would happen if originalBody didn't match)
+    const matches = agentCall?.prompt?.match(/summarize this/g);
+    expect(matches?.length).toBe(1);
+  });
 });

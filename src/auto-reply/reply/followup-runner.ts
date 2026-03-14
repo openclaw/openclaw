@@ -41,7 +41,7 @@ const MEDIA_ONLY_PLACEHOLDER = "[User sent media without caption]";
 const MEDIA_REPLY_HINT_PREFIX = "To send an image back, prefer the message tool";
 const LEADING_MEDIA_ATTACHED_LINE_RE =
   /^(?:\[media attached: \d+ files\]|\[media attached(?: \d+\/\d+)?: [^\r\n]*\])$/;
-const FILE_BLOCK_RE = /<file\b/i;
+const FILE_BLOCK_RE = /<file\s+name="/i;
 
 function stripLeadingMediaAttachedLines(prompt: string): string {
   const lines = prompt.split("\n");
@@ -252,14 +252,21 @@ export function createFollowupRunner(params: {
         );
         if (hasMedia) {
           try {
+            const resolvedOriginalBody =
+              queued.mediaContext.CommandBody ??
+              queued.mediaContext.RawBody ??
+              queued.mediaContext.Body;
             const mediaCtx = {
               ...queued.mediaContext,
-              Body:
-                queued.mediaContext.CommandBody ??
-                queued.mediaContext.RawBody ??
-                queued.mediaContext.Body,
+              Body: resolvedOriginalBody,
             } as MsgContext;
-            const originalBody = queued.mediaContext.Body;
+            const originalBody = resolvedOriginalBody;
+            // Capture whether the resolved body already contains a file block
+            // BEFORE applyMediaUnderstanding mutates it — this detects prior
+            // extraction so we avoid double-inserting.  Checking the body
+            // (not the full queued.prompt) avoids false positives from user
+            // messages that happen to contain literal "<file path=" text.
+            const bodyAlreadyHasFileBlock = FILE_BLOCK_RE.test(resolvedOriginalBody ?? "");
             const muResult = await applyMediaUnderstanding({
               ctx: mediaCtx,
               cfg: queued.run.config,
@@ -271,7 +278,7 @@ export function createFollowupRunner(params: {
             });
             const shouldRebuildPrompt =
               muResult.outputs.length > 0 ||
-              (muResult.appliedFile && !FILE_BLOCK_RE.test(queued.prompt));
+              (muResult.appliedFile && !bodyAlreadyHasFileBlock);
             if (shouldRebuildPrompt) {
               // Rebuild the queued prompt from the mutated media context so the
               // deferred path matches the primary path's prompt shape.
