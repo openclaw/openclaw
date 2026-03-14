@@ -82,7 +82,7 @@ export function normalizeReplyPayload(
   if (text) {
     text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
   }
-  if (text && hasSuspiciousReplyLeakage(text)) {
+  if (text && hasSuspiciousReplyLeakage(text, { silentToken })) {
     if (!hasMedia && !hasChannelData) {
       opts.onSkip?.("suspicious");
       return null;

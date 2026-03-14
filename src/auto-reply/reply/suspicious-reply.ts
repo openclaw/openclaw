@@ -1,3 +1,4 @@
+import { escapeRegExp } from "../../utils.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 
 const STRUCTURED_ROUTE_MARKER_LINE_RE =
@@ -5,8 +6,18 @@ const STRUCTURED_ROUTE_MARKER_LINE_RE =
 const TOOL_JSON_KEY_RE =
   /"(?:command|yieldMs|workdir|file_path|oldText|newText|old_string|new_string|sessionId|timeout|background|pty|elevated)"\s*:/i;
 
-function stripLeadingSilentToken(text: string): string {
-  return text.replace(new RegExp(`^\\s*${SILENT_REPLY_TOKEN}\\b`, "i"), "").trimStart();
+export type SuspiciousReplyLeakageOptions = {
+  silentToken?: string;
+};
+
+function stripLeadingSilentToken(text: string, silentToken: string): string {
+  const escapedToken = escapeRegExp(silentToken);
+  return text.replace(new RegExp(`^\\s*${escapedToken}(?=\\s|$|\\b)`, "i"), "").trimStart();
+}
+
+function startsWithSilentToken(text: string, silentToken: string): boolean {
+  const escapedToken = escapeRegExp(silentToken);
+  return new RegExp(`^\\s*${escapedToken}(?=\\s|$|\\b)`, "i").test(text);
 }
 
 function firstNonEmptyLine(text: string): string {
@@ -63,7 +74,10 @@ function hasStructuredToolJsonBlock(lines: string[]): boolean {
   return lines.every(isJsonBlockLine) && lines.some((line) => TOOL_JSON_KEY_RE.test(line));
 }
 
-export function hasSuspiciousReplyLeakage(text: string | undefined): boolean {
+export function hasSuspiciousReplyLeakage(
+  text: string | undefined,
+  opts: SuspiciousReplyLeakageOptions = {},
+): boolean {
   if (!text) {
     return false;
   }
@@ -72,9 +86,12 @@ export function hasSuspiciousReplyLeakage(text: string | undefined): boolean {
     return false;
   }
 
+  const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
   const hasLeadingSilentWithExtra =
-    trimmed.toUpperCase().startsWith(SILENT_REPLY_TOKEN) && !isSilentReplyText(trimmed);
-  const candidate = hasLeadingSilentWithExtra ? stripLeadingSilentToken(trimmed) : trimmed;
+    startsWithSilentToken(trimmed, silentToken) && !isSilentReplyText(trimmed, silentToken);
+  const candidate = hasLeadingSilentWithExtra
+    ? stripLeadingSilentToken(trimmed, silentToken)
+    : trimmed;
   const lines = nonEmptyLines(candidate);
   const firstLine = firstNonEmptyLine(candidate);
   if (!STRUCTURED_ROUTE_MARKER_LINE_RE.test(firstLine)) {

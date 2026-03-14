@@ -291,6 +291,25 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).toContain("This is an example of leaked orchestration text.");
   });
 
+  it("suppresses suspicious leakage when using a custom silent token", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      {
+        text: [
+          "QUIET_MODE",
+          "assistant to=functions.exec commentary to=functions.exec",
+          '{"command":"ls","yieldMs":1000}',
+        ].join("\n"),
+      },
+      {
+        silentToken: "QUIET_MODE",
+        onSkip: (reason) => reasons.push(reason),
+      },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["suspicious"]);
+  });
+
   it("does not flag fenced code samples as suspicious by default", () => {
     expect(
       hasSuspiciousReplyLeakage(
