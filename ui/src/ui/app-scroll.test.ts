@@ -61,7 +61,7 @@ function createScrollEvent(scrollHeight: number, scrollTop: number, clientHeight
 /* ------------------------------------------------------------------ */
 
 describe("handleChatScroll", () => {
-  it("sets chatUserNearBottom=true when within the 450px threshold", () => {
+  it("sets chatUserNearBottom=true when within the 150px threshold", () => {
     const { host } = createScrollHost({});
     // distanceFromBottom = 2000 - 1600 - 400 = 0 → clearly near bottom
     const event = createScrollEvent(2000, 1600, 400);
@@ -71,16 +71,16 @@ describe("handleChatScroll", () => {
 
   it("sets chatUserNearBottom=true when distance is just under threshold", () => {
     const { host } = createScrollHost({});
-    // distanceFromBottom = 2000 - 1151 - 400 = 449 → just under threshold
-    const event = createScrollEvent(2000, 1151, 400);
+    // distanceFromBottom = 2000 - 1451 - 400 = 149 → just under 150px threshold
+    const event = createScrollEvent(2000, 1451, 400);
     handleChatScroll(host, event);
     expect(host.chatUserNearBottom).toBe(true);
   });
 
   it("sets chatUserNearBottom=false when distance is exactly at threshold", () => {
     const { host } = createScrollHost({});
-    // distanceFromBottom = 2000 - 1150 - 400 = 450 → at threshold (uses strict <)
-    const event = createScrollEvent(2000, 1150, 400);
+    // distanceFromBottom = 2000 - 1450 - 400 = 150 → at threshold (uses strict <)
+    const event = createScrollEvent(2000, 1450, 400);
     handleChatScroll(host, event);
     expect(host.chatUserNearBottom).toBe(false);
   });
@@ -93,11 +93,10 @@ describe("handleChatScroll", () => {
     expect(host.chatUserNearBottom).toBe(false);
   });
 
-  it("sets chatUserNearBottom=false when user scrolled up past one long message (>200px <450px)", () => {
+  it("sets chatUserNearBottom=false when user scrolled up past threshold during streaming", () => {
     const { host } = createScrollHost({});
-    // distanceFromBottom = 2000 - 1250 - 400 = 350 → old threshold would say "near", new says "near"
-    // distanceFromBottom = 2000 - 1100 - 400 = 500 → old threshold would say "not near", new also "not near"
-    const event = createScrollEvent(2000, 1100, 400);
+    // distanceFromBottom = 2000 - 1250 - 400 = 350 → old 450px threshold said "near", new 150px correctly says "not near"
+    const event = createScrollEvent(2000, 1250, 400);
     handleChatScroll(host, event);
     expect(host.chatUserNearBottom).toBe(false);
   });
