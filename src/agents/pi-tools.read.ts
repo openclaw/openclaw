@@ -77,14 +77,17 @@ export function isInboundMediaPath(filePath: string): boolean {
   ) {
     return true;
   }
-  // Absolute path (POSIX or Windows drive): the staging directory must sit
-  // exactly one level below the filesystem root / drive root, i.e.
-  //   /workspace/media/inbound/...   (true)
-  //   C:/workspace/media/inbound/... (true)
-  //   /workspace/src/media/inbound/  (false - nested, not the staging root)
-  return new RegExp(
-    `^(?:[A-Za-z]:)?/[^/]+/${INBOUND_MEDIA_PATH_SEGMENT}(?:/|$)`,
-  ).test(normalized);
+  // Absolute path (POSIX or Windows drive): the staging directory may sit
+  // at any depth below the filesystem root / drive root, i.e.
+  //   /workspace/media/inbound/...              (true)
+  //   C:/workspace/media/inbound/...            (true)
+  //   /Users/alice/openclaw/media/inbound/...   (true - multi-segment host path)
+  //   C:/Users/alice/openclaw/media/inbound/... (true - multi-segment Windows path)
+  //   /workspace/media/inbound                  (false - exact dir, no file)
+  // We require at least one path segment before media/inbound and a trailing
+  // slash (i.e. the path must point to a file inside the directory, not the
+  // directory itself).
+  return new RegExp(`^(?:[A-Za-z]:)?/(?:[^/]+/)+${INBOUND_MEDIA_PATH_SEGMENT}/`).test(normalized);
 }
 
 type OpenClawReadToolOptions = {
