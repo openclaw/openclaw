@@ -1,3 +1,4 @@
+import { inspectSlackAccount } from "../../../extensions/slack/src/account-inspect.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveChannelGroupRequireMention,
@@ -11,7 +12,6 @@ import type {
 } from "../../config/types.tools.js";
 import { resolveExactLineGroupConfigKey } from "../../line/group-keys.js";
 import { normalizeAtHashSlug, normalizeHyphenSlug } from "../../shared/string-normalization.js";
-import { inspectSlackAccount } from "../../slack/account-inspect.js";
 import type { ChannelGroupContext } from "./types.js";
 
 type GroupMentionParams = ChannelGroupContext;
