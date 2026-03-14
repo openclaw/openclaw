@@ -48,6 +48,7 @@ describe("OPENCLAW_LOG_LEVEL", () => {
       level: "debug",
       file: testLogPath,
       maxFileBytes: defaultMaxFileBytes,
+      maxBackups: 5,
     });
     expect(getResolvedConsoleSettings()).toEqual({
       level: "debug",

@@ -49,6 +49,10 @@ export const FIELD_HELP: Record<string, string> = {
     'Console output format style: "pretty", "compact", or "json" based on operator and ingestion needs. Use json for machine parsing pipelines and pretty/compact for human-first terminal workflows.',
   "logging.redactSensitive":
     'Sensitive redaction mode: "off" disables built-in masking, while "tools" redacts sensitive tool/config payload fields. Keep "tools" in shared logs unless you have isolated secure log sinks.',
+  "logging.maxFileBytes":
+    "Maximum size in bytes for a single log file before rotation triggers (default 500 MB). When the threshold is exceeded, the current file is renamed to file.1 and a new file is opened. Set maxBackups to control how many rotated files are retained.",
+  "logging.maxBackups":
+    "Number of rotated log backup files to keep alongside the active log file (default 5). When a rotation occurs, older backups are shifted up (file.1 → file.2, …) and any backup beyond this count is deleted. Set to 0 to disable rotation and revert to the legacy suppress-on-cap behaviour.",
   "logging.redactPatterns":
     "Additional custom redact regex patterns applied to log output before emission/storage. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
   cli: "CLI presentation controls for local command output behavior such as banner and tagline style. Use this section to keep startup output aligned with operator preference without changing runtime behavior.",

@@ -49,3 +49,13 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **mc-seo** — SEO automation: rank tracking across Google, Bing, and DuckDuckGo; backlink outreach pipeline; sitemap pinging via IndexNow + Google Search Console; directory submission tracking. Part of the [miniclaw-os](https://github.com/augmentedmike/miniclaw-os) plugin ecosystem.
+  npm: `@miniclaw-os/mc-seo`
+  repo: `https://github.com/augmentedmike/miniclaw-os`
+  install: `openclaw plugins install @miniclaw-os/mc-seo`
+
+- **mc-board** — Kanban task board for OpenClaw agents. Board-worker subagents autonomously execute task cards with design/development/research protocols. Supports multi-column workflow, card attachments, acceptance criteria, and priority tiers. Part of the [miniclaw-os](https://github.com/augmentedmike/miniclaw-os) ecosystem.
+  npm: `@miniclaw-os/mc-board`
+  repo: `https://github.com/augmentedmike/miniclaw-os`
+  install: `openclaw plugins install @miniclaw-os/mc-board`
