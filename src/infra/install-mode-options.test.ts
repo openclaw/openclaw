@@ -4,6 +4,8 @@ import {
   resolveTimedInstallModeOptions,
 } from "./install-mode-options.js";
 
+type LoggerKey = "default" | "explicit";
+
 describe("install mode option helpers", () => {
   it.each([
     {
@@ -21,23 +23,27 @@ describe("install mode option helpers", () => {
       params: { mode: "update" as const, dryRun: false },
       expected: { loggerKey: "default", mode: "update", dryRun: false },
     },
-  ])("$name", ({ params, expected }) => {
+  ] satisfies Array<{
+    name: string;
+    params: { loggerKey?: LoggerKey; mode?: "install" | "update"; dryRun?: boolean };
+    expected: { loggerKey: LoggerKey; mode: "install" | "update"; dryRun: boolean };
+  }>)("$name", ({ params, expected }) => {
     const loggers = {
       default: { warn: (_message: string) => {} },
       explicit: { warn: (_message: string) => {} },
-    };
+    } satisfies Record<LoggerKey, { warn: (_message: string) => void }>;
 
     expect(
       resolveInstallModeOptions(
         {
-          logger: params.loggerKey ? loggers[params.loggerKey as keyof typeof loggers] : undefined,
+          logger: params.loggerKey ? loggers[params.loggerKey] : undefined,
           mode: params.mode,
           dryRun: params.dryRun,
         },
         loggers.default,
       ),
     ).toEqual({
-      logger: loggers[expected.loggerKey as keyof typeof loggers],
+      logger: loggers[expected.loggerKey],
       mode: expected.mode,
       dryRun: expected.dryRun,
     });

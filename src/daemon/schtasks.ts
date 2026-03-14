@@ -161,6 +161,12 @@ export type ScheduledTaskInfo = {
   lastRunResult?: string;
 };
 
+function hasListenerPid<T extends { pid?: number | null }>(
+  listener: T,
+): listener is T & { pid: number } {
+  return typeof listener.pid === "number";
+}
+
 export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
   const entries = parseKeyValueOutput(output, ":");
   const info: ScheduledTaskInfo = {};
@@ -496,7 +502,7 @@ async function resolveFallbackRuntime(env: GatewayServiceEnv): Promise<GatewaySe
       detail: `Startup-folder login item installed; could not inspect port ${port}.`,
     };
   }
-  const listener = diagnostics.listeners.find((item) => typeof item.pid === "number");
+  const listener = diagnostics.listeners.find(hasListenerPid);
   return {
     status: diagnostics.status === "busy" ? "running" : "stopped",
     ...(listener?.pid ? { pid: listener.pid } : {}),

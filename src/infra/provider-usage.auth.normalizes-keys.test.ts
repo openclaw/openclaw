@@ -214,12 +214,13 @@ describe("resolveProviderAuths key normalization", () => {
       },
       expected: [{ provider: "minimax", token: "code-plan-key" }],
     },
-  ])("$name", async ({ providers, env, expected }) => {
-    await expectResolvedAuthsFromSuiteHome({
-      providers: [...providers],
-      env,
-      expected: expected as ProviderAuth[],
-    });
+  ] satisfies Array<{
+    name: string;
+    providers: readonly Parameters<typeof resolveProviderAuths>[0]["providers"][number][];
+    env: Record<string, string | undefined>;
+    expected: ProviderAuth[];
+  }>)("$name", async ({ providers, env, expected }) => {
+    await expectResolvedAuthsFromSuiteHome({ providers: [...providers], env, expected });
   });
 
   it("strips embedded CR/LF from stored auth profiles (token + api_key)", async () => {
