@@ -76,6 +76,23 @@ describe("isWithinActiveHours", () => {
     expect(isWithinActiveHours(cfg, heartbeat, Date.UTC(2025, 0, 1, 23, 30, 0))).toBe(false);
   });
 
+  it("trims whitespace from active hours time strings", () => {
+    const cfg = cfgWithUserTimezone("UTC");
+    const heartbeat = heartbeatWindow(" 09:00 ", " 17:00 ", "UTC");
+
+    expect(isWithinActiveHours(cfg, heartbeat, Date.UTC(2025, 0, 1, 12, 0, 0))).toBe(true);
+    expect(isWithinActiveHours(cfg, heartbeat, Date.UTC(2025, 0, 1, 8, 0, 0))).toBe(false);
+    expect(isWithinActiveHours(cfg, heartbeat, Date.UTC(2025, 0, 1, 18, 0, 0))).toBe(false);
+  });
+
+  it("trims whitespace from 24:00 end boundary", () => {
+    const cfg = cfgWithUserTimezone("UTC");
+    const heartbeat = heartbeatWindow("  22:00  ", "  24:00  ", "UTC");
+
+    expect(isWithinActiveHours(cfg, heartbeat, Date.UTC(2025, 0, 1, 23, 0, 0))).toBe(true);
+    expect(isWithinActiveHours(cfg, heartbeat, Date.UTC(2025, 0, 1, 21, 0, 0))).toBe(false);
+  });
+
   it("falls back to user timezone when activeHours timezone is invalid", () => {
     const cfg = cfgWithUserTimezone("UTC");
     const heartbeat = heartbeatWindow("08:00", "10:00", "Mars/Olympus");
