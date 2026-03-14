@@ -3,8 +3,8 @@ import { sendMessageSignal } from "./send.js";
 
 const rpcMock = vi.fn();
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../../../src/config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../src/config/config.js")>();
   return {
     ...actual,
     loadConfig: () => ({}),
