@@ -8,6 +8,7 @@ import {
   serializeConfigForm,
   setPathValue,
 } from "./config/form-utils.ts";
+import { scheduleLocationReload } from "./reload.ts";
 
 export type ConfigState = {
   client: GatewayBrowserClient | null;
@@ -194,6 +195,9 @@ export async function runUpdate(state: ConfigState) {
       const status = res.result?.status ?? "error";
       const reason = res.result?.reason ?? "Update failed.";
       state.lastError = `Update ${status}: ${reason}`;
+    } else if (res?.result?.status === "ok") {
+      // Only reload on actual success, not skipped updates.
+      scheduleLocationReload({ delayMs: 2500 });
     }
   } catch (err) {
     state.lastError = String(err);
