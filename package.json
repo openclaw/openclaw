@@ -469,6 +469,9 @@
           "strip-ansi": "^7.2.0"
         }
       }
+    },
+    "patchedDependencies": {
+      "@pierre/diffs@1.1.0": "patches/@pierre__diffs@1.1.0.patch"
     }
   }
 }

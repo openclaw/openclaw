@@ -1,0 +1,21 @@
+diff --git a/dist/highlighter/shared_highlighter.js b/dist/highlighter/shared_highlighter.js
+index c17d6aed00d3b9cf5c5161585089c8a51190d5e0..e956a9496f21edbad3c2ac86d3665bf1c1d2f2df 100644
+--- a/dist/highlighter/shared_highlighter.js
++++ b/dist/highlighter/shared_highlighter.js
+@@ -60,14 +60,14 @@ async function disposeHighlighter() {
+ 	highlighter = void 0;
+ }
+ registerCustomTheme("pierre-dark", async () => {
+-	const m = await import("@pierre/theme/themes/pierre-dark.json");
++	const m = await import("@pierre/theme/themes/pierre-dark.json", { with: { type: "json" } });
+ 	return {
+ 		...m.default ?? m,
+ 		name: "pierre-dark"
+ 	};
+ });
+ registerCustomTheme("pierre-light", async () => {
+-	const m = await import("@pierre/theme/themes/pierre-light.json");
++	const m = await import("@pierre/theme/themes/pierre-light.json", { with: { type: "json" } });
+ 	return {
+ 		...m.default ?? m,
+ 		name: "pierre-light"

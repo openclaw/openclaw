@@ -21,6 +21,11 @@ overrides:
 
 packageExtensionsChecksum: sha256-n+P/SQo4Pf+dHYpYn1Y6wL4cJEVoVzZ835N0OEp4TM8=
 
+patchedDependencies:
+  '@pierre/diffs@1.1.0':
+    hash: 7a7b25f02aed6c01b722ddbc5c53ef4a7bb764b12a1f5de251166ddbbff2444c
+    path: patches/@pierre__diffs@1.1.0.patch
+
 importers:
 
   .:
@@ -315,7 +320,7 @@ importers:
     dependencies:
       '@pierre/diffs':
         specifier: 1.1.0
-        version: 1.1.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+        version: 1.1.0(patch_hash=7a7b25f02aed6c01b722ddbc5c53ef4a7bb764b12a1f5de251166ddbbff2444c)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@sinclair/typebox':
         specifier: 0.34.48
         version: 0.34.48
@@ -9272,7 +9277,7 @@ snapshots:
   '@oxlint/binding-win32-x64-msvc@1.55.0':
     optional: true
 
-  '@pierre/diffs@1.1.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+  '@pierre/diffs@1.1.0(patch_hash=7a7b25f02aed6c01b722ddbc5c53ef4a7bb764b12a1f5de251166ddbbff2444c)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
       '@pierre/theme': 0.0.22
       '@shikijs/transformers': 3.23.0
