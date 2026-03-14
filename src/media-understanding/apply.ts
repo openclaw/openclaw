@@ -52,6 +52,68 @@ const EXTRA_TEXT_MIMES = [
   "text/javascript",
   "text/tab-separated-values",
 ];
+/**
+ * File extensions known to be binary. Used as a fallback when MIME type is
+ * missing or generic (e.g. application/octet-stream) to prevent binary content
+ * from being injected into the prompt context as text. (#33320)
+ */
+const BINARY_EXTENSIONS = new Set([
+  // Archives
+  ".zip",
+  ".gz",
+  ".tar",
+  ".rar",
+  ".7z",
+  ".bz2",
+  ".xz",
+  ".zst",
+  // Executables & libraries
+  ".exe",
+  ".dll",
+  ".so",
+  ".dylib",
+  ".msi",
+  ".deb",
+  ".rpm",
+  ".dmg",
+  ".app",
+  // Office / document containers
+  ".msg",
+  ".doc",
+  ".docx",
+  ".xls",
+  ".xlsx",
+  ".ppt",
+  ".pptx",
+  ".odt",
+  ".ods",
+  ".odp",
+  // Media (not already handled by kind checks)
+  ".psd",
+  ".ai",
+  ".sketch",
+  ".fig",
+  // Databases & data
+  ".db",
+  ".sqlite",
+  ".sqlite3",
+  ".mdb",
+  // Other binary formats
+  ".class",
+  ".pyc",
+  ".pyo",
+  ".wasm",
+  ".o",
+  ".a",
+  ".lib",
+  ".iso",
+  ".img",
+  ".vmdk",
+  ".qcow2",
+  ".pak",
+  ".cab",
+]);
+
 const TEXT_EXT_MIME = new Map<string, string>([
   [".csv", "text/csv"],
   [".tsv", "text/tab-separated-values"],
@@ -301,6 +363,106 @@ function resolveTextMimeFromName(name?: string): string | undefined {
   return TEXT_EXT_MIME.get(ext);
 }
 
+/**
+ * Well-known binary file signatures (magic bytes): unique byte sequences at the
+ * start of a file that identify its format, regardless of extension or MIME type.
+ * Each entry is a prefix match at byte offset 0.
+ *
+ * INVARIANT: every signature MUST contain at least one non-printable byte
+ * (< 0x20 or > 0x7E). This prevents false positives on text files that happen
+ * to start with the same ASCII characters. If a format's short magic is all
+ * printable (e.g. RAR's "Rar!"), extend the signature to include subsequent
+ * non-printable bytes from the format header.
+ *
+ * Adding a new format: append { name, bytes } to this array.
+ * For complex validation (e.g. MZ/PE offset checks), use the special-case
+ * block in hasBinaryFileSignature() below.
+ */
+export const BINARY_SIGNATURES: ReadonlyArray<{ name: string; bytes: readonly number[] }> = [
+  // Archives
+  { name: "ZIP", bytes: [0x50, 0x4b, 0x03, 0x04] }, // also .docx, .xlsx, .jar, .odt
+  { name: "RAR", bytes: [0x52, 0x61, 0x72, 0x21, 0x1a, 0x07] }, // "Rar!" + 0x1A 0x07 (covers RAR4 + RAR5)
+  { name: "7z", bytes: [0x37, 0x7a, 0xbc, 0xaf] },
+  { name: "gzip", bytes: [0x1f, 0x8b] },
+  // Documents
+  { name: "OLE2", bytes: [0xd0, 0xcf, 0x11, 0xe0] }, // .msg, .doc, .xls, .ppt
+  // Executables & libraries
+  { name: "ELF", bytes: [0x7f, 0x45, 0x4c, 0x46] },
+  { name: "Mach-O BE32", bytes: [0xfe, 0xed, 0xfa, 0xce] },
+  { name: "Mach-O LE32", bytes: [0xce, 0xfa, 0xed, 0xfe] },
+  { name: "Mach-O LE64", bytes: [0xcf, 0xfa, 0xed, 0xfe] },
+  { name: "Mach-O FAT / Java Class", bytes: [0xca, 0xfe, 0xba, 0xbe] },
+  // Databases
+  // SQLite magic header: "SQLite format 3\0" (16 bytes, null-terminated)
+  // Spec: https://www.sqlite.org/fileformat.html#magic_header_string
+  {
+    name: "SQLite",
+    bytes: [
+      0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6f, 0x72, 0x6d, 0x61, 0x74, 0x20, 0x33,
+      0x00,
+    ],
+  },
+];
+
+/**
+ * Check for well-known binary file signatures (magic bytes) in the buffer header.
+ * This catches binary files even when MIME type is missing or wrong.
+ *
+ * Uses a table-driven approach for simple prefix matches, with special-case
+ * validation for formats that need deeper inspection (e.g. MZ/PE executables).
+ */
+function hasBinaryFileSignature(buffer?: Buffer): boolean {
+  if (!buffer || buffer.length < 2) {
+    return false;
+  }
+
+  // Table-driven prefix matching
+  for (const sig of BINARY_SIGNATURES) {
+    if (buffer.length >= sig.bytes.length) {
+      let match = true;
+      for (let i = 0; i < sig.bytes.length; i++) {
+        if (buffer[i] !== sig.bytes[i]) {
+          match = false;
+          break;
+        }
+      }
+      if (match) {
+        return true;
+      }
+    }
+  }
+
+  // Special case: Windows PE/MZ executable
+  // "MZ" (0x4D 0x5A) alone is only 2 printable ASCII bytes, prone to false positives
+  // on text files (e.g. "MZelda..."). Validate by reading the 4-byte LE offset at 0x3C
+  // and checking for the PE signature ("PE\0\0") at that offset.
+  // Need at least 0x3C + 4 = 64 bytes to read the offset field safely.
+  // Spec: https://learn.microsoft.com/en-us/windows/win32/debug/pe-format
+  if (buffer[0] === 0x4d && buffer[1] === 0x5a && buffer.length >= 0x3c + 4) {
+    const peOffset = buffer.readUInt32LE(0x3c);
+    if (
+      peOffset > 0 &&
+      peOffset + 4 <= buffer.length &&
+      buffer[peOffset] === 0x50 && // 'P'
+      buffer[peOffset + 1] === 0x45 && // 'E'
+      buffer[peOffset + 2] === 0x00 &&
+      buffer[peOffset + 3] === 0x00
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isBinaryFileExtension(name?: string): boolean {
+  if (!name) {
+    return false;
+  }
+  const ext = path.extname(name).toLowerCase();
+  return BINARY_EXTENSIONS.has(ext);
+}
+
 function isBinaryMediaMime(mime?: string): boolean {
   if (!mime) {
     return false;
@@ -380,6 +542,25 @@ async function extractFileBlocks(params: {
     const normalizedRawMime = normalizeMimeType(rawMime);
     if (!forcedTextMimeResolved && isBinaryMediaMime(normalizedRawMime)) {
       continue;
+    }
+    // Catch binary files when MIME type is missing or generic. File extension and
+    // magic bytes act as fallback layers to prevent binary content from being
+    // injected into the prompt as text. Only checked when MIME is absent or
+    // uninformative — a known textual MIME (e.g. application/vnd.api+json)
+    // should still be allowed through even on a .bin file. (#33320)
+    const mimeIsAbsentOrGeneric =
+      !normalizedRawMime || normalizedRawMime === "application/octet-stream";
+    if (!forcedTextMimeResolved && mimeIsAbsentOrGeneric) {
+      if (isBinaryFileExtension(nameHint)) {
+        logVerbose(
+          `media: file attachment skipped (binary extension) index=${attachment.index} name=${nameHint}`,
+        );
+        continue;
+      }
+      if (hasBinaryFileSignature(bufferResult?.buffer)) {
+        logVerbose(`media: file attachment skipped (binary signature) index=${attachment.index}`);
+        continue;
+      }
     }
     const utf16Charset = resolveUtf16Charset(bufferResult?.buffer);
     const textSample = decodeTextSample(bufferResult?.buffer);
