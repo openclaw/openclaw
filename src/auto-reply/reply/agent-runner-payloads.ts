@@ -214,16 +214,17 @@ export async function buildReplyPayloads(params: {
   const dedupedPayloadEntries = replyTaggedPayloadEntries.filter((entry) =>
     dedupedPayloadSet.has(entry.payload),
   );
-  const mediaFilteredPayloads = dedupeMessagingToolPayloads
-    ? filterMessagingToolMediaDuplicates({
-        payloads: dedupedPayloads,
-        sentMediaUrls: messagingToolSentMediaUrls,
-      })
-    : dedupedPayloads;
-  const mediaFilteredPayloadSet = new Set(mediaFilteredPayloads);
-  const mediaFilteredPayloadEntries = dedupedPayloadEntries.filter((entry) =>
-    mediaFilteredPayloadSet.has(entry.payload),
-  );
+  const mediaFilteredPayloadEntries = dedupeMessagingToolPayloads
+    ? (() => {
+        const filtered = filterMessagingToolMediaDuplicates({
+          payloads: dedupedPayloadEntries.map((e) => e.payload),
+          sentMediaUrls: messagingToolSentMediaUrls,
+        });
+        return dedupedPayloadEntries
+          .map((entry, i) => ({ ...entry, payload: filtered[i] }))
+          .filter((entry) => isRenderablePayload(entry.payload));
+      })()
+    : dedupedPayloadEntries;
   // Filter out payloads already sent via pipeline or directly during tool flush.
   const filteredPayloadEntries = shouldDropFinalPayloads
     ? []
