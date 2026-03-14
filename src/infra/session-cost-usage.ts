@@ -230,7 +230,9 @@ const extractSessionId = (name: string): string => {
   // Strip .jsonl or .jsonl.reset.<timestamp> suffix from the end.
   // Using a regex anchored at $ avoids the edge case where the session ID
   // itself contains ".jsonl" (indexOf would truncate too early).
-  return name.replace(/\.jsonl(\.reset\..*)?$/, "");
+  // [^.]* in the reset group prevents greedy match across dots
+  // (e.g. session ID "abc.jsonl.reset.foo" with an active .jsonl file).
+  return name.replace(/\.jsonl(\.reset\.[^.]*)?$/, "");
 };
 
 async function* readJsonlRecords(filePath: string): AsyncGenerator<Record<string, unknown>> {
