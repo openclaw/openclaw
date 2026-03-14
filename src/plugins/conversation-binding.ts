@@ -196,6 +196,23 @@ function buildPluginBindingSessionKey(params: {
   return `${PLUGIN_BINDING_SESSION_PREFIX}:${params.pluginId}:${hash}`;
 }
 
+function isLegacyPluginBindingRecord(params: {
+  record:
+    | {
+        targetSessionKey: string;
+        metadata?: Record<string, unknown>;
+      }
+    | null
+    | undefined;
+  pluginId: string;
+}): boolean {
+  if (!params.record || isPluginOwnedBindingMetadata(params.record.metadata)) {
+    return false;
+  }
+  const targetSessionKey = params.record.targetSessionKey.trim();
+  return targetSessionKey.startsWith(`${PLUGIN_BINDING_SESSION_PREFIX}:${params.pluginId}:`);
+}
+
 function buildDiscordButtonRow(
   approvalId: string,
   labels?: { once?: string; always?: string; deny?: string },
@@ -525,12 +542,22 @@ export async function requestPluginConversationBinding(params: {
   const ref = toConversationRef(conversation);
   const existing = getSessionBindingService().resolveByConversation(ref);
   const existingPluginBinding = toPluginConversationBinding(existing);
+  const existingLegacyPluginBinding = isLegacyPluginBindingRecord({
+    record: existing,
+    pluginId: params.pluginId,
+  });
   if (existing && !existingPluginBinding) {
-    return {
-      status: "error",
-      message:
-        "This conversation is already bound by core routing and cannot be claimed by a plugin.",
-    };
+    if (existingLegacyPluginBinding) {
+      log.info(
+        `plugin binding migrating legacy record plugin=${params.pluginId} root=${params.pluginRoot} channel=${ref.channel} account=${ref.accountId} conversation=${ref.conversationId}`,
+      );
+    } else {
+      return {
+        status: "error",
+        message:
+          "This conversation is already bound by core routing and cannot be claimed by a plugin.",
+      };
+    }
   }
   if (existingPluginBinding && existingPluginBinding.pluginRoot !== params.pluginRoot) {
     return {
