@@ -20,6 +20,19 @@ describe("buildOutboundSessionContext", () => {
     expect(resolveSessionAgentIdMock).not.toHaveBeenCalled();
   });
 
+  it("returns only the explicit trimmed agent id when no session key is present", () => {
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        sessionKey: "  ",
+        agentId: "  explicit-agent  ",
+      }),
+    ).toEqual({
+      agentId: "explicit-agent",
+    });
+    expect(resolveSessionAgentIdMock).not.toHaveBeenCalled();
+  });
+
   it("derives the agent id from the trimmed session key when no explicit agent is given", () => {
     resolveSessionAgentIdMock.mockReturnValueOnce("derived-agent");
 
