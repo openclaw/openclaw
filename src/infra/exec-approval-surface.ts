@@ -1,8 +1,8 @@
+import { listEnabledDiscordAccounts } from "../../extensions/discord/src/accounts.js";
+import { isDiscordExecApprovalClientEnabled } from "../../extensions/discord/src/exec-approvals.js";
+import { listEnabledTelegramAccounts } from "../../extensions/telegram/src/accounts.js";
+import { isTelegramExecApprovalClientEnabled } from "../../extensions/telegram/src/exec-approvals.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
-import { listEnabledDiscordAccounts } from "../discord/accounts.js";
-import { isDiscordExecApprovalClientEnabled } from "../discord/exec-approvals.js";
-import { listEnabledTelegramAccounts } from "../telegram/accounts.js";
-import { isTelegramExecApprovalClientEnabled } from "../telegram/exec-approvals.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
 
 export type ExecApprovalInitiatingSurfaceState =
