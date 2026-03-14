@@ -14,11 +14,7 @@ import type {
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import {
-  hasPollCreationParams,
-  resolveTelegramPollVisibility,
-  stripPollCreationParams,
-} from "../../poll-params.js";
+import { resolveTelegramPollVisibility, stripPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -785,15 +781,13 @@ export async function runMessageAction(
 
   // Strip auto-populated poll fields from send requests.
   // Models often fill optional poll params from the shared tool schema even
-  // when only a plain message/attachment send is intended.
+  // when only a plain message/attachment send is intended. Stripping them
+  // here means the send path silently ignores stray poll defaults instead
+  // of surfacing a confusing "use action poll" error.
   // See: https://github.com/openclaw/openclaw/issues/42820
   //      https://github.com/openclaw/openclaw/issues/43015
   if (action === "send") {
     stripPollCreationParams(params);
-  }
-
-  if (action === "send" && hasPollCreationParams(params)) {
-    throw new Error('Poll fields require action "poll"; use action "poll" instead of "send".');
   }
 
   const gateway = resolveGateway(input);
