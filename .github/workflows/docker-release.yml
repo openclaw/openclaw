@@ -318,6 +318,7 @@ jobs:
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          IS_MANUAL_BACKFILL: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
         run: |
           set -euo pipefail
           tags=()
@@ -330,7 +331,8 @@ jobs:
             version="${SOURCE_REF#refs/tags/v}"
             tags+=("${IMAGE}:${version}")
             slim_tags+=("${IMAGE}:${version}-slim")
-            if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
+            # Manual backfills should only republish the requested version tags.
+            if [[ "${IS_MANUAL_BACKFILL}" != "1" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
               tags+=("${IMAGE}:latest")
               slim_tags+=("${IMAGE}:slim")
             fi
