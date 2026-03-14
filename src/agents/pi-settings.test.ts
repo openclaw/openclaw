@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   applyPiCompactionSettingsFromConfig,
+  calculateAdaptiveReserveTokensFloor,
   DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
   resolveCompactionReserveTokensFloor,
 } from "./pi-settings.js";
@@ -138,5 +139,50 @@ describe("resolveCompactionReserveTokensFloor", () => {
         agents: { defaults: { compaction: { reserveTokensFloor: 0 } } },
       }),
     ).toBe(0);
+  });
+
+  it("uses adaptive calculation when contextWindow is provided", () => {
+    // Small model (≤64k): uses default 20k
+    expect(resolveCompactionReserveTokensFloor(undefined, 8192)).toBe(20_000);
+    expect(resolveCompactionReserveTokensFloor(undefined, 32768)).toBe(20_000);
+    expect(resolveCompactionReserveTokensFloor(undefined, 65536)).toBe(20_000);
+
+    // Medium model (64k-256k): 10% of context window
+    expect(resolveCompactionReserveTokensFloor(undefined, 128_000)).toBe(20_000); // 12.8k < 20k, min applies
+    expect(resolveCompactionReserveTokensFloor(undefined, 200_000)).toBe(20_000); // 20k = default
+    expect(resolveCompactionReserveTokensFloor(undefined, 262_144)).toBe(26_214); // 10% of 262k
+
+    // Large model (>256k): 5% with 30k minimum
+    expect(resolveCompactionReserveTokensFloor(undefined, 1_000_000)).toBe(50_000); // 5% of 1M
+    expect(resolveCompactionReserveTokensFloor(undefined, 2_000_000)).toBe(100_000); // 5% of 2M
+  });
+
+  it("user config override takes precedence over adaptive calculation", () => {
+    const cfg = { agents: { defaults: { compaction: { reserveTokensFloor: 40_000 } } } };
+    expect(resolveCompactionReserveTokensFloor(cfg, 1_000_000)).toBe(40_000);
+    expect(resolveCompactionReserveTokensFloor(cfg, 262_144)).toBe(40_000);
+  });
+});
+
+describe("calculateAdaptiveReserveTokensFloor", () => {
+  it("returns default floor for small models (≤64k)", () => {
+    expect(calculateAdaptiveReserveTokensFloor(8192)).toBe(20_000);
+    expect(calculateAdaptiveReserveTokensFloor(32768)).toBe(20_000);
+    expect(calculateAdaptiveReserveTokensFloor(65536)).toBe(20_000);
+  });
+
+  it("returns 10% of context for medium models (64k-256k)", () => {
+    expect(calculateAdaptiveReserveTokensFloor(100_000)).toBe(20_000); // min applies
+    expect(calculateAdaptiveReserveTokensFloor(200_000)).toBe(20_000); // exactly default
+    expect(calculateAdaptiveReserveTokensFloor(250_000)).toBe(25_000);
+    expect(calculateAdaptiveReserveTokensFloor(262_144)).toBe(26_214);
+  });
+
+  it("returns 5% with 30k minimum for large models (>256k)", () => {
+    expect(calculateAdaptiveReserveTokensFloor(300_000)).toBe(30_000); // min applies (15k < 30k)
+    expect(calculateAdaptiveReserveTokensFloor(500_000)).toBe(30_000); // min applies (25k < 30k)
+    expect(calculateAdaptiveReserveTokensFloor(600_000)).toBe(30_000); // min applies (30k = min)
+    expect(calculateAdaptiveReserveTokensFloor(1_000_000)).toBe(50_000);
+    expect(calculateAdaptiveReserveTokensFloor(2_000_000)).toBe(100_000);
   });
 });
