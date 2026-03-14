@@ -257,6 +257,12 @@ export type ExecToolConfig = {
    * Default false to reduce context noise.
    */
   notifyOnExitEmptySuccess?: boolean;
+  /**
+   * Compact output compression via rtk.
+   * - "auto" (default): use rtk if detected in PATH
+   * - "off": disable rtk rewriting
+   */
+  compactOutput?: "auto" | "off";
   /** apply_patch subtool configuration (experimental). */
   applyPatch?: {
     /** Enable apply_patch for OpenAI models (default: false). */
