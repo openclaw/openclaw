@@ -182,7 +182,7 @@ const result = await api.runtime.tts.textToSpeechTelephony({
 
 Notes:
 
-- Uses core `messages.tts` configuration (OpenAI or ElevenLabs).
+- Uses core `messages.tts` configuration (Deepgram, ElevenLabs, or OpenAI).
 - Returns PCM audio buffer + sample rate. Plugins must resample/encode for providers.
 - Edge TTS is not supported for telephony.
 

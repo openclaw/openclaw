@@ -2240,6 +2240,143 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
+  it("resolves unresolved top-level Discord voice TTS deepgram ref", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          discord: {
+            voice: {
+              tts: {
+                deepgram: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "MISSING_DISCORD_VOICE_TTS_DEEPGRAM",
+                  },
+                },
+              },
+            },
+            accounts: {
+              work: {
+                enabled: true,
+                voice: {
+                  enabled: false,
+                  tts: {
+                    deepgram: {
+                      apiKey: {
+                        source: "env",
+                        provider: "default",
+                        id: "MISSING_DISCORD_WORK_VOICE_TTS_DEEPGRAM",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.channels?.discord?.voice?.tts?.deepgram?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MISSING_DISCORD_VOICE_TTS_DEEPGRAM",
+    });
+    expect(snapshot.config.channels?.discord?.accounts?.work?.voice?.tts?.deepgram?.apiKey).toEqual(
+      {
+        source: "env",
+        provider: "default",
+        id: "MISSING_DISCORD_WORK_VOICE_TTS_DEEPGRAM",
+      },
+    );
+    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
+      expect.arrayContaining([
+        "channels.discord.voice.tts.deepgram.apiKey",
+        "channels.discord.accounts.work.voice.tts.deepgram.apiKey",
+      ]),
+    );
+  });
+
+  it("handles Discord nested inheritance for Deepgram voice TTS", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          discord: {
+            voice: {
+              tts: {
+                deepgram: {
+                  apiKey: { source: "env", provider: "default", id: "DISCORD_BASE_TTS_DEEPGRAM" },
+                },
+              },
+            },
+            accounts: {
+              enabledInherited: {
+                enabled: true,
+              },
+              enabledOverride: {
+                enabled: true,
+                voice: {
+                  tts: {
+                    deepgram: {
+                      apiKey: {
+                        source: "env",
+                        provider: "default",
+                        id: "DISCORD_ENABLED_OVERRIDE_TTS_DEEPGRAM",
+                      },
+                    },
+                  },
+                },
+              },
+              disabledOverride: {
+                enabled: false,
+                voice: {
+                  tts: {
+                    deepgram: {
+                      apiKey: {
+                        source: "env",
+                        provider: "default",
+                        id: "DISCORD_DISABLED_OVERRIDE_TTS_DEEPGRAM",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        DISCORD_BASE_TTS_DEEPGRAM: "base-tts-deepgram",
+        DISCORD_ENABLED_OVERRIDE_TTS_DEEPGRAM: "enabled-override-tts-deepgram",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.channels?.discord?.voice?.tts?.deepgram?.apiKey).toBe(
+      "base-tts-deepgram",
+    );
+    expect(
+      snapshot.config.channels?.discord?.accounts?.enabledOverride?.voice?.tts?.deepgram?.apiKey,
+    ).toBe("enabled-override-tts-deepgram");
+    expect(
+      snapshot.config.channels?.discord?.accounts?.disabledOverride?.voice?.tts?.deepgram?.apiKey,
+    ).toEqual({
+      source: "env",
+      provider: "default",
+      id: "DISCORD_DISABLED_OVERRIDE_TTS_DEEPGRAM",
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
+      expect.arrayContaining([
+        "channels.discord.accounts.disabledOverride.voice.tts.deepgram.apiKey",
+      ]),
+    );
+  });
+
   it("skips top-level Discord voice refs when all enabled accounts override nested voice config", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
