@@ -1,9 +1,9 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderConfig } from "./config.ts";
+import { renderConfig, type ConfigProps } from "./config.ts";
 
 describe("config view", () => {
-  const baseProps = () => ({
+  const baseProps = (): ConfigProps => ({
     raw: "{\n}\n",
     originalRaw: "{\n}\n",
     valid: true,
@@ -20,6 +20,7 @@ describe("config view", () => {
     schemaLoading: false,
     uiHints: {},
     formMode: "form" as const,
+    showModeToggle: true,
     formValue: {},
     originalValue: {},
     searchQuery: "",
@@ -35,6 +36,13 @@ describe("config view", () => {
     onApply: vi.fn(),
     onUpdate: vi.fn(),
     onSubsectionChange: vi.fn(),
+    version: "2026.3.11",
+    theme: "claw",
+    themeMode: "system",
+    setTheme: vi.fn(),
+    setThemeMode: vi.fn(),
+    gatewayUrl: "http://127.0.0.1:18789",
+    assistantName: "OpenClaw",
   });
 
   function findActionButtons(container: HTMLElement): {
@@ -200,34 +208,34 @@ describe("config view", () => {
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
   });
 
-  it("shows all tag options in compact tag picker", () => {
+  it("renders the appearance section when selected", () => {
     const container = document.createElement("div");
-    render(renderConfig(baseProps()), container);
-
-    const options = Array.from(container.querySelectorAll(".config-search__tag-option")).map(
-      (option) => option.textContent?.trim(),
+    render(
+      renderConfig({
+        ...baseProps(),
+        activeSection: "__appearance__",
+      }),
+      container,
     );
-    expect(options).toContain("tag:security");
-    expect(options).toContain("tag:advanced");
-    expect(options).toHaveLength(15);
+
+    expect(container.textContent).toContain("Choose a theme family.");
   });
 
-  it("updates search query when toggling a tag option", () => {
+  it("clears the search query from the top-bar clear button", () => {
     const container = document.createElement("div");
     const onSearchChange = vi.fn();
     render(
       renderConfig({
         ...baseProps(),
+        searchQuery: "gateway",
         onSearchChange,
       }),
       container,
     );
 
-    const option = container.querySelector<HTMLButtonElement>(
-      '.config-search__tag-option[data-tag="security"]',
-    );
-    expect(option).toBeTruthy();
-    option?.click();
-    expect(onSearchChange).toHaveBeenCalledWith("tag:security");
+    const clearButton = container.querySelector<HTMLButtonElement>(".config-search__clear");
+    expect(clearButton).toBeTruthy();
+    clearButton?.click();
+    expect(onSearchChange).toHaveBeenCalledWith("");
   });
 });

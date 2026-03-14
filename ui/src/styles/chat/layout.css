@@ -920,7 +920,9 @@
   background: var(--panel);
   color: var(--foreground);
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
 }
 
 .agent-chat__suggestion:hover {
