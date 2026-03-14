@@ -44,6 +44,19 @@ const KIMI_WEB_SEARCH_TOOL = {
   function: { name: "$web_search" },
 } as const;
 
+/**
+ * Strip a trailing `/chat/completions` segment from a base URL so that
+ * callers can safely append it without doubling the path.
+ *
+ * e.g. `"https://api.moonshot.ai/v1/chat/completions"` → `"https://api.moonshot.ai/v1"`
+ */
+function stripCompletionsEndpoint(url: string): string {
+  return url
+    .trim()
+    .replace(/\/+$/, "")
+    .replace(/\/chat\/completions$/, "");
+}
+
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
 const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
@@ -1254,7 +1267,7 @@ async function runPerplexitySearch(params: {
   timeoutSeconds: number;
   freshness?: string;
 }): Promise<{ content: string; citations: string[] }> {
-  const baseUrl = params.baseUrl.trim().replace(/\/$/, "");
+  const baseUrl = stripCompletionsEndpoint(params.baseUrl);
   const endpoint = `${baseUrl}/chat/completions`;
   const model = resolvePerplexityRequestModel(baseUrl, params.model);
 
@@ -1416,7 +1429,7 @@ async function runKimiSearch(params: {
   model: string;
   timeoutSeconds: number;
 }): Promise<{ content: string; citations: string[] }> {
-  const baseUrl = params.baseUrl.trim().replace(/\/$/, "");
+  const baseUrl = stripCompletionsEndpoint(params.baseUrl);
   const endpoint = `${baseUrl}/chat/completions`;
   const messages: Array<Record<string, unknown>> = [
     {
@@ -2219,4 +2232,5 @@ export const __testing = {
   resolveRedirectUrl: resolveCitationRedirectUrl,
   resolveBraveMode,
   mapBraveLlmContextResults,
+  stripCompletionsEndpoint,
 } as const;
