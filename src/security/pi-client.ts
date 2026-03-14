@@ -151,8 +151,20 @@ function sendDetectRequest(text: string): Promise<PiApiResponse> {
         const chunks: Buffer[] = [];
         res.on("data", (chunk: Buffer) => chunks.push(chunk));
         res.on("end", () => {
+          const statusCode = res.statusCode ?? 0;
+          const rawBody = Buffer.concat(chunks).toString("utf-8");
+          // Reject with a descriptive message for non-2xx responses so that
+          // API key or rate-limit issues are clearly visible in debug logs.
+          if (statusCode < 200 || statusCode >= 300) {
+            reject(
+              new Error(
+                `Prompt Inspector returned HTTP ${statusCode}: ${rawBody.slice(0, 200)}`,
+              ),
+            );
+            return;
+          }
           try {
-            const parsed = JSON.parse(Buffer.concat(chunks).toString("utf-8")) as PiApiResponse;
+            const parsed = JSON.parse(rawBody) as PiApiResponse;
             resolve(parsed);
           } catch (err) {
             reject(new Error(`Failed to parse Prompt Inspector response: ${String(err)}`));
@@ -229,11 +241,18 @@ export async function detectSafety(
   }
 }
 
+/** Discriminated-union branch for a completed (checked) detection result. */
+export type CheckedDetectionResult = Extract<PiDetectionResult, { checked: true }>;
+
 /**
  * Returns true if the detection result conclusively identified unsafe content.
  * Returns false for all unchecked/error cases (fail-open semantics).
+ *
+ * Declared as a type predicate so TypeScript narrows `result` to
+ * `CheckedDetectionResult` inside the truthy branch, giving callers
+ * safe access to `.score`, `.category`, and `.latencyMs`.
  */
-export function isUnsafe(result: PiDetectionResult): boolean {
+export function isUnsafe(result: PiDetectionResult): result is CheckedDetectionResult {
   return result.checked && !result.safe;
 }
 

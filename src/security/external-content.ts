@@ -381,7 +381,7 @@ export async function checkExternalContentSafety(
   // optionally call this function for a deeper ML scan on the same content.
   const result = await detectSafety(content, `external-content/${source}`);
 
-  if (isUnsafe(result) && result.checked) {
+  if (isUnsafe(result)) {
     const policy = getOnUnsafePolicy();
     if (policy === "block") {
       throw new Error(
@@ -401,7 +401,11 @@ export async function checkExternalContentSafety(
  * Async variant of buildSafeExternalPrompt() that also runs Prompt Inspector
  * ML detection on the raw content before wrapping it.
  *
- * Falls back gracefully if detection is unavailable (fail-open).
+ * Fail-open for API/network errors: when detection is unavailable, the function
+ * returns normally with `safe: true` (unchecked) rather than throwing.
+ *
+ * @throws {Error} When PMTINSP_ON_UNSAFE=block and prompt injection is detected.
+ *                 Callers must handle this case with try/catch if blocking is enabled.
  */
 export async function buildSafeExternalPromptAsync(params: {
   content: string;
