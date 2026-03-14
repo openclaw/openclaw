@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
+import { getAllRegistries } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "../method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
@@ -65,7 +66,22 @@ export function createGatewayPluginRequestHandler(params: {
 }): PluginHttpRequestHandler {
   const { registry, log } = params;
   return async (req, res, providedPathContext, dispatchContext) => {
-    const routes = registry.httpRoutes ?? [];
+    // Aggregate routes from all registries (fixes ESM/CJS module separation)
+    const allRegistries = getAllRegistries();
+    const allRoutes = new Set<typeof routes[0]>();
+    
+    // Add routes from the primary registry
+    const primaryRoutes = registry.httpRoutes ?? [];
+    primaryRoutes.forEach(r => allRoutes.add(r));
+    
+    // Add routes from all registries in the pool (for cross-module access)
+    for (const reg of allRegistries) {
+      if (reg.httpRoutes) {
+        reg.httpRoutes.forEach(r => allRoutes.add(r));
+      }
+    }
+    
+    const routes = Array.from(allRoutes);
     if (routes.length === 0) {
       return false;
     }
@@ -76,7 +92,7 @@ export function createGatewayPluginRequestHandler(params: {
         const url = new URL(req.url ?? "/", "http://localhost");
         return resolvePluginRoutePathContext(url.pathname);
       })();
-    const matchedRoutes = findMatchingPluginHttpRoutes(registry, pathContext);
+    const matchedRoutes = findMatchingPluginHttpRoutes({ httpRoutes: routes } as PluginRegistry, pathContext);
     if (matchedRoutes.length === 0) {
       return false;
     }
