@@ -152,6 +152,80 @@ describe("printCronList", () => {
     expect(dataLine).toContain("opus");
   });
 
+  it("does not flag running jobs as overdue", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const now = Date.now();
+    const everyMs = 60_000;
+    const job = createBaseJob({
+      id: "running-job",
+      name: "Running",
+      schedule: { kind: "every", everyMs },
+      state: {
+        lastRunAtMs: now - everyMs * 5,
+        runningAtMs: now - everyMs * 3,
+        nextRunAtMs: now - everyMs * 4,
+      },
+    });
+
+    printCronList([job], runtime);
+    expect(logs.every((line) => !line.includes("overdue"))).toBe(true);
+  });
+
+  it("uses nextRunAtMs for overdue threshold when available", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const now = Date.now();
+    const everyMs = 60_000;
+    // nextRunAtMs is in the recent past but within nextRunAtMs + everyMs
+    const job = createBaseJob({
+      id: "backoff-job",
+      name: "Backoff",
+      schedule: { kind: "every", everyMs },
+      state: {
+        lastRunAtMs: now - everyMs * 5,
+        nextRunAtMs: now - everyMs * 0.5,
+      },
+    });
+
+    printCronList([job], runtime);
+    // nextRunAtMs + everyMs is still in the future, so not overdue
+    expect(logs.every((line) => !line.includes("overdue"))).toBe(true);
+  });
+
+  it("flags overdue when past nextRunAtMs + everyMs", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const now = Date.now();
+    const everyMs = 60_000;
+    const job = createBaseJob({
+      id: "overdue-job",
+      name: "Overdue",
+      schedule: { kind: "every", everyMs },
+      state: {
+        lastRunAtMs: now - everyMs * 5,
+        nextRunAtMs: now - everyMs * 3,
+      },
+    });
+
+    printCronList([job], runtime);
+    expect(logs.some((line) => line.includes("overdue"))).toBe(true);
+  });
+
+  it("falls back to lastRunAtMs + 2×everyMs when nextRunAtMs is absent", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const now = Date.now();
+    const everyMs = 60_000;
+    const job = createBaseJob({
+      id: "fallback-job",
+      name: "Fallback",
+      schedule: { kind: "every", everyMs },
+      state: {
+        lastRunAtMs: now - everyMs * 3,
+      },
+    });
+
+    printCronList([job], runtime);
+    expect(logs.some((line) => line.includes("overdue"))).toBe(true);
+  });
+
   it("shows exact label for cron schedules with stagger disabled", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const job = createBaseJob({

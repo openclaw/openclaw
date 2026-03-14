@@ -269,5 +269,27 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
     ].join(" ");
 
     runtime.log(line.trimEnd());
+
+    // Flag unhealthy jobs: consecutive errors or overdue execution
+    const warnings: string[] = [];
+    const consecutiveErrors = job.state.consecutiveErrors ?? 0;
+    if (consecutiveErrors >= 3) {
+      warnings.push(`${consecutiveErrors} consecutive errors`);
+    }
+    if (job.enabled && !job.state.runningAtMs && job.schedule.kind === "every") {
+      const overdueThreshold =
+        typeof job.state.nextRunAtMs === "number"
+          ? job.state.nextRunAtMs + job.schedule.everyMs
+          : typeof job.state.lastRunAtMs === "number"
+            ? job.state.lastRunAtMs + job.schedule.everyMs * 2
+            : undefined;
+      if (overdueThreshold !== undefined && now > overdueThreshold) {
+        warnings.push("overdue (>2× interval since last run)");
+      }
+    }
+    if (warnings.length > 0) {
+      const warnText = `  ⚠ ${warnings.join("; ")}`;
+      runtime.log(rich ? theme.warn(warnText) : warnText);
+    }
   }
 }

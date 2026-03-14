@@ -633,7 +633,23 @@ export async function onTimer(state: CronServiceState) {
 
       try {
         const result = await executeJobCoreWithTimeout(state, job);
-        return { jobId: id, ...result, startedAt, endedAt: state.deps.nowMs() };
+        const endedAt = state.deps.nowMs();
+        const durationMs = endedAt - startedAt;
+        const meta = { jobId: id, jobName: job.name, status: result.status, durationMs };
+        if (result.status === "ok") {
+          state.deps.log.info(meta, "cron: job completed");
+        } else if (result.status === "skipped") {
+          state.deps.log.warn(
+            { ...meta, reason: result.error },
+            `cron: job skipped: ${result.error ?? "unknown reason"}`,
+          );
+        } else {
+          state.deps.log.warn(
+            { ...meta, error: result.error },
+            `cron: job failed: ${result.error ?? "unknown error"}`,
+          );
+        }
+        return { jobId: id, ...result, startedAt, endedAt };
       } catch (err) {
         const errorText = isAbortError(err) ? timeoutErrorMessage() : String(err);
         state.deps.log.warn(
