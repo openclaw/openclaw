@@ -44,6 +44,7 @@ import {
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
+import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
 import { isXaiProvider } from "./schema/clean-for-xai.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import {
@@ -376,6 +377,8 @@ export function createOpenClawCodingTools(options?: {
           workspaceOnly
             ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
                 containerWorkdir: sandbox.containerWorkdir,
+                agentWorkspaceMount:
+                  sandbox.workspaceAccess === "ro" ? SANDBOX_AGENT_WORKSPACE_MOUNT : undefined,
               })
             : sandboxed,
         ];

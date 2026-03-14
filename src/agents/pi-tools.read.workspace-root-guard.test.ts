@@ -76,6 +76,22 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
     });
   });
 
+  it("maps explicit /agent workspace mount paths to the host workspace root", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+      agentWorkspaceMount: "/agent",
+    });
+
+    await wrapped.execute("tc-agent-mount", { path: "/agent/docs/readme.md" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: path.resolve(root, "docs", "readme.md"),
+      cwd: root,
+      root,
+    });
+  });
+
   it("normalizes @-prefixed absolute paths before guard checks", async () => {
     const { tool } = createToolHarness();
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
@@ -101,6 +117,21 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
 
     expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
       filePath: "/workspace-two/secret.txt",
+      cwd: root,
+      root,
+    });
+  });
+
+  it("does not remap /agent paths when no agent workspace mount is configured", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-agent-unmapped", { path: "/agent/docs/readme.md" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: "/agent/docs/readme.md",
       cwd: root,
       root,
     });
