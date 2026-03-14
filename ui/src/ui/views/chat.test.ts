@@ -40,15 +40,12 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     focusMode: false,
     assistantName: "OpenClaw",
     assistantAvatar: null,
-    agentsList: null,
-    currentAgentId: "",
     onRefresh: () => undefined,
     onToggleFocusMode: () => undefined,
     onDraftChange: () => undefined,
     onSend: () => undefined,
     onQueueRemove: () => undefined,
     onNewSession: () => undefined,
-    onAgentChange: () => undefined,
     ...overrides,
   };
 }
@@ -198,8 +195,10 @@ describe("chat view", () => {
       container,
     );
 
-    const stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
-    expect(stopButton).not.toBeNull();
+    const stopButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "Stop",
+    );
+    expect(stopButton).not.toBeUndefined();
     stopButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onAbort).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("New session");
@@ -218,10 +217,10 @@ describe("chat view", () => {
       container,
     );
 
-    const newSessionButton = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="New session"]',
+    const newSessionButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "New session",
     );
-    expect(newSessionButton).not.toBeNull();
+    expect(newSessionButton).not.toBeUndefined();
     newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onNewSession).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Stop");
