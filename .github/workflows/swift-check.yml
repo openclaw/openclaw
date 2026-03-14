@@ -1,0 +1,25 @@
+name: Swift Check
+
+on:
+  push:
+    branches: [fix/websocket-ping-double-resume]
+
+jobs:
+  swift:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          # Use whatever latest Xcode is available on the runner
+          XCODE=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+          swift --version
+
+      - name: Swift build (release)
+        run: swift build --package-path apps/macos --configuration release
+
+      - name: Swift test
+        run: swift test --package-path apps/macos --parallel

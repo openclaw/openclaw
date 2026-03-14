@@ -1,6 +1,7 @@
 import OpenClawProtocol
 import Foundation
 import OSLog
+import Synchronization
 
 public protocol WebSocketTasking: AnyObject {
     var state: URLSessionTask.State { get }
@@ -44,7 +45,18 @@ public struct WebSocketTaskBox: @unchecked Sendable {
 
     public func sendPing() async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            // Guard against double-resume: URLSessionWebSocketTask can invoke the
+            // pong handler more than once when a connection drops while a ping is
+            // in flight (once for the error, once for cancellation). Resuming a
+            // CheckedContinuation twice is a fatal error (SIGTRAP).
+            let resumed = Mutex(false)
             self.task.sendPing { error in
+                let alreadyResumed = resumed.withLock { flag -> Bool in
+                    if flag { return true }
+                    flag = true
+                    return false
+                }
+                guard !alreadyResumed else { return }
                 ThrowingContinuationSupport.resumeVoid(continuation, error: error)
             }
         }
