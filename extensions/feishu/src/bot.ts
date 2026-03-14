@@ -344,7 +344,13 @@ function parseMessageContent(content: string, messageType: string): string {
   try {
     const parsed = JSON.parse(content);
     if (messageType === "text") {
-      return parsed.text || "";
+      const text: string = parsed.text || "";
+      // Preserve interactive metadata (option/options/form_value) from card
+      // actions so command handlers can access the user's selections.
+      if (parsed.interactive && typeof parsed.interactive === "object") {
+        return `${text}\n${JSON.stringify(parsed.interactive)}`;
+      }
+      return text;
     }
     if (messageType === "share_chat") {
       // Preserve available summary text for merged/forwarded chat messages.

@@ -60,4 +60,83 @@ describe("Feishu Card Action Handler", () => {
       }),
     );
   });
+
+  it("handles select_static dropdown with action.option", async () => {
+    const event: FeishuCardActionEvent = {
+      operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
+      token: "tok3",
+      action: { value: { field: "model_selection" }, tag: "select_static", option: "gpt-4o" },
+      context: { open_id: "u123", user_id: "uid1", chat_id: "chat1" },
+    };
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    const call = vi
+      .mocked(handleFeishuMessage)
+      .mock.calls.find(
+        (c: unknown[]) =>
+          (c[0] as { event: { message: { message_id: string } } }).event.message.message_id ===
+          "card-action-tok3",
+      );
+    expect(call).toBeDefined();
+    const inner = JSON.parse(
+      JSON.parse((call![0] as { event: { message: { content: string } } }).event.message.content)
+        .text,
+    );
+    expect(inner).toMatchObject({ option: "gpt-4o" });
+  });
+
+  it("handles multi-select checkbox with action.options", async () => {
+    const event: FeishuCardActionEvent = {
+      operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
+      token: "tok4",
+      action: { value: { field: "tags" }, tag: "checkbox", options: ["tag1", "tag2"] },
+      context: { open_id: "u123", user_id: "uid1", chat_id: "chat1" },
+    };
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    const call = vi
+      .mocked(handleFeishuMessage)
+      .mock.calls.find(
+        (c: unknown[]) =>
+          (c[0] as { event: { message: { message_id: string } } }).event.message.message_id ===
+          "card-action-tok4",
+      );
+    expect(call).toBeDefined();
+    const inner = JSON.parse(
+      JSON.parse((call![0] as { event: { message: { content: string } } }).event.message.content)
+        .text,
+    );
+    expect(inner).toMatchObject({ options: ["tag1", "tag2"] });
+  });
+
+  it("handles form submission with action.form_value", async () => {
+    const event: FeishuCardActionEvent = {
+      operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
+      token: "tok5",
+      action: {
+        value: { form_id: "approval" },
+        tag: "form",
+        form_value: { name: "Alice", approved: true },
+      },
+      context: { open_id: "u123", user_id: "uid1", chat_id: "chat1" },
+    };
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    const call = vi
+      .mocked(handleFeishuMessage)
+      .mock.calls.find(
+        (c: unknown[]) =>
+          (c[0] as { event: { message: { message_id: string } } }).event.message.message_id ===
+          "card-action-tok5",
+      );
+    expect(call).toBeDefined();
+    const inner = JSON.parse(
+      JSON.parse((call![0] as { event: { message: { content: string } } }).event.message.content)
+        .text,
+    );
+    expect(inner).toMatchObject({ form_value: { name: "Alice", approved: true } });
+  });
 });
