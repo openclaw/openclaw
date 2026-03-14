@@ -761,6 +761,7 @@ export async function runEmbeddedPiAgent(
         }
       };
 
+      const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 1;
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
       const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
@@ -773,6 +774,7 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
+      let timeoutCompactionAttempts = 0;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
@@ -1047,7 +1049,11 @@ export async function runEmbeddedPiAgent(
           if (timedOut && !aborted && !timedOutDuringCompaction) {
             const tokenUsedRatio =
               lastTurnTotal != null && ctxInfo.tokens > 0 ? lastTurnTotal / ctxInfo.tokens : 0;
-            if (tokenUsedRatio > 0.65) {
+            if (timeoutCompactionAttempts >= MAX_TIMEOUT_COMPACTION_ATTEMPTS) {
+              log.warn(
+                `[timeout-compaction] already compacted ${timeoutCompactionAttempts} time(s) for timeouts; falling through to failover rotation`,
+              );
+            } else if (tokenUsedRatio > 0.65) {
               const timeoutDiagId = createCompactionDiagId();
               log.warn(
                 `[timeout-compaction] LLM timed out with high context usage (${Math.round(tokenUsedRatio * 100)}%); ` +
@@ -1097,6 +1103,7 @@ export async function runEmbeddedPiAgent(
               await runOwnsCompactionAfterHook("timeout recovery", timeoutCompactResult);
               if (timeoutCompactResult.compacted) {
                 autoCompactionCount += 1;
+                timeoutCompactionAttempts += 1;
                 log.info(
                   `[timeout-compaction] compaction succeeded for ${provider}/${modelId}; retrying prompt`,
                 );

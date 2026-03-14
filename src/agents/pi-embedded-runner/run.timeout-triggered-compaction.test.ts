@@ -231,6 +231,45 @@ describe("timeout-triggered compaction", () => {
     expect(mockedCompactDirect).not.toHaveBeenCalled();
   });
 
+  it("falls through to failover rotation after max timeout compaction attempts", async () => {
+    // First attempt: timeout with high usage (150k / 200k = 75%)
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        timedOut: true,
+        lastAssistant: {
+          usage: { total: 150000 },
+        } as never,
+      }),
+    );
+    // Compaction succeeds on first timeout
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "timeout recovery compaction",
+        tokensBefore: 150000,
+        tokensAfter: 80000,
+      }),
+    );
+    // Second attempt after compaction: also times out with high usage
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        timedOut: true,
+        lastAssistant: {
+          usage: { total: 140000 },
+        } as never,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    // Compaction was only attempted once (first timeout); second timeout
+    // should NOT trigger compaction because the counter is exhausted.
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    // Falls through to timeout error payload (failover rotation path)
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("timed out");
+  });
+
   it("catches thrown errors from contextEngine.compact during timeout recovery", async () => {
     // Timeout with high usage
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
