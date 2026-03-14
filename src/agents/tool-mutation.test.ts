@@ -37,6 +37,31 @@ describe("tool mutation helpers", () => {
     expect(readFingerprint).toBeUndefined();
   });
 
+  it("uses file_path as a stable fingerprint target key", () => {
+    const fingerprint = buildToolActionFingerprint(
+      "write",
+      { file_path: "/tmp/snake-case.txt" },
+      "write 123 chars to /tmp/snake-case.txt",
+    );
+
+    expect(fingerprint).toContain("tool=write");
+    expect(fingerprint).toContain("file_path=/tmp/snake-case.txt");
+    expect(fingerprint).not.toContain("meta=");
+  });
+
+  it("uses old_path and new_path as stable fingerprint target keys", () => {
+    const fingerprint = buildToolActionFingerprint(
+      "edit",
+      { old_path: "/tmp/old.txt", new_path: "/tmp/new.txt" },
+      "rename /tmp/old.txt -> /tmp/new.txt",
+    );
+
+    expect(fingerprint).toContain("tool=edit");
+    expect(fingerprint).toContain("old_path=/tmp/old.txt");
+    expect(fingerprint).toContain("new_path=/tmp/new.txt");
+    expect(fingerprint).not.toContain("meta=");
+  });
+
   it("exposes mutation state for downstream payload rendering", () => {
     expect(
       buildToolMutationState("message", { action: "send", to: "telegram:1" }).mutatingAction,
@@ -63,6 +88,28 @@ describe("tool mutation helpers", () => {
         { toolName: "write" },
       ),
     ).toBe(false);
+  });
+
+  it("matches retry actions for write calls using file_path fingerprint keys", () => {
+    const firstAttempt = buildToolMutationState(
+      "write",
+      { file_path: "/tmp/retry.txt" },
+      "write 92 chars to /tmp/retry.txt",
+    );
+    const retryAttempt = buildToolMutationState(
+      "write",
+      { file_path: "/tmp/retry.txt" },
+      "write 104 chars to /tmp/retry.txt",
+    );
+
+    expect(firstAttempt.actionFingerprint).toBeDefined();
+    expect(retryAttempt.actionFingerprint).toBeDefined();
+    expect(
+      isSameToolMutationAction(
+        { toolName: "write", actionFingerprint: firstAttempt.actionFingerprint },
+        { toolName: "write", actionFingerprint: retryAttempt.actionFingerprint },
+      ),
+    ).toBe(true);
   });
 
   it("keeps legacy name-only mutating heuristics for payload fallback", () => {
