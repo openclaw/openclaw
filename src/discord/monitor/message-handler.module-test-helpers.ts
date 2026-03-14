@@ -1,7 +1,8 @@
 import { vi } from "vitest";
+import type { MockFn } from "../../test-utils/vitest-mock-fn.js";
 
-export const preflightDiscordMessageMock = vi.fn();
-export const processDiscordMessageMock = vi.fn();
+export const preflightDiscordMessageMock: MockFn = vi.fn();
+export const processDiscordMessageMock: MockFn = vi.fn();
 
 vi.mock("./message-handler.preflight.js", () => ({
   preflightDiscordMessage: preflightDiscordMessageMock,

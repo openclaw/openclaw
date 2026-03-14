@@ -1,3 +1,4 @@
+import type { Mock } from "vitest";
 import { vi } from "vitest";
 
 type MatrixBotSdkMockParams = {
@@ -7,7 +8,26 @@ type MatrixBotSdkMockParams = {
   includeVerboseLogService?: boolean;
 };
 
-export function createMatrixBotSdkMock(params: MatrixBotSdkMockParams = {}) {
+type MatrixBotSdkMock = {
+  ConsoleLogger: new () => {
+    trace: Mock<() => void>;
+    debug: Mock<() => void>;
+    info: Mock<() => void>;
+    warn: Mock<() => void>;
+    error: Mock<() => void>;
+  };
+  MatrixClient: unknown;
+  LogService: {
+    setLogger: Mock<() => void>;
+    warn?: Mock<() => void>;
+    info?: Mock<() => void>;
+    debug?: Mock<() => void>;
+  };
+  SimpleFsStorageProvider: unknown;
+  RustSdkCryptoStorageProvider: unknown;
+};
+
+export function createMatrixBotSdkMock(params: MatrixBotSdkMockParams = {}): MatrixBotSdkMock {
   return {
     ConsoleLogger: class {
       trace = vi.fn();
