@@ -387,10 +387,10 @@ describe("plugin conversation binding approvals", () => {
     });
   });
 
-  it("migrates a legacy plugin binding record through the new approval flow", async () => {
+  it("migrates a legacy plugin binding record through the new approval flow even if the old plugin id differs", async () => {
     sessionBindingState.setRecord({
       bindingId: "binding-legacy",
-      targetSessionKey: "plugin-binding:codex:legacy123",
+      targetSessionKey: "plugin-binding:old-codex-plugin:legacy123",
       targetKind: "session",
       conversation: {
         channel: "telegram",

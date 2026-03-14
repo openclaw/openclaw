@@ -204,13 +204,12 @@ function isLegacyPluginBindingRecord(params: {
       }
     | null
     | undefined;
-  pluginId: string;
 }): boolean {
   if (!params.record || isPluginOwnedBindingMetadata(params.record.metadata)) {
     return false;
   }
   const targetSessionKey = params.record.targetSessionKey.trim();
-  return targetSessionKey.startsWith(`${PLUGIN_BINDING_SESSION_PREFIX}:${params.pluginId}:`);
+  return targetSessionKey.startsWith(`${PLUGIN_BINDING_SESSION_PREFIX}:`);
 }
 
 function buildDiscordButtonRow(
@@ -544,7 +543,6 @@ export async function requestPluginConversationBinding(params: {
   const existingPluginBinding = toPluginConversationBinding(existing);
   const existingLegacyPluginBinding = isLegacyPluginBindingRecord({
     record: existing,
-    pluginId: params.pluginId,
   });
   if (existing && !existingPluginBinding) {
     if (existingLegacyPluginBinding) {
