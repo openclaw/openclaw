@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
+type DatabaseSyncCtor = typeof import("node:sqlite").DatabaseSync;
+
 // node:sqlite is experimental and may not be available in all test environments
-let DatabaseSync: typeof import("node:sqlite").DatabaseSync;
+let DatabaseSync: DatabaseSyncCtor | undefined;
 try {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const sqlite = require("node:sqlite");
@@ -115,7 +117,7 @@ function makeConfig(overrides?: Partial<GraphManagerConfig>): GraphManagerConfig
   };
 }
 
-function seedDb(db: InstanceType<typeof DatabaseSync>): void {
+function seedDb(db: InstanceType<DatabaseSyncCtor>): void {
   db.exec(SCHEMA);
   const insertNode = db.prepare(
     `INSERT INTO nodes (id, title, narrative, type, tier, weight)
@@ -135,10 +137,13 @@ function seedDb(db: InstanceType<typeof DatabaseSync>): void {
 const describeIfSqlite = DatabaseSync ? describe : describe.skip;
 
 describeIfSqlite("GraphMemoryManager", () => {
-  let db: InstanceType<typeof DatabaseSync>;
+  let db: InstanceType<DatabaseSyncCtor>;
   let manager: GraphMemoryManager;
 
   beforeEach(() => {
+    if (!DatabaseSync) {
+      throw new Error("node:sqlite DatabaseSync unavailable in this environment");
+    }
     db = new DatabaseSync(":memory:");
     seedDb(db);
     manager = GraphMemoryManager.createFromDb(db, makeConfig());
@@ -234,7 +239,9 @@ describe("resolveGraphConfig", () => {
     const config = resolveGraphConfig({
       workspaceDir: "/home/user/.openclaw/workspace",
     });
-    expect(config.dbPath).toBe("/home/user/.openclaw/workspace/memory/graph/tommy_memory.db");
+    expect(config.dbPath.replaceAll("\\", "/")).toMatch(
+      /\/home\/user\/\.openclaw\/workspace\/memory\/graph\/tommy_memory\.db$/,
+    );
     expect(config.fts).toBe(true);
     expect(config.anchorBoost).toBe(1.5);
     expect(config.transitionBoost).toBe(1.2);
