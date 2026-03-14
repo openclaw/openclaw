@@ -35,6 +35,48 @@ describe("buildBootstrapContextFiles", () => {
       },
     ]);
   });
+  it("skips [MISSING] marker for BOOTSTRAP.md (intentionally deleted after onboarding)", () => {
+    const files = [
+      makeFile({
+        name: "BOOTSTRAP.md",
+        path: "/tmp/BOOTSTRAP.md",
+        missing: true,
+        content: undefined,
+      }),
+    ];
+    expect(buildBootstrapContextFiles(files)).toEqual([]);
+  });
+  it("still injects [MISSING] for other files when BOOTSTRAP.md is also missing", () => {
+    const files = [
+      makeFile({
+        name: "BOOTSTRAP.md",
+        path: "/tmp/BOOTSTRAP.md",
+        missing: true,
+        content: undefined,
+      }),
+      makeFile({ name: "AGENTS.md", path: "/tmp/AGENTS.md", missing: true, content: undefined }),
+    ];
+    expect(buildBootstrapContextFiles(files)).toEqual([
+      {
+        path: "/tmp/AGENTS.md",
+        content: "[MISSING] Expected at: /tmp/AGENTS.md",
+      },
+    ]);
+  });
+  it("includes BOOTSTRAP.md content when present (not missing)", () => {
+    const files = [
+      makeFile({
+        name: "BOOTSTRAP.md",
+        path: "/tmp/BOOTSTRAP.md",
+        missing: false,
+        content: "# Welcome\nFollow these steps...",
+      }),
+    ];
+    const result = buildBootstrapContextFiles(files);
+    expect(result).toEqual([
+      { path: "/tmp/BOOTSTRAP.md", content: "# Welcome\nFollow these steps..." },
+    ]);
+  });
   it("skips empty or whitespace-only content", () => {
     const files = [makeFile({ content: "   \n  " })];
     expect(buildBootstrapContextFiles(files)).toEqual([]);
