@@ -139,7 +139,7 @@ describe("fetchRemoteMedia telegram network policy", () => {
       { address: "149.154.167.220", family: 4 },
       { address: "2001:67c:4e8:f004::9", family: 6 },
     ]) as unknown as LookupFn;
-    undiciFetch
+    undiciMocks.fetch
       .mockRejectedValueOnce(createTelegramFetchFailedError("EHOSTUNREACH"))
       .mockResolvedValueOnce(
         new Response(new Uint8Array([0xff, 0xd8, 0xff, 0x00]), {
@@ -169,7 +169,7 @@ describe("fetchRemoteMedia telegram network policy", () => {
       },
     });
 
-    const firstInit = undiciFetch.mock.calls[0]?.[1] as
+    const firstInit = undiciMocks.fetch.mock.calls[0]?.[1] as
       | (RequestInit & {
           dispatcher?: {
             options?: {
@@ -178,7 +178,7 @@ describe("fetchRemoteMedia telegram network policy", () => {
           };
         })
       | undefined;
-    const secondInit = undiciFetch.mock.calls[1]?.[1] as
+    const secondInit = undiciMocks.fetch.mock.calls[1]?.[1] as
       | (RequestInit & {
           dispatcher?: {
             options?: {
@@ -188,7 +188,7 @@ describe("fetchRemoteMedia telegram network policy", () => {
         })
       | undefined;
 
-    expect(undiciFetch).toHaveBeenCalledTimes(2);
+    expect(undiciMocks.fetch).toHaveBeenCalledTimes(2);
     expect(firstInit?.dispatcher?.options?.connect).toEqual(
       expect.objectContaining({
         autoSelectFamily: true,
@@ -212,7 +212,7 @@ describe("fetchRemoteMedia telegram network policy", () => {
     ]) as unknown as LookupFn;
     const primaryError = createTelegramFetchFailedError("EHOSTUNREACH");
     const fallbackError = createTelegramFetchFailedError("ETIMEDOUT");
-    undiciFetch.mockRejectedValueOnce(primaryError).mockRejectedValueOnce(fallbackError);
+    undiciMocks.fetch.mockRejectedValueOnce(primaryError).mockRejectedValueOnce(fallbackError);
 
     const telegramTransport = resolveTelegramTransport(undefined, {
       network: {
