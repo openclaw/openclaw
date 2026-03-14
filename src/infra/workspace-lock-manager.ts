@@ -208,8 +208,9 @@ async function refreshLock(mapKey: string, token: string): Promise<void> {
       expiresAt: new Date(now + held.ttlMs).toISOString(),
     };
 
+    const serialized = JSON.stringify(nextPayload);
     await handle.truncate(0);
-    await handle.writeFile(JSON.stringify(nextPayload), "utf8");
+    await handle.write(serialized, 0, "utf8");
   } catch {
     // Preserve exclusivity on transient write errors; do not delete lock here.
   } finally {

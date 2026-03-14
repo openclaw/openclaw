@@ -636,4 +636,23 @@ describe("workspace lock manager", () => {
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     await held.release();
   });
+
+  it("refresh writes payload from offset 0 so release can still parse and clean up", async () => {
+    const dir = await makeCaseDir();
+    const target = path.join(dir, "refresh-offset.txt");
+    const lock = await acquireWorkspaceLock(target, {
+      kind: "file",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 5_000,
+    });
+
+    await lock.refresh();
+    const raw = await fs.readFile(lock.lockPath, "utf8");
+    expect(raw.startsWith("{")).toBe(true);
+    expect(() => JSON.parse(raw)).not.toThrow();
+
+    await lock.release();
+    await expect(fs.stat(lock.lockPath)).rejects.toThrow();
+  });
 });
