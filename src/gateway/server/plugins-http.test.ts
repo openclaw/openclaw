@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
+import { registerPluginHttpRoute } from "../../plugins/http-registry.js";
+import { setGatewayPluginRegistry } from "../../plugins/runtime.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "../server-methods/types.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
@@ -281,6 +283,40 @@ describe("createGatewayPluginRequestHandler", () => {
     const handled = await handler({ url: "/API//demo" } as IncomingMessage, res);
     expect(handled).toBe(true);
     expect(routeHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("sees routes registered via registerPluginHttpRoute after handler creation", async () => {
+    // Simulate the gateway startup: stash the registry globally, then create
+    // the handler. This mirrors what createGatewayRuntimeState does.
+    const gatewayRegistry = createTestRegistry({
+      httpRoutes: [createRoute({ path: "/existing", auth: "plugin" })],
+    });
+    setGatewayPluginRegistry(gatewayRegistry);
+    const handler = createGatewayPluginRequestHandler({
+      registry: gatewayRegistry,
+      log: createPluginLog(),
+    });
+
+    // Simulate a channel provider registering a webhook route after startup
+    // via registerPluginHttpRoute (no explicit registry). This is the code
+    // path BlueBubbles uses via registerWebhookTargetWithPluginRoute.
+    const lateHandler = vi.fn(async () => true);
+    const unregister = registerPluginHttpRoute({
+      path: "/late-webhook",
+      handler: lateHandler,
+      auth: "plugin",
+      match: "exact",
+      pluginId: "late-plugin",
+      source: "test",
+    });
+
+    const { res } = makeMockHttpResponse();
+    const handled = await handler({ url: "/late-webhook" } as IncomingMessage, res);
+    expect(handled).toBe(true);
+    expect(lateHandler).toHaveBeenCalledTimes(1);
+
+    unregister();
+    setGatewayPluginRegistry(null as never);
   });
 
   it("logs and responds with 500 when a route throws", async () => {

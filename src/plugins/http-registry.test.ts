@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerPluginHttpRoute } from "./http-registry.js";
 import { createEmptyPluginRegistry } from "./registry.js";
+import { setGatewayPluginRegistry } from "./runtime.js";
 
 function expectRouteRegistrationDenied(params: {
   replaceExisting: boolean;
@@ -38,6 +39,11 @@ function expectRouteRegistrationDenied(params: {
 }
 
 describe("registerPluginHttpRoute", () => {
+  afterEach(() => {
+    // Clear gateway registry so tests don't leak into each other.
+    setGatewayPluginRegistry(null as never);
+  });
+
   it("registers route and unregisters it", () => {
     const registry = createEmptyPluginRegistry();
     const handler = vi.fn();
@@ -163,5 +169,31 @@ describe("registerPluginHttpRoute", () => {
 
     unregister();
     expect(registry.httpRoutes).toHaveLength(1);
+  });
+
+  it("prefers the gateway plugin registry over the active singleton", () => {
+    const gatewayRegistry = createEmptyPluginRegistry();
+    const singletonRegistry = createEmptyPluginRegistry();
+
+    // Simulate the gateway stashing its registry at startup.
+    setGatewayPluginRegistry(gatewayRegistry);
+
+    // Register a route without an explicit registry. It should target the
+    // gateway registry, not the singleton (which would be a different object
+    // when the build duplicates the singleton across chunk boundaries).
+    const handler = vi.fn();
+    const unregister = registerPluginHttpRoute({
+      path: "/webhook",
+      auth: "plugin",
+      handler,
+      pluginId: "bb",
+    });
+
+    expect(gatewayRegistry.httpRoutes).toHaveLength(1);
+    expect(gatewayRegistry.httpRoutes[0]?.path).toBe("/webhook");
+    expect(singletonRegistry.httpRoutes).toHaveLength(0);
+
+    unregister();
+    expect(gatewayRegistry.httpRoutes).toHaveLength(0);
   });
 });
