@@ -93,6 +93,8 @@ export type ChannelOutboundContext = {
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   gifPlayback?: boolean;
+  /** Send image as document to avoid Telegram compression. */
+  forceDocument?: boolean;
   replyToId?: string | null;
   threadId?: string | number | null;
   accountId?: string | null;

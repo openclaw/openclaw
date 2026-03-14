@@ -25,6 +25,11 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
         .option("--thread-id <id>", "Thread id (Telegram forum thread)")
         .option("--gif-playback", "Treat video media as GIF playback (WhatsApp only).", false)
         .option(
+          "--force-document",
+          "Send media as document to avoid Telegram compression (Telegram only). Applies to images and GIFs.",
+          false,
+        )
+        .option(
           "--silent",
           "Send message silently without notification (Telegram + Discord)",
           false,

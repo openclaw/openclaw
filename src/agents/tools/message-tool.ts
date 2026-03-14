@@ -201,6 +201,11 @@ function buildSendSchema(options: {
     ),
     bestEffort: Type.Optional(Type.Boolean()),
     gifPlayback: Type.Optional(Type.Boolean()),
+    forceDocument: Type.Optional(
+      Type.Boolean({
+        description: "Send image/GIF as document to avoid Telegram compression (Telegram only).",
+      }),
+    ),
     buttons: Type.Optional(
       Type.Array(
         Type.Array(
