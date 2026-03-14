@@ -415,6 +415,24 @@ describe("Discord model picker rendering", () => {
     expect(payload.components?.[0]?.type).toBe(ComponentType.ActionRow);
   });
 
+  it("preserves the stored model suffix spacing in Discord current-model text", () => {
+    const data = createModelsProviderData({ openai: [" gpt-5", "gpt-4o"] });
+
+    const rendered = renderDiscordModelPickerProvidersView({
+      command: "model",
+      userId: "99",
+      data,
+      currentModel: " OpenAI/ gpt-5 ",
+      layout: "classic",
+    });
+
+    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+      content?: string;
+    };
+
+    expect(payload.content).toContain("Current model: openai/ gpt-5");
+  });
+
   it("renders model view with select menu and explicit submit button", () => {
     const data = createModelsProviderData({
       openai: ["gpt-4.1", "gpt-4o", "o3"],

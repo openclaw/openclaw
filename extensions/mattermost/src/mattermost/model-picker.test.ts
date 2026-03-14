@@ -60,6 +60,15 @@ describe("Mattermost model picker", () => {
     expect(view.buttons[0]?.[0]?.text).toBe("Browse providers");
   });
 
+  it("trims accidental model spacing in Mattermost current-model text", () => {
+    const view = renderMattermostModelSummaryView({
+      ownerUserId: "user-1",
+      currentModel: " OpenAI/ gpt-5 ",
+    });
+
+    expect(view.text).toContain("Current: openai/gpt-5");
+  });
+
   it("renders providers and models with Telegram-style navigation", () => {
     const providersView = renderMattermostProviderPickerView({
       ownerUserId: "user-1",
