@@ -127,6 +127,36 @@ describe("state + config path candidates", () => {
     });
   });
 
+  it("does not nest .openclaw when OPENCLAW_HOME already ends with .openclaw", () => {
+    const env = {
+      OPENCLAW_HOME: "/home/user/.openclaw",
+    } as NodeJS.ProcessEnv;
+    // Should return /home/user/.openclaw, NOT /home/user/.openclaw/.openclaw
+    expect(resolveStateDir(env)).toBe(path.resolve("/home/user/.openclaw"));
+  });
+
+  it("does not nest when OPENCLAW_HOME uses a legacy state dir name", () => {
+    const env = {
+      OPENCLAW_HOME: "/home/user/.clawdbot",
+    } as NodeJS.ProcessEnv;
+    expect(resolveStateDir(env)).toBe(path.resolve("/home/user/.clawdbot"));
+  });
+
+  it("does not nest .openclaw when OPENCLAW_HOME is a tilde path ending with .openclaw", () => {
+    const env = {
+      OPENCLAW_HOME: "~/.openclaw",
+      HOME: "/home/alice",
+    } as NodeJS.ProcessEnv;
+    expect(resolveStateDir(env)).toBe(path.resolve("/home/alice/.openclaw"));
+  });
+
+  it("still appends .openclaw when OPENCLAW_HOME does not end with a state dir name", () => {
+    const env = {
+      OPENCLAW_HOME: "/srv/openclaw-home",
+    } as NodeJS.ProcessEnv;
+    expect(resolveStateDir(env)).toBe(path.join(path.resolve("/srv/openclaw-home"), ".openclaw"));
+  });
+
   it("respects state dir overrides when config is missing", async () => {
     await withTempDir({ prefix: "openclaw-config-override-" }, async (root) => {
       const legacyDir = path.join(root, ".openclaw");

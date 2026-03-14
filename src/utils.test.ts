@@ -141,6 +141,44 @@ describe("resolveConfigDir", () => {
   });
 });
 
+describe("resolveConfigDir – OPENCLAW_HOME nesting guard (#45765)", () => {
+  it("does not nest .openclaw when OPENCLAW_HOME already ends with .openclaw", () => {
+    const env = {
+      OPENCLAW_HOME: "/home/user/.openclaw",
+    } as NodeJS.ProcessEnv;
+    expect(resolveConfigDir(env)).toBe(path.resolve("/home/user/.openclaw"));
+  });
+
+  it("does not nest when OPENCLAW_HOME is a tilde path ending with .openclaw", () => {
+    const env = {
+      OPENCLAW_HOME: "~/.openclaw",
+      HOME: "/home/alice",
+    } as NodeJS.ProcessEnv;
+    expect(resolveConfigDir(env)).toBe(path.resolve("/home/alice/.openclaw"));
+  });
+
+  it("does not nest when OPENCLAW_HOME uses a legacy state dir name", () => {
+    const env = {
+      OPENCLAW_HOME: "/home/user/.clawdbot",
+    } as NodeJS.ProcessEnv;
+    expect(resolveConfigDir(env)).toBe(path.resolve("/home/user/.clawdbot"));
+  });
+
+  it("does not nest when OPENCLAW_HOME uses .moldbot legacy name", () => {
+    const env = {
+      OPENCLAW_HOME: "/home/user/.moldbot",
+    } as NodeJS.ProcessEnv;
+    expect(resolveConfigDir(env)).toBe(path.resolve("/home/user/.moldbot"));
+  });
+
+  it("still appends .openclaw when OPENCLAW_HOME does not end with .openclaw", () => {
+    const env = {
+      OPENCLAW_HOME: "/srv/openclaw-home",
+    } as NodeJS.ProcessEnv;
+    expect(resolveConfigDir(env)).toBe(path.join(path.resolve("/srv/openclaw-home"), ".openclaw"));
+  });
+});
+
 describe("resolveHomeDir", () => {
   it("prefers OPENCLAW_HOME over HOME", () => {
     vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");

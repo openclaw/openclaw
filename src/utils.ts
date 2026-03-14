@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveOAuthDir } from "./config/paths.js";
+import { ALL_STATE_DIRNAMES, resolveOAuthDir } from "./config/paths.js";
 import { logVerbose, shouldLogVerbose } from "./globals.js";
 import {
   resolveEffectiveHomeDir,
@@ -290,7 +290,15 @@ export function resolveConfigDir(
   if (override) {
     return resolveUserPath(override, env, homedir);
   }
-  const newDir = path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
+  // When OPENCLAW_HOME already points to a known state directory (e.g.
+  // OPENCLAW_HOME=~/.openclaw), use it directly instead of appending
+  // ".openclaw" again, which would produce ~/.openclaw/.openclaw (#45765).
+  const explicitHome = env.OPENCLAW_HOME?.trim();
+  const resolvedHome = resolveRequiredHomeDir(env, homedir);
+  if (explicitHome && ALL_STATE_DIRNAMES.has(path.basename(resolvedHome))) {
+    return resolvedHome;
+  }
+  const newDir = path.join(resolvedHome, ".openclaw");
   try {
     const hasNew = fs.existsSync(newDir);
     if (hasNew) {
