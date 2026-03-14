@@ -1,6 +1,4 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "../infra/errors.js";
 import type { SkillScanFinding, SkillScanSeverity } from "./skill-scanner.js";
 
 // ---------------------------------------------------------------------------
@@ -26,7 +24,8 @@ const INJECTION_RULES: MarkdownRule[] = [
     ruleId: "md-injection-ignore-previous",
     severity: "critical",
     message: "Prompt injection: instruction to ignore/disregard previous instructions",
-    pattern: /ignore\s+(?:all\s+)?(?:previous|above|prior)\s+(?:instructions?|rules?|constraints?)/i,
+    pattern:
+      /ignore\s+(?:all\s+)?(?:previous|above|prior)\s+(?:instructions?|rules?|constraints?)/i,
   },
   {
     ruleId: "md-injection-forget-previous",
@@ -119,7 +118,7 @@ const DANGEROUS_CMD_RULES: MarkdownRule[] = [
     ruleId: "md-dangerous-cmd-rm-rf",
     severity: "critical",
     message: "Dangerous command: recursive delete on root or home directory",
-    pattern: /rm\s+-rf\s+[\/~]/,
+    pattern: /rm\s+-rf\s+[/~]/,
   },
   {
     ruleId: "md-dangerous-cmd-curl-pipe-shell",
@@ -202,9 +201,10 @@ function isDocumentationLine(line: string, inCodeBlock: boolean): boolean {
   if (inCodeBlock) {
     return true;
   }
-  // Lines starting with quote markers, example indicators, or list bullets
-  // with status icons are likely documentation
-  return /^[\s]*[>❌✅⚠️|$#]/.test(line);
+  // Lines starting with quote markers, example indicators, or table/anchor chars
+  // are likely documentation. Note: `#` (markdown headers) is intentionally
+  // excluded — attackers can prefix malicious content with `#` to bypass detection.
+  return /^\s*(?:[>|$]|❌|✅|⚠️)/.test(line);
 }
 
 // ---------------------------------------------------------------------------
