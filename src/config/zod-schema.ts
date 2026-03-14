@@ -143,6 +143,13 @@ const SkillEntrySchema = z
     apiKey: SecretInputSchema.optional().register(sensitive),
     env: z.record(z.string(), z.string()).optional(),
     config: z.record(z.string(), z.unknown()).optional(),
+    security: z
+      .object({
+        securityInfo: z.string().optional(),
+        securityBlocked: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

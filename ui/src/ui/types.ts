@@ -575,6 +575,7 @@ export type SkillStatusEntry = {
   homepage?: string;
   always: boolean;
   disabled: boolean;
+  security?: { securityInfo?: string };
   blockedByAllowlist: boolean;
   eligible: boolean;
   requirements: {

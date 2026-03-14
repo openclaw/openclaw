@@ -204,6 +204,8 @@ export const SkillsUpdateParamsSchema = Type.Object(
     enabled: Type.Optional(Type.Boolean()),
     apiKey: Type.Optional(Type.String()),
     env: Type.Optional(Type.Record(NonEmptyString, Type.String())),
+    securityInfo: Type.Optional(Type.String()),
+    securityBlocked: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

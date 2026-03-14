@@ -18,6 +18,9 @@ export function computeSkillReasons(skill: SkillStatusEntry): string[] {
   if (skill.blockedByAllowlist) {
     reasons.push("blocked by allowlist");
   }
+  if (skill.security?.securityInfo) {
+    reasons.push(skill.security.securityInfo);
+  }
   return reasons;
 }
 
