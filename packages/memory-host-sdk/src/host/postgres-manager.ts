@@ -19,7 +19,11 @@ import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { MemoryPostgresConfig } from "../config/types.memory.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { createEmbeddingProvider, type EmbeddingProvider } from "./embeddings.js";
+import {
+  createEmbeddingProvider,
+  type EmbeddingProvider,
+  type EmbeddingProviderRequest,
+} from "./embeddings.js";
 import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import type {
   MemoryEmbeddingProbeResult,
@@ -281,7 +285,7 @@ export class PostgresMemoryManager implements MemorySearchManager {
         const providerResult = await createEmbeddingProvider({
           config: params.cfg,
           agentDir: resolveAgentDir(params.cfg, params.agentId),
-          provider: pgConfig.embeddingProvider ?? settings.provider,
+          provider: (pgConfig.embeddingProvider as EmbeddingProviderRequest) ?? settings.provider,
           remote: settings.remote,
           model: pgConfig.embeddingModel ?? settings.model,
           fallback: settings.fallback,
