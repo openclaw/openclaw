@@ -4,6 +4,10 @@ import { EdgeTTS } from "node-edge-tts";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
 import { getApiKeyForModel, requireApiKey } from "../agents/model-auth.js";
 import {
+  fetchWithSsrFGuard,
+  withStrictGuardedFetchMode,
+} from "../infra/net/fetch-guard.js";
+import {
   buildModelAliasIndex,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
@@ -592,35 +596,44 @@ export async function elevenLabsTTS(params: {
       url.searchParams.set("output_format", outputFormat);
     }
 
-    const response = await fetch(url.toString(), {
-      method: "POST",
-      headers: {
-        "xi-api-key": apiKey,
-        "Content-Type": "application/json",
-        Accept: "audio/mpeg",
-      },
-      body: JSON.stringify({
-        text,
-        model_id: modelId,
-        seed: normalizedSeed,
-        apply_text_normalization: normalizedNormalization,
-        language_code: normalizedLanguage,
-        voice_settings: {
-          stability: voiceSettings.stability,
-          similarity_boost: voiceSettings.similarityBoost,
-          style: voiceSettings.style,
-          use_speaker_boost: voiceSettings.useSpeakerBoost,
-          speed: voiceSettings.speed,
+    const { response, release } = await fetchWithSsrFGuard(
+      withStrictGuardedFetchMode({
+        url: url.toString(),
+        init: {
+          method: "POST",
+          headers: {
+            "xi-api-key": apiKey,
+            "Content-Type": "application/json",
+            Accept: "audio/mpeg",
+          },
+          body: JSON.stringify({
+            text,
+            model_id: modelId,
+            seed: normalizedSeed,
+            apply_text_normalization: normalizedNormalization,
+            language_code: normalizedLanguage,
+            voice_settings: {
+              stability: voiceSettings.stability,
+              similarity_boost: voiceSettings.similarityBoost,
+              style: voiceSettings.style,
+              use_speaker_boost: voiceSettings.useSpeakerBoost,
+              speed: voiceSettings.speed,
+            },
+          }),
+          signal: controller.signal,
         },
       }),
-      signal: controller.signal,
-    });
+    );
 
-    if (!response.ok) {
-      throw new Error(`ElevenLabs API error (${response.status})`);
+    try {
+      if (!response.ok) {
+        throw new Error(`ElevenLabs API error (${response.status})`);
+      }
+
+      return Buffer.from(await response.arrayBuffer());
+    } finally {
+      await release();
     }
-
-    return Buffer.from(await response.arrayBuffer());
   } finally {
     clearTimeout(timeout);
   }
@@ -652,28 +665,37 @@ export async function openaiTTS(params: {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(`${baseUrl}/audio/speech`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        input: text,
-        voice,
-        response_format: responseFormat,
-        ...(speed != null && { speed }),
-        ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
+    const { response, release } = await fetchWithSsrFGuard(
+      withStrictGuardedFetchMode({
+        url: `${baseUrl}/audio/speech`,
+        init: {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model,
+            input: text,
+            voice,
+            response_format: responseFormat,
+            ...(speed != null && { speed }),
+            ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
+          }),
+          signal: controller.signal,
+        },
       }),
-      signal: controller.signal,
-    });
+    );
 
-    if (!response.ok) {
-      throw new Error(`OpenAI TTS API error (${response.status})`);
+    try {
+      if (!response.ok) {
+        throw new Error(`OpenAI TTS API error (${response.status})`);
+      }
+
+      return Buffer.from(await response.arrayBuffer());
+    } finally {
+      await release();
     }
-
-    return Buffer.from(await response.arrayBuffer());
   } finally {
     clearTimeout(timeout);
   }
