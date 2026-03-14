@@ -1,0 +1,24 @@
+services:
+  openclaw-ubuntu:
+    build:
+      context: .
+      dockerfile: Dockerfile.ubuntu-chrome
+    image: openclaw:ubuntu-chrome
+    container_name: openclaw-ubuntu
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:?OPENCLAW_GATEWAY_TOKEN must be set}
+      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
+      OPENCLAW_BROWSER_NO_SANDBOX: "1"
+      VNC_PASSWORD: ${VNC_PASSWORD:?VNC_PASSWORD must be set}
+      HOME: /home/node
+      TERM: xterm-256color
+    volumes:
+      - ${HOME}/.openclaw-ubuntu:/home/node/.openclaw
+      - ${HOME}/.openclaw-ubuntu/workspace:/home/node/.openclaw/workspace
+    ports:
+      - "18792:18789" # Gateway (+3)
+      - "18793:18790" # Bridge (+3)
+      - "5903:5900" # VNC (+3)
+      - "6083:6080" # noVNC browser access (+3)
+    restart: unless-stopped
+    init: true

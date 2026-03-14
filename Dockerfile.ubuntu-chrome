@@ -1,0 +1,203 @@
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV NODE_ENV=production
+ENV OPENCLAW_BROWSER_NO_SANDBOX=1
+
+ARG UBUNTU_MIRROR=http://mirrors.aliyun.com/ubuntu-ports
+
+# Ubuntu 24.04 on arm64 defaults to ports.ubuntu.com; switch mirror to avoid flaky CDN.
+RUN if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
+  sed -i "s|http://ports.ubuntu.com/ubuntu-ports|${UBUNTU_MIRROR}|g" /etc/apt/sources.list.d/ubuntu.sources; \
+  fi \
+  && if [ -f /etc/apt/sources.list ]; then \
+  sed -i "s|http://ports.ubuntu.com/ubuntu-ports|${UBUNTU_MIRROR}|g" /etc/apt/sources.list; \
+  fi
+
+# Base runtime deps + tools used by OpenClaw/browser automation.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+  ca-certificates \
+  curl \
+  git \
+  gpg \
+  dumb-init \
+  fonts-liberation \
+  fonts-noto-color-emoji \
+  && rm -rf /var/lib/apt/lists/*
+
+# Node.js 22 + corepack(pnpm)
+RUN mkdir -p /etc/apt/keyrings \
+  && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+  | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+  && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" \
+  > /etc/apt/sources.list.d/nodesource.list \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends nodejs \
+  && corepack enable \
+  && rm -rf /var/lib/apt/lists/*
+
+# Install desktop environment, VNC, and browser dependencies
+# Desktop environment (XFCE4), D-Bus, VNC server, noVNC, window manager, network tools,
+# browser dependencies, process management, and utilities
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  xfce4 \
+  xfce4-terminal \
+  xfce4-goodies \
+  dbus-x11 \
+  dbus \
+  x11vnc \
+  novnc \
+  websockify \
+  xdg-utils \
+  xvfb \
+  iputils-ping \
+  wget \
+  libnss3 \
+  libatk1.0-0 \
+  libatk-bridge2.0-0 \
+  libgdk-pixbuf2.0-0 \
+  libgtk-3-0 \
+  libpango-1.0-0 \
+  libglib2.0-0 \
+  libx11-6 \
+  libxcb1 \
+  libxext6 \
+  libxrandr2 \
+  libc6 \
+  supervisor \
+  nano \
+  net-tools \
+  && rm -rf /var/lib/apt/lists/*
+
+# Install Chrome/Chromium for both architectures:
+# For amd64, use Google Chrome; for arm64, compile Chromium from source (simplified)
+ARG TARGETARCH
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+  mkdir -p /etc/apt/keyrings; \
+  curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /etc/apt/keyrings/google-linux.gpg; \
+  echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-linux.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends google-chrome-stable; \
+  rm -rf /var/lib/apt/lists/*; \
+  else \
+  echo "For arm64, installing dependencies for browser or using remote connection..."; \
+  apt-get update && apt-get install -y --no-install-recommends \
+  libglib2.0-0 libx11-6 libxcb1 libxrandr2 libnss3 \
+  wget unzip; \
+  rm -rf /var/lib/apt/lists/*; \
+  mkdir -p /opt/chromium-arm64; \
+  cd /opt/chromium-arm64; \
+  echo "Attempting to download Chromium arm64 binary..."; \
+  if wget -q "https://github.com/ungoogled-software/ungoogled-chromium-binaries/releases/download/123.0.6312.86-1/ungoogled-chromium_123.0.6312.86-1_arm64.AppImage" -O chromium 2>/dev/null; then \
+    chmod +x /opt/chromium-arm64/chromium; \
+    ln -sf /opt/chromium-arm64/chromium /usr/bin/chromium; \
+    echo "Chromium arm64 binary installed successfully."; \
+  else \
+    echo "Binary download failed. Browser will need to be provided or OpenClaw will run headless."; \
+  fi; \
+  fi
+
+# Install real Firefox (not snap transitional package) from Mozilla PPA
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  software-properties-common && \
+  add-apt-repository -y ppa:mozillateam/ppa && \
+  # Configure preferences to prioritize Mozilla Team PPA over snap
+  echo 'Package: *' > /etc/apt/preferences.d/mozilla-firefox && \
+  echo 'Pin: release o=LP-PPA-mozillateam' >> /etc/apt/preferences.d/mozilla-firefox && \
+  echo 'Pin-Priority: 1001' >> /etc/apt/preferences.d/mozilla-firefox && \
+  apt-get update && \
+  apt-get install -y --no-install-recommends firefox && \
+  rm -rf /var/lib/apt/lists/*
+
+# Install OpenClaw directly from npm to keep image build fast and stable.
+RUN npm install -g --no-audit --no-fund openclaw@latest || \
+  (sleep 2 && npm install -g --no-audit --no-fund openclaw@latest) || \
+  (sleep 5 && npm install -g --no-audit --no-fund openclaw@latest)
+
+WORKDIR /workspace
+
+# Non-root runtime user.
+RUN useradd --create-home --shell /bin/bash node
+RUN mkdir -p /home/node/.openclaw /workspace && chown -R node:node /home/node /workspace
+
+# Setup VNC password and noVNC
+RUN mkdir -p /root/.vnc && \
+  x11vnc -storepasswd openclaw /root/.vnc/passwd && \
+  ln -s /usr/share/novnc/vnc.html /usr/share/novnc/index.html
+
+# Configure XFCE4 panel with complete default configuration
+RUN mkdir -p /root/.config/xfce4/xfconf/xfce-perchannel-xml && \
+  cat > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-panel" version="1.0">
+  <property name="configver" type="int" value="2"/>
+  <property name="panels" type="array">
+    <value type="int" value="1"/>
+    <property name="dark-mode" type="bool" value="false"/>
+    <property name="panel-1" type="empty">
+      <property name="position" type="string" value="p=6;x=0;y=0"/>
+      <property name="length" type="uint" value="100"/>
+      <property name="position-locked" type="bool" value="true"/>
+      <property name="icon-size" type="uint" value="16"/>
+      <property name="size" type="uint" value="26"/>
+      <property name="plugin-ids" type="array">
+        <value type="int" value="1"/>
+        <value type="int" value="2"/>
+        <value type="int" value="3"/>
+        <value type="int" value="4"/>
+        <value type="int" value="5"/>
+        <value type="int" value="6"/>
+        <value type="int" value="7"/>
+        <value type="int" value="8"/>
+      </property>
+    </property>
+  </property>
+  <property name="plugins" type="empty">
+    <property name="plugin-1" type="string" value="applicationsmenu"/>
+    <property name="plugin-2" type="string" value="tasklist">
+      <property name="grouping" type="uint" value="1"/>
+    </property>
+    <property name="plugin-3" type="string" value="separator">
+      <property name="expand" type="bool" value="true"/>
+      <property name="style" type="uint" value="0"/>
+    </property>
+    <property name="plugin-4" type="string" value="pager"/>
+    <property name="plugin-5" type="string" value="separator">
+      <property name="style" type="uint" value="0"/>
+    </property>
+    <property name="plugin-6" type="string" value="systray">
+      <property name="square-icons" type="bool" value="true"/>
+    </property>
+    <property name="plugin-7" type="string" value="notification-plugin"/>
+    <property name="plugin-8" type="string" value="clock"/>
+  </property>
+</channel>
+EOF
+
+# Create supervisord config
+RUN mkdir -p /var/log/supervisor
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# Set Firefox as default web browser for XFCE4
+RUN mkdir -p /root/.config && \
+  mkdir -p /home/node/.config && \
+  cat > /root/.config/mimeapps.list <<'EOF'
+[Default Applications]
+text/html=firefox.desktop
+application/xhtml+xml=firefox.desktop
+text/x-shellscript=xfce4-terminal.desktop
+application/x-desktop=xfce4-terminal.desktop
+EOF
+
+# Create startup script
+COPY start-services.sh /usr/local/bin/start-services.sh
+RUN chmod +x /usr/local/bin/start-services.sh
+
+EXPOSE 18789 18790 5900 6080
+
+HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["/usr/local/bin/start-services.sh"]
