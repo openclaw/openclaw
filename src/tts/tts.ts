@@ -449,12 +449,15 @@ export function setTtsEnabled(prefsPath: string, enabled: boolean): void {
 export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): TtsProvider {
   const prefs = readPrefs(prefsPath);
   if (prefs.tts?.provider) {
+    // User has explicitly set a provider in prefs - this takes precedence over config
     return prefs.tts.provider;
   }
   if (config.providerSource === "config") {
+    // Use provider from config (messages.tts.provider)
     return config.provider;
   }
 
+  // Auto-detect based on available API keys
   if (resolveTtsApiKey(config, "openai")) {
     return "openai";
   }
@@ -610,6 +613,10 @@ export async function textToSpeech(params: {
   const output = resolveOutputFormat(channelId);
 
   const errors: string[] = [];
+  const primaryProvider = providers[0];
+  logVerbose(
+    `TTS: starting with provider ${primaryProvider}, fallbacks: ${providers.slice(1).join(", ")}`,
+  );
 
   for (const provider of providers) {
     const providerStart = Date.now();
@@ -748,10 +755,21 @@ export async function textToSpeech(params: {
         voiceCompatible: output.voiceCompatible,
       };
     } catch (err) {
-      errors.push(formatTtsProviderError(provider, err));
+      const errorMsg = formatTtsProviderError(provider, err);
+      errors.push(errorMsg);
+      // Log provider fallback - only log non-verbose when falling back from configured provider to fallback
+      if (provider !== primaryProvider) {
+        logVerbose(`TTS: ${provider} failed (${errorMsg}); trying next provider.`);
+      } else if (errors.length > 0) {
+        // Primary provider failed - this is the key case the user is reporting
+        logVerbose(
+          `TTS: primary provider ${provider} failed (${errorMsg}); trying fallback providers.`,
+        );
+      }
     }
   }
 
+  // Return success with the last working provider or failure
   return buildTtsFailureResult(errors);
 }
 
@@ -860,6 +878,12 @@ export async function maybeApplyTtsToPayload(params: {
   if (autoMode === "off") {
     return params.payload;
   }
+
+  // Log provider selection for debugging TTS issues
+  const effectiveProvider = getTtsProvider(config, prefsPath);
+  logVerbose(
+    `TTS: auto mode enabled (${autoMode}), channel=${params.channel}, selected provider=${effectiveProvider}, config.provider=${config.provider}, config.providerSource=${config.providerSource}`,
+  );
 
   const text = params.payload.text ?? "";
   const directives = parseTtsDirectives(text, config.modelOverrides, config.openai.baseUrl);
