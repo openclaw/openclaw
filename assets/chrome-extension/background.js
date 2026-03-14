@@ -450,10 +450,10 @@ async function ensureRelayConnection() {
       if (resp.ok) {
         const data = await resp.json().catch(() => ({}))
         relayIsLocked = !!data.lockTab
-        if (relayIsLocked && !lockedTabId) {
-          const [active] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => [])
-          lockedTabId = (active?.id && tabs.has(active.id)) ? active.id : (Array.from(tabs.keys())[0] || null)
-        }
+        if (!relayIsLocked) lockedTabId = null
+        else if (typeof data.lockTabId === 'number') lockedTabId = data.lockTabId
+        else if (typeof data.lockTabId === 'string') lockedTabId = tabBySession.get(data.lockTabId) || null
+        else lockedTabId = null
         console.log('[OpenClaw] Fetched relay status. lockTab:', relayIsLocked)
       } else {
         console.warn('[OpenClaw] Relay status fetch failed:', resp.status)
@@ -553,6 +553,10 @@ async function setLockOnRelay(locked, tabId = null, tabMode = null, epoch = null
     const relayToken = await deriveRelayToken(gatewayToken, port)
     const body = { lockTab: locked, tabId, activationEpoch: epoch || activationEpoch }
     if (tabMode) body.tabMode = tabMode
+    if (locked && (typeof tabId !== 'string' || !tabId.trim()) && typeof tabId !== 'number') {
+      console.warn('[OpenClaw] Refusing lock without an authoritative owner')
+      return null
+    }
     const resp = await fetch(`http://127.0.0.1:${port}/extension/status`, {
       method: 'PUT',
       headers: {
@@ -568,12 +572,10 @@ async function setLockOnRelay(locked, tabId = null, tabMode = null, epoch = null
       clearLockStateResyncTimer()
       relayIsLocked = !!data.lockTab
       
-      if (relayIsLocked) {
-        // Resolve session ID string (cb-tab-X) back to numeric tabId for badges
-        lockedTabId = (typeof tabId === 'string') ? (tabBySession.get(tabId) || null) : tabId
-      } else if (lockedTabId === (typeof tabId === 'string' ? tabBySession.get(tabId) : tabId) || tabId === null) {
-        lockedTabId = null
-      }
+      if (!relayIsLocked) lockedTabId = null
+      else if (typeof data.lockTabId === 'number') lockedTabId = data.lockTabId
+      else if (typeof data.lockTabId === 'string') lockedTabId = tabBySession.get(data.lockTabId) || null
+      else lockedTabId = null
       
       void persistState()
       return data
@@ -1916,7 +1918,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (result) {
         updateAllBadges()
       }
-      sendResponse({ ok: !!result, lockTab: relayIsLocked })
+      sendResponse({
+        ok: !!result,
+        lockTab: relayIsLocked,
+        error: locked && !result ? 'No attached target is available to lock.' : undefined,
+      })
     })
     return true
   }

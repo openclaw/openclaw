@@ -659,6 +659,10 @@ export async function ensureChromeExtensionRelayServer(opts: {
                     currentLockTabId = rawTabId.trim();
                   } else if (typeof rawTabId === "number" && Number.isFinite(rawTabId)) {
                     currentLockTabId = rawTabId;
+                  } else {
+                    res.writeHead(400, { "Content-Type": "application/json" });
+                    res.end(JSON.stringify({ ok: false, error: "tabId required when lockTab is true" }));
+                    return;
                   }
                 }
                 let tabIdHint = "";
