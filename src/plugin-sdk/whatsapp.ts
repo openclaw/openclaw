@@ -46,6 +46,7 @@ export {
   resolveWhatsAppGroupToolPolicy,
 } from "../channels/plugins/group-mentions.js";
 export {
+  createWhatsAppOutboundBase,
   resolveWhatsAppGroupIntroHint,
   resolveWhatsAppMentionStripPatterns,
 } from "../channels/plugins/whatsapp-shared.js";
