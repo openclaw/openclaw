@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
-import { loadConfig } from "../../config/config.js";
+import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
@@ -38,6 +38,7 @@ export function createSessionsSendTool(opts?: {
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
   sandboxed?: boolean;
+  config?: OpenClawConfig;
 }): AnyAgentTool {
   return {
     label: "Session Send",
@@ -48,7 +49,7 @@ export function createSessionsSendTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const message = readStringParam(params, "message", { required: true });
-      const cfg = loadConfig();
+      const cfg = opts?.config ?? loadConfig();
       const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,

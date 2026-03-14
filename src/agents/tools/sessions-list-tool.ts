@@ -1,6 +1,6 @@
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
-import { loadConfig } from "../../config/config.js";
+import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -60,6 +60,7 @@ function mergeSessionRowsByKey(
 export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
+  config?: OpenClawConfig;
 }): AnyAgentTool {
   return {
     label: "Sessions",
@@ -68,7 +69,7 @@ export function createSessionsListTool(opts?: {
     parameters: SessionsListToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const cfg = loadConfig();
+      const cfg = opts?.config ?? loadConfig();
       const { mainKey, alias, requesterInternalKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,

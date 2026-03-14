@@ -1472,6 +1472,30 @@ describe("loadOpenClawPlugins", () => {
     ).toBe(true);
   });
 
+  it("dedupes the open allowlist warning for repeated loads of the same plugin set", () => {
+    useNoBundledPlugins();
+    clearPluginLoaderCache();
+    const plugin = writePlugin({
+      id: "warn-open-allow-once",
+      body: `module.exports = { id: "warn-open-allow-once", register() {} };`,
+    });
+    const warnings: string[] = [];
+    const options = {
+      cache: false,
+      logger: createWarningLogger(warnings),
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+        },
+      },
+    };
+
+    loadOpenClawPlugins(options);
+    loadOpenClawPlugins(options);
+
+    expect(warnings.filter((msg) => msg.includes("plugins.allow is empty"))).toHaveLength(1);
+  });
+
   it("does not auto-load workspace-discovered plugins unless explicitly trusted", () => {
     useNoBundledPlugins();
     const workspaceDir = makeTempDir();
@@ -1526,6 +1550,44 @@ describe("loadOpenClawPlugins", () => {
     const workspacePlugin = registry.plugins.find((entry) => entry.id === "workspace-helper");
     expect(workspacePlugin?.origin).toBe("workspace");
     expect(workspacePlugin?.status).toBe("loaded");
+  });
+
+  it("lets an explicitly trusted workspace plugin shadow a bundled plugin with the same id", () => {
+    const bundledDir = makeTempDir();
+    writePlugin({
+      id: "shadowed",
+      body: `module.exports = { id: "shadowed", register() {} };`,
+      dir: bundledDir,
+      filename: "index.cjs",
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const workspaceDir = makeTempDir();
+    const workspaceExtDir = path.join(workspaceDir, ".openclaw", "extensions", "shadowed");
+    mkdirSafe(workspaceExtDir);
+    writePlugin({
+      id: "shadowed",
+      body: `module.exports = { id: "shadowed", register() {} };`,
+      dir: workspaceExtDir,
+      filename: "index.cjs",
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      config: {
+        plugins: {
+          enabled: true,
+          allow: ["shadowed"],
+        },
+      },
+    });
+
+    const entries = registry.plugins.filter((entry) => entry.id === "shadowed");
+    const loaded = entries.find((entry) => entry.status === "loaded");
+    const overridden = entries.find((entry) => entry.status === "disabled");
+    expect(loaded?.origin).toBe("workspace");
+    expect(overridden?.origin).toBe("bundled");
   });
 
   it("warns when loaded non-bundled plugin has no install/load-path provenance", () => {
