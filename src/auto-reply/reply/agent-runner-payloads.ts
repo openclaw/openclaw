@@ -218,6 +218,14 @@ export async function buildReplyPayloads(params: {
         : mediaFilteredPayloads;
   const replyPayloads = suppressMessagingToolReplies ? [] : filteredPayloads;
 
+  logVerbose(
+    `[final-payloads] blockStreamingEnabled=${params.blockStreamingEnabled} didStream=${Boolean(
+      params.blockReplyPipeline?.didStream(),
+    )} isAborted=${Boolean(params.blockReplyPipeline?.isAborted())} shouldDropFinalPayloads=${shouldDropFinalPayloads} ` +
+      `sanitized=${sanitizedPayloads.length} replyTagged=${replyTaggedPayloads.length} deduped=${dedupedPayloads.length} mediaFiltered=${mediaFilteredPayloads.length} filtered=${filteredPayloads.length} final=${replyPayloads.length} ` +
+      `suppressMessagingToolReplies=${suppressMessagingToolReplies} directlySentBlockKeys=${params.directlySentBlockKeys?.size ?? 0}`,
+  );
+
   return {
     replyPayloads,
     didLogHeartbeatStrip,

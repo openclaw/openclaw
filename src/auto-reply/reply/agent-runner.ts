@@ -602,6 +602,10 @@ export async function runReplyAgent(params: {
       }
     }
 
+    logVerbose(
+      `[final-payloads] runId=${runId} sessionId=${followupRun.run.sessionId} blockStreamingEnabled=${blockStreamingEnabled} payloadArray=${payloadArray.length} guardedReplyPayloads=${guardedReplyPayloads.length} directlySentBlockKeys=${directlySentBlockKeys?.size ?? 0}`,
+    );
+
     // If verbose is enabled, prepend operational run notices.
     let finalPayloads = guardedReplyPayloads;
     const verboseNotices: ReplyPayload[] = [];
@@ -699,6 +703,36 @@ export async function runReplyAgent(params: {
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+    }
+
+    logVerbose(
+      `[final-payloads] runId=${runId} sessionId=${followupRun.run.sessionId} finalPayloads=${finalPayloads.length} responseUsageLine=${Boolean(responseUsageLine)} verboseNotices=${verboseNotices.length}`,
+    );
+
+    if (isDiagnosticsEnabled(cfg)) {
+      const textPayloads = finalPayloads.map((payload) => payload.text?.trim()).filter(Boolean);
+      const hasMedia = finalPayloads.some(
+        (payload) => Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0,
+      );
+      emitDiagnosticEvent({
+        type: "final.committed",
+        runId,
+        sessionKey,
+        sessionId: followupRun.run.sessionId,
+        provider: providerUsed,
+        model: modelUsed,
+        payloadKind:
+          textPayloads.length > 0 && hasMedia
+            ? "mixed"
+            : textPayloads.length > 0
+              ? "text"
+              : hasMedia
+                ? "media"
+                : "empty",
+        textPreview: textPayloads.join("\n\n").slice(0, 160),
+        summary: "Final payload committed after reply shaping",
+        sourceFile: "src/auto-reply/reply/agent-runner.ts",
+      });
     }
 
     return finalizeWithFollowup(
