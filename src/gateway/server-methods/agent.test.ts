@@ -802,6 +802,7 @@ describe("gateway agent handler", () => {
           channel: "telegram",
           to: "telegram:12345",
           accountId: "default",
+          threadId: "42",
         },
       }),
     );
