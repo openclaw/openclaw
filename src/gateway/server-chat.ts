@@ -549,7 +549,9 @@ export function createAgentEventHandler({
               : { ...eventForClients, data };
           })()
         : agentPayload;
-    if (evt.seq !== last + 1) {
+    // Only report a gap when last > 0: last === 0 means either the first event
+    // for this run or a stale event arriving after lifecycle-end cleared the seq.
+    if (last > 0 && evt.seq !== last + 1) {
       broadcast("agent", {
         runId: eventRunId,
         stream: "error",
