@@ -35,6 +35,7 @@ import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { throwIfAborted } from "./abort.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
+import { deliverySerializer } from "./delivery-serializer.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { DeliveryMirror } from "./mirror.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
@@ -472,8 +473,14 @@ export async function deliverOutboundPayloads(
       }
     : params;
 
+  // Serialize deliveries to the same channel+account+recipient so concurrent
+  // sessions (e.g. main + sub-agent) don't interleave messages.
+  const serializerKey = `${channel}:${params.accountId ?? "default"}:${to}`;
+
   try {
-    const results = await deliverOutboundPayloadsCore(wrappedParams);
+    const results = await deliverySerializer.serialize(serializerKey, () =>
+      deliverOutboundPayloadsCore(wrappedParams),
+    );
     if (queueId) {
       if (hadPartialFailure) {
         await failDelivery(queueId, "partial delivery failure (bestEffort)").catch(() => {});
