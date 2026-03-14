@@ -23,6 +23,10 @@ const APPROVALS_PATH = "~/.openclaw/plugin-binding-approvals.json";
 const PLUGIN_BINDING_CUSTOM_ID_PREFIX = "pluginbind";
 const PLUGIN_BINDING_OWNER = "plugin";
 const PLUGIN_BINDING_SESSION_PREFIX = "plugin-binding";
+const LEGACY_CODEX_PLUGIN_SESSION_PREFIXES = [
+  "openclaw-app-server:thread:",
+  "openclaw-codex-app-server:thread:",
+] as const;
 
 type PluginBindingApprovalDecision = "allow-once" | "allow-always" | "deny";
 
@@ -209,7 +213,10 @@ function isLegacyPluginBindingRecord(params: {
     return false;
   }
   const targetSessionKey = params.record.targetSessionKey.trim();
-  return targetSessionKey.startsWith(`${PLUGIN_BINDING_SESSION_PREFIX}:`);
+  return (
+    targetSessionKey.startsWith(`${PLUGIN_BINDING_SESSION_PREFIX}:`) ||
+    LEGACY_CODEX_PLUGIN_SESSION_PREFIXES.some((prefix) => targetSessionKey.startsWith(prefix))
+  );
 }
 
 function buildDiscordButtonRow(
