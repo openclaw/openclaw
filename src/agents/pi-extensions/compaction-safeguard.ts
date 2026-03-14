@@ -253,7 +253,8 @@ function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY
   const marker = SUMMARY_TRUNCATED_MARKER;
   const budget = Math.max(0, maxChars - marker.length);
   if (budget <= 0) {
-    return marker.slice(0, maxChars);
+    // Marker cannot fit; keep body prefix instead of a partial marker fragment.
+    return summary.slice(0, maxChars);
   }
   return `${summary.slice(0, budget)}${marker}`;
 }
