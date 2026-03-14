@@ -105,6 +105,7 @@ import {
   sanitizeToolsForGoogle,
 } from "../google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
+import { withLlmRetry } from "../llm-retry.js";
 import { log } from "../logger.js";
 import { buildModelAliasLines } from "../model.js";
 import {
@@ -2059,6 +2060,18 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
         );
       }
+
+      // Wrap prompt method with LLM retry logic
+      const originalPrompt = activeSession.prompt.bind(activeSession);
+      activeSession.prompt = (async (...args: Parameters<typeof originalPrompt>) => {
+        return withLlmRetry(() => originalPrompt(...args), {
+          attempts: 8,
+          minDelayMs: 1000,
+          maxDelayMs: 32000,
+          jitter: 0.1,
+          signal: runAbortController.signal,
+        });
+      }) as typeof originalPrompt;
 
       try {
         const prior = await sanitizeSessionHistory({
