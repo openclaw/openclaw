@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  parseInlineDirectives,
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
 } from "./directive-tags.js";
@@ -55,5 +56,37 @@ describe("stripInlineDirectiveTagsFromMessageForDisplay", () => {
     };
     const result = stripInlineDirectiveTagsFromMessageForDisplay(input);
     expect(result).toEqual(input);
+  });
+});
+
+describe("parseInlineDirectives", () => {
+  test("preserves indentation inside fenced code blocks after stripping reply tags", () => {
+    const input = [
+      "[[reply_to_current]] Here is YAML:",
+      "",
+      "```yaml",
+      "a:",
+      "  b:",
+      "    c: sadffdsd",
+      "```",
+    ].join("\n");
+
+    const result = parseInlineDirectives(input, {
+      currentMessageId: "msg-1",
+    });
+
+    expect(result.replyToId).toBe("msg-1");
+    expect(result.text).toBe(
+      ["Here is YAML:", "", "```yaml", "a:", "  b:", "    c: sadffdsd", "```"].join("\n"),
+    );
+  });
+
+  test("removes inline reply tags without collapsing neighboring words", () => {
+    const result = parseInlineDirectives("see [[reply_to:abc-123]] now", {
+      currentMessageId: "msg-1",
+    });
+
+    expect(result.replyToId).toBe("abc-123");
+    expect(result.text).toBe("see now");
   });
 });
