@@ -192,7 +192,10 @@ export function generateBwrapArgs(
       if (!p || p === "/") {
         continue;
       }
-      if (permAllowsWrite(perm) && (perm[0] === "r" || defaultPerm[0] === "r")) {
+      if (permAllowsWrite(perm)) {
+        // Any write-granting override always needs --bind-try so the path exists
+        // and writes succeed. bwrap mounts are ordered; this override comes after
+        // deny[] tmpfs entries, so --bind-try wins regardless of the base policy.
         args.push("--bind-try", p, p);
       } else if (perm[0] === "r") {
         args.push("--ro-bind-try", p, p);

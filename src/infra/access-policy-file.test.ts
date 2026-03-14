@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -309,6 +310,30 @@ describe("resolveAccessPolicyForAgent", () => {
     expect(warnSpy).not.toHaveBeenCalled();
     errSpy.mockRestore();
     warnSpy.mockRestore();
+  });
+
+  it("does not print 'Bad permission strings' footer when only auto-expand diagnostics are present", () => {
+    // Greptile: footer was printed after auto-expand messages ("rule auto-expanded to ..."),
+    // misleading operators into thinking their policy was broken when it was fine.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Write a file whose rules entry is a bare directory — triggers auto-expand diagnostic
+    // but no real perm-string error.
+    const dir = os.tmpdir();
+    writeFile({ version: 1, base: { rules: { [dir]: "r--" } } });
+    resolveAccessPolicyForAgent("subri");
+    const calls = errSpy.mock.calls.map((c) => String(c[0]));
+    expect(calls.some((m) => m.includes("auto-expanded"))).toBe(true);
+    expect(calls.some((m) => m.includes("Bad permission strings"))).toBe(false);
+    errSpy.mockRestore();
+  });
+
+  it("prints 'Bad permission strings' footer when a real perm-string error is present", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    writeFile({ version: 1, base: { rules: { "/**": "BAD" } } });
+    resolveAccessPolicyForAgent("subri");
+    const calls = errSpy.mock.calls.map((c) => String(c[0]));
+    expect(calls.some((m) => m.includes("Bad permission strings"))).toBe(true);
+    errSpy.mockRestore();
   });
 
   it("named agent deny extends global deny — global deny cannot be removed", () => {

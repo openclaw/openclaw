@@ -264,6 +264,24 @@ describe("generateBwrapArgs", () => {
     expect(bindArgs[secretIdx]).toBe("--ro-bind-try");
   });
 
+  it('script override "-w-" under restrictive default emits --bind-try, not --tmpfs', () => {
+    // Greptile: permAllowsWrite && (r || defaultR) condition was wrong — for -w- under ---
+    // both flags are false so it fell to else → --tmpfs, silently blocking writes.
+    // Fix: any write-granting override always emits --bind-try.
+    const config: AccessPolicyConfig = {
+      default: "---",
+      rules: { [`${HOME}/workspace/**`]: "rwx" },
+    };
+    const overrides = { [`${HOME}/logs/**`]: "-w-" as const };
+    const args = generateBwrapArgs(config, HOME, overrides);
+    const bindMounts = args
+      .map((a, i) => (a === "--bind-try" ? args[i + 1] : null))
+      .filter(Boolean);
+    const tmpfsMounts = args.map((a, i) => (a === "--tmpfs" ? args[i + 1] : null)).filter(Boolean);
+    expect(bindMounts).toContain(`${HOME}/logs`);
+    expect(tmpfsMounts).not.toContain(`${HOME}/logs`);
+  });
+
   it("trailing-slash rule is treated as /** and resolves to correct path", () => {
     // "/tmp/" is shorthand for "/tmp/**" — must produce the same mount target
     // and sort-order length as an explicit "/tmp/**" rule.

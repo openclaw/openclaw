@@ -208,7 +208,12 @@ export function resolveAccessPolicyForAgent(agentId?: string): AccessPolicyConfi
       for (const err of errors) {
         console.error(`[access-policy] ${filePath}: ${err}`);
       }
-      console.error(`[access-policy] Bad permission strings are treated as "---" (deny all).`);
+      // Only print the footer when there are real permission-string errors —
+      // auto-expand diagnostics ("rule auto-expanded to ...") are informational
+      // and the footer would mislead operators into thinking the policy is broken.
+      if (errors.some((e) => !e.includes("auto-expanded"))) {
+        console.error(`[access-policy] Bad permission strings are treated as "---" (deny all).`);
+      }
     }
   }
 
