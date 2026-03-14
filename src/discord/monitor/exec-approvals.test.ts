@@ -116,6 +116,62 @@ function createHandler(config: DiscordExecApprovalConfig, accountId = "default")
   });
 }
 
+function mockSuccessfulDmDelivery(params?: {
+  noteChannelId?: string;
+  expectedNoteText?: string;
+  throwOnUnexpectedRoute?: boolean;
+}) {
+  mockRestPost.mockImplementation(
+    async (route: string, requestParams?: { body?: { content?: string } }) => {
+      if (params?.noteChannelId && route === Routes.channelMessages(params.noteChannelId)) {
+        if (params.expectedNoteText) {
+          expect(requestParams?.body?.content).toContain(params.expectedNoteText);
+        }
+        return { id: "note-1", channel_id: params.noteChannelId };
+      }
+      if (route === Routes.userChannels()) {
+        return { id: "dm-1" };
+      }
+      if (route === Routes.channelMessages("dm-1")) {
+        return { id: "msg-1", channel_id: "dm-1" };
+      }
+      if (params?.throwOnUnexpectedRoute) {
+        throw new Error(`unexpected route: ${route}`);
+      }
+      return { id: "msg-unknown" };
+    },
+  );
+}
+
+async function expectGatewayAuthStart(params: {
+  handler: DiscordExecApprovalHandler;
+  expectedUrl: string;
+  expectedSource: "cli" | "env";
+  expectedToken?: string;
+  expectedPassword?: string;
+}) {
+  await params.handler.start();
+
+  expect(mockResolveGatewayConnectionAuth).toHaveBeenCalledWith(
+    expect.objectContaining({
+      env: process.env,
+      urlOverride: params.expectedUrl,
+      urlOverrideSource: params.expectedSource,
+    }),
+  );
+
+  const expectedClientParams: Record<string, unknown> = {
+    url: params.expectedUrl,
+  };
+  if (params.expectedToken !== undefined) {
+    expectedClientParams.token = params.expectedToken;
+  }
+  if (params.expectedPassword !== undefined) {
+    expectedClientParams.password = params.expectedPassword;
+  }
+  expect(mockGatewayClientCtor).toHaveBeenCalledWith(expect.objectContaining(expectedClientParams));
+}
+
 type ExecApprovalHandlerInternals = {
   pending: Map<
     string,
@@ -470,15 +526,15 @@ describe("ExecApprovalButton", () => {
 
   function createMockInteraction(userId: string) {
     const reply = vi.fn().mockResolvedValue(undefined);
-    const update = vi.fn().mockResolvedValue(undefined);
+    const acknowledge = vi.fn().mockResolvedValue(undefined);
     const followUp = vi.fn().mockResolvedValue(undefined);
     const interaction = {
       userId,
       reply,
-      update,
+      acknowledge,
       followUp,
     } as unknown as ButtonInteraction;
-    return { interaction, reply, update, followUp };
+    return { interaction, reply, acknowledge, followUp };
   }
 
   it("denies unauthorized users with ephemeral message", async () => {
@@ -486,7 +542,7 @@ describe("ExecApprovalButton", () => {
     const ctx: ExecApprovalButtonContext = { handler };
     const button = new ExecApprovalButton(ctx);
 
-    const { interaction, reply, update } = createMockInteraction("999");
+    const { interaction, reply, acknowledge } = createMockInteraction("999");
     const data: ComponentData = { id: "test-approval", action: "allow-once" };
 
     await button.run(interaction, data);
@@ -495,7 +551,7 @@ describe("ExecApprovalButton", () => {
       content: "⛔ You are not authorized to approve exec requests.",
       ephemeral: true,
     });
-    expect(update).not.toHaveBeenCalled();
+    expect(acknowledge).not.toHaveBeenCalled();
     // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
     expect(handler.resolveApproval).not.toHaveBeenCalled();
   });
@@ -505,50 +561,45 @@ describe("ExecApprovalButton", () => {
     const ctx: ExecApprovalButtonContext = { handler };
     const button = new ExecApprovalButton(ctx);
 
-    const { interaction, reply, update } = createMockInteraction("222");
+    const { interaction, reply, acknowledge } = createMockInteraction("222");
     const data: ComponentData = { id: "test-approval", action: "allow-once" };
 
     await button.run(interaction, data);
 
     expect(reply).not.toHaveBeenCalled();
-    expect(update).toHaveBeenCalledWith({
-      content: "Submitting decision: **Allowed (once)**...",
-      components: [],
-    });
+    expect(acknowledge).toHaveBeenCalledTimes(1);
     // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
     expect(handler.resolveApproval).toHaveBeenCalledWith("test-approval", "allow-once");
   });
 
-  it("shows correct label for allow-always", async () => {
+  it("acknowledges allow-always interactions before resolving", async () => {
     const handler = createMockHandler(["111"]);
     const ctx: ExecApprovalButtonContext = { handler };
     const button = new ExecApprovalButton(ctx);
 
-    const { interaction, update } = createMockInteraction("111");
+    const { interaction, acknowledge } = createMockInteraction("111");
     const data: ComponentData = { id: "test-approval", action: "allow-always" };
 
     await button.run(interaction, data);
 
-    expect(update).toHaveBeenCalledWith({
-      content: "Submitting decision: **Allowed (always)**...",
-      components: [],
-    });
+    expect(acknowledge).toHaveBeenCalledTimes(1);
+    // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
+    expect(handler.resolveApproval).toHaveBeenCalledWith("test-approval", "allow-always");
   });
 
-  it("shows correct label for deny", async () => {
+  it("acknowledges deny interactions before resolving", async () => {
     const handler = createMockHandler(["111"]);
     const ctx: ExecApprovalButtonContext = { handler };
     const button = new ExecApprovalButton(ctx);
 
-    const { interaction, update } = createMockInteraction("111");
+    const { interaction, acknowledge } = createMockInteraction("111");
     const data: ComponentData = { id: "test-approval", action: "deny" };
 
     await button.run(interaction, data);
 
-    expect(update).toHaveBeenCalledWith({
-      content: "Submitting decision: **Denied**...",
-      components: [],
-    });
+    expect(acknowledge).toHaveBeenCalledTimes(1);
+    // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
+    expect(handler.resolveApproval).toHaveBeenCalledWith("test-approval", "deny");
   });
 
   it("handles invalid data gracefully", async () => {
@@ -556,18 +607,20 @@ describe("ExecApprovalButton", () => {
     const ctx: ExecApprovalButtonContext = { handler };
     const button = new ExecApprovalButton(ctx);
 
-    const { interaction, update } = createMockInteraction("111");
+    const { interaction, acknowledge, reply } = createMockInteraction("111");
     const data: ComponentData = { id: "", action: "invalid" };
 
     await button.run(interaction, data);
 
-    expect(update).toHaveBeenCalledWith({
+    expect(reply).toHaveBeenCalledWith({
       content: "This approval is no longer valid.",
-      components: [],
+      ephemeral: true,
     });
+    expect(acknowledge).not.toHaveBeenCalled();
     // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
     expect(handler.resolveApproval).not.toHaveBeenCalled();
   });
+
   it("follows up with error when resolve fails", async () => {
     const handler = createMockHandler(["111"]);
     handler.resolveApproval = vi.fn().mockResolvedValue(false);
@@ -581,7 +634,7 @@ describe("ExecApprovalButton", () => {
 
     expect(followUp).toHaveBeenCalledWith({
       content:
-        "Failed to submit approval decision. The request may have expired or already been resolved.",
+        "Failed to submit approval decision for **Allowed (once)**. The request may have expired or already been resolved.",
       ephemeral: true,
     });
   });
@@ -596,14 +649,14 @@ describe("ExecApprovalButton", () => {
     const ctx: ExecApprovalButtonContext = { handler };
     const button = new ExecApprovalButton(ctx);
 
-    const { interaction, update, reply } = createMockInteraction("111");
+    const { interaction, acknowledge, reply } = createMockInteraction("111");
     const data: ComponentData = { id: "test-approval", action: "allow-once" };
 
     await button.run(interaction, data);
 
     // Should match because getApprovers returns [111] and button does String(id) === userId
     expect(reply).not.toHaveBeenCalled();
-    expect(update).toHaveBeenCalled();
+    expect(acknowledge).toHaveBeenCalled();
   });
 });
 
@@ -775,15 +828,7 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
     });
     const internals = getHandlerInternals(handler);
 
-    mockRestPost.mockImplementation(async (route: string) => {
-      if (route === Routes.userChannels()) {
-        return { id: "dm-1" };
-      }
-      if (route === Routes.channelMessages("dm-1")) {
-        return { id: "msg-1", channel_id: "dm-1" };
-      }
-      return { id: "msg-unknown" };
-    });
+    mockSuccessfulDmDelivery();
 
     const request = createRequest({ sessionKey: "agent:main:discord:dm:123" });
     await internals.handleApprovalRequested(request);
@@ -799,6 +844,62 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
           components: expect.any(Array),
         }),
       }),
+    );
+
+    clearPendingTimeouts(handler);
+  });
+
+  it("posts an in-channel note when target is dm and the request came from a non-DM discord conversation", async () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["123"],
+      target: "dm",
+    });
+    const internals = getHandlerInternals(handler);
+
+    mockSuccessfulDmDelivery({
+      noteChannelId: "999888777",
+      expectedNoteText: "I sent the allowed approvers DMs",
+      throwOnUnexpectedRoute: true,
+    });
+
+    await internals.handleApprovalRequested(createRequest());
+
+    expect(mockRestPost).toHaveBeenCalledWith(
+      Routes.channelMessages("999888777"),
+      expect.objectContaining({
+        body: expect.objectContaining({
+          content: expect.stringContaining("I sent the allowed approvers DMs"),
+        }),
+      }),
+    );
+    expect(mockRestPost).toHaveBeenCalledWith(
+      Routes.channelMessages("dm-1"),
+      expect.objectContaining({
+        body: expect.any(Object),
+      }),
+    );
+
+    clearPendingTimeouts(handler);
+  });
+
+  it("does not post an in-channel note when the request already came from a discord DM", async () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["123"],
+      target: "dm",
+    });
+    const internals = getHandlerInternals(handler);
+
+    mockSuccessfulDmDelivery({ throwOnUnexpectedRoute: true });
+
+    await internals.handleApprovalRequested(
+      createRequest({ sessionKey: "agent:main:discord:dm:123" }),
+    );
+
+    expect(mockRestPost).not.toHaveBeenCalledWith(
+      Routes.channelMessages("999888777"),
+      expect.anything(),
     );
 
     clearPendingTimeouts(handler);
@@ -819,22 +920,13 @@ describe("DiscordExecApprovalHandler gateway auth resolution", () => {
       cfg: { session: { store: STORE_PATH } },
     });
 
-    await handler.start();
-
-    expect(mockResolveGatewayConnectionAuth).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: process.env,
-        urlOverride: "wss://override.example/ws",
-        urlOverrideSource: "cli",
-      }),
-    );
-    expect(mockGatewayClientCtor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "wss://override.example/ws",
-        token: "resolved-token",
-        password: "resolved-password", // pragma: allowlist secret
-      }),
-    );
+    await expectGatewayAuthStart({
+      handler,
+      expectedUrl: "wss://override.example/ws",
+      expectedSource: "cli",
+      expectedToken: "resolved-token",
+      expectedPassword: "resolved-password", // pragma: allowlist secret
+    });
 
     await handler.stop();
   });
@@ -850,20 +942,11 @@ describe("DiscordExecApprovalHandler gateway auth resolution", () => {
         cfg: { session: { store: STORE_PATH } },
       });
 
-      await handler.start();
-
-      expect(mockResolveGatewayConnectionAuth).toHaveBeenCalledWith(
-        expect.objectContaining({
-          env: process.env,
-          urlOverride: "wss://gateway-from-env.example/ws",
-          urlOverrideSource: "env",
-        }),
-      );
-      expect(mockGatewayClientCtor).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "wss://gateway-from-env.example/ws",
-        }),
-      );
+      await expectGatewayAuthStart({
+        handler,
+        expectedUrl: "wss://gateway-from-env.example/ws",
+        expectedSource: "env",
+      });
 
       await handler.stop();
     } finally {

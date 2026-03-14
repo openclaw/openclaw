@@ -1,3 +1,4 @@
+import type { IncomingMessage } from "node:http";
 import net from "node:net";
 import os from "node:os";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
@@ -182,6 +183,27 @@ export function resolveClientIp(params: {
     return parseRealIp(params.realIp);
   }
   return undefined;
+}
+
+function headerValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+export function resolveRequestClientIp(
+  req?: IncomingMessage,
+  trustedProxies?: string[],
+  allowRealIpFallback = false,
+): string | undefined {
+  if (!req) {
+    return undefined;
+  }
+  return resolveClientIp({
+    remoteAddr: req.socket?.remoteAddress ?? "",
+    forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
+    realIp: headerValue(req.headers?.["x-real-ip"]),
+    trustedProxies,
+    allowRealIpFallback,
+  });
 }
 
 export function isLocalGatewayAddress(ip: string | undefined): boolean {
