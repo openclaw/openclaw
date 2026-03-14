@@ -74,6 +74,7 @@ import {
   registerDiscordListener,
 } from "./listeners.js";
 import { createDiscordMessageHandler } from "./message-handler.js";
+import { reconcileDiscordNativeCommands } from "./native-command-state.js";
 import {
   createDiscordCommandArgFallbackButton,
   createDiscordModelPickerFallbackButton,
@@ -105,6 +106,7 @@ export type MonitorDiscordOpts = {
 };
 
 type DiscordVoiceManager = import("../voice/manager.js").DiscordVoiceManager;
+type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
 
 type DiscordVoiceRuntimeModule = typeof import("../voice/manager.runtime.js");
 
@@ -368,6 +370,56 @@ function logDiscordStartupPhase(params: {
   );
 }
 
+function resolveDiscordNativeCommandReconcileOnStartup(params: {
+  cfg: OpenClawConfig;
+  discordConfig?: DiscordConfig;
+}): boolean {
+  return (
+    params.discordConfig?.commands?.reconcileOnStartup ??
+    params.cfg.channels?.discord?.commands?.reconcileOnStartup ??
+    false
+  );
+}
+
+async function deployDiscordCommandsWithOptionalReconcile(params: {
+  client: Client;
+  runtime: RuntimeEnv;
+  enabled: boolean;
+  reconcileOnStartup: boolean;
+  cfg: OpenClawConfig;
+  accountId: string;
+  applicationId: string;
+  commandSpecs: NativeCommandSpec[];
+}) {
+  if (!params.enabled) {
+    return;
+  }
+  if (!params.reconcileOnStartup) {
+    params.runtime.log?.("discord: native commands using legacy deploy path");
+    await deployDiscordCommands({
+      client: params.client,
+      runtime: params.runtime,
+      enabled: params.enabled,
+    });
+    return;
+  }
+  params.runtime.log?.("discord: native commands using reconcile-on-startup path");
+  try {
+    await reconcileDiscordNativeCommands({
+      client: params.client,
+      cfg: params.cfg,
+      runtime: params.runtime,
+      accountId: params.accountId,
+      applicationId: params.applicationId,
+      commandSpecs: params.commandSpecs,
+    });
+  } catch (err) {
+    const details = formatDiscordDeployErrorDetails(err);
+    params.runtime.error?.(
+      danger(`discord: failed to reconcile native commands: ${formatErrorMessage(err)}${details}`),
+    );
+  }
+}
 function formatDiscordDeployErrorDetails(err: unknown): string {
   if (!err || typeof err !== "object") {
     return "";
@@ -487,6 +539,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     providerSetting: discordCfg.commands?.nativeSkills,
     globalSetting: cfg.commands?.nativeSkills,
   });
+  const reconcileNativeCommandsOnStartup = resolveDiscordNativeCommandReconcileOnStartup({
+    cfg,
+    discordConfig: discordCfg,
+  });
   const nativeDisabledExplicit = isNativeCommandsExplicitlyDisabled({
     providerSetting: discordCfg.commands?.native,
     globalSetting: cfg.commands?.native,
@@ -524,7 +580,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       emptyText: "any",
     });
     logVerbose(
-      `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${allowFromSummary} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${groupDmChannelSummary} groupPolicy=${groupPolicy} guilds=${guildSummary} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))} native=${nativeEnabled ? "on" : "off"} nativeSkills=${nativeSkillsEnabled ? "on" : "off"} accessGroups=${useAccessGroups ? "on" : "off"} threadBindings=${threadBindingsEnabled ? "on" : "off"} threadIdleTimeout=${formatThreadBindingDurationForConfigLabel(threadBindingIdleTimeoutMs)} threadMaxAge=${formatThreadBindingDurationForConfigLabel(threadBindingMaxAgeMs)}`,
+      `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${allowFromSummary} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${groupDmChannelSummary} groupPolicy=${groupPolicy} guilds=${guildSummary} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))} native=${nativeEnabled ? "on" : "off"} nativeSkills=${nativeSkillsEnabled ? "on" : "off"} nativeReconcile=${reconcileNativeCommandsOnStartup ? "on" : "off"} accessGroups=${useAccessGroups ? "on" : "off"} threadBindings=${threadBindingsEnabled ? "on" : "off"} threadIdleTimeout=${formatThreadBindingDurationForConfigLabel(threadBindingIdleTimeoutMs)} threadMaxAge=${formatThreadBindingDurationForConfigLabel(threadBindingMaxAgeMs)}`,
     );
   }
 
@@ -790,14 +846,17 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       phase: "deploy-commands:start",
       startAt: startupStartedAt,
       gateway: lifecycleGateway,
-      details: `native=${nativeEnabled ? "on" : "off"} commandCount=${commands.length}`,
+      details: `native=${nativeEnabled ? "on" : "off"} reconcile=${reconcileNativeCommandsOnStartup ? "on" : "off"} commandCount=${commands.length}`,
     });
-    await deployDiscordCommands({
+    await deployDiscordCommandsWithOptionalReconcile({
       client,
       runtime,
       enabled: nativeEnabled,
+      reconcileOnStartup: reconcileNativeCommandsOnStartup,
+      cfg,
       accountId: account.accountId,
-      startupStartedAt,
+      applicationId,
+      commandSpecs,
     });
     logDiscordStartupPhase({
       runtime,

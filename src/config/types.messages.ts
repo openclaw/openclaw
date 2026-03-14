@@ -174,4 +174,6 @@ export type ProviderCommandsConfig = {
   native?: NativeCommandsSetting;
   /** Override native skill command registration for this provider (bool or "auto"). */
   nativeSkills?: NativeCommandsSetting;
+  /** Reconcile native command deployment on startup instead of bulk redeploying. Default: false. */
+  reconcileOnStartup?: boolean;
 };

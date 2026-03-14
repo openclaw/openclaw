@@ -35,6 +35,7 @@ const {
   createDiscordMessageHandlerMock,
   createNoopThreadBindingManagerMock,
   createThreadBindingManagerMock,
+  reconcileDiscordNativeCommandsMock,
   reconcileAcpThreadBindingsOnStartupMock,
   createdBindingManagers,
   getAcpSessionStatusMock,
@@ -80,6 +81,18 @@ const {
       createdBindingManagers.push(manager);
       return manager;
     }),
+    reconcileDiscordNativeCommandsMock: vi.fn(async () => ({
+      mode: "reconcile",
+      liveCount: 0,
+      savedCount: 0,
+      summary: {
+        unchanged: 0,
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        leftAlone: 0,
+      },
+    })),
     reconcileAcpThreadBindingsOnStartupMock: vi.fn(() => ({
       checked: 0,
       removed: 0,
@@ -151,12 +164,24 @@ vi.mock("@buape/carbon", () => {
   }
   class Client {
     listeners: unknown[];
-    rest: { put: ReturnType<typeof vi.fn> };
+    rest: {
+      delete: ReturnType<typeof vi.fn>;
+      get: ReturnType<typeof vi.fn>;
+      patch: ReturnType<typeof vi.fn>;
+      post: ReturnType<typeof vi.fn>;
+      put: ReturnType<typeof vi.fn>;
+    };
     options: unknown;
     constructor(options: unknown, handlers: { listeners?: unknown[] }) {
       this.options = options;
       this.listeners = handlers.listeners ?? [];
-      this.rest = { put: vi.fn(async () => undefined) };
+      this.rest = {
+        delete: vi.fn(async () => undefined),
+        get: vi.fn(async () => []),
+        patch: vi.fn(async () => undefined),
+        post: vi.fn(async () => undefined),
+        put: vi.fn(async () => undefined),
+      };
       clientConstructorOptionsMock(options);
     }
     async handleDeployRequest() {
@@ -311,6 +336,10 @@ vi.mock("./native-command.js", () => ({
   createDiscordNativeCommand: createDiscordNativeCommandMock,
 }));
 
+vi.mock("./native-command-state.js", () => ({
+  reconcileDiscordNativeCommands: reconcileDiscordNativeCommandsMock,
+}));
+
 vi.mock("./presence.js", () => ({
   resolveDiscordPresenceUpdate: () => undefined,
 }));
@@ -413,6 +442,18 @@ describe("monitorDiscordProvider", () => {
     createDiscordNativeCommandMock.mockClear().mockReturnValue({ name: "mock-command" });
     createNoopThreadBindingManagerMock.mockClear();
     createThreadBindingManagerMock.mockClear();
+    reconcileDiscordNativeCommandsMock.mockClear().mockResolvedValue({
+      mode: "reconcile",
+      liveCount: 0,
+      savedCount: 0,
+      summary: {
+        unchanged: 0,
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        leftAlone: 0,
+      },
+    });
     reconcileAcpThreadBindingsOnStartupMock.mockClear().mockReturnValue({
       checked: 0,
       removed: 0,
@@ -808,6 +849,75 @@ describe("monitorDiscordProvider", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("native command deploy skipped"),
     );
+  });
+
+  it("uses the legacy deploy path when reconcileOnStartup is disabled", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
+    expect(reconcileDiscordNativeCommandsMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the reconcile path when reconcileOnStartup is enabled on the provider config", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+
+    await monitorDiscordProvider({
+      config: {
+        ...baseConfig(),
+        channels: {
+          discord: {
+            accounts: {
+              default: {},
+            },
+            commands: {
+              reconcileOnStartup: true,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      runtime: baseRuntime(),
+    });
+
+    expect(reconcileDiscordNativeCommandsMock).toHaveBeenCalledTimes(1);
+    expect(clientHandleDeployRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("passes plugin commands into the reconcile path", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    getPluginCommandSpecsMock.mockReturnValue([
+      { name: "cron_jobs", description: "List cron jobs", acceptsArgs: false },
+    ]);
+
+    await monitorDiscordProvider({
+      config: {
+        ...baseConfig(),
+        channels: {
+          discord: {
+            commands: {
+              reconcileOnStartup: true,
+            },
+            accounts: {
+              default: {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      runtime: baseRuntime(),
+    });
+
+    expect(reconcileDiscordNativeCommandsMock).toHaveBeenCalledTimes(1);
+    const firstCallArg = (
+      reconcileDiscordNativeCommandsMock.mock.calls.at(0) as unknown as
+        | [{ commandSpecs?: Array<{ name: string }> }]
+        | undefined
+    )?.[0];
+    const commandSpecs = firstCallArg?.commandSpecs;
+    expect(commandSpecs?.map((command) => command.name)).toEqual(["cmd", "cron_jobs"]);
   });
 
   it("reports connected status on startup and shutdown", async () => {
