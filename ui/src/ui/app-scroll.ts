@@ -82,7 +82,7 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
       }
       host.chatUserNearBottom = true;
       host.chatFollowLocked = false;
-      host.chatLastScrollTop = scrollTop;
+      host.chatLastScrollTop = Math.max(0, target.scrollHeight - target.clientHeight);
       host.chatNewMessagesBelow = false;
       const retryDelay = effectiveForce ? 150 : 120;
       host.chatScrollTimeout = window.setTimeout(() => {
@@ -99,7 +99,7 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
         latest.scrollTop = latest.scrollHeight;
         host.chatUserNearBottom = true;
         host.chatFollowLocked = false;
-        host.chatLastScrollTop = latest.scrollHeight;
+        host.chatLastScrollTop = Math.max(0, latest.scrollHeight - latest.clientHeight);
       }, retryDelay);
     });
   });
