@@ -222,6 +222,7 @@ export async function processGatewayAllowlist(
       });
       let approvedByAsk = baseDecision.approvedByAsk;
       let deniedReason = baseDecision.deniedReason;
+      let unresolvedWarning = "";
 
       if (baseDecision.timedOut && askFallback === "allowlist") {
         if (!analysisOk || !allowlistSatisfied) {
@@ -248,9 +249,7 @@ export async function processGatewayAllowlist(
           if (unresolved.length > 0) {
             const joined = unresolved.join(", ");
             logInfo(`exec: failed to resolve absolute paths for “Always Allow”: ${joined}`);
-            params.warnings.push(
-              `⚠️ Could not resolve absolute path for command(s): ${joined}. "Always Allow" failed to persist.`,
-            );
+            unresolvedWarning = `⚠️ Could not resolve absolute path for command(s): ${joined}. "Always Allow" failed to persist.\n`;
           }
         }
       }
@@ -323,7 +322,7 @@ export async function processGatewayAllowlist(
         turnSourceTo: params.turnSourceTo,
         turnSourceAccountId: params.turnSourceAccountId,
         turnSourceThreadId: params.turnSourceThreadId,
-        resultText: summary,
+        resultText: unresolvedWarning ? unresolvedWarning + summary : summary,
       }).catch(() => {});
     })();
 
