@@ -7,9 +7,6 @@ function changedProfileInvariants(
   next: ResolvedBrowserProfile,
 ): string[] {
   const changed: string[] = [];
-  if (current.mcpTargetUrl !== next.mcpTargetUrl) {
-    changed.push("mcpTargetUrl");
-  }
   if (current.cdpUrl !== next.cdpUrl) {
     changed.push("cdpUrl");
   }
