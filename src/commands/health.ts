@@ -384,15 +384,28 @@ export async function getHealthSnapshot(params?: {
   // Get runtime channel status from gateway to get accurate running/tokenSource info
   let gatewayChannelStatus: Record<string, unknown> = {};
   try {
-    gatewayChannelStatus = (await callGateway({
+    const result = await callGateway({
       method: "channels.status",
       params: { probe: doProbe, timeoutMs: cappedTimeout },
       timeoutMs: cappedTimeout,
       config: cfg,
-    })) as Record<string, unknown>;
+    });
+    // Validate response structure
+    if (result && typeof result === "object" && "channels" in result) {
+      gatewayChannelStatus = result as Record<string, unknown>;
+    }
   } catch (err) {
     debugHealth("gateway channels.status failed", err);
   }
+
+  // Helper to safely extract gateway channel data
+  const getGatewayChannelData = (channelId: string) => {
+    const channels = gatewayChannelStatus.channels;
+    if (!channels || typeof channels !== "object") return null;
+    const channel = (channels as Record<string, unknown>)[channelId];
+    if (!channel || typeof channel !== "object") return null;
+    return channel as Record<string, unknown>;
+  };
 
   for (const plugin of listChannelPlugins()) {
     channelLabels[plugin.id] = plugin.meta.label ?? plugin.id;
@@ -500,16 +513,13 @@ export async function getHealthSnapshot(params?: {
       }
 
       // Merge with gateway runtime status for accurate running/tokenSource at account level
-      const gatewayChannel = (gatewayChannelStatus.channels as Record<string, unknown>?)?.[plugin.id];
-      const gatewayAccounts = gatewayChannel && typeof gatewayChannel === "object"
-        ? (gatewayChannel as Record<string, unknown>).accounts as Record<string, unknown> | undefined
-        : undefined;
-      const gatewayAccount = gatewayAccounts?.[accountId];
-      if (gatewayAccount && typeof gatewayAccount === "object") {
-        const gw = gatewayAccount as Record<string, unknown>;
-        for (const key of ["running", "tokenSource", "lastStartAt", "lastStopAt", "lastError", "mode"]) {
-          if (key in gw && record[key as keyof ChannelAccountHealthSummary] === undefined) {
-            (record as Record<string, unknown>)[key] = gw[key];
+      const gwChannel = getGatewayChannelData(plugin.id);
+      const gwAccounts = gwChannel?.accounts as Record<string, unknown> | undefined;
+      const gwAccount = gwAccounts?.[accountId];
+      if (gwAccount && typeof gwAccount === "object") {
+        for (const key of ["running", "tokenSource", "lastStartAt", "lastStopAt", "lastError", "mode"] as const) {
+          if (key in gwAccount && record[key] === undefined) {
+            record[key] = gwAccount[key] as ChannelAccountHealthSummary[typeof key];
           }
         }
       }
@@ -522,19 +532,21 @@ export async function getHealthSnapshot(params?: {
       accountSummaries[preferredAccountId] ??
       accountSummaries[defaultAccountId] ??
       accountSummaries[accountIdsToProbe[0] ?? preferredAccountId];
-    // Merge with gateway runtime status for accurate running/tokenSource
-    const gatewayChannel = (gatewayChannelStatus.channels as Record<string, unknown>?)?.[plugin.id];
-    const gatewayRuntime = gatewayChannel && typeof gatewayChannel === "object" ? gatewayChannel as Record<string, unknown> : {};
-
     const fallbackSummary = defaultSummary ?? accountSummaries[Object.keys(accountSummaries)[0]];
     if (fallbackSummary) {
+      // Merge with gateway runtime status for accurate running/tokenSource at channel level
+      const gwChannel = getGatewayChannelData(plugin.id);
+      const gatewayRuntimeFields = gwChannel
+        ? Object.fromEntries(
+            Object.entries(gwChannel).filter(([key]) =>
+              !["accounts", "accountId", "configured", "enabled", "probe", "lastProbeAt"].includes(key),
+            ),
+          )
+        : {};
+
       channels[plugin.id] = {
         ...fallbackSummary,
-        ...Object.fromEntries(
-          Object.entries(gatewayRuntime).filter(([key]) =>
-            !["accounts", "accountId", "configured", "enabled", "probe", "lastProbeAt"].includes(key),
-          ),
-        ),
+        ...gatewayRuntimeFields,
         accounts: accountSummaries,
       } satisfies ChannelHealthSummary;
     }
