@@ -1,4 +1,3 @@
-import JSON5 from "json5";
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../icons.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
@@ -504,16 +503,10 @@ function truncateValue(value: unknown, maxLen = 40): string {
 }
 
 function computeRawDiff(
-  original: string,
-  current: string,
+  original: Record<string, unknown> | null,
+  current: Record<string, unknown> | null,
 ): Array<{ path: string; from: unknown; to: unknown }> {
-  try {
-    const origObj = JSON5.parse(original);
-    const currObj = JSON5.parse(current);
-    return computeDiff(origObj, currObj);
-  } catch {
-    return [];
-  }
+  return computeDiff(original, current);
 }
 
 function renderDiffValue(path: string, value: unknown, _uiHints: ConfigUiHints): string {
@@ -736,7 +729,9 @@ export function renderConfig(props: ConfigProps) {
   // Compute diff for showing changes (works for both form and raw modes)
   const diff = formMode === "form" ? computeDiff(props.originalValue, props.formValue) : [];
   const rawDiff =
-    formMode === "raw" && cvs.rawDiffRevealed ? computeRawDiff(props.originalRaw, props.raw) : [];
+    formMode === "raw" && cvs.rawDiffRevealed
+      ? computeRawDiff(props.originalValue, props.formValue)
+      : [];
   const hasRawChanges = formMode === "raw" && props.raw !== props.originalRaw;
   const hasChanges = formMode === "form" ? diff.length > 0 : hasRawChanges;
 
