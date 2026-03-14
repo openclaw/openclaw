@@ -142,6 +142,8 @@ export type TelegramAccountConfig = {
   /** @deprecated Legacy key; migrated automatically to `streaming`. */
   streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
+  /** Custom Telegram Bot API root URL (e.g. a reverse proxy). Replaces https://api.telegram.org. */
+  apiRoot?: string;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
   timeoutSeconds?: number;
   /** Retry policy for outbound Telegram API calls. */
