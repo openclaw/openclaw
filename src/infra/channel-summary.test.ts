@@ -179,6 +179,7 @@ function makeFallbackSummaryPlugin(params: {
     id: "fallback-plugin",
     meta: {
       id: "fallback-plugin",
+      label: "Fallback",
       selectionLabel: "Fallback",
       docsPath: "/channels/fallback",
       blurb: "test",
@@ -289,7 +290,7 @@ describe("buildChannelSummary", () => {
     ]);
   });
 
-  it("falls back to plugin id and default account id when no label or accounts exist", async () => {
+  it("uses the channel label and default account id when no accounts exist", async () => {
     vi.mocked(listChannelPlugins).mockReturnValue([
       makeFallbackSummaryPlugin({
         enabled: true,
@@ -304,7 +305,7 @@ describe("buildChannelSummary", () => {
       includeAllowFrom: false,
     });
 
-    expect(lines).toEqual(["fallback-plugin: configured", "  - fallback-account"]);
+    expect(lines).toEqual(["Fallback: configured", "  - fallback-account"]);
   });
 
   it("shows not-configured status when enabled accounts exist without configured ones", async () => {
@@ -321,6 +322,6 @@ describe("buildChannelSummary", () => {
       includeAllowFrom: false,
     });
 
-    expect(lines).toEqual(["fallback-plugin: not configured"]);
+    expect(lines).toEqual(["Fallback: not configured"]);
   });
 });
