@@ -440,6 +440,12 @@ export function stripEmptyComponents(params: Record<string, unknown>): void {
     return;
   }
 
+  // Preserve array-based components (Discord TopLevelComponents[]) — they
+  // are a valid payload format and should never be stripped.
+  if (Array.isArray(components)) {
+    return;
+  }
+
   const comp = components as Record<string, unknown>;
 
   // Strip empty modal (no fields or only empty fields array)
@@ -451,14 +457,17 @@ export function stripEmptyComponents(params: Record<string, unknown>): void {
     }
   }
 
-  // Check if the remaining components have any meaningful content
-  const blocks = comp.blocks;
-  const hasBlocks = Array.isArray(blocks) && blocks.length > 0;
+  // Check if the remaining components have any meaningful content.
+  // Preserve container-only payloads (accentColor, reusable, spoiler)
+  // as they carry valid Discord styling metadata.
+  const hasBlocks = Array.isArray(comp.blocks) && comp.blocks.length > 0;
   const hasText = typeof comp.text === "string" && comp.text.trim().length > 0;
   const hasModal = comp.modal != null;
+  const hasContainer = comp.container != null && typeof comp.container === "object";
+  const hasReusable = comp.reusable === true;
 
   // If nothing meaningful remains, remove the entire components object
-  if (!hasBlocks && !hasText && !hasModal) {
+  if (!hasBlocks && !hasText && !hasModal && !hasContainer && !hasReusable) {
     delete params.components;
   }
 }
