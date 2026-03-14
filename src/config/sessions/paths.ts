@@ -2,9 +2,16 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { sameFileIdentity } from "../../infra/file-identity.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveStateDir } from "../paths.js";
+
+const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fs.constants;
+const OPEN_DIRECTORY_FLAGS =
+  fs.constants.O_RDONLY |
+  (typeof fs.constants.O_DIRECTORY === "number" ? fs.constants.O_DIRECTORY : 0) |
+  (SUPPORTS_NOFOLLOW ? fs.constants.O_NOFOLLOW : 0);
 
 function resolveAgentSessionsDir(
   agentId?: string,
@@ -34,6 +41,31 @@ export async function ensurePrivateSessionsDir(sessionsDir: string): Promise<str
   if (stat.isSymbolicLink()) {
     throw new Error(`Session transcripts dir must not be a symlink: ${resolved}`);
   }
+  if (!stat.isDirectory()) {
+    throw new Error(`Session transcripts dir must be a directory: ${resolved}`);
+  }
+
+  if (SUPPORTS_NOFOLLOW) {
+    const handle = await fsPromises.open(resolved, OPEN_DIRECTORY_FLAGS);
+    try {
+      const openedStat = await handle.stat();
+      if (!openedStat.isDirectory()) {
+        throw new Error(`Session transcripts dir must be a directory: ${resolved}`);
+      }
+      if (!sameFileIdentity(stat, openedStat)) {
+        throw new Error(`Session transcripts dir changed during permission update: ${resolved}`);
+      }
+      try {
+        await handle.chmod(0o700);
+      } catch {
+        // Best-effort on platforms/filesystems without chmod semantics.
+      }
+    } finally {
+      await handle.close().catch(() => undefined);
+    }
+    return resolved;
+  }
+
   try {
     await fsPromises.chmod(resolved, 0o700);
   } catch {
