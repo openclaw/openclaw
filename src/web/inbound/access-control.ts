@@ -99,9 +99,13 @@ export async function checkInboundAccessControl(params: {
     accountId: account.accountId,
     log: (message) => logVerbose(message),
   });
-  const normalizedDmSender = normalizeE164(params.from);
+  const normalizedDmSender = params.from.includes("@") ? params.from : normalizeE164(params.from);
   const normalizedGroupSender =
-    typeof params.senderE164 === "string" ? normalizeE164(params.senderE164) : null;
+    typeof params.senderE164 === "string"
+      ? params.senderE164.includes("@")
+        ? params.senderE164
+        : normalizeE164(params.senderE164)
+      : null;
   const access = resolveDmGroupAccessWithLists({
     isGroup: params.group,
     dmPolicy,
@@ -117,7 +121,10 @@ export async function checkInboundAccessControl(params: {
       }
       const normalizedEntrySet = new Set(
         allowEntries
-          .map((entry) => normalizeE164(String(entry)))
+          .map((entry) => {
+            const raw = String(entry).trim();
+            return raw.includes("@") ? raw : normalizeE164(raw);
+          })
           .filter((entry): entry is string => Boolean(entry)),
       );
       if (!params.group && isSamePhone) {

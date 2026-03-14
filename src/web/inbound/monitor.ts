@@ -184,15 +184,13 @@ export async function monitorWebInbox(options: {
       }
     }
     const participantJid = msg.key?.participant ?? undefined;
-    const from = group ? remoteJid : await resolveInboundJid(remoteJid);
-    if (!from) {
-      return null;
-    }
+    const resolvedFrom = group ? remoteJid : await resolveInboundJid(remoteJid);
+    const from = resolvedFrom || remoteJid;
     const senderE164 = group
       ? participantJid
         ? await resolveInboundJid(participantJid)
         : null
-      : from;
+      : resolvedFrom;
 
     let groupSubject: string | undefined;
     let groupParticipants: string[] | undefined;

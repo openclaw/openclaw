@@ -636,9 +636,11 @@ export async function onTimer(state: CronServiceState) {
         return { jobId: id, ...result, startedAt, endedAt: state.deps.nowMs() };
       } catch (err) {
         const errorText = isAbortError(err) ? timeoutErrorMessage() : String(err);
+        const isTimeout = isAbortError(err) || errorText.includes("timeout");
+
         state.deps.log.warn(
-          { jobId: id, jobName: job.name, timeoutMs: jobTimeoutMs ?? null },
-          `cron: job failed: ${errorText}`,
+          { jobId: id, jobName: job.name, timeoutMs: jobTimeoutMs ?? null, isTimeout },
+          `cron: job failed: ${errorText}${isTimeout ? " (check LLM API availability)" : ""}`,
         );
         return {
           jobId: id,
