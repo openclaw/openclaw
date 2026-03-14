@@ -1,8 +1,8 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ImageContent } from "@mariozechner/pi-ai";
+import { loadWebMedia } from "../../../../extensions/whatsapp/src/media.js";
 import { resolveUserPath } from "../../../utils.js";
-import { loadWebMedia } from "../../../web/media.js";
 import type { ImageSanitizationLimits } from "../../image-sanitization.js";
 import {
   createSandboxBridgeReadFile,

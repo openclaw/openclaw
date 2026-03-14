@@ -1,10 +1,16 @@
-import type { OpenClawConfig } from "../config/config.js";
-import { inspectDiscordAccount, type InspectedDiscordAccount } from "../discord/account-inspect.js";
-import { inspectSlackAccount, type InspectedSlackAccount } from "../slack/account-inspect.js";
+import {
+  inspectDiscordAccount,
+  type InspectedDiscordAccount,
+} from "../../extensions/discord/src/account-inspect.js";
+import {
+  inspectSlackAccount,
+  type InspectedSlackAccount,
+} from "../../extensions/slack/src/account-inspect.js";
 import {
   inspectTelegramAccount,
   type InspectedTelegramAccount,
-} from "../telegram/account-inspect.js";
+} from "../../extensions/telegram/src/account-inspect.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { ChannelId } from "./plugins/types.js";
 
 export type ReadOnlyInspectedAccount =

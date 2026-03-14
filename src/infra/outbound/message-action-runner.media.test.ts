@@ -3,17 +3,19 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { slackPlugin } from "../../../extensions/slack/src/channel.js";
+import { loadWebMedia } from "../../../extensions/whatsapp/src/media.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { loadWebMedia } from "../../web/media.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { runMessageAction } from "./message-action-runner.js";
 
-vi.mock("../../web/media.js", async () => {
-  const actual = await vi.importActual<typeof import("../../web/media.js")>("../../web/media.js");
+vi.mock("../../../extensions/whatsapp/src/media.js", async () => {
+  const actual = await vi.importActual<typeof import("../../../extensions/whatsapp/src/media.js")>(
+    "../../../extensions/whatsapp/src/media.js",
+  );
   return {
     ...actual,
     loadWebMedia: vi.fn(actual.loadWebMedia),
@@ -154,8 +156,9 @@ describe("runMessageAction media behavior", () => {
     });
 
     async function restoreRealMediaLoader() {
-      const actual =
-        await vi.importActual<typeof import("../../web/media.js")>("../../web/media.js");
+      const actual = await vi.importActual<
+        typeof import("../../../extensions/whatsapp/src/media.js")
+      >("../../../extensions/whatsapp/src/media.js");
       vi.mocked(loadWebMedia).mockImplementation(actual.loadWebMedia);
     }
 

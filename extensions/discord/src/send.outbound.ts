@@ -14,7 +14,7 @@ import { maxBytesForKind } from "../../../src/media/constants.js";
 import { extensionForMime } from "../../../src/media/mime.js";
 import { unlinkIfExists } from "../../../src/media/temp-files.js";
 import type { PollInput } from "../../../src/polls.js";
-import { loadWebMediaRaw } from "../../../src/web/media.js";
+import { loadWebMediaRaw } from "../../whatsapp/src/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
 import {

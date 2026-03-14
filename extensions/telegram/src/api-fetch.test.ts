@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fetchTelegramChatId } from "./api.js";
+import { fetchTelegramChatId } from "./api-fetch.js";
 
 describe("fetchTelegramChatId", () => {
   const cases = [
