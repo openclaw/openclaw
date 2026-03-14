@@ -133,7 +133,7 @@ async function rebootInstance(regionId, instanceId, forceStop = false) {
 }
 
 // 获取监控数据
-async function describeInstanceMonitorData(regionId, instanceId, metricName, period = 60, startTime, endTime) {
+async function describeInstanceMonitorData(regionId, instanceId, period = 60, startTime, endTime) {
     const client = createClient(regionId);
     
     const request = new Ecs20140526.DescribeInstanceMonitorDataRequest({
@@ -264,9 +264,7 @@ async function describeSecurityGroupAttribute(regionId, securityGroupId, directi
     
     const response = await client.describeSecurityGroupAttribute(request);
     
-    const rules = direction === 'ingress' 
-        ? response.body.permissions?.permission 
-        : response.body.permissions?.permission;
+    const rules = response.body.permissions?.permission;
     
     if (!rules) return [];
     

@@ -242,7 +242,6 @@ async function main() {
                 const monitorData = await ecs.describeInstanceMonitorData(
                     options.region,
                     options.id,
-                    null,
                     period,
                     startTime.toISOString(),
                     endTime.toISOString()
@@ -284,16 +283,23 @@ async function main() {
                         console.error('错误: 请提供 --region 和 --id 参数');
                         process.exit(1);
                     }
-                    // 查询实例的磁盘ID，然后查询快照
-                    const instances = await ecs.describeInstances(options.region, {
-                        instanceIds: JSON.stringify([options.id]),
-                    });
-                    if (instances.length === 0) {
-                        console.log('实例不存在');
-                        process.exit(1);
+                    // 查询实例的快照列表
+                    const snapshots = await ecs.describeSnapshots(options.region, options.id, null);
+                    console.log(`\n实例 ${options.id} 的快照列表:\n`);
+                    if (snapshots.length === 0) {
+                        console.log('暂无快照');
+                    } else {
+                        console.log(formatTable(snapshots.map(snap => ({
+                            ...snap,
+                            status: snap.status === 'accomplished' ? '已完成' : snap.status,
+                        })), [
+                            { key: 'snapshotId', header: '快照ID' },
+                            { key: 'snapshotName', header: '名称' },
+                            { key: 'status', header: '状态' },
+                            { key: 'progress', header: '进度' },
+                            { key: 'creationTime', header: '创建时间' },
+                        ]));
                     }
-                    // 注意：需要通过其他API获取磁盘ID，这里简化处理
-                    console.log('快照列表功能需要进一步开发');
                 } else if (subCommand === 'create') {
                     if (!options.region || !options['disk-id'] || !options.name) {
                         console.error('错误: 请提供 --region, --disk-id 和 --name 参数');

@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Aliyun ECS management skill for OpenClaw",
   "main": "src/index.js",
+  "bin": {
+    "aliyun-ecs": "./src/index.js"
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
