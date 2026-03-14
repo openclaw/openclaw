@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { resolveCronRunLogPath } from "../run-log.js";
+import { purgeCronJobSessions } from "../session-reaper.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import { normalizeCronCreateDeliveryInput } from "./initial-delivery.js";
 import {
@@ -330,12 +333,32 @@ export async function remove(state: CronServiceState, id: string) {
     if (!state.store) {
       return { ok: false, removed: false } as const;
     }
+    const job = state.store.jobs.find((j) => j.id === id);
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
     await persist(state);
     armTimer(state);
     if (removed) {
       emit(state, { jobId: id, action: "removed" });
+
+      // Clean up run log file
+      const logPath = resolveCronRunLogPath({ storePath: state.deps.storePath, jobId: id });
+      void fs.unlink(logPath).catch(() => undefined);
+
+      // Clean up sessions from the session store
+      if (job && state.deps.resolveSessionStorePath) {
+        const sessionStorePath = state.deps.resolveSessionStorePath(job.agentId);
+        void purgeCronJobSessions({
+          jobId: id,
+          sessionStorePath,
+          log: state.deps.log,
+        }).catch((err) => {
+          state.deps.log.warn(
+            { err: String(err), jobId: id },
+            "cron: failed to purge job sessions on removal",
+          );
+        });
+      }
     }
     return { ok: true, removed } as const;
   });
