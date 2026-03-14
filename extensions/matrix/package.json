@@ -4,6 +4,7 @@
   "description": "OpenClaw Matrix channel plugin",
   "type": "module",
   "dependencies": {
+    "@mariozechner/pi-agent-core": "0.58.1",
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
     "fake-indexeddb": "^6.2.5",
     "markdown-it": "14.1.1",
