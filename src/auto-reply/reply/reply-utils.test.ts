@@ -141,9 +141,39 @@ describe("normalizeReplyPayload", () => {
     expect(reasons).toEqual(["silent"]);
   });
 
+  it("suppresses leaked tool-call control syntax after sanitization", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      { text: 'assistant to=functions.exec_command {"cmd":"id"}' },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
+
+  it("suppresses NO_REPLY-prefixed control leakage after sanitization", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      { text: 'NO_REPLY to=functions.exec_command {"cmd":"id"}' },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
+
   it("strips NO_REPLY but keeps media payload", () => {
     const result = normalizeReplyPayload({
       text: "NO_REPLY",
+      mediaUrl: "https://example.com/img.png",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("");
+    expect(result!.mediaUrl).toBe("https://example.com/img.png");
+  });
+
+  it("drops leaked control text but keeps media payloads", () => {
+    const result = normalizeReplyPayload({
+      text: 'commentary to=functions.write_stdin {"session_id":1}',
       mediaUrl: "https://example.com/img.png",
     });
     expect(result).not.toBeNull();

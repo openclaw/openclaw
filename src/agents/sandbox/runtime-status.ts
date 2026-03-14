@@ -119,9 +119,13 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
   }
 
   const lines: string[] = [];
-  lines.push(`Tool "${tool}" blocked by sandbox tool policy (mode=${runtime.mode}).`);
+  lines.push(
+    `blocked by sandbox: tool "${tool}" is not allowed in this session (mode=${runtime.mode}).`,
+  );
   lines.push(`Session: ${runtime.sessionKey || "(unknown)"}`);
   lines.push(`Reason: ${reasons.join(" + ")}`);
+  lines.push("Next:");
+  lines.push(`- Stay inside workspace tools when possible (memory/... or /workspace/memory/...).`);
   lines.push("Fix:");
   lines.push(`- agents.defaults.sandbox.mode=off (disable sandbox)`);
   for (const fix of fixes) {

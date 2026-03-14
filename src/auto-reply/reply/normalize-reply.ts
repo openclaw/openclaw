@@ -27,6 +27,31 @@ export type NormalizeReplyOptions = {
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
 
+function shouldSuppressSanitizedText(text: string): boolean {
+  const trimmed = text.trimStart();
+  if (!trimmed) {
+    return false;
+  }
+  if (
+    isSilentReplyText(trimmed, SILENT_REPLY_TOKEN) ||
+    isSilentReplyText(trimmed, HEARTBEAT_TOKEN)
+  ) {
+    return true;
+  }
+  const hasFunctionDirective =
+    /to=functions\.(?:exec_command|write_stdin|update_plan|apply_patch|parallel)\b/i.test(trimmed);
+  if (
+    /^(?:assistant|commentary)\s+to=functions\./i.test(trimmed) ||
+    /^to=functions\./i.test(trimmed)
+  ) {
+    return true;
+  }
+  if (/^NO_REPLY\b/i.test(trimmed) || /^HEARTBEAT_OK\b/i.test(trimmed)) {
+    return hasFunctionDirective;
+  }
+  return hasFunctionDirective && /^(?:assistant|commentary)\b/i.test(trimmed);
+}
+
 export function normalizeReplyPayload(
   payload: ReplyPayload,
   opts: NormalizeReplyOptions = {},
@@ -80,6 +105,13 @@ export function normalizeReplyPayload(
 
   if (text) {
     text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
+    if (text && shouldSuppressSanitizedText(text)) {
+      if (!hasMedia && !hasChannelData) {
+        opts.onSkip?.("silent");
+        return null;
+      }
+      text = "";
+    }
   }
   if (!text?.trim() && !hasMedia && !hasChannelData) {
     opts.onSkip?.("empty");
