@@ -13,6 +13,7 @@ export function createGatewayCloseHandler(params: {
   canvasHostServer: CanvasHostServer | null;
   stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
   pluginServices: PluginServicesHandle | null;
+  quantd: { close: () => Promise<void> } | null;
   cron: { stop: () => void };
   heartbeatRunner: HeartbeatRunner;
   updateCheckStop?: (() => void) | null;
@@ -68,6 +69,9 @@ export function createGatewayCloseHandler(params: {
     }
     if (params.pluginServices) {
       await params.pluginServices.stop().catch(() => {});
+    }
+    if (params.quantd) {
+      await params.quantd.close().catch(() => {});
     }
     await stopGmailWatcher();
     params.cron.stop();

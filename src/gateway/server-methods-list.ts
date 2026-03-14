@@ -1,5 +1,5 @@
 import { listChannelPlugins } from "../channels/plugins/index.js";
-import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "./events.js";
+import { GATEWAY_EVENT_RUNTIME_FORMAL, GATEWAY_EVENT_UPDATE_AVAILABLE } from "./events.js";
 
 const BASE_METHODS = [
   "health",
@@ -129,5 +129,6 @@ export const GATEWAY_EVENTS = [
   "voicewake.changed",
   "exec.approval.requested",
   "exec.approval.resolved",
+  GATEWAY_EVENT_RUNTIME_FORMAL,
   GATEWAY_EVENT_UPDATE_AVAILABLE,
 ];

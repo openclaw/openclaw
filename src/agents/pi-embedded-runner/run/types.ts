@@ -5,6 +5,7 @@ import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import type { PluginHookBeforeAgentStartResult } from "../../../plugins/types.js";
+import type { FailoverReason } from "../../pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { RunEmbeddedPiAgentParams } from "./params.js";
@@ -30,6 +31,24 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+};
+
+export type EmbeddedRunAttemptFailoverSignal = {
+  stage: "prompt" | "assistant";
+  source:
+    | "router_preflight"
+    | "stream_call"
+    | "stream_result"
+    | "stream_iterator"
+    | "prompt_error"
+    | "assistant_error"
+    | "timeout";
+  provider: string;
+  model: string;
+  reason: FailoverReason | null;
+  status?: number;
+  rawError: string;
+  timedOut?: boolean;
 };
 
 export type EmbeddedRunAttemptResult = {
@@ -60,6 +79,8 @@ export type EmbeddedRunAttemptResult = {
   messagingToolSentTargets: MessagingToolSend[];
   successfulCronAdds?: number;
   cloudCodeAssistFormatError: boolean;
+  promptFailureSignal?: EmbeddedRunAttemptFailoverSignal;
+  assistantFailureSignal?: EmbeddedRunAttemptFailoverSignal;
   attemptUsage?: NormalizedUsage;
   compactionCount?: number;
   /** Client tool call detected (OpenResponses hosted tools). */

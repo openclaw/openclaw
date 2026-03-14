@@ -1,6 +1,9 @@
 import type { HealthSummary } from "../commands/health.js";
 import { cleanOldMedia } from "../media/store.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
+import { GATEWAY_EVENT_RUNTIME_FORMAL } from "./events.js";
+import { diffFormalRuntimeMonitoringIssues } from "./runtime-monitoring-alerts.js";
+import type { FormalRuntimeMonitoringSummary } from "./runtime-monitoring.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import {
   DEDUPE_MAX,
@@ -11,6 +14,36 @@ import {
 import type { DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
+
+export function applyFormalRuntimeMonitoringUpdate(params: {
+  previous: FormalRuntimeMonitoringSummary | undefined;
+  monitoring: FormalRuntimeMonitoringSummary;
+  broadcast: (
+    event: string,
+    payload: unknown,
+    opts?: {
+      dropIfSlow?: boolean;
+      stateVersion?: { presence?: number; health?: number };
+    },
+  ) => void;
+  nodeSendToAllSubscribed: (event: string, payload: unknown) => void;
+  enqueueRuntimeSystemEvent?: (text: string) => void;
+  getPresenceVersion: () => number;
+  getHealthVersion: () => number;
+}): FormalRuntimeMonitoringSummary {
+  params.broadcast(GATEWAY_EVENT_RUNTIME_FORMAL, params.monitoring, {
+    stateVersion: {
+      presence: params.getPresenceVersion(),
+      health: params.getHealthVersion(),
+    },
+  });
+  params.nodeSendToAllSubscribed(GATEWAY_EVENT_RUNTIME_FORMAL, params.monitoring);
+  const alerts = diffFormalRuntimeMonitoringIssues(params.previous, params.monitoring);
+  for (const alert of alerts) {
+    params.enqueueRuntimeSystemEvent?.(alert.text);
+  }
+  return params.monitoring;
+}
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -39,12 +72,14 @@ export function startGatewayMaintenanceTimers(params: {
   agentRunSeq: Map<string, number>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   mediaCleanupTtlMs?: number;
+  enqueueRuntimeSystemEvent?: (text: string) => void;
 }): {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
   mediaCleanup: ReturnType<typeof setInterval> | null;
 } {
+  let previousMonitoring: FormalRuntimeMonitoringSummary | undefined;
   setBroadcastHealthUpdate((snap: HealthSummary) => {
     params.broadcast("health", snap, {
       stateVersion: {
@@ -53,6 +88,17 @@ export function startGatewayMaintenanceTimers(params: {
       },
     });
     params.nodeSendToAllSubscribed("health", snap);
+    if (snap.monitoring) {
+      previousMonitoring = applyFormalRuntimeMonitoringUpdate({
+        previous: previousMonitoring,
+        monitoring: snap.monitoring,
+        broadcast: params.broadcast,
+        nodeSendToAllSubscribed: params.nodeSendToAllSubscribed,
+        enqueueRuntimeSystemEvent: params.enqueueRuntimeSystemEvent,
+        getPresenceVersion: params.getPresenceVersion,
+        getHealthVersion: params.getHealthVersion,
+      });
+    }
   });
 
   // periodic keepalive

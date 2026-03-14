@@ -347,6 +347,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
   return {
     ...actual,
     loadConfig: mocks.loadConfig,
+    readBestEffortConfig: vi.fn(async () => mocks.loadConfig()),
   };
 });
 vi.mock("../daemon/service.js", () => ({

@@ -35,6 +35,10 @@ vi.mock("../web/auth-store.js", () => ({
   logoutWeb: vi.fn(),
 }));
 
+vi.mock("../telegram/fetch.js", () => ({
+  resolveTelegramFetch: () => globalThis.fetch,
+}));
+
 function stubTelegramFetchOk(calls: string[]) {
   vi.stubGlobal(
     "fetch",
@@ -86,7 +90,7 @@ async function runSuccessfulTelegramProbe(
   const calls: string[] = [];
   stubTelegramFetchOk(calls);
 
-  const snap = await getHealthSnapshot({ timeoutMs: 25 });
+  const snap = await getHealthSnapshot({ timeoutMs: 250 });
   const telegram = snap.channels.telegram as {
     configured?: boolean;
     probe?: {
@@ -142,6 +146,18 @@ describe("getHealthSnapshot", () => {
     expect(telegram.probe).toBeUndefined();
     expect(snap.sessions.count).toBe(2);
     expect(snap.sessions.recent[0]?.key).toBe("foo");
+    expect(snap.quantd?.status).toBe("disabled");
+    expect(snap.monitoring?.agents.total).toBeGreaterThan(0);
+    expect(snap.monitoring?.issueCounts).toEqual({
+      P0: 0,
+      P1: 1,
+      P2: 1,
+      INFO: 0,
+    });
+    expect(snap.monitoring?.issues.map((issue) => issue.code)).toEqual([
+      "agents.default_idle",
+      "agents.all_idle",
+    ]);
   });
 
   it("probes telegram getMe + webhook info when configured", async () => {
@@ -190,7 +206,7 @@ describe("getHealthSnapshot", () => {
       }),
     );
 
-    const snap = await getHealthSnapshot({ timeoutMs: 25 });
+    const snap = await getHealthSnapshot({ timeoutMs: 250 });
     const telegram = snap.channels.telegram as {
       configured?: boolean;
       probe?: { ok?: boolean; status?: number; error?: string };
@@ -213,7 +229,7 @@ describe("getHealthSnapshot", () => {
       }),
     );
 
-    const snap = await getHealthSnapshot({ timeoutMs: 25 });
+    const snap = await getHealthSnapshot({ timeoutMs: 250 });
     const telegram = snap.channels.telegram as {
       configured?: boolean;
       probe?: { ok?: boolean; error?: string };

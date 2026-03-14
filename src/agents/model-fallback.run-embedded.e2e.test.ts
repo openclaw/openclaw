@@ -171,6 +171,7 @@ async function writeAuthStore(
       failureCounts?: Partial<Record<AuthProfileFailureReason, number>>;
     }
   >,
+  extraProfiles?: Record<string, { type: "api_key"; provider: string; key: string }>,
 ) {
   await fs.writeFile(
     path.join(agentDir, "auth-profiles.json"),
@@ -178,12 +179,21 @@ async function writeAuthStore(
       version: 1,
       profiles: {
         "openai:p1": { type: "api_key", provider: "openai", key: "sk-openai" },
+        ...extraProfiles,
         "groq:p1": { type: "api_key", provider: "groq", key: "sk-groq" },
       },
       usageStats:
         usageStats ??
         ({
           "openai:p1": { lastUsed: 1 },
+          ...(extraProfiles
+            ? Object.fromEntries(
+                Object.keys(extraProfiles).map((profileId, index) => [
+                  profileId,
+                  { lastUsed: index + 2 },
+                ]),
+              )
+            : {}),
           "groq:p1": { lastUsed: 2 },
         } as const),
     }),
@@ -421,6 +431,71 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       expect(usageStats["openai:p1"]?.failureCounts).toMatchObject({ overloaded: 2 });
       expect(computeBackoffMock).toHaveBeenCalledTimes(1);
       expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("falls back after router preflight opens on repeated overloaded primary profiles", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir, undefined, {
+        "openai:p2": { type: "api_key", provider: "openai", key: "sk-openai-2" },
+      });
+      runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
+        const attemptParams = params as {
+          provider: string;
+          authProfileId?: string;
+          modelId: string;
+        };
+        if (attemptParams.provider === "openai") {
+          return makeAttempt({
+            assistantTexts: [],
+            lastAssistant: buildAssistant({
+              provider: "openai",
+              model: "mock-1",
+              stopReason: "error",
+              errorMessage: OVERLOADED_ERROR_PAYLOAD,
+            }),
+          });
+        }
+        if (attemptParams.provider === "groq") {
+          return makeAttempt({
+            assistantTexts: ["fallback ok"],
+            lastAssistant: buildAssistant({
+              provider: "groq",
+              model: "mock-2",
+              stopReason: "stop",
+              content: [{ type: "text", text: "fallback ok" }],
+            }),
+          });
+        }
+        throw new Error(`Unexpected provider ${attemptParams.provider}`);
+      });
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:router-preflight-fallback",
+        runId: "run:router-preflight-fallback",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.attempts).toHaveLength(1);
+      expect(result.attempts[0]).toMatchObject({
+        provider: "openai",
+        model: "mock-1",
+        reason: "overloaded",
+      });
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(3);
+      expect(
+        runEmbeddedAttemptMock.mock.calls.map((call) =>
+          (call[0] as { provider?: string; authProfileId?: string } | undefined)?.provider ===
+          "openai"
+            ? (call[0] as { authProfileId?: string }).authProfileId
+            : "groq:p1",
+        ),
+      ).toEqual(["openai:p1", "openai:p2", "groq:p1"]);
+      expect(computeBackoffMock).toHaveBeenCalledTimes(2);
+      expect(sleepWithAbortMock).toHaveBeenCalledTimes(2);
     });
   });
 
