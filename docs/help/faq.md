@@ -91,7 +91,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 - [Where things live on disk](#where-things-live-on-disk)
   - [Is all data used with OpenClaw saved locally?](#is-all-data-used-with-openclaw-saved-locally)
   - [Where does OpenClaw store its data?](#where-does-openclaw-store-its-data)
-  - [Where should AGENTS.md / SOUL.md / USER.md / MEMORY.md live?](#where-should-agentsmd-soulmd-usermd-memorymd-live)
+  - [Where should AGENTS.md / SOUL.md / VALUE.md / USER.md / MEMORY.md live?](#where-should-agentsmd-soulmd-valuemd-usermd-memorymd-live)
   - [What's the recommended backup strategy?](#whats-the-recommended-backup-strategy)
   - [How do I completely uninstall OpenClaw?](#how-do-i-completely-uninstall-openclaw)
   - [Can agents work outside the workspace?](#can-agents-work-outside-the-workspace)
@@ -1353,11 +1353,11 @@ Legacy single-agent path: `~/.openclaw/agent/*` (migrated by `openclaw doctor`).
 
 Your **workspace** (AGENTS.md, memory files, skills, etc.) is separate and configured via `agents.defaults.workspace` (default: `~/.openclaw/workspace`).
 
-### Where should AGENTSmd SOULmd USERmd MEMORYmd live
+### Where should AGENTSmd SOULmd VALUEmd USERmd MEMORYmd live
 
 These files live in the **agent workspace**, not `~/.openclaw`.
 
-- **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`,
+- **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `VALUE.md`, `IDENTITY.md`, `USER.md`,
   `MEMORY.md` (or `memory.md`), `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
 - **State dir (`~/.openclaw`)**: config, credentials, auth profiles, sessions, logs,
   and shared skills (`~/.openclaw/skills`).

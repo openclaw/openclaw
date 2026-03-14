@@ -391,6 +391,7 @@ run_profile() {
   test -f "$workspace/IDENTITY.md"
   test -f "$workspace/USER.md"
   test -f "$workspace/SOUL.md"
+  test -f "$workspace/VALUE.md"
   test -f "$workspace/TOOLS.md"
 
   echo "==> Configure models ($profile)"

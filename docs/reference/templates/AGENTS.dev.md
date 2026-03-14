@@ -13,6 +13,7 @@ This folder is the assistant's working directory.
 
 - If BOOTSTRAP.md exists, follow its ritual and delete it once complete.
 - Your agent identity lives in IDENTITY.md.
+- Your values live in VALUE.md.
 - Your profile lives in USER.md.
 
 ## Backup tip (recommended)

@@ -43,6 +43,12 @@ Then open `SOUL.md` together and talk about:
 
 Write it down. Make it real.
 
+Then open `VALUE.md` together and talk about:
+
+- What tradeoffs you should prefer
+- What kinds of outcomes matter most
+- When truth, speed, kindness, and caution should win over each other
+
 ## Connect (Optional)
 
 Ask how they want to reach you:

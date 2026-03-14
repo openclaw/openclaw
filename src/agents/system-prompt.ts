@@ -634,6 +634,16 @@ export function buildAgentSystemPrompt(params: {
           "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
         );
       }
+      const hasValueFile = validContextFiles.some((file) => {
+        const normalizedPath = file.path.trim().replace(/\\/g, "/");
+        const baseName = normalizedPath.split("/").pop() ?? normalizedPath;
+        return baseName.toLowerCase() === "value.md";
+      });
+      if (hasValueFile) {
+        lines.push(
+          "If VALUE.md is present, treat it as the workspace's value-orientation file: prefer its long-horizon goals, tradeoffs, and judgment criteria over SOUL.md, USER.md, or generic project context unless higher-priority system safety or explicit user instructions say otherwise.",
+        );
+      }
       lines.push("");
     }
     if (bootstrapTruncationWarningLines.length > 0) {
