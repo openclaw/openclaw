@@ -4,7 +4,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
-import { isImmutableThinkingBlock } from "./thinking-guard.js";
+
 import type { EmbeddedContextFile } from "./types.js";
 
 type ContentBlockWithSignature = {
@@ -64,9 +64,6 @@ export function stripThoughtSignatures<T>(
   };
   return content.map((block) => {
     if (!block || typeof block !== "object") {
-      return block;
-    }
-    if (isImmutableThinkingBlock(block)) {
       return block;
     }
     const rec = block as ContentBlockWithSignature;
