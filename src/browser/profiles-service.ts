@@ -130,15 +130,19 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
         }
       }
       if (driver === "existing-session") {
-        throw new BrowserValidationError(
-          "driver=existing-session does not accept cdpUrl; it attaches via the Chrome MCP auto-connect flow",
-        );
+        profileConfig = {
+          cdpUrl: parsed.normalized,
+          driver,
+          attachOnly: true,
+          color: profileColor,
+        };
+      } else {
+        profileConfig = {
+          cdpUrl: parsed.normalized,
+          ...(driver ? { driver } : {}),
+          color: profileColor,
+        };
       }
-      profileConfig = {
-        cdpUrl: parsed.normalized,
-        ...(driver ? { driver } : {}),
-        color: profileColor,
-      };
     } else {
       if (driver === "extension") {
         throw new BrowserValidationError("driver=extension requires an explicit loopback cdpUrl");
