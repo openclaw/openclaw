@@ -1,6 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { DiscordActionConfig } from "../../config/config.js";
-import { getPresence } from "../../discord/monitor/presence-cache.js";
+import { getPresence } from "../../../extensions/discord/src/monitor/presence-cache.js";
 import {
   addRoleDiscord,
   createChannelDiscord,
@@ -20,7 +19,8 @@ import {
   setChannelPermissionDiscord,
   uploadEmojiDiscord,
   uploadStickerDiscord,
-} from "../../discord/send.js";
+} from "../../../extensions/discord/src/send.js";
+import type { DiscordActionConfig } from "../../config/config.js";
 import {
   type ActionGate,
   jsonResult,

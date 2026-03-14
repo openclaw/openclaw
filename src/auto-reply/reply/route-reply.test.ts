@@ -29,22 +29,22 @@ const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
 }));
 
-vi.mock("../../discord/send.js", () => ({
+vi.mock("../../../extensions/discord/src/send.js", () => ({
   sendMessageDiscord: mocks.sendMessageDiscord,
 }));
-vi.mock("../../imessage/send.js", () => ({
+vi.mock("../../../extensions/imessage/src/send.js", () => ({
   sendMessageIMessage: mocks.sendMessageIMessage,
 }));
-vi.mock("../../signal/send.js", () => ({
+vi.mock("../../../extensions/signal/src/send.js", () => ({
   sendMessageSignal: mocks.sendMessageSignal,
 }));
-vi.mock("../../slack/send.js", () => ({
+vi.mock("../../../extensions/slack/src/send.js", () => ({
   sendMessageSlack: mocks.sendMessageSlack,
 }));
-vi.mock("../../telegram/send.js", () => ({
+vi.mock("../../../extensions/telegram/src/send.js", () => ({
   sendMessageTelegram: mocks.sendMessageTelegram,
 }));
-vi.mock("../../web/outbound.js", () => ({
+vi.mock("../../../extensions/whatsapp/src/send.js", () => ({
   sendMessageWhatsApp: mocks.sendMessageWhatsApp,
   sendPollWhatsApp: mocks.sendMessageWhatsApp,
 }));
