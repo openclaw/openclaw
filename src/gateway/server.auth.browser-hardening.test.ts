@@ -203,6 +203,41 @@ describe("gateway auth browser hardening", () => {
     },
   );
 
+  test("does not trust forwarded-host origin fallback from loopback unless proxy is trusted", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    await writeConfigFile({
+      gateway: {
+        trustedProxies: [],
+        controlUi: {
+          allowedOrigins: [ALLOWED_BROWSER_ORIGIN],
+        },
+      },
+    });
+
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, {
+        origin: "https://attacker.example",
+        "x-forwarded-host": "attacker.example",
+        "x-forwarded-proto": "https",
+      });
+      try {
+        const res = await connectReq(ws, {
+          token: "secret",
+          client: TEST_OPERATOR_CLIENT,
+          device: null,
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("origin not allowed");
+        expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+        );
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
   test("rejects non-local browser origins for non-control-ui clients", async () => {
     testState.gatewayAuth = { mode: "token", token: "secret" };
     await withGatewayServer(async ({ port }) => {
