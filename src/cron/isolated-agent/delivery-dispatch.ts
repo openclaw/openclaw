@@ -325,10 +325,17 @@ export async function dispatchCronDelivery(
         (p) => !isSilentReplyText(p.text, SILENT_REPLY_TOKEN),
       );
       if (payloadsForDelivery.length === 0) {
-        // Mark attempted so the heartbeat timer does not fire a fallback
-        // enqueueSystemEvent with the NO_REPLY sentinel text.
+        // Mark as silently delivered so the heartbeat timer does not fire a fallback
+        // and the job is persisted as successfully delivered.
         deliveryAttempted = true;
-        return null;
+        delivered = true;
+        return params.withRunSession({
+          status: "ok",
+          summary,
+          outputText,
+          delivered: true,
+          ...params.telemetry,
+        });
       }
       if (params.isAborted()) {
         return params.withRunSession({
