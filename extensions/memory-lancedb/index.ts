@@ -543,31 +543,6 @@ const memoryPlugin = {
     // Lifecycle Hooks
     // ========================================================================
 
-    // Keywords to exclude from auto-recall (prevent triggering responses for greetings/polite words in memories)
-    const AUTO_RECALL_EXCLUDE_KEYWORDS = [
-      "晚安",
-      "早上好",
-      "中午好",
-      "下午好",
-      "晚上好",
-      "早安",
-      "感谢",
-      "谢谢",
-      "不客气",
-      "你好",
-      "hi",
-      "hello",
-      "hey",
-      "greetings",
-    ];
-
-    function shouldExcludeFromRecall(text: string): boolean {
-      const lower = text.toLowerCase();
-      return AUTO_RECALL_EXCLUDE_KEYWORDS.some(
-        (keyword) => lower.includes(keyword.toLowerCase()) && text.length < 50,
-      );
-    }
-
     // Auto-recall: inject relevant memories before agent starts
     if (cfg.autoRecall) {
       api.on("before_agent_start", async (event) => {
@@ -583,20 +558,11 @@ const memoryPlugin = {
             return;
           }
 
-          // Filter out memories that contain greeting/polite keywords
-          const filteredResults = results.filter((r) => !shouldExcludeFromRecall(r.entry.text));
-
-          if (filteredResults.length === 0) {
-            return;
-          }
-
-          api.logger.info?.(
-            `memory-lancedb: injecting ${filteredResults.length} memories into context`,
-          );
+          api.logger.info?.(`memory-lancedb: injecting ${results.length} memories into context`);
 
           return {
             prependContext: formatRelevantMemoriesContext(
-              filteredResults.map((r) => ({ category: r.entry.category, text: r.entry.text })),
+              results.map((r) => ({ category: r.entry.category, text: r.entry.text })),
             ),
             messageMeta: {
               displayStripPatterns: [
