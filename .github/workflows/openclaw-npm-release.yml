@@ -26,7 +26,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -57,7 +56,6 @@ jobs:
           echo "Would run: pnpm check"
           echo "Would run: pnpm build"
           echo "Would run: pnpm release:check"
-          bash scripts/openclaw-npm-publish.sh --dry-run
 
       - name: Validate release tag and package metadata
         env:
@@ -111,6 +109,16 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - name: Validate tag input format
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-beta\.[1-9][0-9]*)?$ ]]; then
+            echo "Invalid release tag format: ${RELEASE_TAG}"
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
@@ -161,6 +169,4 @@ jobs:
         run: pnpm release:check
 
       - name: Publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: bash scripts/openclaw-npm-publish.sh --publish
