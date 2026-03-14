@@ -591,6 +591,7 @@ export const stripPromptMutationFieldsFromLegacyHookResult = (
 };
 
 // llm_input hook
+// Fired once per assistant LLM call/round within a run, not once per run.
 export type PluginHookLlmInputEvent = {
   runId: string;
   sessionId: string;
@@ -603,6 +604,7 @@ export type PluginHookLlmInputEvent = {
 };
 
 // llm_output hook
+// Fired once per assistant LLM call/round within a run, not once per run.
 export type PluginHookLlmOutputEvent = {
   runId: string;
   sessionId: string;

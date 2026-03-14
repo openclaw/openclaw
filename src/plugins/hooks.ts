@@ -332,7 +332,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Run llm_input hook.
-   * Allows plugins to observe the exact input payload sent to the LLM.
+   * Allows plugins to observe the exact input payload sent to each LLM round.
    * Runs in parallel (fire-and-forget).
    */
   async function runLlmInput(event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) {
@@ -341,7 +341,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Run llm_output hook.
-   * Allows plugins to observe the exact output payload returned by the LLM.
+   * Allows plugins to observe the exact output payload returned by each LLM round.
    * Runs in parallel (fire-and-forget).
    */
   async function runLlmOutput(event: PluginHookLlmOutputEvent, ctx: PluginHookAgentContext) {

@@ -124,6 +124,8 @@ export type EmbeddedPiSubscribeContext = {
   incrementCompactionCount: () => void;
   getUsageTotals: () => NormalizedUsage | undefined;
   getCompactionCount: () => number;
+  emitLlmInputHook: () => void;
+  emitLlmOutputHook: (message: AgentMessage) => void;
 };
 
 /**
