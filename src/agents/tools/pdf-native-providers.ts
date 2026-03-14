@@ -5,6 +5,10 @@
 
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
+import {
+  fetchWithSsrFGuard,
+  withStrictGuardedFetchMode,
+} from "../../infra/net/fetch-guard.js";
 
 type PdfInput = {
   base64: string;
@@ -60,20 +64,27 @@ export async function anthropicAnalyzePdf(params: {
   content.push({ type: "text", text: params.prompt });
 
   const baseUrl = (params.baseUrl ?? "https://api.anthropic.com").replace(/\/+$/, "");
-  const res = await fetch(`${baseUrl}/v1/messages`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "pdfs-2024-09-25",
-    },
-    body: JSON.stringify({
-      model: params.modelId,
-      max_tokens: params.maxTokens ?? 4096,
-      messages: [{ role: "user", content }],
+  const fetchUrl = `${baseUrl}/v1/messages`;
+  const { response: res, release } = await fetchWithSsrFGuard(
+    withStrictGuardedFetchMode({
+      url: fetchUrl,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-beta": "pdfs-2024-09-25",
+        },
+        body: JSON.stringify({
+          model: params.modelId,
+          max_tokens: params.maxTokens ?? 4096,
+          messages: [{ role: "user", content }],
+        }),
+      },
     }),
-  });
+  );
+  try {
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
@@ -102,6 +113,9 @@ export async function anthropicAnalyzePdf(params: {
   }
 
   return text.trim();
+  } finally {
+    await release();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -140,15 +154,24 @@ export async function geminiAnalyzePdf(params: {
   const baseUrl = (params.baseUrl ?? "https://generativelanguage.googleapis.com")
     .replace(/\/+$/, "")
     .replace(/\/v1beta$/, "");
-  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent`;
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts }],
+  const { response: res, release } = await fetchWithSsrFGuard(
+    withStrictGuardedFetchMode({
+      url,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts }],
+        }),
+      },
     }),
-  });
+  );
+  try {
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
@@ -175,4 +198,7 @@ export async function geminiAnalyzePdf(params: {
   }
 
   return text.trim();
+  } finally {
+    await release();
+  }
 }
