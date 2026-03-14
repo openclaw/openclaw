@@ -56,6 +56,7 @@ export function isProfileInCooldown(
   const unusableUntil = resolveProfileUnusableUntil(stats);
   const ts = now ?? Date.now();
   if (
+    !isActiveUnusableWindow(stats.disabledUntil, ts) &&
     stats.cooldownReason === "rate_limit" &&
     typeof forModel === "string" &&
     forModel.trim().length > 0 &&
@@ -223,6 +224,8 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
 
     if (cooldownExpired) {
       stats.cooldownUntil = undefined;
+      stats.cooldownReason = undefined;
+      stats.cooldownModel = undefined;
       profileMutated = true;
     }
     if (disabledExpired) {

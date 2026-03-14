@@ -123,6 +123,22 @@ describe("isProfileInCooldown", () => {
     );
   });
 
+  it("still blocks when a disabled window is active even if the stored rate-limit cooldown is for another model", () => {
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "rate_limit",
+        cooldownModel: "claude-opus-4-6",
+        disabledUntil: Date.now() + 5 * 60_000,
+        disabledReason: "billing",
+      },
+    });
+
+    expect(isProfileInCooldown(store, "anthropic:default", undefined, "claude-sonnet-4-6")).toBe(
+      true,
+    );
+  });
+
   it("returns false when cooldownUntil has passed", () => {
     const store = makeStore({
       "anthropic:default": { cooldownUntil: Date.now() - 1_000 },
@@ -368,6 +384,8 @@ describe("clearExpiredCooldowns", () => {
         cooldownUntil: Date.now() - 1_000,
         disabledUntil: future,
         disabledReason: "billing",
+        cooldownReason: "rate_limit",
+        cooldownModel: "claude-opus-4-6",
         errorCount: 5,
         failureCounts: { rate_limit: 3, billing: 2 },
       },
@@ -378,6 +396,8 @@ describe("clearExpiredCooldowns", () => {
     const stats = store.usageStats?.["anthropic:default"];
     // cooldownUntil cleared
     expect(stats?.cooldownUntil).toBeUndefined();
+    expect(stats?.cooldownReason).toBeUndefined();
+    expect(stats?.cooldownModel).toBeUndefined();
     // disabledUntil still active — not touched
     expect(stats?.disabledUntil).toBe(future);
     expect(stats?.disabledReason).toBe("billing");
