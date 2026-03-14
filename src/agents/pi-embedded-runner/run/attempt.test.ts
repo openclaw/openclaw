@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
+import { createEmbeddedAttemptRouter } from "./attempt-router.js";
 import {
   buildAfterTurnRuntimeContext,
   composeSystemPromptWithHookContext,
@@ -140,6 +141,50 @@ describe("wrapStreamFnCaptureFailoverSignal", () => {
         rawError: "request failed",
       }),
     ]);
+  });
+
+  it("short-circuits repeated overloaded calls through the attempt router preflight", async () => {
+    const failures: Array<Record<string, unknown>> = [];
+    const baseFn = vi.fn(async () => {
+      const err = new Error("provider overloaded");
+      Object.assign(err, { status: 503 });
+      throw err;
+    });
+    const router = createEmbeddedAttemptRouter({
+      now: () => 1_000,
+    });
+
+    const wrapped = wrapStreamFnCaptureFailoverSignal(baseFn as never, {
+      stage: "prompt",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.4",
+      router,
+      onFailure: (failure) => {
+        failures.push(failure as unknown as Record<string, unknown>);
+      },
+    });
+
+    await expect(
+      wrapped({ provider: "openai", id: "gpt-5.4" } as never, {} as never, {} as never),
+    ).rejects.toThrow("provider overloaded");
+    await expect(
+      wrapped({ provider: "openai", id: "gpt-5.4" } as never, {} as never, {} as never),
+    ).rejects.toThrow("provider overloaded");
+    expect(() =>
+      wrapped({ provider: "openai", id: "gpt-5.4" } as never, {} as never, {} as never),
+    ).toThrow(/circuit open/i);
+
+    expect(baseFn).toHaveBeenCalledTimes(2);
+    expect(failures.at(-1)).toEqual(
+      expect.objectContaining({
+        stage: "prompt",
+        source: "router_preflight",
+        provider: "openai",
+        model: "gpt-5.4",
+        reason: "overloaded",
+        status: 503,
+      }),
+    );
   });
 });
 

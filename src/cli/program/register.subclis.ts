@@ -205,6 +205,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "quantd",
+    description: "Run and inspect the local quantd trading data guard",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../quantd-cli.js");
+      mod.registerQuantdCli(program);
+    },
+  },
+  {
     name: "clawbot",
     description: "Legacy clawbot command aliases",
     hasSubcommands: true,

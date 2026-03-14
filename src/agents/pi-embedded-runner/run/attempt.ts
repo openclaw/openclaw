@@ -49,7 +49,7 @@ import {
 import { ensureCustomApiRegistered } from "../../custom-api-registry.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
-import { isTimeoutError, resolveFailoverStatus } from "../../failover-error.js";
+import { FailoverError, isTimeoutError, resolveFailoverStatus } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
@@ -130,6 +130,7 @@ import { installToolResultContextGuard } from "../tool-result-context-guard.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
+import { createEmbeddedAttemptRouter } from "./attempt-router.js";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 import {
   selectCompactionTimeoutSnapshot,
@@ -857,11 +858,12 @@ export function buildEmbeddedAttemptFailoverSignal(params: {
   error?: unknown;
   rawError?: string | null;
   timedOut?: boolean;
+  status?: number;
 }): EmbeddedRunAttemptFailoverSignal | undefined {
   const rawError = (
     params.rawError?.trim() || (params.error ? describeUnknownError(params.error) : "")
   ).trim();
-  const status = extractErrorStatus(params.error);
+  const status = params.status ?? extractErrorStatus(params.error);
   const timedOut =
     params.timedOut === true ||
     (params.error ? isTimeoutError(params.error) : false) ||
@@ -899,6 +901,7 @@ function wrapStreamCaptureFailoverSignal(
     defaultProvider: string;
     defaultModel: string;
     model: { provider?: string; id?: string };
+    router?: ReturnType<typeof createEmbeddedAttemptRouter>;
     onFailure: (failure: EmbeddedRunAttemptFailoverSignal) => void;
   },
 ): ReturnType<typeof streamSimple> {
@@ -924,6 +927,13 @@ function wrapStreamCaptureFailoverSignal(
     if (!failure) {
       return;
     }
+    params.router?.recordFailure({
+      provider: failure.provider,
+      model: failure.model,
+      reason: failure.reason,
+      status: failure.status,
+      rawError: failure.rawError,
+    });
     reported = true;
     params.onFailure(failure);
   };
@@ -931,7 +941,9 @@ function wrapStreamCaptureFailoverSignal(
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     try {
-      return await originalResult();
+      const result = await originalResult();
+      params.router?.recordSuccess(resolveAttemptSignalModelRef(params));
+      return result;
     } catch (error) {
       reportFailure(error, "stream_result");
       throw error;
@@ -945,7 +957,11 @@ function wrapStreamCaptureFailoverSignal(
       return {
         async next() {
           try {
-            return await iterator.next();
+            const result = await iterator.next();
+            if (result.done) {
+              params.router?.recordSuccess(resolveAttemptSignalModelRef(params));
+            }
+            return result;
           } catch (error) {
             reportFailure(error, "stream_iterator");
             throw error;
@@ -969,20 +985,57 @@ export function wrapStreamFnCaptureFailoverSignal(
     stage: EmbeddedRunAttemptFailoverSignal["stage"];
     defaultProvider: string;
     defaultModel: string;
+    router?: ReturnType<typeof createEmbeddedAttemptRouter>;
     onFailure: (failure: EmbeddedRunAttemptFailoverSignal) => void;
   },
 ): StreamFn {
   return (model, context, options) => {
+    const modelRef = model as { provider?: string; id?: string };
+    const resolvedModelRef = resolveAttemptSignalModelRef({
+      model: modelRef,
+      defaultProvider: params.defaultProvider,
+      defaultModel: params.defaultModel,
+    });
+    const preflight = params.router?.inspect(resolvedModelRef);
+    if (preflight) {
+      const failure = buildEmbeddedAttemptFailoverSignal({
+        stage: params.stage,
+        source: "router_preflight",
+        defaultProvider: params.defaultProvider,
+        defaultModel: params.defaultModel,
+        model: resolvedModelRef,
+        rawError: preflight.rawError,
+        timedOut: preflight.reason === "timeout",
+        status: preflight.status,
+      });
+      if (failure) {
+        params.onFailure(failure);
+        throw new FailoverError(failure.rawError, {
+          reason: failure.reason ?? "unknown",
+          provider: failure.provider,
+          model: failure.model,
+          status: failure.status,
+        });
+      }
+    }
+
     const reportCallFailure = (error: unknown) => {
       const failure = buildEmbeddedAttemptFailoverSignal({
         stage: params.stage,
         source: "stream_call",
         defaultProvider: params.defaultProvider,
         defaultModel: params.defaultModel,
-        model: model as { provider?: string; id?: string },
+        model: modelRef,
         error,
       });
       if (failure) {
+        params.router?.recordFailure({
+          provider: failure.provider,
+          model: failure.model,
+          reason: failure.reason,
+          status: failure.status,
+          rawError: failure.rawError,
+        });
         params.onFailure(failure);
       }
     };
@@ -993,7 +1046,7 @@ export function wrapStreamFnCaptureFailoverSignal(
           (stream) =>
             wrapStreamCaptureFailoverSignal(stream, {
               ...params,
-              model: model as { provider?: string; id?: string },
+              model: modelRef,
             }),
           (error) => {
             reportCallFailure(error);
@@ -1003,7 +1056,7 @@ export function wrapStreamFnCaptureFailoverSignal(
       }
       return wrapStreamCaptureFailoverSignal(maybeStream, {
         ...params,
-        model: model as { provider?: string; id?: string },
+        model: modelRef,
       });
     } catch (error) {
       reportCallFailure(error);
@@ -2292,12 +2345,14 @@ export async function runEmbeddedAttempt(
       }
 
       let promptFailureSignal: EmbeddedRunAttemptFailoverSignal | undefined;
+      const attemptRouter = createEmbeddedAttemptRouter();
       activeSession.agent.streamFn = wrapStreamFnCaptureFailoverSignal(
         activeSession.agent.streamFn,
         {
           stage: "prompt",
           defaultProvider: params.provider,
           defaultModel: params.modelId,
+          router: attemptRouter,
           onFailure: (failure) => {
             promptFailureSignal ??= failure;
           },

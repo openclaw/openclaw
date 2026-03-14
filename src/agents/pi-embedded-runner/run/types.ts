@@ -36,6 +36,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
 export type EmbeddedRunAttemptFailoverSignal = {
   stage: "prompt" | "assistant";
   source:
+    | "router_preflight"
     | "stream_call"
     | "stream_result"
     | "stream_iterator"
