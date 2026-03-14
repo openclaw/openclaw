@@ -663,6 +663,9 @@ export function attachGatewayWsMessageHandler(params: {
         // that device-identity pairing can proceed.  This restores the pre-
         // 2026.3.12 behaviour where loopback CLI clients could reach a
         // --bind lan gateway without supplying a token/password.
+        // Note: `device` here confirms structural validity (id-derivation,
+        // nonce, timestamp) but NOT the cryptographic device signature — the
+        // real trust gate is isLocalClient (TCP source address).
         // Browser-based clients (Control UI / webchat) are excluded because
         // they have separate security requirements (origin checks, device
         // identity via SubtleCrypto).
