@@ -979,11 +979,18 @@ export async function maybeApplyTtsToPayload(params: {
   });
 
   // Persist voice when the directive included persist=true and TTS succeeded.
+  // Best-effort: a prefs write failure must not abort the already-generated reply.
   if (directives.persist && result.success && result.provider) {
     const voice = resolveVoiceOverrideForPersist(directives.overrides, result.provider);
     if (voice) {
-      setTtsVoice(prefsPath, result.provider, voice);
-      logVerbose(`TTS: persisted voice for provider "${result.provider}": ${voice}`);
+      try {
+        setTtsVoice(prefsPath, result.provider, voice);
+        logVerbose(`TTS: persisted voice for provider "${result.provider}": ${voice}`);
+      } catch (err) {
+        logVerbose(
+          `TTS: failed to persist voice for provider "${result.provider}": ${(err as Error).message}`,
+        );
+      }
     }
   }
 

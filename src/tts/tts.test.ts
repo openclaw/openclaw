@@ -394,13 +394,13 @@ describe("tts", () => {
 
   describe("getTtsVoice / setTtsVoice", () => {
     it("returns undefined when no voice is persisted", () => {
-      const prefsPath = `/tmp/tts-voice-test-${Date.now()}.json`;
+      const prefsPath = `/tmp/tts-voice-test-${Math.random().toString(36).slice(2)}.json`;
       expect(getTtsVoice(prefsPath, "elevenlabs")).toBeUndefined();
       expect(getTtsVoice(prefsPath, "openai")).toBeUndefined();
     });
 
     it("persists and retrieves voice per provider", () => {
-      const prefsPath = `/tmp/tts-voice-test-${Date.now()}.json`;
+      const prefsPath = `/tmp/tts-voice-test-${Math.random().toString(36).slice(2)}.json`;
       setTtsVoice(prefsPath, "elevenlabs", "pMsXgVXv3BLzUgSXRplE");
       setTtsVoice(prefsPath, "openai", "alloy");
 
@@ -409,14 +409,14 @@ describe("tts", () => {
     });
 
     it("isolates voices per provider — setting one does not affect another", () => {
-      const prefsPath = `/tmp/tts-voice-test-${Date.now()}.json`;
+      const prefsPath = `/tmp/tts-voice-test-${Math.random().toString(36).slice(2)}.json`;
       setTtsVoice(prefsPath, "elevenlabs", "pMsXgVXv3BLzUgSXRplE");
 
       expect(getTtsVoice(prefsPath, "openai")).toBeUndefined();
     });
 
     it("clears the persisted voice when an empty string is passed", () => {
-      const prefsPath = `/tmp/tts-voice-test-${Date.now()}.json`;
+      const prefsPath = `/tmp/tts-voice-test-${Math.random().toString(36).slice(2)}.json`;
       setTtsVoice(prefsPath, "openai", "alloy");
       setTtsVoice(prefsPath, "openai", "");
 
@@ -424,7 +424,7 @@ describe("tts", () => {
     });
 
     it("works generically for any provider name (future-proof)", () => {
-      const prefsPath = `/tmp/tts-voice-test-${Date.now()}.json`;
+      const prefsPath = `/tmp/tts-voice-test-${Math.random().toString(36).slice(2)}.json`;
       setTtsVoice(prefsPath, "minimax", "female-shaonv");
 
       expect(getTtsVoice(prefsPath, "minimax")).toBe("female-shaonv");
