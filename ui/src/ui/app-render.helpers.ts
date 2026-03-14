@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { modelKey } from "../../../src/agents/model-selection.js";
 import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
@@ -372,7 +373,8 @@ function buildChatModelOptions(
 
   for (const entry of catalog) {
     const provider = entry.provider?.trim();
-    addOption(entry.id, provider ? `${entry.id} · ${provider}` : entry.id);
+    const fullKey = modelKey(provider ?? "", entry.id);
+    addOption(fullKey, provider ? `${fullKey} · ${provider}` : fullKey);
   }
 
   if (currentOverride) {
