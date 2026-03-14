@@ -704,6 +704,9 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   if (typeof patch.bestEffortDeliver === "boolean") {
     next.bestEffortDeliver = patch.bestEffortDeliver;
   }
+  if (typeof patch.outputHistory === "boolean") {
+    next.outputHistory = patch.outputHistory;
+  }
   return next;
 }
 
@@ -772,6 +775,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     channel: patch.channel,
     to: patch.to,
     bestEffortDeliver: patch.bestEffortDeliver,
+    outputHistory: patch.outputHistory,
   };
 }
 

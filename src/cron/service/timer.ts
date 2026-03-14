@@ -3,6 +3,10 @@ import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
+import {
+  OUTPUT_HISTORY_MAX_ENTRIES,
+  truncateOutputForHistory,
+} from "../isolated-agent/output-history.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
   CronDeliveryStatus,
@@ -48,6 +52,7 @@ type TimedCronRunOutcome = CronRunOutcome &
     jobId: string;
     delivered?: boolean;
     deliveryAttempted?: boolean;
+    outputText?: string;
     startedAt: number;
     endedAt: number;
   };
@@ -299,6 +304,7 @@ export function applyJobResult(
     status: CronRunStatus;
     error?: string;
     delivered?: boolean;
+    outputText?: string;
     startedAt: number;
     endedAt: number;
   },
@@ -333,6 +339,27 @@ export function applyJobResult(
   job.state.lastDeliveryError =
     deliveryStatus === "not-delivered" && result.error ? result.error : undefined;
   job.updatedAtMs = result.endedAt;
+
+  // Record output for history on successful runs. Delivery outcome is irrelevant —
+  // the agent should remember what it produced regardless of whether it reached the
+  // user, otherwise it will repeat itself when delivery recovers.
+  const outputText = result.outputText?.trim();
+  const shouldRecordHistory =
+    result.status === "ok" &&
+    outputText &&
+    job.payload.kind === "agentTurn" &&
+    job.payload.outputHistory;
+  if (shouldRecordHistory) {
+    const outputs = job.state.recentOutputs ?? [];
+    outputs.push({
+      text: truncateOutputForHistory(outputText),
+      timestamp: result.endedAt,
+    });
+    if (outputs.length > OUTPUT_HISTORY_MAX_ENTRIES) {
+      outputs.splice(0, outputs.length - OUTPUT_HISTORY_MAX_ENTRIES);
+    }
+    job.state.recentOutputs = outputs;
+  }
 
   // Track consecutive errors for backoff / auto-disable.
   if (result.status === "error") {
@@ -492,6 +519,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     status: result.status,
     error: result.error,
     delivered: result.delivered,
+    outputText: result.outputText,
     startedAt: result.startedAt,
     endedAt: result.endedAt,
   });
@@ -929,20 +957,7 @@ async function runStartupCatchupCandidate(
   emit(state, { jobId: candidate.job.id, action: "started", runAtMs: startedAt });
   try {
     const result = await executeJobCoreWithTimeout(state, candidate.job);
-    return {
-      jobId: candidate.jobId,
-      status: result.status,
-      error: result.error,
-      summary: result.summary,
-      delivered: result.delivered,
-      sessionId: result.sessionId,
-      sessionKey: result.sessionKey,
-      model: result.model,
-      provider: result.provider,
-      usage: result.usage,
-      startedAt,
-      endedAt: state.deps.nowMs(),
-    };
+    return { jobId: candidate.jobId, ...result, startedAt, endedAt: state.deps.nowMs() };
   } catch (err) {
     return {
       jobId: candidate.jobId,
@@ -1009,7 +1024,8 @@ export async function executeJobCore(
   job: CronJob,
   abortSignal?: AbortSignal,
 ): Promise<
-  CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
+  CronRunOutcome &
+    CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean; outputText?: string }
 > {
   const resolveAbortError = () => ({
     status: "error" as const,
@@ -1148,6 +1164,7 @@ export async function executeJobCore(
     summary: res.summary,
     delivered: res.delivered,
     deliveryAttempted: res.deliveryAttempted,
+    outputText: res.outputText,
     sessionId: res.sessionId,
     sessionKey: res.sessionKey,
     model: res.model,
@@ -1177,6 +1194,7 @@ export async function executeJob(
   let coreResult: {
     status: CronRunStatus;
     delivered?: boolean;
+    outputText?: string;
   } & CronRunOutcome &
     CronRunTelemetry;
   try {
@@ -1190,6 +1208,7 @@ export async function executeJob(
     status: coreResult.status,
     error: coreResult.error,
     delivered: coreResult.delivered,
+    outputText: coreResult.outputText,
     startedAt,
     endedAt,
   });

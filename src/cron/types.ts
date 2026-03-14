@@ -100,6 +100,11 @@ type CronAgentTurnPayloadFields = {
   channel?: CronMessageChannel;
   to?: string;
   bestEffortDeliver?: boolean;
+  /**
+   * When true, inject recent delivered outputs into the agent's system prompt
+   * as context for the next run. Default: false.
+   */
+  outputHistory?: boolean;
 };
 
 type CronAgentTurnPayload = {
@@ -133,6 +138,17 @@ export type CronJobState = {
   lastDeliveryError?: string;
   /** Whether the last run's output was delivered to the target channel. */
   lastDelivered?: boolean;
+  /**
+   * Recent delivered outputs for output history injection.
+   * Capped at 5 entries, FIFO.
+   * Only populated when `payload.outputHistory` is enabled.
+   */
+  recentOutputs?: Array<{
+    /** Delivered text, truncated to ≤600 characters (head + tail with separator). */
+    text: string;
+    /** Timestamp (ms since epoch) when the output was delivered. */
+    timestamp: number;
+  }>;
 };
 
 export type CronJob = CronJobBase<
