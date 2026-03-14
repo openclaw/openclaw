@@ -3,7 +3,7 @@ import JSON5 from "json5";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { type OpenClawConfig, createConfigIO, writeConfigFile } from "../config/config.js";
 import { formatConfigPath, logConfigUpdated } from "../config/logging.js";
-import { resolveSessionTranscriptsDir } from "../config/sessions.js";
+import { ensurePrivateSessionsDir, resolveSessionTranscriptsDir } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
@@ -86,6 +86,6 @@ export async function setupCommand(
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
 
   const sessionsDir = resolveSessionTranscriptsDir();
-  await fs.mkdir(sessionsDir, { recursive: true });
+  await ensurePrivateSessionsDir(sessionsDir);
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
 }

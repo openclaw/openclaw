@@ -9,6 +9,7 @@ import {
   loadSessionStore,
   mergeSessionEntry,
   resolveAndPersistSessionFile,
+  saveSessionStore,
   updateSessionStore,
 } from "../sessions.js";
 import type { SessionConfig } from "../types.base.js";
@@ -42,6 +43,14 @@ function useTempSessionsFixture(prefix: string) {
     storePath: () => storePath,
     sessionsDir: () => sessionsDir,
   };
+}
+
+function expectPrivateDirMode(actual: number) {
+  if (process.platform === "win32") {
+    expect([0o700, 0o777]).toContain(actual);
+    return;
+  }
+  expect(actual).toBe(0o700);
 }
 
 describe("session path safety", () => {
@@ -123,6 +132,26 @@ describe("session path safety", () => {
       expect(path.basename(resolved)).toBe("sess-1.jsonl");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("session directory permissions", () => {
+  it("creates a private sessions dir when saving a new session store", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-perms-"));
+    try {
+      const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+      await saveSessionStore(storePath, {
+        "agent:main:perms": {
+          sessionId: "sess-private",
+          updatedAt: Date.now(),
+        },
+      });
+
+      const mode = fs.statSync(path.dirname(storePath)).mode & 0o777;
+      expectPrivateDirMode(mode);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 });

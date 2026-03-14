@@ -4,6 +4,7 @@ import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { parseSessionThreadInfo } from "./delivery-info.js";
 import {
+  ensurePrivateSessionsDir,
   resolveDefaultSessionStorePath,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -71,7 +72,7 @@ async function ensureSessionHeader(params: {
   if (fs.existsSync(params.sessionFile)) {
     return;
   }
-  await fs.promises.mkdir(path.dirname(params.sessionFile), { recursive: true });
+  await ensurePrivateSessionsDir(path.dirname(params.sessionFile));
   const header = {
     type: "session",
     version: CURRENT_SESSION_VERSION,

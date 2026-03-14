@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
@@ -13,6 +14,26 @@ function resolveAgentSessionsDir(
   const root = resolveStateDir(env, homedir);
   const id = normalizeAgentId(agentId ?? DEFAULT_AGENT_ID);
   return path.join(root, "agents", id, "sessions");
+}
+
+export async function ensurePrivateSessionsDir(sessionsDir: string): Promise<string> {
+  const resolved = path.resolve(sessionsDir);
+  await fsPromises.mkdir(resolved, { recursive: true, mode: 0o700 });
+  try {
+    await fsPromises.chmod(resolved, 0o700);
+  } catch {
+    // Best-effort on platforms/filesystems without chmod semantics.
+  }
+  return resolved;
+}
+
+export async function ensureSessionTranscriptsDirForAgent(
+  agentId?: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
+): Promise<string> {
+  const sessionsDir = resolveAgentSessionsDir(agentId, env, homedir);
+  return await ensurePrivateSessionsDir(sessionsDir);
 }
 
 export function resolveSessionTranscriptsDir(

@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
+import { ensurePrivateSessionsDir } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { pickPrimaryLanIPv4, isValidIPv4 } from "../gateway/net.js";
@@ -297,7 +298,7 @@ export async function ensureWorkspaceAndSessions(
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
   const sessionsDir = resolveSessionTranscriptsDirForAgent(options?.agentId);
-  await fs.mkdir(sessionsDir, { recursive: true });
+  await ensurePrivateSessionsDir(sessionsDir);
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
 }
 

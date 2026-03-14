@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   resolveAgentDir: vi.fn(() => "/agents/test-agent"),
   resolveAgentWorkspaceDir: vi.fn(() => "/workspace/test-agent"),
   resolveSessionTranscriptsDirForAgent: vi.fn(() => "/transcripts/test-agent"),
+  ensureSessionTranscriptsDirForAgent: vi.fn(async () => "/transcripts/test-agent"),
   listAgentsForGateway: vi.fn(() => ({
     defaultId: "main",
     mainKey: "agent:main:main",
@@ -63,6 +64,7 @@ vi.mock("../../agents/workspace.js", async () => {
 });
 
 vi.mock("../../config/sessions/paths.js", () => ({
+  ensureSessionTranscriptsDirForAgent: mocks.ensureSessionTranscriptsDirForAgent,
   resolveSessionTranscriptsDirForAgent: mocks.resolveSessionTranscriptsDirForAgent,
 }));
 
