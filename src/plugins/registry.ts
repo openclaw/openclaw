@@ -419,6 +419,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    const existing = registry.channels.find((entry) => entry.plugin.id === id);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `channel already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
     record.channelIds.push(id);
     registry.channels.push({
       pluginId: record.id,

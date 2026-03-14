@@ -3,7 +3,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { installPackageDir } from "./install-package-dir.js";
+
+vi.mock("../process/exec.js", async () => {
+  const actual = await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+  return {
+    ...actual,
+    runCommandWithTimeout: vi.fn(actual.runCommandWithTimeout),
+  };
+});
 
 async function listMatchingDirs(root: string, prefix: string): Promise<string[]> {
   const entries = await fs.readdir(root, { withFileTypes: true });
@@ -262,5 +271,50 @@ describe("installPackageDir", () => {
     });
     const backupRoot = path.join(preservedInstallRoot, ".openclaw-install-backups");
     await expect(fs.readdir(backupRoot)).resolves.toHaveLength(1);
+  });
+
+  it("installs peer dependencies for isolated plugin package installs", async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-package-dir-"));
+    const sourceDir = path.join(fixtureRoot, "source");
+    const targetDir = path.join(fixtureRoot, "plugins", "demo");
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sourceDir, "package.json"),
+      JSON.stringify({
+        name: "demo-plugin",
+        version: "1.0.0",
+        dependencies: {
+          zod: "^4.0.0",
+        },
+      }),
+      "utf-8",
+    );
+
+    vi.mocked(runCommandWithTimeout).mockResolvedValue({
+      stdout: "",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    const result = await installPackageDir({
+      sourceDir,
+      targetDir,
+      mode: "install",
+      timeoutMs: 1_000,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: true,
+      depsLogMessage: "Installing deps…",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledWith(
+      ["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"],
+      expect.objectContaining({
+        cwd: expect.stringContaining(".openclaw-install-stage-"),
+      }),
+    );
   });
 });
