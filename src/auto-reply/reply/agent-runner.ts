@@ -482,6 +482,35 @@ export async function runReplyAgent(params: {
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
     if (payloadArray.length === 0) {
+      // When auto-compaction occurred but the model produced no output, inject a
+      // compaction notice so the user is never left in complete silence.
+      // Note: run.ts already enqueues a system event after successful compaction,
+      // so we only need the user-facing payload here.
+      if (autoCompactionCompleted) {
+        await incrementRunCompactionCount({
+          sessionEntry: activeSessionEntry,
+          sessionStore: activeSessionStore,
+          sessionKey,
+          storePath,
+          lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+          contextTokensUsed,
+        });
+        if (sessionKey) {
+          try {
+            const contextContent = await readPostCompactionContext(process.cwd(), cfg);
+            if (contextContent) {
+              enqueueSystemEvent(contextContent, { sessionKey });
+            }
+          } catch {
+            // Best-effort: workspace file may be inaccessible during compaction edge cases.
+          }
+        }
+        return finalizeWithFollowup(
+          { text: "🧹 Context was auto-compacted. Resuming task." },
+          queueKey,
+          runFollowupTurn,
+        );
+      }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
@@ -511,6 +540,9 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     if (replyPayloads.length === 0) {
+      // payloadArray was non-empty but replyPayloads is empty after filtering.
+      // This typically means content was already delivered via block streaming,
+      // messaging tools, or dedup — not a silence bug. No fallback needed.
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
@@ -674,18 +706,20 @@ export async function runReplyAgent(params: {
         contextTokensUsed,
       });
 
-      // Inject post-compaction workspace context for the next agent turn
+      // Inject post-compaction workspace context for the next agent turn.
+      // Awaited to guarantee the context is enqueued before any subsequent
+      // prompt can be assembled, preventing the agent from losing identity
+      // and task awareness after compaction.
       if (sessionKey) {
         const workspaceDir = process.cwd();
-        readPostCompactionContext(workspaceDir, cfg)
-          .then((contextContent) => {
-            if (contextContent) {
-              enqueueSystemEvent(contextContent, { sessionKey });
-            }
-          })
-          .catch(() => {
-            // Silent failure — post-compaction context is best-effort
-          });
+        try {
+          const contextContent = await readPostCompactionContext(workspaceDir, cfg);
+          if (contextContent) {
+            enqueueSystemEvent(contextContent, { sessionKey });
+          }
+        } catch {
+          // Best-effort: workspace file may be inaccessible during compaction edge cases.
+        }
       }
 
       if (verboseEnabled) {
