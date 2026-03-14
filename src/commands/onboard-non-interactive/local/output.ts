@@ -1,7 +1,7 @@
 import type { RuntimeEnv } from "../../../runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
-type GatewayHealthFailureDiagnostics = {
+export type GatewayHealthFailureDiagnostics = {
   service?: {
     label: string;
     loaded: boolean;

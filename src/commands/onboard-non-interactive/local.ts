@@ -16,6 +16,7 @@ import type { OnboardOptions } from "../onboard-types.js";
 import { inferAuthChoiceFromFlags } from "./local/auth-choice-inference.js";
 import { applyNonInteractiveGatewayConfig } from "./local/gateway-config.js";
 import {
+  type GatewayHealthFailureDiagnostics,
   logNonInteractiveOnboardingFailure,
   logNonInteractiveOnboardingJson,
 } from "./local/output.js";
@@ -26,36 +27,9 @@ const INSTALL_DAEMON_HEALTH_DEADLINE_MS = 45_000;
 const ATTACH_EXISTING_GATEWAY_HEALTH_DEADLINE_MS = 15_000;
 
 async function collectGatewayHealthFailureDiagnostics(): Promise<
-  | {
-      service?: {
-        label: string;
-        loaded: boolean;
-        loadedText: string;
-        runtimeStatus?: string;
-        state?: string;
-        pid?: number;
-        lastExitStatus?: number;
-        lastExitReason?: string;
-      };
-      lastGatewayError?: string;
-      inspectError?: string;
-    }
-  | undefined
+  GatewayHealthFailureDiagnostics | undefined
 > {
-  const diagnostics: {
-    service?: {
-      label: string;
-      loaded: boolean;
-      loadedText: string;
-      runtimeStatus?: string;
-      state?: string;
-      pid?: number;
-      lastExitStatus?: number;
-      lastExitReason?: string;
-    };
-    lastGatewayError?: string;
-    inspectError?: string;
-  } = {};
+  const diagnostics: GatewayHealthFailureDiagnostics = {};
 
   try {
     const { resolveGatewayService } = await import("../../daemon/service.js");
