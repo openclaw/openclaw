@@ -1383,6 +1383,16 @@ export const registerTelegramHandlers = ({
           const modelId = rawModel.slice(slashIdx + 1);
           const normalizedModel = `${normalizeProviderId(provider)}/${modelId}`;
 
+          // Validate model is still in current allowlist (reject stale callbacks)
+          const currentModelSet = byProvider.get(provider);
+          if (!currentModelSet || !currentModelSet.has(modelId)) {
+            await editMessageWithButtons(
+              "❌ Model no longer available. Provider or model list may have changed.",
+              [],
+            );
+            return;
+          }
+
           // Read and update config
           const snapshot = await readConfigFileSnapshot();
           if (!snapshot.valid || !snapshot.parsed || typeof snapshot.parsed !== "object") {
