@@ -38,6 +38,7 @@ function readTelegramSendParams(params: Record<string, unknown>) {
   const buttons = params.buttons;
   const asVoice = readBooleanParam(params, "asVoice");
   const silent = readBooleanParam(params, "silent");
+  const forceDocument = readBooleanParam(params, "forceDocument");
   const quoteText = readStringParam(params, "quoteText");
   return {
     to,
@@ -48,6 +49,7 @@ function readTelegramSendParams(params: Record<string, unknown>) {
     buttons,
     asVoice,
     silent,
+    forceDocument,
     quoteText: quoteText ?? undefined,
   };
 }
