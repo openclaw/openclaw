@@ -342,6 +342,52 @@ describe("runRescueWatchdogJob", () => {
     expect(result.summary).toContain("ran doctor --repair --non-interactive");
   });
 
+  it("passes the job abort signal into the doctor fallback subprocess", async () => {
+    let probeCount = 0;
+    probeGateway.mockImplementation(async () => {
+      probeCount += 1;
+      if (probeCount >= 62) {
+        return {
+          ok: true,
+          close: null,
+          error: null,
+        };
+      }
+      return {
+        ok: false,
+        close: { code: 1006, reason: "down" },
+        error: "down",
+      };
+    });
+
+    const abort = new AbortController();
+    const runPromise = runRescueWatchdogJob({
+      job: {
+        id: "job-doctor-abort-signal",
+        name: "rescue",
+        payload: {
+          kind: "rescueWatchdog",
+          monitoredProfile: "work",
+          timeoutSeconds: 120,
+        },
+      } as never,
+      monitoredProfile: "work",
+      abortSignal: abort.signal,
+    });
+
+    await vi.advanceTimersByTimeAsync(31_000);
+    const result = await runPromise;
+
+    expect(result.status).toBe("ok");
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      expect.arrayContaining(["--profile", "work", "doctor", "--repair", "--non-interactive"]),
+      expect.objectContaining({
+        signal: abort.signal,
+        timeoutMs: expect.any(Number),
+      }),
+    );
+  });
+
   it("skips doctor when the cron timeout budget is already exhausted", async () => {
     probeGateway.mockResolvedValue({
       ok: false,
