@@ -19,6 +19,10 @@ export type AllowlistMatch<TSource extends string = AllowlistMatchSource> = {
 export type CompiledAllowlist = {
   set: ReadonlySet<string>;
   wildcard: boolean;
+  /** Alias for `set` – used by capability validation and external consumers. */
+  ids: ReadonlySet<string>;
+  /** Alias for `wildcard` – used by capability validation and external consumers. */
+  hasWildcard: boolean;
 };
 
 export function formatAllowlistMatchMeta(
@@ -29,9 +33,12 @@ export function formatAllowlistMatchMeta(
 
 export function compileAllowlist(entries: ReadonlyArray<string>): CompiledAllowlist {
   const set = new Set(entries.filter(Boolean));
+  const wildcard = set.has("*");
   return {
     set,
-    wildcard: set.has("*"),
+    wildcard,
+    ids: set,
+    hasWildcard: wildcard,
   };
 }
 
