@@ -136,4 +136,28 @@ describe("pw-tools-core.snapshot navigate guard", () => {
       reason: "retry navigate after detached frame",
     });
   });
+
+  it("does not start the first navigation once the request is already aborted", async () => {
+    const ctrl = new AbortController();
+    const goto = vi.fn(async () => {});
+    getPwToolsCoreSessionMocks().getPageForTargetId.mockImplementationOnce(async () => {
+      ctrl.abort(new Error("navigate aborted before goto"));
+      return {
+        goto,
+        url: vi.fn(() => "https://example.com/aborted"),
+      };
+    });
+
+    await expect(
+      mod.navigateViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "tab-1",
+        url: "https://example.com/aborted",
+        ssrfPolicy: { allowPrivateNetwork: true },
+        signal: ctrl.signal,
+      }),
+    ).rejects.toThrow("navigate aborted before goto");
+
+    expect(goto).not.toHaveBeenCalled();
+  });
 });
