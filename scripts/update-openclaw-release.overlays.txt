@@ -1,0 +1,9 @@
+# Files copied from your current local repo into the fresh release source
+# before docker build. Keep this list focused on local custom fixes.
+
+Dockerfile
+extensions/signal/src/channel.ts
+src/signal/client.ts
+src/signal/monitor.ts
+src/signal/probe.ts
+src/signal/sse-reconnect.ts
