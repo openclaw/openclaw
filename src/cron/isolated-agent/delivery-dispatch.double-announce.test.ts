@@ -667,6 +667,21 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     // No delivery was sent, so delivered stays false.
     expect(state.delivered).toBe(false);
+    // deliveryAttempted must be true so the heartbeat timer does not fire
+    // a fallback enqueueSystemEvent with the NO_REPLY sentinel text.
+    expect(state.deliveryAttempted).toBe(true);
+
+    // Verify timer guard agrees: shouldEnqueueCronMainSummary returns false
+    expect(
+      shouldEnqueueCronMainSummary({
+        summaryText: "NO_REPLY",
+        deliveryRequested: true,
+        delivered: state.delivered,
+        deliveryAttempted: state.deliveryAttempted,
+        suppressMainSummary: false,
+        isCronSystemEvent: () => true,
+      }),
+    ).toBe(false);
   });
 
   it("suppresses NO_REPLY payload with surrounding whitespace", async () => {
@@ -679,5 +694,17 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(state.delivered).toBe(false);
+    expect(state.deliveryAttempted).toBe(true);
+
+    expect(
+      shouldEnqueueCronMainSummary({
+        summaryText: "  NO_REPLY  ",
+        deliveryRequested: true,
+        delivered: state.delivered,
+        deliveryAttempted: state.deliveryAttempted,
+        suppressMainSummary: false,
+        isCronSystemEvent: () => true,
+      }),
+    ).toBe(false);
   });
 });
