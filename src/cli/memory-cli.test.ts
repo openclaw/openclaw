@@ -284,7 +284,18 @@ describe("memory cli", () => {
     mockManager({
       probeVectorAvailability: vi.fn(async () => true),
       probeEmbeddingAvailability,
-      status: () => makeMemoryStatus({ files: 1, chunks: 1 }),
+      status: () =>
+        makeMemoryStatus({
+          files: 1,
+          chunks: 1,
+          custom: {
+            embeddingAuth: {
+              provider: "openai",
+              source: "env: OPENAI_API_KEY",
+              fingerprint: "abc123def456",
+            },
+          },
+        }),
       close,
     });
 
@@ -293,6 +304,9 @@ describe("memory cli", () => {
 
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Embeddings: ready"));
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("Embeddings auth: openai (env: OPENAI_API_KEY, sha256:abc123def456)"),
+    );
     expect(close).toHaveBeenCalled();
   });
 

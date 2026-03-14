@@ -22,6 +22,12 @@ const MemoryGetSchema = Type.Object({
   lines: Type.Optional(Type.Number()),
 });
 
+type EmbeddingAuthDiagnostics = {
+  provider?: string;
+  source?: string;
+  fingerprint?: string;
+};
+
 function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessionKey?: string }) {
   const cfg = options.config;
   if (!cfg) {
@@ -50,6 +56,23 @@ async function getMemoryManagerContext(params: { cfg: OpenClawConfig; agentId: s
     agentId: params.agentId,
   });
   return manager ? { manager } : { error };
+}
+
+function resolveEmbeddingAuthDiagnostics(status: {
+  custom?: Record<string, unknown>;
+}): EmbeddingAuthDiagnostics | undefined {
+  const raw = (status.custom as { embeddingAuth?: unknown } | undefined)?.embeddingAuth;
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const auth = raw as { provider?: unknown; source?: unknown; fingerprint?: unknown };
+  const provider = typeof auth.provider === "string" ? auth.provider : undefined;
+  const source = typeof auth.source === "string" ? auth.source : undefined;
+  const fingerprint = typeof auth.fingerprint === "string" ? auth.fingerprint : undefined;
+  if (!provider && !source && !fingerprint) {
+    return undefined;
+  }
+  return { provider, source, fingerprint };
 }
 
 function createMemoryTool(params: {
@@ -126,7 +149,12 @@ export function createMemorySearchTool(options: {
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          return jsonResult(buildMemorySearchUnavailableResult(message));
+          return jsonResult(
+            buildMemorySearchUnavailableResult(
+              message,
+              resolveEmbeddingAuthDiagnostics(memory.manager.status()),
+            ),
+          );
         }
       },
   });
@@ -221,7 +249,10 @@ function clampResultsByInjectedChars(
   return clamped;
 }
 
-function buildMemorySearchUnavailableResult(error: string | undefined) {
+function buildMemorySearchUnavailableResult(
+  error: string | undefined,
+  embeddingAuth?: EmbeddingAuthDiagnostics,
+) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
   const isQuotaError = /insufficient_quota|quota|429/.test(reason.toLowerCase());
   const warning = isQuotaError
@@ -235,6 +266,7 @@ function buildMemorySearchUnavailableResult(error: string | undefined) {
     disabled: true,
     unavailable: true,
     error: reason,
+    ...(embeddingAuth ? { embeddingAuth } : {}),
     warning,
     action,
   };

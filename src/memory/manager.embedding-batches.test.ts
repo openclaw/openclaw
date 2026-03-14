@@ -109,6 +109,27 @@ describe("memory embedding batches", () => {
     expect(calls).toBe(3);
   }, 10000);
 
+  it("retries intermittent missing model.request scope errors", async () => {
+    const memoryDir = fx.getMemoryDir();
+    const managerSmall = fx.getManagerSmall();
+    const line = "f".repeat(120);
+    const content = Array.from({ length: 4 }, () => line).join("\n");
+    await fs.writeFile(path.join(memoryDir, "2026-01-09.md"), content);
+
+    let calls = 0;
+    embedBatch.mockImplementation(async (texts: string[]) => {
+      calls += 1;
+      if (calls <= 2) {
+        throw new Error("openai embeddings failed: 401 Missing scopes: model.request (transient)");
+      }
+      return texts.map(() => [0, 1, 0]);
+    });
+
+    await expectSyncWithFastTimeouts(managerSmall);
+
+    expect(calls).toBe(3);
+  }, 10000);
+
   it("retries embeddings on too-many-tokens-per-day rate limits", async () => {
     const memoryDir = fx.getMemoryDir();
     const managerSmall = fx.getManagerSmall();

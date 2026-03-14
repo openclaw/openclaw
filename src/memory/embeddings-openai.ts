@@ -11,6 +11,8 @@ export type OpenAiEmbeddingClient = {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   model: string;
+  authSource?: string;
+  authFingerprint?: string;
 };
 
 export const DEFAULT_OPENAI_EMBEDDING_MODEL = "text-embedding-3-small";

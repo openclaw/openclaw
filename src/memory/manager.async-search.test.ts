@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useFastShortTimeouts } from "../../test/helpers/fast-short-timeouts.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { MemoryIndexManager } from "./index.js";
 import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
@@ -100,5 +101,28 @@ describe("memory search async sync", () => {
     releaseSync();
     await closePromise;
     manager = null;
+  });
+
+  it("retries query embeddings on intermittent missing model.request scope errors", async () => {
+    const cfg = buildConfig();
+    manager = await createMemoryManagerOrThrow(cfg);
+
+    let queryCalls = 0;
+    embedQuery.mockImplementation(async (_input: string) => {
+      queryCalls += 1;
+      if (queryCalls <= 2) {
+        throw new Error("openai embeddings failed: 401 Missing scopes: model.request");
+      }
+      return [0.2, 0.2, 0.2];
+    });
+
+    const restoreFastTimeouts = useFastShortTimeouts();
+    try {
+      await manager.search("hello");
+    } finally {
+      restoreFastTimeouts();
+    }
+
+    expect(queryCalls).toBe(3);
   });
 });

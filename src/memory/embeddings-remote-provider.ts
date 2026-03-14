@@ -11,6 +11,8 @@ export type RemoteEmbeddingClient = {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   model: string;
+  authSource?: string;
+  authFingerprint?: string;
 };
 
 export function createRemoteEmbeddingProvider(params: {
@@ -53,11 +55,12 @@ export async function resolveRemoteEmbeddingClient(params: {
   defaultBaseUrl: string;
   normalizeModel: (model: string) => string;
 }): Promise<RemoteEmbeddingClient> {
-  const { baseUrl, headers, ssrfPolicy } = await resolveRemoteEmbeddingBearerClient({
-    provider: params.provider,
-    options: params.options,
-    defaultBaseUrl: params.defaultBaseUrl,
-  });
+  const { baseUrl, headers, ssrfPolicy, authSource, authFingerprint } =
+    await resolveRemoteEmbeddingBearerClient({
+      provider: params.provider,
+      options: params.options,
+      defaultBaseUrl: params.defaultBaseUrl,
+    });
   const model = params.normalizeModel(params.options.model);
-  return { baseUrl, headers, ssrfPolicy, model };
+  return { baseUrl, headers, ssrfPolicy, model, authSource, authFingerprint };
 }

@@ -11,6 +11,8 @@ export type MistralEmbeddingClient = {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   model: string;
+  authSource?: string;
+  authFingerprint?: string;
 };
 
 export const DEFAULT_MISTRAL_EMBEDDING_MODEL = "mistral-embed";
