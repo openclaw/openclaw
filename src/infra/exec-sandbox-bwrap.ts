@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import { promisify } from "node:util";
 import type { AccessPolicyConfig, PermStr } from "../config/types.tools.js";
+import { findBestRule } from "./access-policy.js";
 import { shellEscape } from "./shell-escape.js";
 
 const execFileAsync = promisify(execFile);
@@ -142,8 +143,14 @@ export function generateBwrapArgs(
     // mount /proc so programs that read /proc/self/*, /proc/cpuinfo, etc. work
     // correctly inside the sandbox (shells, Python, most build tools need this).
     args.push("--proc", "/proc");
-    // Upgrade /tmp to writable tmpfs and overlay a real /dev for normal process operation.
-    args.push("--tmpfs", "/tmp");
+    // Add writable /tmp tmpfs unless the policy has an explicit rule that denies
+    // write on /tmp. Without an explicit rule, /tmp is writable by default (needed
+    // by most processes for temp files). With an explicit "r--" or "---" rule on
+    // /tmp/**, respect it — /tmp remains read-only via the --ro-bind / / base.
+    const explicitTmpPerm = findBestRule("/tmp/.", config.rules ?? {}, homeDir);
+    if (explicitTmpPerm === null || explicitTmpPerm[1] === "w") {
+      args.push("--tmpfs", "/tmp");
+    }
     args.push("--dev", "/dev");
   } else {
     // Restrictive base: only bind system paths needed to run processes.

@@ -387,8 +387,12 @@ export async function runExecProcess(opts: {
       Object.keys(_scripts).some(
         (k) => k.startsWith("~") && k.replace(/^~(?=$|[/\\])/, os.homedir()) === argv0,
       );
+    // Use default:"rwx" so only actual deny-pattern hits produce "deny".
+    // Without a default, permAllows(undefined, "exec") → false → every path
+    // not matched by a deny pattern would be incorrectly blocked.
     const denyVerdict = checkAccessPolicy(argv0, "exec", {
       deny: opts.permissions.deny,
+      default: "rwx",
     });
     if (denyVerdict === "deny") {
       throw new Error(`exec denied by access policy: ${argv0}`);

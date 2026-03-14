@@ -115,6 +115,15 @@ describe("generateBwrapArgs", () => {
     expect(tmpfsMounts).toContain("/tmp");
   });
 
+  it("skips --tmpfs /tmp in permissive mode when policy explicitly restricts /tmp writes", () => {
+    // A rule "/tmp/**": "r--" means the user wants /tmp read-only; the base --ro-bind / /
+    // already makes it readable. Adding --tmpfs /tmp would silently grant write access.
+    const config: AccessPolicyConfig = { default: "r--", rules: { "/tmp/**": "r--" } };
+    const args = generateBwrapArgs(config, HOME);
+    const tmpfsMounts = args.map((a, i) => (a === "--tmpfs" ? args[i + 1] : null)).filter(Boolean);
+    expect(tmpfsMounts).not.toContain("/tmp");
+  });
+
   it("does not add --tmpfs /tmp in restrictive mode (default: ---)", () => {
     const config: AccessPolicyConfig = { default: "---" };
     const args = generateBwrapArgs(config, HOME);

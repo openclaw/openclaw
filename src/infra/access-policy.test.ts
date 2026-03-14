@@ -104,6 +104,16 @@ describe("validateAccessPolicyConfig", () => {
     expect(errs[0]).toMatch(/auto-expanded/);
   });
 
+  it("does NOT auto-expand a non-existent deny[] path that looks like a file (has extension)", () => {
+    // "~/future-secrets.key" doesn't exist yet but the extension heuristic should
+    // prevent expansion to "~/future-secrets.key/**" — the user intends to protect
+    // the file itself, not a subtree of non-existent children.
+    const fileLikePath = path.join(os.tmpdir(), `openclaw-test-${Date.now()}.key`);
+    const config: AccessPolicyConfig = { deny: [fileLikePath] };
+    validateAccessPolicyConfig(config);
+    expect(config.deny?.[0]).toBe(fileLikePath); // must NOT be expanded to /**
+  });
+
   it("does NOT auto-expand a bare deny[] entry that is an existing file", () => {
     // A specific file like "~/.ssh/id_rsa" must stay as an exact-match pattern.
     // Expanding it to "~/.ssh/id_rsa/**" would only match non-existent children,

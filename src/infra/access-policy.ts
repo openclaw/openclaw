@@ -94,12 +94,26 @@ export function validateAccessPolicyConfig(config: AccessPolicyConfig): string[]
           ? pattern.replace(/^~(?=$|[/\\])/, os.homedir())
           : pattern;
         let isExistingFile = false;
+        // For non-existent paths: treat as a future file (skip /**-expansion) when
+        // the last segment looks like a filename — has a dot but is not a dotfile-only
+        // name (e.g. ".ssh") and has a non-empty extension (e.g. "secrets.key").
+        // This preserves the intent of "deny: ['~/future-secrets.key']" where the
+        // user wants to protect that specific file once it is created.
+        // Plain names without an extension (e.g. "myfolder") are still treated as
+        // future directories and expanded to /**.
+        let looksLikeFile = false;
         try {
           isExistingFile = !fs.statSync(expandedForStat).isDirectory();
         } catch {
-          // Path does not exist — treat as a future directory and expand to /**.
+          const lastName =
+            expandedForStat
+              .replace(/[/\\]$/, "")
+              .split(/[/\\]/)
+              .pop() ?? "";
+          // Has a dot that is not the leading dot (dotfile), and has chars after the dot.
+          looksLikeFile = /[^.]\.[^/\\]+$/.test(lastName);
         }
-        if (!isExistingFile) {
+        if (!isExistingFile && !looksLikeFile) {
           const fixed = `${pattern}/**`;
           config.deny[i] = fixed;
           if (!_autoExpandedWarned.has(`deny:${pattern}`)) {
