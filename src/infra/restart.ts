@@ -510,6 +510,7 @@ export const __testing = {
     sigusr1AuthorizedCount = 0;
     sigusr1AuthorizedUntil = 0;
     sigusr1ExternalAllowed = false;
+    handlingAuthorizedSigusr1Restart = false;
     preRestartCheck = null;
     restartCycleToken = 0;
     emittedRestartToken = 0;
