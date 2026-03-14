@@ -144,10 +144,9 @@ describe("issue #46341: recurring job transient error retry", () => {
 
   it("uses increasing backoff on consecutive transient errors for a daily job", () => {
     const state = makeState();
+    const job = makeCronJob("0 10 * * *");
 
-    const runError = (consecutiveErrors: number) => {
-      const job = makeCronJob("0 10 * * *");
-      job.state.consecutiveErrors = consecutiveErrors;
+    const recordNext = () => {
       applyJobResult(state, job, {
         status: "error",
         error: "econnreset",
@@ -157,9 +156,9 @@ describe("issue #46341: recurring job transient error retry", () => {
       return job.state.nextRunAtMs!;
     };
 
-    const first = runError(0); // 1st error → 30s backoff
-    const second = runError(1); // 2nd error → 60s backoff
-    const third = runError(2); // 3rd error → 5min backoff
+    const first = recordNext(); // consecutiveErrors → 1, 30s backoff
+    const second = recordNext(); // consecutiveErrors → 2, 60s backoff
+    const third = recordNext(); // consecutiveErrors → 3, 5min backoff
 
     expect(second).toBeGreaterThan(first);
     expect(third).toBeGreaterThan(second);
