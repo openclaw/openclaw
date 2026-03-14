@@ -38,7 +38,6 @@ export type TraceEvent = {
   messagesCount?: number;
   toolsCount?: number;
   payload?: unknown;
-  payloadDigest?: string;
   // Message fields
   text?: string;
   reasoning?: string;
