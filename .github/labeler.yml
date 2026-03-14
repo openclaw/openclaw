@@ -204,6 +204,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/diagnostics-otel/**"
+"extensions: tracing":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tracing/**"
 "extensions: google-antigravity-auth":
   - changed-files:
       - any-glob-to-any-file:

@@ -1,0 +1,8 @@
+{
+  "id": "tracing",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
