@@ -193,6 +193,65 @@ describe("resolveAgentRoute", () => {
     expect(route.sessionKey).toBe("agent:main:discord:channel:1468834856187203680");
   });
 
+  test("matches peer bindings case-insensitively for normalized session ids", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "signal-group",
+          match: {
+            channel: "signal",
+            peer: {
+              kind: "group",
+              id: "NPy/PPdwLKD996QtL3+0d2JdQgzPY3Ysf9NTY4P7BaE=",
+            },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "signal",
+      accountId: "default",
+      peer: {
+        kind: "group",
+        id: "npy/ppdwlkd996qtl3+0d2jdqgzpy3ysf9nty4p7bae=",
+      },
+    });
+    expect(route.agentId).toBe("signal-group");
+    expect(route.matchedBy).toBe("binding.peer");
+    expect(route.sessionKey).toBe(
+      "agent:signal-group:signal:group:npy/ppdwlkd996qtl3+0d2jdqgzpy3ysf9nty4p7bae=",
+    );
+  });
+
+  test("keeps peer binding matching case-sensitive for non-signal channels", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "line-group",
+          match: {
+            channel: "line",
+            peer: {
+              kind: "group",
+              id: "AbCd123",
+            },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "line",
+      accountId: "default",
+      peer: {
+        kind: "group",
+        id: "abcd123",
+      },
+    });
+    expect(route.agentId).toBe("main");
+    expect(route.matchedBy).toBe("default");
+  });
+
   test("guild binding wins over account binding when peer not bound", () => {
     const cfg: OpenClawConfig = {
       bindings: [
