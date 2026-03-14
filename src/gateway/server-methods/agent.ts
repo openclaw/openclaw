@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
+import { AGENT_LANE_SUBAGENT } from "../../agents/lanes.js";
 import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSpawnedRun,
 } from "../../agents/spawned-context.js";
+import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { buildBareSessionResetPrompt } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
@@ -34,6 +36,7 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { resolveAssistantIdentity } from "../assistant-identity.js";
+import { resolveChatRunExpiresAtMs } from "../chat-abort.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
@@ -97,10 +100,40 @@ function dispatchAgentRunFromGateway(params: {
   ingressOpts: Parameters<typeof agentCommandFromIngress>[0];
   runId: string;
   idempotencyKey: string;
+  sessionId: string;
+  sessionKey: string;
+  timeoutMs: number;
+  client: GatewayRequestHandlerOptions["client"];
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
 }) {
-  void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
+  // If an in-flight run with the same runId already exists, abort it first
+  // so this request can proceed. The caller has already received an `accepted`
+  // response, so silently rejecting would create a ghost request.
+  const existingEntry = params.context.chatAbortControllers.get(params.runId);
+  if (existingEntry) {
+    existingEntry.controller.abort();
+    params.context.chatAbortControllers.delete(params.runId);
+    params.context.chatRunBuffers.delete(params.runId);
+    params.context.chatDeltaSentAt.delete(params.runId);
+  }
+  const abortController = new AbortController();
+  const now = Date.now();
+  params.context.chatAbortControllers.set(params.runId, {
+    controller: abortController,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    startedAtMs: now,
+    expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs: params.timeoutMs }),
+    ownerConnId: typeof params.client?.connId === "string" ? params.client.connId : undefined,
+    ownerDeviceId: params.client?.connect?.device?.id ?? undefined,
+  });
+
+  void agentCommandFromIngress(
+    { ...params.ingressOpts, abortSignal: abortController.signal },
+    defaultRuntime,
+    params.context.deps,
+  )
     .then((result) => {
       const payload = {
         runId: params.runId,
@@ -142,6 +175,9 @@ function dispatchAgentRunFromGateway(params: {
         runId: params.runId,
         error: formatForLog(err),
       });
+    })
+    .finally(() => {
+      params.context.chatAbortControllers.delete(params.runId);
     });
 }
 
@@ -311,6 +347,10 @@ export const agentHandlers: GatewayRequestHandlers = {
     let bestEffortDeliver = requestedBestEffortDeliver ?? false;
     let cfgForAgent: ReturnType<typeof loadConfig> | undefined;
     let resolvedSessionKey = requestedSessionKey;
+    // Capture the session key as the caller knows it (before reset mutation
+    // and loadSessionEntry canonicalization) so chat.abort authorization —
+    // which compares against the raw caller key — can match.
+    const callerSessionKey = requestedSessionKey;
     let skipTimestampInjection = false;
 
     const resetCommandMatch = message.match(RESET_COMMAND_RE);
@@ -622,6 +662,22 @@ export const agentHandlers: GatewayRequestHandlers = {
       },
       runId,
       idempotencyKey: idem,
+      sessionId: resolvedSessionId ?? runId,
+      sessionKey: callerSessionKey ?? "",
+      // Use lane-aware timeout: subagent lane with no explicit timeout is treated
+      // as no-timeout (0) by agentCommandFromIngress; match that here so the
+      // abort registration expiry aligns with the actual command execution.
+      timeoutMs: resolveAgentTimeoutMs({
+        cfg: cfgForAgent ?? cfg,
+        overrideSeconds:
+          request.timeout !== undefined
+            ? request.timeout
+            : (typeof request.lane === "string" ? request.lane.trim() : request.lane) ===
+                String(AGENT_LANE_SUBAGENT)
+              ? 0
+              : undefined,
+      }),
+      client,
       respond,
       context,
     });
