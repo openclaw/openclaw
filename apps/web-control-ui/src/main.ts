@@ -673,6 +673,11 @@ class WebControlUiApp extends LitElement {
     return html`<div class="tag-list">${items.map((item) => html`<span class="tag">${item}</span>`)}</div>`;
   }
 
+  private currentDevUrl() {
+    const token = this.gatewayToken.trim();
+    return token ? `http://localhost:4173/#token=${token}` : "http://localhost:4173/#token=<gateway-token>";
+  }
+
   render() {
     return html`
       <div class="page">
@@ -738,6 +743,21 @@ class WebControlUiApp extends LitElement {
               </div>
               <button type="submit">连接 Gateway</button>
             </form>
+          </section>
+
+          <section class="panel">
+            <h2>Dev Access</h2>
+            <p class="subtitle">开发态最顺手的打开方式：先用 OpenClaw 官方命令生成 token，再直接打开带 token 的 4173 dev 页面。</p>
+            <div class="grid">
+              <article class="recommendation">
+                <h3>生成官方 dashboard token</h3>
+                <pre>openclaw dashboard --no-open</pre>
+              </article>
+              <article class="recommendation">
+                <h3>当前 dev 页面入口</h3>
+                <pre>${this.currentDevUrl()}</pre>
+              </article>
+            </div>
           </section>
 
           <section class="panel">
