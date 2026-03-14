@@ -5,6 +5,14 @@ import { withTempHome } from "../../test/helpers/temp-home.js";
 import { setupCommand } from "./setup.js";
 
 describe("setupCommand", () => {
+  const expectPrivateDirMode = (actual: number) => {
+    if (process.platform === "win32") {
+      expect([0o700, 0o666, 0o777]).toContain(actual);
+      return;
+    }
+    expect(actual).toBe(0o700);
+  };
+
   it("writes gateway.mode=local on first run", async () => {
     await withTempHome(async (home) => {
       const runtime = {
@@ -17,9 +25,12 @@ describe("setupCommand", () => {
 
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       const raw = await fs.readFile(configPath, "utf-8");
+      const sessionsDir = path.join(home, ".openclaw", "agents", "main", "sessions");
+      const sessionsMode = (await fs.stat(sessionsDir)).mode & 0o777;
 
       expect(raw).toContain('"mode": "local"');
       expect(raw).toContain('"workspace"');
+      expectPrivateDirMode(sessionsMode);
     });
   });
 

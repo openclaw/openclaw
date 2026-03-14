@@ -1,9 +1,22 @@
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { sameFileIdentity } from "../../infra/file-identity.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveStateDir } from "../paths.js";
+
+const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fs.constants;
+const OPEN_DIRECTORY_FLAGS =
+  fs.constants.O_RDONLY |
+  (typeof fs.constants.O_DIRECTORY === "number" ? fs.constants.O_DIRECTORY : 0) |
+  (SUPPORTS_NOFOLLOW ? fs.constants.O_NOFOLLOW : 0);
+
+type PathIdentitySnapshot = {
+  path: string;
+  stat: fs.Stats;
+};
 
 function resolveAgentSessionsDir(
   agentId?: string,
@@ -13,6 +26,203 @@ function resolveAgentSessionsDir(
   const root = resolveStateDir(env, homedir);
   const id = normalizeAgentId(agentId ?? DEFAULT_AGENT_ID);
   return path.join(root, "agents", id, "sessions");
+}
+
+function resolveManagedSessionsSafetyChain(sessionsDir: string): string[] {
+  const resolved = path.resolve(sessionsDir);
+  const agentDir = path.dirname(resolved);
+  const agentsDir = path.dirname(agentDir);
+  if (path.basename(resolved) === "sessions" && path.basename(agentsDir) === "agents") {
+    const stateDir = path.dirname(agentsDir);
+    return [stateDir, agentsDir, agentDir, resolved];
+  }
+  return [path.dirname(resolved), resolved];
+}
+
+async function verifyDirectoryIdentity(dirPath: string): Promise<fs.Stats> {
+  const stat = await fsPromises.lstat(dirPath);
+  if (stat.isSymbolicLink()) {
+    throw new Error(`Session transcripts dir must not traverse a symlink: ${dirPath}`);
+  }
+  if (!stat.isDirectory()) {
+    throw new Error(`Session transcripts dir must be a directory: ${dirPath}`);
+  }
+  if (!SUPPORTS_NOFOLLOW) {
+    return stat;
+  }
+
+  const handle = await fsPromises.open(dirPath, OPEN_DIRECTORY_FLAGS);
+  try {
+    const openedStat = await handle.stat();
+    if (!openedStat.isDirectory()) {
+      throw new Error(`Session transcripts dir must be a directory: ${dirPath}`);
+    }
+    if (!sameFileIdentity(stat, openedStat)) {
+      throw new Error(`Session transcripts dir changed during permission update: ${dirPath}`);
+    }
+    return stat;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
+async function snapshotManagedSessionsSafetyChain(
+  sessionsDir: string,
+  opts: { allowMissingTail: boolean },
+): Promise<PathIdentitySnapshot[]> {
+  const chain = resolveManagedSessionsSafetyChain(sessionsDir);
+  const snapshots: PathIdentitySnapshot[] = [];
+  for (const entry of chain) {
+    try {
+      const stat = await verifyDirectoryIdentity(entry);
+      snapshots.push({ path: entry, stat });
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (opts.allowMissingTail && code === "ENOENT") {
+        continue;
+      }
+      throw err;
+    }
+  }
+  return snapshots;
+}
+
+function assertStablePathIdentities(
+  expected: PathIdentitySnapshot[],
+  actual: PathIdentitySnapshot[],
+): void {
+  const actualByPath = new Map(actual.map((entry) => [entry.path, entry.stat]));
+  for (const entry of expected) {
+    const current = actualByPath.get(entry.path);
+    if (!current || !sameFileIdentity(entry.stat, current)) {
+      throw new Error(`Session transcripts dir changed during permission update: ${entry.path}`);
+    }
+  }
+}
+
+export async function ensurePrivateSessionsDir(sessionsDir: string): Promise<string> {
+  const resolved = path.resolve(sessionsDir);
+  const ancestorSnapshots = await snapshotManagedSessionsSafetyChain(resolved, {
+    allowMissingTail: true,
+  });
+  try {
+    const stat = await fsPromises.lstat(resolved);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Session transcripts dir must not be a symlink: ${resolved}`);
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      throw err;
+    }
+  }
+  await fsPromises.mkdir(resolved, { recursive: true, mode: 0o700 });
+  const currentAncestorSnapshots = await snapshotManagedSessionsSafetyChain(resolved, {
+    allowMissingTail: false,
+  });
+  assertStablePathIdentities(ancestorSnapshots, currentAncestorSnapshots);
+  const stat = await fsPromises.lstat(resolved);
+  if (stat.isSymbolicLink()) {
+    throw new Error(`Session transcripts dir must not be a symlink: ${resolved}`);
+  }
+  if (!stat.isDirectory()) {
+    throw new Error(`Session transcripts dir must be a directory: ${resolved}`);
+  }
+
+  if (SUPPORTS_NOFOLLOW) {
+    const handle = await fsPromises.open(resolved, OPEN_DIRECTORY_FLAGS);
+    try {
+      const openedStat = await handle.stat();
+      if (!openedStat.isDirectory()) {
+        throw new Error(`Session transcripts dir must be a directory: ${resolved}`);
+      }
+      const finalAncestorSnapshots = await snapshotManagedSessionsSafetyChain(resolved, {
+        allowMissingTail: false,
+      });
+      assertStablePathIdentities(currentAncestorSnapshots, finalAncestorSnapshots);
+      const currentStat = await fsPromises.lstat(resolved);
+      if (!sameFileIdentity(stat, openedStat) || !sameFileIdentity(currentStat, openedStat)) {
+        throw new Error(`Session transcripts dir changed during permission update: ${resolved}`);
+      }
+      try {
+        await handle.chmod(0o700);
+      } catch {
+        // Best-effort on platforms/filesystems without chmod semantics.
+      }
+    } finally {
+      await handle.close().catch(() => undefined);
+    }
+    return resolved;
+  }
+
+  try {
+    await fsPromises.chmod(resolved, 0o700);
+  } catch {
+    // Best-effort on platforms/filesystems without chmod semantics.
+  }
+  return resolved;
+}
+
+export async function ensureSessionTranscriptsDirForAgent(
+  agentId?: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
+): Promise<string> {
+  const sessionsDir = resolveAgentSessionsDir(agentId, env, homedir);
+  return await ensurePrivateSessionsDir(sessionsDir);
+}
+
+export function isManagedSessionsDir(
+  sessionsDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
+): boolean {
+  const resolvedSessionsDir = path.resolve(sessionsDir);
+  if (path.basename(resolvedSessionsDir) !== "sessions") {
+    return false;
+  }
+
+  const agentDir = path.dirname(resolvedSessionsDir);
+  const agentsDir = path.dirname(agentDir);
+  if (path.basename(agentsDir) !== "agents") {
+    return false;
+  }
+
+  const agentId = path.basename(agentDir);
+  if (!agentId) {
+    return false;
+  }
+
+  const expectedSessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, homedir);
+  return (
+    resolveComparableManagedPath(resolvedSessionsDir) ===
+    resolveComparableManagedPath(expectedSessionsDir)
+  );
+}
+
+export function isManagedSessionStorePath(
+  storePath: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
+): boolean {
+  const resolvedStorePath = path.resolve(storePath);
+  if (path.basename(resolvedStorePath) !== "sessions.json") {
+    return false;
+  }
+  return isManagedSessionsDir(path.dirname(resolvedStorePath), env, homedir);
+}
+
+export function isManagedSessionTranscriptPath(
+  sessionFile: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
+): boolean {
+  const resolvedSessionFile = path.resolve(sessionFile);
+  const fileName = path.basename(resolvedSessionFile);
+  if (!fileName || !fileName.endsWith(".jsonl")) {
+    return false;
+  }
+  return isManagedSessionsDir(path.dirname(resolvedSessionFile), env, homedir);
 }
 
 export function resolveSessionTranscriptsDir(
@@ -165,6 +375,25 @@ function safeRealpathSync(filePath: string): string | undefined {
     return fs.realpathSync(filePath);
   } catch {
     return undefined;
+  }
+}
+
+function resolveComparableManagedPath(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  const pendingSegments: string[] = [];
+  let cursor = resolved;
+  while (true) {
+    const real = safeRealpathSync(cursor);
+    if (real) {
+      // Canonicalize any existing prefix so symlink aliases still compare as the same managed path.
+      return path.resolve(real, ...pendingSegments.toReversed());
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      return resolved;
+    }
+    pendingSegments.push(path.basename(cursor));
+    cursor = parent;
   }
 }
 

@@ -18,6 +18,7 @@ import {
 import { getFileStatSnapshot, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
+import { ensurePrivateSessionsDir, isManagedSessionStorePath } from "./paths.js";
 import {
   clearSessionStoreCaches,
   dropSessionStoreObjectCache,
@@ -454,7 +455,12 @@ async function saveSessionStoreUnlocked(
     }
   }
 
-  await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
+  const storeDir = path.dirname(storePath);
+  if (isManagedSessionStorePath(storePath)) {
+    await ensurePrivateSessionsDir(storeDir);
+  } else {
+    await fs.promises.mkdir(storeDir, { recursive: true });
+  }
   const json = JSON.stringify(store, null, 2);
   if (getSerializedSessionStore(storePath) === json) {
     updateSessionStoreWriteCaches({ storePath, store, serialized: json });

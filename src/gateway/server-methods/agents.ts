@@ -26,7 +26,10 @@ import {
   pruneAgentConfig,
 } from "../../commands/agents.config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
-import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
+import {
+  ensureSessionTranscriptsDirForAgent,
+  resolveSessionTranscriptsDirForAgent,
+} from "../../config/sessions/paths.js";
 import { sameFileIdentity } from "../../infra/file-identity.js";
 import { SafeOpenError, readLocalFileSafely, writeFileWithinRoot } from "../../infra/fs-safe.js";
 import { assertNoPathAliasEscape } from "../../infra/path-alias-guards.js";
@@ -525,7 +528,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     // here does not leave a broken config entry behind.
     const skipBootstrap = Boolean(nextConfig.agents?.defaults?.skipBootstrap);
     await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: !skipBootstrap });
-    await fs.mkdir(resolveSessionTranscriptsDirForAgent(agentId), { recursive: true });
+    await ensureSessionTranscriptsDirForAgent(agentId);
 
     await writeConfigFile(nextConfig);
 
