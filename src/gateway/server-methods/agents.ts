@@ -165,6 +165,27 @@ async function resolveWorkspaceRealPath(workspaceDir: string): Promise<string> {
   }
 }
 
+async function validateResolvedWorkspaceTarget(params: {
+  requestPath: string;
+  targetPath: string;
+  workspaceReal: string;
+}): Promise<Extract<ResolvedAgentWorkspaceFilePath, { kind: "invalid" }> | undefined> {
+  try {
+    await assertNoPathAliasEscape({
+      absolutePath: params.targetPath,
+      rootPath: params.workspaceReal,
+      boundaryLabel: "workspace root",
+    });
+    return undefined;
+  } catch (error) {
+    return {
+      kind: "invalid",
+      requestPath: params.requestPath,
+      reason: error instanceof Error ? error.message : "path escapes workspace root",
+    };
+  }
+}
+
 async function resolveAgentWorkspaceFilePath(params: {
   workspaceDir: string;
   name: string;
@@ -232,6 +253,14 @@ async function resolveAgentWorkspaceFilePath(params: {
     if (targetStat.nlink > 1) {
       return { kind: "invalid", requestPath, reason: "hardlinked file path not allowed" };
     }
+    const targetValidation = await validateResolvedWorkspaceTarget({
+      requestPath,
+      targetPath: targetReal,
+      workspaceReal,
+    });
+    if (targetValidation) {
+      return targetValidation;
+    }
     return { kind: "ready", requestPath, ioPath: targetReal, workspaceReal };
   }
 
@@ -243,6 +272,14 @@ async function resolveAgentWorkspaceFilePath(params: {
   }
 
   const targetReal = await fs.realpath(candidatePath).catch(() => candidatePath);
+  const targetValidation = await validateResolvedWorkspaceTarget({
+    requestPath,
+    targetPath: targetReal,
+    workspaceReal,
+  });
+  if (targetValidation) {
+    return targetValidation;
+  }
   return { kind: "ready", requestPath, ioPath: targetReal, workspaceReal };
 }
 
