@@ -1,5 +1,12 @@
-import type { FileContents, FileDiffMetadata, SupportedLanguages } from "@pierre/diffs";
-import { parsePatchFiles } from "@pierre/diffs";
+import fs from "node:fs/promises";
+import { createRequire } from "node:module";
+import type {
+  FileContents,
+  FileDiffMetadata,
+  SupportedLanguages,
+  ThemeRegistrationResolved,
+} from "@pierre/diffs";
+import { RegisteredCustomThemes, parsePatchFiles } from "@pierre/diffs";
 import { preloadFileDiff, preloadMultiFileDiff } from "@pierre/diffs/ssr";
 import type {
   DiffInput,
@@ -13,6 +20,45 @@ import { VIEWER_LOADER_PATH } from "./viewer-assets.js";
 const DEFAULT_FILE_NAME = "diff.txt";
 const MAX_PATCH_FILE_COUNT = 128;
 const MAX_PATCH_TOTAL_LINES = 120_000;
+const diffsRequire = createRequire(import.meta.resolve("@pierre/diffs"));
+
+let pierreThemesPatched = false;
+
+function createThemeLoader(
+  themeName: "pierre-dark" | "pierre-light",
+  themePath: string,
+): () => Promise<ThemeRegistrationResolved> {
+  let cachedTheme: ThemeRegistrationResolved | undefined;
+  return async () => {
+    if (cachedTheme) {
+      return cachedTheme;
+    }
+    const raw = await fs.readFile(themePath, "utf8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    cachedTheme = {
+      ...parsed,
+      name: themeName,
+    } as ThemeRegistrationResolved;
+    return cachedTheme;
+  };
+}
+
+function patchPierreThemeLoadersForNode24(): void {
+  if (pierreThemesPatched) {
+    return;
+  }
+  try {
+    const darkThemePath = diffsRequire.resolve("@pierre/theme/themes/pierre-dark.json");
+    const lightThemePath = diffsRequire.resolve("@pierre/theme/themes/pierre-light.json");
+    RegisteredCustomThemes.set("pierre-dark", createThemeLoader("pierre-dark", darkThemePath));
+    RegisteredCustomThemes.set("pierre-light", createThemeLoader("pierre-light", lightThemePath));
+    pierreThemesPatched = true;
+  } catch {
+    // Keep upstream loaders if theme files cannot be resolved.
+  }
+}
+
+patchPierreThemeLoadersForNode24();
 
 function escapeCssString(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
