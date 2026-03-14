@@ -146,34 +146,170 @@ async function sendReplyOrFallbackDirect(
   return toFeishuSendResult(response, params.directParams.receiveId);
 }
 
+const CARD_MAX_NODES = 500;
+const CARD_MAX_OUTPUT_CHARS = 8000;
+// Cap the number of child-arrays enqueued to prevent wide column_set or note
+// structures from causing unbounded queue growth / memory exhaustion.
+const CARD_MAX_QUEUED_ARRAYS = 64;
+
+// Strip ANSI CSI/OSC escape sequences and non-printable control characters
+// (except \n and \t) from card text before it reaches logs or LLM context.
+// Prevents log/terminal injection via attacker-influenced card payloads (CWE-117).
+const ANSI_ESCAPE_RE = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*\x07)/g;
+const CONTROL_CHAR_RE = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
+
+function sanitizeCardText(s: string): string {
+  return s.replace(ANSI_ESCAPE_RE, "").replace(CONTROL_CHAR_RE, "");
+}
+
+/**
+ * Iterative DFS extraction of visible text from a Feishu interactive card.
+ * Uses a LIFO stack (push/pop) so nested content is emitted in document order —
+ * a FIFO queue would emit nested blocks after later siblings, inverting layout.
+ *
+ * Bounded by CARD_MAX_NODES (total elements visited, including column entries),
+ * CARD_MAX_OUTPUT_CHARS, and CARD_MAX_QUEUED_ARRAYS to prevent DoS from
+ * deeply-nested or wide attacker-influenced card payloads.
+ */
+function extractCardTextElements(root: unknown[]): string[] {
+  const out: string[] = [];
+  // LIFO stack: push children in reverse so first child is processed first.
+  const stack: unknown[][] = [root];
+  let seenNodes = 0;
+  let outChars = 0;
+
+  const pushText = (s: string) => {
+    if (!s || outChars >= CARD_MAX_OUTPUT_CHARS) return;
+    const clean = sanitizeCardText(s);
+    const clipped = clean.slice(0, CARD_MAX_OUTPUT_CHARS - outChars);
+    out.push(clipped);
+    outChars += clipped.length;
+  };
+
+  const enqueue = (arr: unknown[]) => {
+    if (stack.length < CARD_MAX_QUEUED_ARRAYS) stack.push(arr);
+  };
+
+  while (stack.length > 0 && seenNodes < CARD_MAX_NODES && outChars < CARD_MAX_OUTPUT_CHARS) {
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const nodes = stack.pop()!;
+    for (const element of nodes) {
+      if (++seenNodes > CARD_MAX_NODES) break;
+      if (!element || typeof element !== "object") continue;
+
+      // Legacy post/rich-text format: elements/content is array-of-arrays where each
+      // inner array is a row of inline elements. Supported tags:
+      //   text, a (link), at (mention) → extract .text
+      //   code_block → extract .text
+      //   img, media, emotion, hr → skip (no readable text)
+      if (Array.isArray(element)) {
+        for (const inline of element as unknown[]) {
+          if (seenNodes++ >= CARD_MAX_NODES || outChars >= CARD_MAX_OUTPUT_CHARS) break;
+          if (!inline || typeof inline !== "object") continue;
+          const inEl = inline as Record<string, unknown>;
+          const inTag = inEl.tag;
+          if (
+            (inTag === "text" || inTag === "a" || inTag === "code_block") &&
+            typeof inEl.text === "string" &&
+            inEl.text.trim()
+          ) {
+            pushText(inEl.text.trim());
+          } else if (
+            inTag === "at" &&
+            typeof inEl.user_name === "string" &&
+            inEl.user_name.trim()
+          ) {
+            // at-mention: use user_name as display text
+            pushText(inEl.user_name.trim());
+          }
+        }
+        continue;
+      }
+
+      const el = element as Record<string, unknown>;
+      const tag = el.tag;
+
+      if (tag === "div" && el.text && typeof el.text === "object") {
+        const c = (el.text as Record<string, unknown>).content;
+        if (typeof c === "string") pushText(c);
+      } else if (
+        (tag === "markdown" || tag === "plain_text" || tag === "lark_md") &&
+        typeof el.content === "string"
+      ) {
+        pushText(el.content);
+      } else if (tag === "header" && el.title && typeof el.title === "object") {
+        const c = (el.title as Record<string, unknown>).content;
+        if (typeof c === "string") pushText(c);
+      } else if (tag === "note" && Array.isArray(el.elements)) {
+        enqueue(el.elements as unknown[]);
+      } else if (tag === "column_set" && Array.isArray(el.columns)) {
+        // Each column entry counts against seenNodes regardless of whether it
+        // has extractable elements — this bounds the scan cost for wide arrays
+        // containing mostly empty/malformed column objects.
+        // Push in reverse so that popping (LIFO) processes columns in original order.
+        const cols = el.columns as unknown[];
+        for (let i = cols.length - 1; i >= 0; i--) {
+          if (++seenNodes > CARD_MAX_NODES) break;
+          const col = cols[i];
+          if (
+            col &&
+            typeof col === "object" &&
+            Array.isArray((col as Record<string, unknown>).elements)
+          ) {
+            enqueue((col as Record<string, unknown>).elements as unknown[]);
+            if (stack.length >= CARD_MAX_QUEUED_ARRAYS) break; // hard fanout cap
+          }
+        }
+      }
+    }
+  }
+
+  return out;
+}
+
 function parseInteractiveCardContent(parsed: unknown): string {
   if (!parsed || typeof parsed !== "object") {
     return "[Interactive Card]";
   }
 
-  const candidate = parsed as { elements?: unknown };
-  if (!Array.isArray(candidate.elements)) {
-    return "[Interactive Card]";
+  const card = parsed as Record<string, unknown>;
+  const texts: string[] = [];
+
+  // Legacy format: top-level "title" string (not inside a header object)
+  if (typeof card.title === "string" && card.title) {
+    const t = sanitizeCardText(card.title);
+    if (t) texts.push(t.slice(0, CARD_MAX_OUTPUT_CHARS));
   }
 
-  const texts: string[] = [];
-  for (const element of candidate.elements) {
-    if (!element || typeof element !== "object") {
-      continue;
-    }
-    const item = element as {
-      tag?: string;
-      content?: string;
-      text?: { content?: string };
-    };
-    if (item.tag === "div" && typeof item.text?.content === "string") {
-      texts.push(item.text.content);
-      continue;
-    }
-    if (item.tag === "markdown" && typeof item.content === "string") {
-      texts.push(item.content);
+  // Extract header title + subtitle if present (sit outside the elements array)
+  if (card.header && typeof card.header === "object") {
+    const h = card.header as Record<string, unknown>;
+    texts.push(...extractCardTextElements([{ tag: "header", title: h.title }]));
+    // subtitle: same shape as title — {tag: "plain_text"|"lark_md", content: "..."}
+    if (h.subtitle && typeof h.subtitle === "object") {
+      const c = (h.subtitle as Record<string, unknown>).content;
+      if (typeof c === "string" && c.trim()) {
+        const t = sanitizeCardText(c.trim());
+        if (t) texts.push(t.slice(0, CARD_MAX_OUTPUT_CHARS));
+      }
     }
   }
+
+  // Extract body — priority order:
+  // 1. card.elements  — schema 1.0 flat elements array
+  // 2. card.body.elements — schema 2.0 (buildMarkdownCard, modern alert cards)
+  // 3. card.content — legacy post/rich-text format (array-of-arrays rows)
+  const bodyElements = Array.isArray(card.elements)
+    ? (card.elements as unknown[])
+    : card.body &&
+        typeof card.body === "object" &&
+        Array.isArray((card.body as Record<string, unknown>).elements)
+      ? ((card.body as Record<string, unknown>).elements as unknown[])
+      : Array.isArray(card.content)
+        ? (card.content as unknown[])
+        : [];
+  texts.push(...extractCardTextElements(bodyElements));
+
   return texts.join("\n").trim() || "[Interactive Card]";
 }
 
@@ -257,6 +393,7 @@ export async function getMessageFeishu(params: {
 
     const msgType = item.msg_type ?? "text";
     const rawContent = item.body?.content ?? "";
+
     const content = parseQuotedMessageContent(rawContent, msgType);
 
     return {
