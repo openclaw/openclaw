@@ -52,6 +52,7 @@ import {
 } from "./inbound-processing.js";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { parseIMessageNotification } from "./parse-notification.js";
+import { lookupReplyContextSync } from "./reply-context-lookup.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
@@ -462,6 +463,23 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     if (!message) {
       logVerbose("imessage: dropping malformed RPC message payload");
       return;
+    }
+    // Populate reply context from chat.db when imsg does not provide it (issue #42266).
+    // Only when running locally: with SSH-wrapper cliPath, imsg (and --db) run on the remote
+    // Mac, so a local lookup would read the wrong or missing chat.db.
+    if (
+      dbPath &&
+      !remoteHost &&
+      typeof message.id === "number" &&
+      message.reply_to_id == null &&
+      message.reply_to_text == null
+    ) {
+      const ctx = lookupReplyContextSync(dbPath, message.id);
+      if (ctx) {
+        message.reply_to_id = ctx.reply_to_id;
+        message.reply_to_text = ctx.reply_to_text;
+        message.reply_to_sender = ctx.reply_to_sender;
+      }
     }
     await inboundDebouncer.enqueue({ message });
   };
