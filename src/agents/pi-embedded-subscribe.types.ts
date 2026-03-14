@@ -29,6 +29,8 @@ export type SubscribeEmbeddedPiSessionParams = {
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void | Promise<void>;
+  /** Called with every raw session event for trace/debug logging. */
+  onTraceEvent?: (evt: Record<string, unknown>) => void;
   enforceFinalTag?: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;
