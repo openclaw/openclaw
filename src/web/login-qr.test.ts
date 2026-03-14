@@ -2,6 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetActiveWebLoginsForTest, startWebLoginWithQr, waitForWebLogin } from "./login-qr.js";
 import { createWaSocket, logoutWeb, waitForWaConnection } from "./session.js";
 
+vi.mock("qrcode-terminal", () => ({
+  default: {
+    generate: vi.fn((_data: string, _opts: unknown, cb?: (output: string) => void) => {
+      cb?.("ascii-qr");
+    }),
+  },
+}));
+
 vi.mock("./session.js", () => {
   const createWaSocket = vi.fn(
     async (_printQr: boolean, _verbose: boolean, opts?: { onQr?: (qr: string) => void }) => {
@@ -67,6 +75,7 @@ describe("login-qr", () => {
 
     const resolved = await first;
     expect(resolved.qrDataUrl).toBe("data:image/png;base64,base64");
+    expect(resolved.qrAscii).toBe("ascii-qr");
     expect(createWaSocketMock).toHaveBeenCalledTimes(1);
   });
 
@@ -77,6 +86,7 @@ describe("login-qr", () => {
 
     const start = await startWebLoginWithQr({ timeoutMs: 5000 });
     expect(start.qrDataUrl).toBe("data:image/png;base64,base64");
+    expect(start.qrAscii).toBe("ascii-qr");
 
     const result = await waitForWebLogin({ timeoutMs: 5000 });
 

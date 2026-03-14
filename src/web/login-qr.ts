@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { DisconnectReason } from "@whiskeysockets/baileys";
+import qrcode from "qrcode-terminal";
 import { loadConfig } from "../config/config.js";
 import { danger, info, success } from "../globals.js";
 import { logInfo } from "../logger.js";
@@ -112,6 +113,14 @@ async function restartLoginSocket(login: ActiveLogin, runtime: RuntimeEnv) {
   }
 }
 
+function renderQrAscii(data: string): Promise<string> {
+  return new Promise((resolve) => {
+    qrcode.generate(data, { small: true }, (output: string) => {
+      resolve(output);
+    });
+  });
+}
+
 export async function startWebLoginWithQr(
   opts: {
     verbose?: boolean;
@@ -120,23 +129,27 @@ export async function startWebLoginWithQr(
     accountId?: string;
     runtime?: RuntimeEnv;
   } = {},
-): Promise<{ qrDataUrl?: string; message: string }> {
+): Promise<{ qrDataUrl?: string; qrAscii?: string; message: string }> {
   const runtime = opts.runtime ?? defaultRuntime;
   const cfg = loadConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });
   const existing = activeLogins.get(account.accountId);
   if (existing && isLoginFresh(existing)) {
     if (existing.qrDataUrl) {
+      const qrAscii = existing.qr ? await renderQrAscii(existing.qr) : undefined;
       return {
         qrDataUrl: existing.qrDataUrl,
+        qrAscii,
         message: "QR already active. Scan it in WhatsApp → Linked Devices.",
       };
     }
     if (existing.qr) {
       const base64 = await renderQrPngBase64(existing.qr);
+      const qrAscii = await renderQrAscii(existing.qr);
       existing.qrDataUrl = `data:image/png;base64,${base64}`;
       return {
         qrDataUrl: existing.qrDataUrl,
+        qrAscii,
         message: "QR already active. Scan it in WhatsApp → Linked Devices.",
       };
     }
@@ -227,9 +240,11 @@ export async function startWebLoginWithQr(
   }
 
   const base64 = await renderQrPngBase64(qr);
+  const qrAscii = await renderQrAscii(qr);
   login.qrDataUrl = `data:image/png;base64,${base64}`;
   return {
     qrDataUrl: login.qrDataUrl,
+    qrAscii,
     message: "Scan this QR in WhatsApp → Linked Devices.",
   };
 }
