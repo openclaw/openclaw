@@ -58,16 +58,16 @@ function resolveVoiceInfo(filename: string, contentType?: string) {
   const extension = path.extname(filename).toLowerCase();
   const isCaf =
     extension === ".caf" || (normalizedType ? AUDIO_MIME_CAF.has(normalizedType) : false);
+  const isMp3 =
+    extension === ".mp3" || (normalizedType ? AUDIO_MIME_MP3.has(normalizedType) : false);
   const isAudio =
     isCaf ||
-    extension === ".mp3" ||
+    isMp3 ||
     extension === ".ogg" ||
     extension === ".opus" ||
     Boolean(normalizedType?.startsWith("audio/")) ||
-    (normalizedType
-      ? AUDIO_MIME_MP3.has(normalizedType) || AUDIO_MIME_OPUS.has(normalizedType)
-      : false);
-  return { isAudio, isCaf };
+    (normalizedType ? AUDIO_MIME_OPUS.has(normalizedType) : false);
+  return { isAudio, isCaf, isMp3 };
 }
 
 function resolveVoiceInputExtension(filename: string, contentType?: string): string {
@@ -97,7 +97,7 @@ async function convertAudioBufferToCaf(
   const inputPath = path.join(tempDir, `openclaw-bb-voice-${id}${inputExt}`);
   const outputPath = path.join(tempDir, `openclaw-bb-voice-${id}.caf`);
   try {
-    await fs.writeFile(inputPath, inputBuffer);
+    await fs.writeFile(inputPath, inputBuffer, { mode: 0o600 });
     await new Promise<void>((resolve, reject) => {
       execFile(
         "ffmpeg",
@@ -109,9 +109,9 @@ async function convertAudioBufferToCaf(
           "-sn",
           "-dn",
           "-c:a",
-          "libopus",
+          "aac",
           "-b:a",
-          "24k",
+          "32k",
           "-f",
           "caf",
           outputPath,
@@ -247,6 +247,11 @@ export async function sendBlueBubblesAttachment(params: {
     if (voiceInfo.isCaf) {
       filename = ensureExtension(filename, ".caf", fallbackName);
       contentType = "audio/x-caf";
+    } else if (voiceInfo.isMp3) {
+      // MP3 voice memos: BlueBubbles server converts MP3→CAF natively,
+      // so pass through without ffmpeg to avoid a hard dependency.
+      filename = ensureExtension(filename, ".mp3", fallbackName);
+      contentType = "audio/mpeg";
     } else {
       try {
         buffer = await convertAudioBufferToCaf(

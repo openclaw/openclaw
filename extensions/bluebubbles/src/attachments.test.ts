@@ -384,11 +384,10 @@ describe("sendBlueBubblesAttachment", () => {
     });
 
     const bodyText = expectVoiceAttachmentBody();
-    expect(bodyText).toContain('filename="voice.caf"');
+    expect(bodyText).toContain('filename="voice.mp3"');
     expect(bodyText).toContain('name="method"');
     expect(bodyText).toContain("private-api");
-    expect(execFileMock).toHaveBeenCalledTimes(1);
-    expect(execFileMock.mock.calls[0]?.[0]).toBe("ffmpeg");
+    expect(execFileMock).not.toHaveBeenCalled();
   });
 
   it("normalizes mp3 filenames for voice memos", async () => {
@@ -407,8 +406,8 @@ describe("sendBlueBubblesAttachment", () => {
     });
 
     const bodyText = expectVoiceAttachmentBody();
-    expect(bodyText).toContain('filename="voice.caf"');
-    expect(bodyText).toContain('name="voice.caf"');
+    expect(bodyText).toContain('filename="voice.mp3"');
+    expect(bodyText).toContain('name="voice.mp3"');
   });
 
   it("throws when asVoice is true but media is not audio", async () => {
