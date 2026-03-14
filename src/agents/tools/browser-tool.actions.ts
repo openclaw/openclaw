@@ -314,7 +314,7 @@ export async function executeActAction(params: {
             })) as { tabs?: unknown[] }
           ).tabs ?? [])
         : await browserTabs(baseUrl, { profile }).catch(() => []);
-      // Some Chrome relay targetIds can go stale between snapshots and actions.
+      // Some user-browser targetIds can go stale between snapshots and actions.
       // Only retry safe read-only actions, and only when exactly one tab remains attached.
       if (retryRequest && canRetryChromeActWithoutTargetId(request) && tabs.length === 1) {
         try {
@@ -334,8 +334,12 @@ export async function executeActAction(params: {
         }
       }
       if (!tabs.length) {
+        // Extension relay profiles need the toolbar icon click; Chrome MCP just needs Chrome running.
+        const isRelayProfile = profile === "chrome-relay" || profile === "chrome";
         throw new Error(
-          "No Chrome tabs are attached via the OpenClaw Browser Relay extension. Click the toolbar icon on the tab you want to control (badge ON), then retry.",
+          isRelayProfile
+            ? "No Chrome tabs are attached via the OpenClaw Browser Relay extension. Click the toolbar icon on the tab you want to control (badge ON), then retry."
+            : `No Chrome tabs found for profile="${profile}". Make sure Chrome (v146+) is running and has open tabs, then retry.`,
           { cause: err },
         );
       }
