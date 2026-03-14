@@ -542,7 +542,10 @@ export async function runMemoryFlushIfNeeded(params: {
           sessionKey: params.sessionKey,
           update: async () => ({
             memoryFlushAt: Date.now(),
-            memoryFlushCompactionCount,
+            // Only advance the flush counter when compaction actually ran
+            // during this flush turn. Otherwise the counters synchronize
+            // and the next flush cycle is skipped (#12590).
+            ...(memoryCompactionCompleted ? { memoryFlushCompactionCount } : {}),
           }),
         });
         if (updatedEntry) {
