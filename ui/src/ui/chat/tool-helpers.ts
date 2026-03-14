@@ -6,39 +6,46 @@ import { PREVIEW_MAX_CHARS, PREVIEW_MAX_LINES, TOOL_INLINE_THRESHOLD } from "./c
 
 /**
  * Format tool output content for display in the sidebar.
- * Detects JSON and wraps it in a code block with formatting.
+ * Truncates long outputs and shows a preview.
+ *
+ * @param output - The tool output to format
+ * @param maxLength - Maximum characters to show (default: PREVIEW_MAX_CHARS)
+ * @returns Formatted output with truncation indicator if needed
  */
-export function formatToolOutputForSidebar(text: string): string {
-  const trimmed = text.trim();
-  // Try to detect and format JSON
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      return "```json\n" + JSON.stringify(parsed, null, 2) + "\n```";
-    } catch {
-      // Not valid JSON, return as-is
-    }
+export function formatToolOutput(output: string, maxLength: number = PREVIEW_MAX_CHARS): string {
+  if (!output || output.length <= maxLength) {
+    return output;
   }
-  return text;
+
+  return output.slice(0, maxLength) + "...";
 }
 
 /**
- * Get a truncated preview of tool output text.
- * Truncates to first N lines or first N characters, whichever is shorter.
+ * Get truncated preview of tool output.
+ *
+ * @param text - The full tool output text
+ * @param maxLines - Maximum number of lines to show (default: PREVIEW_MAX_LINES)
+ * @returns Truncated preview with line count indicator
  */
-export function getTruncatedPreview(text: string): string {
-  const allLines = text.split("\n");
-  const lines = allLines.slice(0, PREVIEW_MAX_LINES);
-  const preview = lines.join("\n");
-  if (preview.length > PREVIEW_MAX_CHARS) {
-    return preview.slice(0, PREVIEW_MAX_CHARS) + "…";
+export function getTruncatedPreview(text: string, maxLines: number = PREVIEW_MAX_LINES): string {
+  if (!text) {
+    return "";
   }
-  return lines.length < allLines.length ? preview + "…" : preview;
+
+  const lines = text.split("\n");
+
+  if (lines.length <= maxLines) {
+    return text;
+  }
+
+  return lines.slice(0, maxLines).join("\n") + `... (${lines.length - maxLines} more lines)`;
 }
 
 /**
- * Check if tool output is considered "long" (exceeds threshold).
- * Used to determine if expand/collapse toggle should shown.
+ * Check if tool output is long enough to need truncation.
+ *
+ * @param text - The tool output text
+ * @returns True if output exceeds TOOL_INLINE_THRESHOLD
  */
 export function isLongToolOutput(text: string): boolean {
   return text.length > TOOL_INLINE_THRESHOLD;

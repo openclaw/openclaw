@@ -54,7 +54,7 @@ export function renderToolCardSidebar(card: ToolCard, _onOpenSidebar?: (content:
   const hasText = Boolean(card.text?.trim());
 
   // Issue #45040: Remove auto-open sidebar behavior to prevent blocking popup
-  // Users can still manually open sidebar if needed
+  // Users can now expand/collapse tool output inline instead
   const canClick = false;
 
   const isShort = hasText && (card.text?.length ?? 0) <= TOOL_INLINE_THRESHOLD;
@@ -92,7 +92,22 @@ export function renderToolCardSidebar(card: ToolCard, _onOpenSidebar?: (content:
       }
       ${
         showCollapsed
-          ? html`<div class="chat-tool-card__preview mono">${getTruncatedPreview(card.text!)}</div>`
+          ? html`
+              <details class="chat-tool-card__details">
+                <summary class="chat-tool-card__summary">
+                  <div class="chat-tool-card__preview mono">${getTruncatedPreview(card.text!)}</div>
+                  <div class="chat-tool-card__summary-content">
+                    <span class="chat-tool-card__toggle-text">
+                      <span class="chat-tool-card__toggle-icon">${icons.chevronRight}</span>
+                      <span>Show full output</span>
+                    </span>
+                  </div>
+                </summary>
+                <div class="chat-tool-card__output">
+                  <div class="chat-tool-card__full mono">${card.text}</div>
+                </div>
+              </details>
+            `
           : nothing
       }
       ${showInline ? html`<div class="chat-tool-card__inline mono">${card.text}</div>` : nothing}
