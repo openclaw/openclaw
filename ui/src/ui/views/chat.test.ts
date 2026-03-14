@@ -268,6 +268,28 @@ describe("chat view", () => {
     expect(indicator?.textContent).toContain("Compacting context...");
   });
 
+  it("does not show the welcome state when hidden tool-result activity exists", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showThinking: false,
+          messages: [
+            {
+              role: "toolResult",
+              content: "background tool output",
+              timestamp: 1_000,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+    expect(container.querySelector(".agent-chat__input")).not.toBeNull();
+  });
+
   it("renders completion indicator shortly after compaction", () => {
     const container = document.createElement("div");
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);

@@ -850,7 +850,14 @@ export function renderChat(props: ChatProps) {
   };
 
   const chatItems = buildChatItems(props);
-  const isEmpty = chatItems.length === 0 && !props.loading;
+  const hasSessionActivity =
+    (Array.isArray(props.messages) && props.messages.length > 0) ||
+    (Array.isArray(props.toolMessages) && props.toolMessages.length > 0) ||
+    (Array.isArray(props.streamSegments) &&
+      props.streamSegments.some((segment) => segment.text.trim())) ||
+    props.stream !== null;
+  const showWelcomeState = !hasSessionActivity && !props.loading && !vs.searchOpen;
+  const showEmptySearch = chatItems.length === 0 && !props.loading && vs.searchOpen;
 
   const thread = html`
     <div
@@ -893,9 +900,9 @@ export function renderChat(props: ChatProps) {
             `
           : nothing
       }
-      ${isEmpty && !vs.searchOpen ? renderWelcomeState(props) : nothing}
+      ${showWelcomeState ? renderWelcomeState(props) : nothing}
       ${
-        isEmpty && vs.searchOpen
+        showEmptySearch
           ? html`
               <div class="agent-chat__empty">No matching messages</div>
             `
