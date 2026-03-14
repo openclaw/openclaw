@@ -41,8 +41,7 @@ import {
 } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
-  buildEmbeddedRunBaseParams,
-  buildEmbeddedRunContexts,
+  buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -313,20 +312,17 @@ export async function runAgentTurnWithFallback(params: {
               }
             })();
           }
-          const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts({
-            run: params.followupRun.run,
-            sessionCtx: params.sessionCtx,
-            hasRepliedRef: params.opts?.hasRepliedRef,
-            provider,
-          });
-          const runBaseParams = buildEmbeddedRunBaseParams({
-            run: params.followupRun.run,
-            provider,
-            model,
-            runId,
-            authProfile,
-            allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
-          });
+          const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams(
+            {
+              run: params.followupRun.run,
+              sessionCtx: params.sessionCtx,
+              hasRepliedRef: params.opts?.hasRepliedRef,
+              provider,
+              runId,
+              allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+              model,
+            },
+          );
           return (async () => {
             const result = await runEmbeddedPiAgent({
               ...embeddedContext,
@@ -402,11 +398,15 @@ export async function runAgentTurnWithFallback(params: {
                     await params.opts?.onToolStart?.({ name, phase });
                   }
                 }
-                // Track auto-compaction completion
+                // Track auto-compaction completion and notify UI layer
                 if (evt.stream === "compaction") {
                   const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                  if (phase === "start") {
+                    await params.opts?.onCompactionStart?.();
+                  }
                   if (phase === "end") {
                     autoCompactionCompleted = true;
+                    await params.opts?.onCompactionEnd?.();
                   }
                 }
               },

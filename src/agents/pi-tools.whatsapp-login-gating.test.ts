@@ -21,6 +21,7 @@ describe("owner-only tool gating", () => {
     expect(toolNames).not.toContain("whatsapp_login");
     expect(toolNames).not.toContain("cron");
     expect(toolNames).not.toContain("gateway");
+    expect(toolNames).not.toContain("nodes");
   });
 
   it("keeps owner-only tools for authorized senders", () => {
@@ -29,6 +30,13 @@ describe("owner-only tool gating", () => {
     expect(toolNames).toContain("whatsapp_login");
     expect(toolNames).toContain("cron");
     expect(toolNames).toContain("gateway");
+    expect(toolNames).toContain("nodes");
+  });
+
+  it("keeps canvas available to unauthorized senders by current trust model", () => {
+    const tools = createOpenClawCodingTools({ senderIsOwner: false });
+    const toolNames = tools.map((tool) => tool.name);
+    expect(toolNames).toContain("canvas");
   });
 
   it("defaults to removing owner-only tools when owner status is unknown", () => {
@@ -37,5 +45,7 @@ describe("owner-only tool gating", () => {
     expect(toolNames).not.toContain("whatsapp_login");
     expect(toolNames).not.toContain("cron");
     expect(toolNames).not.toContain("gateway");
+    expect(toolNames).not.toContain("nodes");
+    expect(toolNames).toContain("canvas");
   });
 });

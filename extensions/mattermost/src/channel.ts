@@ -21,6 +21,7 @@ import {
   type ChannelMessageActionName,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/mattermost";
+import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { MattermostConfigSchema } from "./config-schema.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
@@ -389,21 +390,30 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       }
       return { ok: true, to: trimmed };
     },
-    sendText: async ({ cfg, to, text, accountId, replyToId }) => {
+    sendText: async ({ cfg, to, text, accountId, replyToId, threadId }) => {
       const result = await sendMessageMattermost(to, text, {
         cfg,
         accountId: accountId ?? undefined,
-        replyToId: replyToId ?? undefined,
+        replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
       });
       return { channel: "mattermost", ...result };
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, replyToId }) => {
+    sendMedia: async ({
+      cfg,
+      to,
+      text,
+      mediaUrl,
+      mediaLocalRoots,
+      accountId,
+      replyToId,
+      threadId,
+    }) => {
       const result = await sendMessageMattermost(to, text, {
         cfg,
         accountId: accountId ?? undefined,
         mediaUrl,
         mediaLocalRoots,
-        replyToId: replyToId ?? undefined,
+        replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
       });
       return { channel: "mattermost", ...result };
     },
@@ -419,18 +429,12 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       lastStopAt: null,
       lastError: null,
     },
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      botTokenSource: snapshot.botTokenSource ?? "none",
-      running: snapshot.running ?? false,
-      connected: snapshot.connected ?? false,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-      baseUrl: snapshot.baseUrl ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) =>
+      buildPassiveProbedChannelStatusSummary(snapshot, {
+        botTokenSource: snapshot.botTokenSource ?? "none",
+        connected: snapshot.connected ?? false,
+        baseUrl: snapshot.baseUrl ?? null,
+      }),
     probeAccount: async ({ account, timeoutMs }) => {
       const token = account.botToken?.trim();
       const baseUrl = account.baseUrl?.trim();

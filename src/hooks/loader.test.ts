@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
+import { stripAnsi } from "../terminal/ansi.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
   clearInternalHooks,
@@ -31,6 +34,13 @@ describe("loader", () => {
     // Disable bundled hooks during tests by setting env var to non-existent directory
     envSnapshot = captureEnv(["OPENCLAW_BUNDLED_HOOKS_DIR"]);
     process.env.OPENCLAW_BUNDLED_HOOKS_DIR = "/nonexistent/bundled/hooks";
+    setLoggerOverride({ level: "silent", consoleLevel: "error" });
+    loggingState.rawConsole = {
+      log: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
   });
 
   async function writeHandlerModule(
@@ -54,6 +64,8 @@ describe("loader", () => {
 
   afterEach(async () => {
     clearInternalHooks();
+    loggingState.rawConsole = null;
+    setLoggerOverride(null);
     envSnapshot.restore();
   });
 
@@ -335,6 +347,29 @@ describe("loader", () => {
       }
 
       await expectNoCommandHookRegistration(createLegacyHandlerConfig());
+    });
+
+    it("sanitizes control characters in loader error logs", async () => {
+      const error = loggingState.rawConsole?.error;
+      expect(error).toBeTypeOf("function");
+
+      const cfg = createEnabledHooksConfig([
+        {
+          event: "command:new",
+          module: `${tmpDir}\u001b[31m\nforged-log`,
+        },
+      ]);
+
+      await expectNoCommandHookRegistration(cfg);
+
+      const messages = stripAnsi(
+        (error as ReturnType<typeof vi.fn>).mock.calls
+          .map((call) => String(call[0] ?? ""))
+          .join("\n"),
+      );
+      expect(messages).toContain("forged-log");
+      expect(messages).not.toContain("\u001b[31m");
+      expect(messages).not.toContain("\nforged-log");
     });
   });
 });

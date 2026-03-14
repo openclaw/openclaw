@@ -1,10 +1,10 @@
 export type BrowserProfileConfig = {
   /** CDP port for this profile. Allocated once at creation, persisted permanently. */
   cdpPort?: number;
-  /** CDP URL for this profile (use for remote Chrome). */
+  /** CDP URL for this profile (use for remote Chrome, or as browserUrl/wsEndpoint for existing-session MCP attach). */
   cdpUrl?: string;
   /** Profile driver (default: openclaw). */
-  driver?: "openclaw" | "clawd" | "extension";
+  driver?: "openclaw" | "clawd" | "extension" | "existing-session";
   /** If true, never launch a browser for this profile; only attach. Falls back to browser.attachOnly. */
   attachOnly?: boolean;
   /** Profile color (hex). Auto-assigned at creation. */

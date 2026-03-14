@@ -2,8 +2,10 @@ import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveProfile } from "./config.js";
+import { DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME } from "./constants.js";
 import { BrowserProfileNotFoundError, toBrowserErrorResponse } from "./errors.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
+import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import {
   refreshResolvedBrowserConfigFromDisk,
   resolveBrowserProfileWithHotReload,
@@ -37,6 +39,35 @@ export function listKnownProfileNames(state: BrowserServerState): string[] {
     names.add(name);
   }
   return [...names];
+}
+
+function resolveImplicitProfileName(state: BrowserServerState): string {
+  const defaultProfileName = state.resolved.defaultProfile;
+  if (!state.resolved.headless) {
+    return defaultProfileName;
+  }
+
+  const defaultProfile = resolveProfile(state.resolved, defaultProfileName);
+  if (!defaultProfile) {
+    return defaultProfileName;
+  }
+
+  const capabilities = getBrowserProfileCapabilities(defaultProfile);
+  if (!capabilities.requiresRelay) {
+    return defaultProfileName;
+  }
+
+  const managedProfile = resolveProfile(state.resolved, DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
+  if (!managedProfile) {
+    return defaultProfileName;
+  }
+
+  const managedCapabilities = getBrowserProfileCapabilities(managedProfile);
+  if (managedCapabilities.requiresRelay) {
+    return defaultProfileName;
+  }
+
+  return managedProfile.name;
 }
 
 /**
@@ -128,7 +159,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
 
   const forProfile = (profileName?: string): ProfileContext => {
     const current = state();
-    const name = profileName ?? current.resolved.defaultProfile;
+    const name = profileName ?? resolveImplicitProfileName(current);
     const profile = resolveBrowserProfileWithHotReload({
       current,
       refreshConfigFromDisk,
@@ -159,15 +190,26 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
       if (!profile) {
         continue;
       }
+      const capabilities = getBrowserProfileCapabilities(profile);
 
       let tabCount = 0;
       let running = false;
+      const profileCtx = createProfileContext(opts, profile);
 
-      if (profileState?.running) {
+      if (capabilities.usesChromeMcp) {
+        try {
+          running = await profileCtx.isReachable(300);
+          if (running) {
+            const tabs = await profileCtx.listTabs();
+            tabCount = tabs.filter((t) => t.type === "page").length;
+          }
+        } catch {
+          // Chrome MCP not available
+        }
+      } else if (profileState?.running) {
         running = true;
         try {
-          const ctx = createProfileContext(opts, profile);
-          const tabs = await ctx.listTabs();
+          const tabs = await profileCtx.listTabs();
           tabCount = tabs.filter((t) => t.type === "page").length;
         } catch {
           // Browser might not be responsive
@@ -178,8 +220,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
           const reachable = await isChromeReachable(profile.cdpUrl, 200);
           if (reachable) {
             running = true;
-            const ctx = createProfileContext(opts, profile);
-            const tabs = await ctx.listTabs().catch(() => []);
+            const tabs = await profileCtx.listTabs().catch(() => []);
             tabCount = tabs.filter((t) => t.type === "page").length;
           }
         } catch {
@@ -189,9 +230,11 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
 
       result.push({
         name,
-        cdpPort: profile.cdpPort,
-        cdpUrl: profile.cdpUrl,
+        transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
+        cdpPort: capabilities.usesChromeMcp ? null : profile.cdpPort,
+        cdpUrl: capabilities.usesChromeMcp ? null : profile.cdpUrl,
         color: profile.color,
+        driver: profile.driver,
         running,
         tabCount,
         isDefault: name === current.resolved.defaultProfile,

@@ -461,6 +461,391 @@ describe("memory index", () => {
     }
   });
 
+  it("targets explicit session files during post-compaction sync", async () => {
+    const stateDir = path.join(fixtureRoot, `state-targeted-${randomUUID()}`);
+    const sessionDir = path.join(stateDir, "agents", "main", "sessions");
+    const firstSessionPath = path.join(sessionDir, "targeted-first.jsonl");
+    const secondSessionPath = path.join(sessionDir, "targeted-second.jsonl");
+    const storePath = path.join(workspaceDir, `index-targeted-${randomUUID()}.sqlite`);
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(
+      firstSessionPath,
+      `${JSON.stringify({
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: "first transcript v1" }] },
+      })}\n`,
+    );
+    await fs.writeFile(
+      secondSessionPath,
+      `${JSON.stringify({
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: "second transcript v1" }] },
+      })}\n`,
+    );
+
+    try {
+      const result = await getMemorySearchManager({
+        cfg: createCfg({
+          storePath,
+          sources: ["sessions"],
+          sessionMemory: true,
+        }),
+        agentId: "main",
+      });
+      const manager = requireManager(result);
+      await manager.sync?.({ reason: "test" });
+
+      const db = (
+        manager as unknown as {
+          db: {
+            prepare: (sql: string) => {
+              get: (path: string, source: string) => { hash: string } | undefined;
+            };
+          };
+        }
+      ).db;
+      const getSessionHash = (sessionPath: string) =>
+        db
+          .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
+          .get(sessionPath, "sessions")?.hash;
+
+      const firstOriginalHash = getSessionHash("sessions/targeted-first.jsonl");
+      const secondOriginalHash = getSessionHash("sessions/targeted-second.jsonl");
+
+      await fs.writeFile(
+        firstSessionPath,
+        `${JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "first transcript v2 after compaction" }],
+          },
+        })}\n`,
+      );
+      await fs.writeFile(
+        secondSessionPath,
+        `${JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "second transcript v2 should stay untouched" }],
+          },
+        })}\n`,
+      );
+
+      await manager.sync?.({
+        reason: "post-compaction",
+        sessionFiles: [firstSessionPath],
+      });
+
+      expect(getSessionHash("sessions/targeted-first.jsonl")).not.toBe(firstOriginalHash);
+      expect(getSessionHash("sessions/targeted-second.jsonl")).toBe(secondOriginalHash);
+      await manager.close?.();
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves unrelated dirty sessions after targeted post-compaction sync", async () => {
+    const stateDir = path.join(fixtureRoot, `state-targeted-dirty-${randomUUID()}`);
+    const sessionDir = path.join(stateDir, "agents", "main", "sessions");
+    const firstSessionPath = path.join(sessionDir, "targeted-dirty-first.jsonl");
+    const secondSessionPath = path.join(sessionDir, "targeted-dirty-second.jsonl");
+    const storePath = path.join(workspaceDir, `index-targeted-dirty-${randomUUID()}.sqlite`);
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(
+      firstSessionPath,
+      `${JSON.stringify({
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: "first transcript v1" }] },
+      })}\n`,
+    );
+    await fs.writeFile(
+      secondSessionPath,
+      `${JSON.stringify({
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: "second transcript v1" }] },
+      })}\n`,
+    );
+
+    try {
+      const manager = requireManager(
+        await getMemorySearchManager({
+          cfg: createCfg({
+            storePath,
+            sources: ["sessions"],
+            sessionMemory: true,
+          }),
+          agentId: "main",
+        }),
+      );
+      await manager.sync({ reason: "test" });
+
+      const db = (
+        manager as unknown as {
+          db: {
+            prepare: (sql: string) => {
+              get: (path: string, source: string) => { hash: string } | undefined;
+            };
+          };
+        }
+      ).db;
+      const getSessionHash = (sessionPath: string) =>
+        db
+          .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
+          .get(sessionPath, "sessions")?.hash;
+
+      const firstOriginalHash = getSessionHash("sessions/targeted-dirty-first.jsonl");
+      const secondOriginalHash = getSessionHash("sessions/targeted-dirty-second.jsonl");
+
+      await fs.writeFile(
+        firstSessionPath,
+        `${JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "first transcript v2 after compaction" }],
+          },
+        })}\n`,
+      );
+      await fs.writeFile(
+        secondSessionPath,
+        `${JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "second transcript v2 still pending" }],
+          },
+        })}\n`,
+      );
+
+      const internal = manager as unknown as {
+        sessionsDirty: boolean;
+        sessionsDirtyFiles: Set<string>;
+      };
+      internal.sessionsDirty = true;
+      internal.sessionsDirtyFiles.add(secondSessionPath);
+
+      await manager.sync({
+        reason: "post-compaction",
+        sessionFiles: [firstSessionPath],
+      });
+
+      expect(getSessionHash("sessions/targeted-dirty-first.jsonl")).not.toBe(firstOriginalHash);
+      expect(getSessionHash("sessions/targeted-dirty-second.jsonl")).toBe(secondOriginalHash);
+      expect(internal.sessionsDirtyFiles.has(secondSessionPath)).toBe(true);
+      expect(internal.sessionsDirty).toBe(true);
+
+      await manager.sync({ reason: "test" });
+
+      expect(getSessionHash("sessions/targeted-dirty-second.jsonl")).not.toBe(secondOriginalHash);
+      await manager.close?.();
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+      await fs.rm(storePath, { force: true });
+    }
+  });
+
+  it("queues targeted session sync when another sync is already in progress", async () => {
+    const stateDir = path.join(fixtureRoot, `state-targeted-queued-${randomUUID()}`);
+    const sessionDir = path.join(stateDir, "agents", "main", "sessions");
+    const sessionPath = path.join(sessionDir, "targeted-queued.jsonl");
+    const storePath = path.join(workspaceDir, `index-targeted-queued-${randomUUID()}.sqlite`);
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(
+      sessionPath,
+      `${JSON.stringify({
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: "queued transcript v1" }] },
+      })}\n`,
+    );
+
+    try {
+      const manager = requireManager(
+        await getMemorySearchManager({
+          cfg: createCfg({
+            storePath,
+            sources: ["sessions"],
+            sessionMemory: true,
+          }),
+          agentId: "main",
+        }),
+      );
+      await manager.sync({ reason: "test" });
+
+      const db = (
+        manager as unknown as {
+          db: {
+            prepare: (sql: string) => {
+              get: (path: string, source: string) => { hash: string } | undefined;
+            };
+          };
+        }
+      ).db;
+      const getSessionHash = (sessionRelPath: string) =>
+        db
+          .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
+          .get(sessionRelPath, "sessions")?.hash;
+      const originalHash = getSessionHash("sessions/targeted-queued.jsonl");
+
+      const internal = manager as unknown as {
+        runSyncWithReadonlyRecovery: (params?: {
+          reason?: string;
+          sessionFiles?: string[];
+        }) => Promise<void>;
+      };
+      const originalRunSync = internal.runSyncWithReadonlyRecovery.bind(manager);
+      let releaseBusySync: (() => void) | undefined;
+      const busyGate = new Promise<void>((resolve) => {
+        releaseBusySync = resolve;
+      });
+      internal.runSyncWithReadonlyRecovery = async (params) => {
+        if (params?.reason === "busy-sync") {
+          await busyGate;
+        }
+        return await originalRunSync(params);
+      };
+
+      const busySyncPromise = manager.sync({ reason: "busy-sync" });
+      await fs.writeFile(
+        sessionPath,
+        `${JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "queued transcript v2 after compaction" }],
+          },
+        })}\n`,
+      );
+
+      const targetedSyncPromise = manager.sync({
+        reason: "post-compaction",
+        sessionFiles: [sessionPath],
+      });
+
+      releaseBusySync?.();
+      await Promise.all([busySyncPromise, targetedSyncPromise]);
+
+      expect(getSessionHash("sessions/targeted-queued.jsonl")).not.toBe(originalHash);
+      await manager.close?.();
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+      await fs.rm(storePath, { force: true });
+    }
+  });
+
+  it("runs a full reindex after fallback activates during targeted sync", async () => {
+    const stateDir = path.join(fixtureRoot, `state-targeted-fallback-${randomUUID()}`);
+    const sessionDir = path.join(stateDir, "agents", "main", "sessions");
+    const sessionPath = path.join(sessionDir, "targeted-fallback.jsonl");
+    const storePath = path.join(workspaceDir, `index-targeted-fallback-${randomUUID()}.sqlite`);
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(
+      sessionPath,
+      `${JSON.stringify({
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: "fallback transcript v1" }] },
+      })}\n`,
+    );
+
+    try {
+      const manager = requireManager(
+        await getMemorySearchManager({
+          cfg: createCfg({
+            storePath,
+            sources: ["sessions"],
+            sessionMemory: true,
+          }),
+          agentId: "main",
+        }),
+      );
+      await manager.sync({ reason: "test" });
+
+      const internal = manager as unknown as {
+        syncSessionFiles: (params: {
+          targetSessionFiles?: string[];
+          needsFullReindex: boolean;
+        }) => Promise<void>;
+        shouldFallbackOnError: (message: string) => boolean;
+        activateFallbackProvider: (reason: string) => Promise<boolean>;
+        runUnsafeReindex: (params: {
+          reason?: string;
+          force?: boolean;
+          progress?: unknown;
+        }) => Promise<void>;
+      };
+      const originalSyncSessionFiles = internal.syncSessionFiles.bind(manager);
+      const originalShouldFallbackOnError = internal.shouldFallbackOnError.bind(manager);
+      const originalActivateFallbackProvider = internal.activateFallbackProvider.bind(manager);
+      const originalRunUnsafeReindex = internal.runUnsafeReindex.bind(manager);
+
+      internal.syncSessionFiles = async (params) => {
+        if (params.targetSessionFiles?.length) {
+          throw new Error("embedding backend failed");
+        }
+        return await originalSyncSessionFiles(params);
+      };
+      internal.shouldFallbackOnError = () => true;
+      const activateFallbackProvider = vi.fn(async () => true);
+      internal.activateFallbackProvider = activateFallbackProvider;
+      const runUnsafeReindex = vi.fn(async () => {});
+      internal.runUnsafeReindex = runUnsafeReindex;
+
+      await manager.sync({
+        reason: "post-compaction",
+        sessionFiles: [sessionPath],
+      });
+
+      expect(activateFallbackProvider).toHaveBeenCalledWith("embedding backend failed");
+      expect(runUnsafeReindex).toHaveBeenCalledWith({
+        reason: "post-compaction",
+        force: true,
+        progress: undefined,
+      });
+
+      internal.syncSessionFiles = originalSyncSessionFiles;
+      internal.shouldFallbackOnError = originalShouldFallbackOnError;
+      internal.activateFallbackProvider = originalActivateFallbackProvider;
+      internal.runUnsafeReindex = originalRunUnsafeReindex;
+      await manager.close?.();
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+      await fs.rm(storePath, { force: true });
+    }
+  });
+
   it("reindexes when the embedding model changes", async () => {
     const base = createCfg({ storePath: indexModelPath });
     const baseAgents = base.agents!;
