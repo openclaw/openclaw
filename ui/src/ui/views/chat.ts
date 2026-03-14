@@ -247,35 +247,87 @@ function renderFallbackIndicator(status: FallbackIndicatorStatus | null | undefi
 }
 
 /**
- * Compact notice when context usage reaches 85%+.
- * Progressively shifts from amber (85%) to red (90%+).
+ * Always-visible context usage notice with progressive color coding.
+ *
+ * Bug fix: `session.inputTokens` is the **cumulative** input across all turns
+ * (each turn includes the full context, so the sum grows much larger than the
+ * actual window). When chat messages are available we walk backwards to find
+ * the last assistant message with usage data and use its `input`/`inputTokens`
+ * value, which represents the true current context size.
+ *
+ * Color tiers:
+ *   <50%  green    – plenty of room
+ *   50-75% blue    – moderate
+ *   75-85% amber   – getting full
+ *   ≥85%  red      – danger zone (warning icon)
  */
 function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
+  messages?: Array<{ message: Record<string, unknown> }>,
 ) {
-  const used = session?.inputTokens ?? 0;
+  // Prefer the last assistant message's input tokens (= actual context size)
+  // over the session-level cumulative inputTokens.
+  let used = 0;
+  if (messages?.length) {
+    for (let idx = messages.length - 1; idx >= 0; idx--) {
+      // Messages may be raw objects or {message: ...} wrappers depending on
+      // whether they come from ChatProps.messages or a grouped render array.
+      const raw = messages[idx] as Record<string, unknown>;
+      const m = (raw?.message ?? raw) as Record<string, unknown>;
+      if (m?.role === "assistant") {
+        const usage = m.usage as Record<string, number> | undefined;
+        const t = usage?.input ?? usage?.inputTokens ?? 0;
+        if (t > 0) {
+          used = t;
+          break;
+        }
+      }
+    }
+  }
+  // Fallback to session-level value when no per-message usage is available
+  if (!used) {
+    used = session?.inputTokens ?? 0;
+  }
+
   const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
   if (!used || !limit) {
     return nothing;
   }
+
   const ratio = used / limit;
-  if (ratio < 0.85) {
-    return nothing;
-  }
   const pct = Math.min(Math.round(ratio * 100), 100);
-  // Lerp from amber (#d97706) at 85% to red (#dc2626) at 95%+
-  const t = Math.min(Math.max((ratio - 0.85) / 0.1, 0), 1);
-  // RGB: amber(217,119,6) → red(220,38,38)
-  const r = Math.round(217 + (220 - 217) * t);
-  const g = Math.round(119 + (38 - 119) * t);
-  const b = Math.round(6 + (38 - 6) * t);
+
+  let r: number, g: number, b: number;
+  if (ratio < 0.5) {
+    // Green
+    r = 76; g = 175; b = 80;
+  } else if (ratio < 0.75) {
+    // Blue
+    r = 59; g = 130; b = 246;
+  } else if (ratio < 0.85) {
+    // Amber
+    r = 245; g = 166; b = 35;
+  } else {
+    // Red (lerp 85% → 100%)
+    const t = Math.min(Math.max((ratio - 0.85) / 0.15, 0), 1);
+    r = Math.round(220 + 35 * t);
+    g = Math.round(120 - 82 * t);
+    b = Math.round(30 + 8 * t);
+  }
+
   const color = `rgb(${r}, ${g}, ${b})`;
-  const bgOpacity = 0.08 + 0.08 * t;
+  const bgOpacity = ratio < 0.75 ? 0.06 : 0.08 + 0.08 * Math.min(ratio, 1);
   const bg = `rgba(${r}, ${g}, ${b}, ${bgOpacity})`;
+
+  // Warning triangle for ≥85%, info circle otherwise
+  const icon = ratio >= 0.85
+    ? html`<svg class="context-notice__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`
+    : html`<svg class="context-notice__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`;
+
   return html`
     <div class="context-notice" role="status" style="--ctx-color:${color};--ctx-bg:${bg}">
-      <svg class="context-notice__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      ${icon}
       <span>${pct}% context used</span>
       <span class="context-notice__detail">${formatTokensCompact(used)} / ${formatTokensCompact(limit)}</span>
     </div>
@@ -1163,7 +1215,7 @@ export function renderChat(props: ChatProps) {
 
       ${renderFallbackIndicator(props.fallbackStatus)}
       ${renderCompactionIndicator(props.compactionStatus)}
-      ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null)}
+      ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, props.messages as Array<{ message: Record<string, unknown> }>)}
 
       ${
         props.showNewMessages
