@@ -606,9 +606,24 @@ export function resolveAllowedModelRef(params: {
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
   });
+
+  // When the input has no provider prefix (e.g. "gemini-2.5-flash"), try to
+  // infer the correct provider from the model catalog before falling back to
+  // defaultProvider.  This prevents the UI model switcher from incorrectly
+  // routing a model to the current session's provider when that provider
+  // doesn't actually serve it.
+  let effectiveDefaultProvider = params.defaultProvider;
+  if (!trimmed.includes("/")) {
+    const normalizedModel = trimmed.toLowerCase();
+    const catalogMatch = params.catalog.find((entry) => entry.id.toLowerCase() === normalizedModel);
+    if (catalogMatch) {
+      effectiveDefaultProvider = catalogMatch.provider;
+    }
+  }
+
   const resolved = resolveModelRefFromString({
     raw: trimmed,
-    defaultProvider: params.defaultProvider,
+    defaultProvider: effectiveDefaultProvider,
     aliasIndex,
   });
   if (!resolved) {
