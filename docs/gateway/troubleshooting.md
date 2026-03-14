@@ -289,7 +289,7 @@ Look for:
 
 - Valid browser executable path.
 - CDP profile reachability.
-- Extension relay tab attachment for `profile="chrome"`.
+- Extension relay tab attachment for `profile="chrome-relay"`.
 
 Common signatures:
 
