@@ -33,6 +33,11 @@ const SENTINEL_FAST_RE = new RegExp(
     .join("|"),
 );
 
+// Session-recap detection — matches `<session-recap>` / `<session_recap>` tags.
+const SESSION_RECAP_QUICK_RE = /<\s*session[-_]recap\b/i;
+const SESSION_RECAP_OPEN_LINE_RE = /^<\s*session[-_]recap\b[^<>]*>\s*$/i;
+const SESSION_RECAP_CLOSE_LINE_RE = /^<\s*\/\s*session[-_]recap\s*>\s*$/i;
+
 function isInboundMetaSentinelLine(line: string): boolean {
   const trimmed = line.trim();
   return INBOUND_META_SENTINELS.some((sentinel) => sentinel === trimmed);
@@ -106,6 +111,38 @@ function stripTrailingUntrustedContextSuffix(lines: string[]): string[] {
 }
 
 /**
+ * Strip a leading `<session-recap>…</session-recap>` block (and surrounding
+ * blank lines) from the start of a line array.  Returns the original array
+ * reference when no session-recap block is found.
+ */
+function stripLeadingSessionRecapBlock(lines: string[]): string[] {
+  let i = 0;
+  while (i < lines.length && lines[i]?.trim() === "") {
+    i++;
+  }
+  if (i >= lines.length) {
+    return lines;
+  }
+  if (!SESSION_RECAP_OPEN_LINE_RE.test(lines[i] ?? "")) {
+    return lines;
+  }
+  i++;
+  while (i < lines.length && !SESSION_RECAP_CLOSE_LINE_RE.test(lines[i] ?? "")) {
+    i++;
+  }
+  if (i >= lines.length) {
+    // No closing tag found — return original lines unmodified to avoid
+    // dropping the entire message for truncated or user-authored XML.
+    return lines;
+  }
+  i++; // skip closing tag
+  while (i < lines.length && lines[i]?.trim() === "") {
+    i++;
+  }
+  return lines.slice(i);
+}
+
+/**
  * Remove all injected inbound metadata prefix blocks from `text`.
  *
  * Each block has the shape:
@@ -121,8 +158,17 @@ function stripTrailingUntrustedContextSuffix(lines: string[]): string[] {
  * (fast path — zero allocation).
  */
 export function stripInboundMetadata(text: string): string {
-  if (!text || !SENTINEL_FAST_RE.test(text)) {
+  if (!text || (!SENTINEL_FAST_RE.test(text) && !SESSION_RECAP_QUICK_RE.test(text))) {
     return text;
+  }
+
+  // Handle leading session-recap block before the main metadata stripping loop.
+  if (SESSION_RECAP_QUICK_RE.test(text)) {
+    const recapStripped = stripLeadingSessionRecapBlock(text.split("\n"));
+    text = recapStripped.join("\n");
+    if (!text || !SENTINEL_FAST_RE.test(text)) {
+      return text.replace(/^\n+/, "").replace(/\n+$/, "");
+    }
   }
 
   const lines = text.split("\n");
@@ -178,11 +224,17 @@ export function stripInboundMetadata(text: string): string {
 }
 
 export function stripLeadingInboundMetadata(text: string): string {
-  if (!text || !SENTINEL_FAST_RE.test(text)) {
+  if (!text || (!SENTINEL_FAST_RE.test(text) && !SESSION_RECAP_QUICK_RE.test(text))) {
     return text;
   }
 
-  const lines = text.split("\n");
+  let lines = text.split("\n");
+
+  // Strip leading session-recap block first.
+  if (SESSION_RECAP_QUICK_RE.test(text)) {
+    lines = stripLeadingSessionRecapBlock(lines);
+  }
+
   let index = 0;
 
   while (index < lines.length && lines[index] === "") {
