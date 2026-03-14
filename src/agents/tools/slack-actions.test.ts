@@ -596,6 +596,20 @@ describe("handleSlackAction", () => {
     expect(await resolveSendToken(cfg)).toBeUndefined();
   });
 
+  it("uses bot token for reads when userTokenReadOnly is false", async () => {
+    const cfg = {
+      channels: { slack: { botToken: "xoxb-1", userToken: "xoxp-1", userTokenReadOnly: false } },
+    } as OpenClawConfig;
+    expect(await resolveReadToken(cfg)).toBeUndefined();
+  });
+
+  it("falls back to user token for reads when userTokenReadOnly is false and no bot token", async () => {
+    const cfg = {
+      channels: { slack: { userToken: "xoxp-1", userTokenReadOnly: false } },
+    } as OpenClawConfig;
+    expect(await resolveReadToken(cfg)).toBe("xoxp-1");
+  });
+
   it("allows user token writes when bot token is missing", async () => {
     const cfg = {
       channels: {
