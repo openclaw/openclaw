@@ -10,6 +10,7 @@ import {
   persistGatewaySessionLifecycleEvent,
 } from "./session-lifecycle-state.js";
 import { loadGatewaySessionRow, loadSessionEntry } from "./session-utils.js";
+import { mirrorWebchatTextToTarget } from "./server-methods/webchat-mirror.js";
 import { formatForLog } from "./ws-log.js";
 
 function resolveHeartbeatAckMaxChars(): number {
@@ -628,6 +629,22 @@ export function createAgentEventHandler({
     chatRunState.deltaLastBroadcastLen.delete(clientRunId);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
+
+    const webchatMirrorTarget =
+      getAgentRunContext(sourceRunId)?.webchatMirrorTarget ??
+      getAgentRunContext(clientRunId)?.webchatMirrorTarget;
+    if (jobState === "done" && text && !shouldSuppressSilent && webchatMirrorTarget) {
+      mirrorWebchatTextToTarget({
+        cfg: loadConfig(),
+        sessionKey,
+        text,
+        target: webchatMirrorTarget,
+      }).catch((err: unknown) => {
+        // Log but don't fail the webchat response
+        console.error(`[webchat-mirror] Failed to mirror to ${webchatMirrorTarget.channel}:`, err);
+      });
+    }
+
     if (jobState === "done") {
       const payload = {
         runId: clientRunId,

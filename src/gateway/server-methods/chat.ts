@@ -10,6 +10,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { createChannelReplyPipeline } from "../../plugin-sdk/channel-reply-pipeline.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
@@ -69,6 +70,7 @@ import type {
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
 } from "./types.js";
+import { mirrorWebchatTextToTarget, resolveWebchatMirrorTarget } from "./webchat-mirror.js";
 
 type TranscriptAppendResult = {
   ok: boolean;
@@ -1289,6 +1291,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
       const stampedMessage = injectTimestamp(messageForAgent, timestampOptsFromConfig(cfg));
+      const webchatMirrorTarget = resolveWebchatMirrorTarget({
+        client: clientInfo,
+        entry,
+        sessionKey,
+      });
 
       const ctx: MsgContext = {
         Body: messageForAgent,
@@ -1368,6 +1375,17 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
       });
 
+      if (webchatMirrorTarget && rawMessage && !rawMessage.startsWith("/")) {
+        void mirrorWebchatTextToTarget({
+          cfg,
+          sessionKey,
+          text: rawMessage,
+          target: webchatMirrorTarget,
+        }).catch((err) => {
+          context.logGateway.warn(`webchat input mirror failed: ${formatForLog(err)}`);
+        });
+      }
+
       let agentRunStarted = false;
       void dispatchInboundMessage({
         ctx,
@@ -1379,6 +1397,11 @@ export const chatHandlers: GatewayRequestHandlers = {
           images: parsedImages.length > 0 ? parsedImages : undefined,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
+            registerAgentRunContext(runId, {
+              sessionKey,
+              isControlUiVisible: true,
+              ...(webchatMirrorTarget ? { webchatMirrorTarget } : {}),
+            });
             emitUserTranscriptUpdate();
             const connId = typeof client?.connId === "string" ? client.connId : undefined;
             const wantsToolEvents = hasGatewayClientCap(

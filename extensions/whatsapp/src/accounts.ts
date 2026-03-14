@@ -16,6 +16,7 @@ export type ResolvedWhatsAppAccount = {
   accountId: string;
   name?: string;
   enabled: boolean;
+  proxy?: string;
   sendReadReceipts: boolean;
   messagePrefix?: string;
   defaultTo?: string;
@@ -133,6 +134,7 @@ export function resolveWhatsAppAccount(params: {
     accountId,
     name: accountCfg?.name?.trim() || undefined,
     enabled,
+    proxy: accountCfg?.proxy ?? rootCfg?.proxy,
     sendReadReceipts: accountCfg?.sendReadReceipts ?? rootCfg?.sendReadReceipts ?? true,
     messagePrefix:
       accountCfg?.messagePrefix ?? rootCfg?.messagePrefix ?? params.cfg.messages?.messagePrefix,

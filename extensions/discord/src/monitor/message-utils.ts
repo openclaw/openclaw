@@ -69,6 +69,7 @@ export type DiscordChannelInfo = {
 
 type DiscordMessageWithChannelId = Message & {
   channel_id?: unknown;
+  channel?: { type?: unknown } | null;
   rawData?: { channel_id?: unknown };
 };
 
@@ -126,6 +127,19 @@ export function resolveDiscordMessageChannelId(params: {
     normalizeDiscordChannelId(message.rawData?.channel_id) ||
     normalizeDiscordChannelId(params.eventChannelId)
   );
+}
+
+export function resolveDiscordFallbackChannelType(message: Message): ChannelType | undefined {
+  const typedMessage = message as DiscordMessageWithChannelId & {
+    rawData?: { type?: unknown } | null;
+  };
+  const candidates = [typedMessage.channel?.type, typedMessage.rawData?.type];
+  for (const candidate of candidates) {
+    if (typeof candidate === "number") {
+      return candidate as ChannelType;
+    }
+  }
+  return undefined;
 }
 
 export async function resolveDiscordChannelInfo(
