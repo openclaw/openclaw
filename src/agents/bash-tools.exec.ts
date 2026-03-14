@@ -334,6 +334,9 @@ export function createExecTool(
       }
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
+      if (host === "sandbox" && !sandbox) {
+        host = "gateway"; // fall through to approval flow
+      }
       if (
         host === "sandbox" &&
         !sandbox &&
