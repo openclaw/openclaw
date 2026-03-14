@@ -20,7 +20,6 @@ MINGIT_ZIP_PATH=""
 MINGIT_ZIP_NAME=""
 SERVER_PID=""
 RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-windows.XXXXXX)"
-BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 
 TIMEOUT_SNAPSHOT_S=240
 TIMEOUT_INSTALL_S=1200
@@ -510,41 +509,16 @@ else:
 PY
 }
 
-acquire_build_lock() {
-  local owner_pid=""
-  while ! mkdir "$BUILD_LOCK_DIR" 2>/dev/null; do
-    if [[ -f "$BUILD_LOCK_DIR/pid" ]]; then
-      owner_pid="$(cat "$BUILD_LOCK_DIR/pid" 2>/dev/null || true)"
-      if [[ -n "$owner_pid" ]] && ! kill -0 "$owner_pid" >/dev/null 2>&1; then
-        warn "Removing stale Parallels build lock"
-        rm -rf "$BUILD_LOCK_DIR"
-        continue
-      fi
-    fi
-    sleep 1
-  done
-  printf '%s\n' "$$" >"$BUILD_LOCK_DIR/pid"
-}
-
-release_build_lock() {
-  if [[ -d "$BUILD_LOCK_DIR" ]]; then
-    rm -rf "$BUILD_LOCK_DIR"
-  fi
-}
-
 ensure_current_build() {
   local head build_commit
-  acquire_build_lock
   head="$(git rev-parse HEAD)"
   build_commit="$(current_build_commit)"
   if [[ "$build_commit" == "$head" ]]; then
-    release_build_lock
     return
   fi
   say "Build dist for current head"
   pnpm build
   build_commit="$(current_build_commit)"
-  release_build_lock
   [[ "$build_commit" == "$head" ]] || die "dist/build-info.json still does not match HEAD after build"
 }
 
@@ -704,14 +678,6 @@ verify_gateway() {
   guest_run_openclaw "" "" gateway status --deep --require-rpc
 }
 
-show_gateway_status_compat() {
-  if guest_run_openclaw "" "" gateway status --help | grep -Fq -- "--require-rpc"; then
-    guest_run_openclaw "" "" gateway status --deep --require-rpc
-    return
-  fi
-  guest_run_openclaw "" "" gateway status --deep
-}
-
 verify_turn() {
   guest_run_openclaw "" "" agent --agent main --message ping --json
 }
@@ -727,7 +693,7 @@ capture_latest_ref_failure() {
   fi
   warn "Latest release ref-mode onboard failed pre-upgrade"
   set +e
-  show_gateway_status_compat || true
+  verify_gateway || true
   set -e
   return 1
 }
