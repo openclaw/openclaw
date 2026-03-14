@@ -1,8 +1,10 @@
 import {
+  readClaudeCliCredentialsCached,
   readQwenCliCredentialsCached,
   readMiniMaxCliCredentialsCached,
 } from "../cli-credentials.js";
 import {
+  CLAUDE_CLI_PROFILE_ID,
   EXTERNAL_CLI_NEAR_EXPIRY_MS,
   EXTERNAL_CLI_SYNC_TTL_MS,
   QWEN_CLI_PROFILE_ID,
@@ -37,7 +39,11 @@ function isExternalProfileFresh(cred: AuthProfileCredential | undefined, now: nu
   if (cred.type !== "oauth" && cred.type !== "token") {
     return false;
   }
-  if (cred.provider !== "qwen-portal" && cred.provider !== "minimax-portal") {
+  if (
+    cred.provider !== "anthropic" &&
+    cred.provider !== "qwen-portal" &&
+    cred.provider !== "minimax-portal"
+  ) {
     return false;
   }
   if (typeof cred.expires !== "number") {
@@ -89,6 +95,19 @@ function syncExternalCliCredentialsForProvider(
 export function syncExternalCliCredentials(store: AuthProfileStore): boolean {
   let mutated = false;
   const now = Date.now();
+
+  // Sync from Claude Code CLI (macOS Keychain or ~/.claude/.credentials.json)
+  if (
+    syncExternalCliCredentialsForProvider(
+      store,
+      CLAUDE_CLI_PROFILE_ID,
+      "anthropic",
+      () => readClaudeCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
+      now,
+    )
+  ) {
+    mutated = true;
+  }
 
   // Sync from Qwen Code CLI
   const existingQwen = store.profiles[QWEN_CLI_PROFILE_ID];
