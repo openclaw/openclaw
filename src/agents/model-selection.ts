@@ -144,8 +144,8 @@ function normalizeAnthropicModelId(model: string): string {
     return trimmed;
   }
   const lower = trimmed.toLowerCase();
-  // Keep alias normalization local to call-time so bundlers cannot reorder a
-  // top-level alias table ahead of config initialization and trigger TDZ faults.
+  // Keep alias resolution local so bundled startup paths cannot trip a TDZ on
+  // a module-level alias table while config parsing is still initializing.
   switch (lower) {
     case "opus-4.6":
       return "claude-opus-4-6";
@@ -171,7 +171,7 @@ function normalizeProviderModelId(provider: string, model: string): string {
       return `anthropic/${normalizedAnthropicModel}`;
     }
   }
-  if (provider === "google") {
+  if (provider === "google" || provider === "google-vertex") {
     return normalizeGoogleModelId(model);
   }
   // OpenRouter-native models (e.g. "openrouter/aurora-alpha") need the full

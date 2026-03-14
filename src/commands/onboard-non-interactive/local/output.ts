@@ -1,7 +1,7 @@
 import type { RuntimeEnv } from "../../../runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
-type GatewayHealthFailureDiagnostics = {
+export type GatewayHealthFailureDiagnostics = {
   service?: {
     label: string;
     loaded: boolean;
@@ -29,6 +29,11 @@ export function logNonInteractiveOnboardingJson(params: {
     tailscaleMode: string;
   };
   installDaemon?: boolean;
+  daemonInstall?: {
+    requested: boolean;
+    installed: boolean;
+    skippedReason?: string;
+  };
   daemonRuntime?: string;
   skipSkills?: boolean;
   skipHealth?: boolean;
@@ -45,6 +50,7 @@ export function logNonInteractiveOnboardingJson(params: {
         authChoice: params.authChoice,
         gateway: params.gateway,
         installDaemon: Boolean(params.installDaemon),
+        daemonInstall: params.daemonInstall,
         daemonRuntime: params.daemonRuntime,
         skipSkills: Boolean(params.skipSkills),
         skipHealth: Boolean(params.skipHealth),
@@ -91,6 +97,11 @@ export function logNonInteractiveOnboardingFailure(params: {
     httpUrl?: string;
   };
   installDaemon?: boolean;
+  daemonInstall?: {
+    requested: boolean;
+    installed: boolean;
+    skippedReason?: string;
+  };
   daemonRuntime?: string;
   diagnostics?: GatewayHealthFailureDiagnostics;
 }) {
@@ -108,6 +119,7 @@ export function logNonInteractiveOnboardingFailure(params: {
           detail: params.detail,
           gateway: params.gateway,
           installDaemon: Boolean(params.installDaemon),
+          daemonInstall: params.daemonInstall,
           daemonRuntime: params.daemonRuntime,
           diagnostics: params.diagnostics,
           hints: hints.length > 0 ? hints : undefined,
