@@ -46,6 +46,21 @@ export function looksLikeArchive(name: string): boolean {
   return name.endsWith(".tar.gz") || name.endsWith(".tgz") || name.endsWith(".zip");
 }
 
+/** @internal Exported for testing. */
+export function resolveSignalCliArchiveTempName(assetName: string): string | null {
+  const lower = assetName.trim().toLowerCase();
+  if (lower.endsWith(".tar.gz")) {
+    return "signal-cli.tar.gz";
+  }
+  if (lower.endsWith(".tgz")) {
+    return "signal-cli.tgz";
+  }
+  if (lower.endsWith(".zip")) {
+    return "signal-cli.zip";
+  }
+  return null;
+}
+
 /**
  * Pick a native release asset from the official GitHub releases.
  *
@@ -242,18 +257,19 @@ async function installSignalCliFromRelease(runtime: RuntimeEnv): Promise<SignalI
     };
   }
 
+  const archiveTempName = resolveSignalCliArchiveTempName(asset.name);
+  if (!archiveTempName) {
+    return { ok: false, error: `Unsupported archive type: ${asset.name}` };
+  }
+
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-"));
-  const archivePath = path.join(tmpDir, asset.name);
+  const archivePath = path.join(tmpDir, archiveTempName);
 
   runtime.log(`Downloading signal-cli ${version} (${asset.name})…`);
   await downloadToFile(asset.browser_download_url, archivePath);
 
   const installRoot = path.join(CONFIG_DIR, "tools", "signal-cli", version);
   await fs.mkdir(installRoot, { recursive: true });
-
-  if (!looksLikeArchive(asset.name.toLowerCase())) {
-    return { ok: false, error: `Unsupported archive type: ${asset.name}` };
-  }
   try {
     await extractSignalCliArchive(archivePath, installRoot, 60_000);
   } catch (err) {

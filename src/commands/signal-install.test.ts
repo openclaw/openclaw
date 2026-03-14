@@ -5,7 +5,12 @@ import JSZip from "jszip";
 import * as tar from "tar";
 import { describe, expect, it } from "vitest";
 import type { ReleaseAsset } from "./signal-install.js";
-import { extractSignalCliArchive, looksLikeArchive, pickAsset } from "./signal-install.js";
+import {
+  extractSignalCliArchive,
+  looksLikeArchive,
+  pickAsset,
+  resolveSignalCliArchiveTempName,
+} from "./signal-install.js";
 
 // Realistic asset list modelled after an actual signal-cli GitHub release.
 const SAMPLE_ASSETS: ReleaseAsset[] = [
@@ -59,6 +64,24 @@ describe("looksLikeArchive", () => {
 
   it("rejects unrelated files", () => {
     expect(looksLikeArchive("README.md")).toBe(false);
+  });
+});
+
+describe("resolveSignalCliArchiveTempName", () => {
+  it("maps zip assets to a fixed safe temp name", () => {
+    expect(resolveSignalCliArchiveTempName("signal-cli-0.13.14-Windows-native.zip")).toBe(
+      "signal-cli.zip",
+    );
+  });
+
+  it("preserves archive type while ignoring traversal segments", () => {
+    expect(resolveSignalCliArchiveTempName("../escape.tar.gz")).toBe("signal-cli.tar.gz");
+    expect(resolveSignalCliArchiveTempName("nested\\escape.tgz")).toBe("signal-cli.tgz");
+  });
+
+  it("returns null for unsupported archive names", () => {
+    expect(resolveSignalCliArchiveTempName("signal-cli.tar.gz.asc")).toBeNull();
+    expect(resolveSignalCliArchiveTempName("README.md")).toBeNull();
   });
 });
 
