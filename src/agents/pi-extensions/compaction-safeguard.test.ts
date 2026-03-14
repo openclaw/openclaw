@@ -329,6 +329,24 @@ describe("compaction-safeguard summary budgets", () => {
     expect(capped).toContain("None.\n\n## Tool Failures");
     expect(capped).not.toMatch(/None\.## Tool Failures/);
   });
+
+  it("preserves tail sections when suffix exceeds cap (workspace rules, diagnostics over preserved turns)", () => {
+    const criticalTail =
+      "\n\n## Tool Failures\n- exec: failed\n\n<read-files>\nfoo.ts\n</read-files>\n\n" +
+      "<workspace-critical-rules>\n## Session Startup\nRead AGENTS.md\n</workspace-critical-rules>";
+    const preservedTurns =
+      "## Recent turns preserved verbatim\n- User: x\n- Assistant: y\n" +
+      "x".repeat(MAX_COMPACTION_SUMMARY_CHARS);
+    const oversizedSuffix = preservedTurns + criticalTail;
+
+    const capped = capCompactionSummaryPreservingSuffix("short body", oversizedSuffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped).toContain("<workspace-critical-rules>");
+    expect(capped).toContain("## Tool Failures");
+    expect(capped).toContain("<read-files>");
+    expect(capped).toContain("## Session Startup");
+  });
 });
 
 describe("computeAdaptiveChunkRatio", () => {

@@ -270,7 +270,8 @@ function capCompactionSummaryPreservingSuffix(
     return capCompactionSummary(`${summaryBody}${suffix}`, maxChars);
   }
   if (suffix.length >= maxChars) {
-    return suffix.slice(0, maxChars);
+    // Preserve tail (workspace rules, diagnostics) over head (preserved turns).
+    return suffix.slice(-maxChars);
   }
   const bodyBudget = Math.max(0, maxChars - suffix.length);
   const cappedBody = capCompactionSummary(summaryBody, bodyBudget);
