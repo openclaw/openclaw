@@ -14,7 +14,9 @@ const gatewayClientCalls: Array<{
   onClose?: (code: number, reason: string) => void;
 }> = [];
 const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
-const installGatewayDaemonNonInteractiveMock = vi.hoisted(() => vi.fn(async () => {}));
+const installGatewayDaemonNonInteractiveMock = vi.hoisted(() =>
+  vi.fn(async () => ({ installed: true as const })),
+);
 const gatewayServiceMock = vi.hoisted(() => ({
   label: "LaunchAgent",
   loadedText: "loaded",
@@ -398,6 +400,84 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
       expect(installGatewayDaemonNonInteractiveMock).toHaveBeenCalledTimes(1);
       expect(capturedDeadlineMs).toBe(45_000);
+    });
+  }, 60_000);
+
+  it("emits a daemon-install failure when Linux user systemd is unavailable", async () => {
+    await withStateDir("state-local-daemon-install-json-fail-", async (stateDir) => {
+      installGatewayDaemonNonInteractiveMock.mockResolvedValueOnce({
+        installed: false,
+        skippedReason: "systemd-user-unavailable",
+      });
+
+      let capturedError = "";
+      const runtimeWithCapture: RuntimeEnv = {
+        log: () => {},
+        error: (...args: unknown[]) => {
+          const firstArg = args[0];
+          capturedError =
+            typeof firstArg === "string"
+              ? firstArg
+              : firstArg instanceof Error
+                ? firstArg.message
+                : (JSON.stringify(firstArg) ?? "");
+          throw new Error(capturedError);
+        },
+        exit: (_code: number) => {
+          throw new Error("exit should not be reached after runtime.error");
+        },
+      };
+
+      const originalPlatform = process.platform;
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: "linux",
+      });
+
+      try {
+        await expect(
+          runNonInteractiveOnboarding(
+            {
+              nonInteractive: true,
+              mode: "local",
+              workspace: path.join(stateDir, "openclaw"),
+              authChoice: "skip",
+              skipSkills: true,
+              skipHealth: false,
+              installDaemon: true,
+              gatewayBind: "loopback",
+              json: true,
+            },
+            runtimeWithCapture,
+          ),
+        ).rejects.toThrow(/"phase": "daemon-install"/);
+      } finally {
+        Object.defineProperty(process, "platform", {
+          configurable: true,
+          value: originalPlatform,
+        });
+      }
+
+      const parsed = JSON.parse(capturedError) as {
+        ok: boolean;
+        phase: string;
+        daemonInstall?: {
+          requested?: boolean;
+          installed?: boolean;
+          skippedReason?: string;
+        };
+        hints?: string[];
+      };
+      expect(parsed.ok).toBe(false);
+      expect(parsed.phase).toBe("daemon-install");
+      expect(parsed.daemonInstall).toEqual({
+        requested: true,
+        installed: false,
+        skippedReason: "systemd-user-unavailable",
+      });
+      expect(parsed.hints).toContain(
+        "Fix: rerun without `--install-daemon` for one-shot setup, or enable a working user-systemd session and retry.",
+      );
     });
   }, 60_000);
 
