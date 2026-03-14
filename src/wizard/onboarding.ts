@@ -25,6 +25,7 @@ import {
   clearOnboardingInProgress,
   backupInterruptedConfig,
 } from "../commands/onboard-helpers.js";
+
 async function requireRiskAcknowledgement(params: {
   opts: OnboardOptions;
   prompter: WizardPrompter;
@@ -409,6 +410,7 @@ export async function runOnboardingWizard(
     });
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
     await writeConfigFile(nextConfig);
+    await clearOnboardingInProgress();
     logConfigUpdated(runtime);
     await prompter.outro("Remote gateway configured.");
     return;
