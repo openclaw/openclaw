@@ -58,6 +58,7 @@ class PhoneProxyClient(private val context: Context) : GatewayClientInterface, M
 
   private var phoneNodeId: String? = null
   private var reconnectJob: Job? = null
+  private var connectionGeneration = 0L
 
   private val _connected = MutableStateFlow(false)
   override val connected: StateFlow<Boolean> = _connected.asStateFlow()
@@ -72,8 +73,10 @@ class PhoneProxyClient(private val context: Context) : GatewayClientInterface, M
     messageClient.addListener(this)
     reconnectJob?.cancel()
     _statusText.value = context.getString(R.string.wear_status_finding_phone)
+    val generation = connectionGeneration + 1
+    connectionGeneration = generation
     scope.launch {
-      findPhoneAndPing()
+      findPhoneAndPing(generation)
     }
   }
 
@@ -81,6 +84,7 @@ class PhoneProxyClient(private val context: Context) : GatewayClientInterface, M
     messageClient.removeListener(this)
     reconnectJob?.cancel()
     reconnectJob = null
+    connectionGeneration += 1
     phoneNodeId = null
     _connected.value = false
     _statusText.value = context.getString(R.string.wear_status_phone_proxy_offline)
@@ -90,6 +94,7 @@ class PhoneProxyClient(private val context: Context) : GatewayClientInterface, M
 
   override suspend fun request(method: String, paramsJson: String?, timeoutMs: Long): String {
     val nodeId = phoneNodeId ?: throw Exception("Phone not connected")
+    val generation = connectionGeneration
     val id = UUID.randomUUID().toString()
     val deferred = CompletableDeferred<String>()
     pendingRequests[id] = deferred
@@ -101,16 +106,31 @@ class PhoneProxyClient(private val context: Context) : GatewayClientInterface, M
         put("params", json.parseToJsonElement(paramsJson))
       }
     }
-    sendMessageWithTimeout(
-      nodeId = nodeId,
-      path = RPC_PATH,
-      data = msg.toString().toByteArray(Charsets.UTF_8),
-      timeoutMs = MESSAGE_SEND_TIMEOUT_MS,
-    )
+    try {
+      sendMessageWithTimeout(
+        nodeId = nodeId,
+        path = RPC_PATH,
+        data = msg.toString().toByteArray(Charsets.UTF_8),
+        timeoutMs = MESSAGE_SEND_TIMEOUT_MS,
+      )
+    } catch (e: Throwable) {
+      handleTransportFailure(
+        statusText = context.getString(R.string.wear_status_phone_not_responding),
+        generation = generation,
+      )
+      pendingRequests.remove(id)
+      throw e
+    }
 
     return try {
       withTimeoutOrNull(timeoutMs) { deferred.await() }
-        ?: throw Exception("Request timed out: $method")
+        ?: run {
+          handleTransportFailure(
+            statusText = context.getString(R.string.wear_status_phone_not_responding),
+            generation = generation,
+          )
+          throw Exception("Request timed out: $method")
+        }
     } finally {
       pendingRequests.remove(id)
     }
@@ -181,15 +201,17 @@ class PhoneProxyClient(private val context: Context) : GatewayClientInterface, M
     _events.tryEmit(GatewayEvent("proxy.connected", null))
   }
 
-  private suspend fun findPhoneAndPing() {
+  private suspend fun findPhoneAndPing(generation: Long) {
+    if (generation != connectionGeneration) return
     try {
       val nodes = nodeClient.connectedNodes.await()
+      if (generation != connectionGeneration) return
       val phone = nodes.firstOrNull { it.isNearby } ?: nodes.firstOrNull()
       if (phone == null) {
         _connected.value = false
         phoneNodeId = null
         _statusText.value = context.getString(R.string.wear_status_no_phone_found)
-        scheduleReconnect(delayMs = 5_000)
+        scheduleReconnect(delayMs = 5_000, generation = generation)
         return
       }
       phoneNodeId = phone.id
@@ -202,23 +224,24 @@ class PhoneProxyClient(private val context: Context) : GatewayClientInterface, M
         phoneNodeId = null
         _connected.value = false
         _statusText.value = context.getString(R.string.wear_status_phone_ping_timed_out)
-        scheduleReconnect()
+        scheduleReconnect(generation = generation)
         return
       }
       // If we don't get a pong in time, retry.
       scope.launch {
         delay(PHONE_PONG_TIMEOUT_MS)
-        if (!_connected.value) {
+        if (generation == connectionGeneration && !_connected.value) {
           phoneNodeId = null
           _statusText.value = context.getString(R.string.wear_status_phone_not_responding)
-          scheduleReconnect(delayMs = 0)
+          scheduleReconnect(delayMs = 0, generation = generation)
         }
       }
     } catch (e: Throwable) {
+      if (generation != connectionGeneration) return
       Log.w(TAG, "Failed to find phone: ${e.message}")
       _connected.value = false
       _statusText.value = context.getString(R.string.wear_status_failed, e.message ?: "")
-      scheduleReconnect(delayMs = 5_000)
+      scheduleReconnect(delayMs = 5_000, generation = generation)
     }
   }
 
@@ -233,12 +256,22 @@ class PhoneProxyClient(private val context: Context) : GatewayClientInterface, M
     }
   }
 
-  private fun scheduleReconnect(delayMs: Long = PHONE_PONG_TIMEOUT_MS) {
+  private fun scheduleReconnect(delayMs: Long = PHONE_PONG_TIMEOUT_MS, generation: Long = connectionGeneration) {
     reconnectJob?.cancel()
     reconnectJob = scope.launch {
       delay(delayMs)
-      if (!_connected.value) findPhoneAndPing()
+      if (generation == connectionGeneration && !_connected.value) {
+        findPhoneAndPing(generation)
+      }
     }
+  }
+
+  private fun handleTransportFailure(statusText: String, generation: Long) {
+    if (generation != connectionGeneration) return
+    phoneNodeId = null
+    _connected.value = false
+    _statusText.value = statusText
+    scheduleReconnect(generation = generation)
   }
 
   private fun parseProxyHandshake(data: String): ProxyHandshake {
