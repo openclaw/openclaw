@@ -18,7 +18,8 @@ import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient } from "./client.js";
-import { markdownToSlackMrkdwnChunks } from "./format.js";
+import { markdownToSlackMrkdwnChunks, markdownToSlackMrkdwnWithTables } from "./format.js";
+import { markdownTablesToBlockKitAttachment } from "./block-kit-tables.js";
 import { parseSlackTarget } from "./targets.js";
 import { resolveSlackBotToken } from "./token.js";
 
@@ -93,12 +94,14 @@ async function postSlackMessageBestEffort(params: {
   threadTs?: string;
   identity?: SlackSendIdentity;
   blocks?: (Block | KnownBlock)[];
+  attachments?: Record<string, unknown>[];
 }) {
   const basePayload = {
     channel: params.channelId,
     text: params.text,
     thread_ts: params.threadTs,
     ...(params.blocks?.length ? { blocks: params.blocks } : {}),
+    ...(params.attachments?.length ? { attachments: params.attachments } : {}),
   };
   try {
     // Slack Web API types model icon_url and icon_emoji as mutually exclusive.
@@ -307,9 +310,30 @@ export async function sendMessageSlack(
     chunkMode === "newline"
       ? chunkMarkdownTextWithMode(trimmedMessage, chunkLimit, chunkMode)
       : [trimmedMessage];
-  const chunks = markdownChunks.flatMap((markdown) =>
-    markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode }),
-  );
+
+  // When tableMode is "block", extract table data alongside text chunks
+  // so we can send Block Kit table blocks as attachments.
+  let tableAttachments: Record<string, unknown>[] | undefined;
+  const chunks: string[] = [];
+
+  if (tableMode === "block") {
+    const allTables: import("../../../src/markdown/ir.js").MarkdownTableData[] = [];
+    for (const markdown of markdownChunks) {
+      const result = markdownToSlackMrkdwnWithTables(markdown, chunkLimit, { tableMode });
+      chunks.push(...result.chunks);
+      allTables.push(...result.tables);
+    }
+    if (allTables.length > 0) {
+      tableAttachments = markdownTablesToBlockKitAttachment(allTables);
+    }
+  } else {
+    chunks.push(
+      ...markdownChunks.flatMap((markdown) =>
+        markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode }),
+      ),
+    );
+  }
+
   if (!chunks.length && trimmedMessage) {
     chunks.push(trimmedMessage);
   }
@@ -341,13 +365,18 @@ export async function sendMessageSlack(
       lastMessageId = response.ts ?? lastMessageId;
     }
   } else {
-    for (const chunk of chunks.length ? chunks : [""]) {
+    // Send text chunks. Attach Block Kit tables to the last chunk
+    // so the table renders at the end of the message.
+    const allChunks = chunks.length ? chunks : [""];
+    for (let i = 0; i < allChunks.length; i++) {
+      const isLastChunk = i === allChunks.length - 1;
       const response = await postSlackMessageBestEffort({
         client,
         channelId,
-        text: chunk,
+        text: allChunks[i] ?? "",
         threadTs: opts.threadTs,
         identity: opts.identity,
+        ...(isLastChunk && tableAttachments ? { attachments: tableAttachments } : {}),
       });
       lastMessageId = response.ts ?? lastMessageId;
     }

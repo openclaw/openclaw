@@ -1,5 +1,11 @@
 import type { MarkdownTableMode } from "../../../src/config/types.base.js";
-import { chunkMarkdownIR, markdownToIR, type MarkdownLinkSpan } from "../../../src/markdown/ir.js";
+import {
+  chunkMarkdownIR,
+  markdownToIR,
+  markdownToIRWithMeta,
+  type MarkdownLinkSpan,
+  type MarkdownTableData,
+} from "../../../src/markdown/ir.js";
 import { renderMarkdownWithMarkers } from "../../../src/markdown/render.js";
 
 // Escape special characters for Slack mrkdwn format.
@@ -147,4 +153,46 @@ export function markdownToSlackMrkdwnChunks(
   const chunks = chunkMarkdownIR(ir, limit);
   const renderOptions = buildSlackRenderOptions();
   return chunks.map((chunk) => renderMarkdownWithMarkers(chunk, renderOptions));
+}
+
+export type SlackMrkdwnWithTables = {
+  chunks: string[];
+  tables: MarkdownTableData[];
+};
+
+/**
+ * Like markdownToSlackMrkdwnChunks, but when tableMode is "block",
+ * also returns the extracted table data for Block Kit table rendering.
+ */
+export function markdownToSlackMrkdwnWithTables(
+  markdown: string,
+  limit: number,
+  options: SlackMarkdownOptions = {},
+): SlackMrkdwnWithTables {
+  const parseOptions = {
+    linkify: false,
+    autolink: false,
+    headingStyle: "bold" as const,
+    blockquotePrefix: "> ",
+    tableMode: options.tableMode,
+  };
+
+  if (options.tableMode === "block") {
+    const { ir } = markdownToIRWithMeta(markdown ?? "", parseOptions);
+    const chunks = chunkMarkdownIR(ir, limit);
+    const renderOptions = buildSlackRenderOptions();
+    return {
+      chunks: chunks.map((chunk) => renderMarkdownWithMarkers(chunk, renderOptions)),
+      tables: ir.tables ?? [],
+    };
+  }
+
+  // Non-block modes: no table data to extract
+  const ir = markdownToIR(markdown ?? "", parseOptions);
+  const chunks = chunkMarkdownIR(ir, limit);
+  const renderOptions = buildSlackRenderOptions();
+  return {
+    chunks: chunks.map((chunk) => renderMarkdownWithMarkers(chunk, renderOptions)),
+    tables: [],
+  };
 }

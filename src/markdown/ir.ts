@@ -45,10 +45,22 @@ export type MarkdownLinkSpan = {
   href: string;
 };
 
+/** Parsed table data for block-level rendering (e.g. Slack Block Kit tables). */
+export type MarkdownTableData = {
+  /** Header cell texts. */
+  headers: string[];
+  /** Row data – each row is an array of cell texts. */
+  rows: string[][];
+  /** Character offset in the IR text where a placeholder was inserted. */
+  placeholderOffset: number;
+};
+
 export type MarkdownIR = {
   text: string;
   styles: MarkdownStyleSpan[];
   links: MarkdownLinkSpan[];
+  /** When tableMode is "block", parsed table data is collected here. */
+  tables?: MarkdownTableData[];
 };
 
 type OpenStyle = {
@@ -86,6 +98,8 @@ type RenderState = RenderTarget & {
   tableMode: MarkdownTableMode;
   table: TableState | null;
   hasTables: boolean;
+  /** Collected table data when tableMode is "block". */
+  collectedTables: MarkdownTableData[];
 };
 
 export type MarkdownParseOptions = {
@@ -556,6 +570,37 @@ function renderTableAsCode(state: RenderState) {
   }
 }
 
+/**
+ * Collect table data for block-level rendering (e.g. Slack Block Kit tables).
+ * Instead of inlining the table as text, we extract headers and rows as
+ * structured data and insert a placeholder newline into the IR text.
+ */
+function collectTableAsBlock(state: RenderState) {
+  if (!state.table) {
+    return;
+  }
+  const headers = state.table.headers.map(trimCell);
+  const rows = state.table.rows.map((row) => row.map(trimCell));
+
+  if (headers.length === 0 && rows.length === 0) {
+    return;
+  }
+
+  // Record the offset where this table occurs in the text stream.
+  const placeholderOffset = state.text.length;
+
+  // Ensure a blank line separates tables from surrounding text.
+  if (placeholderOffset > 0 && !state.text.endsWith("\n\n")) {
+    state.text += state.text.endsWith("\n") ? "\n" : "\n\n";
+  }
+
+  state.collectedTables.push({
+    headers: headers.map((c) => c.text),
+    rows: rows.map((row) => row.map((c) => c.text)),
+    placeholderOffset: state.text.length,
+  });
+}
+
 function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
   for (const token of tokens) {
     switch (token.type) {
@@ -692,7 +737,9 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         break;
       case "table_close":
         if (state.table) {
-          if (state.tableMode === "bullets") {
+          if (state.tableMode === "block") {
+            collectTableAsBlock(state);
+          } else if (state.tableMode === "bullets") {
             renderTableAsBullets(state);
           } else if (state.tableMode === "code") {
             renderTableAsCode(state);
@@ -908,6 +955,7 @@ export function markdownToIRWithMeta(
     tableMode,
     table: null,
     hasTables: false,
+    collectedTables: [],
   };
 
   renderTokens(tokens as MarkdownToken[], state);
@@ -933,6 +981,7 @@ export function markdownToIRWithMeta(
       text: finalText,
       styles: mergeStyleSpans(clampStyleSpans(state.styles, finalLength)),
       links: clampLinkSpans(state.links, finalLength),
+      ...(state.collectedTables.length > 0 ? { tables: state.collectedTables } : {}),
     },
     hasTables: state.hasTables,
   };
