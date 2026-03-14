@@ -156,6 +156,8 @@ export type SessionEntry = {
   cliSessionIds?: Record<string, string>;
   claudeCliSessionId?: string;
   label?: string;
+  /** True when `label` was auto-derived from group/channel metadata rather than set by the user. */
+  labelAutoSet?: boolean;
   displayName?: string;
   channel?: string;
   groupId?: string;
