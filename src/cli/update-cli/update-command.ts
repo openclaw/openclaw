@@ -685,7 +685,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const invocationCwd = tryResolveInvocationCwd();
 
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
-  const shouldRestart = opts.restart !== false;
+  let shouldRestart = opts.restart !== false;
   if (timeoutMs === null) {
     return;
   }
@@ -884,6 +884,9 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         restartScriptPath = await prepareRestartScript(process.env, gatewayPort);
         refreshGatewayServiceEnv = true;
       }
+      // When the service is not loaded, restartScriptPath stays null so
+      // maybeRestartService falls through to runDaemonRestart(), which
+      // handles unmanaged gateways via its onNotLoaded callback.
     } catch {
       // Ignore errors during pre-check; fallback to standard restart
     }
