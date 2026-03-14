@@ -5,6 +5,7 @@ import type { InlineCodeState } from "../markdown/code-spans.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.js";
+import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
 import type {
   BlockReplyChunking,
   SubscribeEmbeddedPiSessionParams,
@@ -77,6 +78,8 @@ export type EmbeddedPiSubscribeState = {
   successfulCronAdds: number;
   pendingMessagingMediaUrls: Map<string, string[]>;
   deterministicApprovalPromptSent: boolean;
+  suppressPreToolText: boolean;
+  pendingBlockReplies: BlockReplyPayload[];
   lastAssistant?: AgentMessage;
 };
 

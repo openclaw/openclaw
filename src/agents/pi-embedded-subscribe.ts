@@ -79,6 +79,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     successfulCronAdds: 0,
     pendingMessagingMediaUrls: new Map(),
     deterministicApprovalPromptSent: false,
+    suppressPreToolText: Boolean(params.onBlockReply),
+    pendingBlockReplies: [],
   };
   const usageTotals = {
     input: 0,
@@ -105,6 +107,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     payload: Parameters<NonNullable<SubscribeEmbeddedPiSessionParams["onBlockReply"]>>[0],
   ) => {
     if (!params.onBlockReply) {
+      return;
+    }
+    if (state.suppressPreToolText) {
+      state.pendingBlockReplies.push(payload);
       return;
     }
     void Promise.resolve()
@@ -134,6 +140,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastReasoningSent = undefined;
     state.reasoningStreamOpen = false;
     state.suppressBlockChunks = false;
+    state.pendingBlockReplies.length = 0;
     state.assistantMessageIndex += 1;
     state.lastAssistantTextMessageIndex = -1;
     state.lastAssistantTextNormalized = undefined;

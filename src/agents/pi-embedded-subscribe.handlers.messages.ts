@@ -264,6 +264,9 @@ export function handleMessageEnd(
   const assistantMessage = msg;
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
+  // Capture baseline BEFORE finalizeAssistantTexts updates it so we can discard
+  // intermediate-turn texts if this turn ends with toolUse (see pendingBlockReplies logic below).
+  const preTurnAssistantTextBaseline = ctx.state.assistantTextBaseline;
   if (ctx.state.deterministicApprovalPromptSent) {
     return;
   }
@@ -334,6 +337,10 @@ export function handleMessageEnd(
   const onBlockReply = ctx.params.onBlockReply;
   const emitBlockReplySafely = (payload: Parameters<NonNullable<typeof onBlockReply>>[0]) => {
     if (!onBlockReply) {
+      return;
+    }
+    if (ctx.state.suppressPreToolText) {
+      ctx.state.pendingBlockReplies.push(payload);
       return;
     }
     void Promise.resolve()
@@ -426,6 +433,27 @@ export function handleMessageEnd(
 
   if (ctx.state.blockReplyBreak === "text_end" && onBlockReply) {
     emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }));
+  }
+
+  if (ctx.state.pendingBlockReplies.length > 0) {
+    const stopReason = (assistantMessage as { stopReason?: string }).stopReason;
+    if (stopReason === "toolUse") {
+      ctx.state.pendingBlockReplies.length = 0;
+      // Also remove intermediate-turn texts from assistantTexts so they don't
+      // appear in the final reply payload (hasSentPayload dedup won't catch them
+      // because they were never enqueued into the block-reply pipeline).
+      ctx.state.assistantTexts.splice(preTurnAssistantTextBaseline);
+      ctx.state.assistantTextBaseline = preTurnAssistantTextBaseline;
+    } else {
+      const pending = ctx.state.pendingBlockReplies.splice(0);
+      for (const payload of pending) {
+        void Promise.resolve()
+          .then(() => onBlockReply?.(payload))
+          .catch((err) => {
+            ctx.log.warn(`block reply callback failed: ${String(err)}`);
+          });
+      }
+    }
   }
 
   ctx.state.deltaBuffer = "";
