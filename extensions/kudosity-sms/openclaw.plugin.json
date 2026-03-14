@@ -1,0 +1,22 @@
+{
+  "id": "kudosity-sms",
+  "channels": ["kudosity-sms"],
+  "name": "Kudosity SMS",
+  "description": "Cloud SMS channel powered by Kudosity — send and receive SMS via the Kudosity API",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "uiHints": {
+    "apiKey": {
+      "label": "API Key",
+      "placeholder": "Your Kudosity API key",
+      "sensitive": true
+    },
+    "sender": {
+      "label": "Sender Number",
+      "placeholder": "+61400000000"
+    }
+  }
+}

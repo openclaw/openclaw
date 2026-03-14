@@ -1,0 +1,11 @@
+{
+  "name": "@openclaw/kudosity-sms",
+  "version": "2026.3.2",
+  "private": true,
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "index.ts"
+    ]
+  }
+}
