@@ -6,10 +6,9 @@
 # on those entries too or you can silently remove required secops review.
 # Security-sensitive code, config, and docs require secops review.
 /SECURITY.md @openclaw/secops
-/.github/actions/ @openclaw/secops
 /.github/dependabot.yml @openclaw/secops
 /.github/codeql/ @openclaw/secops
-/.github/workflows/ @openclaw/secops
+/.github/workflows/codeql.yml @openclaw/secops
 /src/security/ @openclaw/secops
 /src/secrets/ @openclaw/secops
 /src/config/*secret*.ts @openclaw/secops
@@ -48,7 +47,7 @@
 /docs/reference/secretref-user-supplied-credentials-matrix.json @openclaw/secops
 
 # Release workflow and its supporting release-path checks.
-/.github/workflows/openclaw-npm-release.yml @openclaw/secops @openclaw/openclaw-release-managers
+/.github/workflows/openclaw-npm-release.yml @openclaw/openclaw-release-managers
 /docs/reference/RELEASING.md @openclaw/openclaw-release-managers
 /scripts/openclaw-npm-publish.sh @openclaw/openclaw-release-managers
 /scripts/openclaw-npm-release-check.ts @openclaw/openclaw-release-managers
