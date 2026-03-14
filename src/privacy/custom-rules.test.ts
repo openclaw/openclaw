@@ -80,6 +80,30 @@ describe("custom-rules", () => {
       expect(errors.some((e) => e.field === "keywords")).toBe(true);
     });
 
+    it("rejects non-array context.mustContain", () => {
+      const rule = {
+        type: "context_rule",
+        description: "Context rule",
+        riskLevel: "medium",
+        pattern: "password",
+        context: { mustContain: "password" },
+      } as unknown as UserDefinedRule;
+      const errors = validateUserRule(rule, 0);
+      expect(errors.some((e) => e.field === "context.mustContain")).toBe(true);
+    });
+
+    it("rejects non-array context.mustNotContain", () => {
+      const rule = {
+        type: "context_rule",
+        description: "Context rule",
+        riskLevel: "medium",
+        pattern: "password",
+        context: { mustNotContain: "ignore" },
+      } as unknown as UserDefinedRule;
+      const errors = validateUserRule(rule, 0);
+      expect(errors.some((e) => e.field === "context.mustNotContain")).toBe(true);
+    });
+
     it("rejects missing type", () => {
       const rule = {
         description: "test",
@@ -236,6 +260,18 @@ describe("custom-rules", () => {
       const phoneRule = result.rules.find((r) => r.type === "phone_cn");
       expect(emailRule?.enabled).toBe(false);
       expect(phoneRule?.enabled).toBe(false);
+    });
+
+    it("ignores malformed disable field without throwing", () => {
+      const config = {
+        extends: "basic",
+        disable: { email: true },
+        rules: [],
+      } as unknown as CustomRulesConfig;
+      const result = processCustomRulesConfig(config);
+      const emailRule = result.rules.find((r) => r.type === "email");
+      expect(emailRule?.enabled).toBe(true);
+      expect(result.warnings.some((w) => w.includes("disable must be an array"))).toBe(true);
     });
 
     it("user rules override built-in rules with same type", () => {

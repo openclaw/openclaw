@@ -163,7 +163,7 @@ export class PrivacyDetector {
         }
       }
 
-      if (rule.keywords) {
+      if (Array.isArray(rule.keywords)) {
         for (const kw of rule.keywords) {
           const flags = rule.caseSensitive ? "g" : "gi";
           compiled.keywordPatterns.push(new RegExp(escapeRegex(kw), flags));
@@ -298,7 +298,7 @@ export class PrivacyDetector {
     const ctxEnd = Math.min(text.length, end + CONTEXT_WINDOW);
     const context = text.slice(ctxStart, ctxEnd).toLowerCase();
 
-    if (ctx.mustContain) {
+    if (Array.isArray(ctx.mustContain)) {
       // At least one of the context keywords must appear nearby.
       const found = ctx.mustContain.some(
         (kw) => typeof kw === "string" && context.includes(kw.toLowerCase()),
@@ -308,7 +308,7 @@ export class PrivacyDetector {
       }
     }
 
-    if (ctx.mustNotContain) {
+    if (Array.isArray(ctx.mustNotContain)) {
       for (const kw of ctx.mustNotContain) {
         if (typeof kw === "string" && context.includes(kw.toLowerCase())) {
           return false;
