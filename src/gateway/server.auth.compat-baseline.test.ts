@@ -1,5 +1,8 @@
+import os from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import {
+  BACKEND_GATEWAY_CLIENT,
   connectReq,
   CONTROL_UI_CLIENT,
   ConnectErrorDetailCodes,
@@ -140,6 +143,50 @@ describe("gateway auth compatibility baseline", () => {
           canRetryWithDeviceToken: false,
           recommendedNextStep: "update_auth_credentials",
         });
+      } finally {
+        ws.close();
+      }
+    });
+
+    test("keeps local backend device-token reconnects out of pairing", async () => {
+      const identityPath = path.join(
+        os.tmpdir(),
+        `openclaw-backend-device-${process.pid}-${port}.json`,
+      );
+      const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
+        await import("../infra/device-identity.js");
+      const { approveDevicePairing, requestDevicePairing, rotateDeviceToken } =
+        await import("../infra/device-pairing.js");
+
+      const identity = loadOrCreateDeviceIdentity(identityPath);
+      const pending = await requestDevicePairing({
+        deviceId: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        clientId: BACKEND_GATEWAY_CLIENT.id,
+        clientMode: BACKEND_GATEWAY_CLIENT.mode,
+        role: "operator",
+        scopes: ["operator.admin"],
+      });
+      await approveDevicePairing(pending.request.requestId);
+
+      const rotated = await rotateDeviceToken({
+        deviceId: identity.deviceId,
+        role: "operator",
+        scopes: ["operator.admin"],
+      });
+      expect(rotated?.token).toBeTruthy();
+
+      const ws = await openWs(port);
+      try {
+        const res = await connectReq(ws, {
+          skipDefaultAuth: true,
+          client: { ...BACKEND_GATEWAY_CLIENT },
+          deviceIdentityPath: identityPath,
+          deviceToken: String(rotated?.token ?? ""),
+          scopes: ["operator.admin"],
+        });
+        expect(res.ok).toBe(true);
+        expect((res.payload as { type?: string } | undefined)?.type).toBe("hello-ok");
       } finally {
         ws.close();
       }
