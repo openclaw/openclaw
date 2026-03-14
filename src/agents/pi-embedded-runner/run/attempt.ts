@@ -21,6 +21,7 @@ import {
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
+  PluginHookAfterToolsResolvedEvent,
   PluginHookAgentContext,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
@@ -780,6 +781,33 @@ export function wrapStreamFnTrimToolCallNames(
     }
     return wrapStreamTrimToolCallNames(maybeStream, allowedToolNames);
   };
+}
+
+export function buildAfterToolsResolvedToolMetadata(
+  tools: Array<{ name?: string; label?: string; description?: string; parameters?: unknown }>,
+): PluginHookAfterToolsResolvedEvent["tools"] {
+  return tools
+    .map((tool) => {
+      const name = typeof tool.name === "string" ? tool.name.trim() : "";
+      if (!name) {
+        return null;
+      }
+
+      const meta: PluginHookAfterToolsResolvedEvent["tools"][number] = { name };
+      if (typeof tool.label === "string" && tool.label.trim().length > 0) {
+        meta.label = tool.label;
+      }
+      if (typeof tool.description === "string" && tool.description.trim().length > 0) {
+        meta.description = tool.description;
+      }
+
+      if (tool.parameters !== undefined) {
+        meta.parameters = tool.parameters;
+      }
+
+      return meta;
+    })
+    .filter((tool): tool is PluginHookAfterToolsResolvedEvent["tools"][number] => tool !== null);
 }
 
 function extractBalancedJsonPrefix(raw: string): string | null {
@@ -1590,6 +1618,7 @@ export async function runEmbeddedAttempt(
             return undefined;
           })()
         : undefined;
+    const hookAgentId = sessionAgentId;
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
     const reasoningTagHint = isReasoningTagProvider(params.provider);
     // Resolve channel-specific message actions for system prompt
@@ -1822,6 +1851,31 @@ export async function runEmbeddedAttempt(
         : [];
 
       const allCustomTools = [...customTools, ...clientToolDefs];
+
+      if (hookRunner?.hasHooks("after_tools_resolved")) {
+        const resolvedTools = buildAfterToolsResolvedToolMetadata([
+          ...builtInTools,
+          ...allCustomTools,
+        ]);
+        void hookRunner
+          .runAfterToolsResolved(
+            {
+              tools: resolvedTools,
+              provider: params.provider,
+              model: params.modelId,
+            },
+            {
+              agentId: hookAgentId,
+              sessionKey: params.sessionKey,
+              sessionId: params.sessionId,
+              workspaceDir: params.workspaceDir,
+              messageProvider: params.messageProvider ?? undefined,
+            },
+          )
+          .catch((err) => {
+            log.warn(`after_tools_resolved hook failed: ${String(err)}`);
+          });
+      }
 
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,
@@ -2300,8 +2354,6 @@ export async function runEmbeddedAttempt(
       }
 
       // Hook runner was already obtained earlier before tool creation
-      const hookAgentId = sessionAgentId;
-
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
       const prePromptMessageCount = activeSession.messages.length;
