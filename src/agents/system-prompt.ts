@@ -403,6 +403,13 @@ export function buildAgentSystemPrompt(params: {
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     "If a task is more complex or takes longer, spawn a sub-agent. It will do the work for you and ping you when it's done. You can always check up on it.",
+    ...(availableTools.has("sessions_spawn")
+      ? [
+          "Treat goal-oriented multi-step work that needs browsing, waiting, retries, uploads, or other external side effects as an execution task.",
+          "If an execution task is actionable with the current context, create a real background run with `sessions_spawn` instead of promising you will continue later.",
+          "Do not tell the user you will keep working in the background unless you already spawned that run; otherwise continue with tools now or return a concrete blocker.",
+        ]
+      : []),
     "",
     "## Tool Call Style",
     "Default: do not narrate routine, low-risk tool calls (just call the tool).",

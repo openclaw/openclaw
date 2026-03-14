@@ -252,6 +252,23 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("update.run");
   });
 
+  it("documents execution task handoff when sessions_spawn is available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "browser", "exec"],
+    });
+
+    expect(prompt).toContain(
+      "Treat goal-oriented multi-step work that needs browsing, waiting, retries, uploads, or other external side effects as an execution task.",
+    );
+    expect(prompt).toContain(
+      "If an execution task is actionable with the current context, create a real background run with `sessions_spawn` instead of promising you will continue later.",
+    );
+    expect(prompt).toContain(
+      "Do not tell the user you will keep working in the background unless you already spawned that run",
+    );
+  });
+
   it("includes skills guidance when skills prompt is present", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
