@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
 import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
 import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts";
+import type { GatewayHelloOk } from "./gateway.ts";
 
 const loadChatHistoryMock = vi.hoisted(() => vi.fn(async () => undefined));
 
@@ -9,6 +10,7 @@ type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
   options: { clientVersion?: string };
+  emitHello: (hello?: GatewayHelloOk) => void;
   emitClose: (info: {
     code: number;
     reason?: string;
@@ -39,6 +41,7 @@ vi.mock("./gateway.ts", () => {
     constructor(
       private opts: {
         clientVersion?: string;
+        onHello?: (hello: GatewayHelloOk) => void;
         onClose?: (info: {
           code: number;
           reason: string;
@@ -52,6 +55,15 @@ vi.mock("./gateway.ts", () => {
         start: this.start,
         stop: this.stop,
         options: { clientVersion: this.opts.clientVersion },
+        emitHello: (hello) => {
+          this.opts.onHello?.(
+            hello ?? {
+              type: "hello-ok",
+              protocol: 3,
+              snapshot: {},
+            },
+          );
+        },
         emitClose: (info) => {
           this.opts.onClose?.({
             code: info.code,
@@ -354,6 +366,93 @@ describe("connectGateway", () => {
 
     expect(host.lastError).toContain("gateway token mismatch");
     expect(host.lastErrorCode).toBe("AUTH_TOKEN_MISMATCH");
+  });
+
+  it("surfaces shutdown restart reasons before the socket closes", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitEvent({
+      event: "shutdown",
+      payload: {
+        reason: "config change requires gateway restart (plugins.installs)",
+        restartExpectedMs: 1500,
+      },
+    });
+    client.emitClose({ code: 1006 });
+
+    expect(host.lastError).toBe(
+      "Restarting: config change requires gateway restart (plugins.installs)",
+    );
+    expect(host.lastErrorCode).toBeNull();
+  });
+
+  it("clears pending shutdown messages on successful hello after reconnect", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitEvent({
+      event: "shutdown",
+      payload: {
+        reason: "config change",
+        restartExpectedMs: 1500,
+      },
+    });
+    client.emitClose({ code: 1006 });
+
+    expect(host.lastError).toBe("Restarting: config change");
+
+    client.emitHello();
+    expect(host.lastError).toBeNull();
+
+    client.emitClose({ code: 1006 });
+    expect(host.lastError).toBe("disconnected (1006): no reason");
+  });
+
+  it("keeps shutdown restart reasons on service restart closes", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitEvent({
+      event: "shutdown",
+      payload: {
+        reason: "gateway restarting",
+        restartExpectedMs: 1500,
+      },
+    });
+    client.emitClose({ code: 1012, reason: "service restart" });
+
+    expect(host.lastError).toBe("Restarting: gateway restarting");
+    expect(host.lastErrorCode).toBeNull();
+  });
+
+  it("prefers shutdown restart reasons over non-1012 close reasons", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitEvent({
+      event: "shutdown",
+      payload: {
+        reason: "gateway restarting",
+        restartExpectedMs: 1500,
+      },
+    });
+    client.emitClose({ code: 1001, reason: "going away" });
+
+    expect(host.lastError).toBe("Restarting: gateway restarting");
+    expect(host.lastErrorCode).toBeNull();
   });
 
   it("does not reload chat history for each live tool result event", () => {
