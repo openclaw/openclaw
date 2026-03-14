@@ -5,18 +5,26 @@ import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 
-const enqueueSystemEventMock = vi.fn();
-const requestHeartbeatNowMock = vi.fn();
-const loadConfigMock = vi.fn();
-const fetchWithSsrFGuardMock = vi.fn();
-const runCronIsolatedAgentTurnMock = vi.fn(async () => ({ status: "ok" as const, summary: "ok" }));
+const {
+  enqueueSystemEventMock,
+  requestHeartbeatNowMock,
+  loadConfigMock,
+  fetchWithSsrFGuardMock,
+  runCronIsolatedAgentTurnMock,
+} = vi.hoisted(() => ({
+  enqueueSystemEventMock: vi.fn(),
+  requestHeartbeatNowMock: vi.fn(),
+  loadConfigMock: vi.fn(),
+  fetchWithSsrFGuardMock: vi.fn(),
+  runCronIsolatedAgentTurnMock: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
+}));
 
 vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+  enqueueSystemEvent: enqueueSystemEventMock,
 }));
 
 vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+  requestHeartbeatNow: requestHeartbeatNowMock,
 }));
 
 vi.mock("../config/config.js", async () => {
@@ -28,11 +36,11 @@ vi.mock("../config/config.js", async () => {
 });
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
 vi.mock("../cron/isolated-agent.js", () => ({
-  runCronIsolatedAgentTurn: (...args: unknown[]) => runCronIsolatedAgentTurnMock(...args),
+  runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
 }));
 
 import { buildGatewayCronService } from "./server-cron.js";

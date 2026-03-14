@@ -89,6 +89,22 @@ describe("CronService store migrations", () => {
     await stopCronAndCleanup(cron, store);
   });
 
+  it("preserves stored custom session targets", async () => {
+    const { store, cron } = await startCronWithStoredJobs([
+      createLegacyIsolatedAgentTurnJob({
+        id: "custom-session-job",
+        name: "custom session",
+        sessionTarget: "session:ProjectAlpha",
+      }),
+    ]);
+
+    const job = await listJobById(cron, "custom-session-job");
+    expect(job?.sessionTarget).toBe("session:ProjectAlpha");
+    expect(job?.delivery).toEqual({ mode: "announce" });
+
+    await stopCronAndCleanup(cron, store);
+  });
+
   it("migrates legacy top-level agentTurn fields and initializes missing state", async () => {
     const { store, cron } = await startCronWithStoredJobs([
       createLegacyIsolatedAgentTurnJob({

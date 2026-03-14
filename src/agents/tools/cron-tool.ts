@@ -361,7 +361,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             normalizeCronJobCreate(params.job, {
               sessionContext: { sessionKey: opts?.agentSessionKey },
             }) ?? params.job;
-          if (job && typeof job === "object" && !("agentId" in job)) {
+          if (job && typeof job === "object") {
             const cfg = loadConfig();
             const { mainKey, alias } = resolveMainSessionAlias(cfg);
             const resolvedSessionKey = opts?.agentSessionKey

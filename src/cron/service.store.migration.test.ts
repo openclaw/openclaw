@@ -133,6 +133,24 @@ describe("cron store migration", () => {
     expect(schedule.at).toBe(new Date(atMs).toISOString());
   });
 
+  it("preserves stored custom session targets", async () => {
+    const migrated = await migrateLegacyJob(
+      makeLegacyJob({
+        id: "job-custom-session",
+        name: "Custom session",
+        schedule: { kind: "cron", expr: "0 23 * * *", tz: "UTC" },
+        sessionTarget: "session:ProjectAlpha",
+        payload: {
+          kind: "agentTurn",
+          message: "hello",
+        },
+      }),
+    );
+
+    expect(migrated.sessionTarget).toBe("session:ProjectAlpha");
+    expect(migrated.delivery).toEqual({ mode: "announce" });
+  });
+
   it("adds anchorMs to legacy every schedules", async () => {
     const createdAtMs = 1_700_000_000_000;
     const migrated = await migrateLegacyJob(

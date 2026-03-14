@@ -492,11 +492,25 @@ export async function ensureLoaded(
 
     const payloadKind =
       payloadRecord && typeof payloadRecord.kind === "string" ? payloadRecord.kind : "";
-    const normalizedSessionTarget =
-      typeof raw.sessionTarget === "string" ? raw.sessionTarget.trim().toLowerCase() : "";
-    if (normalizedSessionTarget === "main" || normalizedSessionTarget === "isolated") {
-      if (raw.sessionTarget !== normalizedSessionTarget) {
-        raw.sessionTarget = normalizedSessionTarget;
+    const rawSessionTarget = typeof raw.sessionTarget === "string" ? raw.sessionTarget.trim() : "";
+    const loweredSessionTarget = rawSessionTarget.toLowerCase();
+    if (loweredSessionTarget === "main" || loweredSessionTarget === "isolated") {
+      if (raw.sessionTarget !== loweredSessionTarget) {
+        raw.sessionTarget = loweredSessionTarget;
+        mutated = true;
+      }
+    } else if (loweredSessionTarget.startsWith("session:")) {
+      const customSessionId = rawSessionTarget.slice(8).trim();
+      if (customSessionId) {
+        const normalizedSessionTarget = `session:${customSessionId}`;
+        if (raw.sessionTarget !== normalizedSessionTarget) {
+          raw.sessionTarget = normalizedSessionTarget;
+          mutated = true;
+        }
+      }
+    } else if (loweredSessionTarget === "current") {
+      if (raw.sessionTarget !== "isolated") {
+        raw.sessionTarget = "isolated";
         mutated = true;
       }
     } else {

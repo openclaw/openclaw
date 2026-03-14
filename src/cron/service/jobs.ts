@@ -131,17 +131,15 @@ function resolveEveryAnchorMs(params: {
 }
 
 export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "payload">) {
-  const isMainSession = job.sessionTarget === "main";
-  const isIsolatedSession =
+  const isIsolatedLike =
     job.sessionTarget === "isolated" ||
     job.sessionTarget === "current" ||
     job.sessionTarget.startsWith("session:");
-
-  if (isMainSession && job.payload.kind !== "systemEvent") {
+  if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
     throw new Error('main cron jobs require payload.kind="systemEvent"');
   }
-  if (isIsolatedSession && job.payload.kind !== "agentTurn") {
-    throw new Error('isolated/current/session:xxx cron jobs require payload.kind="agentTurn"');
+  if (isIsolatedLike && job.payload.kind !== "agentTurn") {
+    throw new Error('isolated/current/session cron jobs require payload.kind="agentTurn"');
   }
 }
 
@@ -195,7 +193,6 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
     job.delivery.to = target;
     return;
   }
-  // Non-webhook delivery (announce, etc.) requires isolated-like session target
   const isIsolatedLike =
     job.sessionTarget === "isolated" ||
     job.sessionTarget === "current" ||

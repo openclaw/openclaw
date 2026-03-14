@@ -471,6 +471,14 @@ export function normalizeCronJobInput(
         next.sessionTarget = "isolated";
       }
     }
+    if (next.sessionTarget === "current") {
+      const sessionKey = options.sessionContext?.sessionKey?.trim();
+      if (sessionKey) {
+        next.sessionTarget = `session:${sessionKey}`;
+      } else {
+        next.sessionTarget = "isolated";
+      }
+    }
     if (
       "schedule" in next &&
       isRecord(next.schedule) &&
