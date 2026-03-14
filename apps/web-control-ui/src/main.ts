@@ -395,6 +395,8 @@ class WebControlUiApp extends LitElement {
   @state() recommendations: FeatureRecommendation[] = defaultRecommendations;
   @state() promptDraft = defaultFrontendPrompt;
   @state() safeEditMode = true;
+  @state() checkpointName = "before-change";
+  @state() restoreRef = "checkpoint/web-control-ui-YYYYMMDD-HHMMSS-before-change";
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -556,20 +558,12 @@ class WebControlUiApp extends LitElement {
     client.start();
   }
 
-  private async sendChat() {
+  private async sendRawMessage(userText: string, outbound: string) {
     if (!this.client || this.connectionState !== "connected" || this.chatSending) {
       return;
     }
-    const text = this.chatInput.trim();
-    if (!text) {
-      return;
-    }
     const runId = crypto.randomUUID();
-    this.chatMessages = [...this.chatMessages, { role: "user", text, timestamp: Date.now() }];
-    const outbound = buildFrontendPrompt(this.preferenceMemory, text, {
-      safeMode: this.safeEditMode,
-    }).replace(defaultFrontendPrompt.trim(), this.promptDraft.trim());
-    this.chatInput = "";
+    this.chatMessages = [...this.chatMessages, { role: "user", text: userText, timestamp: Date.now() }];
     this.chatRunId = runId;
     this.chatStream = "";
     this.chatSending = true;
@@ -589,6 +583,39 @@ class WebControlUiApp extends LitElement {
         { role: "system", text: `发送失败：${String(error)}`, timestamp: Date.now() },
       ];
     }
+  }
+
+  private async sendChat() {
+    if (!this.client || this.connectionState !== "connected" || this.chatSending) {
+      return;
+    }
+    const text = this.chatInput.trim();
+    if (!text) {
+      return;
+    }
+    const outbound = buildFrontendPrompt(this.preferenceMemory, text, {
+      safeMode: this.safeEditMode,
+    }).replace(defaultFrontendPrompt.trim(), this.promptDraft.trim());
+    this.chatInput = "";
+    await this.sendRawMessage(text, outbound);
+  }
+
+  private async triggerCheckpoint() {
+    const name = this.checkpointName.trim() || "before-change";
+    const userText = `创建 checkpoint：${name}`;
+    const outbound = `${this.promptDraft.trim()}\n\n请不要修改页面代码，只执行一件事：在 openclaw-src 仓库根目录运行\n\npwsh ./scripts/web-control-ui-checkpoint.ps1 -Name ${name}\n\n执行完成后，仅回复：\n- 是否创建成功\n- 新 checkpoint ref 或 commit/tag 信息\n- 是否建议立刻开始下一轮改动`;
+    await this.sendRawMessage(userText, outbound);
+  }
+
+  private async triggerRestore() {
+    const ref = this.restoreRef.trim();
+    if (!ref) {
+      this.errorMessage = "请先填写要恢复的 checkpoint ref";
+      return;
+    }
+    const userText = `恢复 checkpoint：${ref}`;
+    const outbound = `${this.promptDraft.trim()}\n\n请不要做新的页面设计改动，只执行恢复操作：在 openclaw-src 仓库根目录运行\n\npwsh ./scripts/web-control-ui-restore.ps1 -Ref ${ref}\n\n恢复后，再在 openclaw-src/apps/web-control-ui 目录运行\n\nnode .\\node_modules\\vite\\bin\\vite.js build\n\n最后只回复：\n- 恢复是否成功\n- build 是否通过\n- 当前是否适合继续迭代`;
+    await this.sendRawMessage(userText, outbound);
   }
 
   private savePreferenceDraft() {
@@ -888,11 +915,37 @@ class WebControlUiApp extends LitElement {
 
               <section class="panel">
                 <h2>Rollback First</h2>
-                <p class="subtitle">最小但可靠的回退机制，不复杂，但够用。</p>
+                <p class="subtitle">最小但可靠的回退机制，不复杂，但够用，而且现在已经有快捷触发入口。</p>
                 <div class="recommendation">
                   <p><strong>做 checkpoint：</strong><code>pwsh ./scripts/web-control-ui-checkpoint.ps1 -Name before-change</code></p>
                   <p style="margin-top: 8px;"><strong>恢复版本：</strong><code>pwsh ./scripts/web-control-ui-restore.ps1 -Ref checkpoint/web-control-ui-时间戳-before-change</code></p>
                   <p style="margin-top: 8px;"><strong>原则：</strong>每次较大 UI 改动前先 checkpoint，改坏了就只恢复 <code>apps/web-control-ui</code>，不波及整个仓库。</p>
+                </div>
+                <div class="memory-item" style="margin-top: 12px;">
+                  <span class="label">Checkpoint 名称</span>
+                  <input
+                    .value=${this.checkpointName}
+                    @input=${(event: InputEvent) => {
+                      this.checkpointName = (event.target as HTMLInputElement).value;
+                    }}
+                    placeholder="before-change"
+                  />
+                </div>
+                <div class="memory-actions" style="margin-top: 12px;">
+                  <button type="button" @click=${() => this.triggerCheckpoint()} ?disabled=${this.chatSending}>${this.chatSending ? "执行中..." : "创建 checkpoint"}</button>
+                </div>
+                <div class="memory-item" style="margin-top: 12px;">
+                  <span class="label">恢复的 checkpoint ref</span>
+                  <input
+                    .value=${this.restoreRef}
+                    @input=${(event: InputEvent) => {
+                      this.restoreRef = (event.target as HTMLInputElement).value;
+                    }}
+                    placeholder="checkpoint/web-control-ui-YYYYMMDD-HHMMSS-before-change"
+                  />
+                </div>
+                <div class="memory-actions" style="margin-top: 12px;">
+                  <button class="secondary" type="button" @click=${() => this.triggerRestore()} ?disabled=${this.chatSending}>${this.chatSending ? "执行中..." : "恢复 checkpoint"}</button>
                 </div>
               </section>
             </div>
