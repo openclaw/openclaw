@@ -101,6 +101,60 @@ export async function runAgentTurnWithFallback(params: {
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
 }): Promise<AgentRunLoopResult> {
+  /** Resolve compaction onFailure policy from config. */
+  function resolveCompactionOnFailure(
+    config: import("../../config/config.js").OpenClawConfig | undefined,
+  ): "reset" | "continue" | "halt" {
+    return config?.agents?.defaults?.compaction?.onFailure ?? "reset";
+  }
+
+  function resolveCompactionOnFailureMessage(
+    config: import("../../config/config.js").OpenClawConfig | undefined,
+  ): string {
+    return (
+      config?.agents?.defaults?.compaction?.onFailureMessage ??
+      "\u26a0\ufe0f Session halted: compaction failed. Use /new to start a fresh session."
+    );
+  }
+
+  async function markSessionHalted(
+    params: {
+      sessionKey?: string;
+      activeSessionStore?: Record<string, import("../../config/sessions.js").SessionEntry>;
+      storePath?: string;
+      getActiveSessionEntry: () => import("../../config/sessions.js").SessionEntry | undefined;
+    },
+    reason: string,
+  ): Promise<void> {
+    if (!params.sessionKey || !params.activeSessionStore || !params.storePath) {
+      defaultRuntime.error(
+        `Cannot persist compaction halt state: missing session params (sessionKey=${params.sessionKey ?? "undefined"})`,
+      );
+      return;
+    }
+    const entry = params.getActiveSessionEntry();
+    if (!entry) {
+      defaultRuntime.error(
+        `Cannot persist compaction halt state: no active session entry for ${params.sessionKey}`,
+      );
+      return;
+    }
+    const now = Date.now();
+    entry.haltedAt = now;
+    entry.haltedReason = reason;
+    params.activeSessionStore[params.sessionKey] = entry;
+    try {
+      await updateSessionStore(params.storePath, (store) => {
+        if (store[params.sessionKey!]) {
+          store[params.sessionKey!].haltedAt = now;
+          store[params.sessionKey!].haltedReason = reason;
+        }
+      });
+    } catch {
+      // Best-effort persistence.
+    }
+  }
+
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
   let autoCompactionCompleted = false;
@@ -490,16 +544,34 @@ export async function runAgentTurnWithFallback(params: {
       if (
         embeddedError &&
         isContextOverflowError(embeddedError.message) &&
-        !didResetAfterCompactionFailure &&
-        (await params.resetSessionAfterCompactionFailure(embeddedError.message))
+        !didResetAfterCompactionFailure
       ) {
-        didResetAfterCompactionFailure = true;
-        return {
-          kind: "final",
-          payload: {
-            text: "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
-          },
-        };
+        const onFailurePolicy = resolveCompactionOnFailure(params.followupRun.run.config);
+        if (onFailurePolicy === "halt") {
+          await markSessionHalted(params, embeddedError.message);
+          didResetAfterCompactionFailure = true;
+          return {
+            kind: "final",
+            payload: { text: resolveCompactionOnFailureMessage(params.followupRun.run.config) },
+          };
+        }
+        if (onFailurePolicy === "continue") {
+          return {
+            kind: "final",
+            payload: {
+              text: "\u26a0\ufe0f Compaction failed but the session will continue. Context may be degraded \u2014 consider using /new if responses seem off.",
+            },
+          };
+        }
+        if (await params.resetSessionAfterCompactionFailure(embeddedError.message)) {
+          didResetAfterCompactionFailure = true;
+          return {
+            kind: "final",
+            payload: {
+              text: "\u26a0\ufe0f Context limit exceeded. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
+            },
+          };
+        }
       }
       if (embeddedError?.kind === "role_ordering") {
         const didReset = await params.resetSessionAfterRoleOrderingConflict(embeddedError.message);
@@ -523,18 +595,33 @@ export async function runAgentTurnWithFallback(params: {
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
       const isTransientHttp = isTransientHttpError(message);
 
-      if (
-        isCompactionFailure &&
-        !didResetAfterCompactionFailure &&
-        (await params.resetSessionAfterCompactionFailure(message))
-      ) {
-        didResetAfterCompactionFailure = true;
-        return {
-          kind: "final",
-          payload: {
-            text: "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
-          },
-        };
+      if (isCompactionFailure && !didResetAfterCompactionFailure) {
+        const onFailurePolicy = resolveCompactionOnFailure(params.followupRun.run.config);
+        if (onFailurePolicy === "halt") {
+          await markSessionHalted(params, message);
+          didResetAfterCompactionFailure = true;
+          return {
+            kind: "final",
+            payload: { text: resolveCompactionOnFailureMessage(params.followupRun.run.config) },
+          };
+        }
+        if (onFailurePolicy === "continue") {
+          // Skip reset — session continues accepting messages with a user-friendly notice.
+          return {
+            kind: "final",
+            payload: {
+              text: "⚠️ Compaction failed but the session will continue. Context may be degraded — consider using /new if responses seem off.",
+            },
+          };
+        } else if (await params.resetSessionAfterCompactionFailure(message)) {
+          didResetAfterCompactionFailure = true;
+          return {
+            kind: "final",
+            payload: {
+              text: "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
+            },
+          };
+        }
       }
       if (isRoleOrderingError) {
         const didReset = await params.resetSessionAfterRoleOrderingConflict(message);
@@ -644,6 +731,32 @@ export async function runAgentTurnWithFallback(params: {
         text: "⚠️ Context overflow — this conversation is too large for the model. Use /new to start a fresh session.",
       },
     };
+  }
+
+  // Scenario A: compaction timed out during the run — the agent returned a result
+  // using the pre-compaction snapshot, but context is still near-full and will
+  // likely time out again on the next message.  Apply the onFailure policy.
+  if (runResult?.meta?.compactionTimedOut && !didResetAfterCompactionFailure) {
+    const onFailurePolicy = resolveCompactionOnFailure(params.followupRun.run.config);
+    const reason = "Compaction timed out during agent run";
+    if (onFailurePolicy === "halt") {
+      await markSessionHalted(params, reason);
+      return {
+        kind: "final",
+        payload: { text: resolveCompactionOnFailureMessage(params.followupRun.run.config) },
+      };
+    }
+    if (onFailurePolicy === "reset") {
+      if (await params.resetSessionAfterCompactionFailure(reason)) {
+        return {
+          kind: "final",
+          payload: {
+            text: "\u26a0\ufe0f Compaction timed out. I've reset our conversation to start fresh - please try again.",
+          },
+        };
+      }
+    }
+    // "continue": fall through — return the (possibly degraded) result as-is.
   }
 
   return {

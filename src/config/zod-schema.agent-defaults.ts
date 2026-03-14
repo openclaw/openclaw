@@ -124,6 +124,10 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        onFailure: z
+          .union([z.literal("reset"), z.literal("continue"), z.literal("halt")])
+          .optional(),
+        onFailureMessage: z.string().optional(),
       })
       .strict()
       .optional(),

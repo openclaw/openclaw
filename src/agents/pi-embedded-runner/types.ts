@@ -44,6 +44,8 @@ export type EmbeddedPiRunMeta = {
       | "retry_limit";
     message: string;
   };
+  /** True when the run timed out during post-prompt compaction. */
+  compactionTimedOut?: boolean;
   /** Stop reason for the agent run (e.g., "completed", "tool_calls"). */
   stopReason?: string;
   /** Pending tool calls when stopReason is "tool_calls". */
