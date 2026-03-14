@@ -22,3 +22,14 @@ export function getActiveClient(accountId: string): IrcClient | undefined {
 export function removeActiveClient(accountId: string): void {
   activeClients.delete(accountId);
 }
+
+/**
+ * Only remove the active client if it matches the expected instance.
+ * Prevents a stopping monitor from deregistering a newer monitor's
+ * healthy client during reconnect races.
+ */
+export function removeActiveClientIfMatch(accountId: string, expected: IrcClient): void {
+  if (activeClients.get(accountId) === expected) {
+    activeClients.delete(accountId);
+  }
+}
