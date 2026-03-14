@@ -13,6 +13,7 @@ import {
   BrowserResourceExhaustedError,
   BrowserValidationError,
 } from "./errors.js";
+import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import {
   allocateCdpPort,
   allocateColor,
@@ -33,8 +34,9 @@ export type CreateProfileParams = {
 export type CreateProfileResult = {
   ok: true;
   profile: string;
-  cdpPort: number;
-  cdpUrl: string;
+  transport: "cdp" | "chrome-mcp";
+  cdpPort: number | null;
+  cdpUrl: string | null;
   color: string;
   isRemote: boolean;
 };
@@ -169,12 +171,14 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     if (!resolved) {
       throw new BrowserProfileNotFoundError(`profile "${name}" not found after creation`);
     }
+    const capabilities = getBrowserProfileCapabilities(resolved);
 
     return {
       ok: true,
       profile: name,
-      cdpPort: resolved.cdpPort,
-      cdpUrl: resolved.cdpUrl,
+      transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
+      cdpPort: capabilities.usesChromeMcp ? null : resolved.cdpPort,
+      cdpUrl: capabilities.usesChromeMcp ? null : resolved.cdpUrl,
       color: resolved.color,
       isRemote: !resolved.cdpIsLoopback,
     };
