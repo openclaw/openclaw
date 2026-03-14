@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
@@ -61,12 +62,13 @@ import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
+  type PreparedSecretsRuntimeSnapshot,
   resolveCommandSecretsFromActiveRuntimeSnapshot,
 } from "../secrets/runtime.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
-import { startGatewayConfigReloader } from "./config-reload.js";
+import { resolveGatewayReloadSettings, startGatewayConfigReloader } from "./config-reload.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
@@ -396,6 +398,12 @@ export async function startGatewayServer(
         throw err;
       }
     });
+  const isSameSecretsSnapshot = (
+    left: PreparedSecretsRuntimeSnapshot,
+    right: PreparedSecretsRuntimeSnapshot,
+  ): boolean =>
+    isDeepStrictEqual(left.sourceConfig, right.sourceConfig) &&
+    isDeepStrictEqual(left.config, right.config);
 
   // Fail fast before startup if required refs are unresolved.
   let cfgAtStart: OpenClawConfig;
@@ -892,7 +900,27 @@ export async function startGatewayServer(
       ...secretsHandlers,
     },
     broadcast,
-    context: gatewayRequestContext,
+    context: {
+      ...gatewayRequestContext,
+      refreshRuntimeConfigFromDisk: async (configOverride) => {
+        if (!getActiveSecretsRuntimeSnapshot()) {
+          return;
+        }
+        if (configOverride) {
+          await activateRuntimeSecrets(configOverride, { reason: "reload", activate: true });
+          return;
+        }
+        const reloadMode = resolveGatewayReloadSettings(loadConfig()).mode;
+        if (reloadMode === "off" || reloadMode === "restart") {
+          return;
+        }
+        const snapshot = await readConfigFileSnapshot();
+        if (!snapshot.exists || !snapshot.valid) {
+          return;
+        }
+        await activateRuntimeSecrets(snapshot.config, { reason: "reload", activate: true });
+      },
+    },
   });
   logGatewayStartup({
     cfg: cfgAtStart,
@@ -996,11 +1024,20 @@ export async function startGatewayServer(
             try {
               await applyHotReload(plan, prepared.config);
             } catch (err) {
-              if (previousSnapshot) {
-                activateSecretsRuntimeSnapshot(previousSnapshot);
-              } else {
-                clearSecretsRuntimeSnapshot();
-              }
+              await runWithSecretsActivationLock(async () => {
+                const activeSnapshot = getActiveSecretsRuntimeSnapshot();
+                if (activeSnapshot && !isSameSecretsSnapshot(activeSnapshot, prepared)) {
+                  logReload.warn(
+                    "gateway: skipping hot-reload snapshot rollback because runtime snapshot advanced",
+                  );
+                  return;
+                }
+                if (previousSnapshot) {
+                  activateSecretsRuntimeSnapshot(previousSnapshot);
+                } else {
+                  clearSecretsRuntimeSnapshot();
+                }
+              });
               throw err;
             }
           },
