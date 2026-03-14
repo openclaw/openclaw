@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
-import { resolveWindowsExecutablePath } from "../plugin-sdk/windows-spawn.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -373,7 +372,6 @@ export async function checkQmdBinaryAvailable(
   timeoutMs = 5000,
   cwd?: string,
 ): Promise<{ available: true; path: string } | { available: false; error: string }> {
-  const isWindows = process.platform === "win32";
   const hasPath = /[\\/]/.test(command) || path.isAbsolute(command);
 
   // Resolve command using the same logic as runtime spawn to handle Windows shims correctly
