@@ -311,6 +311,9 @@ function isBinaryMediaMime(mime?: string): boolean {
   if (mime === "application/octet-stream") {
     return true;
   }
+  if (mime === "application/msword") {
+    return true;
+  }
   if (
     mime === "application/zip" ||
     mime === "application/x-zip-compressed" ||
