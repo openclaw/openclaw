@@ -111,6 +111,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     describeAccount: (account) => ({
       accountId: account.accountId,
       name: account.name,
+      agentId: account.config.agentId,
       enabled: account.enabled,
       configured: Boolean(account.token?.trim()),
       tokenSource: account.tokenSource,
