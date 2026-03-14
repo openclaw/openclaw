@@ -224,7 +224,7 @@ function renderEscapedPlainTextHtml(value: string): string {
   return value
     .replace(/\r\n?/g, "\n")
     .split(/\n{2,}/)
-    .filter((segment) => segment.length > 0)
+    .filter((segment) => segment.trim().length > 0)
     .map((segment) => `<p>${escapeHtml(segment).replace(/\n/g, "<br>")}</p>`)
     .join("");
 }
