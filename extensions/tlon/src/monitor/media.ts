@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir, unlink } from "node:fs/promises";
+import { chmod, mkdir, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import { Readable, Transform } from "node:stream";
@@ -69,6 +69,8 @@ export async function downloadMedia(
 
     // Ensure media directory exists with restricted permissions
     await mkdir(mediaDir, { recursive: true, mode: MEDIA_DIR_MODE });
+    // chmod to harden directories created by earlier versions (recursive: true won't update existing dirs)
+    await chmod(mediaDir, MEDIA_DIR_MODE).catch(() => {});
 
     // Fetch with SSRF protection
     // Use fetchWithSsrFGuard directly (not urbitFetch) to preserve the full URL path
