@@ -531,7 +531,7 @@ Core parameters:
 Notes:
 
 - Returns snippets (~400 token chunks, ~700 char cap) with file path, line range, and relevance score.
-- Powered by QMD (sqlite-vec) when configured; falls back to builtin SQLite if QMD is unavailable.
+- Powered by QMD (sqlite-vec) when configured; falls back to the builtin provider (Markdown embeddings) if QMD is unavailable.
 - Session transcript indexing is optional (`memory.qmd.sessions.enabled`).
 - See [Memory](/concepts/memory) for configuration and backend options.
 
