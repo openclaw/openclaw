@@ -499,7 +499,8 @@ export function applyJobResult(
         }
       }
     } else if (result.status === "error" && job.enabled) {
-      // Apply exponential backoff for errored jobs to prevent retry storms.
+      const retryConfig = resolveRetryConfig(state.deps.cronConfig);
+      const transient = isTransientCronError(result.error, retryConfig.retryOn);
       const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
       let normalNext: number | undefined;
       try {
@@ -514,9 +515,18 @@ export function applyJobResult(
         recordScheduleComputeError({ state, job, err });
       }
       const backoffNext = result.endedAt + backoff;
-      // Use whichever is later: the natural next run or the backoff delay.
-      job.state.nextRunAtMs =
-        normalNext !== undefined ? Math.max(normalNext, backoffNext) : backoffNext;
+      if (transient) {
+        // Transient error (network, timeout, rate-limit, 5xx): retry soon with
+        // backoff regardless of schedule interval. Without this, long-period jobs
+        // (hourly, daily) would wait until the next natural schedule time even
+        // when the error is self-healing (e.g. a brief network blip).
+        job.state.nextRunAtMs = backoffNext;
+      } else {
+        // Permanent error: respect natural schedule. Math.max ensures short-interval
+        // jobs still observe the backoff cool-down and don't form retry storms.
+        job.state.nextRunAtMs =
+          normalNext !== undefined ? Math.max(normalNext, backoffNext) : backoffNext;
+      }
       state.deps.log.info(
         {
           jobId: job.id,
