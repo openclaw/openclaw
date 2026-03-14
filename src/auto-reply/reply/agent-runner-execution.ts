@@ -75,6 +75,35 @@ export type AgentRunLoopResult =
     }
   | { kind: "final"; payload: ReplyPayload };
 
+/**
+ * Build a human-friendly rate limit fallback message with model info and time estimate.
+ */
+function buildRateLimitFallbackText(err: unknown): string {
+  let backIn = "~60 seconds";
+  let modelInfo = "";
+  if (isFallbackSummaryError(err)) {
+    if (err.soonestCooldownExpiry !== null) {
+      const secsRemaining = Math.ceil((err.soonestCooldownExpiry - Date.now()) / 1000);
+      if (secsRemaining > 0) {
+        if (secsRemaining < 60) {
+          backIn = `~${secsRemaining}s`;
+        } else if (secsRemaining < 3600) {
+          backIn = `~${Math.ceil(secsRemaining / 60)} min`;
+        } else {
+          backIn = `~${Math.ceil(secsRemaining / 3600)} hr`;
+        }
+      } else {
+        backIn = "any moment";
+      }
+    }
+    const limitedModels = err.attempts.filter((a) => a.reason === "rate_limit").map((a) => a.model);
+    if (limitedModels.length > 0) {
+      modelInfo = ` (${limitedModels.join(", ")} rate limited)`;
+    }
+  }
+  return `⚡ Temporarily unavailable${modelInfo} — back in ${backIn}.`;
+}
+
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   followupRun: FollowupRun;
@@ -636,36 +665,7 @@ export async function runAgentTurnWithFallback(params: {
           : isRoleOrderingError
             ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
             : isRateLimit
-              ? (() => {
-                  // Build a human-friendly rate limit message with model info and time estimate.
-                  let backIn = "~60 seconds";
-                  let modelInfo = "";
-                  if (isFallbackSummaryError(err)) {
-                    if (err.soonestCooldownExpiry !== null) {
-                      const secsRemaining = Math.ceil(
-                        (err.soonestCooldownExpiry - Date.now()) / 1000,
-                      );
-                      if (secsRemaining > 0) {
-                        if (secsRemaining < 60) {
-                          backIn = `~${secsRemaining}s`;
-                        } else if (secsRemaining < 3600) {
-                          backIn = `~${Math.ceil(secsRemaining / 60)} min`;
-                        } else {
-                          backIn = `~${Math.ceil(secsRemaining / 3600)} hr`;
-                        }
-                      } else {
-                        backIn = "any moment";
-                      }
-                    }
-                    const limitedModels = err.attempts
-                      .filter((a) => a.reason === "rate_limit")
-                      .map((a) => a.model);
-                    if (limitedModels.length > 0) {
-                      modelInfo = ` (${limitedModels.join(", ")} rate limited)`;
-                    }
-                  }
-                  return `⚡ Temporarily unavailable${modelInfo} — back in ${backIn}.`;
-                })()
+              ? buildRateLimitFallbackText(err)
               : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
 
       return {

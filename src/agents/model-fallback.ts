@@ -220,8 +220,18 @@ function throwFallbackFailureSummary(params: {
   formatAttempt: (attempt: FallbackAttempt) => string;
   soonestCooldownExpiry?: number | null;
 }): never {
-  if (params.attempts.length <= 1 && params.lastError) {
+  if (params.attempts.length === 0 && params.lastError) {
     throw params.lastError;
+  }
+  if (params.attempts.length === 1 && params.lastError) {
+    throw new FallbackSummaryError(
+      `${params.label} failed: ${params.formatAttempt(params.attempts[0])}`,
+      {
+        attempts: params.attempts,
+        soonestCooldownExpiry: params.soonestCooldownExpiry ?? null,
+        cause: params.lastError instanceof Error ? params.lastError : undefined,
+      },
+    );
   }
   const summary =
     params.attempts.length > 0 ? params.attempts.map(params.formatAttempt).join(" | ") : "unknown";
@@ -866,11 +876,15 @@ export async function runWithImageModelFallback<T>(params: {
     }
   }
 
+  // TODO: Thread authStore into runWithImageModelFallback to compute
+  // soonestCooldownExpiry for image model rate limits (same pattern as
+  // runWithModelFallback). Currently falls back to default "~60 seconds".
   throwFallbackFailureSummary({
     attempts,
     candidates,
     lastError,
     label: "image models",
+    soonestCooldownExpiry: null,
     formatAttempt: (attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`,
   });
 }
