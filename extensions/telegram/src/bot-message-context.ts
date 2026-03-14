@@ -392,7 +392,9 @@ export const buildTelegramMessageContext = async ({
         })
       : null;
 
-  // When status reactions are enabled, setQueued() replaces the simple ack reaction
+  // When status reactions are enabled, setQueued() replaces the simple ack reaction.
+  // The waiting transition (😴) is handled per-message via the onQueued callback
+  // from the command queue, so we don't leak global lane state here.
   const ackReactionPromise = statusReactionController
     ? shouldAckReaction()
       ? Promise.resolve(statusReactionController.setQueued()).then(

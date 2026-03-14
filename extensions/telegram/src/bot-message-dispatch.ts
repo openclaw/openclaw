@@ -514,6 +514,9 @@ export const dispatchTelegramMessage = async ({
 
   let queuedFinal = false;
 
+  // Always set thinking eagerly. If the queue delays this message, the
+  // per-message onQueued callback (below) will override to waiting first,
+  // and onReplyStart transitions back to thinking when execution starts.
   if (statusReactionController) {
     void statusReactionController.setThinking();
   }
@@ -538,6 +541,16 @@ export const dispatchTelegramMessage = async ({
       dispatcherOptions: {
         ...prefixOptions,
         typingCallbacks,
+        // Transition waiting → thinking when the agent run actually starts.
+        // Placed in dispatcherOptions (not replyOptions) so it isn't overwritten
+        // by the typing-controller's onReplyStart merge in dispatch.ts:72-75.
+        // Composes with typingCallbacks.onReplyStart to preserve typing indicator.
+        onReplyStart: statusReactionController
+          ? () => {
+              void typingCallbacks?.onReplyStart?.();
+              void statusReactionController.setThinking();
+            }
+          : undefined,
         deliver: async (payload, info) => {
           if (info.kind === "final") {
             // Assistant callbacks are fire-and-forget; ensure queued boundary
@@ -727,6 +740,11 @@ export const dispatchTelegramMessage = async ({
             }
           : undefined,
         onModelSelected,
+        // Per-message queue callback: fires when THIS message's task is enqueued
+        // and won't run immediately. Avoids leaking global lane state.
+        onQueued: statusReactionController
+          ? () => void statusReactionController.setWaiting()
+          : undefined,
       },
     }));
   } catch (err) {

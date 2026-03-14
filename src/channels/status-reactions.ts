@@ -16,6 +16,7 @@ export type StatusReactionAdapter = {
 
 export type StatusReactionEmojis = {
   queued?: string; // Default: uses initialEmoji param
+  waiting?: string; // Default: "😴"
   thinking?: string; // Default: "🧠"
   tool?: string; // Default: "🛠️"
   coding?: string; // Default: "💻"
@@ -37,6 +38,7 @@ export type StatusReactionTiming = {
 
 export type StatusReactionController = {
   setQueued: () => Promise<void> | void;
+  setWaiting: () => Promise<void> | void;
   setThinking: () => Promise<void> | void;
   setTool: (toolName?: string) => Promise<void> | void;
   setCompacting: () => Promise<void> | void;
@@ -54,6 +56,7 @@ export type StatusReactionController = {
 
 export const DEFAULT_EMOJIS: Required<StatusReactionEmojis> = {
   queued: "👀",
+  waiting: "😴",
   thinking: "🤔",
   tool: "🔥",
   coding: "👨‍💻",
@@ -159,6 +162,7 @@ export function createStatusReactionController(params: {
   const knownEmojis = new Set<string>([
     initialEmoji,
     emojis.queued,
+    emojis.waiting,
     emojis.thinking,
     emojis.tool,
     emojis.coding,
@@ -203,6 +207,20 @@ export function createStatusReactionController(params: {
     if (debounceTimer) {
       clearTimeout(debounceTimer);
       debounceTimer = null;
+    }
+  }
+
+  /**
+   * Clear stall timers without restarting them (used by setWaiting).
+   */
+  function clearStallTimers(): void {
+    if (stallSoftTimer) {
+      clearTimeout(stallSoftTimer);
+      stallSoftTimer = null;
+    }
+    if (stallHardTimer) {
+      clearTimeout(stallHardTimer);
+      stallHardTimer = null;
     }
   }
 
@@ -303,6 +321,14 @@ export function createStatusReactionController(params: {
     scheduleEmoji(emojis.queued, { immediate: true });
   }
 
+  function setWaiting(): void {
+    // Clear any stall timers armed by prior states (e.g. setQueued) and skip
+    // resetting them — stall detection is only meaningful once execution begins,
+    // not while intentionally waiting behind other queued tasks.
+    clearStallTimers();
+    scheduleEmoji(emojis.waiting, { skipStallReset: true });
+  }
+
   function setThinking(): void {
     scheduleEmoji(emojis.thinking);
   }
@@ -388,6 +414,7 @@ export function createStatusReactionController(params: {
 
   return {
     setQueued,
+    setWaiting,
     setThinking,
     setTool,
     setCompacting,

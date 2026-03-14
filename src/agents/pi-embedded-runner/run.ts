@@ -264,10 +264,30 @@ export async function runEmbeddedPiAgent(
 ): Promise<EmbeddedPiRunResult> {
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
+  // Guard against firing onQueued twice (once from session lane, once from global).
+  let onQueuedFired = false;
+  const onQueuedOnce = params.onQueued
+    ? () => {
+        if (!onQueuedFired) {
+          onQueuedFired = true;
+          params.onQueued!();
+        }
+      }
+    : undefined;
   const enqueueGlobal =
-    params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
+    params.enqueue ??
+    ((task, opts) =>
+      enqueueCommandInLane(globalLane, task, {
+        ...opts,
+        onQueued: onQueuedOnce,
+      }));
   const enqueueSession =
-    params.enqueue ?? ((task, opts) => enqueueCommandInLane(sessionLane, task, opts));
+    params.enqueue ??
+    ((task, opts) =>
+      enqueueCommandInLane(sessionLane, task, {
+        ...opts,
+        onQueued: onQueuedOnce,
+      }));
   const channelHint = params.messageChannel ?? params.messageProvider;
   const resolvedToolResultFormat =
     params.toolResultFormat ??

@@ -112,6 +112,8 @@ export type RunEmbeddedPiAgentParams = {
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
   lane?: string;
   enqueue?: typeof enqueueCommand;
+  /** Fires when this task is enqueued and won't run immediately (per-message signal). */
+  onQueued?: () => void;
   extraSystemPrompt?: string;
   inputProvenance?: InputProvenance;
   streamParams?: AgentStreamParams;
