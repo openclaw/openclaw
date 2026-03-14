@@ -86,7 +86,6 @@ function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model<Api>>): 
   const normalized = normalizeModelCompat(model as Model<Api>);
   expect(supportsDeveloperRole(normalized)).toBe(false);
 }
-
 function expectResolvedForwardCompat(
   model: Model<Api> | undefined,
   expected: { provider: string; id: string },

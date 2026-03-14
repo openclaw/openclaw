@@ -259,6 +259,13 @@ export type AgentDefaultsConfig = {
      */
     lightContext?: boolean;
     /**
+     * If true, run heartbeat turns in an isolated session with no prior
+     * conversation history. The heartbeat only sees its bootstrap context
+     * (HEARTBEAT.md when lightContext is also enabled). Dramatically reduces
+     * per-heartbeat token cost by avoiding the full session transcript.
+     */
+    isolatedSession?: boolean;
+    /**
      * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
      * as a separate message prefixed with `Reasoning:` (same as `/reasoning on`).
      *
