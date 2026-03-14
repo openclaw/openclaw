@@ -4,6 +4,25 @@ import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-
 const TOOL_CALL_NAME_MAX_CHARS = 64;
 const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_-]+$/;
 
+// OpenAI-compatible providers may prefix tool names with "functions." or "functions "
+// during function calling. These prefixes need to be stripped to match actual tool names.
+const FUNCTIONS_PREFIX_RE = /^functions\.[\s]*/i;
+const FUNCTIONS_PREFIX_SPACE_RE = /^functions\s+/i;
+
+/**
+ * Normalize a tool name that may have been prefixed with "functions." or "functions "
+ * by an OpenAI-compatible provider.
+ */
+function normalizePrefixedToolName(name: string): string {
+  if (FUNCTIONS_PREFIX_RE.test(name)) {
+    return name.replace(FUNCTIONS_PREFIX_RE, "");
+  }
+  if (FUNCTIONS_PREFIX_SPACE_RE.test(name)) {
+    return name.replace(FUNCTIONS_PREFIX_SPACE_RE, "");
+  }
+  return name;
+}
+
 type RawToolCallBlock = {
   type?: unknown;
   id?: unknown;
@@ -63,13 +82,15 @@ function hasToolCallName(block: RawToolCallBlock, allowedToolNames: Set<string> 
   if (!trimmed) {
     return false;
   }
-  if (trimmed.length > TOOL_CALL_NAME_MAX_CHARS || !TOOL_CALL_NAME_RE.test(trimmed)) {
+  // Normalize away any "functions." or "functions " prefix added by OpenAI-compatible providers
+  const normalizedName = normalizePrefixedToolName(trimmed);
+  if (normalizedName.length > TOOL_CALL_NAME_MAX_CHARS || !TOOL_CALL_NAME_RE.test(normalizedName)) {
     return false;
   }
   if (!allowedToolNames) {
     return true;
   }
-  return allowedToolNames.has(trimmed.toLowerCase());
+  return allowedToolNames.has(normalizedName.toLowerCase());
 }
 
 function redactSessionsSpawnAttachmentsArgs(value: unknown): unknown {
@@ -99,8 +120,10 @@ function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
   const rawName = typeof block.name === "string" ? block.name : undefined;
   const trimmedName = rawName?.trim();
   const hasTrimmedName = typeof trimmedName === "string" && trimmedName.length > 0;
-  const normalizedName = hasTrimmedName ? trimmedName : undefined;
-  const nameChanged = hasTrimmedName && rawName !== trimmedName;
+  // Normalize away any "functions." or "functions " prefix added by OpenAI-compatible providers
+  const prefixNormalizedName = hasTrimmedName ? normalizePrefixedToolName(trimmedName) : undefined;
+  const normalizedName = prefixNormalizedName;
+  const nameChanged = hasTrimmedName && rawName !== normalizedName;
 
   const isSessionsSpawn = normalizedName?.toLowerCase() === "sessions_spawn";
 
@@ -164,9 +187,16 @@ function normalizeToolResultName(
   fallbackName?: string,
 ): Extract<AgentMessage, { role: "toolResult" }> {
   const rawToolName = (message as { toolName?: unknown }).toolName;
-  const normalizedToolName = trimNonEmptyString(rawToolName);
+  const trimmedToolName = trimNonEmptyString(rawToolName);
+  // Normalize away any "functions." or "functions " prefix added by OpenAI-compatible providers
+  const normalizedToolName = trimmedToolName
+    ? normalizePrefixedToolName(trimmedToolName)
+    : undefined;
   if (normalizedToolName) {
-    if (rawToolName === normalizedToolName) {
+    // Also normalize the raw tool name if it had a prefix
+    const finalRawName =
+      typeof rawToolName === "string" ? normalizePrefixedToolName(rawToolName.trim()) : rawToolName;
+    if (finalRawName === normalizedToolName) {
       return message;
     }
     return { ...message, toolName: normalizedToolName };
@@ -276,8 +306,10 @@ export function repairToolCallInputs(
             if (typeof (block as { name?: unknown }).name === "string") {
               const rawName = (block as { name: string }).name;
               const trimmedName = rawName.trim();
-              if (rawName !== trimmedName && trimmedName) {
-                const renamed = { ...(block as object), name: trimmedName } as typeof block;
+              // Normalize away any "functions." or "functions " prefix added by OpenAI-compatible providers
+              const normalizedName = normalizePrefixedToolName(trimmedName);
+              if (rawName !== normalizedName && normalizedName) {
+                const renamed = { ...(block as object), name: normalizedName } as typeof block;
                 nextContent.push(renamed);
                 changed = true;
                 messageChanged = true;

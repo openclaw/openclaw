@@ -232,4 +232,101 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expect(bId.length).toBe(9);
     });
   });
+
+  describe("mangled tool call ID normalization", () => {
+    it("normalizes mangled tool call IDs with 'functions ' instead of 'functions.'", () => {
+      // Some OpenAI-compatible providers send IDs like "functions.exec:0" which get
+      // corrupted to "functions exec:0" (space instead of dot).
+      // The key behavior is that the tool result ID gets normalized to match the tool call ID.
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "functions.exec:0", name: "exec", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          // Mangled ID: space instead of dot - should be normalized to match tool call
+          toolCallId: "functions exec:0",
+          toolName: "exec",
+          content: [{ type: "text", text: "ok" }],
+        },
+      ]);
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict");
+      // The tool call ID should be sanitized to alphanumeric
+      const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+      const toolCall = assistant.content?.[0] as { id?: string };
+      const sanitizedId = toolCall.id;
+      expect(sanitizedId).toMatch(/^functionsexec0/); // May have hash suffix if collision occurred
+
+      // The tool result should match the normalized tool call ID
+      const result = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
+      expect(result.toolCallId).toBe(sanitizedId);
+    });
+
+    it("normalizes mangled tool call IDs with various patterns", () => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "functions.read:1", name: "read", arguments: {} },
+            { type: "toolCall", id: "functions.exec:2", name: "exec", arguments: {} },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "functions read:1",
+          toolName: "read",
+          content: [{ type: "text", text: "one" }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "functions exec:2",
+          toolName: "exec",
+          content: [{ type: "text", text: "two" }],
+        },
+      ]);
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict");
+      const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+      const call1 = assistant.content?.[0] as { id?: string };
+      const call2 = assistant.content?.[1] as { id?: string };
+
+      // IDs should be sanitized (alphanumeric only)
+      expect(call1.id).toMatch(/^functionsread1/);
+      expect(call2.id).toMatch(/^functionsexec2/);
+
+      // Tool results should match their corresponding tool calls
+      const result1 = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
+      const result2 = out[2] as Extract<AgentMessage, { role: "toolResult" }>;
+      expect(result1.toolCallId).toBe(call1.id);
+      expect(result2.toolCallId).toBe(call2.id);
+    });
+
+    it("handles tool results that come before their tool calls in the message array", () => {
+      // Edge case: tool results might appear before assistant messages in some scenarios
+      const input = castAgentMessages([
+        {
+          role: "toolResult",
+          // Mangled ID
+          toolCallId: "functions exec:0",
+          toolName: "exec",
+          content: [{ type: "text", text: "ok" }],
+        },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "functions.exec:0", name: "exec", arguments: {} }],
+        },
+      ]);
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict");
+
+      // Both IDs should be normalized and match
+      const assistant = out[1] as Extract<AgentMessage, { role: "assistant" }>;
+      const toolCall = assistant.content?.[0] as { id?: string };
+      const result = out[0] as Extract<AgentMessage, { role: "toolResult" }>;
+
+      expect(result.toolCallId).toBe(toolCall.id);
+    });
+  });
 });
