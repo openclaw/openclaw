@@ -313,6 +313,7 @@ describe("canvas host", () => {
     const linkPath = path.join(a2uiRoot, linkName);
     let createdBundle = false;
     let createdLink = false;
+    let server: Awaited<ReturnType<typeof startFixtureCanvasHost>> | undefined;
 
     try {
       await fs.stat(bundlePath);
@@ -324,17 +325,16 @@ describe("canvas host", () => {
     await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
     createdLink = true;
 
-    let server: Awaited<ReturnType<typeof startFixtureCanvasHost>>;
     try {
-      server = await startFixtureCanvasHost(dir);
-    } catch (error) {
-      if (isLoopbackBindDenied(error)) {
-        return;
+      try {
+        server = await startFixtureCanvasHost(dir);
+      } catch (error) {
+        if (isLoopbackBindDenied(error)) {
+          return;
+        }
+        throw error;
       }
-      throw error;
-    }
 
-    try {
       const res = await fetch(`http://127.0.0.1:${server.port}/__openclaw__/a2ui/`);
       const html = await res.text();
       expect(res.status).toBe(200);
@@ -356,7 +356,7 @@ describe("canvas host", () => {
       expect(symlinkRes.status).toBe(404);
       expect(await symlinkRes.text()).toBe("not found");
     } finally {
-      await server.close();
+      await server?.close();
       if (createdLink) {
         await fs.rm(linkPath, { force: true });
       }
