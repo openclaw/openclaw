@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { compileConfigRegex } from "../security/config-regex.js";
+import { resolveCustomRulesPath } from "../privacy/custom-rules.js";
 import { PrivacyDetector } from "../privacy/detector.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { replacePatternBounded } from "./redact-bounded.js";
@@ -176,6 +177,13 @@ export function getDefaultRedactPatterns(): string[] {
 let cachedDetector: PrivacyDetector | undefined;
 let cachedDetectorRules: string | undefined;
 
+function resolveDetectorRulesKey(rules: string): string {
+  if (rules === "basic" || rules === "extended" || rules === "none") {
+    return rules;
+  }
+  return resolveCustomRulesPath(rules);
+}
+
 /**
  * Enhanced redaction that combines the existing pattern-based redaction
  * with the privacy detection engine for broader coverage.
@@ -204,7 +212,7 @@ export function redactWithPrivacyFilter(
   }
 
   try {
-    const rules = privacyRules ?? "extended";
+    const rules = resolveDetectorRulesKey(privacyRules ?? "extended");
     // Re-create the detector only when the ruleset changes.
     if (!cachedDetector || cachedDetectorRules !== rules) {
       cachedDetector = new PrivacyDetector(rules);
