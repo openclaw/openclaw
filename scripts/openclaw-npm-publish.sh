@@ -11,10 +11,15 @@ fi
 
 package_version="$(node -p "require('./package.json').version")"
 publish_cmd=(npm publish --access public --provenance)
+release_channel="stable"
 
 if [[ "${package_version}" == *-beta.* ]]; then
   publish_cmd=(npm publish --access public --tag beta --provenance)
+  release_channel="beta"
 fi
+
+echo "Resolved package version: ${package_version}"
+echo "Resolved release channel: ${release_channel}"
 
 if [[ -n "${NODE_AUTH_TOKEN:-}" ]]; then
   if [[ "${mode}" == "--dry-run" ]]; then
@@ -22,6 +27,8 @@ if [[ -n "${NODE_AUTH_TOKEN:-}" ]]; then
   else
     printf '//registry.npmjs.org/:_authToken=%s\n' "${NODE_AUTH_TOKEN}" > "${HOME}/.npmrc"
   fi
+else
+  echo 'No NODE_AUTH_TOKEN set in this environment'
 fi
 
 printf 'Publish command:'
