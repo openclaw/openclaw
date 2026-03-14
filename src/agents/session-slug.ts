@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 const SLUG_ADJECTIVES = [
   "amber",
   "briny",
@@ -100,14 +102,25 @@ const SLUG_NOUNS = [
   "zephyr",
 ];
 
-function randomChoice(values: string[], fallback: string) {
-  return values[Math.floor(Math.random() * values.length)] ?? fallback;
+function secureRandomChoice(values: string[], fallback: string) {
+  const randomIndex = randomBytes(4).readUInt32BE(0) % values.length;
+  return values[randomIndex] ?? fallback;
+}
+
+function createSecureToken(length: number): string {
+  return randomBytes(Math.ceil((length * 3) / 4))
+    .toString("base64url")
+    .replace(/[^a-z0-9]/gi, "")
+    .slice(0, length);
 }
 
 function createSlugBase(words = 2) {
-  const parts = [randomChoice(SLUG_ADJECTIVES, "steady"), randomChoice(SLUG_NOUNS, "harbor")];
+  const parts = [
+    secureRandomChoice(SLUG_ADJECTIVES, "steady"),
+    secureRandomChoice(SLUG_NOUNS, "harbor"),
+  ];
   if (words > 2) {
-    parts.push(randomChoice(SLUG_NOUNS, "reef"));
+    parts.push(secureRandomChoice(SLUG_NOUNS, "reef"));
   }
   return parts.join("-");
 }
@@ -141,6 +154,6 @@ export function createSessionSlug(isTaken?: (id: string) => boolean): string {
   if (threeWord) {
     return threeWord;
   }
-  const fallback = `${createSlugBase(3)}-${Math.random().toString(36).slice(2, 5)}`;
+  const fallback = `${createSlugBase(3)}-${createSecureToken(5)}`;
   return isIdTaken(fallback) ? `${fallback}-${Date.now().toString(36)}` : fallback;
 }
