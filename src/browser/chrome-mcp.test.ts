@@ -189,4 +189,22 @@ describe("chrome MCP page parsing", () => {
     expect(tabs).toHaveLength(2);
     expect(result).toBe(123);
   });
+
+  it("clears failed pending sessions so the next call can retry", async () => {
+    let factoryCalls = 0;
+    const factory: ChromeMcpSessionFactory = async () => {
+      factoryCalls += 1;
+      if (factoryCalls === 1) {
+        throw new Error("attach failed");
+      }
+      return createFakeSession();
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/attach failed/);
+
+    const tabs = await listChromeMcpTabs("chrome-live");
+    expect(factoryCalls).toBe(2);
+    expect(tabs).toHaveLength(2);
+  });
 });
