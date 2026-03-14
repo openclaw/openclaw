@@ -33,6 +33,11 @@ const SENTINEL_FAST_RE = new RegExp(
     .join("|"),
 );
 
+// Fast-path check for <session-recap> blocks.
+const SESSION_RECAP_QUICK_RE = /<\s*session[-_]recap\b/i;
+const SESSION_RECAP_OPEN_LINE_RE = /^<\s*session[-_]recap\b[^<>]*>\s*$/i;
+const SESSION_RECAP_CLOSE_LINE_RE = /^<\s*\/\s*session[-_]recap\s*>\s*$/i;
+
 function isInboundMetaSentinelLine(line: string): boolean {
   const trimmed = line.trim();
   return INBOUND_META_SENTINELS.some((sentinel) => sentinel === trimmed);
@@ -106,6 +111,31 @@ function stripTrailingUntrustedContextSuffix(lines: string[]): string[] {
 }
 
 /**
+ * Strips a leading <session-recap>…</session-recap> block injected as agent
+ * context scaffolding. These blocks are AI-facing only and must not be visible
+ * in any UI surface.
+ *
+ * The block is only stripped when it appears at the very start of the message
+ * (ignoring leading blank lines). A <session-recap> tag that appears mid-message
+ * is left intact.
+ */
+function stripLeadingSessionRecapBlock(lines: string[]): string[] {
+  let i = 0;
+  // Skip leading blank lines.
+  while (i < lines.length && lines[i]?.trim() === "") i++;
+  if (i >= lines.length) return lines;
+  // Only strip if the first non-blank line is a <session-recap> open tag.
+  if (!SESSION_RECAP_OPEN_LINE_RE.test(lines[i] ?? "")) return lines;
+  i++;
+  // Consume all lines until (and including) the closing </session-recap> tag.
+  while (i < lines.length && !SESSION_RECAP_CLOSE_LINE_RE.test(lines[i] ?? "")) i++;
+  if (i < lines.length) i++; // consume the closing tag line itself
+  // Skip blank lines after the closing tag.
+  while (i < lines.length && lines[i]?.trim() === "") i++;
+  return lines.slice(i);
+}
+
+/**
  * Remove all injected inbound metadata prefix blocks from `text`.
  *
  * Each block has the shape:
@@ -121,11 +151,28 @@ function stripTrailingUntrustedContextSuffix(lines: string[]): string[] {
  * (fast path — zero allocation).
  */
 export function stripInboundMetadata(text: string): string {
-  if (!text || !SENTINEL_FAST_RE.test(text)) {
+  if (!text) return text;
+
+  // Fast-path: if neither standard sentinels nor session-recap are present,
+  // return the original string unchanged (zero allocation).
+  const hasStandardSentinels = SENTINEL_FAST_RE.test(text);
+  const hasSessionRecap = SESSION_RECAP_QUICK_RE.test(text);
+  if (!hasStandardSentinels && !hasSessionRecap) {
     return text;
   }
 
-  const lines = text.split("\n");
+  let lines = text.split("\n");
+
+  // Strip a leading <session-recap> block first so the remaining logic can
+  // operate on a clean prefix.
+  if (hasSessionRecap) {
+    lines = stripLeadingSessionRecapBlock(lines);
+  }
+
+  if (!hasStandardSentinels) {
+    return lines.join("\n").replace(/^\n+/, "").replace(/\n+$/, "");
+  }
+
   const result: string[] = [];
   let inMetaBlock = false;
   let inFencedJson = false;
@@ -178,11 +225,26 @@ export function stripInboundMetadata(text: string): string {
 }
 
 export function stripLeadingInboundMetadata(text: string): string {
-  if (!text || !SENTINEL_FAST_RE.test(text)) {
+  if (!text) return text;
+
+  const hasStandardSentinels = SENTINEL_FAST_RE.test(text);
+  const hasSessionRecap = SESSION_RECAP_QUICK_RE.test(text);
+  if (!hasStandardSentinels && !hasSessionRecap) {
     return text;
   }
 
-  const lines = text.split("\n");
+  let lines = text.split("\n");
+
+  // Strip a leading <session-recap> block first.
+  if (hasSessionRecap) {
+    lines = stripLeadingSessionRecapBlock(lines);
+  }
+
+  if (!hasStandardSentinels) {
+    const strippedNoLeading = stripTrailingUntrustedContextSuffix(lines);
+    return strippedNoLeading.join("\n");
+  }
+
   let index = 0;
 
   while (index < lines.length && lines[index] === "") {
