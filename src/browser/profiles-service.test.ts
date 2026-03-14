@@ -178,7 +178,9 @@ describe("BrowserProfilesService", () => {
       driver: "existing-session",
     });
 
-    expect(result.cdpPort).toBe(0);
+    expect(result.transport).toBe("chrome-mcp");
+    expect(result.cdpPort).toBeNull();
+    expect(result.cdpUrl).toBeNull();
     expect(result.isRemote).toBe(false);
     expect(state.resolved.profiles["chrome-live"]).toEqual({
       driver: "existing-session",

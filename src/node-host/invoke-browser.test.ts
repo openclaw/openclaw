@@ -79,6 +79,36 @@ describe("runBrowserProxyCommand", () => {
     );
   });
 
+  it("includes chrome-mcp transport in timeout diagnostics when no CDP URL exists", async () => {
+    dispatcherMocks.dispatch
+      .mockImplementationOnce(async () => {
+        await new Promise(() => {});
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        body: {
+          running: true,
+          transport: "chrome-mcp",
+          cdpHttp: true,
+          cdpReady: false,
+          cdpUrl: null,
+        },
+      });
+
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({
+          method: "GET",
+          path: "/snapshot",
+          profile: "chrome-live",
+          timeoutMs: 5,
+        }),
+      ),
+    ).rejects.toThrow(
+      /browser proxy timed out for GET \/snapshot after 5ms; ws-backed browser action; profile=chrome-live; status\(running=true, cdpHttp=true, cdpReady=false, transport=chrome-mcp\)/,
+    );
+  });
+
   it("keeps non-timeout browser errors intact", async () => {
     dispatcherMocks.dispatch.mockResolvedValue({
       status: 500,
