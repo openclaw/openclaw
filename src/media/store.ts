@@ -398,7 +398,7 @@ export async function saveMediaBuffer(
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const uuid = crypto.randomUUID();
   const headerExt = extensionForMime(contentType?.split(";")[0]?.trim() ?? undefined);
-  const mime = await detectMime({ buffer, headerMime: contentType });
+  const mime = await detectMime({ buffer, headerMime: contentType, filePath: originalFilename });
   const ext = headerExt ?? extensionForMime(mime) ?? "";
   const id = buildSavedMediaId({ baseId: uuid, ext, originalFilename });
   await writeSavedMediaBuffer({ dir, id, buffer });
