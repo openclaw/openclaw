@@ -879,6 +879,25 @@ async function executeGatewayRequestWithScopes<T>(params: {
   });
 }
 
+function shouldRetryTransientLocalGatewayError(url: string, err: unknown): boolean {
+  try {
+    const parsed = new URL(url);
+    if (!["127.0.0.1", "::1", "localhost"].includes(parsed.hostname)) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+
+  const message = err instanceof Error ? err.message : String(err);
+  const lowered = message.toLowerCase();
+  return (
+    lowered.includes("gateway closed (1000") ||
+    lowered.includes("connect challenge timeout") ||
+    lowered.includes("handshake timeout")
+  );
+}
+
 async function callGatewayWithScopes<T = Record<string, unknown>>(
   opts: CallGatewayBaseOptions,
   scopes: OperatorScope[],
@@ -904,17 +923,36 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const url = connectionDetails.url;
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
   const { token, password } = resolvedCredentials;
-  return await executeGatewayRequestWithScopes<T>({
-    opts,
-    scopes,
-    url,
-    token,
-    password,
-    tlsFingerprint,
-    timeoutMs,
-    safeTimerTimeoutMs,
-    connectionDetails,
-  });
+
+  try {
+    return await executeGatewayRequestWithScopes<T>({
+      opts,
+      scopes,
+      url,
+      token,
+      password,
+      tlsFingerprint,
+      timeoutMs,
+      safeTimerTimeoutMs,
+      connectionDetails,
+    });
+  } catch (err) {
+    if (!shouldRetryTransientLocalGatewayError(url, err)) {
+      throw err;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    return await executeGatewayRequestWithScopes<T>({
+      opts,
+      scopes,
+      url,
+      token,
+      password,
+      tlsFingerprint,
+      timeoutMs,
+      safeTimerTimeoutMs,
+      connectionDetails,
+    });
+  }
 }
 
 export async function callGatewayScoped<T = Record<string, unknown>>(
