@@ -63,6 +63,7 @@ export type EmbeddedPiSubscribeState = {
 
   compactionInFlight: boolean;
   pendingCompactionRetry: number;
+  pendingCompactionRetryStarts: number;
   compactionRetryResolve?: () => void;
   compactionRetryReject?: (reason?: unknown) => void;
   compactionRetryPromise: Promise<void> | null;
@@ -118,6 +119,7 @@ export type EmbeddedPiSubscribeContext = {
   trimMessagingToolSent: () => void;
   ensureCompactionPromise: () => void;
   noteCompactionRetry: () => void;
+  markCompactionRetryStarted: () => void;
   resolveCompactionRetry: () => void;
   maybeResolveCompactionWait: () => void;
   recordAssistantUsage: (usage: unknown) => void;
