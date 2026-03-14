@@ -369,7 +369,7 @@ actor PortGuardian {
             return false
         case .local:
             // The gateway daemon may listen as `openclaw` or as its runtime (`node`, `bun`, etc).
-            if full.contains("gateway-daemon") { return true }
+            if full.contains("gateway-daemon") || full.contains("openclaw-gateway") { return true }
             // If args are unavailable, treat a CLI listener as expected.
             if cmd.contains("openclaw"), full == cmd { return true }
             return false
