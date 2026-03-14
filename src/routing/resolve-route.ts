@@ -628,11 +628,6 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const memberRoleIds = input.memberRoleIds ?? [];
   const memberRoleIdSet = new Set(memberRoleIds);
   const dmScope = input.cfg.session?.dmScope ?? "main";
-  const groupScope =
-    ((input.cfg.session as Record<string, unknown> | undefined)?.groupScope as
-      | "main"
-      | "per-channel"
-      | undefined) ?? "per-channel";
   const identityLinks = input.cfg.session?.identityLinks;
   const shouldLogDebug = shouldLogVerbose();
   const parentPeer = input.parentPeer
@@ -666,7 +661,11 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const bindings = getEvaluatedBindingsForChannelAccount(input.cfg, channel, accountId);
   const bindingsIndex = getEvaluatedBindingIndexForChannelAccount(input.cfg, channel, accountId);
 
-  const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {
+  const choose = (
+    agentId: string,
+    matchedBy: ResolvedAgentRoute["matchedBy"],
+    bindingGroupScope?: "main" | "per-channel",
+  ) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
     const sessionKey = buildAgentSessionKey({
       agentId: resolvedAgentId,
@@ -674,7 +673,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       accountId,
       peer,
       dmScope,
-      groupScope,
+      groupScope: bindingGroupScope ?? "per-channel",
       identityLinks,
     }).toLowerCase();
     const mainSessionKey = buildAgentMainSessionKey({
@@ -805,7 +804,8 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       if (shouldLogDebug) {
         logDebug(`[routing] match: matchedBy=${tier.matchedBy} agentId=${matched.binding.agentId}`);
       }
-      return choose(matched.binding.agentId, tier.matchedBy);
+      const routeBinding = matched.binding as { groupScope?: "main" | "per-channel" };
+      return choose(matched.binding.agentId, tier.matchedBy, routeBinding.groupScope);
     }
   }
 
