@@ -24,7 +24,14 @@ const providerId = "telegram";
 function readTelegramSendParams(params: Record<string, unknown>) {
   const to = readStringParam(params, "to", { required: true });
   const mediaUrl = readStringParam(params, "media", { trim: false });
-  const message = readStringParam(params, "message", { required: !mediaUrl, allowEmpty: true });
+  const buffer = readStringParam(params, "buffer", { trim: false });
+  const filename = readStringParam(params, "filename");
+  const contentType = readStringParam(params, "contentType") ?? readStringParam(params, "mimeType");
+  const hasAttachment = Boolean(mediaUrl || buffer);
+  const message = readStringParam(params, "message", {
+    required: !hasAttachment,
+    allowEmpty: true,
+  });
   const caption = readStringParam(params, "caption", { allowEmpty: true });
   const content = message || caption || "";
   const replyTo = readStringParam(params, "replyTo");
@@ -37,6 +44,9 @@ function readTelegramSendParams(params: Record<string, unknown>) {
     to,
     content,
     mediaUrl: mediaUrl ?? undefined,
+    buffer: buffer ?? undefined,
+    filename: filename ?? undefined,
+    contentType: contentType ?? undefined,
     replyToMessageId: replyTo ?? undefined,
     messageThreadId: threadId ?? undefined,
     buttons,
