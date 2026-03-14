@@ -182,6 +182,30 @@ describe("system run command helpers", () => {
     expect(res.details?.code).toBe("MISSING_COMMAND");
   });
 
+  test("resolveSystemRunCommand returns an empty success payload when no command is provided", () => {
+    const res = resolveSystemRunCommand({});
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.argv).toEqual([]);
+    expect(res.commandText).toBe("");
+    expect(res.shellPayload).toBeNull();
+    expect(res.previewText).toBeNull();
+  });
+
+  test("resolveSystemRunCommand stringifies non-string argv tokens", () => {
+    const res = resolveSystemRunCommand({
+      command: ["echo", 123, false, null],
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.argv).toEqual(["echo", "123", "false", "null"]);
+    expect(res.commandText).toBe("echo 123 false null");
+  });
+
   test("resolveSystemRunCommandRequest accepts legacy shell payloads but returns canonical command text", () => {
     const res = resolveSystemRunCommandRequest({
       command: ["cmd.exe", "/d", "/s", "/c", "echo", "SAFE&&whoami"],
