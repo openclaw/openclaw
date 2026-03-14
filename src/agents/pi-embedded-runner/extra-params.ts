@@ -152,6 +152,48 @@ function createStreamFnWithExtraParams(
   return wrappedStreamFn;
 }
 
+function normalizeOllamaThinkFlag(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (["off", "false", "disabled", "disable", "none"].includes(normalized)) {
+    return false;
+  }
+  if (["on", "true", "enabled", "enable"].includes(normalized)) {
+    return true;
+  }
+  return undefined;
+}
+
+function resolveOllamaThinkingFlag(params: {
+  configuredThinking?: unknown;
+  thinkingLevel?: ThinkLevel;
+}): boolean | undefined {
+  if (params.thinkingLevel === "off") {
+    return false;
+  }
+  return normalizeOllamaThinkFlag(params.configuredThinking);
+}
+
+function createOllamaThinkingWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkValue: boolean,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) =>
+    underlying(model, context, {
+      ...options,
+      ...(options?.thinking === undefined ? { thinking: thinkValue } : {}),
+    });
+}
+
 function isGemini31Model(modelId: string): boolean {
   const normalized = modelId.toLowerCase();
   return normalized.includes("gemini-3.1-pro") || normalized.includes("gemini-3.1-flash");
@@ -392,6 +434,17 @@ export function applyExtraParamsToAgent(
   }
 
   agent.streamFn = createAnthropicToolPayloadCompatibilityWrapper(agent.streamFn);
+
+  if (provider === "ollama") {
+    const ollamaThinkingFlag = resolveOllamaThinkingFlag({
+      configuredThinking: merged?.thinking,
+      thinkingLevel,
+    });
+    if (ollamaThinkingFlag !== undefined) {
+      log.debug(`applying Ollama think=${ollamaThinkingFlag} for ${provider}/${modelId}`);
+      agent.streamFn = createOllamaThinkingWrapper(agent.streamFn, ollamaThinkingFlag);
+    }
+  }
 
   if (provider === "openrouter") {
     log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);

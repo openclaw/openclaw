@@ -434,6 +434,37 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
+  it("includes top-level think=false and temperature for Ollama-native requests", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          options: { temperature: 0.2, thinking: "off" },
+        });
+
+        const events = await collectStreamEvents(stream);
+        expect(events.at(-1)?.type).toBe("done");
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+
+        const requestBody = JSON.parse(requestInit.body) as {
+          think?: boolean;
+          options: { temperature?: number };
+        };
+        expect(requestBody.think).toBe(false);
+        expect(requestBody.options.temperature).toBe(0.2);
+      },
+    );
+  });
+
   it("preserves an explicit Authorization header when apiKey is a local marker", async () => {
     await withMockNdjsonFetch(
       [
