@@ -36,6 +36,7 @@ function runWritePlan(args: string[], input?: string) {
       basename: args[3] ?? "",
     },
     mkdir: args[4] === "1",
+    expectedSize: Number.parseInt(args[5] ?? "0", 10),
   });
 
   return spawnSync("sh", ["-c", plan.script, "moltbot-sandbox-fs", ...(plan.args ?? [])], {
@@ -51,7 +52,10 @@ describe("sandbox pinned mutation helper", () => {
       const workspace = path.join(root, "workspace");
       await fs.mkdir(workspace, { recursive: true });
 
-      const result = runMutation(["write", workspace, "nested/deeper", "note.txt", "1"], "hello");
+      const result = runMutation(
+        ["write", workspace, "nested/deeper", "note.txt", "1", "5"],
+        "hello",
+      );
 
       expect(result.status).toBe(0);
       await expect(
@@ -68,7 +72,7 @@ describe("sandbox pinned mutation helper", () => {
         await fs.mkdir(workspace, { recursive: true });
 
         const result = runWritePlan(
-          ["write", workspace, "nested/deeper", "note.txt", "1"],
+          ["write", workspace, "nested/deeper", "note.txt", "1", "5"],
           "hello",
         );
 
@@ -76,6 +80,24 @@ describe("sandbox pinned mutation helper", () => {
         await expect(
           fs.readFile(path.join(workspace, "nested", "deeper", "note.txt"), "utf8"),
         ).resolves.toBe("hello");
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects stdin size mismatches before committing the target file",
+    async () => {
+      await withTempRoot("openclaw-mutation-helper-", async (root) => {
+        const workspace = path.join(root, "workspace");
+        const targetPath = path.join(workspace, "nested", "note.txt");
+        await fs.mkdir(path.dirname(targetPath), { recursive: true });
+        await fs.writeFile(targetPath, "seed", "utf8");
+
+        const result = runWritePlan(["write", workspace, "nested", "note.txt", "1", "99"], "hello");
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("write size mismatch");
+        await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("seed");
       });
     },
   );
@@ -90,7 +112,7 @@ describe("sandbox pinned mutation helper", () => {
         await fs.mkdir(outside, { recursive: true });
         await fs.symlink(outside, path.join(workspace, "alias"));
 
-        const result = runMutation(["write", workspace, "alias", "escape.txt", "0"], "owned");
+        const result = runMutation(["write", workspace, "alias", "escape.txt", "0", "5"], "owned");
 
         expect(result.status).not.toBe(0);
         await expect(fs.readFile(path.join(outside, "escape.txt"), "utf8")).rejects.toThrow();
