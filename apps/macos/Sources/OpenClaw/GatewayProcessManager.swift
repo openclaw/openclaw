@@ -378,6 +378,11 @@ final class GatewayProcessManager {
     func waitForGatewayReady(timeout: TimeInterval = 6) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
+            // Bail early if gateway already failed to start (e.g. CLI not in PATH).
+            if case .failed = self.status {
+                self.appendLog("[gateway] gateway already in failed state, not waiting\n")
+                return false
+            }
             if !self.desiredActive { return false }
             do {
                 _ = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
