@@ -1033,6 +1033,7 @@
               {
                 "group": "Skills",
                 "pages": [
+                  "tools/btw",
                   "tools/creating-skills",
                   "tools/slash-commands",
                   "tools/skills",
