@@ -437,6 +437,41 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(abortEmbeddedPiRun)).not.toHaveBeenCalled();
   });
 
+  it("restores previewed system events when session hint persistence fails", async () => {
+    vi.mocked(peekFormattedSystemEvents).mockResolvedValueOnce({
+      reservation: {
+        sessionKey: "session-key",
+        reservationId: "r0",
+        entries: [{ text: "Node connected", ts: 1 }],
+      },
+      text: "System: [t] Node connected.",
+    });
+    vi.mocked(commitSessionHintEffects).mockRejectedValueOnce(new Error("store write failed"));
+
+    await expect(
+      runPreparedReply(
+        baseParams({
+          abortedLastRun: true,
+          sessionEntry: {
+            sessionId: "session-id",
+            updatedAt: Date.now(),
+          },
+          sessionStore: {
+            "session-key": {
+              sessionId: "session-id",
+              updatedAt: Date.now(),
+            },
+          },
+          storePath: "/tmp/sessions.json",
+        }),
+      ),
+    ).rejects.toThrow("store write failed");
+
+    expect(vi.mocked(restorePeekedSystemEvents)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(commitPeekedSystemEvents)).not.toHaveBeenCalled();
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+  });
+
   it("prefers Provider over Surface when origin channel is missing", async () => {
     await runPreparedReply(
       baseParams({

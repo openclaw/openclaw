@@ -403,194 +403,201 @@ export async function runPreparedReply(
     }
   }
 
-  commitPeekedSystemEvents(previewedSystemEvents);
-  await commitSessionHintEffects({
-    abortedLastRun,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    abortKey: command.abortKey,
-  });
-  const skillResult = await ensureSkillSnapshot({
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    sessionId,
-    isFirstTurnInSession,
-    workspaceDir,
-    cfg,
-    skillFilter: opts?.skillFilter,
-  });
-  sessionEntry = skillResult.sessionEntry ?? sessionEntry;
-  currentSystemSent = skillResult.systemSent;
-  const skillsSnapshot = skillResult.skillsSnapshot;
-  if (!resolvedThinkLevel) {
-    resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
-  }
-  if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
-    const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
-    if (explicitThink) {
-      typing.cleanup();
-      return {
-        text: `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}. Use /think high or switch to one of those models.`,
-      };
+  try {
+    await commitSessionHintEffects({
+      abortedLastRun,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      abortKey: command.abortKey,
+    });
+    const skillResult = await ensureSkillSnapshot({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      sessionId,
+      isFirstTurnInSession,
+      workspaceDir,
+      cfg,
+      skillFilter: opts?.skillFilter,
+    });
+    sessionEntry = skillResult.sessionEntry ?? sessionEntry;
+    currentSystemSent = skillResult.systemSent;
+    const skillsSnapshot = skillResult.skillsSnapshot;
+    if (!resolvedThinkLevel) {
+      resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
     }
-    resolvedThinkLevel = "high";
-    if (sessionEntry && sessionStore && sessionKey && sessionEntry.thinkingLevel === "xhigh") {
-      sessionEntry.thinkingLevel = "high";
-      sessionEntry.updatedAt = Date.now();
-      sessionStore[sessionKey] = sessionEntry;
-      if (storePath) {
-        await updateSessionStore(storePath, (store) => {
-          store[sessionKey] = sessionEntry;
-        });
+    if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
+      const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
+      if (explicitThink) {
+        restorePeekedSystemEvents(previewedSystemEvents);
+        typing.cleanup();
+        return {
+          text: `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}. Use /think high or switch to one of those models.`,
+        };
+      }
+      resolvedThinkLevel = "high";
+      if (sessionEntry && sessionStore && sessionKey && sessionEntry.thinkingLevel === "xhigh") {
+        sessionEntry.thinkingLevel = "high";
+        sessionEntry.updatedAt = Date.now();
+        sessionStore[sessionKey] = sessionEntry;
+        if (storePath) {
+          const nextSessionEntry = sessionEntry;
+          await updateSessionStore(storePath, (store) => {
+            store[sessionKey] = nextSessionEntry;
+          });
+        }
       }
     }
-  }
-  if (resetTriggered && command.isAuthorizedSender) {
-    await sendResetSessionNotice({
-      ctx,
-      command,
-      sessionKey,
-      cfg,
-      accountId: ctx.AccountId,
-      threadId: ctx.MessageThreadId,
-      provider,
-      model,
-      defaultProvider,
-      defaultModel,
-    });
-  }
-  const sessionIdFinal = sessionId ?? crypto.randomUUID();
-  const sessionFile = resolveSessionFilePath(
-    sessionIdFinal,
-    sessionEntry,
-    resolveSessionFilePathOptions({ agentId, storePath }),
-  );
-  const resolvedQueue = resolveQueueSettings({
-    cfg,
-    channel: sessionCtx.Provider,
-    sessionEntry,
-    inlineMode: perMessageQueueMode,
-    inlineOptions: perMessageQueueOptions,
-  });
-  const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal);
-  const laneSize = getQueueSize(sessionLaneKey);
-  if (resolvedQueue.mode === "interrupt" && laneSize > 0) {
-    const cleared = clearCommandLane(sessionLaneKey);
-    const aborted = abortEmbeddedPiRun(sessionIdFinal);
-    logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
-  }
-  const queueKey = sessionKey ?? sessionIdFinal;
-  const isActive = isEmbeddedPiRunActive(sessionIdFinal);
-  const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
-  const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
-  const shouldFollowup =
-    resolvedQueue.mode === "followup" ||
-    resolvedQueue.mode === "collect" ||
-    resolvedQueue.mode === "steer-backlog";
-  const authProfileId = await resolveSessionAuthProfileOverride({
-    cfg,
-    provider,
-    agentDir,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    isNewSession,
-  });
-  const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
-  const followupRun = {
-    prompt: queuedBody,
-    messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
-    summaryLine: baseBodyTrimmedRaw,
-    enqueuedAt: Date.now(),
-    // Originating channel for reply routing.
-    originatingChannel: ctx.OriginatingChannel,
-    originatingTo: ctx.OriginatingTo,
-    originatingAccountId: ctx.AccountId,
-    originatingThreadId: ctx.MessageThreadId,
-    originatingChatType: ctx.ChatType,
-    run: {
-      agentId,
-      agentDir,
-      sessionId: sessionIdFinal,
-      sessionKey,
-      messageProvider: resolveOriginMessageProvider({
-        originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
-        // Prefer Provider over Surface for fallback channel identity.
-        // Surface can carry relayed metadata (for example "webchat") while Provider
-        // still reflects the active channel that should own tool routing.
-        provider: ctx.Provider ?? ctx.Surface ?? sessionCtx.Provider,
-      }),
-      agentAccountId: sessionCtx.AccountId,
-      groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
-      groupChannel: sessionCtx.GroupChannel?.trim() ?? sessionCtx.GroupSubject?.trim(),
-      groupSpace: sessionCtx.GroupSpace?.trim() ?? undefined,
-      senderId: sessionCtx.SenderId?.trim() || undefined,
-      senderName: sessionCtx.SenderName?.trim() || undefined,
-      senderUsername: sessionCtx.SenderUsername?.trim() || undefined,
-      senderE164: sessionCtx.SenderE164?.trim() || undefined,
-      senderIsOwner: command.senderIsOwner,
-      sessionFile,
-      workspaceDir,
-      config: cfg,
-      skillsSnapshot,
-      provider,
-      model,
-      authProfileId,
-      authProfileIdSource,
-      thinkLevel: resolvedThinkLevel,
-      fastMode: resolveFastModeState({
+    if (resetTriggered && command.isAuthorizedSender) {
+      await sendResetSessionNotice({
+        ctx,
+        command,
+        sessionKey,
         cfg,
+        accountId: ctx.AccountId,
+        threadId: ctx.MessageThreadId,
         provider,
         model,
-        sessionEntry,
-      }).enabled,
-      verboseLevel: resolvedVerboseLevel,
-      reasoningLevel: resolvedReasoningLevel,
-      elevatedLevel: resolvedElevatedLevel,
-      execOverrides,
-      bashElevated: {
-        enabled: elevatedEnabled,
-        allowed: elevatedAllowed,
-        defaultLevel: resolvedElevatedLevel ?? "off",
+        defaultProvider,
+        defaultModel,
+      });
+    }
+    const sessionIdFinal = sessionId ?? crypto.randomUUID();
+    const sessionFile = resolveSessionFilePath(
+      sessionIdFinal,
+      sessionEntry,
+      resolveSessionFilePathOptions({ agentId, storePath }),
+    );
+    const resolvedQueue = resolveQueueSettings({
+      cfg,
+      channel: sessionCtx.Provider,
+      sessionEntry,
+      inlineMode: perMessageQueueMode,
+      inlineOptions: perMessageQueueOptions,
+    });
+    const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal);
+    const laneSize = getQueueSize(sessionLaneKey);
+    if (resolvedQueue.mode === "interrupt" && laneSize > 0) {
+      const cleared = clearCommandLane(sessionLaneKey);
+      const aborted = abortEmbeddedPiRun(sessionIdFinal);
+      logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
+    }
+    const queueKey = sessionKey ?? sessionIdFinal;
+    const isActive = isEmbeddedPiRunActive(sessionIdFinal);
+    const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
+    const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
+    const shouldFollowup =
+      resolvedQueue.mode === "followup" ||
+      resolvedQueue.mode === "collect" ||
+      resolvedQueue.mode === "steer-backlog";
+    const authProfileId = await resolveSessionAuthProfileOverride({
+      cfg,
+      provider,
+      agentDir,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      isNewSession,
+    });
+    const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
+    const followupRun = {
+      prompt: queuedBody,
+      messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+      summaryLine: baseBodyTrimmedRaw,
+      enqueuedAt: Date.now(),
+      // Originating channel for reply routing.
+      originatingChannel: ctx.OriginatingChannel,
+      originatingTo: ctx.OriginatingTo,
+      originatingAccountId: ctx.AccountId,
+      originatingThreadId: ctx.MessageThreadId,
+      originatingChatType: ctx.ChatType,
+      run: {
+        agentId,
+        agentDir,
+        sessionId: sessionIdFinal,
+        sessionKey,
+        messageProvider: resolveOriginMessageProvider({
+          originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
+          // Prefer Provider over Surface for fallback channel identity.
+          // Surface can carry relayed metadata (for example "webchat") while Provider
+          // still reflects the active channel that should own tool routing.
+          provider: ctx.Provider ?? ctx.Surface ?? sessionCtx.Provider,
+        }),
+        agentAccountId: sessionCtx.AccountId,
+        groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
+        groupChannel: sessionCtx.GroupChannel?.trim() ?? sessionCtx.GroupSubject?.trim(),
+        groupSpace: sessionCtx.GroupSpace?.trim() ?? undefined,
+        senderId: sessionCtx.SenderId?.trim() || undefined,
+        senderName: sessionCtx.SenderName?.trim() || undefined,
+        senderUsername: sessionCtx.SenderUsername?.trim() || undefined,
+        senderE164: sessionCtx.SenderE164?.trim() || undefined,
+        senderIsOwner: command.senderIsOwner,
+        sessionFile,
+        workspaceDir,
+        config: cfg,
+        skillsSnapshot,
+        provider,
+        model,
+        authProfileId,
+        authProfileIdSource,
+        thinkLevel: resolvedThinkLevel,
+        fastMode: resolveFastModeState({
+          cfg,
+          provider,
+          model,
+          sessionEntry,
+        }).enabled,
+        verboseLevel: resolvedVerboseLevel,
+        reasoningLevel: resolvedReasoningLevel,
+        elevatedLevel: resolvedElevatedLevel,
+        execOverrides,
+        bashElevated: {
+          enabled: elevatedEnabled,
+          allowed: elevatedAllowed,
+          defaultLevel: resolvedElevatedLevel ?? "off",
+        },
+        timeoutMs,
+        blockReplyBreak: resolvedBlockStreamingBreak,
+        ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
+        inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
+        extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
+        ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
       },
-      timeoutMs,
-      blockReplyBreak: resolvedBlockStreamingBreak,
-      ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
-      inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
-      extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
-      ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
-    },
-  };
+    };
 
-  return runReplyAgent({
-    commandBody: prefixedCommandBody,
-    followupRun,
-    queueKey,
-    resolvedQueue,
-    shouldSteer,
-    shouldFollowup,
-    isActive,
-    isStreaming,
-    opts,
-    typing,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    defaultModel,
-    agentCfgContextTokens: agentCfg?.contextTokens,
-    resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
-    isNewSession,
-    blockStreamingEnabled,
-    blockReplyChunking,
-    resolvedBlockStreamingBreak,
-    sessionCtx,
-    shouldInjectGroupIntro,
-    typingMode,
-  });
+    commitPeekedSystemEvents(previewedSystemEvents);
+    return runReplyAgent({
+      commandBody: prefixedCommandBody,
+      followupRun,
+      queueKey,
+      resolvedQueue,
+      shouldSteer,
+      shouldFollowup,
+      isActive,
+      isStreaming,
+      opts,
+      typing,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      defaultModel,
+      agentCfgContextTokens: agentCfg?.contextTokens,
+      resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+      isNewSession,
+      blockStreamingEnabled,
+      blockReplyChunking,
+      resolvedBlockStreamingBreak,
+      sessionCtx,
+      shouldInjectGroupIntro,
+      typingMode,
+    });
+  } catch (error) {
+    restorePeekedSystemEvents(previewedSystemEvents);
+    throw error;
+  }
 }
