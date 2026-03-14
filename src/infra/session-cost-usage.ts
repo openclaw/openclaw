@@ -227,12 +227,14 @@ const isTranscriptFile = (name: string): boolean =>
  * - Reset:  `<sessionId>.jsonl.reset.<timestamp>` → `<sessionId>`
  */
 const extractSessionId = (name: string): string => {
-  // Strip .jsonl or .jsonl.reset.<timestamp> suffix from the end.
-  // Using a regex anchored at $ avoids the edge case where the session ID
-  // itself contains ".jsonl" (indexOf would truncate too early).
-  // [^.]* in the reset group prevents greedy match across dots
-  // (e.g. session ID "abc.jsonl.reset.foo" with an active .jsonl file).
-  return name.replace(/\.jsonl(\.reset\.[^.]*)?$/, "");
+  // Use lastIndexOf to find the rightmost ".jsonl" marker.
+  // This correctly handles both:
+  //   active:  "<id>.jsonl"               → "<id>"
+  //   reset:   "<id>.jsonl.reset.<ts>"     → "<id>"
+  // Including session IDs that themselves contain ".jsonl.reset." substrings
+  // (indexOf would truncate too early; a regex with .* would greedily over-match).
+  const idx = name.lastIndexOf(".jsonl");
+  return idx !== -1 ? name.slice(0, idx) : name;
 };
 
 async function* readJsonlRecords(filePath: string): AsyncGenerator<Record<string, unknown>> {
