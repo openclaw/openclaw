@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCronStoreHarness } from "./service.test-harness.js";
-import { loadCronStore, resolveCronStorePath, saveCronStore } from "./store.js";
+import {
+  getDefaultCronStorePath,
+  loadCronStore,
+  resolveCronStorePath,
+  saveCronStore,
+} from "./store.js";
 import type { CronStoreFile } from "./types.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-store-" });
@@ -39,6 +44,25 @@ describe("resolveCronStorePath", () => {
 
     const result = resolveCronStorePath("~/cron/jobs.json");
     expect(result).toBe(path.resolve("/srv/openclaw-home", "cron", "jobs.json"));
+  });
+
+  it("respects OPENCLAW_STATE_DIR for default cron store path", () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/custom/state-dir");
+
+    const result = resolveCronStorePath();
+    expect(result).toBe(path.join("/custom/state-dir", "cron", "jobs.json"));
+  });
+
+  it("getDefaultCronStorePath reflects OPENCLAW_STATE_DIR at call time", () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/profile-a");
+    const pathA = getDefaultCronStorePath();
+
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/profile-b");
+    const pathB = getDefaultCronStorePath();
+
+    expect(pathA).toBe(path.join("/profile-a", "cron", "jobs.json"));
+    expect(pathB).toBe(path.join("/profile-b", "cron", "jobs.json"));
+    expect(pathA).not.toBe(pathB);
   });
 });
 
