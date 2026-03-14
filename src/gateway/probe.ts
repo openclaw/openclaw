@@ -40,7 +40,6 @@ export async function probeGateway(opts: {
   let connectError: string | null = null;
   let close: GatewayProbeClose | null = null;
 
-  const disableDeviceIdentity = false;
 
   return await new Promise<GatewayProbeResult>((resolve) => {
     let settled = false;
@@ -63,7 +62,7 @@ export async function probeGateway(opts: {
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.PROBE,
       instanceId,
-      deviceIdentity: disableDeviceIdentity ? null : undefined,
+      deviceIdentity: undefined,
       onConnectError: (err) => {
         connectError = formatErrorMessage(err);
       },
