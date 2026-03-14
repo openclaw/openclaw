@@ -2,8 +2,12 @@ export function parseTelegramReplyToMessageId(replyToId?: string | null): number
   if (!replyToId) {
     return undefined;
   }
-  const parsed = Number.parseInt(replyToId, 10);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  const trimmed = replyToId.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function parseIntegerId(value: string): number | undefined {
