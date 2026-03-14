@@ -195,6 +195,9 @@ function contentToOpenAIParts(content: unknown, modelOverride?: ReplayModelInfo)
     mimeType?: string;
     source?: unknown;
   }>) {
+    if (!part || typeof part !== "object") {
+      continue;
+    }
     if (
       (part.type === "text" || part.type === "input_text" || part.type === "output_text") &&
       typeof part.text === "string"
@@ -343,6 +346,9 @@ export function convertMessagesToInputItems(
           arguments?: unknown;
           thinkingSignature?: unknown;
         }>) {
+          if (!block || typeof block !== "object") {
+            continue;
+          }
           if (block.type === "text" && typeof block.text === "string") {
             const parsedSignature = parseAssistantTextSignature(block.textSignature);
             if (!assistantPhase) {
