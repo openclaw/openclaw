@@ -3,7 +3,7 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
+import { abortEmbeddedPiRun, queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -29,6 +29,7 @@ import {
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { isAbortRequestText } from "./abort.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
   createShouldEmitToolOutput,
@@ -195,6 +196,14 @@ export async function runReplyAgent(params: {
   };
 
   if (shouldSteer && isStreaming) {
+    // Abort the active run immediately when the inbound message is a priority
+    // interrupt (e.g. "stop", "/stop", "abort") instead of steering it into the
+    // conversation where it might be ignored during tool execution. (#7450)
+    if (isAbortRequestText(followupRun.prompt)) {
+      abortEmbeddedPiRun(followupRun.run.sessionId);
+      typing.cleanup();
+      return undefined;
+    }
     const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
     if (steered && !shouldFollowup) {
       await touchActiveSessionEntry();
