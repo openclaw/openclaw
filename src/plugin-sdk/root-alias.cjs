@@ -70,6 +70,9 @@ function getJiti() {
   jitiLoader = createJiti(__filename, {
     interopDefault: true,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+    transformOptions: {
+      babel: { compact: false, minified: false },
+    },
   });
   return jitiLoader;
 }
