@@ -7,6 +7,7 @@ import type { Duplex } from "node:stream";
 import chokidar from "chokidar";
 import { type WebSocket, WebSocketServer } from "ws";
 import { resolveStateDir } from "../config/paths.js";
+import { setDefaultSecurityHeaders } from "../gateway/http-common.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { detectMime } from "../media/mime.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -307,6 +308,7 @@ export async function createCanvasHostHandler(
     try {
       const url = new URL(urlRaw, "http://localhost");
       if (url.pathname === CANVAS_WS_PATH) {
+        setDefaultSecurityHeaders(res);
         res.statusCode = liveReload ? 426 : 404;
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
         res.end(liveReload ? "upgrade required" : "not found");
@@ -322,11 +324,14 @@ export async function createCanvasHostHandler(
       }
 
       if (req.method !== "GET" && req.method !== "HEAD") {
+        setDefaultSecurityHeaders(res);
         res.statusCode = 405;
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
         res.end("Method Not Allowed");
         return true;
       }
+
+      setDefaultSecurityHeaders(res);
 
       const opened = await resolveFileWithinRoot(rootReal, urlPath);
       if (!opened) {
