@@ -257,6 +257,8 @@ export type ExecToolConfig = {
    * Default false to reduce context noise.
    */
   notifyOnExitEmptySuccess?: boolean;
+  /** Use PTY mode by default for exec commands (default: false). */
+  pty?: boolean;
   /** apply_patch subtool configuration (experimental). */
   applyPatch?: {
     /** Enable apply_patch for OpenAI models (default: false). */

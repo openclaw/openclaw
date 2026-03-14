@@ -429,7 +429,7 @@ export function createExecTool(
           command: params.command,
           workdir,
           env,
-          pty: params.pty === true && !sandbox,
+          pty: (params.pty === true || (params.pty == null && defaults?.pty === true)) && !sandbox,
           timeoutSec: params.timeout,
           defaultTimeoutSec,
           security,
@@ -463,7 +463,8 @@ export function createExecTool(
         ? null
         : (explicitTimeoutSec ?? defaultTimeoutSec);
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
-      const usePty = params.pty === true && !sandbox;
+      const usePty =
+        (params.pty === true || (params.pty == null && defaults?.pty === true)) && !sandbox;
 
       // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
       // before we execute and burn tokens in cron loops.

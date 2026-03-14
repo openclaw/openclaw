@@ -26,6 +26,7 @@ export type ExecToolDefaults = {
   accountId?: string;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
+  pty?: boolean;
   cwd?: string;
 };
 
