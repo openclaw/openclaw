@@ -562,6 +562,9 @@ describe("createOllamaStreamFn", () => {
         expect(events[0]?.type).toBe("start");
         expect((events[0] as { partial: { content: unknown[] } }).partial.content).toEqual([]);
 
+        // `partial` is a single mutable reference shared across all text_delta events;
+        // only `delta` reliably reflects the per-chunk value. See the
+        // "text_delta partial accumulates content across chunks" test for details.
         expect(events[1]).toMatchObject({ type: "text_delta", delta: "hello", contentIndex: 0 });
         expect(events[2]).toMatchObject({ type: "text_delta", delta: " world", contentIndex: 0 });
 
