@@ -39,9 +39,10 @@ class WearChatController(
 
   private data class PendingRunSnapshot(
     val sessionKey: String,
-    val baselineMessageCount: Int,
+    val baselineUserCount: Int,
     val baselineAssistantCount: Int,
     val baselineAssistantId: String?,
+    val pendingOrder: Int,
     val optimisticMessage: WearChatMessage,
   )
 
@@ -51,6 +52,7 @@ class WearChatController(
   )
 
   private data class HistorySnapshot(
+    val userCount: Int,
     val assistantCount: Int,
     val latestAssistantId: String?,
   )
@@ -95,6 +97,8 @@ class WearChatController(
   private val dispatchJobs = mutableMapOf<String, Job>()
   private val completedRunIds = linkedSetOf<String>()
   private var lastAnnouncedAssistantId: String? = null
+  private var lastSyncedHistory: List<WearChatMessage> = emptyList()
+  private var hasSyncedHistory = false
 
   init {
     startEventsCollection()
@@ -107,6 +111,8 @@ class WearChatController(
     _streamingText.value = null
     _errorText.value = null
     _isSending.value = false
+    lastSyncedHistory = emptyList()
+    hasSyncedHistory = false
     clearPendingRuns()
     clearQueuedOutboundMessages()
     synchronized(completedRunIds) {
@@ -173,6 +179,8 @@ class WearChatController(
     _messages.value = emptyList()
     _streamingText.value = null
     _errorText.value = null
+    lastSyncedHistory = emptyList()
+    hasSyncedHistory = false
     clearPendingRuns()
     clearQueuedOutboundMessages()
     lastAnnouncedAssistantId = null
@@ -184,7 +192,6 @@ class WearChatController(
     if (trimmed.isEmpty()) return
 
     val runId = UUID.randomUUID().toString()
-    val historyBeforeSend = _messages.value
     val activeSessionKey = _sessionKey.value
     val optimisticMessage =
       WearChatMessage(
@@ -202,14 +209,16 @@ class WearChatController(
 
     scope.launch {
       try {
-        val baseline = resolveBaselineSnapshot(historyBeforeSend)
+        val baseline = resolveBaselineSnapshot()
         lastAnnouncedAssistantId = baseline.latestAssistantId
         synchronized(pendingRuns) {
+          val pendingOrder = pendingRuns.values.count { it.sessionKey == activeSessionKey }
           pendingRuns[runId] = PendingRunSnapshot(
             sessionKey = activeSessionKey,
-            baselineMessageCount = historyBeforeSend.size,
+            baselineUserCount = baseline.userCount,
             baselineAssistantCount = baseline.assistantCount,
             baselineAssistantId = baseline.latestAssistantId,
+            pendingOrder = pendingOrder,
             optimisticMessage = optimisticMessage,
           )
           _isSending.value = pendingRuns.isNotEmpty()
@@ -422,11 +431,12 @@ class WearChatController(
     }
   }
 
-  private suspend fun resolveBaselineSnapshot(historyBeforeSend: List<WearChatMessage>): HistorySnapshot {
-    if (historyBeforeSend.isNotEmpty()) {
+  private suspend fun resolveBaselineSnapshot(): HistorySnapshot {
+    if (hasSyncedHistory) {
       return HistorySnapshot(
-        assistantCount = historyBeforeSend.countAssistantMessages(),
-        latestAssistantId = historyBeforeSend.latestAssistantId(),
+        userCount = lastSyncedHistory.countUserMessages(),
+        assistantCount = lastSyncedHistory.countAssistantMessages(),
+        latestAssistantId = lastSyncedHistory.latestAssistantId(),
       )
     }
 
@@ -436,7 +446,10 @@ class WearChatController(
       } catch (_: Throwable) {
         emptyList()
       }
+    lastSyncedHistory = history
+    hasSyncedHistory = true
     return HistorySnapshot(
+      userCount = history.countUserMessages(),
       assistantCount = history.countAssistantMessages(),
       latestAssistantId = history.latestAssistantId(),
     )
@@ -463,6 +476,8 @@ class WearChatController(
     ) {
       return false
     }
+    lastSyncedHistory = history
+    hasSyncedHistory = true
     val resolvedPendingRuns = reconcilePendingRuns(history)
     _messages.value = mergePendingOptimisticMessages(requestedSessionKey = requestedSessionKey, history = history)
     if (emitLatestAssistantReply || resolvedPendingRuns) {
@@ -475,10 +490,14 @@ class WearChatController(
     requestedSessionKey: String,
     history: List<WearChatMessage>,
   ): List<WearChatMessage> {
+    val historyUserCount = history.countUserMessages()
     val pendingOptimisticMessages =
       synchronized(pendingRuns) {
         pendingRuns.values
-          .filter { it.sessionKey == requestedSessionKey && history.size <= it.baselineMessageCount }
+          .filter { snapshot ->
+            snapshot.sessionKey == requestedSessionKey &&
+              historyUserCount <= snapshot.baselineUserCount + snapshot.pendingOrder
+          }
           .map { it.optimisticMessage }
       }
     if (pendingOptimisticMessages.isEmpty()) return history
@@ -506,13 +525,18 @@ class WearChatController(
       }
     if (pendingSnapshots.isEmpty()) return false
 
+    val userCount = history.countUserMessages()
     val assistantCount = history.countAssistantMessages()
     val latestAssistantId = history.latestAssistantId()
     val resolvedRunIds =
       pendingSnapshots.mapNotNull { (runId, snapshot) ->
+        val userPersisted = userCount > snapshot.baselineUserCount + snapshot.pendingOrder
         when {
-          assistantCount > snapshot.baselineAssistantCount -> runId
-          latestAssistantId != null && latestAssistantId != snapshot.baselineAssistantId -> runId
+          userPersisted && assistantCount > snapshot.baselineAssistantCount + snapshot.pendingOrder -> runId
+          userPersisted &&
+            latestAssistantId != null &&
+            latestAssistantId != snapshot.baselineAssistantId &&
+            assistantCount > snapshot.baselineAssistantCount -> runId
           else -> null
         }
       }
@@ -771,6 +795,10 @@ class WearChatController(
 
   private fun List<WearChatMessage>.countAssistantMessages(): Int {
     return count { it.role == "assistant" && it.text.isNotBlank() }
+  }
+
+  private fun List<WearChatMessage>.countUserMessages(): Int {
+    return count { it.role == "user" && it.text.isNotBlank() }
   }
 
   private fun List<WearChatMessage>.latestAssistantId(): String? {
