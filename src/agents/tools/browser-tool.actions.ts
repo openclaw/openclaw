@@ -74,7 +74,7 @@ function formatConsoleToolResult(result: {
 }
 
 function isChromeStaleTargetError(profile: string | undefined, err: unknown): boolean {
-  if (profile !== "chrome-relay" && profile !== "chrome") {
+  if (profile !== "chrome-relay" && profile !== "chrome" && profile !== "user") {
     return false;
   }
   const msg = String(err);
@@ -340,7 +340,7 @@ export async function executeActAction(params: {
         );
       }
       throw new Error(
-        `Chrome tab not found (stale targetId?). Run action=tabs profile="chrome-relay" and use one of the returned targetIds.`,
+        `Chrome tab not found (stale targetId?). Run action=tabs profile="${profile}" and use one of the returned targetIds.`,
         { cause: err },
       );
     }
