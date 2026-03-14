@@ -41,6 +41,7 @@ export type SlackMonitorContext = {
   groupDmEnabled: boolean;
   groupDmChannels: string[];
   defaultRequireMention: boolean;
+  defaultRequireMentionInThreads?: boolean;
   channelsConfig?: SlackChannelConfigEntries;
   channelsConfigKeys: string[];
   groupPolicy: GroupPolicy;
@@ -106,6 +107,7 @@ export function createSlackMonitorContext(params: {
   groupDmEnabled: boolean;
   groupDmChannels: Array<string | number> | undefined;
   defaultRequireMention?: boolean;
+  defaultRequireMentionInThreads?: boolean;
   channelsConfig?: SlackMonitorContext["channelsConfig"];
   groupPolicy: SlackMonitorContext["groupPolicy"];
   useAccessGroups: boolean;
@@ -140,6 +142,7 @@ export function createSlackMonitorContext(params: {
   const groupDmChannels = normalizeAllowList(params.groupDmChannels);
   const groupDmChannelsLower = normalizeAllowListLower(groupDmChannels);
   const defaultRequireMention = params.defaultRequireMention ?? true;
+  const defaultRequireMentionInThreads = params.defaultRequireMentionInThreads;
   const hasChannelAllowlistConfig = Object.keys(params.channelsConfig ?? {}).length > 0;
   const channelsConfigKeys = Object.keys(params.channelsConfig ?? {});
 
@@ -324,6 +327,8 @@ export function createSlackMonitorContext(params: {
         channels: params.channelsConfig,
         channelKeys: channelsConfigKeys,
         defaultRequireMention,
+        defaultRequireMentionInThreads,
+        allowNameMatching: params.allowNameMatching,
       });
       const channelMatchMeta = formatAllowlistMatchMeta(channelConfig);
       const channelAllowed = channelConfig?.allowed !== false;
@@ -404,6 +409,7 @@ export function createSlackMonitorContext(params: {
     groupDmEnabled: params.groupDmEnabled,
     groupDmChannels,
     defaultRequireMention,
+    defaultRequireMentionInThreads,
     channelsConfig: params.channelsConfig,
     channelsConfigKeys,
     groupPolicy: params.groupPolicy,
