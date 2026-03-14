@@ -17,9 +17,15 @@ export async function runInteractiveOnboarding(
   } catch (err) {
     if (err instanceof WizardCancelledError) {
       // Best practice: cancellation is not a successful completion.
+      // Also clear the sentinel so the next run does not falsely report
+      // an interrupted session — the user simply chose to cancel.
+      const { clearOnboardingInProgress } = await import("./onboard-helpers.js");
+      await clearOnboardingInProgress();
       exitCode = 1;
       return;
     }
+    throw err;
+  }
     throw err;
   } finally {
     // Keep stdin paused so non-daemon runs can exit cleanly (e.g. Docker setup).
