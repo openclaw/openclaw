@@ -845,8 +845,42 @@ describe("cron controller", () => {
     expect(errors.name).toBe("cron.errors.nameRequired");
     expect(errors.cronExpr).toBe("cron.errors.cronExprRequired");
     expect(errors.payloadText).toBe("cron.errors.agentMessageRequired");
-    expect(errors.timeoutSeconds).toBe("cron.errors.timeoutInvalid");
+    expect(errors.timeoutSeconds).toBeUndefined();
     expect(errors.deliveryTo).toBe("cron.errors.webhookUrlInvalid");
+  });
+
+  it("rejects negative timeoutSeconds but allows zero (no-timeout mode)", () => {
+    const errorsNeg = validateCronForm({
+      ...DEFAULT_CRON_FORM,
+      payloadKind: "agentTurn",
+      payloadText: "run",
+      timeoutSeconds: "-5",
+    });
+    expect(errorsNeg.timeoutSeconds).toBe("cron.errors.timeoutInvalid");
+
+    const errorsZero = validateCronForm({
+      ...DEFAULT_CRON_FORM,
+      payloadKind: "agentTurn",
+      payloadText: "run",
+      timeoutSeconds: "0",
+    });
+    expect(errorsZero.timeoutSeconds).toBeUndefined();
+
+    const errorsNonNumeric = validateCronForm({
+      ...DEFAULT_CRON_FORM,
+      payloadKind: "agentTurn",
+      payloadText: "run",
+      timeoutSeconds: "abc",
+    });
+    expect(errorsNonNumeric.timeoutSeconds).toBe("cron.errors.timeoutInvalid");
+
+    const errorsInfinity = validateCronForm({
+      ...DEFAULT_CRON_FORM,
+      payloadKind: "agentTurn",
+      payloadText: "run",
+      timeoutSeconds: "Infinity",
+    });
+    expect(errorsInfinity.timeoutSeconds).toBe("cron.errors.timeoutInvalid");
   });
 
   it("blocks add/update submit when validation errors exist", async () => {
