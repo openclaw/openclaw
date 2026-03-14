@@ -22,7 +22,8 @@ import type {
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
-import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
+import { isSubagentSessionKey, resolvePromptModeForSession } from "../../../routing/session-key.js";
+export { resolvePromptModeForSession };
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
@@ -1230,13 +1231,6 @@ export function composeSystemPromptWithHookContext(params: {
     [params.prependSystemContext, params.baseSystemPrompt, params.appendSystemContext],
     { trim: true },
   );
-}
-
-export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "full" {
-  if (!sessionKey) {
-    return "full";
-  }
-  return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) ? "minimal" : "full";
 }
 
 export function resolveAttemptFsWorkspaceOnly(params: {

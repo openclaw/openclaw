@@ -157,6 +157,7 @@ export async function runCliAgent(params: {
     bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
     modelDisplay,
     agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
   });
   const systemPromptReport = buildSystemPromptReport({
     source: "run",
