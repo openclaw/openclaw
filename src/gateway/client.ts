@@ -288,11 +288,11 @@ export class GatewayClient {
       this.ws?.close(1008, "connect challenge missing nonce");
       return;
     }
-    this.connectSent = true;
-    if (this.connectTimer) {
-      clearTimeout(this.connectTimer);
-      this.connectTimer = null;
-    }
+    // Build the connect params before marking connectSent so that errors
+    // during param construction (crypto, file I/O) don't leave us in a state
+    // where connectSent=true but no message was actually queued.  That would
+    // silence the client-side challenge timeout while the gateway's own
+    // handshake timer keeps ticking, producing a misleading code-1000 close.
     const role = this.opts.role ?? "operator";
     const {
       authToken,
@@ -367,6 +367,15 @@ export class GatewayClient {
       scopes,
       device,
     };
+
+    // Mark connectSent only after params are fully built so that a build
+    // failure (e.g. crypto/signing error) keeps the challenge timer active
+    // instead of silently swallowing the error.
+    this.connectSent = true;
+    if (this.connectTimer) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
 
     void this.request<HelloOk>("connect", params)
       .then((helloOk) => {

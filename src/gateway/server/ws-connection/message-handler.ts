@@ -657,6 +657,19 @@ export function attachGatewayWsMessageHandler(params: {
             }),
           verifyDeviceToken,
         }));
+        // Loopback connections are inherently trusted (no network interception
+        // risk).  When the gateway binds on LAN (0.0.0.0) but the CLI connects
+        // from localhost without shared credentials, allow the connection so
+        // that device-identity pairing can proceed.  This restores the pre-
+        // 2026.3.12 behaviour where loopback CLI clients could reach a
+        // --bind lan gateway without supplying a token/password.
+        // Browser-based clients (Control UI / webchat) are excluded because
+        // they have separate security requirements (origin checks, device
+        // identity via SubtleCrypto).
+        if (!authOk && isLocalClient && device && !hasBrowserOriginHeader) {
+          authOk = true;
+          authMethod = "none";
+        }
         if (!authOk) {
           rejectUnauthorized(authResult);
           return;
