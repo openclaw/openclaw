@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 - Placeholder: replace with the first 2026.3.14 user-facing change.
 - Refactor/channels: remove the legacy channel shim directories and point channel-specific imports directly at the extension-owned implementations. (#45967) thanks @scoootscooob.
+- Feishu/streaming: add `onReasoningStream` and `onReasoningEnd` support to streaming cards, so `/reasoning stream` renders thinking tokens as markdown blockquotes in the same card — matching the Telegram channel's reasoning lane behavior.
 
 ### Fixes
 

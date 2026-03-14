@@ -462,6 +462,117 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  it("streams reasoning content as blockquote before answer", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.onReplyStart?.();
+    result.replyOptions.onReasoningStream?.({ text: "thinking step 1" });
+    result.replyOptions.onReasoningStream?.({ text: "thinking step 1\nstep 2" });
+    result.replyOptions.onPartialReply?.({ text: "answer part" });
+    result.replyOptions.onReasoningEnd?.();
+    await options.deliver({ text: "answer part final" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(1);
+    const updateCalls = streamingInstances[0].update.mock.calls.map((c: unknown[]) => c[0]);
+    const reasoningUpdate = updateCalls.find((c: string) => c.includes("Thinking"));
+    expect(reasoningUpdate).toContain("> 💭 **Thinking**");
+    expect(reasoningUpdate).toContain("> thinking step");
+
+    const combinedUpdate = updateCalls.find(
+      (c: string) => c.includes("Thinking") && c.includes("---"),
+    );
+    expect(combinedUpdate).toBeDefined();
+
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    const closeArg = streamingInstances[0].close.mock.calls[0][0] as string;
+    expect(closeArg).toContain("> 💭 **Thinking**");
+    expect(closeArg).toContain("---");
+    expect(closeArg).toContain("answer part final");
+  });
+
+  it("provides onReasoningStream and onReasoningEnd when streaming is enabled", () => {
+    const { result } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    expect(result.replyOptions.onReasoningStream).toBeTypeOf("function");
+    expect(result.replyOptions.onReasoningEnd).toBeTypeOf("function");
+  });
+
+  it("omits reasoning callbacks when streaming is disabled", () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: false,
+      },
+    });
+
+    const { result } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    expect(result.replyOptions.onReasoningStream).toBeUndefined();
+    expect(result.replyOptions.onReasoningEnd).toBeUndefined();
+  });
+
+  it("renders reasoning-only card when no answer text arrives", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.onReplyStart?.();
+    result.replyOptions.onReasoningStream?.({ text: "deep thought" });
+    result.replyOptions.onReasoningEnd?.();
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    const closeArg = streamingInstances[0].close.mock.calls[0][0] as string;
+    expect(closeArg).toContain("> 💭 **Thinking**");
+    expect(closeArg).toContain("> deep thought");
+    expect(closeArg).not.toContain("---");
+  });
+
+  it("ignores empty reasoning payloads", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.onReplyStart?.();
+    result.replyOptions.onReasoningStream?.({ text: "" });
+    result.replyOptions.onPartialReply?.({ text: "```ts\ncode\n```" });
+    await options.deliver({ text: "```ts\ncode\n```" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(1);
+    const closeArg = streamingInstances[0].close.mock.calls[0][0] as string;
+    expect(closeArg).not.toContain("Thinking");
+    expect(closeArg).toBe("```ts\ncode\n```");
+  });
+
+  it("includes combined reasoning+answer text in duplicate detection", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.onReplyStart?.();
+    result.replyOptions.onReasoningStream?.({ text: "thought" });
+    result.replyOptions.onReasoningEnd?.();
+    await options.deliver({ text: "final answer" }, { kind: "final" });
+
+    const closeArg = streamingInstances[0].close.mock.calls[0][0] as string;
+    // Deliver the same combined text again — should be deduped
+    await options.deliver({ text: closeArg }, { kind: "final" });
+
+    // Only one streaming session should exist since the second is a duplicate
+    expect(streamingInstances).toHaveLength(1);
+  });
+
   it("passes replyToMessageId and replyInThread to streaming.start()", async () => {
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
