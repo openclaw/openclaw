@@ -1054,6 +1054,7 @@ export const registerTelegramHandlers = ({
     storeAllowFrom: string[];
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
+    skipDocumentBatch?: boolean;
   }) => {
     const {
       ctx,
@@ -1064,6 +1065,7 @@ export const registerTelegramHandlers = ({
       storeAllowFrom,
       sendOversizeWarning,
       oversizeLogMessage,
+      skipDocumentBatch,
     } = params;
 
     // Text fragment handling - Telegram splits long pastes into multiple inbound messages (~4096 chars).
@@ -1169,7 +1171,13 @@ export const registerTelegramHandlers = ({
     // Skip batching when sender is unknown (channel posts, anonymous admins) to avoid
     // merging unrelated documents under a shared "unknown" key.
     const docSenderId = msg.from?.id != null ? String(msg.from.id) : null;
-    if (!mediaGroupId && msg.document && documentBatchWindowMs > 0 && docSenderId) {
+    if (
+      !mediaGroupId &&
+      msg.document &&
+      documentBatchWindowMs > 0 &&
+      docSenderId &&
+      !skipDocumentBatch
+    ) {
       const docBatchKey = `doc:${chatId}:${docSenderId}:${resolvedThreadId ?? "f"}:${dmThreadId ?? "d"}`;
       const existing = documentBatchBuffer.get(docBatchKey);
       if (existing) {
@@ -1714,6 +1722,9 @@ export const registerTelegramHandlers = ({
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
     errorMessage: string;
+    /** When true, skip document batching (e.g. channel_post traffic where all
+     *  posts share a synthetic sender identity derived from the channel ID). */
+    skipDocumentBatch?: boolean;
   };
 
   const handleInboundMessageLike = async (event: InboundTelegramEvent) => {
@@ -1793,6 +1804,7 @@ export const registerTelegramHandlers = ({
         storeAllowFrom,
         sendOversizeWarning: event.sendOversizeWarning,
         oversizeLogMessage: event.oversizeLogMessage,
+        skipDocumentBatch: event.skipDocumentBatch,
       });
     } catch (err) {
       runtime.error?.(danger(`${event.errorMessage}: ${String(err)}`));
@@ -1871,6 +1883,7 @@ export const registerTelegramHandlers = ({
       sendOversizeWarning: false,
       oversizeLogMessage: "channel post media exceeds size limit",
       errorMessage: "channel_post handler failed",
+      skipDocumentBatch: true,
     });
   });
 };
