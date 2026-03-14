@@ -33,6 +33,36 @@ is_truthy_value() {
   esac
 }
 
+# Sanitize a .env file so Docker Compose reads it correctly.
+# Removes UTF-8 BOM, converts CRLF to LF, and strips stray carriage returns.
+# This prevents subtle bugs when the file is edited on Windows (e.g. Notepad
+# saves with BOM + CRLF, causing variable values to carry trailing \r).
+sanitize_env_file() {
+  local file="$1"
+  [[ -f "$file" ]] || return 0
+
+  local tmp
+  tmp="$(mktemp)"
+
+  # Build the 3-byte UTF-8 BOM using ANSI-C quoting so the pattern works
+  # with both GNU sed and BSD sed (which lacks \xNN escape support).
+  local bom
+  bom=$'\xef\xbb\xbf'
+
+  # 1. Strip UTF-8 BOM if present at the start of file
+  # 2. Convert CRLF to LF and remove any remaining bare CR characters
+  LC_ALL=C sed "1s/^${bom}//" "$file" \
+    | tr -d '\r' \
+    >"$tmp"
+
+  # Only overwrite if content actually changed (preserves timestamps).
+  # Use cat to rewrite the inode in-place, preserving owner/group/mode.
+  if ! cmp -s "$file" "$tmp"; then
+    cat "$tmp" > "$file"
+  fi
+  rm -f "$tmp"
+}
+
 read_config_gateway_token() {
   local config_path="$OPENCLAW_CONFIG_DIR/openclaw.json"
   if [[ ! -f "$config_path" ]]; then
@@ -428,6 +458,9 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_INSTALL_DOCKER_CLI \
   OPENCLAW_ALLOW_INSECURE_PRIVATE_WS \
   OPENCLAW_TZ
+
+# Clean up any BOM / CRLF artifacts so Docker Compose reads the .env correctly.
+sanitize_env_file "$ENV_FILE"
 
 if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
