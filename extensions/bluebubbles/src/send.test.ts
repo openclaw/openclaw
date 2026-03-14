@@ -687,6 +687,34 @@ describe("send", () => {
       );
     });
 
+    it("skips lazy-refresh when caller overrides credentials to avoid cache poisoning", async () => {
+      // When opts.serverUrl differs from account.config.serverUrl, the lazy-refresh
+      // should be skipped to avoid writing a different server's Private API status
+      // into the account-scoped cache.
+      fetchServerInfoMock.mockClear();
+      privateApiStatusMock.mockReturnValue(null);
+
+      mockResolvedHandleTarget();
+      mockSendResponse({ data: { guid: "msg-uuid-no-refresh" } });
+
+      await sendMessageBlueBubbles("+15551234567", "Threaded reply", {
+        serverUrl: "http://other-server:9999",
+        password: "other-pass",
+        replyToMessageGuid: "reply-guid-override",
+        cfg: {
+          channels: {
+            bluebubbles: {
+              serverUrl: "http://config-server:5678",
+              password: "config-pass",
+            },
+          },
+        },
+      });
+
+      // fetchBlueBubblesServerInfo should NOT have been called
+      expect(fetchServerInfoMock).not.toHaveBeenCalled();
+    });
+
     it("degrades to plain send when lazy-refresh fails to restore Private API", async () => {
       // If fetchBlueBubblesServerInfo returns null (server unreachable),
       // privateApiStatus stays null and the reply should degrade gracefully.

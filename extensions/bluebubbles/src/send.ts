@@ -421,7 +421,16 @@ export async function sendMessageBlueBubbles(
 
   // Lazy-refresh Private API status when it's unknown and we need it for reply/effect.
   // The cache expires after 10 minutes; without this, replies silently degrade to plain sends.
-  if (privateApiStatus === null && (wantsReplyThread || wantsEffect)) {
+  // Skip when caller overrides serverUrl/password with values different from the account config.
+  // The cache is keyed by accountId, so refreshing with different credentials would poison
+  // the account-scoped cache entry. Only treat it as an override when the account has a
+  // configured value AND the caller explicitly provides a different one.
+  const accountServerUrl = normalizeSecretInputString(account.config.serverUrl);
+  const accountPassword = normalizeSecretInputString(account.config.password);
+  const isCredentialOverride =
+    (accountServerUrl && normalizeSecretInputString(opts.serverUrl) !== accountServerUrl) ||
+    (accountPassword && normalizeSecretInputString(opts.password) !== accountPassword);
+  if (privateApiStatus === null && (wantsReplyThread || wantsEffect) && !isCredentialOverride) {
     const serverInfo = await fetchBlueBubblesServerInfo({
       baseUrl,
       password,
