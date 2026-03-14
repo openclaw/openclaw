@@ -268,14 +268,19 @@ describe("model-selection", () => {
       // circular-dependency ordering, causing:
       //   ReferenceError: Cannot access 'ANTHROPIC_MODEL_ALIASES' before initialization
       // The fix wraps the aliases in a getter function so allocation is deferred to call time.
-      expect(() => parseModelRef("opus-4.6", "anthropic")).not.toThrow();
-      expect(() => parseModelRef("sonnet-4.6", "anthropic")).not.toThrow();
-      expect(() => parseModelRef("opus-4.5", "anthropic")).not.toThrow();
-      expect(() => parseModelRef("sonnet-4.5", "anthropic")).not.toThrow();
-      // Verify the aliases still resolve correctly
+      // A non-null return value already proves no throw was raised, so .not.toThrow()
+      // wrappers are omitted — asserting all four canonical mappings gives tighter coverage.
       expect(parseModelRef("opus-4.6", "anthropic")).toEqual({
         provider: "anthropic",
         model: "claude-opus-4-6",
+      });
+      expect(parseModelRef("sonnet-4.6", "anthropic")).toEqual({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      });
+      expect(parseModelRef("opus-4.5", "anthropic")).toEqual({
+        provider: "anthropic",
+        model: "claude-opus-4-5",
       });
       expect(parseModelRef("sonnet-4.5", "anthropic")).toEqual({
         provider: "anthropic",
