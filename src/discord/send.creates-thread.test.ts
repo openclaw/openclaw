@@ -18,7 +18,7 @@ import {
 } from "./send.js";
 import { makeDiscordRest } from "./send.test-harness.js";
 
-vi.mock("../web/media.js", async () => {
+vi.mock("../../extensions/whatsapp/src/media.js", async () => {
   const { discordWebMediaMockFactory } = await import("./send.test-harness.js");
   return discordWebMediaMockFactory();
 });

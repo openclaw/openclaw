@@ -44,7 +44,7 @@ vi.mock("../../slack/send.js", () => ({
 vi.mock("../../telegram/send.js", () => ({
   sendMessageTelegram: mocks.sendMessageTelegram,
 }));
-vi.mock("../../web/outbound.js", () => ({
+vi.mock("../../../extensions/whatsapp/src/send.js", () => ({
   sendMessageWhatsApp: mocks.sendMessageWhatsApp,
   sendPollWhatsApp: mocks.sendMessageWhatsApp,
 }));
