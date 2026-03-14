@@ -169,6 +169,7 @@ export type CommandOptions = {
   cwd?: string;
   input?: string;
   env?: NodeJS.ProcessEnv;
+  baseEnv?: NodeJS.ProcessEnv;
   windowsVerbatimArguments?: boolean;
   noOutputTimeoutMs?: number;
   signal?: AbortSignal;
@@ -216,10 +217,10 @@ export async function runCommandWithTimeout(
 ): Promise<SpawnResult> {
   const options: CommandOptions =
     typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
-  const { timeoutMs, cwd, input, env, noOutputTimeoutMs, signal } = options;
+  const { timeoutMs, cwd, input, env, baseEnv, noOutputTimeoutMs, signal } = options;
   const { windowsVerbatimArguments } = options;
   const hasInput = input !== undefined;
-  const resolvedEnv = resolveCommandEnv({ argv, env });
+  const resolvedEnv = resolveCommandEnv({ argv, env, baseEnv });
 
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
   const finalArgv = process.platform === "win32" ? (resolveNpmArgvForWindows(argv) ?? argv) : argv;

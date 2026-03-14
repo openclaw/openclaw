@@ -382,10 +382,80 @@ describe("runRescueWatchdogJob", () => {
     expect(runCommandWithTimeout).toHaveBeenCalledWith(
       expect.arrayContaining(["--profile", "work", "doctor", "--repair", "--non-interactive"]),
       expect.objectContaining({
+        baseEnv: {},
         signal: abort.signal,
         timeoutMs: expect.any(Number),
       }),
     );
+  });
+
+  it("runs doctor with the rescue profile env only, without inheriting parent service identity", async () => {
+    const inheritedEnv = {
+      OPENCLAW_PROFILE: "rescue",
+      OPENCLAW_LAUNCHD_LABEL: "com.example.openclaw-rescue",
+      OPENCLAW_GATEWAY_PORT: "29998",
+      PATH: "/tmp/bin",
+      HOME: "/home/tester",
+    };
+    const originalEnv = process.env;
+    process.env = { ...originalEnv, ...inheritedEnv };
+
+    try {
+      let probeCount = 0;
+      probeGateway.mockImplementation(async () => {
+        probeCount += 1;
+        if (probeCount >= 62) {
+          return {
+            ok: true,
+            close: null,
+            error: null,
+          };
+        }
+        return {
+          ok: false,
+          close: { code: 1006, reason: "down" },
+          error: "down",
+        };
+      });
+
+      const runPromise = runRescueWatchdogJob({
+        job: {
+          id: "job-doctor-env-isolated",
+          name: "rescue",
+          payload: {
+            kind: "rescueWatchdog",
+            monitoredProfile: "work",
+            timeoutSeconds: 120,
+          },
+        } as never,
+        monitoredProfile: "work",
+      });
+
+      await vi.advanceTimersByTimeAsync(31_000);
+      await runPromise;
+
+      expect(runCommandWithTimeout).toHaveBeenCalledWith(
+        expect.arrayContaining(["--profile", "work", "doctor", "--repair", "--non-interactive"]),
+        expect.objectContaining({
+          baseEnv: {},
+          env: expect.objectContaining({
+            OPENCLAW_PROFILE: "work",
+            PATH: "/tmp/bin",
+          }),
+        }),
+      );
+
+      const doctorOptions = (
+        (runCommandWithTimeout.mock.lastCall ?? [undefined, undefined]) as unknown as [
+          unknown,
+          { env?: Record<string, string | undefined> } | undefined,
+        ]
+      )[1];
+      expect(doctorOptions?.env?.OPENCLAW_LAUNCHD_LABEL).toBeUndefined();
+      expect(doctorOptions?.env?.OPENCLAW_GATEWAY_PORT).toBeUndefined();
+    } finally {
+      process.env = originalEnv;
+    }
   });
 
   it("skips doctor when the cron timeout budget is already exhausted", async () => {
