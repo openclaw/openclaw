@@ -316,6 +316,99 @@ describe("telegramPlugin duplicate token guard", () => {
     expect(result).toMatchObject({ channel: "telegram", messageId: "tg-2" });
   });
 
+  it("falls back to plain send when Telegram reply target is missing for text sends", async () => {
+    const sendMessageTelegram = installSendMessageRuntime(
+      vi
+        .fn()
+        .mockRejectedValueOnce(
+          new Error("Call to 'sendMessage' failed! (400: Bad Request: message to be replied not found)"),
+        )
+        .mockResolvedValueOnce({ messageId: "tg-retry-text" }),
+    );
+
+    const result = await telegramPlugin.outbound!.sendText!({
+      cfg: createCfg(),
+      to: "12345",
+      text: "hello",
+      accountId: "ops",
+      replyToId: "456",
+    });
+
+    expect(sendMessageTelegram).toHaveBeenCalledTimes(2);
+    expect(sendMessageTelegram.mock.calls[0]?.[2]).toMatchObject({ replyToMessageId: 456 });
+    expect(sendMessageTelegram.mock.calls[1]?.[2]).toMatchObject({ replyToMessageId: undefined });
+    expect(result).toMatchObject({ channel: "telegram", messageId: "tg-retry-text" });
+  });
+
+  it("falls back to plain send when Telegram reply target is missing for media sends", async () => {
+    const sendMessageTelegram = installSendMessageRuntime(
+      vi
+        .fn()
+        .mockRejectedValueOnce(
+          new Error("Call to 'sendMessage' failed! (400: Bad Request: message to be replied not found)"),
+        )
+        .mockResolvedValueOnce({ messageId: "tg-retry-media" }),
+    );
+
+    const result = await telegramPlugin.outbound!.sendMedia!({
+      cfg: createCfg(),
+      to: "12345",
+      text: "hello",
+      mediaUrl: "/tmp/image.png",
+      accountId: "ops",
+      replyToId: "456",
+    });
+
+    expect(sendMessageTelegram).toHaveBeenCalledTimes(2);
+    expect(sendMessageTelegram.mock.calls[0]?.[2]).toMatchObject({
+      replyToMessageId: 456,
+      mediaUrl: "/tmp/image.png",
+    });
+    expect(sendMessageTelegram.mock.calls[1]?.[2]).toMatchObject({
+      replyToMessageId: undefined,
+      mediaUrl: "/tmp/image.png",
+    });
+    expect(result).toMatchObject({ channel: "telegram", messageId: "tg-retry-media" });
+  });
+
+  it("falls back to plain send when Telegram reply target is missing for payload sends", async () => {
+    const sendMessageTelegram = installSendMessageRuntime(
+      vi
+        .fn()
+        .mockRejectedValueOnce(
+          new Error("Call to 'sendMessage' failed! (400: Bad Request: message to be replied not found)"),
+        )
+        .mockResolvedValueOnce({ messageId: "tg-retry-payload" }),
+    );
+
+    const result = await telegramPlugin.outbound!.sendPayload!({
+      cfg: createCfg(),
+      to: "12345",
+      text: "",
+      payload: {
+        text: "Approval required",
+        channelData: {
+          telegram: {
+            buttons: [[{ text: "Allow Once", callback_data: "/approve abc allow-once" }]],
+          },
+        },
+      },
+      accountId: "ops",
+      replyToId: "456",
+    });
+
+    expect(sendMessageTelegram).toHaveBeenCalledTimes(2);
+    expect(sendMessageTelegram.mock.calls[0]?.[2]).toMatchObject({
+      replyToMessageId: 456,
+      buttons: [[{ text: "Allow Once", callback_data: "/approve abc allow-once" }]],
+    });
+    expect(sendMessageTelegram.mock.calls[1]?.[2]).toMatchObject({
+      replyToMessageId: undefined,
+      buttons: [[{ text: "Allow Once", callback_data: "/approve abc allow-once" }]],
+    });
+    expect(result).toMatchObject({ channel: "telegram", messageId: "tg-retry-payload" });
+  });
+
   it("sends outbound payload media lists and keeps buttons on the first message only", async () => {
     const sendMessageTelegram = installSendMessageRuntime(
       vi

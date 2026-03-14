@@ -43,6 +43,19 @@ import {
 import { getTelegramRuntime } from "./runtime.js";
 
 const meta = getChatChannelMeta("telegram");
+const TELEGRAM_REPLY_TARGET_MISSING_RE = /message to be replied not found/i;
+
+function isTelegramReplyTargetMissingError(error: unknown): boolean {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : error && typeof error === "object" && "message" in error
+          ? String((error as { message?: unknown }).message ?? "")
+          : String(error ?? "");
+  return TELEGRAM_REPLY_TARGET_MISSING_RE.test(message);
+}
 
 function findTelegramTokenOwnerAccountId(params: {
   cfg: OpenClawConfig;
@@ -104,6 +117,25 @@ function buildTelegramSendOptions(params: {
   };
 }
 
+async function sendTelegramWithReplyFallback(params: {
+  send: TelegramSendFn;
+  to: string;
+  text: string;
+  opts: TelegramSendOptions;
+}) {
+  try {
+    return await params.send(params.to, params.text, params.opts);
+  } catch (error) {
+    if (!params.opts.replyToMessageId || !isTelegramReplyTargetMissingError(error)) {
+      throw error;
+    }
+    return await params.send(params.to, params.text, {
+      ...params.opts,
+      replyToMessageId: undefined,
+    });
+  }
+}
+
 async function sendTelegramOutbound(params: {
   cfg: OpenClawConfig;
   to: string;
@@ -118,10 +150,11 @@ async function sendTelegramOutbound(params: {
 }) {
   const send =
     params.deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
-  return await send(
-    params.to,
-    params.text,
-    buildTelegramSendOptions({
+  return await sendTelegramWithReplyFallback({
+    send,
+    to: params.to,
+    text: params.text,
+    opts: buildTelegramSendOptions({
       cfg: params.cfg,
       mediaUrl: params.mediaUrl,
       mediaLocalRoots: params.mediaLocalRoots,
@@ -130,7 +163,7 @@ async function sendTelegramOutbound(params: {
       threadId: params.threadId,
       silent: params.silent,
     }),
-  );
+  });
 }
 
 const telegramMessageActions: ChannelMessageActionAdapter = {
@@ -383,7 +416,8 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     }) => {
       const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
       const result = await sendTelegramPayloadMessages({
-        send,
+        send: async (target, text, opts) =>
+          await sendTelegramWithReplyFallback({ send, to: target, text, opts: opts ?? {} }),
         to,
         payload,
         baseOpts: buildTelegramSendOptions({
