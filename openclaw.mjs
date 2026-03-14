@@ -35,6 +35,21 @@ const ensureSupportedNodeVersion = () => {
 
 ensureSupportedNodeVersion();
 
+// Short-circuit --version / -V / -v before any heavy imports or respawn.
+// Covers the common bare `openclaw --version` invocation; complex argv
+// combinations (e.g. --profile dev --version) fall through to entry.ts.
+{
+  const args = process.argv.slice(2);
+  if (args.length === 1 && (args[0] === "--version" || args[0] === "-V" || args[0] === "-v")) {
+    const { readFileSync } = await import("node:fs");
+    const { version } = JSON.parse(
+      readFileSync(new URL("./package.json", import.meta.url), "utf8"),
+    );
+    console.log(version);
+    process.exit(0);
+  }
+}
+
 // https://nodejs.org/api/module.html#module-compile-cache
 if (module.enableCompileCache && !process.env.NODE_DISABLE_COMPILE_CACHE) {
   try {
