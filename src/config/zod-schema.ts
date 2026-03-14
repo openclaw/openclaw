@@ -371,9 +371,12 @@ export const OpenClawSchema = z
                 color: HexColorSchema,
               })
               .strict()
-              .refine((value) => value.cdpPort || value.cdpUrl, {
-                message: "Profile must set cdpPort or cdpUrl",
-              }),
+              .refine(
+                (value) => value.driver === "existing-session" || value.cdpPort || value.cdpUrl,
+                {
+                  message: "Profile must set cdpPort or cdpUrl",
+                },
+              ),
           )
           .optional(),
         extraArgs: z.array(z.string()).optional(),

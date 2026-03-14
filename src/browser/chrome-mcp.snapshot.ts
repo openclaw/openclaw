@@ -4,6 +4,7 @@ import {
   type RoleRefMap,
   type RoleSnapshotOptions,
 } from "./pw-role-snapshot.js";
+import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
 export type ChromeMcpSnapshotNode = {
   id?: string;
@@ -13,60 +14,6 @@ export type ChromeMcpSnapshotNode = {
   description?: string;
   children?: ChromeMcpSnapshotNode[];
 };
-
-const INTERACTIVE_ROLES = new Set([
-  "button",
-  "checkbox",
-  "combobox",
-  "link",
-  "listbox",
-  "menuitem",
-  "menuitemcheckbox",
-  "menuitemradio",
-  "option",
-  "radio",
-  "searchbox",
-  "slider",
-  "spinbutton",
-  "switch",
-  "tab",
-  "textbox",
-  "treeitem",
-]);
-
-const CONTENT_ROLES = new Set([
-  "article",
-  "cell",
-  "columnheader",
-  "gridcell",
-  "heading",
-  "listitem",
-  "main",
-  "navigation",
-  "region",
-  "rowheader",
-]);
-
-const STRUCTURAL_ROLES = new Set([
-  "application",
-  "directory",
-  "document",
-  "generic",
-  "group",
-  "ignored",
-  "list",
-  "menu",
-  "menubar",
-  "none",
-  "presentation",
-  "row",
-  "rowgroup",
-  "tablist",
-  "table",
-  "toolbar",
-  "tree",
-  "treegrid",
-]);
 
 function normalizeRole(node: ChromeMcpSnapshotNode): string {
   const role = typeof node.role === "string" ? node.role.trim().toLowerCase() : "";
