@@ -32,7 +32,6 @@ export function expectSingleNpmInstallIgnoreScriptsCall(params: {
     "npm",
     "install",
     "--omit=dev",
-    "--omit=peer",
     "--silent",
     "--ignore-scripts",
   ]);
