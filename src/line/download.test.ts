@@ -82,6 +82,19 @@ describe("downloadLineMedia", () => {
     expect(writtenPath).toBe(result.path);
   });
 
+  it("downloads file attachments (PDF) as application/octet-stream", async () => {
+    // PDF magic bytes: %PDF
+    const pdf = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34]);
+    getMessageContentMock.mockResolvedValueOnce(chunks([pdf]));
+    vi.spyOn(fs.promises, "writeFile").mockResolvedValueOnce(undefined);
+
+    const result = await downloadLineMedia("mid-pdf", "token");
+
+    expect(result.contentType).toBe("application/octet-stream");
+    expect(result.path).toMatch(/\.bin$/);
+    expect(result.size).toBe(pdf.length);
+  });
+
   it("detects MP4 video from ftyp major brand (isom)", async () => {
     const mp4 = Buffer.from([
       0x00, 0x00, 0x00, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d,
