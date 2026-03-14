@@ -990,3 +990,32 @@
   background: var(--panel-strong);
   border-color: var(--accent);
 }
+
+/* Context usage notice (≥85% warning) */
+.context-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  margin: 4px 16px 0;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ctx-color);
+  background: var(--ctx-bg);
+  border: 1px solid color-mix(in srgb, var(--ctx-color) 30%, transparent);
+  flex-shrink: 0;
+}
+
+.context-notice__icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  stroke: var(--ctx-color);
+}
+
+.context-notice__detail {
+  margin-left: auto;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
