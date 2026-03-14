@@ -4,6 +4,11 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import {
+  type StreamingThinkingFilter,
+  createStreamingThinkingFilter,
+  stripReasoningTagsFromText,
+} from "../shared/text/reasoning-tags.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
@@ -203,6 +208,8 @@ export type ChatRunState = {
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
   deltaLastBroadcastLen: Map<string, number>;
   abortedRuns: Map<string, number>;
+  /** Per-run stateful filter that suppresses streaming deltas inside thinking blocks. */
+  thinkingFilters: Map<string, StreamingThinkingFilter>;
   clear: () => void;
 };
 
@@ -212,6 +219,7 @@ export function createChatRunState(): ChatRunState {
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
+  const thinkingFilters = new Map<string, StreamingThinkingFilter>();
 
   const clear = () => {
     registry.clear();
@@ -219,6 +227,7 @@ export function createChatRunState(): ChatRunState {
     deltaSentAt.clear();
     deltaLastBroadcastLen.clear();
     abortedRuns.clear();
+    thinkingFilters.clear();
   };
 
   return {
@@ -227,6 +236,7 @@ export function createChatRunState(): ChatRunState {
     deltaSentAt,
     deltaLastBroadcastLen,
     abortedRuns,
+    thinkingFilters,
     clear,
   };
 }
@@ -346,9 +356,25 @@ export function createAgentEventHandler({
     text: string,
     delta?: unknown,
   ) => {
-    const cleanedText = stripInlineDirectiveTagsForDisplay(text).text;
-    const cleanedDelta =
+    // Strip inline directives and reasoning tags to prevent <think>/<thinking>
+    // content from leaking to TUI/webchat when models emit tags in text output.
+    const cleanedText = stripReasoningTagsFromText(stripInlineDirectiveTagsForDisplay(text).text, {
+      mode: "strict",
+      trim: "start",
+    });
+    // Strip inline directives but NOT reasoning tags from the delta — the
+    // stateful streaming filter needs to see raw <think>/<thinking> tag
+    // boundaries to correctly track cross-chunk reasoning blocks.
+    const rawDelta =
       typeof delta === "string" ? stripInlineDirectiveTagsForDisplay(delta).text : "";
+    // Apply stateful streaming filter to suppress thinking content that arrives
+    // in bare delta chunks (between <think> open and </think> close tags).
+    let thinkingFilter = chatRunState.thinkingFilters.get(clientRunId);
+    if (!thinkingFilter) {
+      thinkingFilter = createStreamingThinkingFilter();
+      chatRunState.thinkingFilters.set(clientRunId, thinkingFilter);
+    }
+    const cleanedDelta = thinkingFilter.filter(rawDelta);
     const previousText = chatRunState.buffers.get(clientRunId) ?? "";
     const mergedText = resolveMergedAssistantText({
       previousText,
@@ -467,6 +493,8 @@ export function createAgentEventHandler({
     chatRunState.deltaLastBroadcastLen.delete(clientRunId);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
+    chatRunState.thinkingFilters.get(clientRunId)?.reset();
+    chatRunState.thinkingFilters.delete(clientRunId);
     if (jobState === "done") {
       const payload = {
         runId: clientRunId,
@@ -627,6 +655,8 @@ export function createAgentEventHandler({
         chatRunState.abortedRuns.delete(evt.runId);
         chatRunState.buffers.delete(clientRunId);
         chatRunState.deltaSentAt.delete(clientRunId);
+        chatRunState.thinkingFilters.get(clientRunId)?.reset();
+        chatRunState.thinkingFilters.delete(clientRunId);
         if (chatLink) {
           chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
         }
