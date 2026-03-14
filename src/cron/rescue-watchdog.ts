@@ -425,6 +425,7 @@ export async function runRescueWatchdogJob(params: {
         ? Math.min(DOCTOR_REPAIR_TIMEOUT_MS, remainingJobBudgetMs)
         : DOCTOR_REPAIR_TIMEOUT_MS,
     env,
+    signal: params.abortSignal,
   });
   if (doctorResult.code === 0) {
     actions.push("ran doctor --repair --non-interactive");
