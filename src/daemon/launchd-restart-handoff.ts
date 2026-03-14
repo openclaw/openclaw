@@ -81,6 +81,12 @@ if ! launchctl kickstart -k "$service_target" >/dev/null 2>&1; then
     launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
   fi
 fi
+# Verify the service is actually running after restart attempts.
+if ! launchctl print "$service_target" >/dev/null 2>&1; then
+  launchctl enable "$service_target" >/dev/null 2>&1
+  launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1
+  launchctl kickstart -kp "$service_target" >/dev/null 2>&1 || true
+fi
 `;
   }
 
@@ -95,6 +101,12 @@ if ! launchctl start "$service_target" >/dev/null 2>&1; then
   else
     launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
   fi
+fi
+# Verify the service is actually running after restart attempts.
+if ! launchctl print "$service_target" >/dev/null 2>&1; then
+  launchctl enable "$service_target" >/dev/null 2>&1
+  launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1
+  launchctl kickstart -kp "$service_target" >/dev/null 2>&1 || true
 fi
 `;
 }

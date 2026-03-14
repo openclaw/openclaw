@@ -102,6 +102,16 @@ if ! launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null; then
   launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}' 2>/dev/null
   launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null || true
 fi
+# Verify the service is actually running after restart attempts.
+# This ensures the service is loaded and running, especially important after
+# npm global updates where the LaunchAgent may be in an inconsistent state.
+sleep 1
+if ! launchctl print 'gui/${uid}/${escaped}' >/dev/null 2>&1; then
+  # Service not loaded - force a final bootstrap and kickstart
+  launchctl enable 'gui/${uid}/${escaped}' 2>/dev/null
+  launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}' 2>/dev/null
+  launchctl kickstart -kp 'gui/${uid}/${escaped}' 2>/dev/null || true
+fi
 # Self-cleanup
 rm -f "$0"
 `;
