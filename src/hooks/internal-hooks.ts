@@ -8,6 +8,7 @@
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
@@ -37,6 +38,20 @@ export type GatewayStartupHookEvent = InternalHookEvent & {
   type: "gateway";
   action: "startup";
   context: GatewayStartupHookContext;
+};
+
+export type SessionRolloverHookContext = {
+  cfg?: OpenClawConfig;
+  workspaceDir: string;
+  sessionEntry?: SessionEntry;
+  previousSessionEntry?: SessionEntry;
+  resetReason?: string;
+};
+
+export type SessionRolloverHookEvent = InternalHookEvent & {
+  type: "session";
+  action: "rollover";
+  context: SessionRolloverHookContext;
 };
 
 // ============================================================================
@@ -362,6 +377,19 @@ export function isGatewayStartupEvent(event: InternalHookEvent): event is Gatewa
     return false;
   }
   return Boolean(getHookContext<GatewayStartupHookContext>(event));
+}
+
+export function isSessionRolloverEvent(
+  event: InternalHookEvent,
+): event is SessionRolloverHookEvent {
+  if (!isHookEventTypeAndAction(event, "session", "rollover")) {
+    return false;
+  }
+  const context = getHookContext<SessionRolloverHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return hasStringContextField(context, "workspaceDir");
 }
 
 export function isMessageReceivedEvent(

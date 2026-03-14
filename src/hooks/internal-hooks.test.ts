@@ -7,6 +7,7 @@ import {
   isGatewayStartupEvent,
   isMessageReceivedEvent,
   isMessageSentEvent,
+  isSessionRolloverEvent,
   registerInternalHook,
   triggerInternalHook,
   unregisterInternalHook,
@@ -14,6 +15,7 @@ import {
   type GatewayStartupHookContext,
   type MessageReceivedHookContext,
   type MessageSentHookContext,
+  type SessionRolloverHookContext,
 } from "./internal-hooks.js";
 
 describe("hooks", () => {
@@ -234,6 +236,43 @@ describe("hooks", () => {
     for (const testCase of cases) {
       it(testCase.name, () => {
         expect(isGatewayStartupEvent(testCase.event)).toBe(testCase.expected);
+      });
+    }
+  });
+
+  describe("isSessionRolloverEvent", () => {
+    const cases: Array<{
+      name: string;
+      event: ReturnType<typeof createInternalHookEvent>;
+      expected: boolean;
+    }> = [
+      {
+        name: "returns true for session:rollover events with expected context",
+        event: createInternalHookEvent("session", "rollover", "test-session", {
+          workspaceDir: "/tmp/workspace",
+          resetReason: "automatic",
+        } satisfies SessionRolloverHookContext),
+        expected: true,
+      },
+      {
+        name: "returns false when workspaceDir is missing",
+        event: createInternalHookEvent("session", "rollover", "test-session", {
+          resetReason: "automatic",
+        }),
+        expected: false,
+      },
+      {
+        name: "returns false for non-rollover session events",
+        event: createInternalHookEvent("session", "start", "test-session", {
+          workspaceDir: "/tmp/workspace",
+        }),
+        expected: false,
+      },
+    ];
+
+    for (const testCase of cases) {
+      it(testCase.name, () => {
+        expect(isSessionRolloverEvent(testCase.event)).toBe(testCase.expected);
       });
     }
   });

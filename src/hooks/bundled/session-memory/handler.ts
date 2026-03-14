@@ -1,8 +1,9 @@
 /**
  * Session memory hook handler
  *
- * Saves session context to memory when /new or /reset command is triggered
- * Creates a new dated memory file with LLM-generated slug
+ * Saves session context to memory when explicit reset commands or automatic
+ * session rollover events end a conversation boundary.
+ * Creates a new dated memory file with an LLM-generated slug.
  */
 
 import fs from "node:fs/promises";
@@ -24,6 +25,7 @@ import {
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
+import { isSessionRolloverEvent } from "../../internal-hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
@@ -194,19 +196,23 @@ async function findPreviousSessionFile(params: {
 }
 
 /**
- * Save session context to memory when /new or /reset command is triggered
+ * Save session context to memory when an explicit reset or automatic session rollover happens.
  */
 const saveSessionToMemory: HookHandler = async (event) => {
-  // Only trigger on reset/new commands
-  const isResetCommand = event.action === "new" || event.action === "reset";
-  if (event.type !== "command" || !isResetCommand) {
+  const isResetCommand =
+    event.type === "command" && (event.action === "new" || event.action === "reset");
+  const rolloverEvent = isSessionRolloverEvent(event) ? event : null;
+  if (!isResetCommand && !rolloverEvent) {
     return;
   }
 
   try {
-    log.debug("Hook triggered for reset/new command", { action: event.action });
+    log.debug("Hook triggered for session memory persistence", {
+      type: event.type,
+      action: event.action,
+    });
 
-    const context = event.context || {};
+    const context = rolloverEvent ? rolloverEvent.context : event.context || {};
     const cfg = context.cfg as OpenClawConfig | undefined;
     const contextWorkspaceDir =
       typeof context.workspaceDir === "string" && context.workspaceDir.trim().length > 0
@@ -324,7 +330,10 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
-    const source = (context.commandSource as string) || "unknown";
+    const source =
+      (typeof context.commandSource === "string" && context.commandSource) ||
+      (typeof context.resetReason === "string" && context.resetReason) ||
+      "unknown";
 
     // Build Markdown entry
     const entryParts = [
