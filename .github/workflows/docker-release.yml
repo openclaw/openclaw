@@ -19,6 +19,8 @@ on:
         required: true
         type: string
 
+permissions: {}
+
 concurrency:
   group: docker-release-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
   cancel-in-progress: false

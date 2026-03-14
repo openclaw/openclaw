@@ -13,6 +13,9 @@ on:
       - Dockerfile.sandbox-common
       - scripts/sandbox-common-setup.sh
 
+permissions:
+  contents: read
+
 concurrency:
   group: sandbox-common-smoke-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
