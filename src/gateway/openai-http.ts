@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { listAgentIds } from "../agents/agent-scope.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { ImageContent } from "../commands/agent/types.js";
+import { loadConfig } from "../config/config.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
@@ -25,9 +27,9 @@ import {
 } from "./agent-prompt.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
+import { sendInvalidRequest, sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { resolveGatewayRequestContext } from "./http-utils.js";
+import { InvalidGatewayAgentIdError, resolveGatewayRequestContext } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 
 type OpenAiHttpOptions = {
@@ -431,14 +433,25 @@ export async function handleOpenAiHttpRequest(
   const model = typeof payload.model === "string" ? payload.model : "openclaw";
   const user = typeof payload.user === "string" ? payload.user : undefined;
 
-  const { sessionKey, messageChannel } = resolveGatewayRequestContext({
-    req,
-    model,
-    user,
-    sessionPrefix: "openai",
-    defaultMessageChannel: "webchat",
-    useMessageChannelHeader: true,
-  });
+  let sessionKey: string;
+  let messageChannel: string;
+  try {
+    ({ sessionKey, messageChannel } = resolveGatewayRequestContext({
+      req,
+      model,
+      user,
+      sessionPrefix: "openai",
+      defaultMessageChannel: "webchat",
+      useMessageChannelHeader: true,
+      knownAgentIds: listAgentIds(loadConfig()),
+    }));
+  } catch (err) {
+    if (err instanceof InvalidGatewayAgentIdError) {
+      sendInvalidRequest(res, err.message);
+      return true;
+    }
+    throw err;
+  }
   const activeTurnContext = resolveActiveTurnContext(payload.messages);
   const prompt = buildAgentPrompt(payload.messages, activeTurnContext.activeUserMessageIndex);
   let images: ImageContent[] = [];

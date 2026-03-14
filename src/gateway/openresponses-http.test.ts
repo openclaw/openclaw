@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
-import { agentCommand, getFreePort, installGatewayTestHooks } from "./test-helpers.js";
+import { agentCommand, getFreePort, installGatewayTestHooks, testState } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -15,6 +15,12 @@ let enabledPort: number;
 beforeAll(async () => {
   enabledPort = await getFreePort();
   enabledServer = await startServer(enabledPort, { openResponsesEnabled: true });
+});
+
+beforeEach(() => {
+  testState.agentsConfig = {
+    list: [{ id: "alpha" }, { id: "beta" }],
+  };
 });
 
 afterAll(async () => {
@@ -214,6 +220,15 @@ describe("OpenResponses HTTP API (e2e)", () => {
       await ensureResponseConsumed(resMissingModel);
 
       mockAgentOnce([{ text: "hello" }]);
+      const resDefault = await postResponses(port, { model: "openclaw", input: "hi" });
+      expect(resDefault.status).toBe(200);
+      const optsDefault = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      expect((optsDefault as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
+        /^agent:main:/,
+      );
+      await ensureResponseConsumed(resDefault);
+
+      mockAgentOnce([{ text: "hello" }]);
       const resHeader = await postResponses(
         port,
         { model: "openclaw", input: "hi" },
@@ -237,6 +252,28 @@ describe("OpenResponses HTTP API (e2e)", () => {
         /^agent:beta:/,
       );
       await ensureResponseConsumed(resModel);
+
+      agentCommand.mockClear();
+      const resUnknownHeader = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        { "x-openclaw-agent-id": "ghost" },
+      );
+      const unknownHeaderError = await expectInvalidRequest(
+        resUnknownHeader,
+        /Unknown agent id "ghost"/,
+      );
+      expect(unknownHeaderError?.type).toBe("invalid_request_error");
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+
+      agentCommand.mockClear();
+      const resUnknownModel = await postResponses(port, { model: "agent:ghost", input: "hi" });
+      const unknownModelError = await expectInvalidRequest(
+        resUnknownModel,
+        /Unknown agent id "ghost"/,
+      );
+      expect(unknownModelError?.type).toBe("invalid_request_error");
+      expect(agentCommand).toHaveBeenCalledTimes(0);
 
       mockAgentOnce([{ text: "hello" }]);
       const resChannelHeader = await postResponses(
