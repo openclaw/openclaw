@@ -5,7 +5,13 @@ import { danger, info, success } from "../globals.js";
 import { logInfo } from "../logger.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveWhatsAppAccount } from "./accounts.js";
-import { createWaSocket, formatError, logoutWeb, waitForWaConnection } from "./session.js";
+import {
+  createWaSocket,
+  flushCredsSaveQueue,
+  formatError,
+  logoutWeb,
+  waitForWaConnection,
+} from "./session.js";
 
 export async function loginWeb(
   verbose: boolean,
@@ -38,6 +44,8 @@ export async function loginWeb(
       } catch {
         // ignore
       }
+      // Wait for in-flight creds writes before restarting (same race as login-qr.ts).
+      await flushCredsSaveQueue();
       const retry = await createWaSocket(false, verbose, {
         authDir: account.authDir,
       });

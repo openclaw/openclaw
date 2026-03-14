@@ -252,6 +252,8 @@ export type ChannelLoginWithQrStartResult = {
 export type ChannelLoginWithQrWaitResult = {
   connected: boolean;
   message: string;
+  /** Latest QR data URL; included on timeout/poll responses so the UI can refresh stale QR codes. */
+  qrDataUrl?: string;
 };
 
 export type ChannelLogoutContext<ResolvedAccount = unknown> = {
