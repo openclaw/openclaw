@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { streamSimpleOpenAICompletions, type Model } from "@mariozechner/pi-ai";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { CUSTOM_LOCAL_AUTH_MARKER, NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import {
+  applyLocalNoAuthHeaderOverride,
   hasUsableCustomProviderApiKey,
   requireApiKey,
   resolveApiKeyForProvider,
@@ -394,5 +396,164 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
         },
       }),
     ).rejects.toThrow("No API key found");
+  });
+
+  it("does not synthesize local auth when apiKey is explicitly configured but unresolved", async () => {
+    const previous = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      await expect(
+        resolveApiKeyForProvider({
+          provider: "custom",
+          cfg: {
+            models: {
+              providers: {
+                custom: {
+                  baseUrl: "http://127.0.0.1:8080/v1",
+                  api: "openai-completions",
+                  apiKey: "OPENAI_API_KEY",
+                  models: [
+                    {
+                      id: "llama3",
+                      name: "Llama 3",
+                      reasoning: false,
+                      input: ["text"],
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                      contextWindow: 8192,
+                      maxTokens: 4096,
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      ).rejects.toThrow('No API key found for provider "custom"');
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previous;
+      }
+    }
+  });
+
+  it("does not synthesize local auth when auth mode explicitly requires oauth", async () => {
+    await expect(
+      resolveApiKeyForProvider({
+        provider: "custom",
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "http://127.0.0.1:8080/v1",
+                api: "openai-completions",
+                auth: "oauth",
+                models: [
+                  {
+                    id: "llama3",
+                    name: "Llama 3",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 8192,
+                    maxTokens: 4096,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow('No API key found for provider "custom"');
+  });
+
+  it("keeps built-in aws-sdk fallback for local baseUrl overrides", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "amazon-bedrock",
+      cfg: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              baseUrl: "http://127.0.0.1:8080/v1",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(auth.mode).toBe("aws-sdk");
+    expect(auth.apiKey).toBeUndefined();
+  });
+});
+
+describe("applyLocalNoAuthHeaderOverride", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it("clears Authorization for synthetic local OpenAI-compatible auth markers", async () => {
+    let capturedAuthorization: string | null | undefined;
+    let capturedXTest: string | null | undefined;
+    let resolveRequest: (() => void) | undefined;
+    const requestSeen = new Promise<void>((resolve) => {
+      resolveRequest = resolve;
+    });
+    globalThis.fetch = vi.fn(async (_input, init) => {
+      const headers = new Headers(init?.headers);
+      capturedAuthorization = headers.get("Authorization");
+      capturedXTest = headers.get("X-Test");
+      resolveRequest?.();
+      return new Response(JSON.stringify({ error: { message: "unauthorized" } }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const model = applyLocalNoAuthHeaderOverride(
+      {
+        id: "local-llm",
+        name: "local-llm",
+        api: "openai-completions",
+        provider: "custom",
+        baseUrl: "http://127.0.0.1:8080/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 4096,
+        headers: { "X-Test": "1" },
+      } as Model<"openai-completions">,
+      {
+        apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+        source: "models.providers.custom (synthetic local key)",
+        mode: "api-key",
+      },
+    );
+
+    streamSimpleOpenAICompletions(
+      model,
+      {
+        messages: [
+          {
+            role: "user",
+            content: "hello",
+            timestamp: Date.now(),
+          },
+        ],
+      },
+      {
+        apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      },
+    );
+
+    await requestSeen;
+
+    expect(capturedAuthorization).toBeNull();
+    expect(capturedXTest).toBe("1");
   });
 });
