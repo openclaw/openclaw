@@ -77,11 +77,13 @@ function createRuntimeEnv(): RuntimeEnv {
 }
 
 async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessageEvent }) {
+  const runtime = createRuntimeEnv();
   await handleFeishuMessage({
     cfg: params.cfg,
     event: params.event,
-    runtime: createRuntimeEnv(),
+    runtime,
   });
+  return runtime;
 }
 
 describe("buildFeishuAgentBody", () => {
@@ -147,6 +149,8 @@ describe("handleFeishuMessage command authorization", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockShouldComputeCommandAuthorized.mockReset().mockReturnValue(true);
+    mockGetMessageFeishu.mockReset().mockResolvedValue(null);
+    mockListFeishuThreadMessages.mockReset().mockResolvedValue([]);
     mockReadSessionUpdatedAt.mockReturnValue(undefined);
     mockResolveStorePath.mockReturnValue("/tmp/feishu-sessions.json");
     mockResolveAgentRoute.mockReturnValue({
@@ -1835,6 +1839,76 @@ describe("handleFeishuMessage command authorization", () => {
       expect.objectContaining({
         ThreadStarterBody: undefined,
         ThreadHistoryBody: undefined,
+        ThreadLabel: "Feishu thread in oc-group",
+        MessageThreadId: "om_topic_root",
+      }),
+    );
+  });
+
+  it("keeps sender-scoped thread history when the inbound event and thread history use different sender ids", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockGetMessageFeishu.mockResolvedValue({
+      messageId: "om_topic_root",
+      chatId: "oc-group",
+      content: "root starter",
+      contentType: "text",
+      threadId: "omt_topic_1",
+    });
+    mockListFeishuThreadMessages.mockResolvedValue([
+      {
+        messageId: "om_bot_reply",
+        senderId: "app_1",
+        senderType: "app",
+        content: "assistant reply",
+        contentType: "text",
+        createTime: 1710000000000,
+      },
+      {
+        messageId: "om_follow_up",
+        senderId: "user_topic_1",
+        senderType: "user",
+        content: "follow-up question",
+        contentType: "text",
+        createTime: 1710000001000,
+      },
+    ]);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_topic_sender",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-topic-user",
+          user_id: "user_topic_1",
+        },
+      },
+      message: {
+        message_id: "om_topic_followup_mixed_ids",
+        root_id: "om_topic_root",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "current turn" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ThreadStarterBody: "root starter",
+        ThreadHistoryBody: "assistant reply\n\nfollow-up question",
         ThreadLabel: "Feishu thread in oc-group",
         MessageThreadId: "om_topic_root",
       }),
