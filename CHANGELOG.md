@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 - Android/chat settings: redesign the chat settings sheet with grouped device and media sections, refresh the Connect and Voice tabs, and tighten the chat composer/session header for a denser mobile layout. (#44894) Thanks @obviyus.
 - iOS/onboarding: add a first-run welcome pager before gateway setup, stop auto-opening the QR scanner, and show `/pair qr` instructions on the connect step. (#45054) Thanks @ngutman.
 - Docker/timezone override: add `OPENCLAW_TZ` so `docker-setup.sh` can pin gateway and CLI containers to a chosen IANA timezone instead of inheriting the daemon default. (#34119) Thanks @Lanfei.
+- Browser/agents: add `browserSession="agent" | "user"` so agent browser calls can explicitly choose the isolated OpenClaw browser or a logged-in user browser, with docs for when user presence and attach approval are required.
 
 ### Fixes
 
@@ -62,6 +63,7 @@ Docs: https://docs.openclaw.ai
 - Discord/allowlists: honor raw `guild_id` when hydrated guild objects are missing so allowlisted channels and threads like `#maintainers` no longer get false-dropped before channel allowlist checks.
 - macOS/runtime locator: require Node >=22.16.0 during macOS runtime discovery so the app no longer accepts Node versions that the main runtime guard rejects later. Thanks @sumleo.
 - Agents/custom providers: preserve blank API keys for loopback OpenAI-compatible custom providers by clearing the synthetic Authorization header at runtime, while keeping explicit apiKey and oauth/token config from silently downgrading into fake bearer auth. (#45631) Thanks @xinhuagu.
+- Models/google-vertex Gemini flash-lite normalization: apply existing bare-ID preview normalization to `google-vertex` model refs and provider configs so `google-vertex/gemini-3.1-flash-lite` resolves as `gemini-3.1-flash-lite-preview`. (#42435) thanks @scoootscooob.
 
 ## 2026.3.12
 
@@ -138,6 +140,7 @@ Docs: https://docs.openclaw.ai
 - Mattermost/reply media delivery: pass agent-scoped `mediaLocalRoots` through shared reply delivery so allowed local files upload correctly from button, slash-command, and model-picker replies. (#44021) Thanks @LyleLiu666.
 - Plugins/env-scoped roots: fix plugin discovery/load caches and provenance tracking so same-process `HOME`/`OPENCLAW_HOME` changes no longer reuse stale plugin state or misreport `~/...` plugins as untracked. (#44046) thanks @gumadeiras.
 - Gateway/session discovery: discover disk-only and retired ACP session stores under custom templated `session.store` roots so ACP reconciliation, session-id/session-label targeting, and run-id fallback keep working after restart. (#44176) thanks @gumadeiras.
+- Browser/existing-session: stop reporting fake CDP ports/URLs for live attached Chrome sessions, render `transport: chrome-mcp` in CLI/status output instead of `port: 0`, and keep timeout diagnostics transport-aware when no direct CDP URL exists.
 - Models/OpenRouter native ids: canonicalize native OpenRouter model keys across config writes, runtime lookups, fallback management, and `models list --plain`, and migrate legacy duplicated `openrouter/openrouter/...` config entries forward on write.
 - Feishu/event dedupe: keep early duplicate suppression aligned with the shared Feishu message-id contract and release the pre-queue dedupe marker after failed dispatch so retried events can recover instead of being dropped until the short TTL expires. (#43762) Thanks @yunweibang.
 - Gateway/hooks: bucket hook auth failures by forwarded client IP behind trusted proxies and warn when `hooks.allowedAgentIds` leaves hook routing unrestricted.
@@ -372,6 +375,7 @@ Docs: https://docs.openclaw.ai
 - Agents/embedded runner: carry provider-observed overflow token counts into compaction so overflow retries and diagnostics use the rejected live prompt size instead of only transcript estimates. (#40357) thanks @rabsef-bicrym.
 - Agents/compaction transcript updates: emit a transcript-update event immediately after successful embedded compaction so downstream listeners observe the post-compact transcript without waiting for a later write. (#25558) thanks @rodrigouroz.
 - Agents/sessions_spawn: use the target agent workspace for cross-agent spawned runs instead of inheriting the caller workspace, so child sessions load the correct workspace-scoped instructions and persona files. (#40176) Thanks @moshehbenavraham.
+
 
 ## 2026.3.7
 

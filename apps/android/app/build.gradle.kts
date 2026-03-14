@@ -1,5 +1,7 @@
 import com.android.build.api.variant.impl.VariantOutputImpl
 
+val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
+
 val androidStoreFile = providers.gradleProperty("OPENCLAW_ANDROID_STORE_FILE").orNull?.takeIf { it.isNotBlank() }
 val androidStorePassword = providers.gradleProperty("OPENCLAW_ANDROID_STORE_PASSWORD").orNull?.takeIf { it.isNotBlank() }
 val androidKeyAlias = providers.gradleProperty("OPENCLAW_ANDROID_KEY_ALIAS").orNull?.takeIf { it.isNotBlank() }
@@ -63,8 +65,8 @@ android {
         applicationId = "ai.openclaw.app"
         minSdk = 31
         targetSdk = 36
-        versionCode = 202603130
-        versionName = "2026.3.13"
+        versionCode = 2026031400
+        versionName = "2026.3.14"
         ndk {
             // Support all major ABIs — native libs are tiny (~47 KB per ABI)
             abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
@@ -210,4 +212,46 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
+}
+
+val stripReleaseDnsjavaServiceDescriptor =
+    tasks.register("stripReleaseDnsjavaServiceDescriptor") {
+        val mergedJar =
+            layout.buildDirectory.file(
+                "intermediates/merged_java_res/release/mergeReleaseJavaResource/base.jar",
+            )
+
+        inputs.file(mergedJar)
+        outputs.file(mergedJar)
+
+        doLast {
+            val jarFile = mergedJar.get().asFile
+            if (!jarFile.exists()) {
+                return@doLast
+            }
+
+            val unpackDir = temporaryDir.resolve("merged-java-res")
+            delete(unpackDir)
+            copy {
+                from(zipTree(jarFile))
+                into(unpackDir)
+                exclude(dnsjavaInetAddressResolverService)
+            }
+            delete(jarFile)
+            ant.invokeMethod(
+                "zip",
+                mapOf(
+                    "destfile" to jarFile.absolutePath,
+                    "basedir" to unpackDir.absolutePath,
+                ),
+            )
+        }
+    }
+
+tasks.matching { it.name == "stripReleaseDnsjavaServiceDescriptor" }.configureEach {
+    dependsOn("mergeReleaseJavaResource")
+}
+
+tasks.matching { it.name == "minifyReleaseWithR8" }.configureEach {
+    dependsOn(stripReleaseDnsjavaServiceDescriptor)
 }
