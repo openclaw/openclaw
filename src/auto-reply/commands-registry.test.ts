@@ -282,6 +282,10 @@ describe("commands registry", () => {
   it("normalizes dock command aliases", () => {
     expect(normalizeCommandBody("/dock_telegram")).toBe("/dock-telegram");
   });
+
+  it("normalizes /cron alias to /crons", () => {
+    expect(normalizeCommandBody("/cron all")).toBe("/crons all");
+  });
 });
 
 describe("commands registry args", () => {
