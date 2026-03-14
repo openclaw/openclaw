@@ -9,8 +9,9 @@ let capturedDispatchParams: unknown;
 let sessionDir: string | undefined;
 let sessionStorePath: string;
 let backgroundTasks: Set<Promise<unknown>>;
-const { deliverWebReplyMock } = vi.hoisted(() => ({
+const { deliverWebReplyMock, enqueueSystemEventMock } = vi.hoisted(() => ({
   deliverWebReplyMock: vi.fn(async () => {}),
+  enqueueSystemEventMock: vi.fn(),
 }));
 
 const defaultReplyLogger = {
@@ -106,6 +107,10 @@ vi.mock("../deliver-reply.js", () => ({
   deliverWebReply: deliverWebReplyMock,
 }));
 
+vi.mock("../../../infra/system-events.js", () => ({
+  enqueueSystemEvent: enqueueSystemEventMock,
+}));
+
 import { updateLastRouteInBackground } from "./last-route.js";
 import { processMessage } from "./process-message.js";
 
@@ -115,6 +120,7 @@ describe("web processMessage inbound contract", () => {
     capturedDispatchParams = undefined;
     backgroundTasks = new Set();
     deliverWebReplyMock.mockClear();
+    enqueueSystemEventMock.mockClear();
     sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-process-message-"));
     sessionStorePath = path.join(sessionDir, "sessions.json");
   });
@@ -298,6 +304,23 @@ describe("web processMessage inbound contract", () => {
     await deliver?.({ text: "final payload" }, { kind: "final" });
     expect(deliverWebReplyMock).toHaveBeenCalledTimes(1);
     expect(rememberSentText).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces WhatsApp delivery failures as system events", async () => {
+    await processMessage(createWhatsAppDirectStreamingArgs());
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const onError = (capturedDispatchParams as any)?.dispatcherOptions?.onError as
+      | ((err: unknown, info: { kind: "tool" | "block" | "final" }) => void)
+      | undefined;
+    expect(onError).toBeTypeOf("function");
+
+    onError?.(new Error("Connection Closed"), { kind: "final" });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "WhatsApp auto-reply delivery failed to +1555: Connection Closed",
+      { sessionKey: "agent:main:whatsapp:direct:+1555" },
+    );
   });
 
   it("forces disableBlockStreaming for WhatsApp dispatch", async () => {

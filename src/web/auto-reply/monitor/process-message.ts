@@ -17,6 +17,7 @@ import type { loadConfig } from "../../../config/config.js";
 import { resolveMarkdownTableMode } from "../../../config/markdown-tables.js";
 import { recordSessionMetaFromInbound } from "../../../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
+import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import type { getChildLogger } from "../../../logging.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import {
@@ -443,9 +444,12 @@ export async function processMessage(params: {
             : info.kind === "block"
               ? "block update"
               : "auto-reply";
-        whatsappOutboundLog.error(
-          `Failed sending web ${label} to ${params.msg.from ?? conversationId}: ${formatError(err)}`,
-        );
+        const errorText = formatError(err);
+        const target = params.msg.from ?? conversationId;
+        whatsappOutboundLog.error(`Failed sending web ${label} to ${target}: ${errorText}`);
+        enqueueSystemEvent(`WhatsApp ${label} delivery failed to ${target}: ${errorText}`, {
+          sessionKey: params.route.sessionKey,
+        });
       },
       onReplyStart: params.msg.sendComposing,
     },

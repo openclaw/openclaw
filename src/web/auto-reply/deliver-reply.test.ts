@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { logVerbose } from "../../globals.js";
 import { sleep } from "../../utils.js";
 import { loadWebMedia } from "../media.js";
@@ -84,6 +84,10 @@ async function expectReplySuppressed(replyResult: { text: string; isReasoning?: 
 }
 
 describe("deliverWebReply", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("suppresses payloads flagged as reasoning", async () => {
     await expectReplySuppressed({ text: "Reasoning:\n_hidden_", isReasoning: true });
   });
@@ -145,7 +149,7 @@ describe("deliverWebReply", () => {
       });
 
       expect(msg.reply).toHaveBeenCalledTimes(2);
-      expect(sleep).toHaveBeenCalledWith(500);
+      expect(sleep).toHaveBeenCalledWith(1000);
     },
   );
 
@@ -199,7 +203,59 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.sendMedia).toHaveBeenCalledTimes(2);
-    expect(sleep).toHaveBeenCalledWith(500);
+    expect(sleep).toHaveBeenCalledWith(1000);
+  });
+
+  it("keeps retrying transient text failures until the fifth attempt", async () => {
+    const msg = makeMsg();
+    const replyMock = msg.reply as unknown as {
+      mockRejectedValueOnce: (v: unknown) => unknown;
+      mockResolvedValueOnce: (v: unknown) => unknown;
+    };
+    replyMock.mockRejectedValueOnce(new Error("Connection Closed"));
+    replyMock.mockRejectedValueOnce(new Error("Connection Closed"));
+    replyMock.mockRejectedValueOnce(new Error("Connection Closed"));
+    replyMock.mockRejectedValueOnce(new Error("Connection Closed"));
+    replyMock.mockResolvedValueOnce(undefined);
+
+    await deliverWebReply({
+      replyResult: { text: "hi" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(5);
+    expect(sleep).toHaveBeenNthCalledWith(1, 1000);
+    expect(sleep).toHaveBeenNthCalledWith(2, 2000);
+    expect(sleep).toHaveBeenNthCalledWith(3, 3000);
+    expect(sleep).toHaveBeenNthCalledWith(4, 4000);
+  });
+
+  it("throws after exhausting transient text retries", async () => {
+    const msg = makeMsg();
+    (msg.reply as unknown as { mockRejectedValue: (v: unknown) => void }).mockRejectedValue(
+      new Error("Connection Closed"),
+    );
+
+    await expect(
+      deliverWebReply({
+        replyResult: { text: "hi" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        skipLog: true,
+      }),
+    ).rejects.toThrow("Connection Closed");
+
+    expect(msg.reply).toHaveBeenCalledTimes(5);
+    expect(sleep).toHaveBeenNthCalledWith(1, 1000);
+    expect(sleep).toHaveBeenNthCalledWith(2, 2000);
+    expect(sleep).toHaveBeenNthCalledWith(3, 3000);
+    expect(sleep).toHaveBeenNthCalledWith(4, 4000);
   });
 
   it("falls back to text-only when the first media send fails", async () => {

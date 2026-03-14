@@ -13,6 +13,8 @@ import type { WebInboundMsg } from "./types.js";
 import { elide } from "./util.js";
 
 const REASONING_PREFIX = "reasoning:";
+const SEND_RETRY_MAX_ATTEMPTS = 5;
+const SEND_RETRY_BACKOFF_MS = 1000;
 
 function shouldSuppressReasoningReply(payload: ReplyPayload): boolean {
   if (payload.isReasoning === true) {
@@ -58,7 +60,11 @@ export async function deliverWebReply(params: {
       ? [replyResult.mediaUrl]
       : [];
 
-  const sendWithRetry = async (fn: () => Promise<unknown>, label: string, maxAttempts = 3) => {
+  const sendWithRetry = async (
+    fn: () => Promise<unknown>,
+    label: string,
+    maxAttempts = SEND_RETRY_MAX_ATTEMPTS,
+  ) => {
     let lastErr: unknown;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
@@ -71,7 +77,7 @@ export async function deliverWebReply(params: {
         if (!shouldRetry || isLast) {
           throw err;
         }
-        const backoffMs = 500 * attempt;
+        const backoffMs = SEND_RETRY_BACKOFF_MS * attempt;
         logVerbose(
           `Retrying ${label} to ${msg.from} after failure (${attempt}/${maxAttempts - 1}) in ${backoffMs}ms: ${errText}`,
         );
