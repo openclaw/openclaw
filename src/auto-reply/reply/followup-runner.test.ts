@@ -653,6 +653,69 @@ describe("createFollowupRunner media understanding", () => {
     expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "Got it!" }));
   });
 
+  it("applies media understanding for URL-only attachments", async () => {
+    const transcriptText = "URL-only transcript";
+    applyMediaUnderstandingMock.mockImplementationOnce(
+      async (params: { ctx: Record<string, unknown> }) => {
+        params.ctx.MediaUnderstanding = [
+          {
+            kind: "audio.transcription",
+            text: transcriptText,
+            attachmentIndex: 0,
+            provider: "whisper",
+          },
+        ];
+        params.ctx.Transcript = transcriptText;
+        params.ctx.Body = `[Audio]\nUser text:\nsome text\nTranscript:\n${transcriptText}`;
+        return {
+          outputs: [
+            {
+              kind: "audio.transcription",
+              text: transcriptText,
+              attachmentIndex: 0,
+              provider: "whisper",
+            },
+          ],
+          decisions: [],
+          appliedImage: false,
+          appliedAudio: true,
+          appliedVideo: false,
+          appliedFile: false,
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Got it!" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        prompt: "[media attached: https://cdn.example.com/voice.ogg (audio/ogg)]\nsome text",
+        mediaContext: {
+          Body: "some text",
+          MediaUrl: "https://cdn.example.com/voice.ogg",
+          MediaUrls: ["https://cdn.example.com/voice.ogg"],
+          MediaType: "audio/ogg",
+          MediaTypes: ["audio/ogg"],
+        },
+      }),
+    );
+
+    expect(applyMediaUnderstandingMock).toHaveBeenCalledTimes(1);
+    const agentCall = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      prompt?: string;
+    };
+    expect(agentCall?.prompt).toContain(transcriptText);
+  });
+
   it("strips the full media line when attachment paths or URLs contain brackets", async () => {
     const transcriptText = "Bracket-safe transcript";
     applyMediaUnderstandingMock.mockImplementationOnce(
@@ -1164,6 +1227,98 @@ describe("createFollowupRunner media understanding", () => {
     expect(agentCall?.prompt).not.toContain("/think high summarize this");
   });
 
+  it("preserves directive-like tokens inside extracted media content", async () => {
+    const fileBlock =
+      '<file name="notes.txt" mime="text/plain">\n/model claude-opus should stay\n/queue followup should stay\n</file>';
+    applyMediaUnderstandingMock.mockImplementationOnce(
+      async (params: { ctx: Record<string, unknown> }) => {
+        params.ctx.Body = `/think high summarize this\n\n${fileBlock}`;
+        return {
+          outputs: [],
+          decisions: [],
+          appliedImage: false,
+          appliedAudio: false,
+          appliedVideo: false,
+          appliedFile: true,
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "processed" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        prompt: `[media attached: /tmp/notes.txt]\n${MEDIA_REPLY_HINT}\nsummarize this`,
+        mediaContext: {
+          Body: "/think high summarize this",
+          MediaPaths: ["/tmp/notes.txt"],
+          MediaTypes: ["text/plain"],
+        },
+      }),
+    );
+
+    const agentCall = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      prompt?: string;
+    };
+    expect(agentCall?.prompt).toContain("summarize this");
+    expect(agentCall?.prompt).not.toContain("/think high summarize this");
+    expect(agentCall?.prompt).toContain("/model claude-opus should stay");
+    expect(agentCall?.prompt).toContain("/queue followup should stay");
+  });
+
+  it("rebuilds the prompt when image understanding mutates the body without outputs", async () => {
+    const description = "[Image]\nDescription:\na mountain at sunset";
+    applyMediaUnderstandingMock.mockImplementationOnce(
+      async (params: { ctx: Record<string, unknown> }) => {
+        params.ctx.Body = description;
+        return {
+          outputs: [],
+          decisions: [],
+          appliedImage: true,
+          appliedAudio: false,
+          appliedVideo: false,
+          appliedFile: false,
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "processed" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        prompt: "[media attached: /tmp/photo.jpg (image/jpeg)]\nsome text",
+        mediaContext: {
+          Body: "some text",
+          MediaPaths: ["/tmp/photo.jpg"],
+          MediaTypes: ["image/jpeg"],
+        },
+      }),
+    );
+
+    const agentCall = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      prompt?: string;
+    };
+    expect(agentCall?.prompt).toContain("a mountain at sunset");
+  });
+
   it("does not false-positive on user text containing literal '<file' when extracting files", async () => {
     const fileBlock = '<file name="data.csv" mime="text/csv">\ncol1,col2\n1,2\n</file>';
     applyMediaUnderstandingMock.mockImplementationOnce(
@@ -1195,8 +1350,7 @@ describe("createFollowupRunner media understanding", () => {
     // file extraction results from being embedded in the prompt.
     await runner(
       createQueuedRun({
-        prompt:
-          "[media attached: /tmp/data.csv (text/csv)]\ncheck my <file upload please",
+        prompt: "[media attached: /tmp/data.csv (text/csv)]\ncheck my <file upload please",
         mediaContext: {
           Body: "check my <file upload please",
           CommandBody: "check my <file upload please",
@@ -1213,6 +1367,154 @@ describe("createFollowupRunner media understanding", () => {
     // The file extraction result should be present in the prompt
     expect(agentCall?.prompt).toContain(fileBlock);
     expect(agentCall?.prompt).toContain("check my <file upload please");
+  });
+
+  it("preserves directive-like text that appears inside extracted file content", async () => {
+    const fileBlock =
+      '<file name="notes.txt" mime="text/plain">\nRun `/think high` literally in the shell example.\n</file>';
+    applyMediaUnderstandingMock.mockImplementationOnce(
+      async (params: { ctx: Record<string, unknown> }) => {
+        params.ctx.Body = `summarize this\n\n${fileBlock}`;
+        return {
+          outputs: [],
+          decisions: [],
+          appliedImage: false,
+          appliedAudio: false,
+          appliedVideo: false,
+          appliedFile: true,
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "processed" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        prompt: `[media attached: /tmp/notes.txt]\n${MEDIA_REPLY_HINT}\nsummarize this`,
+        mediaContext: {
+          Body: "/think high summarize this",
+          CommandBody: "summarize this",
+          RawBody: "/think high summarize this",
+          MediaPaths: ["/tmp/notes.txt"],
+          MediaTypes: ["text/plain"],
+        },
+      }),
+    );
+
+    const agentCall = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      prompt?: string;
+    };
+    expect(agentCall?.prompt).toContain("summarize this");
+    expect(agentCall?.prompt).toContain("Run `/think high` literally in the shell example.");
+  });
+
+  it("rebuilds the prompt when image understanding mutates the body without outputs", async () => {
+    applyMediaUnderstandingMock.mockImplementationOnce(
+      async (params: { ctx: Record<string, unknown> }) => {
+        params.ctx.Body = "some text\n\n[Image summary]\nA whiteboard with action items.";
+        return {
+          outputs: [],
+          decisions: [],
+          appliedImage: true,
+          appliedAudio: false,
+          appliedVideo: false,
+          appliedFile: false,
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "processed" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        prompt: "[media attached: /tmp/board.jpg (image/jpeg)]\nsome text",
+        mediaContext: {
+          Body: "some text",
+          CommandBody: "some text",
+          RawBody: "some text",
+          MediaPaths: ["/tmp/board.jpg"],
+          MediaTypes: ["image/jpeg"],
+        },
+      }),
+    );
+
+    const agentCall = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      prompt?: string;
+    };
+    expect(agentCall?.prompt).toContain("[Image summary]");
+    expect(agentCall?.prompt).toContain("A whiteboard with action items.");
+  });
+
+  it("applies media understanding for URL-only deferred attachments", async () => {
+    applyMediaUnderstandingMock.mockImplementationOnce(
+      async (params: { ctx: Record<string, unknown> }) => {
+        params.ctx.Body = "[Audio]\nTranscript:\nremote transcript";
+        params.ctx.Transcript = "remote transcript";
+        return {
+          outputs: [
+            {
+              kind: "audio.transcription",
+              text: "remote transcript",
+              attachmentIndex: 0,
+              provider: "whisper",
+            },
+          ],
+          decisions: [],
+          appliedImage: false,
+          appliedAudio: true,
+          appliedVideo: false,
+          appliedFile: false,
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "processed" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        prompt: "[User sent media without caption]",
+        mediaContext: {
+          Body: "",
+          MediaUrl: "https://cdn.example.com/audio.ogg",
+          MediaUrls: ["https://cdn.example.com/audio.ogg"],
+          MediaType: "audio/ogg",
+          MediaTypes: ["audio/ogg"],
+        },
+      }),
+    );
+
+    expect(applyMediaUnderstandingMock).toHaveBeenCalledTimes(1);
+    const agentCall = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      prompt?: string;
+    };
+    expect(agentCall?.prompt).toContain("remote transcript");
   });
 
   it("uses resolved body (CommandBody) as originalBody for accurate prompt replacement", async () => {

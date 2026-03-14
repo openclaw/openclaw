@@ -172,6 +172,45 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
   });
 
+  it("snapshots URL-only attachments into followup mediaContext", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "check this attachment",
+          RawBody: "check this attachment",
+          CommandBody: "check this attachment",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          ChatType: "group",
+          MediaUrl: "https://cdn.example.com/input.png",
+          MediaUrls: ["https://cdn.example.com/input.png"],
+          MediaType: "image/png",
+          MediaTypes: ["image/png"],
+        },
+        sessionCtx: {
+          Body: "check this attachment",
+          BodyStripped: "check this attachment",
+          ThreadHistoryBody: "Earlier message in this thread",
+          Provider: "slack",
+          ChatType: "group",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.mediaContext).toEqual(
+      expect.objectContaining({
+        MediaUrl: "https://cdn.example.com/input.png",
+        MediaUrls: ["https://cdn.example.com/input.png"],
+        MediaType: "image/png",
+        MediaTypes: ["image/png"],
+      }),
+    );
+  });
+
   it("keeps thread history context on follow-up turns", async () => {
     const result = await runPreparedReply(
       baseParams({
@@ -184,6 +223,41 @@ describe("runPreparedReply media-only handling", () => {
     expect(call).toBeTruthy();
     expect(call?.followupRun.prompt).toContain("[Thread history - for context]");
     expect(call?.followupRun.prompt).toContain("Earlier message in this thread");
+  });
+
+  it("snapshots mediaContext for URL-only deferred attachments", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          MediaUrl: "https://cdn.example.com/audio.ogg",
+          MediaUrls: ["https://cdn.example.com/audio.ogg"],
+          MediaType: "audio/ogg",
+          MediaTypes: ["audio/ogg"],
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          Provider: "slack",
+          ChatType: "group",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.mediaContext?.MediaUrl).toBe("https://cdn.example.com/audio.ogg");
+    expect(call?.followupRun.mediaContext?.MediaUrls).toEqual([
+      "https://cdn.example.com/audio.ogg",
+    ]);
   });
 
   it("returns the empty-body reply when there is no text and no media", async () => {

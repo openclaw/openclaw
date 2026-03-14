@@ -307,7 +307,14 @@ export async function runPreparedReply(
     : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
   const baseBodyTrimmed = baseBodyForPrompt.trim();
   const hasMediaAttachment = Boolean(
-    sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
+    sessionCtx.MediaPath ||
+    sessionCtx.MediaUrl ||
+    (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0) ||
+    (sessionCtx.MediaUrls && sessionCtx.MediaUrls.length > 0) ||
+    ctx.MediaPath?.trim() ||
+    ctx.MediaUrl?.trim() ||
+    (Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0) ||
+    (Array.isArray(ctx.MediaUrls) && ctx.MediaUrls.length > 0),
   );
   if (!baseBodyTrimmed && !hasMediaAttachment) {
     await typing.onReplyStart();
@@ -473,7 +480,10 @@ export async function runPreparedReply(
   // followup runner.  When MediaUnderstanding is already populated the runner
   // knows transcription already succeeded and skips re-application.
   const hasMediaAttachments = Boolean(
-    ctx.MediaPath?.trim() || (Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0),
+    ctx.MediaPath?.trim() ||
+    ctx.MediaUrl?.trim() ||
+    (Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0) ||
+    (Array.isArray(ctx.MediaUrls) && ctx.MediaUrls.length > 0),
   );
   const mediaContext = hasMediaAttachments
     ? {
