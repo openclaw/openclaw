@@ -688,6 +688,8 @@ export async function preflightDiscordMessage(
       logVerbose(`discord: drop guild message (mention required, botId=${botId})`);
       logger.info(
         {
+          accountId: params.accountId,
+          guildId: params.data.guild_id,
           channelId: messageChannelId,
           reason: "no-mention",
         },
