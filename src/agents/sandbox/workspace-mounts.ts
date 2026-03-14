@@ -18,7 +18,9 @@ export function appendWorkspaceMountArgs(params: {
 }) {
   const { args, workspaceDir, agentWorkspaceDir, workdir, workspaceAccess } = params;
 
-  args.push("-v", `${workspaceDir}:${workdir}${mainWorkspaceMountSuffix(workspaceAccess)}`);
+  if (workspaceAccess !== "none") {
+    args.push("-v", `${workspaceDir}:${workdir}${mainWorkspaceMountSuffix(workspaceAccess)}`);
+  }
   if (workspaceAccess !== "none" && workspaceDir !== agentWorkspaceDir) {
     args.push(
       "-v",
