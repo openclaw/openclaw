@@ -35,6 +35,7 @@ const BROWSER_TOOL_ACTIONS = [
 ] as const;
 
 const BROWSER_TARGETS = ["sandbox", "host", "node"] as const;
+const BROWSER_SESSION_CHOICES = ["agent", "user"] as const;
 
 const BROWSER_SNAPSHOT_FORMATS = ["aria", "ai"] as const;
 const BROWSER_SNAPSHOT_MODES = ["efficient"] as const;
@@ -88,6 +89,7 @@ const BrowserActSchema = Type.Object({
 export const BrowserToolSchema = Type.Object({
   action: stringEnum(BROWSER_TOOL_ACTIONS),
   target: optionalStringEnum(BROWSER_TARGETS),
+  browserSession: optionalStringEnum(BROWSER_SESSION_CHOICES),
   node: Type.Optional(Type.String()),
   profile: Type.Optional(Type.String()),
   targetUrl: Type.Optional(Type.String()),
