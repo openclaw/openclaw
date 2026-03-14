@@ -263,6 +263,27 @@ export function createRootScopedReadFile(params: {
   };
 }
 
+export async function statLocalFileSafely(params: {
+  filePath: string;
+  maxBytes?: number;
+}): Promise<Omit<SafeLocalReadResult, "buffer">> {
+  const opened = await openVerifiedLocalFile(params.filePath);
+  try {
+    if (params.maxBytes !== undefined && opened.stat.size > params.maxBytes) {
+      throw new SafeOpenError(
+        "too-large",
+        `file exceeds limit of ${params.maxBytes} bytes (got ${opened.stat.size})`,
+      );
+    }
+    return {
+      realPath: opened.realPath,
+      stat: opened.stat,
+    };
+  } finally {
+    await opened.handle.close().catch(() => {});
+  }
+}
+
 export async function readLocalFileSafely(params: {
   filePath: string;
   maxBytes?: number;

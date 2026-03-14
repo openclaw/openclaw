@@ -751,6 +751,9 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `channels.telegram.textChunkLimit` default is 4000.
     - `channels.telegram.chunkMode="newline"` prefers paragraph boundaries (blank lines) before length splitting.
     - `channels.telegram.mediaMaxMb` (default 100) caps inbound and outbound Telegram media size.
+    - `channels.telegram.apiRoot` overrides the Telegram Bot API root (default `https://api.telegram.org`). Use this for a Local Bot API Server, for example `http://127.0.0.1:8081`.
+    - When `apiRoot` points at a Local Bot API Server, inbound `getFile` results that are absolute paths or `file://` URIs are read from disk directly instead of being downloaded over HTTP.
+    - When `apiRoot` points at a loopback Local Bot API Server, outbound local media paths can be passed through as local file references instead of being preloaded into memory first.
     - `channels.telegram.timeoutSeconds` overrides Telegram API client timeout (if unset, grammY default applies).
     - group context history uses `channels.telegram.historyLimit` or `messages.groupChat.historyLimit` (default 50); `0` disables.
     - DM history controls:
@@ -900,6 +903,7 @@ Primary reference:
 - `channels.telegram.enabled`: enable/disable channel startup.
 - `channels.telegram.botToken`: bot token (BotFather).
 - `channels.telegram.tokenFile`: read token from a regular file path. Symlinks are rejected.
+- `channels.telegram.apiRoot`: custom Telegram Bot API root URL. Defaults to `https://api.telegram.org`. Named accounts inherit the top-level value unless `channels.telegram.accounts.<account>.apiRoot` is set.
 - `channels.telegram.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
 - `channels.telegram.allowFrom`: DM allowlist (numeric Telegram user IDs). `allowlist` requires at least one sender ID. `open` requires `"*"`. `openclaw doctor --fix` can resolve legacy `@username` entries to IDs and can recover allowlist entries from pairing-store files in allowlist migration flows.
 - `channels.telegram.actions.poll`: enable or disable Telegram poll creation (default: enabled; still requires `sendMessage`).

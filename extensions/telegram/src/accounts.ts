@@ -44,6 +44,7 @@ export type ResolvedTelegramAccount = {
   accountId: string;
   enabled: boolean;
   name?: string;
+  baseUrl?: string;
   token: string;
   tokenSource: "env" | "tokenFile" | "config" | "none";
   config: TelegramAccountConfig;
@@ -186,6 +187,7 @@ export function resolveTelegramAccount(params: {
       accountId,
       enabled,
       name: merged.name?.trim() || undefined,
+      baseUrl: merged.apiRoot?.trim() || undefined,
       token: tokenResolution.token,
       tokenSource: tokenResolution.source,
       config: merged,

@@ -1,9 +1,16 @@
+import { buildTelegramBotApiUrl } from "./api-root.js";
+
 export async function fetchTelegramChatId(params: {
   token: string;
   chatId: string;
+  apiRoot?: string;
   signal?: AbortSignal;
 }): Promise<string | null> {
-  const url = `https://api.telegram.org/bot${params.token}/getChat?chat_id=${encodeURIComponent(params.chatId)}`;
+  const url = `${buildTelegramBotApiUrl({
+    token: params.token,
+    method: "getChat",
+    apiRoot: params.apiRoot,
+  })}?chat_id=${encodeURIComponent(params.chatId)}`;
   try {
     const res = await fetch(url, params.signal ? { signal: params.signal } : undefined);
     if (!res.ok) {

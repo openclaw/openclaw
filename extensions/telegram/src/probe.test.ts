@@ -177,6 +177,7 @@ describe("probeTelegram retry logic", () => {
     mockGetWebhookInfoSuccess(fetchMock);
 
     await probeTelegram(token, timeoutMs, {
+      apiRoot: "http://127.0.0.1:8081/",
       proxyUrl: "http://127.0.0.1:8888",
       network: {
         autoSelectFamily: false,
@@ -186,11 +187,25 @@ describe("probeTelegram retry logic", () => {
 
     expect(makeProxyFetch).toHaveBeenCalledWith("http://127.0.0.1:8888");
     expect(resolveTelegramFetch).toHaveBeenCalledWith(fetchMock, {
+      apiRoot: "http://127.0.0.1:8081/",
       network: {
         autoSelectFamily: false,
         dnsResultOrder: "ipv4first",
       },
     });
+  });
+
+  it("builds probe requests from a custom Telegram Bot API root", async () => {
+    const fetchMock = installFetchMock();
+    mockGetMeSuccess(fetchMock);
+    mockGetWebhookInfoSuccess(fetchMock);
+
+    await probeTelegram(token, timeoutMs, {
+      apiRoot: "http://127.0.0.1:8081/",
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://127.0.0.1:8081/bottest-token/getMe");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("http://127.0.0.1:8081/bottest-token/getWebhookInfo");
   });
 
   it("reuses probe fetcher across repeated probes for the same account transport settings", async () => {
@@ -240,6 +255,26 @@ describe("probeTelegram retry logic", () => {
         autoSelectFamily: false,
         dnsResultOrder: "ipv4first",
       },
+    });
+
+    expect(resolveTelegramFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reuse probe fetcher cache when apiRoot differs", async () => {
+    const fetchMock = installFetchMock();
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "production");
+
+    mockGetMeSuccess(fetchMock);
+    mockGetWebhookInfoSuccess(fetchMock);
+    await probeTelegram(`${token}-cache-root`, timeoutMs, {
+      apiRoot: "http://127.0.0.1:8081/",
+    });
+
+    mockGetMeSuccess(fetchMock);
+    mockGetWebhookInfoSuccess(fetchMock);
+    await probeTelegram(`${token}-cache-root`, timeoutMs, {
+      apiRoot: "http://127.0.0.1:8082/",
     });
 
     expect(resolveTelegramFetch).toHaveBeenCalledTimes(2);

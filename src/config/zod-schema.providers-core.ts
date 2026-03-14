@@ -53,6 +53,16 @@ const DiscordIdListSchema = z.array(DiscordIdSchema);
 
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
 const TelegramIdListSchema = z.array(z.union([z.string(), z.number()]));
+const TelegramApiRootSchema = z
+  .string()
+  .url()
+  .refine((value) => {
+    const protocol = new URL(value).protocol;
+    return protocol === "http:" || protocol === "https:";
+  }, "Expected http:// or https:// URL")
+  .describe(
+    "Custom Telegram Bot API root URL. Defaults to https://api.telegram.org; set to a local Bot API Server root such as http://127.0.0.1:8081 when applicable.",
+  );
 
 const TelegramCapabilitiesSchema = z.union([
   z.array(z.string()),
@@ -203,6 +213,7 @@ export const TelegramAccountSchemaBase = z
     streamMode: z.enum(["off", "partial", "block"]).optional(),
     mediaMaxMb: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
+    apiRoot: TelegramApiRootSchema.optional(),
     retry: RetryConfigSchema,
     network: z
       .object({

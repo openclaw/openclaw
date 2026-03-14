@@ -102,6 +102,33 @@ function getErrorCode(err: unknown): string | undefined {
   return undefined;
 }
 
+function getRetryAfterSeconds(err: unknown): number | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const direct =
+    "parameters" in err && err.parameters && typeof err.parameters === "object"
+      ? (err.parameters as { retry_after?: unknown }).retry_after
+      : undefined;
+  if (typeof direct === "number" && Number.isFinite(direct)) {
+    return direct;
+  }
+  const response =
+    "response" in err && err.response && typeof err.response === "object"
+      ? (err.response as { parameters?: { retry_after?: unknown } }).parameters?.retry_after
+      : undefined;
+  if (typeof response === "number" && Number.isFinite(response)) {
+    return response;
+  }
+  const nestedError =
+    "error" in err && err.error && typeof err.error === "object"
+      ? (err.error as { parameters?: { retry_after?: unknown } }).parameters?.retry_after
+      : undefined;
+  return typeof nestedError === "number" && Number.isFinite(nestedError)
+    ? nestedError
+    : undefined;
+}
+
 export type TelegramNetworkErrorContext = "polling" | "send" | "webhook" | "unknown";
 export type TelegramNetworkErrorOrigin = {
   method?: string | null;
@@ -151,8 +178,9 @@ export function isTelegramPollingNetworkError(err: unknown): boolean {
 
 /**
  * Returns true if the error is safe to retry for a non-idempotent Telegram send operation
- * (e.g. sendMessage). Only matches errors that are guaranteed to have occurred *before*
- * the request reached Telegram's servers, preventing duplicate message delivery.
+ * (e.g. sendMessage). This is intentionally stricter than generic Telegram retries:
+ * it only allows pre-connect failures, explicit rate-limit rejections, and grammY's
+ * failed-after network envelope, all of which indicate the send was not accepted.
  *
  * Use this instead of isRecoverableTelegramNetworkError for sendMessage/sendPhoto/etc.
  * calls where a retry would create a duplicate visible message.
@@ -166,8 +194,15 @@ export function isSafeToRetrySendError(err: unknown): boolean {
     if (code && PRE_CONNECT_ERROR_CODES.has(code)) {
       return true;
     }
+    if (typeof getRetryAfterSeconds(candidate) === "number") {
+      return true;
+    }
+    const message = formatErrorMessage(candidate).trim();
+    if (message && GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message)) {
+      return true;
+    }
   }
-  return false;
+  return hasTelegramErrorCode(err, (code) => code === 429);
 }
 
 function hasTelegramErrorCode(err: unknown, matches: (code: number) => boolean): boolean {

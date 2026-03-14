@@ -5,6 +5,7 @@ import { resolveFetch } from "../../../src/infra/fetch.js";
 import { hasEnvHttpProxyConfigured } from "../../../src/infra/net/proxy-env.js";
 import type { PinnedDispatcherPolicy } from "../../../src/infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../../src/logging/subsystem.js";
+import { resolveTelegramApiOriginDetails } from "./api-root.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
   resolveTelegramDnsResultOrderDecision,
@@ -14,7 +15,7 @@ import { getProxyUrlFromFetch } from "./proxy.js";
 const log = createSubsystemLogger("telegram/network");
 
 const TELEGRAM_AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 300;
-const TELEGRAM_API_HOSTNAME = "api.telegram.org";
+const DEFAULT_TELEGRAM_API_HOSTNAME = "api.telegram.org";
 
 type RequestInitWithDispatcher = RequestInit & {
   dispatcher?: unknown;
@@ -138,7 +139,24 @@ function buildTelegramConnectOptions(params: {
   return Object.keys(connect).length > 0 ? connect : null;
 }
 
-function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env): boolean {
+function resolveTelegramApiProxyTarget(apiRoot?: string | null): {
+  protocol: "http" | "https";
+  hostname: string;
+  port: number;
+} {
+  const resolved = resolveTelegramApiOriginDetails(apiRoot);
+  const protocol = resolved?.protocol === "http:" ? "http" : "https";
+  return {
+    protocol,
+    hostname: resolved?.hostname ?? DEFAULT_TELEGRAM_API_HOSTNAME,
+    port: resolved?.port ?? (protocol === "http" ? 80 : 443),
+  };
+}
+
+function shouldBypassEnvProxyForTelegramApi(
+  apiRoot?: string | null,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
   // We need this classification before dispatch to decide whether sticky IPv4 fallback
   // can safely arm. EnvHttpProxyAgent does not expose route decisions (proxy vs direct
   // NO_PROXY bypass), so we mirror undici's parsing/matching behavior for this host.
@@ -154,8 +172,9 @@ function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env
   if (noProxyValue === "*") {
     return true;
   }
-  const targetHostname = TELEGRAM_API_HOSTNAME.toLowerCase();
-  const targetPort = 443;
+  const target = resolveTelegramApiProxyTarget(apiRoot);
+  const targetHostname = target.hostname.toLowerCase();
+  const targetPort = target.port;
   const noProxyEntries = noProxyValue.split(/[,\s]/);
   for (let i = 0; i < noProxyEntries.length; i++) {
     const entry = noProxyEntries[i];
@@ -178,8 +197,11 @@ function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env
   return false;
 }
 
-function hasEnvHttpProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env): boolean {
-  return hasEnvHttpProxyConfigured("https", env);
+function hasEnvHttpProxyForTelegramApi(
+  apiRoot?: string | null,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return hasEnvHttpProxyConfigured(resolveTelegramApiProxyTarget(apiRoot).protocol, env);
 }
 
 function resolveTelegramDispatcherPolicy(params: {
@@ -403,7 +425,7 @@ export type TelegramTransport = {
 
 export function resolveTelegramTransport(
   proxyFetch?: typeof fetch,
-  options?: { network?: TelegramNetworkConfig },
+  options?: { network?: TelegramNetworkConfig; apiRoot?: string },
 ): TelegramTransport {
   const autoSelectDecision = resolveTelegramAutoSelectFamilyDecision({
     network: options?.network,
@@ -429,7 +451,7 @@ export function resolveTelegramTransport(
     return { fetch: sourceFetch, sourceFetch };
   }
 
-  const useEnvProxy = !explicitProxyUrl && hasEnvHttpProxyForTelegramApi();
+  const useEnvProxy = !explicitProxyUrl && hasEnvHttpProxyForTelegramApi(options?.apiRoot);
   const defaultDispatcherResolution = resolveTelegramDispatcherPolicy({
     autoSelectFamily: autoSelectDecision.value,
     dnsResultOrder,
@@ -438,7 +460,7 @@ export function resolveTelegramTransport(
     proxyUrl: explicitProxyUrl,
   });
   const defaultDispatcher = createTelegramDispatcher(defaultDispatcherResolution.policy);
-  const shouldBypassEnvProxy = shouldBypassEnvProxyForTelegramApi();
+  const shouldBypassEnvProxy = shouldBypassEnvProxyForTelegramApi(options?.apiRoot);
   const allowStickyIpv4Fallback =
     defaultDispatcher.mode === "direct" ||
     (defaultDispatcher.mode === "env-proxy" && shouldBypassEnvProxy);
@@ -508,7 +530,7 @@ export function resolveTelegramTransport(
 
 export function resolveTelegramFetch(
   proxyFetch?: typeof fetch,
-  options?: { network?: TelegramNetworkConfig },
+  options?: { network?: TelegramNetworkConfig; apiRoot?: string },
 ): typeof fetch {
   return resolveTelegramTransport(proxyFetch, options).fetch;
 }

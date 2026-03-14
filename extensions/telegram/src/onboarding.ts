@@ -47,7 +47,7 @@ async function noteTelegramUserIdHelp(prompter: WizardPrompter): Promise<void> {
   await prompter.note(
     [
       `1) DM your bot, then read from.id in \`${formatCliCommand("openclaw logs --follow")}\` (safest)`,
-      "2) Or call https://api.telegram.org/bot<bot_token>/getUpdates and read message.from.id",
+      "2) Or call <your Bot API root>/bot<bot_token>/getUpdates (default: https://api.telegram.org) and read message.from.id",
       "3) Third-party: DM @userinfobot or @getidsbot",
       `Docs: ${formatDocsLink("/telegram")}`,
       "Website: https://openclaw.ai",
@@ -106,7 +106,11 @@ async function promptTelegramAllowFrom(params: {
             return { input: entry, resolved: false, id: null };
           }
           const username = stripped.startsWith("@") ? stripped : `@${stripped}`;
-          const id = await fetchTelegramChatId({ token: tokenValue, chatId: username });
+          const id = await fetchTelegramChatId({
+            token: tokenValue,
+            chatId: username,
+            apiRoot: resolved.config.apiRoot,
+          });
           return { input: entry, resolved: Boolean(id), id };
         }),
       );

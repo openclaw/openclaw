@@ -157,6 +157,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
     telegram: {
       enabled: true,
       botToken: "your-bot-token",
+      apiRoot: "http://127.0.0.1:8081",
       dmPolicy: "pairing",
       allowFrom: ["tg:123456789"],
       groups: {
@@ -204,6 +205,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 ```
 
 - Bot token: `channels.telegram.botToken` or `channels.telegram.tokenFile` (regular file only; symlinks rejected), with `TELEGRAM_BOT_TOKEN` as fallback for the default account.
+- `channels.telegram.apiRoot` overrides the Bot API root (default `https://api.telegram.org`). Set this to a Local Bot API Server root such as `http://127.0.0.1:8081` when you want Telegram sends, probes, lookups, and file downloads to use that server. Loopback Local Bot API roots also let outbound local media paths stay as file references instead of being fully preloaded into memory first.
 - Optional `channels.telegram.defaultAccount` overrides default account selection when it matches a configured account id.
 - In multi-account setups (2+ account ids), set an explicit default (`channels.telegram.defaultAccount` or `channels.telegram.accounts.default`) to avoid fallback routing; `openclaw doctor` warns when this is missing or invalid.
 - `configWrites: false` blocks Telegram-initiated config writes (supergroup ID migrations, `/config set|unset`).

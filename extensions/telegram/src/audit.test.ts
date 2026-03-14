@@ -21,11 +21,12 @@ function mockGetChatMemberStatus(status: string) {
   );
 }
 
-async function auditSingleGroup() {
+async function auditSingleGroup(options?: { apiRoot?: string }) {
   return auditTelegramGroupMembership({
     token: "t",
     botId: 123,
     groupIds: ["-1001"],
+    apiRoot: options?.apiRoot,
     timeoutMs: 5000,
   });
 }
@@ -67,5 +68,13 @@ describe("telegram audit", () => {
     expect(res.ok).toBe(false);
     expect(res.groups[0]?.ok).toBe(false);
     expect(res.groups[0]?.status).toBe("left");
+  });
+
+  it("uses a custom Telegram Bot API root for membership checks", async () => {
+    mockGetChatMemberStatus("member");
+    await auditSingleGroup({ apiRoot: "http://127.0.0.1:8081/" });
+    expect(undiciFetch.mock.calls[0]?.[0]).toBe(
+      "http://127.0.0.1:8081/bott/getChatMember?chat_id=-1001&user_id=123",
+    );
   });
 });

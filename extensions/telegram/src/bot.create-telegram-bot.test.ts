@@ -112,6 +112,45 @@ describe("createTelegramBot", () => {
       }),
     );
   });
+  it("applies global and per-account apiRoot", () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          apiRoot: "http://127.0.0.1:8081/",
+        },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ apiRoot: "http://127.0.0.1:8081" }),
+      }),
+    );
+    botCtorSpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          apiRoot: "http://127.0.0.1:8081/",
+          accounts: {
+            foo: { apiRoot: "http://127.0.0.1:8082/" },
+          },
+        },
+      },
+    });
+    createTelegramBot({ token: "tok", accountId: "foo" });
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ apiRoot: "http://127.0.0.1:8082" }),
+      }),
+    );
+  });
   it("sequentializes updates by chat and thread", () => {
     createTelegramBot({ token: "tok" });
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);
@@ -815,7 +854,7 @@ describe("createTelegramBot", () => {
     expect(payload.SessionKey).toBe("agent:opie:main");
   });
 
-  it("routes non-default account DMs to the per-account fallback session without explicit bindings", async () => {
+  it("routes non-default account DMs to isolated per-account sessions without explicit bindings", async () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
@@ -845,9 +884,9 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = replySpy.mock.calls[0]?.[0];
+    const payload = replySpy.mock.calls[0]?.[0] as { AccountId?: string; SessionKey?: string };
     expect(payload.AccountId).toBe("opie");
-    expect(payload.SessionKey).toContain("agent:main:telegram:opie:");
+    expect(payload.SessionKey).toBe("agent:main:telegram:opie:direct:999");
   });
 
   it("applies group mention overrides and fallback behavior", async () => {
@@ -1864,7 +1903,11 @@ describe("createTelegramBot", () => {
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
-      createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+      createTelegramBot({
+        token: "tok",
+        testTimings: TELEGRAM_TEST_TIMINGS,
+        proxyFetch: fetchSpy as unknown as typeof fetch,
+      });
       const handler = getOnHandler("channel_post") as (
         ctx: Record<string, unknown>,
       ) => Promise<void>;
@@ -2091,7 +2134,11 @@ describe("createTelegramBot", () => {
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
-      createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+      createTelegramBot({
+        token: "tok",
+        testTimings: TELEGRAM_TEST_TIMINGS,
+        proxyFetch: fetchSpy as unknown as typeof fetch,
+      });
       const handler = getOnHandler("channel_post") as (
         ctx: Record<string, unknown>,
       ) => Promise<void>;

@@ -336,17 +336,22 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
     const inspected = inspectTelegramAccount({ cfg, accountId });
     return inspected.enabled && inspected.tokenStatus === "configured_unavailable";
   });
-  const tokens = Array.from(
+  const apiClients = Array.from(
     new Set(
       listTelegramAccountIds(resolvedConfig)
         .map((accountId) => resolveTelegramAccount({ cfg: resolvedConfig, accountId }))
-        .map((account) => (account.tokenSource === "none" ? "" : account.token))
-        .map((token) => token.trim())
+        .filter((account) => account.tokenSource !== "none")
+        .map((account) => ({
+          token: account.token.trim(),
+          apiRoot: account.config.apiRoot?.trim() || undefined,
+        }))
+        .filter((entry) => entry.token)
+        .map((entry) => JSON.stringify(entry))
         .filter(Boolean),
     ),
-  );
+  ).map((entry) => JSON.parse(entry) as { token: string; apiRoot?: string });
 
-  if (tokens.length === 0) {
+  if (apiClients.length === 0) {
     return {
       config: cfg,
       changes: [
@@ -373,13 +378,14 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
       return null;
     }
     const username = stripped.startsWith("@") ? stripped : `@${stripped}`;
-    for (const token of tokens) {
+    for (const client of apiClients) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 4000);
       try {
         const id = await fetchTelegramChatId({
-          token,
+          token: client.token,
           chatId: username,
+          apiRoot: client.apiRoot,
           signal: controller.signal,
         });
         if (id) {
