@@ -16,6 +16,7 @@ import { resolveGatewayCredentialsFromValues } from "./credentials.js";
 import {
   isLocalishHost,
   isLoopbackAddress,
+  resolveRequestClientIp,
   isTrustedProxyAddress,
   resolveClientIp,
 } from "./net.js";
@@ -39,7 +40,14 @@ export type ResolvedGatewayAuth = {
 
 export type GatewayAuthResult = {
   ok: boolean;
-  method?: "none" | "token" | "password" | "tailscale" | "device-token" | "trusted-proxy";
+  method?:
+    | "none"
+    | "token"
+    | "password"
+    | "tailscale"
+    | "device-token"
+    | "bootstrap-token"
+    | "trusted-proxy";
   user?: string;
   reason?: string;
   /** Present when the request was blocked by the rate limiter. */
@@ -102,23 +110,6 @@ function resolveTailscaleClientIp(req?: IncomingMessage): string | undefined {
     remoteAddr: req.socket?.remoteAddress ?? "",
     forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
     trustedProxies: [...TAILSCALE_TRUSTED_PROXIES],
-  });
-}
-
-function resolveRequestClientIp(
-  req?: IncomingMessage,
-  trustedProxies?: string[],
-  allowRealIpFallback = false,
-): string | undefined {
-  if (!req) {
-    return undefined;
-  }
-  return resolveClientIp({
-    remoteAddr: req.socket?.remoteAddress ?? "",
-    forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
-    realIp: headerValue(req.headers?.["x-real-ip"]),
-    trustedProxies,
-    allowRealIpFallback,
   });
 }
 

@@ -117,6 +117,27 @@ export async function drainFormattedSystemEvents(params: {
     .join("\n");
 }
 
+async function persistSessionEntryUpdate(params: {
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  storePath?: string;
+  nextEntry: SessionEntry;
+}) {
+  if (!params.sessionStore || !params.sessionKey) {
+    return;
+  }
+  params.sessionStore[params.sessionKey] = {
+    ...params.sessionStore[params.sessionKey],
+    ...params.nextEntry,
+  };
+  if (!params.storePath) {
+    return;
+  }
+  await updateSessionStore(params.storePath, (store) => {
+    store[params.sessionKey!] = { ...store[params.sessionKey!], ...params.nextEntry };
+  });
+}
+
 export async function ensureSkillSnapshot(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -185,12 +206,7 @@ export async function ensureSkillSnapshot(params: {
       systemSent: true,
       skillsSnapshot: skillSnapshot,
     };
-    sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...nextEntry };
-    if (storePath) {
-      await updateSessionStore(storePath, (store) => {
-        store[sessionKey] = { ...store[sessionKey], ...nextEntry };
-      });
-    }
+    await persistSessionEntryUpdate({ sessionStore, sessionKey, storePath, nextEntry });
     systemSent = true;
   }
 
@@ -227,12 +243,7 @@ export async function ensureSkillSnapshot(params: {
       updatedAt: Date.now(),
       skillsSnapshot,
     };
-    sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...nextEntry };
-    if (storePath) {
-      await updateSessionStore(storePath, (store) => {
-        store[sessionKey] = { ...store[sessionKey], ...nextEntry };
-      });
-    }
+    await persistSessionEntryUpdate({ sessionStore, sessionKey, storePath, nextEntry });
   }
 
   return { sessionEntry: nextEntry, skillsSnapshot, systemSent };

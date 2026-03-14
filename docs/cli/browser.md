@@ -27,7 +27,7 @@ Related:
 ## Quick start (local)
 
 ```bash
-openclaw browser --browser-profile chrome tabs
+openclaw browser profiles
 openclaw browser --browser-profile openclaw start
 openclaw browser --browser-profile openclaw open https://example.com
 openclaw browser --browser-profile openclaw snapshot
@@ -38,7 +38,8 @@ openclaw browser --browser-profile openclaw snapshot
 Profiles are named browser routing configs. In practice:
 
 - `openclaw`: launches/attaches to a dedicated OpenClaw-managed Chrome instance (isolated user data dir).
-- `chrome`: controls your existing Chrome tab(s) via the Chrome extension relay.
+- `user`: controls your existing signed-in Chrome session via Chrome DevTools MCP.
+- `chrome-relay`: controls your existing Chrome tab(s) via the Chrome extension relay.
 
 ```bash
 openclaw browser profiles

@@ -7,6 +7,9 @@ import {
   DefaultResourceLoader,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import { resolveSignalReactionLevel } from "../../../../extensions/signal/src/reaction-level.js";
+import { resolveTelegramInlineButtonsScope } from "../../../../extensions/telegram/src/inline-buttons.js";
+import { resolveTelegramReactionLevel } from "../../../../extensions/telegram/src/reaction-level.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -24,9 +27,6 @@ import type {
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
-import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
-import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
-import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
@@ -1930,7 +1930,10 @@ export async function runEmbeddedAttempt(
         params.config,
         params.provider,
         params.modelId,
-        params.streamParams,
+        {
+          ...params.streamParams,
+          fastMode: params.fastMode,
+        },
         params.thinkLevel,
         sessionAgentId,
       );
@@ -1944,9 +1947,10 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = cacheTrace.wrapStreamFn(activeSession.agent.streamFn);
       }
 
-      // Copilot/Claude can reject persisted `thinking` blocks (e.g. thinkingSignature:"reasoning_text")
-      // on *any* follow-up provider call (including tool continuations). Wrap the stream function
-      // so every outbound request sees sanitized messages.
+      // Anthropic Claude endpoints can reject replayed `thinking` blocks
+      // (e.g. thinkingSignature:"reasoning_text") on any follow-up provider
+      // call, including tool continuations. Wrap the stream function so every
+      // outbound request sees sanitized messages.
       if (transcriptPolicy.dropThinkingBlocks) {
         const inner = activeSession.agent.streamFn;
         activeSession.agent.streamFn = (model, context, options) => {
@@ -2542,14 +2546,19 @@ export async function runEmbeddedAttempt(
           }
         }
 
+        // Check if ANY compaction occurred during the entire attempt (prompt + retry).
+        // Using a cumulative count (> 0) instead of a delta check avoids missing
+        // compactions that complete during activeSession.prompt() before the delta
+        // baseline is sampled.
         const compactionOccurredThisAttempt = getCompactionCount() > 0;
-
         // Append cache-TTL timestamp AFTER prompt + compaction retry completes.
         // Previously this was before the prompt, which caused a custom entry to be
         // inserted between compaction and the next prompt — breaking the
         // prepareCompaction() guard that checks the last entry type, leading to
         // double-compaction. See: https://github.com/openclaw/openclaw/issues/9282
         // Skip when timed out during compaction — session state may be inconsistent.
+        // Also skip when compaction ran this attempt — appending a custom entry
+        // after compaction would break the guard again. See: #28491
         if (!timedOutDuringCompaction && !compactionOccurredThisAttempt) {
           const shouldTrackCacheTtl =
             params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&

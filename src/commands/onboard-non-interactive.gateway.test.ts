@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../runtime.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
 import { createThrowingRuntime, readJsonFile } from "./onboard-non-interactive.test-helpers.js";
+import type { installGatewayDaemonNonInteractive } from "./onboard-non-interactive/local/daemon-install.js";
 
 const gatewayClientCalls: Array<{
   url?: string;
@@ -13,6 +15,29 @@ const gatewayClientCalls: Array<{
   onClose?: (code: number, reason: string) => void;
 }> = [];
 const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
+type InstallGatewayDaemonResult = Awaited<ReturnType<typeof installGatewayDaemonNonInteractive>>;
+const installGatewayDaemonNonInteractiveMock = vi.hoisted(() =>
+  vi.fn(async (): Promise<InstallGatewayDaemonResult> => ({ installed: true })),
+);
+const gatewayServiceMock = vi.hoisted(() => ({
+  label: "LaunchAgent",
+  loadedText: "loaded",
+  isLoaded: vi.fn(async () => true),
+  readRuntime: vi.fn(async () => ({
+    status: "running",
+    state: "active",
+    pid: 4242,
+  })),
+}));
+const readLastGatewayErrorLineMock = vi.hoisted(() =>
+  vi.fn(async () => "Gateway failed to start: required secrets are unavailable."),
+);
+let waitForGatewayReachableMock:
+  | ((params: { url: string; token?: string; password?: string; deadlineMs?: number }) => Promise<{
+      ok: boolean;
+      detail?: string;
+    }>)
+  | undefined;
 
 vi.mock("../gateway/client.js", () => ({
   GatewayClient: class {
@@ -46,8 +71,24 @@ vi.mock("./onboard-helpers.js", async (importOriginal) => {
   return {
     ...actual,
     ensureWorkspaceAndSessions: ensureWorkspaceAndSessionsMock,
+    waitForGatewayReachable: (...args: Parameters<typeof actual.waitForGatewayReachable>) =>
+      waitForGatewayReachableMock
+        ? waitForGatewayReachableMock(args[0])
+        : actual.waitForGatewayReachable(...args),
   };
 });
+
+vi.mock("./onboard-non-interactive/local/daemon-install.js", () => ({
+  installGatewayDaemonNonInteractive: installGatewayDaemonNonInteractiveMock,
+}));
+
+vi.mock("../daemon/service.js", () => ({
+  resolveGatewayService: () => gatewayServiceMock,
+}));
+
+vi.mock("../daemon/diagnostics.js", () => ({
+  readLastGatewayErrorLine: readLastGatewayErrorLineMock,
+}));
 
 const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");
 const { resolveConfigPath: resolveStateConfigPath } = await import("../config/paths.js");
@@ -114,6 +155,14 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       await fs.rm(tempHome, { recursive: true, force: true });
     }
     envSnapshot.restore();
+  });
+
+  afterEach(() => {
+    waitForGatewayReachableMock = undefined;
+    installGatewayDaemonNonInteractiveMock.mockClear();
+    gatewayServiceMock.isLoaded.mockClear();
+    gatewayServiceMock.readRuntime.mockClear();
+    readLastGatewayErrorLineMock.mockClear();
   });
 
   it("writes gateway token auth into config", async () => {
@@ -299,6 +348,211 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       const lastCall = gatewayClientCalls[gatewayClientCalls.length - 1];
       expect(lastCall?.url).toBe(`ws://127.0.0.1:${port}`);
       expect(lastCall?.token).toBe(token);
+    });
+  }, 60_000);
+
+  it("explains local health failure when no daemon was requested", async () => {
+    await withStateDir("state-local-health-hint-", async (stateDir) => {
+      waitForGatewayReachableMock = vi.fn(async () => ({
+        ok: false,
+        detail: "socket closed: 1006 abnormal closure",
+      }));
+
+      await expect(
+        runNonInteractiveOnboarding(
+          {
+            nonInteractive: true,
+            mode: "local",
+            workspace: path.join(stateDir, "openclaw"),
+            authChoice: "skip",
+            skipSkills: true,
+            skipHealth: false,
+            installDaemon: false,
+            gatewayBind: "loopback",
+          },
+          runtime,
+        ),
+      ).rejects.toThrow(
+        /only waits for an already-running gateway unless you pass --install-daemon[\s\S]*--skip-health/,
+      );
+    });
+  }, 60_000);
+
+  it("uses a longer health deadline when daemon install was requested", async () => {
+    await withStateDir("state-local-daemon-health-", async (stateDir) => {
+      let capturedDeadlineMs: number | undefined;
+      waitForGatewayReachableMock = vi.fn(async (params: { deadlineMs?: number }) => {
+        capturedDeadlineMs = params.deadlineMs;
+        return { ok: true };
+      });
+
+      await runNonInteractiveOnboarding(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace: path.join(stateDir, "openclaw"),
+          authChoice: "skip",
+          skipSkills: true,
+          skipHealth: false,
+          installDaemon: true,
+          gatewayBind: "loopback",
+        },
+        runtime,
+      );
+
+      expect(installGatewayDaemonNonInteractiveMock).toHaveBeenCalledTimes(1);
+      expect(capturedDeadlineMs).toBe(45_000);
+    });
+  }, 60_000);
+
+  it("emits a daemon-install failure when Linux user systemd is unavailable", async () => {
+    await withStateDir("state-local-daemon-install-json-fail-", async (stateDir) => {
+      installGatewayDaemonNonInteractiveMock.mockResolvedValueOnce({
+        installed: false,
+        skippedReason: "systemd-user-unavailable",
+      });
+
+      let capturedError = "";
+      const runtimeWithCapture: RuntimeEnv = {
+        log: () => {},
+        error: (...args: unknown[]) => {
+          const firstArg = args[0];
+          capturedError =
+            typeof firstArg === "string"
+              ? firstArg
+              : firstArg instanceof Error
+                ? firstArg.message
+                : (JSON.stringify(firstArg) ?? "");
+          throw new Error(capturedError);
+        },
+        exit: (_code: number) => {
+          throw new Error("exit should not be reached after runtime.error");
+        },
+      };
+
+      const originalPlatform = process.platform;
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: "linux",
+      });
+
+      try {
+        await expect(
+          runNonInteractiveOnboarding(
+            {
+              nonInteractive: true,
+              mode: "local",
+              workspace: path.join(stateDir, "openclaw"),
+              authChoice: "skip",
+              skipSkills: true,
+              skipHealth: false,
+              installDaemon: true,
+              gatewayBind: "loopback",
+              json: true,
+            },
+            runtimeWithCapture,
+          ),
+        ).rejects.toThrow(/"phase": "daemon-install"/);
+      } finally {
+        Object.defineProperty(process, "platform", {
+          configurable: true,
+          value: originalPlatform,
+        });
+      }
+
+      const parsed = JSON.parse(capturedError) as {
+        ok: boolean;
+        phase: string;
+        daemonInstall?: {
+          requested?: boolean;
+          installed?: boolean;
+          skippedReason?: string;
+        };
+        hints?: string[];
+      };
+      expect(parsed.ok).toBe(false);
+      expect(parsed.phase).toBe("daemon-install");
+      expect(parsed.daemonInstall).toEqual({
+        requested: true,
+        installed: false,
+        skippedReason: "systemd-user-unavailable",
+      });
+      expect(parsed.hints).toContain(
+        "Fix: rerun without `--install-daemon` for one-shot setup, or enable a working user-systemd session and retry.",
+      );
+    });
+  }, 60_000);
+
+  it("emits structured JSON diagnostics when daemon health fails", async () => {
+    await withStateDir("state-local-daemon-health-json-fail-", async (stateDir) => {
+      waitForGatewayReachableMock = vi.fn(async () => ({
+        ok: false,
+        detail: "gateway closed (1006 abnormal closure (no close frame)): no close reason",
+      }));
+
+      let capturedError = "";
+      const runtimeWithCapture: RuntimeEnv = {
+        log: () => {},
+        error: (...args: unknown[]) => {
+          const firstArg = args[0];
+          capturedError =
+            typeof firstArg === "string"
+              ? firstArg
+              : firstArg instanceof Error
+                ? firstArg.message
+                : (JSON.stringify(firstArg) ?? "");
+          throw new Error(capturedError);
+        },
+        exit: (_code: number) => {
+          throw new Error("exit should not be reached after runtime.error");
+        },
+      };
+
+      await expect(
+        runNonInteractiveOnboarding(
+          {
+            nonInteractive: true,
+            mode: "local",
+            workspace: path.join(stateDir, "openclaw"),
+            authChoice: "skip",
+            skipSkills: true,
+            skipHealth: false,
+            installDaemon: true,
+            gatewayBind: "loopback",
+            json: true,
+          },
+          runtimeWithCapture,
+        ),
+      ).rejects.toThrow(/"phase": "gateway-health"/);
+
+      const parsed = JSON.parse(capturedError) as {
+        ok: boolean;
+        phase: string;
+        installDaemon: boolean;
+        detail?: string;
+        gateway?: { wsUrl?: string };
+        hints?: string[];
+        diagnostics?: {
+          service?: {
+            label?: string;
+            loaded?: boolean;
+            runtimeStatus?: string;
+            pid?: number;
+          };
+          lastGatewayError?: string;
+        };
+      };
+      expect(parsed.ok).toBe(false);
+      expect(parsed.phase).toBe("gateway-health");
+      expect(parsed.installDaemon).toBe(true);
+      expect(parsed.detail).toContain("1006 abnormal closure");
+      expect(parsed.gateway?.wsUrl).toContain("ws://127.0.0.1:");
+      expect(parsed.hints).toContain("Run `openclaw gateway status --deep` for more detail.");
+      expect(parsed.diagnostics?.service?.label).toBe("LaunchAgent");
+      expect(parsed.diagnostics?.service?.loaded).toBe(true);
+      expect(parsed.diagnostics?.service?.runtimeStatus).toBe("running");
+      expect(parsed.diagnostics?.service?.pid).toBe(4242);
+      expect(parsed.diagnostics?.lastGatewayError).toContain("required secrets are unavailable");
     });
   }, 60_000);
 

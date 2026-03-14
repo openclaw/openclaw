@@ -291,6 +291,6 @@ describe("pw-tools-core", () => {
         targetId: "T1",
         ref: "   ",
       }),
-    ).rejects.toThrow(/ref is required/i);
+    ).rejects.toThrow(/ref or selector is required/i);
   });
 });

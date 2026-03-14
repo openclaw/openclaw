@@ -1,11 +1,11 @@
-import { detectBinary } from "../../../commands/onboard-helpers.js";
-import type { OpenClawConfig } from "../../../config/config.js";
 import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,
   resolveIMessageAccount,
-} from "../../../imessage/accounts.js";
-import { normalizeIMessageHandle } from "../../../imessage/targets.js";
+} from "../../../../extensions/imessage/src/accounts.js";
+import { normalizeIMessageHandle } from "../../../../extensions/imessage/src/targets.js";
+import { detectBinary } from "../../../commands/onboard-helpers.js";
+import type { OpenClawConfig } from "../../../config/config.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
 import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";

@@ -88,6 +88,15 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
     executeLocal: true,
     argOptions: ["on", "off", "full"],
   },
+  {
+    name: "fast",
+    description: "Toggle fast mode",
+    args: "<status|on|off>",
+    icon: "zap",
+    category: "model",
+    executeLocal: true,
+    argOptions: ["status", "on", "off"],
+  },
 
   // ── Tools ──
   {
@@ -99,10 +108,9 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   },
   {
     name: "status",
-    description: "Show system status",
+    description: "Show session status",
     icon: "barChart",
     category: "tools",
-    executeLocal: true,
   },
   {
     name: "export",
