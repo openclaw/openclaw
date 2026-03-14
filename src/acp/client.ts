@@ -465,6 +465,12 @@ function printSessionUpdate(notification: SessionNotification): void {
       }
       return;
     }
+    case "agent_thought_chunk": {
+      if (update.content?.type === "text") {
+        process.stdout.write(`\n[btw] ${update.content.text}`);
+      }
+      return;
+    }
     case "tool_call": {
       console.log(`\n[tool] ${update.title} (${update.status})`);
       return;

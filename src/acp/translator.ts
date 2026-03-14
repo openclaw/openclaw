@@ -853,12 +853,12 @@ export class AcpGatewayAgent implements Agent {
       await this.connection.sessionUpdate({
         sessionId: pending.sessionId,
         update: {
-          sessionUpdate: "agent_message_chunk",
+          // BTW replies are side answers, not main assistant turns, so stream them
+          // through ACP's thought channel instead of normal assistant history.
+          sessionUpdate: "agent_thought_chunk",
           content: { type: "text", text: trimmed },
         },
       });
-      pending.sentTextLength = trimmed.length;
-      pending.sentText = trimmed;
       await this.finishPrompt(pending.sessionId, pending, "end_turn");
     }
   }

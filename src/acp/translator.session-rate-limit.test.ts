@@ -1193,4 +1193,28 @@ describe("acp final chat snapshots", () => {
     await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
     sessionStore.clearAllSessionsForTest();
   });
+
+  it("routes BTW side-result text through ACP thought chunks instead of assistant history", async () => {
+    const { agent, sessionUpdate, promptPromise, runId, sessionStore } =
+      await createSnapshotHarness();
+
+    await agent.handleGatewayEvent({
+      event: "chat.side_result",
+      payload: {
+        sessionKey: "snapshot-session",
+        runId,
+        text: "323",
+      },
+    } as unknown as EventFrame);
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "snapshot-session",
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "323" },
+      },
+    });
+    sessionStore.clearAllSessionsForTest();
+  });
 });
