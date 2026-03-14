@@ -18,7 +18,7 @@ openclaw config file
 openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
 openclaw config set agents.defaults.heartbeat.every "2h"
-openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
+openclaw config set 'agents.list[0].tools.exec.node' "node-id-or-name"
 openclaw config unset tools.web.search.apiKey
 openclaw config validate
 openclaw config validate --json
@@ -26,18 +26,19 @@ openclaw config validate --json
 
 ## Paths
 
-Paths use dot or bracket notation:
+Paths use dot or bracket notation. **Quote paths containing brackets** to prevent
+shell glob expansion:
 
 ```bash
 openclaw config get agents.defaults.workspace
-openclaw config get agents.list[0].id
+openclaw config get 'agents.list[0].id'
 ```
 
 Use the agent list index to target a specific agent:
 
 ```bash
 openclaw config get agents.list
-openclaw config set agents.list[1].tools.exec.node "node-id-or-name"
+openclaw config set 'agents.list[1].tools.exec.node' "node-id-or-name"
 ```
 
 ## Values
