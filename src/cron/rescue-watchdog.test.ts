@@ -560,7 +560,6 @@ describe("runRescueWatchdogJob", () => {
       process.env = originalEnv;
     }
   });
-
   it("skips doctor when the cron timeout budget is already exhausted", async () => {
     probeGateway.mockResolvedValue({
       ok: false,
