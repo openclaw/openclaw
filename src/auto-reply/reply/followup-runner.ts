@@ -10,7 +10,6 @@ import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
-import { formatMediaUnderstandingBody } from "../../media-understanding/format.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
@@ -19,6 +18,7 @@ import type { MsgContext, OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-utils.js";
+import { parseInlineDirectives } from "./directive-handling.js";
 import {
   resolveOriginAccountId,
   resolveOriginMessageProvider,
@@ -36,6 +36,86 @@ import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
+
+const MEDIA_ONLY_PLACEHOLDER = "[User sent media without caption]";
+const MEDIA_REPLY_HINT_PREFIX = "To send an image back, prefer the message tool";
+
+function stripLeadingMediaAttachedLines(prompt: string): string {
+  const lines = prompt.split("\n");
+  let index = 0;
+  while (index < lines.length) {
+    const trimmed = lines[index]?.trim() ?? "";
+    if (!trimmed.startsWith("[media attached") || !trimmed.endsWith("]")) {
+      break;
+    }
+    index += 1;
+  }
+  return lines.slice(index).join("\n").trim();
+}
+
+function stripLeadingMediaReplyHint(prompt: string): string {
+  const lines = prompt.split("\n");
+  if ((lines[0] ?? "").startsWith(MEDIA_REPLY_HINT_PREFIX)) {
+    return lines.slice(1).join("\n").trim();
+  }
+  return prompt.trim();
+}
+
+function replaceLastOccurrence(
+  value: string,
+  search: string,
+  replacement: string,
+): string | undefined {
+  if (!search) {
+    return undefined;
+  }
+  const index = value.lastIndexOf(search);
+  if (index < 0) {
+    return undefined;
+  }
+  return `${value.slice(0, index)}${replacement}${value.slice(index + search.length)}`;
+}
+
+function stripInlineDirectives(text: string | undefined): string {
+  return parseInlineDirectives(text ?? "").cleaned.trim();
+}
+
+function rebuildQueuedPromptWithMediaUnderstanding(params: {
+  prompt: string;
+  originalBody?: string;
+  updatedBody?: string;
+  mediaNote?: string;
+}): string {
+  let stripped = stripLeadingMediaAttachedLines(params.prompt);
+  if (!params.mediaNote) {
+    stripped = stripLeadingMediaReplyHint(stripped);
+  }
+
+  const updatedBody = stripInlineDirectives(params.updatedBody);
+  if (!updatedBody) {
+    return [params.mediaNote?.trim(), stripped].filter(Boolean).join("\n").trim();
+  }
+
+  const replacementTargets = [
+    params.originalBody?.trim(),
+    stripInlineDirectives(params.originalBody),
+    MEDIA_ONLY_PLACEHOLDER,
+  ].filter(
+    (value, index, list): value is string => Boolean(value) && list.indexOf(value) === index,
+  );
+
+  let rebuilt = stripped;
+  for (const target of replacementTargets) {
+    const replaced = replaceLastOccurrence(rebuilt, target, updatedBody);
+    if (replaced !== undefined) {
+      rebuilt = replaced;
+      return [params.mediaNote?.trim(), rebuilt.trim()].filter(Boolean).join("\n").trim();
+    }
+  }
+
+  rebuilt = [rebuilt, updatedBody].filter(Boolean).join("\n\n");
+  return [params.mediaNote?.trim(), rebuilt.trim()].filter(Boolean).join("\n").trim();
+}
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
@@ -170,6 +250,7 @@ export function createFollowupRunner(params: {
         if (hasMedia) {
           try {
             const mediaCtx = { ...queued.mediaContext } as MsgContext;
+            const originalBody = mediaCtx.Body;
             const muResult = await applyMediaUnderstanding({
               ctx: mediaCtx,
               cfg: queued.run.config,
@@ -179,34 +260,19 @@ export function createFollowupRunner(params: {
                 model: queued.run.model,
               },
             });
-            if (muResult.outputs.length > 0) {
-              // Rebuild the prompt with media understanding results baked in,
-              // matching the primary path's formatting.
+            if (muResult.outputs.length > 0 || muResult.appliedFile) {
+              // Rebuild the queued prompt from the mutated media context so the
+              // deferred path matches the primary path's prompt shape.
               const newMediaNote = buildInboundMediaNote(mediaCtx);
-              const transcriptBody = formatMediaUnderstandingBody({
-                body: undefined,
-                outputs: muResult.outputs,
+              queued.prompt = rebuildQueuedPromptWithMediaUnderstanding({
+                prompt: queued.prompt,
+                originalBody,
+                updatedBody: mediaCtx.Body,
+                mediaNote: newMediaNote,
               });
 
-              // Strip existing [media attached ...] lines from the prompt so
-              // they can be replaced by the updated media note (which excludes
-              // successfully-understood attachments like transcribed audio).
-              const stripped = queued.prompt
-                .replace(/\[media attached: \d+ files\]\n?/g, "")
-                .replace(/\[media attached[^\]]*\]\n?/g, "");
-
-              const parts: string[] = [];
-              if (newMediaNote) {
-                parts.push(newMediaNote);
-              }
-              if (transcriptBody) {
-                parts.push(transcriptBody);
-              }
-              parts.push(stripped.trim());
-              queued.prompt = parts.filter(Boolean).join("\n\n");
-
               logVerbose(
-                `followup: applied media understanding (audio=${muResult.appliedAudio}, image=${muResult.appliedImage})`,
+                `followup: applied media understanding (audio=${muResult.appliedAudio}, image=${muResult.appliedImage}, video=${muResult.appliedVideo}, file=${muResult.appliedFile})`,
               );
             }
           } catch (err) {

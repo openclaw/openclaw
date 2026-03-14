@@ -66,6 +66,9 @@ beforeEach(() => {
 const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
   createMockFollowupRun({ run: { messageProvider } });
 
+const MEDIA_REPLY_HINT =
+  "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/image.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./image.jpg. Avoid absolute paths (MEDIA:/...) and ~ paths — they are blocked for security. Keep caption in the text body.";
+
 function createQueuedRun(
   overrides: Partial<Omit<FollowupRun, "run">> & {
     run?: Partial<FollowupRun["run"]>;
@@ -576,7 +579,7 @@ describe("createFollowupRunner media understanding", () => {
   it("applies audio transcription when mediaContext has untranscribed audio", async () => {
     const transcriptText = "Hello, this is a voice note.";
     // The real applyMediaUnderstanding mutates the ctx; the mock must do the same
-    // so buildInboundMediaNote sees MediaUnderstanding and suppresses the audio line.
+    // so buildInboundMediaNote and queued prompt rebuilding see the transcribed body.
     applyMediaUnderstandingMock.mockImplementationOnce(
       async (params: { ctx: Record<string, unknown> }) => {
         params.ctx.MediaUnderstanding = [
@@ -588,6 +591,7 @@ describe("createFollowupRunner media understanding", () => {
           },
         ];
         params.ctx.Transcript = transcriptText;
+        params.ctx.Body = `[Audio]\nUser text:\nsome text\nTranscript:\n${transcriptText}`;
         return {
           outputs: [
             {
@@ -764,6 +768,7 @@ describe("createFollowupRunner media understanding", () => {
           },
         ];
         params.ctx.Transcript = "voice transcript";
+        params.ctx.Body = "[Audio]\nUser text:\nsome text\nTranscript:\nvoice transcript";
         return {
           outputs: [
             {
@@ -814,5 +819,168 @@ describe("createFollowupRunner media understanding", () => {
     // removed and replaced by the new buildInboundMediaNote output)
     // The transcript should be present
     expect(agentCall?.prompt).toContain("voice transcript");
+  });
+
+  it("strips queued media lines when attachment paths or URLs contain a literal closing bracket", async () => {
+    const transcriptText = "Bracket-safe transcript";
+    applyMediaUnderstandingMock.mockImplementationOnce(
+      async (params: { ctx: Record<string, unknown> }) => {
+        params.ctx.MediaUnderstanding = [
+          {
+            kind: "audio.transcription",
+            text: transcriptText,
+            attachmentIndex: 0,
+            provider: "whisper",
+          },
+        ];
+        params.ctx.Transcript = transcriptText;
+        params.ctx.Body = `[Audio]\nUser text:\nsome text\nTranscript:\n${transcriptText}`;
+        return {
+          outputs: [
+            {
+              kind: "audio.transcription",
+              text: transcriptText,
+              attachmentIndex: 0,
+              provider: "whisper",
+            },
+          ],
+          decisions: [],
+          appliedImage: false,
+          appliedAudio: true,
+          appliedVideo: false,
+          appliedFile: false,
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        prompt:
+          "[media attached: /tmp/voice[0].ogg (audio/ogg) | https://cdn.example.com/files[0].ogg?sig=abc]123]\n" +
+          MEDIA_REPLY_HINT +
+          "\n" +
+          "some text",
+        mediaContext: {
+          Body: "some text",
+          MediaPaths: ["/tmp/voice[0].ogg"],
+          MediaUrls: ["https://cdn.example.com/files[0].ogg?sig=abc]123"],
+          MediaTypes: ["audio/ogg"],
+        },
+      }),
+    );
+
+    const agentCall = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      prompt?: string;
+    };
+    expect(agentCall?.prompt).toContain(transcriptText);
+    expect(agentCall?.prompt).not.toContain("/tmp/voice[0].ogg");
+    expect(agentCall?.prompt).not.toContain("https://cdn.example.com/files[0].ogg?sig=abc]123");
+    expect(agentCall?.prompt).not.toContain(MEDIA_REPLY_HINT);
+  });
+
+  it("preserves file-only media understanding when outputs are empty", async () => {
+    applyMediaUnderstandingMock.mockImplementationOnce(
+      async (params: { ctx: Record<string, unknown> }) => {
+        params.ctx.Body =
+          '<file name="report.pdf" mime="application/pdf">\nQuarterly report body\n</file>';
+        return {
+          outputs: [],
+          decisions: [],
+          appliedImage: false,
+          appliedAudio: false,
+          appliedVideo: false,
+          appliedFile: true,
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "processed" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        prompt: `[media attached: /tmp/report.pdf]\n${MEDIA_REPLY_HINT}\n[User sent media without caption]`,
+        mediaContext: {
+          Body: "",
+          MediaPaths: ["/tmp/report.pdf"],
+          MediaTypes: ["application/pdf"],
+        },
+      }),
+    );
+
+    const agentCall = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      prompt?: string;
+    };
+    expect(agentCall?.prompt).toContain("[media attached: /tmp/report.pdf (application/pdf)]");
+    expect(agentCall?.prompt).toContain(MEDIA_REPLY_HINT);
+    expect(agentCall?.prompt).toContain('<file name="report.pdf" mime="application/pdf">');
+    expect(agentCall?.prompt).toContain("Quarterly report body");
+    expect(agentCall?.prompt).not.toContain("[User sent media without caption]");
+  });
+
+  it("replaces the queued body when inline directives were already stripped from the prompt", async () => {
+    applyMediaUnderstandingMock.mockImplementationOnce(
+      async (params: { ctx: Record<string, unknown> }) => {
+        params.ctx.Body =
+          '/think high summarize this\n\n<file name="report.pdf" mime="application/pdf">\nreport\n</file>';
+        return {
+          outputs: [],
+          decisions: [],
+          appliedImage: false,
+          appliedAudio: false,
+          appliedVideo: false,
+          appliedFile: true,
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "processed" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        prompt: `[media attached: /tmp/report.pdf]\n${MEDIA_REPLY_HINT}\nsummarize this`,
+        mediaContext: {
+          Body: "/think high summarize this",
+          MediaPaths: ["/tmp/report.pdf"],
+          MediaTypes: ["application/pdf"],
+        },
+      }),
+    );
+
+    const agentCall = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      prompt?: string;
+    };
+    expect(agentCall?.prompt).toContain("summarize this");
+    expect(agentCall?.prompt).toContain('<file name="report.pdf" mime="application/pdf">');
+    expect(agentCall?.prompt).not.toContain("summarize this\n\n/think high summarize this");
+    expect(agentCall?.prompt).not.toContain("/think high summarize this");
   });
 });
