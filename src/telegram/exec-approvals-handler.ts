@@ -1,20 +1,18 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
-import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { GatewayClient } from "../gateway/client.js";
-import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
+import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
+import { resolveExecApprovalCommandDisplay } from "../infra/exec-approval-command-display.js";
 import {
   buildExecApprovalPendingReplyPayload,
   type ExecApprovalPendingReplyParams,
 } from "../infra/exec-approval-reply.js";
+import { resolveExecApprovalSessionTarget } from "../infra/exec-approval-session-target.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
-import { resolveSessionDeliveryTarget } from "../infra/outbound/targets.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAccountId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { compileSafeRegex, testRegexWithBoundedInput } from "../security/safe-regex.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildTelegramExecApprovalButtons } from "./approval-buttons.js";
 import {
   getTelegramExecApprovalApprovers,
@@ -121,40 +119,14 @@ function resolveRequestSessionTarget(params: {
   cfg: OpenClawConfig;
   request: ExecApprovalRequest;
 }): { to: string; accountId?: string; threadId?: number; channel?: string } | null {
-  const sessionKey = params.request.request.sessionKey?.trim();
-  if (!sessionKey) {
-    return null;
-  }
-  const parsed = parseAgentSessionKey(sessionKey);
-  const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
-  const store = loadSessionStore(storePath);
-  const entry = store[sessionKey];
-  if (!entry) {
-    return null;
-  }
-  const target = resolveSessionDeliveryTarget({
-    entry,
-    requestedChannel: "last",
+  return resolveExecApprovalSessionTarget({
+    cfg: params.cfg,
+    request: params.request,
     turnSourceChannel: params.request.request.turnSourceChannel ?? undefined,
     turnSourceTo: params.request.request.turnSourceTo ?? undefined,
     turnSourceAccountId: params.request.request.turnSourceAccountId ?? undefined,
     turnSourceThreadId: params.request.request.turnSourceThreadId ?? undefined,
   });
-  if (!target.to) {
-    return null;
-  }
-  return {
-    channel: target.channel ?? undefined,
-    to: target.to,
-    accountId: target.accountId ?? undefined,
-    threadId:
-      typeof target.threadId === "number"
-        ? target.threadId
-        : typeof target.threadId === "string"
-          ? Number.parseInt(target.threadId, 10)
-          : undefined,
-  };
 }
 
 function resolveTelegramSourceTarget(params: {
@@ -248,31 +220,10 @@ export class TelegramExecApprovalHandler {
       return;
     }
 
-    const { url: gatewayUrl, urlSource } = buildGatewayConnectionDetails({
+    this.gatewayClient = await createOperatorApprovalsGatewayClient({
       config: this.opts.cfg,
-      url: this.opts.gatewayUrl,
-    });
-    const gatewayUrlOverrideSource =
-      urlSource === "cli --url"
-        ? "cli"
-        : urlSource === "env OPENCLAW_GATEWAY_URL"
-          ? "env"
-          : undefined;
-    const auth = await resolveGatewayConnectionAuth({
-      config: this.opts.cfg,
-      env: process.env,
-      urlOverride: gatewayUrlOverrideSource ? gatewayUrl : undefined,
-      urlOverrideSource: gatewayUrlOverrideSource,
-    });
-
-    this.gatewayClient = new GatewayClient({
-      url: gatewayUrl,
-      token: auth.token,
-      password: auth.password,
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      gatewayUrl: this.opts.gatewayUrl,
       clientDisplayName: `Telegram Exec Approvals (${this.opts.accountId})`,
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
-      scopes: ["operator.approvals"],
       onEvent: (evt) => this.handleGatewayEvent(evt),
       onConnectError: (err) => {
         log.error(`telegram exec approvals: connect error: ${err.message}`);
@@ -335,7 +286,7 @@ export class TelegramExecApprovalHandler {
       approvalId: request.id,
       approvalSlug: request.id.slice(0, 8),
       approvalCommandId: request.id,
-      command: request.request.command,
+      command: resolveExecApprovalCommandDisplay(request.request).commandText,
       cwd: request.request.cwd ?? undefined,
       host: request.request.host === "node" ? "node" : "gateway",
       nodeId: request.request.nodeId ?? undefined,

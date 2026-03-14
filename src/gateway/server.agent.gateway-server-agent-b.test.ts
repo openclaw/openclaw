@@ -287,10 +287,60 @@ describe("gateway server agent", () => {
     await vi.waitFor(() => expect(calls.length).toBeGreaterThan(callsBefore));
     const call = (calls.at(-1)?.[0] ?? {}) as Record<string, unknown>;
     expect(call.message).toBeTypeOf("string");
-    expect(call.message).toContain("Execute your Session Startup sequence now");
+    expect(call.message).toContain("Run your Session Startup sequence");
     expect(call.message).toContain("Current time:");
     expect(typeof call.sessionId).toBe("string");
     expect(call.sessionId).not.toBe("sess-main-before-reset");
+  });
+
+  test("write-scoped callers cannot use sessions.reset directly but can still reset conversations via agent", async () => {
+    await withGatewayServer(async ({ port }) => {
+      await useTempSessionStorePath();
+      const storePath = testState.sessionStorePath;
+      if (!storePath) {
+        throw new Error("missing session store path");
+      }
+
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main-before-write-reset",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const writeWs = new WebSocket(`ws://127.0.0.1:${port}`);
+      trackConnectChallengeNonce(writeWs);
+      await new Promise<void>((resolve) => writeWs.once("open", resolve));
+      await connectOk(writeWs, { scopes: ["operator.write"] });
+
+      const directReset = await rpcReq(writeWs, "sessions.reset", { key: "main" });
+      expect(directReset.ok).toBe(false);
+      expect(directReset.error?.message).toContain("missing scope: operator.admin");
+
+      vi.mocked(agentCommand).mockClear();
+      const viaAgent = await rpcReq(writeWs, "agent", {
+        message: "/reset",
+        sessionKey: "main",
+        idempotencyKey: "idem-agent-write-reset",
+      });
+      expect(viaAgent.ok).toBe(true);
+
+      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        { sessionId?: string }
+      >;
+      expect(store["agent:main:main"]?.sessionId).toBeDefined();
+      expect(store["agent:main:main"]?.sessionId).not.toBe("sess-main-before-write-reset");
+
+      await vi.waitFor(() => expect(vi.mocked(agentCommand)).toHaveBeenCalled());
+      const call = readAgentCommandCall();
+      expect(typeof call.sessionId).toBe("string");
+      expect(call.sessionId).not.toBe("sess-main-before-write-reset");
+
+      writeWs.close();
+    });
   });
 
   test("agent ack response then final response", { timeout: 8000 }, async () => {

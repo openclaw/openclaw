@@ -137,6 +137,33 @@ describe("buildSandboxCreateArgs", () => {
     );
   });
 
+  it("preserves the OpenClaw exec marker when strict env sanitization is enabled", () => {
+    const cfg = createSandboxConfig({
+      env: {
+        NODE_ENV: "test",
+      },
+    });
+
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-marker",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+      envSanitizationOptions: {
+        strictMode: true,
+      },
+    });
+
+    expect(args).toEqual(
+      expect.arrayContaining([
+        "--env",
+        "NODE_ENV=test",
+        "--env",
+        `OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE}`,
+      ]),
+    );
+  });
+
   it("emits -v flags for safe custom binds", () => {
     const cfg: SandboxDockerConfig = {
       image: "openclaw-sandbox:bookworm-slim",

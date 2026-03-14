@@ -87,6 +87,8 @@ Token/secret files:
 }
 ```
 
+`tokenFile` and `secretFile` must point to regular files. Symlinks are rejected.
+
 Multiple accounts:
 
 ```json5
