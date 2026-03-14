@@ -112,10 +112,13 @@ export async function executeSnapshotAction(params: {
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
   const snapshotDefaults = loadConfig().browser?.snapshotDefaults;
-  const format: "ai" | "aria" | undefined =
+  const requestedFormat: "ai" | "aria" | undefined =
     input.snapshotFormat === "ai" || input.snapshotFormat === "aria"
       ? input.snapshotFormat
       : undefined;
+  // Tool-driven browser automation expects actionable refs from AI snapshots by default.
+  // Falling back to server-selected format can yield AX-tree refs (axN) that are not clickable.
+  const format: "ai" | "aria" = requestedFormat ?? "ai";
   const mode: "efficient" | undefined =
     input.mode === "efficient"
       ? "efficient"
@@ -150,7 +153,7 @@ export async function executeSnapshotAction(params: {
         ? maxChars
         : undefined;
   const snapshotQuery = {
-    ...(format ? { format } : {}),
+    format,
     targetId,
     limit,
     ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),

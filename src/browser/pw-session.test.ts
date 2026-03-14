@@ -71,6 +71,13 @@ describe("pw-session refLocator", () => {
 
     expect(mocks.locator).toHaveBeenCalledWith("aria-ref=e1");
   });
+
+  it("fails fast for AX-tree refs from aria snapshots", () => {
+    const { page, mocks } = fakePage();
+
+    expect(() => refLocator(page, "ax70")).toThrow(/not actionable/i);
+    expect(mocks.locator).not.toHaveBeenCalled();
+  });
 });
 
 describe("pw-session role refs cache", () => {
