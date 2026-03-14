@@ -691,12 +691,8 @@ function resolveSessionScopedOptionLabel(
   }
 
   const label = row.label?.trim() || "";
-  if (label && label !== key) {
-    return resolveSessionDisplayName(key, row);
-  }
-
   const displayName = row.displayName?.trim() || "";
-  if (displayName && displayName !== key) {
+  if ((label && label !== key) || (displayName && displayName !== key)) {
     return resolveSessionDisplayName(key, row);
   }
 
