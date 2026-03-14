@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { extractToolResultMediaPaths } from "./pi-embedded-subscribe.tools.js";
+import {
+  extractToolResultMedia,
+  extractToolResultMediaPaths,
+} from "./pi-embedded-subscribe.tools.js";
 
 describe("extractToolResultMediaPaths", () => {
   it("returns empty array for null/undefined", () => {
@@ -228,5 +231,53 @@ describe("extractToolResultMediaPaths", () => {
       ],
     };
     expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/page1.png", "/tmp/page2.png"]);
+  });
+});
+
+describe("extractToolResultMedia", () => {
+  it("detects [[audio_as_voice]] tag and propagates audioAsVoice", () => {
+    const result = {
+      content: [
+        {
+          type: "text",
+          text: "[[audio_as_voice]]\nMEDIA:/tmp/openclaw/tts-abc/voice-123.mp3",
+        },
+      ],
+    };
+    const extracted = extractToolResultMedia(result);
+    expect(extracted.paths).toEqual(["/tmp/openclaw/tts-abc/voice-123.mp3"]);
+    expect(extracted.audioAsVoice).toBe(true);
+  });
+
+  it("does not set audioAsVoice when tag is absent", () => {
+    const result = {
+      content: [
+        {
+          type: "text",
+          text: "MEDIA:/tmp/screenshot.png",
+        },
+      ],
+    };
+    const extracted = extractToolResultMedia(result);
+    expect(extracted.paths).toEqual(["/tmp/screenshot.png"]);
+    expect(extracted.audioAsVoice).toBeUndefined();
+  });
+
+  it("detects audioAsVoice across multiple text blocks", () => {
+    const result = {
+      content: [
+        { type: "text", text: "[[audio_as_voice]]" },
+        { type: "text", text: "MEDIA:/tmp/voice.opus" },
+      ],
+    };
+    const extracted = extractToolResultMedia(result);
+    expect(extracted.paths).toEqual(["/tmp/voice.opus"]);
+    expect(extracted.audioAsVoice).toBe(true);
+  });
+
+  it("returns empty paths for null input", () => {
+    const extracted = extractToolResultMedia(null);
+    expect(extracted.paths).toEqual([]);
+    expect(extracted.audioAsVoice).toBeUndefined();
   });
 });
