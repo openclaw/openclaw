@@ -22,12 +22,12 @@ export function toDirectoryEntries(kind: "user" | "group", ids: string[]): Chann
   return ids.map((id) => ({ kind, id }) as const);
 }
 
-function collectDirectoryIdsFromEntries(params: {
-  entries?: readonly unknown[];
+function normalizeDirectoryIds(params: {
+  rawIds: readonly string[];
   normalizeId?: (entry: string) => string | null | undefined;
 }): string[] {
-  return (params.entries ?? [])
-    .map((entry) => String(entry).trim())
+  return params.rawIds
+    .map((entry) => entry.trim())
     .filter((entry) => Boolean(entry) && entry !== "*")
     .map((entry) => {
       const normalized = params.normalizeId ? params.normalizeId(entry) : entry;
@@ -36,18 +36,24 @@ function collectDirectoryIdsFromEntries(params: {
     .filter(Boolean);
 }
 
+function collectDirectoryIdsFromEntries(params: {
+  entries?: readonly unknown[];
+  normalizeId?: (entry: string) => string | null | undefined;
+}): string[] {
+  return normalizeDirectoryIds({
+    rawIds: (params.entries ?? []).map((entry) => String(entry)),
+    normalizeId: params.normalizeId,
+  });
+}
+
 function collectDirectoryIdsFromMapKeys(params: {
   groups?: Record<string, unknown>;
   normalizeId?: (entry: string) => string | null | undefined;
 }): string[] {
-  return Object.keys(params.groups ?? {})
-    .map((entry) => entry.trim())
-    .filter((entry) => Boolean(entry) && entry !== "*")
-    .map((entry) => {
-      const normalized = params.normalizeId ? params.normalizeId(entry) : entry;
-      return typeof normalized === "string" ? normalized.trim() : "";
-    })
-    .filter(Boolean);
+  return normalizeDirectoryIds({
+    rawIds: Object.keys(params.groups ?? {}),
+    normalizeId: params.normalizeId,
+  });
 }
 
 function dedupeDirectoryIds(ids: string[]): string[] {
