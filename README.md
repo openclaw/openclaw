@@ -23,6 +23,15 @@ It answers you on the channels you already use (WhatsApp, Telegram, Slack, Disco
 
 If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
 
+> **Note:** This is a community-maintained fork (**CiwardClaw**) by @Ciward. It includes significant underlying improvements for stability and compatibility, including:
+>
+> - 🛡️ **Gateway Restart Recovery**: Painless restarts with inflight agent run resumption without losing session context.
+> - 🌐 **Robust Browser Automation**: Enhanced target lookup recovery and strict route timeout budget alignment to avoid misleading browser failures.
+> - 🤖 **Codex & Gemini Compatibility**: Improved proxy dispatch, streaming error fallbacks, and DNS pinning bypass for OAuth.
+> - 💬 **Channel Stability**: Upgraded Discord steer-mode queues and Telegram active dispatch reference counting.
+>
+> _For upstream updates, please refer to the [OpenClaw official repository](https://github.com/openclaw/openclaw)._
+
 [Website](https://openclaw.ai) · [Docs](https://docs.openclaw.ai) · [Vision](VISION.md) · [DeepWiki](https://deepwiki.com/openclaw/openclaw) · [Getting Started](https://docs.openclaw.ai/start/getting-started) · [Updating](https://docs.openclaw.ai/install/updating) · [Showcase](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/help/faq) · [Wizard](https://docs.openclaw.ai/start/wizard) · [Nix](https://github.com/openclaw/nix-openclaw) · [Docker](https://docs.openclaw.ai/install/docker) · [Discord](https://discord.gg/clawd)
 
 Preferred setup: run the onboarding wizard (`openclaw onboard`) in your terminal.
