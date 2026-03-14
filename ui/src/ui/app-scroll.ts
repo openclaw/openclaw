@@ -176,8 +176,7 @@ export function handleLogsScroll(host: ScrollHost, event: Event) {
   if (!container) {
     return;
   }
-  const distanceFromBottom =
-    container.scrollHeight - container.scrollTop - container.clientHeight;
+  const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
   host.logsAtBottom = distanceFromBottom < 80;
 }
 
