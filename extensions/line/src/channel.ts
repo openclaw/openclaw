@@ -539,21 +539,27 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       const issues: ChannelStatusIssue[] = [];
       for (const account of accounts) {
         const accountId = account.accountId ?? DEFAULT_ACCOUNT_ID;
-        if (!account.channelAccessToken?.trim()) {
-          issues.push({
-            channel: "line",
-            accountId,
-            kind: "config",
-            message: "LINE channel access token not configured",
-          });
-        }
-        if (!account.channelSecret?.trim()) {
-          issues.push({
-            channel: "line",
-            accountId,
-            kind: "config",
-            message: "LINE channel secret not configured",
-          });
+        if (account.configured === false) {
+          // tokenSource distinguishes missing token vs missing secret.
+          // configured is false when either credential is missing or whitespace-only
+          // (see buildAccountSnapshot which uses trim()).
+          const hasToken = account.tokenSource != null && account.tokenSource !== "none";
+          if (!hasToken) {
+            issues.push({
+              channel: "line",
+              accountId,
+              kind: "config",
+              message: "LINE channel access token not configured",
+            });
+          } else {
+            // Token is present but configured is false → secret must be missing
+            issues.push({
+              channel: "line",
+              accountId,
+              kind: "config",
+              message: "LINE channel secret not configured",
+            });
+          }
         }
       }
       return issues;
