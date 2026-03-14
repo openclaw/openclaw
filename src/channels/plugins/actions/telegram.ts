@@ -31,6 +31,7 @@ function readTelegramSendParams(params: Record<string, unknown>) {
   const threadId = readStringParam(params, "threadId");
   const buttons = params.buttons;
   const asVoice = readBooleanParam(params, "asVoice");
+  const asDocument = readBooleanParam(params, "asDocument");
   const silent = readBooleanParam(params, "silent");
   const quoteText = readStringParam(params, "quoteText");
   return {
@@ -41,6 +42,7 @@ function readTelegramSendParams(params: Record<string, unknown>) {
     messageThreadId: threadId ?? undefined,
     buttons,
     asVoice,
+    asDocument,
     silent,
     quoteText: quoteText ?? undefined,
   };
