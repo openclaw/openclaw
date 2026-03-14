@@ -9,7 +9,7 @@ import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { normalizeProviderId } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
-type ModelEntry = { id: string; contextWindow?: number };
+type ModelEntry = { id: string; provider?: string; contextWindow?: number };
 type ModelRegistryLike = {
   getAvailable?: () => ModelEntry[];
   getAll: () => ModelEntry[];
@@ -21,6 +21,11 @@ type AgentModelEntry = { params?: Record<string, unknown> };
 
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
 export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
+
+function normalizeModelId(modelId: string): string {
+  return modelId.toLowerCase().trim();
+}
+
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
   maxMs: 60_000,
@@ -41,6 +46,7 @@ export function applyDiscoveredContextWindows(params: {
     if (!contextWindow || contextWindow <= 0) {
       continue;
     }
+
     const existing = params.cache.get(model.id);
     // When the same bare model id appears under multiple providers with different
     // limits, keep the smaller window. This cache feeds both display paths and
@@ -50,6 +56,16 @@ export function applyDiscoveredContextWindows(params: {
     // which tries the provider-qualified key first and falls back here.
     if (existing === undefined || contextWindow < existing) {
       params.cache.set(model.id, contextWindow);
+    }
+
+    const provider = typeof model.provider === "string" ? model.provider : undefined;
+    if (!provider) {
+      continue;
+    }
+    const scopedKey = `${normalizeProviderId(provider)}::${model.id}`;
+    const existingScoped = params.cache.get(scopedKey);
+    if (existingScoped === undefined || contextWindow < existingScoped) {
+      params.cache.set(scopedKey, contextWindow);
     }
   }
 }
@@ -62,7 +78,7 @@ export function applyConfiguredContextWindows(params: {
   if (!providers || typeof providers !== "object") {
     return;
   }
-  for (const provider of Object.values(providers)) {
+  for (const [providerId, provider] of Object.entries(providers)) {
     if (!Array.isArray(provider?.models)) {
       continue;
     }
@@ -73,7 +89,15 @@ export function applyConfiguredContextWindows(params: {
       if (!modelId || !contextWindow || contextWindow <= 0) {
         continue;
       }
-      params.cache.set(modelId, contextWindow);
+
+      const normalizedProvider = normalizeProviderId(providerId);
+      const normalizedModelId = normalizeModelId(modelId);
+
+      // Config remains authoritative on the exact model-id fallback key.
+      params.cache.set(normalizedModelId, contextWindow);
+      // Provider-scoped cache keys live in a separate namespace, so these
+      // writes cannot collide with raw slash-containing discovery ids.
+      params.cache.set(`${normalizedProvider}::${normalizedModelId}`, contextWindow);
     }
   }
 }
@@ -184,13 +208,53 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
   return loadPromise;
 }
 
-export function lookupContextTokens(modelId?: string): number | undefined {
+export function lookupContextTokens(modelId?: string, provider?: string): number | undefined {
   if (!modelId) {
     return undefined;
   }
   // Best-effort: kick off loading, but don't block.
   void ensureContextWindowCacheLoaded();
-  return MODEL_CACHE.get(modelId);
+
+  const normalizedModelId = normalizeModelId(modelId);
+
+  if (provider) {
+    const normalizedProvider = normalizeProviderId(provider);
+    const scopedKey = `${normalizedProvider}::${normalizedModelId}`;
+    const scopedLimit = MODEL_CACHE.get(scopedKey);
+    if (scopedLimit !== undefined) {
+      return scopedLimit;
+    }
+
+    // Legacy discovery entries may still be stored as provider/model raw ids.
+    if (!normalizedModelId.includes("/")) {
+      const qualifiedLimit = MODEL_CACHE.get(`${normalizedProvider}/${normalizedModelId}`);
+      if (qualifiedLimit !== undefined) {
+        return qualifiedLimit;
+      }
+    }
+  }
+
+  const directLimit = MODEL_CACHE.get(normalizedModelId);
+  if (directLimit !== undefined) {
+    return directLimit;
+  }
+
+  // For model-only calls with slash-containing ids, also try the inferred
+  // provider-qualified namespace. This keeps bare callers compatible with the
+  // provider-aware cache when the model string already carries provider context.
+  const slash = normalizedModelId.indexOf("/");
+  if (!provider && slash > 0) {
+    const inferredProvider = normalizeProviderId(normalizedModelId.slice(0, slash));
+    const inferredModel = normalizedModelId.slice(slash + 1).trim();
+    if (inferredModel) {
+      const inferredScoped = MODEL_CACHE.get(`${inferredProvider}::${inferredModel}`);
+      if (inferredScoped !== undefined) {
+        return inferredScoped;
+      }
+    }
+  }
+
+  return undefined;
 }
 
 if (!shouldSkipEagerContextWindowWarmup()) {

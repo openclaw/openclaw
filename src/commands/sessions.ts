@@ -14,7 +14,7 @@ import {
   formatSessionKeyCell,
   formatSessionModelCell,
   resolveSessionDisplayDefaults,
-  resolveSessionDisplayModel,
+  resolveSessionDisplayModelRef,
   SESSION_AGE_PAD,
   SESSION_KEY_PAD,
   SESSION_MODEL_PAD,
@@ -93,7 +93,7 @@ export async function sessionsCommand(
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
   const configContextTokens =
     cfg.agents?.defaults?.contextTokens ??
-    lookupContextTokens(displayDefaults.model) ??
+    lookupContextTokens(displayDefaults.model, displayDefaults.provider) ??
     DEFAULT_CONTEXT_TOKENS;
   const targets = resolveSessionStoreTargetsOrExit({
     cfg,
@@ -156,14 +156,17 @@ export async function sessionsCommand(
           count: rows.length,
           activeMinutes: activeMinutes ?? null,
           sessions: rows.map((r) => {
-            const model = resolveSessionDisplayModel(cfg, r, displayDefaults);
+            const { provider, model } = resolveSessionDisplayModelRef(cfg, r, displayDefaults);
             return {
               ...r,
               totalTokens: resolveFreshSessionTotalTokens(r) ?? null,
               totalTokensFresh:
                 typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
               contextTokens:
-                r.contextTokens ?? lookupContextTokens(model) ?? configContextTokens ?? null,
+                r.contextTokens ??
+                lookupContextTokens(model, provider) ??
+                configContextTokens ??
+                null,
               model,
             };
           }),
@@ -206,8 +209,9 @@ export async function sessionsCommand(
   runtime.log(rich ? theme.heading(header) : header);
 
   for (const row of rows) {
-    const model = resolveSessionDisplayModel(cfg, row, displayDefaults);
-    const contextTokens = row.contextTokens ?? lookupContextTokens(model) ?? configContextTokens;
+    const { provider, model } = resolveSessionDisplayModelRef(cfg, row, displayDefaults);
+    const contextTokens =
+      row.contextTokens ?? lookupContextTokens(model, provider) ?? configContextTokens;
     const total = resolveFreshSessionTotalTokens(row);
 
     const line = [

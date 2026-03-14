@@ -107,6 +107,57 @@ describe("applyConfiguredContextWindows", () => {
     expect(cache.get("custom/model")).toBe(150_000);
     expect(cache.has("bad/model")).toBe(false);
   });
+
+  it("also writes provider-scoped cache entries in a separate namespace", () => {
+    const cache = new Map<string, number>([["openrouter/anthropic/claude-opus-4-6", 1_000_000]]);
+    applyConfiguredContextWindows({
+      cache,
+      modelsConfig: {
+        providers: {
+          openrouter: {
+            models: [{ id: "anthropic/claude-opus-4-6", contextWindow: 200_000 }],
+          },
+        },
+      },
+    });
+
+    expect(cache.get("openrouter::anthropic/claude-opus-4-6")).toBe(200_000);
+  });
+
+  it("writes provider-scoped entries for bare model ids without clobbering raw discovery keys", () => {
+    const cache = new Map<string, number>();
+    cache.set("google-gemini-cli/gemini-3.1-pro-preview", 1_048_576);
+    applyConfiguredContextWindows({
+      cache,
+      modelsConfig: {
+        providers: {
+          "google-gemini-cli": {
+            models: [{ id: "gemini-3.1-pro-preview", contextWindow: 200_000 }],
+          },
+        },
+      },
+    });
+
+    expect(cache.get("google-gemini-cli::gemini-3.1-pro-preview")).toBe(200_000);
+    expect(cache.get("google-gemini-cli/gemini-3.1-pro-preview")).toBe(1_048_576);
+  });
+});
+
+describe("applyDiscoveredContextWindows provider metadata", () => {
+  it("stores provider-scoped cache entries when provider metadata is available", () => {
+    const cache = new Map<string, number>();
+    applyDiscoveredContextWindows({
+      cache,
+      models: [
+        { id: "gemini-3-flash", provider: "google", contextWindow: 1_000_000 },
+        { id: "gemini-3-flash", provider: "github-copilot", contextWindow: 128_000 },
+      ],
+    });
+
+    expect(cache.get("gemini-3-flash")).toBe(128_000);
+    expect(cache.get("google::gemini-3-flash")).toBe(1_000_000);
+    expect(cache.get("github-copilot::gemini-3-flash")).toBe(128_000);
+  });
 });
 
 describe("createSessionManagerRuntimeRegistry", () => {

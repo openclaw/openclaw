@@ -159,11 +159,14 @@ function ensureMemoryFlushSafetyHints(text: string): string {
 }
 
 export function resolveMemoryFlushContextWindowTokens(params: {
+  provider?: string;
   modelId?: string;
   agentCfgContextTokens?: number;
 }): number {
   return (
-    lookupContextTokens(params.modelId) ?? params.agentCfgContextTokens ?? DEFAULT_CONTEXT_TOKENS
+    lookupContextTokens(params.modelId, params.provider) ??
+    params.agentCfgContextTokens ??
+    DEFAULT_CONTEXT_TOKENS
   );
 }
 
