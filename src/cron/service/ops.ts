@@ -333,6 +333,9 @@ export async function remove(state: CronServiceState, id: string) {
     if (!state.store) {
       return { ok: false, removed: false } as const;
     }
+    // Capture the job's agentId before filtering so cleanup targets the
+    // correct per-agent session store.
+    const removedJob = state.store.jobs.find((j) => j.id === id);
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
     await persist(state);
@@ -342,7 +345,7 @@ export async function remove(state: CronServiceState, id: string) {
       // Clean up session records and run log for the deleted job (#46369).
       // Run outside the critical path — failures are logged but do not
       // block the removal response.
-      cleanupRemovedJobArtifacts(state, id).catch((err) => {
+      cleanupRemovedJobArtifacts(state, id, removedJob?.agentId).catch((err) => {
         state.deps.log.warn({ err: String(err) }, "cron: cleanup after remove failed");
       });
     }
@@ -353,34 +356,53 @@ export async function remove(state: CronServiceState, id: string) {
 /**
  * Remove session store entries and the run-log file for a deleted cron job.
  * Called after the job is already removed from jobs.json.
+ * Each step is independent — a failure in one does not prevent the other.
  */
-async function cleanupRemovedJobArtifacts(state: CronServiceState, jobId: string): Promise<void> {
-  // 1. Remove matching session entries from sessions.json.
-  const sessionStorePath = state.deps.sessionStorePath ?? state.deps.resolveSessionStorePath?.();
-  if (sessionStorePath) {
-    const cronKeyFragment = `cron:${jobId}:`;
-    await updateSessionStore(sessionStorePath, (store) => {
-      for (const key of Object.keys(store)) {
-        if (key.includes(cronKeyFragment)) {
-          delete store[key];
-        }
-      }
-    });
+async function cleanupRemovedJobArtifacts(
+  state: CronServiceState,
+  jobId: string,
+  agentId?: string,
+): Promise<void> {
+  const results = await Promise.allSettled([
+    cleanupSessionEntries(state, jobId, agentId),
+    cleanupRunLog(state, jobId),
+  ]);
+  const errors = results.filter((r) => r.status === "rejected");
+  if (errors.length > 0) {
+    throw new Error(errors.map((r) => r.reason).join("; "));
   }
+}
 
-  // 2. Delete the run log file ({cronStoreDir}/runs/{jobId}.jsonl).
-  try {
-    const logPath = resolveCronRunLogPath({
-      storePath: state.deps.storePath,
-      jobId,
-    });
-    await fs.unlink(logPath);
-  } catch (err: unknown) {
-    // ENOENT is fine — the log may not exist yet.
+async function cleanupSessionEntries(
+  state: CronServiceState,
+  jobId: string,
+  agentId?: string,
+): Promise<void> {
+  const sessionStorePath =
+    state.deps.sessionStorePath ?? state.deps.resolveSessionStorePath?.(agentId);
+  if (!sessionStorePath) {
+    return;
+  }
+  const cronKeyFragment = `cron:${jobId}:`;
+  await updateSessionStore(sessionStorePath, (store) => {
+    for (const key of Object.keys(store)) {
+      if (key.includes(cronKeyFragment)) {
+        delete store[key];
+      }
+    }
+  });
+}
+
+async function cleanupRunLog(state: CronServiceState, jobId: string): Promise<void> {
+  const logPath = resolveCronRunLogPath({
+    storePath: state.deps.storePath,
+    jobId,
+  });
+  await fs.unlink(logPath).catch((err: unknown) => {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
       throw err;
     }
-  }
+  });
 }
 
 type PreparedManualRun =
