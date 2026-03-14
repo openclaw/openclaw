@@ -1,9 +1,11 @@
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { logVerbose, shouldLogVerbose } from "../../../src/globals.js";
 import { SafeOpenError, readLocalFileSafely } from "../../../src/infra/fs-safe.js";
 import type { SsrFPolicy } from "../../../src/infra/net/ssrf.js";
+import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
 import { type MediaKind, maxBytesForKind } from "../../../src/media/constants.js";
 import { fetchRemoteMedia } from "../../../src/media/fetch.js";
 import {
@@ -131,6 +133,23 @@ async function assertLocalMediaAllowed(
       return;
     }
   }
+
+  // On macOS, /tmp is a symlink to /private/tmp. os.tmpdir() returns
+  // /var/folders/…/T which doesn't match /private/tmp — add the preferred
+  // OpenClaw temp root as a fallback so files created there are accepted.
+  // Use the trusted tmp resolver to avoid re-allowing paths it deliberately rejected.
+  if (localRoots === undefined && process.platform === "darwin") {
+    let preferredTmp = resolvePreferredOpenClawTmpDir();
+    try {
+      preferredTmp = realpathSync(preferredTmp);
+    } catch {
+      // Directory may not exist yet — fall through with raw path.
+    }
+    if (resolved === preferredTmp || resolved.startsWith(preferredTmp + path.sep)) {
+      return;
+    }
+  }
+
   throw new LocalMediaAccessError(
     "path-not-allowed",
     `Local media path is not under an allowed directory: ${mediaPath}`,
