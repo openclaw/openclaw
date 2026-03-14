@@ -16,7 +16,9 @@ const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
 const hookRunnerMocks = vi.hoisted(() => ({
-  getGlobalHookRunner: vi.fn(() => null),
+  getGlobalHookRunner: vi.fn<() => { runOutboundTransforms: (text: string) => string } | null>(
+    () => null,
+  ),
 }));
 
 vi.mock("../../agents/model-fallback.js", () => ({
