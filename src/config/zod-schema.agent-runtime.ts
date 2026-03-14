@@ -15,6 +15,7 @@ import { sensitive } from "./zod-schema.sensitive.js";
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
+    jitter: z.string().optional(),
     activeHours: z
       .object({
         start: z.string().optional(),
@@ -37,6 +38,18 @@ export const HeartbeatSchema = z
   })
   .strict()
   .superRefine((val, ctx) => {
+    if (val.jitter) {
+      try {
+        parseDurationMs(val.jitter.trim(), { defaultUnit: "m" });
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["jitter"],
+          message: "invalid duration (use ms, s, m, h)",
+        });
+      }
+    }
+
     if (!val.every) {
       return;
     }

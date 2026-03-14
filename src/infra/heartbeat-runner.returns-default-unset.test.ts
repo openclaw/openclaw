@@ -20,6 +20,7 @@ import {
   type HeartbeatDeps,
   isHeartbeatEnabledForAgent,
   resolveHeartbeatIntervalMs,
+  resolveHeartbeatJitterMs,
   resolveHeartbeatPrompt,
   runHeartbeatOnce,
 } from "./heartbeat-runner.js";
@@ -163,6 +164,40 @@ describe("resolveHeartbeatIntervalMs", () => {
         { every: "5m" },
       ),
     ).toBe(5 * 60_000);
+  });
+});
+
+describe("resolveHeartbeatJitterMs", () => {
+  it("defaults to 10% of interval when jitter is not set", () => {
+    expect(resolveHeartbeatJitterMs(undefined, 30 * 60_000)).toBe(180_000);
+    expect(resolveHeartbeatJitterMs({}, 60 * 60_000)).toBe(360_000);
+  });
+
+  it("parses explicit jitter duration", () => {
+    expect(resolveHeartbeatJitterMs({ jitter: "5m" }, 30 * 60_000)).toBe(300_000);
+    expect(resolveHeartbeatJitterMs({ jitter: "30s" }, 30 * 60_000)).toBe(30_000);
+  });
+
+  it("returns 0 when jitter is set to 0s", () => {
+    expect(resolveHeartbeatJitterMs({ jitter: "0s" }, 30 * 60_000)).toBe(0);
+    expect(resolveHeartbeatJitterMs({ jitter: "0m" }, 30 * 60_000)).toBe(0);
+  });
+
+  it("falls back to default on invalid jitter string", () => {
+    expect(resolveHeartbeatJitterMs({ jitter: "banana" }, 30 * 60_000)).toBe(180_000);
+    expect(resolveHeartbeatJitterMs({ jitter: "  " }, 30 * 60_000)).toBe(180_000);
+  });
+
+  it("clamps jitter to not exceed the interval", () => {
+    // jitter: 1h with interval: 5m → clamped to 5m
+    expect(resolveHeartbeatJitterMs({ jitter: "1h" }, 5 * 60_000)).toBe(5 * 60_000);
+  });
+
+  it("default 10% jitter is always within interval", () => {
+    const intervalMs = 10 * 60_000;
+    const jitter = resolveHeartbeatJitterMs(undefined, intervalMs);
+    expect(jitter).toBeLessThanOrEqual(intervalMs);
+    expect(jitter).toBe(60_000);
   });
 });
 
