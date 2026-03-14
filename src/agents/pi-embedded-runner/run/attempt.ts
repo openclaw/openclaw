@@ -111,6 +111,7 @@ import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
   setActiveEmbeddedRun,
+  updateActiveEmbeddedRunSnapshot,
 } from "../runs.js";
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
@@ -830,6 +831,7 @@ function extractBalancedJsonPrefix(raw: string): string | null {
 const MAX_TOOLCALL_REPAIR_BUFFER_CHARS = 64_000;
 const MAX_TOOLCALL_REPAIR_TRAILING_CHARS = 3;
 const TOOLCALL_REPAIR_ALLOWED_TRAILING_RE = /^[^\s{}[\]":,\\]{1,3}$/;
+const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 
 function shouldAttemptMalformedToolCallRepair(partialJson: string, delta: string): boolean {
   if (/[}\]]/.test(delta)) {
@@ -2376,6 +2378,8 @@ export async function runEmbeddedAttempt(
               `runId=${params.runId} sessionId=${params.sessionId}`,
           );
         }
+        const transcriptLeafId =
+          (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
 
         try {
           // Idempotent cleanup for legacy sessions with persisted image payloads.
@@ -2453,6 +2457,13 @@ export async function runEmbeddedAttempt(
                 log.warn(`llm_input hook failed: ${String(err)}`);
               });
           }
+
+          const btwSnapshotMessages = activeSession.messages.slice(-MAX_BTW_SNAPSHOT_MESSAGES);
+          updateActiveEmbeddedRunSnapshot(params.sessionId, {
+            transcriptLeafId,
+            messages: btwSnapshotMessages,
+            inFlightPrompt: effectivePrompt,
+          });
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
