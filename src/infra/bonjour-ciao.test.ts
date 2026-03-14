@@ -18,6 +18,17 @@ describe("bonjour-ciao", () => {
     );
   });
 
+  it("ignores lower-case string cancellation reasons too", () => {
+    logDebugMock.mockReset();
+
+    expect(ignoreCiaoCancellationRejection("ciao announcement cancelled during cleanup")).toBe(
+      true,
+    );
+    expect(logDebugMock).toHaveBeenCalledWith(
+      expect.stringContaining("ignoring unhandled ciao rejection"),
+    );
+  });
+
   it("keeps unrelated rejections visible", () => {
     logDebugMock.mockReset();
 
