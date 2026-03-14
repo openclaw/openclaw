@@ -22,6 +22,11 @@ export type UiSettings = {
   navWidth: number; // Sidebar width when expanded (240–400px)
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
   locale?: string;
+  tools?: {
+    exec?: {
+      notifyOnExit?: boolean;
+    };
+  };
 };
 
 function isViteDevPage(): boolean {
@@ -135,6 +140,11 @@ export function loadSettings(): UiSettings {
     navCollapsed: false,
     navWidth: 220,
     navGroupsCollapsed: {},
+    tools: {
+      exec: {
+        notifyOnExit: true,
+      },
+    },
   };
 
   try {
@@ -173,6 +183,14 @@ export function loadSettings(): UiSettings {
         typeof parsed.chatShowThinking === "boolean"
           ? parsed.chatShowThinking
           : defaults.chatShowThinking,
+      tools: {
+        exec: {
+          notifyOnExit:
+            typeof parsed.tools?.exec?.notifyOnExit === "boolean"
+              ? parsed.tools.exec.notifyOnExit
+              : defaults.tools.exec.notifyOnExit,
+        },
+      },
       splitRatio:
         typeof parsed.splitRatio === "number" &&
         parsed.splitRatio >= 0.4 &&
