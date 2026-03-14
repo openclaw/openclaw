@@ -376,6 +376,13 @@ function resolveDirectToolPolicyFromConfig(params: {
   return { rank: 0 };
 }
 
+function resolveGroupPolicyLookupOptions(channel: string): { groupIdCaseInsensitive?: boolean } {
+  if (channel === "feishu" || channel === "irc") {
+    return { groupIdCaseInsensitive: true };
+  }
+  return {};
+}
+
 function resolveProviderToolPolicy(params: {
   byProvider?: Record<string, ToolPolicyConfig>;
   modelProvider?: string;
@@ -535,6 +542,7 @@ export function resolveGroupToolPolicy(params: {
   } catch {
     plugin = undefined;
   }
+  const groupLookupOptions = resolveGroupPolicyLookupOptions(channel);
   const rawDirectCandidates: Array<{
     directId?: string;
     directIdParent?: string;
@@ -640,6 +648,45 @@ export function resolveGroupToolPolicy(params: {
     (candidate): candidate is { groupId: string; accountId?: string | null } =>
       typeof candidate.groupId === "string" && candidate.groupId.length > 0,
   );
+  const resolveGroupCandidatePolicy = (candidate: {
+    groupId: string;
+    accountId?: string | null;
+  }): { policy?: SandboxToolPolicy; hasExplicitGroupMatch: boolean } => {
+    const { groupConfig } = resolveChannelGroupPolicy({
+      cfg: config,
+      channel,
+      groupId: candidate.groupId,
+      accountId: candidate.accountId,
+      ...groupLookupOptions,
+    });
+    const toolsConfig =
+      dock?.groups?.resolveToolPolicy?.({
+        cfg: config,
+        groupId: candidate.groupId,
+        groupChannel: params.groupChannel,
+        groupSpace: params.groupSpace,
+        accountId: candidate.accountId,
+        senderId: params.senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+      }) ??
+      resolveChannelGroupToolsPolicy({
+        cfg: config,
+        channel,
+        groupId: candidate.groupId,
+        accountId: candidate.accountId,
+        senderId: params.senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+        ...groupLookupOptions,
+      });
+    return {
+      policy: pickSandboxToolPolicy(toolsConfig),
+      hasExplicitGroupMatch: Boolean(groupConfig),
+    };
+  };
   const resolveFirstGroupPolicy = () => {
     if (groupCandidates.length === 0) {
       return undefined;
@@ -651,29 +698,8 @@ export function resolveGroupToolPolicy(params: {
         continue;
       }
       seenGroupCandidates.add(key);
-      const toolsConfig =
-        plugin?.groups?.resolveToolPolicy?.({
-          cfg: config,
-          groupId: candidate.groupId,
-          groupChannel: params.groupChannel,
-          groupSpace: params.groupSpace,
-          accountId: candidate.accountId,
-          senderId: params.senderId,
-          senderName: params.senderName,
-          senderUsername: params.senderUsername,
-          senderE164: params.senderE164,
-        }) ??
-        resolveChannelGroupToolsPolicy({
-          cfg: config,
-          channel,
-          groupId: candidate.groupId,
-          accountId: candidate.accountId,
-          senderId: params.senderId,
-          senderName: params.senderName,
-          senderUsername: params.senderUsername,
-          senderE164: params.senderE164,
-        });
-      const policy = pickSandboxToolPolicy(toolsConfig);
+<<<<<<< HEAD
+      const { policy } = resolveGroupCandidatePolicy(candidate);
       if (policy) {
         return policy;
       }
@@ -715,20 +741,19 @@ export function resolveGroupToolPolicy(params: {
     return directResolution.policy;
   }
   if (preferredScopeKind === "group") {
-    const groupPolicy = resolveFirstGroupPolicy();
+    const groupPolicy = preferredGroupCandidate
+      ? resolveGroupCandidatePolicy({
+          groupId: preferredGroupCandidate.groupId,
+          accountId: preferredGroupCandidate.accountId,
+        })
+      : { policy: resolveFirstGroupPolicy(), hasExplicitGroupMatch: false };
     if (!preferredGroupCandidate?.alternateDirectId) {
-      return groupPolicy;
+      return groupPolicy.policy;
     }
-    const { groupConfig } = resolveChannelGroupPolicy({
-      cfg: config,
-      channel,
-      groupId: preferredGroupCandidate.groupId,
-      accountId: preferredGroupCandidate.accountId,
-    });
-    if (groupConfig) {
-      return groupPolicy;
+    if (groupPolicy.hasExplicitGroupMatch) {
+      return groupPolicy.policy;
     }
-    return directResolution.policy ?? groupPolicy;
+    return directResolution.policy ?? groupPolicy.policy;
   }
   const groupPolicy = resolveFirstGroupPolicy();
   if (groupPolicy) {
