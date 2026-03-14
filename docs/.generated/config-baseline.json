@@ -24102,7 +24102,7 @@
     {
       "path": "channels.slack.accounts.*.capabilities",
       "kind": "channel",
-      "type": "array",
+      "type": ["array", "object"],
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -24113,6 +24113,16 @@
       "path": "channels.slack.accounts.*.capabilities.*",
       "kind": "channel",
       "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.accounts.*.capabilities.interactiveReplies",
+      "kind": "channel",
+      "type": "boolean",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -25329,7 +25339,7 @@
     {
       "path": "channels.slack.capabilities",
       "kind": "channel",
-      "type": "array",
+      "type": ["array", "object"],
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -25344,6 +25354,18 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.capabilities.interactiveReplies",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": ["channels", "network"],
+      "label": "Slack Interactive Replies",
+      "help": "Enable agent-authored Slack interactive reply directives (`[[slack_buttons: ...]]`, `[[slack_select: ...]]`). Default: false.",
       "hasChildren": false
     },
     {
