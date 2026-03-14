@@ -193,20 +193,40 @@ export function filterToolResultMediaUrls(
  * returns base64 image data but no file path; those need a different delivery
  * path like saving to a temp file).
  */
+export interface ExtractedToolResultMedia {
+  paths: string[];
+  audioAsVoice?: boolean;
+}
+
 export function extractToolResultMediaPaths(result: unknown): string[] {
+  return extractToolResultMedia(result).paths;
+}
+
+/**
+ * Extract media file paths **and** voice-bubble intent from a tool result.
+ *
+ * Strategy (first match wins):
+ * 1. Parse `MEDIA:` tokens from text content blocks (all OpenClaw tools).
+ * 2. Fall back to `details.path` when image content exists (OpenClaw imageResult).
+ *
+ * Additionally detects `[[audio_as_voice]]` tags in text content so callers can
+ * propagate the voice-bubble flag to the delivery payload.
+ */
+export function extractToolResultMedia(result: unknown): ExtractedToolResultMedia {
   if (!result || typeof result !== "object") {
-    return [];
+    return { paths: [] };
   }
   const record = result as Record<string, unknown>;
   const content = Array.isArray(record.content) ? record.content : null;
   if (!content) {
-    return [];
+    return { paths: [] };
   }
 
   // Extract MEDIA: paths from text content blocks using the shared parser so
   // directive matching and validation stay in sync with outbound reply parsing.
   const paths: string[] = [];
   let hasImageContent = false;
+  let audioAsVoice = false;
   for (const item of content) {
     if (!item || typeof item !== "object") {
       continue;
@@ -221,11 +241,14 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
       if (parsed.mediaUrls?.length) {
         paths.push(...parsed.mediaUrls);
       }
+      if (parsed.audioAsVoice) {
+        audioAsVoice = true;
+      }
     }
   }
 
   if (paths.length > 0) {
-    return paths;
+    return { paths, ...(audioAsVoice ? { audioAsVoice: true } : {}) };
   }
 
   // Fall back to details.path when image content exists but no MEDIA: text.
@@ -233,11 +256,11 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
     const details = record.details as Record<string, unknown> | undefined;
     const p = typeof details?.path === "string" ? details.path.trim() : "";
     if (p) {
-      return [p];
+      return { paths: [p] };
     }
   }
 
-  return [];
+  return { paths: [] };
 }
 
 export function isToolResultError(result: unknown): boolean {
