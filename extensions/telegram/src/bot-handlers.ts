@@ -218,13 +218,14 @@ export const registerTelegramHandlers = ({
     text: string;
     date?: number;
     from?: Message["from"];
+    entities?: Message["entities"];
   }): Message => ({
     ...params.base,
     ...(params.from ? { from: params.from } : {}),
     text: params.text,
     caption: undefined,
     caption_entities: undefined,
-    entities: undefined,
+    entities: params.entities,
     ...(params.date != null ? { date: params.date } : {}),
   });
   const buildSyntheticContext = (
@@ -392,15 +393,25 @@ export const registerTelegramHandlers = ({
     try {
       entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
 
-      const allText = entry.messages
-        .map((m) => m.msg.caption || m.msg.text || "")
-        .filter(Boolean)
-        .join("\n\n");
+      const textMessages: { msg: Message }[] = [];
+      const textParts: string[] = [];
+      for (const m of entry.messages) {
+        const t = m.msg.caption || m.msg.text || "";
+        if (t) {
+          textParts.push(t);
+          textMessages.push(m);
+        }
+      }
+      const separator = "\n\n";
+      const allText = textParts.join(separator);
+      const combinedEntities = collectBatchEntities(textMessages, separator);
+
       const firstEntry = entry.messages[0];
       const syntheticMsg = buildSyntheticTextMessage({
         base: firstEntry.msg,
         text: allText,
         date: entry.messages.at(-1)?.msg.date ?? firstEntry.msg.date,
+        entities: combinedEntities,
       });
       const primaryEntry = {
         ctx: buildSyntheticContext(firstEntry.ctx, syntheticMsg),
@@ -428,6 +439,12 @@ export const registerTelegramHandlers = ({
             stickerMetadata: media.stickerMetadata,
           });
         }
+      }
+
+      // Skip agent turn when every media item failed to resolve
+      if (allMedia.length === 0) {
+        runtime.log?.(warn("media group: all files failed to resolve, skipping agent turn"));
+        return;
       }
 
       const storeAllowFrom = await loadStoreAllowFrom();
@@ -491,21 +508,54 @@ export const registerTelegramHandlers = ({
     }, TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS);
   };
 
+  // Collect caption/text entities from batched messages, offset-adjusting for joined text.
+  const collectBatchEntities = (
+    messages: { msg: Message }[],
+    separator: string,
+  ): Message["entities"] => {
+    const entities: NonNullable<Message["entities"]> = [];
+    let offset = 0;
+    for (const { msg } of messages) {
+      const text = msg.caption || msg.text || "";
+      const msgEntities = msg.caption_entities ?? msg.entities;
+      if (msgEntities) {
+        for (const ent of msgEntities) {
+          entities.push({ ...ent, offset: ent.offset + offset });
+        }
+      }
+      if (text) {
+        offset += text.length + separator.length;
+      }
+    }
+    return entities.length > 0 ? entities : undefined;
+  };
+
   // Flush buffered document messages as a single processMessage call.
   // Documents sent in quick succession lack media_group_id, so we batch them manually.
   const processDocumentBatch = async (entry: DocumentBatchEntry) => {
     try {
       entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
 
-      const allText = entry.messages
-        .map((m) => m.msg.caption || m.msg.text || "")
-        .filter(Boolean)
-        .join("\n\n");
+      // Build combined text, tracking which messages contribute to calculate entity offsets.
+      const textParts: string[] = [];
+      const textMessages: { msg: Message }[] = [];
+      for (const m of entry.messages) {
+        const t = m.msg.caption || m.msg.text || "";
+        if (t) {
+          textParts.push(t);
+          textMessages.push(m);
+        }
+      }
+      const separator = "\n\n";
+      const allText = textParts.join(separator);
+      const combinedEntities = collectBatchEntities(textMessages, separator);
+
       const firstEntry = entry.messages[0];
       const syntheticMsg = buildSyntheticTextMessage({
         base: firstEntry.msg,
         text: allText,
         date: entry.messages.at(-1)?.msg.date ?? firstEntry.msg.date,
+        entities: combinedEntities,
       });
       const primaryEntry = {
         ctx: buildSyntheticContext(firstEntry.ctx, syntheticMsg),
@@ -550,6 +600,12 @@ export const registerTelegramHandlers = ({
             stickerMetadata: media.stickerMetadata,
           });
         }
+      }
+
+      // Skip agent turn when every document failed to resolve (oversize, network, etc.)
+      if (allMedia.length === 0) {
+        runtime.log?.(warn("document batch: all files failed to resolve, skipping agent turn"));
+        return;
       }
 
       const storeAllowFrom = await loadStoreAllowFrom();

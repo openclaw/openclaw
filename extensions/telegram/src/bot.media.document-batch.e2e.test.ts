@@ -3,6 +3,7 @@ import { sendMessageSpy } from "./bot.media.e2e-harness.js";
 import {
   TELEGRAM_TEST_TIMINGS,
   createBotHandler,
+  createBotHandlerWithOptions,
   mockTelegramPngDownload,
 } from "./bot.media.test-utils.js";
 
@@ -224,6 +225,114 @@ describe("telegram document batch", () => {
       expect(oversizeCalls).toHaveLength(1);
       // Warning replied to the specific oversize message
       expect(oversizeCalls[0][2]).toEqual(expect.objectContaining({ reply_to_message_id: 31 }));
+
+      fetchSpy.mockRestore();
+    },
+    DOC_BATCH_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "preserves caption entities (text_link) through document batch",
+    async () => {
+      const { handler, replySpy, runtimeError } = await createBotHandler();
+      const fetchSpy = mockTelegramPngDownload();
+
+      const from = { id: 999, is_bot: false, first_name: "User" };
+
+      // First doc has a caption with a text_link entity
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          message_id: 40,
+          from,
+          caption: "Check this link",
+          caption_entities: [
+            { type: "text_link", offset: 11, length: 4, url: "https://example.com" },
+          ],
+          date: 1736380800,
+          document: { file_id: "doc1", file_unique_id: "u1", file_name: "file1.md" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "documents/file1.md" }),
+      });
+
+      // Second doc has no caption
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          message_id: 41,
+          from,
+          date: 1736380801,
+          document: { file_id: "doc2", file_unique_id: "u2", file_name: "file2.md" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "documents/file2.md" }),
+      });
+
+      await sleep(DOC_BATCH_SETTLE_MS);
+
+      expect(runtimeError).not.toHaveBeenCalled();
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0][0];
+      // The text_link entity should be expanded into a markdown link
+      expect(payload.Body).toContain("[link](https://example.com)");
+
+      fetchSpy.mockRestore();
+    },
+    DOC_BATCH_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "skips agent turn when all documents in a batch fail to resolve",
+    async () => {
+      const runtimeLog = vi.fn();
+      const { handler, replySpy, runtimeError } = await createBotHandlerWithOptions({
+        runtimeLog,
+      });
+      sendMessageSpy.mockClear();
+
+      // All fetches fail with oversize error
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        throw new Error("File exceeds 20 MB limit");
+      });
+
+      const from = { id: 999, is_bot: false, first_name: "User" };
+
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          message_id: 50,
+          from,
+          caption: "These are huge",
+          date: 1736380800,
+          document: { file_id: "big1", file_unique_id: "b1", file_name: "huge1.pdf" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "documents/huge1.pdf" }),
+      });
+
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          message_id: 51,
+          from,
+          date: 1736380801,
+          document: { file_id: "big2", file_unique_id: "b2", file_name: "huge2.pdf" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "documents/huge2.pdf" }),
+      });
+
+      await sleep(DOC_BATCH_SETTLE_MS);
+
+      expect(runtimeError).not.toHaveBeenCalled();
+      // Agent turn should NOT have been opened
+      expect(replySpy).not.toHaveBeenCalled();
+      // Oversize warnings should still have been sent
+      const oversizeCalls = sendMessageSpy.mock.calls.filter(
+        (call: unknown[]) => typeof call[1] === "string" && call[1].includes("File too large"),
+      );
+      expect(oversizeCalls).toHaveLength(2);
 
       fetchSpy.mockRestore();
     },
