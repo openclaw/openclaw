@@ -462,7 +462,7 @@ run_ref_onboard() {
 }
 
 verify_gateway() {
-  guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" gateway status --deep
+  guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" gateway status --deep --require-rpc
 }
 
 verify_turn() {
@@ -587,7 +587,7 @@ capture_latest_ref_failure() {
   fi
   warn "Latest release ref-mode onboard failed pre-upgrade"
   set +e
-  guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" gateway status --deep || true
+  guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" gateway status --deep --require-rpc || true
   set -e
   return 1
 }
