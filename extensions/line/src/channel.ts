@@ -539,20 +539,13 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       const issues: ChannelStatusIssue[] = [];
       for (const account of accounts) {
         const accountId = account.accountId ?? DEFAULT_ACCOUNT_ID;
-        if (!account.channelAccessToken?.trim()) {
+        // Use 'configured' from snapshot - raw channelAccessToken is stripped for security
+        if (!account.configured) {
           issues.push({
             channel: "line",
             accountId,
             kind: "config",
-            message: "LINE channel access token not configured",
-          });
-        }
-        if (!account.channelSecret?.trim()) {
-          issues.push({
-            channel: "line",
-            accountId,
-            kind: "config",
-            message: "LINE channel secret not configured",
+            message: "LINE channel credentials not configured",
           });
         }
       }
