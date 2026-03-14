@@ -194,9 +194,10 @@ export function lookupContextTokens(modelId?: string): number | undefined {
 }
 
 if (!shouldSkipEagerContextWindowWarmup()) {
-  // Keep prior behavior where model limits begin loading during startup.
-  // This avoids a cold-start miss on the first context token lookup.
-  void ensureContextWindowCacheLoaded();
+  // Defer warmup past module initialization to avoid TDZ errors when
+  // ensureContextWindowCacheLoaded() transitively references consts
+  // (e.g. ANTHROPIC_MODEL_ALIASES) that haven't been initialized yet.
+  setImmediate(() => void ensureContextWindowCacheLoaded());
 }
 
 function resolveConfiguredModelParams(
