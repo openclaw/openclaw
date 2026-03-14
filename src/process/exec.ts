@@ -169,8 +169,10 @@ export type CommandOptions = {
   cwd?: string;
   input?: string;
   env?: NodeJS.ProcessEnv;
+  baseEnv?: NodeJS.ProcessEnv;
   windowsVerbatimArguments?: boolean;
   noOutputTimeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 export function resolveCommandEnv(params: {
@@ -215,10 +217,10 @@ export async function runCommandWithTimeout(
 ): Promise<SpawnResult> {
   const options: CommandOptions =
     typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
-  const { timeoutMs, cwd, input, env, noOutputTimeoutMs } = options;
+  const { timeoutMs, cwd, input, env, baseEnv, noOutputTimeoutMs, signal } = options;
   const { windowsVerbatimArguments } = options;
   const hasInput = input !== undefined;
-  const resolvedEnv = resolveCommandEnv({ argv, env });
+  const resolvedEnv = resolveCommandEnv({ argv, env, baseEnv });
 
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
   const finalArgv = process.platform === "win32" ? (resolveNpmArgvForWindows(argv) ?? argv) : argv;
@@ -247,6 +249,7 @@ export async function runCommandWithTimeout(
     let timedOut = false;
     let noOutputTimedOut = false;
     let noOutputTimer: NodeJS.Timeout | null = null;
+    let onAbort: (() => void) | undefined;
     const shouldTrackOutputTimeout =
       typeof noOutputTimeoutMs === "number" &&
       Number.isFinite(noOutputTimeoutMs) &&
@@ -284,6 +287,22 @@ export async function runCommandWithTimeout(
     }, timeoutMs);
     armNoOutputTimer();
 
+    if (signal) {
+      onAbort = () => {
+        if (settled) {
+          return;
+        }
+        if (typeof child.kill === "function") {
+          child.kill("SIGKILL");
+        }
+      };
+      if (signal.aborted) {
+        onAbort();
+      } else {
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+    }
+
     if (hasInput && child.stdin) {
       child.stdin.write(input ?? "");
       child.stdin.end();
@@ -304,6 +323,9 @@ export async function runCommandWithTimeout(
       settled = true;
       clearTimeout(timer);
       clearNoOutputTimer();
+      if (signal && onAbort) {
+        signal.removeEventListener("abort", onAbort);
+      }
       reject(err);
     });
     child.on("close", (code, signal) => {
@@ -313,6 +335,9 @@ export async function runCommandWithTimeout(
       settled = true;
       clearTimeout(timer);
       clearNoOutputTimer();
+      if (options.signal && onAbort) {
+        options.signal.removeEventListener("abort", onAbort);
+      }
       const termination = noOutputTimedOut
         ? "no-output-timeout"
         : timedOut

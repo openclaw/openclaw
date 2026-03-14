@@ -1,4 +1,6 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
@@ -18,7 +20,7 @@ import {
   scheduleDetachedLaunchdRestartHandoff,
 } from "./launchd-restart-handoff.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
-import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
+import { resolveGatewayStateDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
@@ -32,7 +34,23 @@ import type {
 } from "./service-types.js";
 
 const LAUNCH_AGENT_DIR_MODE = 0o755;
-const LAUNCH_AGENT_PLIST_MODE = 0o644;
+const LAUNCH_AGENT_PLIST_MODE = 0o600;
+
+function resolveTrustedLaunchAgentHome(): string {
+  const home = (() => {
+    try {
+      const fromUserInfo = os.userInfo().homedir.trim();
+      if (fromUserInfo) {
+        return fromUserInfo;
+      }
+    } catch {}
+    return os.homedir().trim();
+  })();
+  if (!home) {
+    throw new Error("Unable to resolve trusted user home for launchd operations.");
+  }
+  return toPosixPath(home);
+}
 
 function resolveLaunchAgentLabel(args?: { env?: Record<string, string | undefined> }): string {
   const envLabel = args?.env?.OPENCLAW_LAUNCHD_LABEL?.trim();
@@ -43,10 +61,10 @@ function resolveLaunchAgentLabel(args?: { env?: Record<string, string | undefine
 }
 
 function resolveLaunchAgentPlistPathForLabel(
-  env: Record<string, string | undefined>,
+  _env: Record<string, string | undefined>,
   label: string,
 ): string {
-  const home = toPosixPath(resolveHomeDir(env));
+  const home = resolveTrustedLaunchAgentHome();
   return path.posix.join(home, "Library", "LaunchAgents", `${label}.plist`);
 }
 
@@ -107,11 +125,16 @@ export function buildLaunchAgentPlist({
 
 async function execLaunchctl(
   args: string[],
+  options?: { signal?: AbortSignal },
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   const isWindows = process.platform === "win32";
   const file = isWindows ? (process.env.ComSpec ?? "cmd.exe") : "launchctl";
   const fileArgs = isWindows ? ["/d", "/s", "/c", "launchctl", ...args] : args;
-  return await execFileUtf8(file, fileArgs, isWindows ? { windowsHide: true } : {});
+  const opts: Record<string, unknown> = isWindows ? { windowsHide: true } : {};
+  if (options?.signal) {
+    opts.signal = options.signal;
+  }
+  return await execFileUtf8(file, fileArgs, opts);
 }
 
 function parseGatewayPortFromProgramArguments(
@@ -194,9 +217,11 @@ async function bootstrapLaunchAgentOrThrow(params: {
   serviceTarget: string;
   plistPath: string;
   actionHint: string;
+  signal?: AbortSignal;
 }) {
-  await execLaunchctl(["enable", params.serviceTarget]);
-  const boot = await execLaunchctl(["bootstrap", params.domain, params.plistPath]);
+  const options = params.signal ? { signal: params.signal } : undefined;
+  await execLaunchctl(["enable", params.serviceTarget], options);
+  const boot = await execLaunchctl(["bootstrap", params.domain, params.plistPath], options);
   if (boot.code === 0) {
     return;
   }
@@ -213,15 +238,58 @@ async function bootstrapLaunchAgentOrThrow(params: {
 
 async function ensureSecureDirectory(targetPath: string): Promise<void> {
   await fs.mkdir(targetPath, { recursive: true, mode: LAUNCH_AGENT_DIR_MODE });
+  const stat = await fs.lstat(targetPath);
+  if (stat.isSymbolicLink()) {
+    throw new Error(`Refusing to use symlinked LaunchAgent path: ${targetPath}`);
+  }
+  if (!stat.isDirectory()) {
+    throw new Error(`Expected LaunchAgent directory at ${targetPath}`);
+  }
+  const mode = stat.mode & 0o777;
+  const tightenedMode = mode & ~0o022;
+  if (tightenedMode !== mode) {
+    await fs.chmod(targetPath, tightenedMode).catch(() => undefined);
+  }
+}
+
+async function assertNotSymlink(targetPath: string): Promise<void> {
   try {
-    const stat = await fs.stat(targetPath);
-    const mode = stat.mode & 0o777;
-    const tightenedMode = mode & ~0o022;
-    if (tightenedMode !== mode) {
-      await fs.chmod(targetPath, tightenedMode);
+    const stat = await fs.lstat(targetPath);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Refusing to use symlinked LaunchAgent path: ${targetPath}`);
     }
-  } catch {
-    // Best effort: keep install working even if chmod/stat is unavailable.
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+}
+
+async function writeLaunchAgentPlistSecure(plistPath: string, plist: string): Promise<void> {
+  await assertNotSymlink(plistPath);
+  const dir = path.dirname(plistPath);
+  const tempPath = path.join(dir, `.${path.basename(plistPath)}.${process.pid}.tmp`);
+  await assertNotSymlink(tempPath);
+  const handle = await fs.open(
+    tempPath,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW,
+    LAUNCH_AGENT_PLIST_MODE,
+  );
+  try {
+    await handle.writeFile(plist, { encoding: "utf8" });
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    await fs.unlink(tempPath).catch(() => undefined);
+    throw error;
+  }
+  await handle.close();
+  try {
+    await fs.rename(tempPath, plistPath);
+  } catch (error) {
+    await fs.unlink(tempPath).catch(() => undefined);
+    throw error;
   }
 }
 
@@ -372,8 +440,8 @@ export async function uninstallLegacyLaunchAgents({
     return agents;
   }
 
-  const home = toPosixPath(resolveHomeDir(env));
-  const trashDir = path.posix.join(home, ".Trash");
+  const trustedHome = resolveTrustedLaunchAgentHome();
+  const trashDir = path.posix.join(trustedHome, ".Trash");
   try {
     await fs.mkdir(trashDir, { recursive: true });
   } catch {
@@ -419,8 +487,7 @@ export async function uninstallLaunchAgent({
     return;
   }
 
-  const home = toPosixPath(resolveHomeDir(env));
-  const trashDir = path.posix.join(home, ".Trash");
+  const trashDir = path.posix.join(resolveTrustedLaunchAgentHome(), ".Trash");
   const dest = path.join(trashDir, `${label}.plist`);
   try {
     await fs.mkdir(trashDir, { recursive: true });
@@ -483,10 +550,6 @@ export async function installLaunchAgent({
   }
 
   const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
-  const home = toPosixPath(resolveHomeDir(env));
-  const libraryDir = path.posix.join(home, "Library");
-  await ensureSecureDirectory(home);
-  await ensureSecureDirectory(libraryDir);
   await ensureSecureDirectory(path.dirname(plistPath));
 
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
@@ -499,8 +562,7 @@ export async function installLaunchAgent({
     stderrPath,
     environment,
   });
-  await fs.writeFile(plistPath, plist, { encoding: "utf8", mode: LAUNCH_AGENT_PLIST_MODE });
-  await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
+  await writeLaunchAgentPlistSecure(plistPath, plist);
 
   await execLaunchctl(["bootout", domain, plistPath]);
   await execLaunchctl(["unload", plistPath]);
@@ -530,11 +592,13 @@ export async function installLaunchAgent({
 export async function restartLaunchAgent({
   stdout,
   env,
+  signal,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
+  const sig = { signal };
   const serviceTarget = `${domain}/${label}`;
 
   // Restart requests issued from inside the managed gateway process tree need a
@@ -558,7 +622,7 @@ export async function restartLaunchAgent({
     cleanStaleGatewayProcessesSync(cleanupPort);
   }
 
-  const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
+  const start = await execLaunchctl(["kickstart", "-k", serviceTarget], sig);
   if (start.code === 0) {
     writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
     return { outcome: "completed" };
@@ -574,9 +638,10 @@ export async function restartLaunchAgent({
     serviceTarget,
     plistPath,
     actionHint: "openclaw gateway restart",
+    signal,
   });
 
-  const retry = await execLaunchctl(["kickstart", "-k", serviceTarget]);
+  const retry = await execLaunchctl(["kickstart", "-k", serviceTarget], sig);
   if (retry.code !== 0) {
     throw new Error(`launchctl kickstart failed: ${retry.stderr || retry.stdout}`.trim());
   }

@@ -35,6 +35,20 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
   });
 
+  it("can resolve against an explicit empty base env", async () => {
+    const resolved = resolveCommandEnv({
+      argv: ["node", "script.js"],
+      baseEnv: {},
+      env: {
+        OPENCLAW_TEST_ENV: "ok",
+      },
+    });
+
+    expect(resolved.OPENCLAW_TEST_ENV).toBe("ok");
+    expect(resolved.PATH).toBeUndefined();
+    expect(resolved.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
+  });
+
   it("suppresses npm fund prompts for npm argv", async () => {
     const resolved = resolveCommandEnv({
       argv: ["npm", "--version"],

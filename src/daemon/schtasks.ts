@@ -694,6 +694,7 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
 export async function restartScheduledTask({
   stdout,
   env,
+  signal,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
   try {
@@ -710,7 +711,8 @@ export async function restartScheduledTask({
     }
   }
   const taskName = resolveTaskName(effectiveEnv);
-  await execSchtasks(["/End", "/TN", taskName]);
+  const sig = signal ? { signal } : undefined;
+  await execSchtasks(["/End", "/TN", taskName], sig);
   const restartPort = await resolveScheduledTaskPort(effectiveEnv);
   await terminateScheduledTaskGatewayListeners(effectiveEnv);
   await terminateInstalledStartupRuntime(effectiveEnv);
@@ -724,7 +726,7 @@ export async function restartScheduledTask({
       }
     }
   }
-  const res = await execSchtasks(["/Run", "/TN", taskName]);
+  const res = await execSchtasks(["/Run", "/TN", taskName], sig);
   if (res.code !== 0) {
     throw new Error(`schtasks run failed: ${res.stderr || res.stdout}`.trim());
   }

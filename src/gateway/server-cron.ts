@@ -11,6 +11,7 @@ import { resolveStorePath } from "../config/sessions/paths.js";
 import { resolveFailureDestination, sendFailureNotificationAnnounce } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
+import { runRescueWatchdogJob } from "../cron/rescue-watchdog.js";
 import {
   appendCronRunLog,
   resolveCronRunLogPath,
@@ -300,6 +301,13 @@ export function buildGatewayCronService(params: {
         agentId,
         sessionKey,
         lane: "cron",
+      });
+    },
+    runRescueWatchdogJob: async ({ job, monitoredProfile, abortSignal }) => {
+      return await runRescueWatchdogJob({
+        job,
+        monitoredProfile,
+        abortSignal,
       });
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {

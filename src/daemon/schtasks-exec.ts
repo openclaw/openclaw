@@ -5,10 +5,12 @@ const SCHTASKS_NO_OUTPUT_TIMEOUT_MS = 5_000;
 
 export async function execSchtasks(
   args: string[],
+  options?: { signal?: AbortSignal },
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   const result = await runCommandWithTimeout(["schtasks", ...args], {
     timeoutMs: SCHTASKS_TIMEOUT_MS,
     noOutputTimeoutMs: SCHTASKS_NO_OUTPUT_TIMEOUT_MS,
+    signal: options?.signal,
   });
   const timeoutDetail =
     result.termination === "timeout"
