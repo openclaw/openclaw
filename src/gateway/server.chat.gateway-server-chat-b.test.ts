@@ -143,7 +143,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.send does not force-disable block streaming", async () => {
+  test("chat.send keeps block streaming enabled and wires reasoning stream callback", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const spy = getReplyFromConfig;
       await connectOk(ws);
@@ -171,6 +171,7 @@ describe("gateway server chat", () => {
         }, FAST_WAIT_OPTS);
 
         expect(capturedOpts?.disableBlockStreaming).toBeUndefined();
+        expect(typeof capturedOpts?.onReasoningStream).toBe("function");
       } finally {
         testState.agentConfig = undefined;
       }
