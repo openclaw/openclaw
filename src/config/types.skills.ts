@@ -40,6 +40,8 @@ export type SkillsLimitsConfig = {
 export type SkillsConfig = {
   /** Optional bundled-skill allowlist (only affects bundled skills). */
   allowBundled?: string[];
+  /** Skills pinned to the front of the model-facing prompt, in priority order. */
+  priority?: string[];
   load?: SkillsLoadConfig;
   install?: SkillsInstallConfig;
   limits?: SkillsLimitsConfig;

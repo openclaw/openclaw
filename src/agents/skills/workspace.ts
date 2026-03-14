@@ -532,8 +532,9 @@ function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawCon
   truncatedReason: "count" | "chars" | null;
 } {
   const limits = resolveSkillsLimits(params.config);
-  const total = params.skills.length;
-  const byCount = params.skills.slice(0, Math.max(0, limits.maxSkillsInPrompt));
+  const orderedSkills = orderSkillsForPrompt(params.skills, params.config?.skills?.priority);
+  const total = orderedSkills.length;
+  const byCount = orderedSkills.slice(0, Math.max(0, limits.maxSkillsInPrompt));
 
   let skillsForPrompt = byCount;
   let truncated = total > byCount.length;
@@ -562,6 +563,32 @@ function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawCon
   }
 
   return { skillsForPrompt, truncated, truncatedReason };
+}
+
+function orderSkillsForPrompt(skills: Skill[], priority?: string[]): Skill[] {
+  if (skills.length <= 1) {
+    return skills.slice();
+  }
+
+  const orderedPriority = (priority ?? []).map((name) => name.trim()).filter(Boolean);
+  const skillsByName = new Map(skills.map((skill) => [skill.name, skill]));
+  const seen = new Set<string>();
+  const prioritized: Skill[] = [];
+
+  for (const name of orderedPriority) {
+    const skill = skillsByName.get(name);
+    if (!skill || seen.has(skill.name)) {
+      continue;
+    }
+    prioritized.push(skill);
+    seen.add(skill.name);
+  }
+
+  const remaining = skills
+    .filter((skill) => !seen.has(skill.name))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  return [...prioritized, ...remaining];
 }
 
 export function buildWorkspaceSkillSnapshot(
