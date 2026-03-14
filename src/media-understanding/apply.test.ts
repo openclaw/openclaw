@@ -989,6 +989,27 @@ describe("applyMediaUnderstanding", () => {
     expectFileNotApplied({ ctx, result, body: "<media:file>" });
   });
 
+  it("does not inject PDF binary as text when MIME type is missing (issue #23191)", async () => {
+    // PDFs uploaded via some platforms arrive without a MIME type.
+    // The %PDF- magic bytes should prevent the text heuristic from
+    // coercing binary content into text/plain.
+    const pseudoPdf = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n", "utf8");
+    const filePath = await createTempMediaFile({
+      fileName: "report.pdf",
+      content: pseudoPdf,
+    });
+
+    const cfg = createMediaDisabledConfigWithAllowedMimes(["text/plain"]);
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      cfg,
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
   it("respects configured allowedMimes for text-like attachments", async () => {
     const tsvText = "a\tb\tc\n1\t2\t3";
     const tsvPath = await createTempMediaFile({
