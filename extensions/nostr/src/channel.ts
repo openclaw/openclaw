@@ -30,6 +30,15 @@ const activeBuses = new Map<string, NostrBusHandle>();
 // Store metrics snapshots per account (for status reporting)
 const metricsSnapshots = new Map<string, MetricsSnapshot>();
 
+function formatNostrOutboundText(text: string, mediaUrl?: string): string {
+  const trimmedText = text.trim();
+  if (!mediaUrl) {
+    return trimmedText;
+  }
+  const attachmentLine = `Attachment: ${mediaUrl}`;
+  return trimmedText ? `${trimmedText}\n\n${attachmentLine}` : attachmentLine;
+}
+
 export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   id: "nostr",
   meta: {
@@ -159,6 +168,15 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         messageId: `nostr-${Date.now()}`,
       };
     },
+    sendMedia: async ({ cfg, to, text, mediaUrl, accountId }) => {
+      const combined = formatNostrOutboundText(text ?? "", mediaUrl);
+      return await nostrPlugin.outbound!.sendText!({
+        cfg,
+        to,
+        text: combined,
+        accountId,
+      });
+    },
   },
 
   status: {
@@ -272,15 +290,27 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         `[${account.accountId}] Nostr provider started, connected to ${account.relays.length} relay(s)`,
       );
 
-      // Return cleanup function
-      return {
-        stop: () => {
-          bus.close();
-          activeBuses.delete(account.accountId);
-          metricsSnapshots.delete(account.accountId);
-          ctx.log?.info(`[${account.accountId}] Nostr provider stopped`);
-        },
+      let stopped = false;
+      const stop = () => {
+        if (stopped) {
+          return;
+        }
+        stopped = true;
+        bus.close();
+        activeBuses.delete(account.accountId);
+        metricsSnapshots.delete(account.accountId);
+        ctx.log?.info(`[${account.accountId}] Nostr provider stopped`);
       };
+
+      try {
+        if (!ctx.abortSignal.aborted) {
+          await new Promise<void>((resolve) => {
+            ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+          });
+        }
+      } finally {
+        stop();
+      }
     },
   },
 };
