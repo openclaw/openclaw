@@ -2,7 +2,9 @@ import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import type { SandboxWorkspaceAccess } from "./types.js";
 
 function mainWorkspaceMountSuffix(access: SandboxWorkspaceAccess): "" | ":ro" {
-  return access === "rw" ? "" : ":ro";
+  // `none` uses an isolated sandbox workspace at /workspace, so only `ro`
+  // should force the primary /workspace mount read-only.
+  return access === "ro" ? ":ro" : "";
 }
 
 function agentWorkspaceMountSuffix(access: SandboxWorkspaceAccess): "" | ":ro" {
