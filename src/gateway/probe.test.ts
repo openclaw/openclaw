@@ -51,7 +51,7 @@ describe("probeGateway", () => {
     });
 
     expect(gatewayClientState.options?.scopes).toEqual(["operator.read"]);
-    expect(gatewayClientState.options?.deviceIdentity).toBeNull();
+    expect(gatewayClientState.options?.deviceIdentity).toBeUndefined();
     expect(gatewayClientState.requests).toEqual([
       "health",
       "status",

@@ -5,6 +5,7 @@ import {
   isProbeReachable,
   isScopeLimitedProbeFailure,
   renderProbeSummaryLine,
+  resolveProbeBudgetMs,
   resolveAuthForTarget,
 } from "./helpers.js";
 
@@ -271,5 +272,14 @@ describe("probe reachability classification", () => {
     expect(isScopeLimitedProbeFailure(probe)).toBe(false);
     expect(isProbeReachable(probe)).toBe(false);
     expect(renderProbeSummaryLine(probe, false)).toContain("RPC: failed");
+  });
+});
+
+describe("resolveProbeBudgetMs", () => {
+  it("gives local loopback probes enough time for detail RPCs", () => {
+    expect(resolveProbeBudgetMs(10_000, "localLoopback")).toBe(3000);
+    expect(resolveProbeBudgetMs(1200, "localLoopback")).toBe(1200);
+    expect(resolveProbeBudgetMs(10_000, "sshTunnel")).toBe(2000);
+    expect(resolveProbeBudgetMs(10_000, "explicit")).toBe(1500);
   });
 });
