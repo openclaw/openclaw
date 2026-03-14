@@ -195,6 +195,8 @@ export async function runAgentTurnWithFallback(params: {
             previousModel: run.model,
             nextProvider: run.provider,
             nextModel: run.model,
+            sessionId: run.sessionId,
+            agentId: run.agentId,
           });
         }
       }
@@ -212,6 +214,8 @@ export async function runAgentTurnWithFallback(params: {
             previousModel: run.model,
             nextProvider: run.provider,
             nextModel: run.model,
+            sessionId: run.sessionId,
+            agentId: run.agentId,
           });
         }
       }

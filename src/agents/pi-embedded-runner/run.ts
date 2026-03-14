@@ -1212,6 +1212,8 @@ export async function runEmbeddedPiAgent(
                   previousModel: modelId,
                   nextProvider: provider,
                   nextModel: modelId,
+                  sessionId: params.sessionId,
+                  agentId: params.agentId,
                 }).catch(() => {});
               }
             }
