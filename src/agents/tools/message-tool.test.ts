@@ -494,13 +494,31 @@ describe("message tool config resolution (SecretRef fallback)", () => {
     mocks.loadConfig.mockReset();
   });
 
-  it("prefers getRuntimeConfigSnapshot over loadConfig when options.config is absent", async () => {
+  it("uses options.config when provided, skipping runtime snapshot and loadConfig", async () => {
+    const explicitConfig = { channels: { telegram: { token: "explicit" } } } as never;
+    mocks.getRuntimeConfigSnapshot.mockReturnValue({ channels: {} } as never);
+    mocks.loadConfig.mockReturnValue({ channels: {} } as never);
+    mockSendResult();
+
+    await executeSend({
+      toolOptions: { config: explicitConfig },
+      action: {
+        target: "telegram:123",
+        message: "hello",
+      },
+    });
+
+    expect(mocks.getRuntimeConfigSnapshot).not.toHaveBeenCalled();
+    expect(mocks.loadConfig).not.toHaveBeenCalled();
+  });
+
+  it("prefers runtime snapshot over loadConfig when options.config is absent", async () => {
     const resolvedConfig = { channels: { telegram: { token: "resolved-token" } } } as never;
     mocks.getRuntimeConfigSnapshot.mockReturnValue(resolvedConfig);
     mocks.loadConfig.mockReturnValue({ channels: { telegram: { token: { $ref: "secret" } } } });
     mockSendResult();
 
-    const call = await executeSend({
+    await executeSend({
       toolOptions: { config: undefined },
       action: {
         target: "telegram:123",
@@ -510,15 +528,15 @@ describe("message tool config resolution (SecretRef fallback)", () => {
 
     expect(mocks.getRuntimeConfigSnapshot).toHaveBeenCalled();
     expect(mocks.loadConfig).not.toHaveBeenCalled();
-    expect(call).toBeDefined();
   });
 
-  it("falls back to loadConfig when getRuntimeConfigSnapshot returns null", async () => {
+  it("falls back to loadConfig only when runtime snapshot is null", async () => {
     mocks.getRuntimeConfigSnapshot.mockReturnValue(null);
-    mocks.loadConfig.mockReturnValue({} as never);
+    const fallbackConfig = { channels: {} } as never;
+    mocks.loadConfig.mockReturnValue(fallbackConfig);
     mockSendResult();
 
-    const call = await executeSend({
+    await executeSend({
       toolOptions: { config: undefined },
       action: {
         target: "telegram:123",
@@ -528,6 +546,5 @@ describe("message tool config resolution (SecretRef fallback)", () => {
 
     expect(mocks.getRuntimeConfigSnapshot).toHaveBeenCalled();
     expect(mocks.loadConfig).toHaveBeenCalled();
-    expect(call).toBeDefined();
   });
 });
