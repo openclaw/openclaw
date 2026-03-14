@@ -18,8 +18,8 @@ Beginner view:
 - Think of it as a **separate, agent-only browser**.
 - The `openclaw` profile does **not** touch your personal browser profile.
 - The agent can **open tabs, read pages, click, and type** in a safe lane.
-- The default `chrome` profile uses the **system default Chromium browser** via the
-  extension relay; switch to `openclaw` for the isolated managed browser.
+- The built-in `user` profile attaches to your real signed-in Chrome session;
+  `chrome-relay` is the explicit extension-relay profile.
 
 ## What you get
 
@@ -43,13 +43,22 @@ openclaw browser --browser-profile openclaw snapshot
 If you get “Browser disabled”, enable it in config (see below) and restart the
 Gateway.
 
-## Profiles: `openclaw` vs `chrome`
+## Profiles: `openclaw` vs `user` vs `chrome-relay`
 
 - `openclaw`: managed, isolated browser (no extension required).
-- `chrome`: extension relay to your **system browser** (requires the OpenClaw
-  extension to be attached to a tab).
-- `existing-session`: official Chrome MCP attach flow for a running Chrome
-  profile.
+- `user`: built-in Chrome MCP attach profile for your **real signed-in Chrome**
+  session.
+- `chrome-relay`: extension relay to your **system browser** (requires the
+  OpenClaw extension to be attached to a tab).
+
+For agent browser tool calls:
+
+- Default: use the isolated `openclaw` browser.
+- Prefer `profile="user"` when existing logged-in sessions matter and the user
+  is at the computer to click/approve any attach prompt.
+- Use `profile="chrome-relay"` only when the user explicitly wants the Chrome
+  extension / toolbar-button attach flow.
+- `profile` is the explicit override when you want a specific browser mode.
 
 Set `browser.defaultProfile: "openclaw"` if you want managed mode by default.
 
@@ -70,7 +79,7 @@ Browser settings live in `~/.openclaw/openclaw.json`.
     // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
     remoteCdpTimeoutMs: 1500, // remote CDP HTTP timeout (ms)
     remoteCdpHandshakeTimeoutMs: 3000, // remote CDP WebSocket handshake timeout (ms)
-    defaultProfile: "chrome",
+    defaultProfile: "openclaw",
     color: "#FF4500",
     headless: false,
     noSandbox: false,
@@ -79,10 +88,14 @@ Browser settings live in `~/.openclaw/openclaw.json`.
     profiles: {
       openclaw: { cdpPort: 18800, color: "#FF4500" },
       work: { cdpPort: 18801, color: "#0066CC" },
-      chromeLive: {
-        cdpPort: 18802,
+      user: {
         driver: "existing-session",
         attachOnly: true,
+        color: "#00AA00",
+      },
+      "chrome-relay": {
+        driver: "extension",
+        cdpUrl: "http://127.0.0.1:18792",
         color: "#00AA00",
       },
       remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
@@ -105,7 +118,7 @@ Notes:
 - `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias for compatibility.
 - `attachOnly: true` means “never launch a local browser; only attach if it is already running.”
 - `color` + per-profile `color` tint the browser UI so you can see which profile is active.
-- Default profile is `openclaw` (OpenClaw-managed standalone browser). Use `defaultProfile: "chrome"` to opt into the Chrome extension relay.
+- Default profile is `openclaw` (OpenClaw-managed standalone browser). Use `defaultProfile: "user"` to opt into the signed-in user browser, or `defaultProfile: "chrome-relay"` for the extension relay.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
 - Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl` — set those only for remote CDP.
 - `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. Do
@@ -279,7 +292,7 @@ OpenClaw supports multiple named profiles (routing configs). Profiles can be:
 Defaults:
 
 - The `openclaw` profile is auto-created if missing.
-- The `chrome` profile is built-in for the Chrome extension relay (points at `http://127.0.0.1:18792` by default).
+- The `chrome-relay` profile is built-in for the Chrome extension relay (points at `http://127.0.0.1:18792` by default).
 - Existing-session profiles are opt-in; create them with `--driver existing-session`.
 - Local CDP ports allocate from **18800–18899** by default.
 - Deleting a profile moves its local data directory to Trash.
@@ -323,8 +336,8 @@ openclaw browser extension install
 
 2. Use it:
 
-- CLI: `openclaw browser --browser-profile chrome tabs`
-- Agent tool: `browser` with `profile="chrome"`
+- CLI: `openclaw browser --browser-profile chrome-relay tabs`
+- Agent tool: `browser` with `profile="chrome-relay"`
 
 Optional: if you want a different name or relay port, create your own profile:
 
@@ -340,6 +353,9 @@ Notes:
 
 - This mode relies on Playwright-on-CDP for most operations (screenshots/snapshots/actions).
 - Detach by clicking the extension icon again.
+- Agent use: prefer `profile="user"` for logged-in sites. Use `profile="chrome-relay"`
+  only when you specifically want the extension flow. The user must be present
+  to click the extension and attach the tab.
 
 ## Chrome existing-session via MCP
 
@@ -352,14 +368,12 @@ Official background and setup references:
 - [Chrome for Developers: Use Chrome DevTools MCP with your browser session](https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session)
 - [Chrome DevTools MCP README](https://github.com/ChromeDevTools/chrome-devtools-mcp)
 
-Create a profile:
+Built-in profile:
 
-```bash
-openclaw browser create-profile \
-  --name chrome-live \
-  --driver existing-session \
-  --color "#00AA00"
-```
+- `user`
+
+Optional: create your own custom existing-session profile if you want a
+different name or color.
 
 Then in Chrome:
 
@@ -370,15 +384,16 @@ Then in Chrome:
 Live attach smoke test:
 
 ```bash
-openclaw browser --browser-profile chrome-live start
-openclaw browser --browser-profile chrome-live status
-openclaw browser --browser-profile chrome-live tabs
-openclaw browser --browser-profile chrome-live snapshot --format ai
+openclaw browser --browser-profile user start
+openclaw browser --browser-profile user status
+openclaw browser --browser-profile user tabs
+openclaw browser --browser-profile user snapshot --format ai
 ```
 
 What success looks like:
 
 - `status` shows `driver: existing-session`
+- `status` shows `transport: chrome-mcp`
 - `status` shows `running: true`
 - `tabs` lists your already-open Chrome tabs
 - `snapshot` returns refs from the selected live tab
@@ -388,6 +403,15 @@ What to check if attach does not work:
 - Chrome is version `144+`
 - remote debugging is enabled at `chrome://inspect/#remote-debugging`
 - Chrome showed and you accepted the attach consent prompt
+
+Agent use:
+
+- Use `profile="user"` when you need the user’s logged-in browser state.
+- If you use a custom existing-session profile, pass that explicit profile name.
+- Prefer `profile="user"` over `profile="chrome-relay"` unless the user
+  explicitly wants the extension / attach-tab flow.
+- Only choose this mode when the user is at the computer to approve the attach
+  prompt.
 - the Gateway or node host can spawn `npx chrome-devtools-mcp@latest --autoConnect`
 
 Notes:
@@ -413,7 +437,7 @@ WSL2 / cross-namespace example:
   browser: {
     enabled: true,
     relayBindHost: "0.0.0.0",
-    defaultProfile: "chrome",
+    defaultProfile: "chrome-relay",
   },
 }
 ```
