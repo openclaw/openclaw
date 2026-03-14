@@ -124,8 +124,10 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
     : "";
   if (truncated.text.length > MARKDOWN_PARSE_LIMIT) {
-    const escaped = escapeHtml(`${truncated.text}${suffix}`);
-    const html = `<pre class="code-block">${escaped}</pre>`;
+    // Large plain-text replies should stay readable without inheriting the
+    // capped code-block chrome, while still preserving whitespace for logs
+    // and other structured text that commonly trips the parse guard.
+    const html = renderEscapedPlainTextHtml(`${truncated.text}${suffix}`);
     const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
     if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
       setCachedMarkdown(input, sanitized);
@@ -217,4 +219,8 @@ function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function renderEscapedPlainTextHtml(value: string): string {
+  return `<div class="markdown-plain-text-fallback">${escapeHtml(value.replace(/\r\n?/g, "\n"))}</div>`;
 }
