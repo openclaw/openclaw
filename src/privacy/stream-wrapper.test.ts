@@ -167,7 +167,19 @@ describe("stream-wrapper integration", () => {
       const messages = [legacy] as unknown as Message[];
       const filtered = filterMessages(messages, ctx) as unknown as Array<{ content: unknown }>;
       expect(typeof filtered[0]?.content).toBe("string");
-      expect(String(filtered[0]?.content)).toContain("admin@company.com");
+      expect(String(filtered[0]?.content)).not.toContain("admin@company.com");
+    });
+
+    it("filters legacy toolResult string content", () => {
+      const ctx = createPrivacyFilterContext("test-session");
+      const legacy = {
+        ...toolResultMessage([{ type: "text", text: "placeholder" }]),
+        content: "token sk-proj1234567890abcdefghijklm",
+      };
+      const messages = [legacy] as unknown as Message[];
+      const filtered = filterMessages(messages, ctx) as unknown as Array<{ content: unknown }>;
+      expect(typeof filtered[0]?.content).toBe("string");
+      expect(String(filtered[0]?.content)).not.toContain("sk-proj1234567890abcdefghijklm");
     });
   });
 

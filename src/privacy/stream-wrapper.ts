@@ -390,6 +390,12 @@ function filterAssistantMessage(
   ctx: PrivacyFilterContext,
 ): AssistantMessage {
   const rawContent = (msg as { content?: unknown }).content;
+  if (typeof rawContent === "string") {
+    const replaced = filterText(rawContent, ctx);
+    return replaced === rawContent
+      ? msg
+      : ({ ...msg, content: replaced } as unknown as AssistantMessage);
+  }
   if (!Array.isArray(rawContent)) {
     // Legacy sessions may carry non-array assistant content at runtime.
     // Keep behavior fail-open here to avoid crashing the request path.
@@ -425,6 +431,12 @@ function filterToolResultMessage(
   ctx: PrivacyFilterContext,
 ): ToolResultMessage {
   const rawContent = (msg as { content?: unknown }).content;
+  if (typeof rawContent === "string") {
+    const replaced = filterText(rawContent, ctx);
+    return replaced === rawContent
+      ? msg
+      : ({ ...msg, content: replaced } as unknown as ToolResultMessage);
+  }
   if (!Array.isArray(rawContent)) {
     return msg;
   }

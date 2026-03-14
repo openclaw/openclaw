@@ -125,7 +125,8 @@ export class PrivacyMappingStore {
   constructor(options?: { storePath?: string; salt?: string }) {
     this.storePath = options?.storePath || defaultStorePath();
     const salt = options?.salt ?? "";
-    const passphrase = loadOrCreateMachinePassphrase();
+    const machineKeyPath = join(dirname(this.storePath), "master.key");
+    const passphrase = loadOrCreateMachinePassphrase(machineKeyPath);
     this.key = deriveKey(passphrase, salt);
     this.legacyKey = deriveLegacyKey(salt);
     this.lockPath = `${this.storePath}.lock`;

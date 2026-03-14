@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -144,6 +144,17 @@ describe("PrivacyMappingStore", () => {
       const store2 = new PrivacyMappingStore({ storePath, salt: "salt-2" });
       // Wrong salt should return empty (graceful failure).
       expect(store2.load()).toEqual([]);
+    });
+
+    it("stores master key next to a custom storePath", () => {
+      const dir = mkdtempSync(join(tmpdir(), "privacy-test-"));
+      cleanups.push(dir);
+
+      const storePath = join(dir, "nested", "enc-test.enc");
+      const store = new PrivacyMappingStore({ storePath, salt: "salt-1" });
+      store.save([makeMappingData("1", "s1")]);
+
+      expect(existsSync(join(dir, "nested", "master.key"))).toBe(true);
     });
   });
 });
