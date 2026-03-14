@@ -292,6 +292,14 @@ describe("shouldConfigPatchTriggerGatewayRestart", () => {
     },
   );
 
+  it("still restarts explicit patches for restart-required paths in hot mode", () => {
+    expect(
+      shouldConfigPatchTriggerGatewayRestart({ gateway: { reload: { mode: "hot" } } }, [
+        "gateway.port",
+      ]),
+    ).toBe(true);
+  });
+
   it("forces restart when a changed path requires a full gateway restart", () => {
     expect(
       shouldConfigPatchTriggerGatewayRestart({ gateway: { reload: { mode: "hybrid" } } }, [

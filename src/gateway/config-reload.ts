@@ -66,8 +66,11 @@ export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReload
 }
 
 /**
- * config.patch should only force SIGUSR1 when hot reload cannot apply the
- * change immediately, or when reload mode explicitly disables hot handling.
+ * config.patch should only skip SIGUSR1 when the requested write can take
+ * effect immediately via hot reload (or when the patch is a no-op). Unlike the
+ * background file watcher, explicit config.patch calls still restart for
+ * restart-required paths in `hot` mode so operator-initiated writes do not
+ * silently land on disk without taking effect.
  */
 export function shouldConfigPatchTriggerGatewayRestart(
   cfg: OpenClawConfig,
