@@ -3289,7 +3289,7 @@ Docs: https://docs.openclaw.ai
 - Agents: add CLI log hint to "agent failed before reply" messages. (#1550) Thanks @sweepies.
 - Agents: warn and ignore tool allowlists that only reference unknown or unloaded plugin tools. (#1566)
 - Agents: treat plugin-only tool allowlists as opt-ins; keep core tools enabled. (#1467)
-- Agents: honor enqueue overrides for embedded runs to avoid queue deadlocks in tests. (commit 084002998)
+- Agents: honor enqueue overrides for embedded runs to avoid queue deadlocks in tests. (#45459) Thanks @LyttonFeng and @vincentkoc.
 - Slack: honor open groupPolicy for unlisted channels in message + slash gating. (#1563) Thanks @itsjaydesu.
 - Discord: limit autoThread mention bypass to bot-owned threads; keep ack reactions mention-gated. (#1511) Thanks @pvoo.
 - Discord: retry rate-limited allowlist resolution + command deploy to avoid gateway crashes. (commit f70ac0c7c)
