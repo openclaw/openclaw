@@ -36,6 +36,38 @@ function normalizeEpochMs(timestamp: number | undefined): number | undefined {
   return timestamp < MS_EPOCH_MIN ? timestamp * 1000 : timestamp;
 }
 
+const LOCAL_MEDIA_PATH_HINT =
+  "Local MEDIA paths must be under allowed OpenClaw media roots. Prefer safe relative paths inside the agent workspace (for example, MEDIA:./screenshot.png).";
+const LOCAL_MEDIA_PATH_USER_FALLBACK =
+  "I could not send that local media file because its path is outside allowed OpenClaw media roots. Use a URL or a safe relative path inside the agent workspace (for example, MEDIA:./screenshot.png).";
+
+type ErrorWithCause = {
+  name?: unknown;
+  code?: unknown;
+  message?: unknown;
+  cause?: unknown;
+};
+
+function isDisallowedLocalMediaPathError(error: unknown): boolean {
+  const visited = new Set<unknown>();
+  let current: unknown = error;
+  while (current && typeof current === "object" && !visited.has(current)) {
+    visited.add(current);
+    const candidate = current as ErrorWithCause;
+    const name = typeof candidate.name === "string" ? candidate.name : "";
+    const code = typeof candidate.code === "string" ? candidate.code : "";
+    const message = typeof candidate.message === "string" ? candidate.message : "";
+    if (
+      (name === "LocalMediaAccessError" && code === "path-not-allowed") ||
+      message.includes("Local media path is not under an allowed directory")
+    ) {
+      return true;
+    }
+    current = candidate.cause;
+  }
+  return false;
+}
+
 export type CreateFeishuReplyDispatcherParams = {
   cfg: ClawdbotConfig;
   agentId: string;
@@ -144,6 +176,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamText = "";
   let lastPartial = "";
   const deliveredFinalTexts = new Set<string>();
+  let localMediaFallbackSent = false;
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
   type StreamTextUpdateMode = "snapshot" | "delta";
@@ -266,6 +299,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
       onReplyStart: () => {
         deliveredFinalTexts.clear();
+        localMediaFallbackSent = false;
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
         }
@@ -359,10 +393,29 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
       },
       onError: async (error, info) => {
+        const localPathBlocked = isDisallowedLocalMediaPathError(error);
+        const hint = localPathBlocked ? ` Hint: ${LOCAL_MEDIA_PATH_HINT}` : "";
         params.runtime.error?.(
-          `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
+          `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}${hint}`,
         );
         await closeStreaming();
+        if (localPathBlocked && info.kind === "final" && !localMediaFallbackSent) {
+          localMediaFallbackSent = true;
+          try {
+            await sendMessageFeishu({
+              cfg,
+              to: chatId,
+              text: LOCAL_MEDIA_PATH_USER_FALLBACK,
+              replyToMessageId: sendReplyToMessageId,
+              replyInThread: effectiveReplyInThread,
+              accountId,
+            });
+          } catch (fallbackError) {
+            params.runtime.error?.(
+              `feishu[${account.accountId}] final reply local-media fallback failed: ${String(fallbackError)}`,
+            );
+          }
+        }
         typingCallbacks.onIdle?.();
       },
       onIdle: async () => {
