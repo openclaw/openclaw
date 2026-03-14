@@ -370,3 +370,13 @@ After testing the skill, users may request improvements. Often this happens righ
 2. Notice struggles or inefficiencies
 3. Identify how SKILL.md or bundled resources should be updated
 4. Implement changes and test again
+
+### Auditing a Skill
+
+To audit an existing skill for compliance with the AgentSkills spec (frontmatter, structure, and naming), use the validation script:
+
+```bash
+python3 scripts/quick_validate.py <path/to/skill-folder>
+```
+
+The script checks for mandatory fields, valid JSON/YAML, and proper file structure. Run it from the `skill-creator` skill directory.

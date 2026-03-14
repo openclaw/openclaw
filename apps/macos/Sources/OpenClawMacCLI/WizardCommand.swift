@@ -166,7 +166,7 @@ actor GatewayWizardClient {
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private let session = URLSession(configuration: .default)
-    private let connectChallengeTimeoutSeconds: Double = 0.75
+    private let connectChallengeTimeoutSeconds: Double = 5.0
     private var task: URLSessionWebSocketTask?
 
     init(url: URL, token: String?, password: String?, json: Bool) {

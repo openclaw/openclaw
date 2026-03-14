@@ -97,3 +97,20 @@ export async function stopBrowserControlServer(): Promise<void> {
     onWarn: (message) => logServer.warn(message),
   });
 }
+
+/**
+ * Return a count of browser profiles that are currently active/running.
+ * Used for gateway restart deferral to avoid killing active browser sessions.
+ */
+export function getActiveBrowserWorkCount(): number {
+  if (!state) {
+    return 0;
+  }
+  let count = 0;
+  for (const profileState of state.profiles.values()) {
+    if (profileState.running) {
+      count++;
+    }
+  }
+  return count;
+}

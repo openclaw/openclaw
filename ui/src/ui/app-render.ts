@@ -264,7 +264,7 @@ type InfrastructureSectionKey = (typeof INFRASTRUCTURE_SECTION_KEYS)[number];
 type AiAgentsSectionKey = (typeof AI_AGENTS_SECTION_KEYS)[number];
 
 const NAV_WIDTH_MIN = 200;
-const NAV_WIDTH_MAX = 400;
+const NAV_WIDTH_MAX = 600;
 
 function handleNavResizeStart(e: MouseEvent, state: AppViewState) {
   e.preventDefault();

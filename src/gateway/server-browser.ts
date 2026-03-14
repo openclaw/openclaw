@@ -2,6 +2,11 @@ import { isTruthyEnvValue } from "../infra/env.js";
 
 export type BrowserControlServer = {
   stop: () => Promise<void>;
+  /**
+   * Return a count of browser sessions that are currently active/running.
+   * Used for gateway restart deferral to avoid killing active browser sessions.
+   */
+  getWorkCount: () => number;
 };
 
 export async function startBrowserControlServerIfEnabled(): Promise<BrowserControlServer | null> {
@@ -27,5 +32,9 @@ export async function startBrowserControlServerIfEnabled(): Promise<BrowserContr
     return null;
   }
   await start();
-  return { stop: stop ?? (async () => {}) };
+  return {
+    stop: stop ?? (async () => {}),
+    getWorkCount:
+      (mod as { getActiveBrowserWorkCount?: () => number }).getActiveBrowserWorkCount ?? (() => 0),
+  };
 }
