@@ -700,10 +700,18 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `messages.ackReaction`
     - agent identity emoji fallback (`agents.list[].identity.emoji`, else "👀")
 
+    Timing resolution order:
+
+    - `channels.telegram.accounts.<accountId>.ackReactionTiming`
+    - `channels.telegram.ackReactionTiming`
+    - `messages.ackReactionTiming`
+    - default: `received`
+
     Notes:
 
     - Telegram expects unicode emoji (for example "👀").
     - Use `""` to disable the reaction for a channel or account.
+    - `ackReactionTiming: "run-start"` waits until the agent actually begins its run before sending the ack reaction or starting status reactions.
 
   </Accordion>
 
@@ -934,6 +942,7 @@ Primary reference:
 - `channels.telegram.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).
 - `channels.telegram.streaming`: `off | partial | block | progress` (live stream preview; default: `partial`; `progress` maps to `partial`; `block` is legacy preview mode compatibility). Telegram preview streaming uses a single preview message that is edited in place.
+- `channels.telegram.ackReactionTiming`: `received | run-start` (per-account ack timing override; falls back to `messages.ackReactionTiming`; default: `received`).
 - `channels.telegram.mediaMaxMb`: inbound/outbound Telegram media cap (MB, default: 100).
 - `channels.telegram.retry`: retry policy for Telegram send helpers (CLI/tools/actions) on recoverable outbound API errors (attempts, minDelayMs, maxDelayMs, jitter).
 - `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to enabled on Node 22+, with WSL2 defaulting to disabled.

@@ -56,6 +56,7 @@ export type BuildTelegramMessageContextParams = {
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
   ackReactionScope: "off" | "none" | "group-mentions" | "group-all" | "direct" | "all";
+  ackReactionTiming: "received" | "run-start";
   logger: TelegramLogger;
   resolveGroupActivation: ResolveGroupActivation;
   resolveGroupRequireMention: ResolveGroupRequireMention;

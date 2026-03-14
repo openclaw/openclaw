@@ -95,6 +95,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
       sendTyping: vi.fn(),
       sendRecordVoice: vi.fn(),
       ackReactionPromise: null,
+      ackReactionTiming: "received",
+      ackReactionValue: "👀",
+      ackReactionAllowed: true,
       reactionApi: null,
       removeAckAfterReply: false,
     } as unknown as TelegramMessageContext;
@@ -2183,6 +2186,149 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(finalTextSentViaDeliverReplies).toBe(true);
   });
 
+  it("defers Telegram ack reactions until agent run start when configured", async () => {
+    const reactionApi = vi.fn(async () => {});
+    let startRun!: () => void;
+    const runStarted = new Promise<void>((resolve) => {
+      startRun = resolve;
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await runStarted;
+      replyOptions?.onAgentRunStart?.("run-1");
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    const runPromise = dispatchWithContext({
+      context: createContext({
+        ackReactionTiming: "run-start",
+        ackReactionValue: "👀",
+        ackReactionAllowed: true,
+        reactionApi: reactionApi as never,
+      }),
+      streamMode: "off",
+    });
+
+    expect(reactionApi).not.toHaveBeenCalled();
+
+    startRun();
+    await runPromise;
+
+    expect(reactionApi).toHaveBeenCalledWith(123, 456, [{ type: "emoji", emoji: "👀" }]);
+  });
+
+  it("does not emit Telegram status reactions before run-start in deferred mode", async () => {
+    const statusReactionController = {
+      setThinking: vi.fn(async () => {}),
+      setCompacting: vi.fn(async () => {}),
+      setTool: vi.fn(async () => {}),
+      setDone: vi.fn(async () => {}),
+      setError: vi.fn(async () => {}),
+      setQueued: vi.fn(async () => {}),
+      cancelPending: vi.fn(() => {}),
+      clear: vi.fn(async () => {}),
+      restoreInitial: vi.fn(async () => {}),
+    };
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onCompactionStart?.();
+      await replyOptions?.onCompactionEnd?.();
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ackReactionTiming: "run-start",
+        ackReactionAllowed: true,
+        statusReactionController: statusReactionController as never,
+      }),
+      streamMode: "off",
+    });
+
+    expect(statusReactionController.setQueued).not.toHaveBeenCalled();
+    expect(statusReactionController.setCompacting).not.toHaveBeenCalled();
+    expect(statusReactionController.setThinking).not.toHaveBeenCalled();
+    expect(statusReactionController.setDone).not.toHaveBeenCalled();
+  });
+
+  it("starts full status reaction lifecycle including thinking on run-start with status reactions enabled", async () => {
+    const events: string[] = [];
+    let startRun!: () => void;
+    let resolveQueued!: () => void;
+    const runStarted = new Promise<void>((resolve) => {
+      startRun = resolve;
+    });
+    const queuedStarted = new Promise<void>((resolve) => {
+      resolveQueued = () => {
+        events.push("queued:resolved");
+        resolve();
+      };
+    });
+    const statusReactionController = {
+      setThinking: vi.fn(async () => {
+        events.push("thinking");
+      }),
+      setCompacting: vi.fn(async () => {
+        events.push("compacting");
+      }),
+      setTool: vi.fn(async (toolName?: string) => {
+        events.push(`tool:${toolName ?? ""}`);
+      }),
+      setDone: vi.fn(async () => {
+        events.push("done");
+      }),
+      setError: vi.fn(async () => {
+        events.push("error");
+      }),
+      setQueued: vi.fn(async () => {
+        events.push("queued");
+        await queuedStarted;
+      }),
+      cancelPending: vi.fn(() => {
+        events.push("cancelPending");
+      }),
+      clear: vi.fn(async () => {
+        events.push("clear");
+      }),
+      restoreInitial: vi.fn(async () => {
+        events.push("restoreInitial");
+      }),
+    };
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await runStarted;
+      replyOptions?.onAgentRunStart?.("run-1");
+      await Promise.resolve();
+      resolveQueued();
+      await Promise.resolve();
+      await Promise.resolve();
+      await replyOptions?.onToolStart?.({ name: "web_search" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    const runPromise = dispatchWithContext({
+      context: createContext({
+        ackReactionTiming: "run-start",
+        ackReactionAllowed: true,
+        statusReactionController: statusReactionController as never,
+      }),
+      streamMode: "off",
+    });
+
+    expect(statusReactionController.setQueued).not.toHaveBeenCalled();
+    expect(statusReactionController.setThinking).not.toHaveBeenCalled();
+
+    startRun();
+    await runPromise;
+    await Promise.resolve();
+
+    expect(statusReactionController.setQueued).toHaveBeenCalledTimes(1);
+    expect(statusReactionController.setThinking).toHaveBeenCalledTimes(1);
+    expect(statusReactionController.setTool).toHaveBeenCalledWith("web_search");
+    expect(statusReactionController.setDone).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["queued", "queued:resolved", "thinking", "tool:web_search", "done"]);
+  });
+
   it("shows compacting reaction during auto-compaction and resumes thinking", async () => {
     const statusReactionController = {
       setThinking: vi.fn(async () => {}),
@@ -2212,6 +2358,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(statusReactionController.setCompacting).toHaveBeenCalledTimes(1);
     expect(statusReactionController.cancelPending).toHaveBeenCalledTimes(1);
     expect(statusReactionController.setThinking).toHaveBeenCalledTimes(2);
+    expect(statusReactionController.setQueued).toHaveBeenCalledTimes(1);
     expect(statusReactionController.setCompacting.mock.invocationCallOrder[0]).toBeLessThan(
       statusReactionController.cancelPending.mock.invocationCallOrder[0],
     );

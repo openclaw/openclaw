@@ -28,6 +28,7 @@ import type {
 import { danger, logVerbose } from "../../../src/globals.js";
 import { getAgentScopedMediaLocalRoots } from "../../../src/media/local-roots.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
@@ -163,6 +164,9 @@ export const dispatchTelegramMessage = async ({
     sendTyping,
     sendRecordVoice,
     ackReactionPromise,
+    ackReactionTiming,
+    ackReactionValue,
+    ackReactionAllowed,
     reactionApi,
     removeAckAfterReply,
     statusReactionController,
@@ -513,9 +517,72 @@ export const dispatchTelegramMessage = async ({
   });
 
   let queuedFinal = false;
-
-  if (statusReactionController) {
-    void statusReactionController.setThinking();
+  let ackReactionStartPromise = ackReactionPromise;
+  let statusReactionLifecycleStarted =
+    Boolean(statusReactionController) && ackReactionAllowed && ackReactionTiming === "received";
+  let statusReactionLifecycleStartPromise: Promise<void> | null =
+    statusReactionLifecycleStarted && ackReactionStartPromise
+      ? ackReactionStartPromise.then(
+          () => undefined,
+          () => undefined,
+        )
+      : null;
+  const ensureAckReactionStarted = (): Promise<void> => {
+    if (!ackReactionAllowed) {
+      return Promise.resolve();
+    }
+    if (statusReactionController) {
+      if (statusReactionLifecycleStartPromise) {
+        return statusReactionLifecycleStartPromise;
+      }
+      statusReactionLifecycleStarted = true;
+      if (!ackReactionStartPromise) {
+        ackReactionStartPromise = Promise.resolve(statusReactionController.setQueued()).then(
+          () => true,
+          () => false,
+        );
+      }
+      statusReactionLifecycleStartPromise = ackReactionStartPromise.then(
+        () => undefined,
+        () => undefined,
+      );
+      return statusReactionLifecycleStartPromise;
+    }
+    if (ackReactionStartPromise) {
+      return ackReactionStartPromise.then(
+        () => undefined,
+        () => undefined,
+      );
+    }
+    if (!reactionApi || !msg.message_id || !ackReactionValue) {
+      return Promise.resolve();
+    }
+    ackReactionStartPromise = withTelegramApiErrorLogging({
+      operation: "setMessageReaction",
+      fn: () =>
+        reactionApi(chatId, msg.message_id ?? 0, [{ type: "emoji", emoji: ackReactionValue }]),
+    }).then(
+      () => true,
+      (err) => {
+        logVerbose(`telegram react failed for chat ${chatId}: ${String(err)}`);
+        return false;
+      },
+    );
+    return ackReactionStartPromise.then(
+      () => undefined,
+      () => undefined,
+    );
+  };
+  const runStatusReactionTransition = async (transition: () => Promise<void> | void) => {
+    if (!statusReactionLifecycleStarted) {
+      return;
+    }
+    await ensureAckReactionStarted();
+    await transition();
+  };
+  if (ackReactionTiming === "received") {
+    void ensureAckReactionStarted();
+    void runStatusReactionTransition(() => statusReactionController?.setThinking());
   }
 
   const typingCallbacks = createTypingCallbacks({
@@ -712,18 +779,29 @@ export const dispatchTelegramMessage = async ({
                 splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
               })
           : undefined,
+        onAgentRunStart: () => {
+          void ensureAckReactionStarted().then(() => {
+            if (statusReactionController && statusReactionLifecycleStarted) {
+              void statusReactionController.setThinking();
+            }
+          });
+        },
         onToolStart: statusReactionController
           ? async (payload) => {
-              await statusReactionController.setTool(payload.name);
+              await runStatusReactionTransition(() =>
+                statusReactionController.setTool(payload.name),
+              );
             }
           : undefined,
         onCompactionStart: statusReactionController
-          ? () => statusReactionController.setCompacting()
+          ? () => runStatusReactionTransition(() => statusReactionController.setCompacting())
           : undefined,
         onCompactionEnd: statusReactionController
           ? async () => {
-              statusReactionController.cancelPending();
-              await statusReactionController.setThinking();
+              await runStatusReactionTransition(async () => {
+                statusReactionController.cancelPending();
+                await statusReactionController.setThinking();
+              });
             }
           : undefined,
         onModelSelected,
@@ -815,7 +893,7 @@ export const dispatchTelegramMessage = async ({
 
   const hasFinalResponse = queuedFinal || sentFallback;
 
-  if (statusReactionController && !hasFinalResponse) {
+  if (statusReactionController && statusReactionLifecycleStarted && !hasFinalResponse) {
     void statusReactionController.setError().catch((err) => {
       logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
     });
@@ -826,15 +904,15 @@ export const dispatchTelegramMessage = async ({
     return;
   }
 
-  if (statusReactionController) {
+  if (statusReactionController && statusReactionLifecycleStarted) {
     void statusReactionController.setDone().catch((err) => {
       logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
     });
   } else {
     removeAckReactionAfterReply({
       removeAfterReply: removeAckAfterReply,
-      ackReactionPromise,
-      ackReactionValue: ackReactionPromise ? "ack" : null,
+      ackReactionPromise: ackReactionStartPromise,
+      ackReactionValue: ackReactionStartPromise ? "ack" : null,
       remove: () => reactionApi?.(chatId, msg.message_id ?? 0, []) ?? Promise.resolve(),
       onError: (err) => {
         if (!msg.message_id) {

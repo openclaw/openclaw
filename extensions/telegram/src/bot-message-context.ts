@@ -52,6 +52,7 @@ export const buildTelegramMessageContext = async ({
   allowFrom,
   groupAllowFrom,
   ackReactionScope,
+  ackReactionTiming,
   logger,
   resolveGroupActivation,
   resolveGroupRequireMention,
@@ -310,7 +311,7 @@ export const buildTelegramMessageContext = async ({
     accountId: account.accountId,
   });
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
-  const shouldAckReaction = () =>
+  const ackReactionAllowed = () =>
     Boolean(
       ackReaction &&
       shouldAckReactionGate({
@@ -339,7 +340,7 @@ export const buildTelegramMessageContext = async ({
   // Status Reactions controller (lifecycle reactions)
   const statusReactionsConfig = cfg.messages?.statusReactions;
   const statusReactionsEnabled =
-    statusReactionsConfig?.enabled === true && Boolean(reactionApi) && shouldAckReaction();
+    statusReactionsConfig?.enabled === true && Boolean(reactionApi) && ackReactionAllowed();
   const resolvedStatusReactionEmojis = resolveTelegramStatusReactionEmojis({
     initialEmoji: ackReaction,
     overrides: statusReactionsConfig?.emojis,
@@ -394,13 +395,13 @@ export const buildTelegramMessageContext = async ({
 
   // When status reactions are enabled, setQueued() replaces the simple ack reaction
   const ackReactionPromise = statusReactionController
-    ? shouldAckReaction()
+    ? ackReactionTiming === "received" && ackReactionAllowed()
       ? Promise.resolve(statusReactionController.setQueued()).then(
           () => true,
           () => false,
         )
       : null
-    : shouldAckReaction() && msg.message_id && reactionApi
+    : ackReactionTiming === "received" && ackReactionAllowed() && msg.message_id && reactionApi
       ? withTelegramApiErrorLogging({
           operation: "setMessageReaction",
           fn: () => reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: ackReaction }]),
@@ -461,6 +462,9 @@ export const buildTelegramMessageContext = async ({
     sendTyping,
     sendRecordVoice,
     ackReactionPromise,
+    ackReactionTiming,
+    ackReactionValue: ackReaction ?? null,
+    ackReactionAllowed: ackReactionAllowed(),
     reactionApi,
     removeAckAfterReply,
     statusReactionController,

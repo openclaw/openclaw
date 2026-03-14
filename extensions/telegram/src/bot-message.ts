@@ -14,7 +14,7 @@ import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
 /** Dependencies injected once when creating the message processor. */
 type TelegramMessageProcessorDeps = Omit<
   BuildTelegramMessageContextParams,
-  "primaryCtx" | "allMedia" | "storeAllowFrom" | "options"
+  "primaryCtx" | "allMedia" | "storeAllowFrom" | "options" | "ackReactionTiming"
 > & {
   telegramCfg: TelegramAccountConfig;
   runtime: RuntimeEnv;
@@ -70,6 +70,8 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       allowFrom,
       groupAllowFrom,
       ackReactionScope,
+      ackReactionTiming:
+        telegramCfg.ackReactionTiming ?? cfg.messages?.ackReactionTiming ?? "received",
       logger,
       resolveGroupActivation,
       resolveGroupRequireMention,
