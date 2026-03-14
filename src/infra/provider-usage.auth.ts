@@ -88,6 +88,16 @@ function resolveMinimaxApiKey(): string | undefined {
   });
 }
 
+function resolveMinimaxCnApiKey(): string | undefined {
+  return resolveProviderApiKeyFromConfigAndStore({
+    providerId: "minimax-cn",
+    envDirect: [
+      process.env.MINIMAX_CN_CODE_PLAN_KEY,
+      process.env.MINIMAX_CN_API_KEY,
+    ],
+  });
+}
+
 function resolveXiaomiApiKey(): string | undefined {
   return resolveProviderApiKeyFromConfigAndStore({
     providerId: "xiaomi",
@@ -244,6 +254,13 @@ export async function resolveProviderAuths(params: {
     }
     if (provider === "minimax") {
       const apiKey = resolveMinimaxApiKey();
+      if (apiKey) {
+        auths.push({ provider, token: apiKey });
+      }
+      continue;
+    }
+    if (provider === "minimax-cn") {
+      const apiKey = resolveMinimaxCnApiKey();
       if (apiKey) {
         auths.push({ provider, token: apiKey });
       }
