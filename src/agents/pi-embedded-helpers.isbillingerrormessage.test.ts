@@ -853,10 +853,20 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("key has been disabled")).toBe("auth_permanent");
     expect(classifyFailoverReason("account has been deactivated")).toBe("auth_permanent");
   });
-  it("classifies JSON api_error internal server failures as timeout", () => {
+  it("classifies retryable JSON server failures as timeout", () => {
     expect(
       classifyFailoverReason(
         '{"type":"error","error":{"type":"api_error","message":"Internal server error"}}',
+      ),
+    ).toBe("timeout");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"API_Error","message":"Internal server error"}}',
+      ),
+    ).toBe("timeout");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","code":"server_error","message":"Internal server error"}}',
       ),
     ).toBe("timeout");
     expect(

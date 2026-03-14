@@ -581,6 +581,7 @@ export function isRawApiErrorPayload(raw?: string): boolean {
 export type ApiErrorInfo = {
   httpCode?: string;
   type?: string;
+  code?: string;
   message?: string;
   requestId?: string;
 };
@@ -616,17 +617,22 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
         : undefined;
 
   const topType = typeof payload.type === "string" ? payload.type : undefined;
+  const topCode = typeof payload.code === "string" ? payload.code : undefined;
   const topMessage = typeof payload.message === "string" ? payload.message : undefined;
 
   let errType: string | undefined;
+  let errCode: string | undefined;
   let errMessage: string | undefined;
   if (payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)) {
     const err = payload.error as Record<string, unknown>;
     if (typeof err.type === "string") {
       errType = err.type;
     }
-    if (typeof err.code === "string" && !errType) {
-      errType = err.code;
+    if (typeof err.code === "string") {
+      errCode = err.code;
+      if (!errType) {
+        errType = err.code;
+      }
     }
     if (typeof err.message === "string") {
       errMessage = err.message;
@@ -636,6 +642,7 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
   return {
     httpCode,
     type: errType ?? topType,
+    code: errCode ?? topCode,
     message: errMessage ?? topMessage,
     requestId,
   };
@@ -857,12 +864,14 @@ function isRetryableJsonApiServerError(raw: string): boolean {
 
   // OpenAI/Codex can surface transient failures as raw payloads like:
   // {"type":"error","error":{"type":"server_error","message":"An error occurred while processing your request."}}
-  if (info.type === "server_error") {
+  const type = info.type?.toLowerCase();
+  const code = info.code?.toLowerCase();
+  if (type === "server_error" || code === "server_error") {
     return true;
   }
 
   const message = info.message?.toLowerCase() ?? "";
-  return info.type === "api_error" && message.includes("internal server error");
+  return type === "api_error" && message.includes("internal server error");
 }
 
 export function parseImageDimensionError(raw: string): {
