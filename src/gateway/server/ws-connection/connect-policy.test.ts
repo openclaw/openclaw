@@ -524,8 +524,8 @@ describe("ws connect policy", () => {
       }),
     ).toBe(false);
 
-    // bootstrap-token should also count as a trusted backend authOk method so
-    // first-time paired sessions can still use internal inter_session delivery.
+    // bootstrap-token is onboarding-only auth: first-time backend connects must still
+    // go through pairing so the session can mint/persist a device token.
     expect(
       shouldSkipBackendSelfPairing({
         connectParams: makeConnectParams(
@@ -538,7 +538,7 @@ describe("ws connect policy", () => {
         authOk: true,
         authMethod: "bootstrap-token",
       }),
-    ).toBe(true);
+    ).toBe(false);
 
     // Remote device-token backend client is trusted when authOk=true.
     expect(
@@ -555,7 +555,7 @@ describe("ws connect policy", () => {
       }),
     ).toBe(true);
 
-    // Remote bootstrap-token backend client is trusted when authOk=true.
+    // Remote bootstrap-token backend clients are also still onboarding and must pair.
     expect(
       shouldSkipBackendSelfPairing({
         connectParams: makeConnectParams(
@@ -568,7 +568,7 @@ describe("ws connect policy", () => {
         authOk: true,
         authMethod: "bootstrap-token",
       }),
-    ).toBe(true);
+    ).toBe(false);
 
     // Remote backend client (gateway.mode=remote) with valid shared-secret auth is trusted.
     expect(

@@ -93,13 +93,13 @@ export function shouldSkipBackendSelfPairing(params: {
   }
   // token/password: sharedAuthOk is set specifically for these in auth-context.ts.
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
-  // device-token, tailscale, and bootstrap-token: all are valid auth methods but
-  // sharedAuthOk is never set for them in the WS flow (auth-context.ts only sets it for
-  // token/password/trusted-proxy). Gate on authOk directly for these instead.
+  // device-token and tailscale are valid backend auth methods, but sharedAuthOk is never
+  // set for them in the WS flow (auth-context.ts only sets it for token/password/
+  // trusted-proxy). Gate on authOk directly for these instead.
+  // bootstrap-token is intentionally excluded: first-time bootstrap connects must still
+  // complete pairing so the gateway can mint and persist a device token.
   const usesAuthOkMethod =
-    params.authMethod === "device-token" ||
-    params.authMethod === "tailscale" ||
-    params.authMethod === "bootstrap-token";
+    params.authMethod === "device-token" || params.authMethod === "tailscale";
   // When auth is disabled entirely (mode="none"), there is no credential to verify. Restrict to
   // local connections only — remote + no-auth would be a security hole.
   const authIsDisabled = params.authMethod === "none";
