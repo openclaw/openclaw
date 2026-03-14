@@ -44,11 +44,14 @@ describe("OPENCLAW_LOG_LEVEL", () => {
     });
     process.env.OPENCLAW_LOG_LEVEL = "debug";
 
-    expect(getResolvedLoggerSettings()).toEqual({
-      level: "debug",
-      file: testLogPath,
-      maxFileBytes: defaultMaxFileBytes,
-    });
+    const settings = getResolvedLoggerSettings();
+    expect(settings.level).toBe("debug");
+    expect(settings.file).toBe(testLogPath);
+    expect(settings.maxFileBytes).toBe(defaultMaxFileBytes);
+    // timezone should be resolved (UTC, local, or system default)
+    expect(typeof settings.timezone).toBe("string");
+    expect(settings.timezone.length).toBeGreaterThan(0);
+
     expect(getResolvedConsoleSettings()).toEqual({
       level: "debug",
       style: "json",
