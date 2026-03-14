@@ -17,11 +17,15 @@ vi.mock("../infra/agent-events.js", () => ({
   onAgentEvent: vi.fn((_handler: unknown) => noop),
 }));
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({
-    agents: { defaults: { subagents: { archiveAfterMinutes: 60 } } },
-  })),
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: vi.fn(() => ({
+      agents: { defaults: { subagents: { archiveAfterMinutes: 60 } } },
+    })),
+  };
+});
 
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(async () => true),

@@ -28,6 +28,16 @@ export type GatewayPortHealthSnapshot = {
   healthy: boolean;
 };
 
+function hasListenerAttributionGap(portUsage: PortUsage): boolean {
+  if (portUsage.status !== "busy" || portUsage.listeners.length > 0) {
+    return false;
+  }
+  if (portUsage.errors?.length) {
+    return true;
+  }
+  return portUsage.hints.some((hint) => hint.includes("process details are unavailable"));
+}
+
 function listenerOwnedByRuntimePid(params: {
   listener: PortUsage["listeners"][number];
   runtimePid: number;
@@ -55,7 +65,8 @@ async function confirmGatewayReachable(port: number): Promise<boolean> {
   const probe = await probeGateway({
     url: `ws://127.0.0.1:${port}`,
     auth: token || password ? { token, password } : undefined,
-    timeoutMs: 1_000,
+    timeoutMs: 3_000,
+    includeDetails: false,
   });
   return probe.ok || looksLikeAuthClose(probe.close?.code, probe.close?.reason);
 }
@@ -113,6 +124,22 @@ export async function inspectGatewayRestart(params: {
     };
   }
 
+  if (portUsage.status === "busy" && runtime.status !== "running") {
+    try {
+      const reachable = await confirmGatewayReachable(params.port);
+      if (reachable) {
+        return {
+          runtime,
+          portUsage,
+          healthy: true,
+          staleGatewayPids: [],
+        };
+      }
+    } catch {
+      // Probe is best-effort; keep the ownership-based diagnostics.
+    }
+  }
+
   const gatewayListeners =
     portUsage.status === "busy"
       ? portUsage.listeners.filter(
@@ -131,11 +158,13 @@ export async function inspectGatewayRestart(params: {
       : [];
   const running = runtime.status === "running";
   const runtimePid = runtime.pid;
+  const listenerAttributionGap = hasListenerAttributionGap(portUsage);
   const ownsPort =
     runtimePid != null
-      ? portUsage.listeners.some((listener) => listenerOwnedByRuntimePid({ listener, runtimePid }))
-      : gatewayListeners.length > 0 ||
-        (portUsage.status === "busy" && portUsage.listeners.length === 0);
+      ? portUsage.listeners.some((listener) =>
+          listenerOwnedByRuntimePid({ listener, runtimePid }),
+        ) || listenerAttributionGap
+      : gatewayListeners.length > 0 || listenerAttributionGap;
   let healthy = running && ownsPort;
   if (!healthy && running && portUsage.status === "busy") {
     try {
@@ -230,6 +259,22 @@ export async function waitForGatewayHealthyListener(params: {
   return snapshot;
 }
 
+function renderPortUsageDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
+  const lines: string[] = [];
+
+  if (snapshot.portUsage.status === "busy") {
+    lines.push(...formatPortDiagnostics(snapshot.portUsage));
+  } else {
+    lines.push(`Gateway port ${snapshot.portUsage.port} status: ${snapshot.portUsage.status}.`);
+  }
+
+  if (snapshot.portUsage.errors?.length) {
+    lines.push(`Port diagnostics errors: ${snapshot.portUsage.errors.join("; ")}`);
+  }
+
+  return lines;
+}
+
 export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): string[] {
   const lines: string[] = [];
   const runtimeSummary = [
@@ -245,33 +290,13 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
     lines.push(`Service runtime: ${runtimeSummary}`);
   }
 
-  if (snapshot.portUsage.status === "busy") {
-    lines.push(...formatPortDiagnostics(snapshot.portUsage));
-  } else {
-    lines.push(`Gateway port ${snapshot.portUsage.port} status: ${snapshot.portUsage.status}.`);
-  }
-
-  if (snapshot.portUsage.errors?.length) {
-    lines.push(`Port diagnostics errors: ${snapshot.portUsage.errors.join("; ")}`);
-  }
+  lines.push(...renderPortUsageDiagnostics(snapshot));
 
   return lines;
 }
 
 export function renderGatewayPortHealthDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
-  const lines: string[] = [];
-
-  if (snapshot.portUsage.status === "busy") {
-    lines.push(...formatPortDiagnostics(snapshot.portUsage));
-  } else {
-    lines.push(`Gateway port ${snapshot.portUsage.port} status: ${snapshot.portUsage.status}.`);
-  }
-
-  if (snapshot.portUsage.errors?.length) {
-    lines.push(`Port diagnostics errors: ${snapshot.portUsage.errors.join("; ")}`);
-  }
-
-  return lines;
+  return renderPortUsageDiagnostics(snapshot);
 }
 
 export async function terminateStaleGatewayPids(pids: number[]): Promise<number[]> {

@@ -1,3 +1,4 @@
+import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
 import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenProviderGroupPolicyWarnings,
@@ -10,7 +11,6 @@ import {
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
-  deleteAccountFromConfigSection,
   extractSlackToolSend,
   getChatChannelMeta,
   handleSlackMessageAction,
@@ -29,15 +29,16 @@ import {
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
   resolveSlackReplyToMode,
+  isSlackInteractiveRepliesEnabled,
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
   buildSlackThreadingToolContext,
-  setAccountEnabledInConfigSection,
   slackOnboardingAdapter,
   SlackConfigSchema,
   type ChannelPlugin,
   type ResolvedSlackAccount,
 } from "openclaw/plugin-sdk/slack";
+import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { getSlackRuntime } from "./runtime.js";
 
 const meta = getChatChannelMeta("slack");
@@ -96,6 +97,15 @@ const slackConfigAccessors = createScopedAccountConfigAccessors({
   resolveDefaultTo: (account: ResolvedSlackAccount) => account.config.defaultTo,
 });
 
+const slackConfigBase = createScopedChannelConfigBase({
+  sectionKey: "slack",
+  listAccountIds: listSlackAccountIds,
+  resolveAccount: (cfg, accountId) => resolveSlackAccount({ cfg, accountId }),
+  inspectAccount: (cfg, accountId) => inspectSlackAccount({ cfg, accountId }),
+  defaultAccountId: resolveDefaultSlackAccountId,
+  clearBaseFields: ["botToken", "appToken", "name"],
+});
+
 export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   id: "slack",
   meta: {
@@ -138,31 +148,24 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     media: true,
     nativeCommands: true,
   },
+  agentPrompt: {
+    messageToolHints: ({ cfg, accountId }) =>
+      isSlackInteractiveRepliesEnabled({ cfg, accountId })
+        ? [
+            "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
+            "- Slack selects: use `[[slack_select: Placeholder | Label:value, Other:other]]` to add a static select menu that routes the chosen value back as a Slack interaction system event.",
+          ]
+        : [
+            "- Slack interactive replies are disabled. If needed, ask to set `channels.slack.capabilities.interactiveReplies=true` (or the same under `channels.slack.accounts.<account>.capabilities`).",
+          ],
+  },
   streaming: {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
   },
   reload: { configPrefixes: ["channels.slack"] },
   configSchema: buildChannelConfigSchema(SlackConfigSchema),
   config: {
-    listAccountIds: (cfg) => listSlackAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveSlackAccount({ cfg, accountId }),
-    inspectAccount: (cfg, accountId) => inspectSlackAccount({ cfg, accountId }),
-    defaultAccountId: (cfg) => resolveDefaultSlackAccountId(cfg),
-    setAccountEnabled: ({ cfg, accountId, enabled }) =>
-      setAccountEnabledInConfigSection({
-        cfg,
-        sectionKey: "slack",
-        accountId,
-        enabled,
-        allowTopLevel: true,
-      }),
-    deleteAccount: ({ cfg, accountId }) =>
-      deleteAccountFromConfigSection({
-        cfg,
-        sectionKey: "slack",
-        accountId,
-        clearBaseFields: ["botToken", "appToken", "name"],
-      }),
+    ...slackConfigBase,
     isConfigured: (account) => isSlackAccountConfigured(account),
     describeAccount: (account) => ({
       accountId: account.accountId,
@@ -242,6 +245,18 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   },
   resolver: {
     resolveTargets: async ({ cfg, accountId, inputs, kind }) => {
+      const toResolvedTarget = <
+        T extends { input: string; resolved: boolean; id?: string; name?: string },
+      >(
+        entry: T,
+        note?: string,
+      ) => ({
+        input: entry.input,
+        resolved: entry.resolved,
+        id: entry.id,
+        name: entry.name,
+        note,
+      });
       const account = resolveSlackAccount({ cfg, accountId });
       const token = account.config.userToken?.trim() || account.botToken?.trim();
       if (!token) {
@@ -256,25 +271,15 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
           token,
           entries: inputs,
         });
-        return resolved.map((entry) => ({
-          input: entry.input,
-          resolved: entry.resolved,
-          id: entry.id,
-          name: entry.name,
-          note: entry.archived ? "archived" : undefined,
-        }));
+        return resolved.map((entry) =>
+          toResolvedTarget(entry, entry.archived ? "archived" : undefined),
+        );
       }
       const resolved = await getSlackRuntime().channel.slack.resolveUserAllowlist({
         token,
         entries: inputs,
       });
-      return resolved.map((entry) => ({
-        input: entry.input,
-        resolved: entry.resolved,
-        id: entry.id,
-        name: entry.name,
-        note: entry.note,
-      }));
+      return resolved.map((entry) => toResolvedTarget(entry, entry.note));
     },
   },
   actions: {
@@ -417,17 +422,11 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       lastStopAt: null,
       lastError: null,
     },
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      botTokenSource: snapshot.botTokenSource ?? "none",
-      appTokenSource: snapshot.appTokenSource ?? "none",
-      running: snapshot.running ?? false,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) =>
+      buildPassiveProbedChannelStatusSummary(snapshot, {
+        botTokenSource: snapshot.botTokenSource ?? "none",
+        appTokenSource: snapshot.appTokenSource ?? "none",
+      }),
     probeAccount: async ({ account, timeoutMs }) => {
       const token = account.botToken?.trim();
       if (!token) {

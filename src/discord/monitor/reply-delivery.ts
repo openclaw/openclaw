@@ -2,7 +2,7 @@ import type { RequestClient } from "@buape/carbon";
 import { resolveAgentAvatar } from "../../agents/identity-avatar.js";
 import type { ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { loadConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { MarkdownTableMode, ReplyToMode } from "../../config/types.base.js";
 import { createDiscordRetryRunner, type RetryRunner } from "../../infra/retry-policy.js";
 import { resolveRetryConfig, retryAsync, type RetryConfig } from "../../infra/retry.js";
@@ -103,7 +103,10 @@ function resolveBoundThreadBinding(params: {
   return bindings.find((entry) => entry.threadId === targetChannelId);
 }
 
-function resolveBindingPersona(binding: DiscordThreadBindingLookupRecord | undefined): {
+function resolveBindingPersona(
+  cfg: OpenClawConfig,
+  binding: DiscordThreadBindingLookupRecord | undefined,
+): {
   username?: string;
   avatarUrl?: string;
 } {
@@ -115,7 +118,7 @@ function resolveBindingPersona(binding: DiscordThreadBindingLookupRecord | undef
 
   let avatarUrl: string | undefined;
   try {
-    const avatar = resolveAgentAvatar(loadConfig(), binding.agentId);
+    const avatar = resolveAgentAvatar(cfg, binding.agentId);
     if (avatar.kind === "remote") {
       avatarUrl = avatar.url;
     }
@@ -126,13 +129,16 @@ function resolveBindingPersona(binding: DiscordThreadBindingLookupRecord | undef
 }
 
 async function sendDiscordChunkWithFallback(params: {
+  cfg: OpenClawConfig;
   target: string;
   text: string;
   token: string;
   accountId?: string;
+  maxLinesPerMessage?: number;
   rest?: RequestClient;
   replyTo?: string;
   binding?: DiscordThreadBindingLookupRecord;
+  chunkMode?: ChunkMode;
   username?: string;
   avatarUrl?: string;
   /** Pre-resolved channel ID to bypass redundant resolution per chunk. */
@@ -150,6 +156,7 @@ async function sendDiscordChunkWithFallback(params: {
   if (binding?.webhookId && binding?.webhookToken) {
     try {
       await sendWebhookMessageDiscord(text, {
+        cfg: params.cfg,
         webhookId: binding.webhookId,
         webhookToken: binding.webhookToken,
         accountId: binding.accountId,
@@ -169,7 +176,18 @@ async function sendDiscordChunkWithFallback(params: {
   if (params.channelId && params.request && params.rest) {
     const { channelId, request, rest } = params;
     await sendWithRetry(
-      () => sendDiscordText(rest, channelId, text, params.replyTo, request),
+      () =>
+        sendDiscordText(
+          rest,
+          channelId,
+          text,
+          params.replyTo,
+          request,
+          params.maxLinesPerMessage,
+          undefined,
+          undefined,
+          params.chunkMode,
+        ),
       params.retryConfig,
     );
     return;
@@ -177,6 +195,7 @@ async function sendDiscordChunkWithFallback(params: {
   await sendWithRetry(
     () =>
       sendMessageDiscord(params.target, text, {
+        cfg: params.cfg,
         token: params.token,
         rest: params.rest,
         accountId: params.accountId,
@@ -187,6 +206,7 @@ async function sendDiscordChunkWithFallback(params: {
 }
 
 async function sendAdditionalDiscordMedia(params: {
+  cfg: OpenClawConfig;
   target: string;
   token: string;
   rest?: RequestClient;
@@ -201,6 +221,7 @@ async function sendAdditionalDiscordMedia(params: {
     await sendWithRetry(
       () =>
         sendMessageDiscord(params.target, "", {
+          cfg: params.cfg,
           token: params.token,
           rest: params.rest,
           mediaUrl,
@@ -214,6 +235,7 @@ async function sendAdditionalDiscordMedia(params: {
 }
 
 export async function deliverDiscordReply(params: {
+  cfg: OpenClawConfig;
   replies: ReplyPayload[];
   target: string;
   token: string;
@@ -254,12 +276,12 @@ export async function deliverDiscordReply(params: {
     sessionKey: params.sessionKey,
     target: params.target,
   });
-  const persona = resolveBindingPersona(binding);
+  const persona = resolveBindingPersona(params.cfg, binding);
   // Pre-resolve channel ID and retry runner once to avoid per-chunk overhead.
   // This eliminates redundant channel-type GET requests and client creation that
   // can cause ordering issues when multiple chunks share the RequestClient queue.
   const channelId = resolveTargetChannelId(params.target);
-  const account = resolveDiscordAccount({ cfg: loadConfig(), accountId: params.accountId });
+  const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
   const retryConfig = resolveDeliveryRetryConfig(account.config.retry);
   const request: RetryRunner | undefined = channelId
     ? createDiscordRetryRunner({ configRetry: account.config.retry })
@@ -289,13 +311,16 @@ export async function deliverDiscordReply(params: {
         }
         const replyTo = resolveReplyTo();
         await sendDiscordChunkWithFallback({
+          cfg: params.cfg,
           target: params.target,
           text: chunk,
           token: params.token,
           rest: params.rest,
           accountId: params.accountId,
+          maxLinesPerMessage: params.maxLinesPerMessage,
           replyTo,
           binding,
+          chunkMode: params.chunkMode,
           username: persona.username,
           avatarUrl: persona.avatarUrl,
           channelId,
@@ -311,34 +336,9 @@ export async function deliverDiscordReply(params: {
     if (!firstMedia) {
       continue;
     }
-
-    // Voice message path: audioAsVoice flag routes through sendVoiceMessageDiscord.
-    if (payload.audioAsVoice) {
-      const replyTo = resolveReplyTo();
-      await sendVoiceMessageDiscord(params.target, firstMedia, {
-        token: params.token,
-        rest: params.rest,
-        accountId: params.accountId,
-        replyTo,
-      });
-      deliveredAny = true;
-      // Voice messages cannot include text; send remaining text separately if present.
-      await sendDiscordChunkWithFallback({
-        target: params.target,
-        text,
-        token: params.token,
-        rest: params.rest,
-        accountId: params.accountId,
-        replyTo: resolveReplyTo(),
-        binding,
-        username: persona.username,
-        avatarUrl: persona.avatarUrl,
-        channelId,
-        request,
-        retryConfig,
-      });
-      // Additional media items are sent as regular attachments (voice is single-file only).
-      await sendAdditionalDiscordMedia({
+    const sendRemainingMedia = () =>
+      sendAdditionalDiscordMedia({
+        cfg: params.cfg,
         target: params.target,
         token: params.token,
         rest: params.rest,
@@ -348,11 +348,44 @@ export async function deliverDiscordReply(params: {
         resolveReplyTo,
         retryConfig,
       });
+
+    // Voice message path: audioAsVoice flag routes through sendVoiceMessageDiscord.
+    if (payload.audioAsVoice) {
+      const replyTo = resolveReplyTo();
+      await sendVoiceMessageDiscord(params.target, firstMedia, {
+        cfg: params.cfg,
+        token: params.token,
+        rest: params.rest,
+        accountId: params.accountId,
+        replyTo,
+      });
+      deliveredAny = true;
+      // Voice messages cannot include text; send remaining text separately if present.
+      await sendDiscordChunkWithFallback({
+        cfg: params.cfg,
+        target: params.target,
+        text,
+        token: params.token,
+        rest: params.rest,
+        accountId: params.accountId,
+        maxLinesPerMessage: params.maxLinesPerMessage,
+        replyTo: resolveReplyTo(),
+        binding,
+        chunkMode: params.chunkMode,
+        username: persona.username,
+        avatarUrl: persona.avatarUrl,
+        channelId,
+        request,
+        retryConfig,
+      });
+      // Additional media items are sent as regular attachments (voice is single-file only).
+      await sendRemainingMedia();
       continue;
     }
 
     const replyTo = resolveReplyTo();
     await sendMessageDiscord(params.target, text, {
+      cfg: params.cfg,
       token: params.token,
       rest: params.rest,
       mediaUrl: firstMedia,
@@ -361,16 +394,7 @@ export async function deliverDiscordReply(params: {
       replyTo,
     });
     deliveredAny = true;
-    await sendAdditionalDiscordMedia({
-      target: params.target,
-      token: params.token,
-      rest: params.rest,
-      accountId: params.accountId,
-      mediaUrls: mediaList.slice(1),
-      mediaLocalRoots: params.mediaLocalRoots,
-      resolveReplyTo,
-      retryConfig,
-    });
+    await sendRemainingMedia();
   }
 
   if (binding && deliveredAny) {

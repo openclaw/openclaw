@@ -57,6 +57,7 @@ export type SubagentSpawnPreparation = {
 };
 
 export type SubagentEndReason = "deleted" | "completed" | "swept" | "released";
+export type ContextEngineRuntimeContext = Record<string, unknown>;
 
 /**
  * ContextEngine defines the pluggable contract for context management.
@@ -71,13 +72,18 @@ export interface ContextEngine {
   /**
    * Initialize engine state for a session, optionally importing historical context.
    */
-  bootstrap?(params: { sessionId: string; sessionFile: string }): Promise<BootstrapResult>;
+  bootstrap?(params: {
+    sessionId: string;
+    sessionKey?: string;
+    sessionFile: string;
+  }): Promise<BootstrapResult>;
 
   /**
    * Ingest a single message into the engine's store.
    */
   ingest(params: {
     sessionId: string;
+    sessionKey?: string;
     message: AgentMessage;
     /** True when the message belongs to a heartbeat run. */
     isHeartbeat?: boolean;
@@ -88,6 +94,7 @@ export interface ContextEngine {
    */
   ingestBatch?(params: {
     sessionId: string;
+    sessionKey?: string;
     messages: AgentMessage[];
     /** True when the batch belongs to a heartbeat run. */
     isHeartbeat?: boolean;
@@ -100,6 +107,7 @@ export interface ContextEngine {
    */
   afterTurn?(params: {
     sessionId: string;
+    sessionKey?: string;
     sessionFile: string;
     messages: AgentMessage[];
     /** Number of messages that existed before the prompt was sent. */
@@ -110,8 +118,8 @@ export interface ContextEngine {
     isHeartbeat?: boolean;
     /** Optional model context token budget for proactive compaction. */
     tokenBudget?: number;
-    /** Backward-compat only: legacy compaction bridge runtime params. */
-    legacyCompactionParams?: Record<string, unknown>;
+    /** Optional runtime-owned context for engines that need caller state. */
+    runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<void>;
 
   /**
@@ -120,6 +128,7 @@ export interface ContextEngine {
    */
   assemble(params: {
     sessionId: string;
+    sessionKey?: string;
     messages: AgentMessage[];
     tokenBudget?: number;
   }): Promise<AssembleResult>;
@@ -130,17 +139,18 @@ export interface ContextEngine {
    */
   compact(params: {
     sessionId: string;
+    sessionKey?: string;
     sessionFile: string;
     tokenBudget?: number;
-    /** Backward-compat only: force legacy compaction behavior even below threshold. */
+    /** Force compaction even below the default trigger threshold. */
     force?: boolean;
     /** Optional live token estimate from the caller's active context. */
     currentTokenCount?: number;
-    /** Controls convergence target; defaults to budget for compatibility. */
+    /** Controls convergence target; defaults to budget. */
     compactionTarget?: "budget" | "threshold";
     customInstructions?: string;
-    /** Backward-compat only: full params bag for legacy compaction bridge. */
-    legacyParams?: Record<string, unknown>;
+    /** Optional runtime-owned context for engines that need caller state. */
+    runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<CompactResult>;
 
   /**
