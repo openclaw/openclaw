@@ -20,3 +20,17 @@ declare module "../../scripts/ci-changed-scope.mjs" {
     runAndroid: boolean;
   };
 }
+
+declare module "../../scripts/lib/test-parallel-policy.mjs" {
+  export function shouldEnableTopLevelParallel(params?: {
+    isCI?: boolean;
+    testProfile?: string;
+  }): boolean;
+}
+
+declare module "*test-parallel-policy.mjs" {
+  export function shouldEnableTopLevelParallel(params?: {
+    isCI?: boolean;
+    testProfile?: string;
+  }): boolean;
+}
