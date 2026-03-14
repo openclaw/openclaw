@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
   resolveGatewayServiceDescription,
@@ -111,6 +112,44 @@ async function execLaunchctl(
   const file = isWindows ? (process.env.ComSpec ?? "cmd.exe") : "launchctl";
   const fileArgs = isWindows ? ["/d", "/s", "/c", "launchctl", ...args] : args;
   return await execFileUtf8(file, fileArgs, isWindows ? { windowsHide: true } : {});
+}
+
+function parseGatewayPortFromProgramArguments(
+  programArguments: string[] | undefined,
+): number | null {
+  if (!Array.isArray(programArguments) || programArguments.length === 0) {
+    return null;
+  }
+  for (let index = 0; index < programArguments.length; index += 1) {
+    const current = programArguments[index]?.trim();
+    if (!current) {
+      continue;
+    }
+    if (current === "--port") {
+      const next = parseStrictPositiveInteger(programArguments[index + 1] ?? "");
+      if (next !== undefined) {
+        return next;
+      }
+      continue;
+    }
+    if (current.startsWith("--port=")) {
+      const value = parseStrictPositiveInteger(current.slice("--port=".length));
+      if (value !== undefined) {
+        return value;
+      }
+    }
+  }
+  return null;
+}
+
+async function resolveLaunchAgentGatewayPort(env: GatewayServiceEnv): Promise<number | null> {
+  const command = await readLaunchAgentProgramArguments(env).catch(() => null);
+  const fromArgs = parseGatewayPortFromProgramArguments(command?.programArguments);
+  if (fromArgs !== null) {
+    return fromArgs;
+  }
+  const fromEnv = parseStrictPositiveInteger(env.OPENCLAW_GATEWAY_PORT ?? "");
+  return fromEnv ?? null;
 }
 
 function resolveGuiDomain(): string {
@@ -512,6 +551,11 @@ export async function restartLaunchAgent({
     }
     writeLaunchAgentActionLine(stdout, "Scheduled LaunchAgent restart", serviceTarget);
     return { outcome: "scheduled" };
+  }
+
+  const cleanupPort = await resolveLaunchAgentGatewayPort(serviceEnv);
+  if (cleanupPort !== null) {
+    cleanStaleGatewayProcessesSync(cleanupPort);
   }
 
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
