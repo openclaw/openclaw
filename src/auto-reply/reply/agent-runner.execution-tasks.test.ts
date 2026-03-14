@@ -5,6 +5,7 @@ import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
 const listSubagentRunsForRequesterMock = vi.fn();
+const spawnSubagentRunMock = vi.fn();
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: async ({
@@ -31,6 +32,10 @@ vi.mock("../../agents/subagent-registry.js", () => ({
   listSubagentRunsForRequester: (...args: unknown[]) => listSubagentRunsForRequesterMock(...args),
 }));
 
+vi.mock("../../agents/subagent-spawn.js", () => ({
+  spawnSubagentRun: (...args: unknown[]) => spawnSubagentRunMock(...args),
+}));
+
 vi.mock("./queue.js", async () => {
   const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
   return {
@@ -45,6 +50,7 @@ import { runReplyAgent } from "./agent-runner.js";
 beforeEach(() => {
   runEmbeddedPiAgentMock.mockReset();
   listSubagentRunsForRequesterMock.mockReset().mockReturnValue([]);
+  spawnSubagentRunMock.mockReset();
 });
 
 function createRun() {
@@ -63,6 +69,7 @@ function createRun() {
     run: {
       sessionId: "session",
       sessionKey: "main",
+      agentId: "main",
       messageProvider: "webchat",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
@@ -84,7 +91,7 @@ function createRun() {
   } as unknown as FollowupRun;
 
   return runReplyAgent({
-    commandBody: "请继续执行这个任务",
+    commandBody: "Please continue executing this task.",
     followupRun,
     queueKey: "main",
     resolvedQueue,
@@ -114,7 +121,7 @@ describe("runReplyAgent execution-task interim retry", () => {
         meta: {},
       })
       .mockResolvedValueOnce({
-        payloads: [{ text: "已经完成，结果如下。" }],
+        payloads: [{ text: "Done. Here is the concrete result." }],
         meta: {},
       });
 
@@ -126,7 +133,7 @@ describe("runReplyAgent execution-task interim retry", () => {
         "Your previous response was only an acknowledgement and did not complete the user's task.",
       ),
     });
-    expect(result).toMatchObject({ text: "已经完成，结果如下。" });
+    expect(result).toMatchObject({ text: "Done. Here is the concrete result." });
   });
 
   it("does not rerun when a subagent run is already active", async () => {
@@ -155,13 +162,72 @@ describe("runReplyAgent execution-task interim retry", () => {
   it("does not rerun when the first turn already returns substantive content", async () => {
     listSubagentRunsForRequesterMock.mockReset().mockReturnValue([]);
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "这是最终结果，不需要后台续跑。" }],
+      payloads: [{ text: "Here is the final result. No background run is needed." }],
       meta: {},
     });
 
     const result = await createRun();
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ text: "这是最终结果，不需要后台续跑。" });
+    expect(result).toMatchObject({
+      text: "Here is the final result. No background run is needed.",
+    });
+  });
+
+  it("auto-spawns a background executor when continuation still only acknowledges", async () => {
+    listSubagentRunsForRequesterMock.mockReset().mockReturnValue([]);
+    runEmbeddedPiAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "on it" }],
+        meta: {},
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "working on it, it'll auto-announce when done" }],
+        meta: {},
+      });
+    spawnSubagentRunMock.mockResolvedValueOnce({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:test",
+      runId: "child-run-1",
+    });
+
+    const result = await createRun();
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    expect(spawnSubagentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "Please continue executing this task.",
+        requesterSessionKey: "main",
+        requesterAgentIdOverride: "main",
+        label: "hello",
+      }),
+    );
+    expect(result).toMatchObject({
+      text: "working on it, it'll auto-announce when done",
+    });
+  });
+
+  it("returns a concrete blocker when the background executor cannot start", async () => {
+    listSubagentRunsForRequesterMock.mockReset().mockReturnValue([]);
+    runEmbeddedPiAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "on it" }],
+        meta: {},
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "working on it, it'll auto-announce when done" }],
+        meta: {},
+      });
+    spawnSubagentRunMock.mockResolvedValueOnce({
+      status: "error",
+      error: "gateway unavailable",
+    });
+
+    const result = await createRun();
+
+    expect(result).toMatchObject({
+      isError: true,
+      text: expect.stringContaining("starting the follow-up run failed: gateway unavailable"),
+    });
   });
 });
