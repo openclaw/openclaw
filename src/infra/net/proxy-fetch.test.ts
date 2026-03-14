@@ -51,7 +51,7 @@ vi.mock("undici", () => ({
   fetch: undiciFetch,
 }));
 
-import { makeProxyFetch, resolveProxyFetchFromEnv } from "./proxy-fetch.js";
+import { getProxyUrlFromFetch, makeProxyFetch, resolveProxyFetchFromEnv } from "./proxy-fetch.js";
 
 function clearProxyEnv(): void {
   for (const key of PROXY_ENV_KEYS) {
@@ -85,6 +85,39 @@ describe("makeProxyFetch", () => {
       "https://api.example.com/v1/audio",
       expect.objectContaining({ dispatcher: getLastAgent() }),
     );
+  });
+
+  it("reuses the same ProxyAgent across calls", async () => {
+    undiciFetch.mockResolvedValue({ ok: true });
+
+    const proxyFetch = makeProxyFetch("http://proxy.test:8080");
+
+    await proxyFetch("https://api.example.com/one");
+    const firstDispatcher = undiciFetch.mock.calls[0]?.[1]?.dispatcher;
+    await proxyFetch("https://api.example.com/two");
+    const secondDispatcher = undiciFetch.mock.calls[1]?.[1]?.dispatcher;
+
+    expect(proxyAgentSpy).toHaveBeenCalledOnce();
+    expect(secondDispatcher).toBe(firstDispatcher);
+  });
+});
+
+describe("getProxyUrlFromFetch", () => {
+  it("returns the trimmed proxy url from proxy fetch wrappers", () => {
+    expect(getProxyUrlFromFetch(makeProxyFetch("  http://proxy.test:8080  "))).toBe(
+      "http://proxy.test:8080",
+    );
+  });
+
+  it("returns undefined for plain fetch functions or blank metadata", () => {
+    const plainFetch = vi.fn() as unknown as typeof fetch;
+    const blankMetadataFetch = vi.fn() as unknown as typeof fetch & {
+      [Symbol.for("openclaw.proxyFetch.proxyUrl")]?: string;
+    };
+    blankMetadataFetch[Symbol.for("openclaw.proxyFetch.proxyUrl")] = "   ";
+
+    expect(getProxyUrlFromFetch(plainFetch)).toBeUndefined();
+    expect(getProxyUrlFromFetch(blankMetadataFetch)).toBeUndefined();
   });
 });
 
