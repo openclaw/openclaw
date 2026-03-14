@@ -106,6 +106,33 @@ function resolveExecutionHandoffLabel(params: {
   return normalized ? normalized.slice(0, 120) : undefined;
 }
 
+function buildExecutionHandoffTask(params: {
+  requesterSessionKey?: string;
+  summaryLine?: string;
+  commandBody: string;
+  interimReply?: string;
+}): string {
+  const summary = params.summaryLine?.trim();
+  const latestInstruction = params.commandBody.trim().replace(/\s+/g, " ");
+  const interimReply = params.interimReply?.trim().replace(/\s+/g, " ");
+  const parts = [
+    "Recover the current user goal from the requester session and continue executing it in the background.",
+    params.requesterSessionKey
+      ? `Requester session: ${params.requesterSessionKey}. Read it with sessions_history before acting whenever the latest message is ambiguous or just asks to continue.`
+      : "Read the requester session with sessions_history before acting whenever the latest message is ambiguous or just asks to continue.",
+    summary ? `Latest user message: ${summary}` : undefined,
+    latestInstruction && latestInstruction !== summary
+      ? `Current prompt: ${latestInstruction}`
+      : undefined,
+    interimReply
+      ? `The requester session only produced this interim acknowledgement before handoff: ${interimReply}`
+      : undefined,
+    "Use the requester session history to recover the active deliverable, current browser or tool state, and what remains to be done.",
+    "Keep working until you have a concrete result or a clear blocker to report back.",
+  ];
+  return parts.filter((part): part is string => Boolean(part)).join("\n");
+}
+
 function buildAutoSpawnFailureReply(error: string): ReplyPayload {
   const reason = error.trim() || "unknown error";
   return {
@@ -480,8 +507,14 @@ export async function runReplyAgent(params: {
         isLikelyInterimExecutionMessage(postContinuationText);
 
       if (shouldAutoSpawnBackgroundRun) {
+        const handoffTask = buildExecutionHandoffTask({
+          requesterSessionKey: sessionKey,
+          summaryLine: followupRun.summaryLine,
+          commandBody,
+          interimReply: postContinuationText,
+        });
         const spawnResult = await spawnSubagentRun({
-          task: commandBody,
+          task: handoffTask,
           label: resolveExecutionHandoffLabel({
             summaryLine: followupRun.summaryLine,
             commandBody,

@@ -53,7 +53,10 @@ beforeEach(() => {
   spawnSubagentRunMock.mockReset();
 });
 
-function createRun() {
+function createRun(overrides?: {
+  commandBody?: string;
+  summaryLine?: string;
+}) {
   const typing = createMockTypingController();
   const sessionCtx = {
     Provider: "webchat",
@@ -64,7 +67,7 @@ function createRun() {
   const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
   const followupRun = {
     prompt: "hello",
-    summaryLine: "hello",
+    summaryLine: overrides?.summaryLine ?? "hello",
     enqueuedAt: Date.now(),
     run: {
       sessionId: "session",
@@ -91,7 +94,7 @@ function createRun() {
   } as unknown as FollowupRun;
 
   return runReplyAgent({
-    commandBody: "Please continue executing this task.",
+    commandBody: overrides?.commandBody ?? "Please continue executing this task.",
     followupRun,
     queueKey: "main",
     resolvedQueue,
@@ -191,17 +194,32 @@ describe("runReplyAgent execution-task interim retry", () => {
       runId: "child-run-1",
     });
 
-    const result = await createRun();
+    const result = await createRun({
+      summaryLine: "Review the latest Gemini image and keep iterating until it is usable",
+      commandBody: "Please continue executing this task.",
+    });
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
     expect(spawnSubagentRunMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        task: "Please continue executing this task.",
+        task: expect.stringContaining(
+          "Recover the current user goal from the requester session and continue executing it in the background.",
+        ),
         requesterSessionKey: "main",
         requesterAgentIdOverride: "main",
-        label: "hello",
+        label: "Review the latest Gemini image and keep iterating until it is usable",
       }),
     );
+    expect(spawnSubagentRunMock.mock.calls[0]?.[0]).toMatchObject({
+      task: expect.stringContaining(
+        "Requester session: main. Read it with sessions_history before acting whenever the latest message is ambiguous or just asks to continue.",
+      ),
+    });
+    expect(spawnSubagentRunMock.mock.calls[0]?.[0]).toMatchObject({
+      task: expect.stringContaining(
+        "The requester session only produced this interim acknowledgement before handoff: working on it, it'll auto-announce when done",
+      ),
+    });
     expect(result).toMatchObject({
       text: "On it. I started a background run and will report back when it is done.",
     });
