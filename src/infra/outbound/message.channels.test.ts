@@ -304,7 +304,9 @@ const emptyRegistry = createTestRegistry([]);
 const createMSTeamsOutbound = (opts?: { includePoll?: boolean }): ChannelOutboundAdapter => ({
   deliveryMode: "direct",
   sendText: async ({ deps, to, text }) => {
-    const send = deps?.sendMSTeams;
+    const send = deps?.sendMSTeams as
+      | ((to: string, text: string, opts?: unknown) => Promise<{ messageId: string }>)
+      | undefined;
     if (!send) {
       throw new Error("sendMSTeams missing");
     }
@@ -312,7 +314,9 @@ const createMSTeamsOutbound = (opts?: { includePoll?: boolean }): ChannelOutboun
     return { channel: "msteams", ...result };
   },
   sendMedia: async ({ deps, to, text, mediaUrl }) => {
-    const send = deps?.sendMSTeams;
+    const send = deps?.sendMSTeams as
+      | ((to: string, text: string, opts?: unknown) => Promise<{ messageId: string }>)
+      | undefined;
     if (!send) {
       throw new Error("sendMSTeams missing");
     }

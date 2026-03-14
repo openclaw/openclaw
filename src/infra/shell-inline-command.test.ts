@@ -22,6 +22,21 @@ describe("resolveInlineCommandMatch", () => {
       command: "Get-ChildItem",
       valueTokenIndex: 2,
     });
+    expect(
+      resolveInlineCommandMatch(["pwsh", "-File", "script.ps1"], POWERSHELL_INLINE_COMMAND_FLAGS),
+    ).toEqual({
+      command: "script.ps1",
+      valueTokenIndex: 2,
+    });
+    expect(
+      resolveInlineCommandMatch(
+        ["powershell", "-f", "script.ps1"],
+        POWERSHELL_INLINE_COMMAND_FLAGS,
+      ),
+    ).toEqual({
+      command: "script.ps1",
+      valueTokenIndex: 2,
+    });
   });
 
   it("supports combined -c forms only when enabled", () => {
