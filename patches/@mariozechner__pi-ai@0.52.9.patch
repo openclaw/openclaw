@@ -1,0 +1,16 @@
+diff --git a/dist/providers/openai-completions.js b/dist/providers/openai-completions.js
+index b0dc5c85ab52fda67c4f13b1203444f0f8b8d81e..f1f0b6a3cc6f141fb4f4efbd210ec5d2d2dc57f5 100644
+--- a/dist/providers/openai-completions.js
++++ b/dist/providers/openai-completions.js
+@@ -91,7 +91,10 @@ export const streamOpenAICompletions = (model, context, options) => {
+                         });
+                     }
+                     else if (block.type === "toolCall") {
+-                        block.arguments = JSON.parse(block.partialArgs || "{}");
++                        // Be tolerant to malformed/incomplete streamed JSON.
++                        // Some providers emit unescaped newlines/quotes in function arguments,
++                        // which should not crash the entire tool-calling turn.
++                        block.arguments = parseStreamingJson(block.partialArgs || "{}");
+                         delete block.partialArgs;
+                         stream.push({
+                             type: "toolcall_end",
