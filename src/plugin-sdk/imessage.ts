@@ -1,10 +1,10 @@
-export type { ResolvedIMessageAccount } from "../imessage/accounts.js";
+export type { ResolvedIMessageAccount } from "../../extensions/imessage/src/accounts.js";
 export * from "./channel-plugin-common.js";
 export {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,
   resolveIMessageAccount,
-} from "../imessage/accounts.js";
+} from "../../extensions/imessage/src/accounts.js";
 export {
   formatTrimmedAllowFromEntries,
   resolveIMessageConfigAllowFrom,

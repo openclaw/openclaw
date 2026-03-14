@@ -1,3 +1,5 @@
+import { resolveTelegramAccount } from "../../../extensions/telegram/src/accounts.js";
+import { deleteTelegramUpdateOffset } from "../../../extensions/telegram/src/update-offset-store.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listChannelPluginCatalogEntries } from "../../channels/plugins/catalog.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
@@ -7,8 +9,6 @@ import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.
 import { writeConfigFile, type OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { resolveTelegramAccount } from "../../telegram/accounts.js";
-import { deleteTelegramUpdateOffset } from "../../telegram/update-offset-store.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
 import { buildAgentSummaries } from "../agents.config.js";

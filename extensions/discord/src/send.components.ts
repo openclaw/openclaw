@@ -7,7 +7,7 @@ import {
 import { ChannelType, Routes } from "discord-api-types/v10";
 import { loadConfig, type OpenClawConfig } from "../../../src/config/config.js";
 import { recordChannelActivity } from "../../../src/infra/channel-activity.js";
-import { loadWebMedia } from "../../../src/web/media.js";
+import { loadWebMedia } from "../../whatsapp/src/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
 import { registerDiscordComponentEntries } from "./components-registry.js";
 import {

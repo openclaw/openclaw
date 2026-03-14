@@ -19,7 +19,7 @@ import type { MediaKind } from "../../../src/media/constants.js";
 import { buildOutboundMediaLoadOptions } from "../../../src/media/load-options.js";
 import { isGifMedia, kindFromMime } from "../../../src/media/mime.js";
 import { normalizePollInput, type PollInput } from "../../../src/polls.js";
-import { loadWebMedia } from "../../../src/web/media.js";
+import { loadWebMedia } from "../../whatsapp/src/media.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { buildTelegramThreadParams, buildTypingThreadParams } from "./bot/helpers.js";

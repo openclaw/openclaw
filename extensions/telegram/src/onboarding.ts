@@ -13,7 +13,6 @@ import {
   setOnboardingChannelEnabled,
   splitOnboardingEntries,
 } from "../../../src/channels/plugins/onboarding/helpers.js";
-import { fetchTelegramChatId } from "../../../src/channels/telegram/api.js";
 import { formatCliCommand } from "../../../src/cli/command-format.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { hasConfiguredSecretInput } from "../../../src/config/types.secrets.js";
@@ -26,6 +25,7 @@ import {
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
 } from "./accounts.js";
+import { fetchTelegramChatId } from "./api-fetch.js";
 
 const channel = "telegram" as const;
 
