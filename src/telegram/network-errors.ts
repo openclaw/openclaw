@@ -150,9 +150,48 @@ export function isTelegramPollingNetworkError(err: unknown): boolean {
 }
 
 /**
+ * Returns true if the error is a Telegram 429 Too Many Requests response with a
+ * retry_after hint. Telegram rate limit responses are safe to retry because the
+ * server explicitly rejected the request before processing it — the message was
+ * never delivered.
+ */
+export function isTelegramRateLimitError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  // grammY / direct Telegram API shape: { parameters: { retry_after: number } }
+  // Also handles nested response/error shapes via candidate traversal.
+  for (const candidate of collectTelegramErrorCandidates(err)) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const params = (candidate as { parameters?: unknown }).parameters;
+    if (params && typeof params === "object" && "retry_after" in params) {
+      return true;
+    }
+    // grammY HttpError shape: { error_code: 429 } or message containing "429"
+    const errorCode = (candidate as { error_code?: unknown }).error_code;
+    if (errorCode === 429) {
+      return true;
+    }
+    const msg = formatErrorMessage(candidate);
+    if (/\b429\b/.test(msg)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Returns true if the error is safe to retry for a non-idempotent Telegram send operation
  * (e.g. sendMessage). Only matches errors that are guaranteed to have occurred *before*
  * the request reached Telegram's servers, preventing duplicate message delivery.
+ *
+ * This includes:
+ * - Pre-connect network errors (ECONNREFUSED, ENOTFOUND, etc.) — request never left the client
+ * - Telegram 429 Too Many Requests — server explicitly rejected before processing
+ * - grammY "Network request failed after N attempts" envelope — library-level retry exhausted
+ *   with an underlying network error; the message was not delivered
  *
  * Use this instead of isRecoverableTelegramNetworkError for sendMessage/sendPhoto/etc.
  * calls where a retry would create a duplicate visible message.
@@ -161,9 +200,19 @@ export function isSafeToRetrySendError(err: unknown): boolean {
   if (!err) {
     return false;
   }
+  // 429 rate limit: Telegram rejected the request — message was not delivered, safe to retry.
+  if (isTelegramRateLimitError(err)) {
+    return true;
+  }
   for (const candidate of collectTelegramErrorCandidates(err)) {
     const code = normalizeCode(getErrorCode(candidate));
     if (code && PRE_CONNECT_ERROR_CODES.has(code)) {
+      return true;
+    }
+    // grammY "Network request for '<method>' failed after N attempts." — underlying network
+    // error that prevented delivery; safe to retry at the outer send level.
+    const message = formatErrorMessage(candidate).trim();
+    if (message && GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message)) {
       return true;
     }
   }
