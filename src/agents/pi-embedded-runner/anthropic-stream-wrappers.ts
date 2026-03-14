@@ -9,7 +9,9 @@ import {
 import { log } from "./logger.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
-const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
+// Note: 1M context is now GA (General Availability) as of March 2025.
+// The context-1m-2025-08-07 beta header is no longer required.
+// Keeping ANTHROPIC_1M_MODEL_PREFIXES for context window detection.
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
 const PI_AI_DEFAULT_ANTHROPIC_BETAS = [
   "fine-grained-tool-streaming-2025-05-14",
@@ -242,12 +244,10 @@ export function resolveAnthropicBetas(
     }
   }
 
-  if (extraParams?.context1m === true) {
-    if (isAnthropic1MModel(modelId)) {
-      betas.add(ANTHROPIC_CONTEXT_1M_BETA);
-    } else {
-      log.warn(`ignoring context1m for non-opus/sonnet model: ${provider}/${modelId}`);
-    }
+  // Note: 1M context is now GA. We no longer inject the context-1m beta header.
+  // The context1m param is still checked here for potential future use or warnings.
+  if (extraParams?.context1m === true && !isAnthropic1MModel(modelId)) {
+    log.warn(`ignoring context1m for non-opus/sonnet model: ${provider}/${modelId}`);
   }
 
   return betas.size > 0 ? [...betas] : undefined;
@@ -260,21 +260,16 @@ export function createAnthropicBetaHeadersWrapper(
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const isOauth = isAnthropicOAuthApiKey(options?.apiKey);
-    const requestedContext1m = betas.includes(ANTHROPIC_CONTEXT_1M_BETA);
-    const effectiveBetas =
-      isOauth && requestedContext1m
-        ? betas.filter((beta) => beta !== ANTHROPIC_CONTEXT_1M_BETA)
-        : betas;
-    if (isOauth && requestedContext1m) {
-      log.warn(
-        `ignoring context1m for OAuth token auth on ${model.provider}/${model.id}; Anthropic rejects context-1m beta with OAuth auth`,
-      );
-    }
+
+    // Note: 1M context is now GA (March 2025), so we no longer need to skip
+    // the context-1m beta for OAuth tokens. The beta header itself is no longer
+    // injected (see resolveAnthropicBetas), so this wrapper now just merges
+    // the configured betas with the default pi-ai betas.
 
     const piAiBetas = isOauth
       ? (PI_AI_OAUTH_ANTHROPIC_BETAS as readonly string[])
       : (PI_AI_DEFAULT_ANTHROPIC_BETAS as readonly string[]);
-    const allBetas = [...new Set([...piAiBetas, ...effectiveBetas])];
+    const allBetas = [...new Set([...piAiBetas, ...betas])];
     return underlying(model, context, {
       ...options,
       headers: mergeAnthropicBetaHeader(options?.headers, allBetas),
