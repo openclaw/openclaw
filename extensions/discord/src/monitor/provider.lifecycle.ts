@@ -15,6 +15,47 @@ type ExecApprovalsHandler = {
   stop: () => Promise<void>;
 };
 
+// ── Persistent state that survives health-monitor restarts ──────────────
+export type DiscordLifecyclePersistentState = {
+  consecutiveHelloStalls: number;
+  /** When true, the next lifecycle start will clear resume state and IDENTIFY fresh. */
+  forceCleanRestart: boolean;
+};
+
+const persistentStates = new Map<string, DiscordLifecyclePersistentState>();
+
+export function getOrCreatePersistentState(accountId: string): DiscordLifecyclePersistentState {
+  let state = persistentStates.get(accountId);
+  if (!state) {
+    state = { consecutiveHelloStalls: 0, forceCleanRestart: false };
+    persistentStates.set(accountId, state);
+  }
+  return state;
+}
+
+/** Signal that the next lifecycle start should clear Discord resume state. */
+export function requestCleanRestart(accountId: string): void {
+  getOrCreatePersistentState(accountId).forceCleanRestart = true;
+}
+
+/** Reset persistent counters after the channel has been stable. */
+export function markStable(accountId: string): void {
+  const state = persistentStates.get(accountId);
+  if (state) {
+    state.consecutiveHelloStalls = 0;
+    state.forceCleanRestart = false;
+  }
+}
+
+/**
+ * Remove the persistent state for an account that has been fully removed from
+ * config.  Call this whenever a Discord account is permanently deleted so the
+ * module-level Map does not grow unboundedly in long-running gateway processes.
+ */
+export function evictPersistentState(accountId: string): void {
+  persistentStates.delete(accountId);
+}
+
 export async function runDiscordGatewayLifecycle(params: {
   accountId: string;
   client: Client;
@@ -108,9 +149,10 @@ export async function runDiscordGatewayLifecycle(params: {
     params.abortSignal?.addEventListener("abort", onAbort, { once: true });
   }
 
+  const persistentState = getOrCreatePersistentState(params.accountId);
+
   let helloTimeoutId: ReturnType<typeof setTimeout> | undefined;
   let helloConnectedPollId: ReturnType<typeof setInterval> | undefined;
-  let consecutiveHelloStalls = 0;
   const clearHelloWatch = () => {
     if (helloTimeoutId) {
       clearTimeout(helloTimeoutId);
@@ -122,7 +164,7 @@ export async function runDiscordGatewayLifecycle(params: {
     }
   };
   const resetHelloStallCounter = () => {
-    consecutiveHelloStalls = 0;
+    persistentState.consecutiveHelloStalls = 0;
   };
   const parseGatewayCloseCode = (message: string): number | undefined => {
     const match = /code\s+(\d{3,5})/i.exec(message);
@@ -151,6 +193,19 @@ export async function runDiscordGatewayLifecycle(params: {
     mutableGateway.state.sequence = null;
     mutableGateway.sequence = null;
   };
+
+  // If a previous health-monitor cycle requested a clean restart, clear
+  // Discord resume/session state so the gateway performs a fresh IDENTIFY.
+  if (persistentState.forceCleanRestart) {
+    clearResumeState();
+    persistentState.forceCleanRestart = false;
+    params.runtime.log?.(
+      danger(
+        "discord: health-monitor requested clean restart; cleared resume state for fresh IDENTIFY",
+      ),
+    );
+  }
+
   const onGatewayDebug = (msg: unknown) => {
     const message = String(msg);
     const at = Date.now();
@@ -211,8 +266,9 @@ export async function runDiscordGatewayLifecycle(params: {
       if (sawConnected || gateway?.isConnected) {
         resetHelloStallCounter();
       } else {
-        consecutiveHelloStalls += 1;
-        const forceFreshIdentify = consecutiveHelloStalls >= MAX_CONSECUTIVE_HELLO_STALLS;
+        persistentState.consecutiveHelloStalls += 1;
+        const forceFreshIdentify =
+          persistentState.consecutiveHelloStalls >= MAX_CONSECUTIVE_HELLO_STALLS;
         const stalledAt = Date.now();
         reconnectStallWatchdog.arm(stalledAt);
         pushStatus({
@@ -226,8 +282,8 @@ export async function runDiscordGatewayLifecycle(params: {
         params.runtime.log?.(
           danger(
             forceFreshIdentify
-              ? `connection stalled: no HELLO within ${HELLO_TIMEOUT_MS}ms (${consecutiveHelloStalls}/${MAX_CONSECUTIVE_HELLO_STALLS}); forcing fresh identify`
-              : `connection stalled: no HELLO within ${HELLO_TIMEOUT_MS}ms (${consecutiveHelloStalls}/${MAX_CONSECUTIVE_HELLO_STALLS}); retrying resume`,
+              ? `connection stalled: no HELLO within ${HELLO_TIMEOUT_MS}ms (${persistentState.consecutiveHelloStalls}/${MAX_CONSECUTIVE_HELLO_STALLS}); forcing fresh identify`
+              : `connection stalled: no HELLO within ${HELLO_TIMEOUT_MS}ms (${persistentState.consecutiveHelloStalls}/${MAX_CONSECUTIVE_HELLO_STALLS}); retrying resume`,
           ),
         );
         if (forceFreshIdentify) {

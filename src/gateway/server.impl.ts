@@ -1,4 +1,13 @@
 import path from "node:path";
+import {
+  listConfiguredDiscordAccountIds,
+  listDiscordAccountIds,
+} from "../../extensions/discord/src/accounts.js";
+import {
+  evictPersistentState as evictDiscordPersistentState,
+  markStable as markDiscordStable,
+  requestCleanRestart as requestDiscordCleanRestart,
+} from "../../extensions/discord/src/monitor/provider.lifecycle.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
@@ -65,7 +74,10 @@ import {
 } from "../secrets/runtime.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
-import { startChannelHealthMonitor } from "./channel-health-monitor.js";
+import {
+  startChannelHealthMonitor,
+  type ChannelHealthMonitorDeps,
+} from "./channel-health-monitor.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import {
@@ -757,11 +769,35 @@ export async function startGatewayServer(
 
   const healthCheckMinutes = cfgAtStart.gateway?.channelHealthCheckMinutes;
   const healthCheckDisabled = healthCheckMinutes === 0;
+  const healthMonitorBeforeRestart: ChannelHealthMonitorDeps["onBeforeRestart"] = ({
+    channelId,
+    accountId,
+    consecutiveRestarts,
+  }) => {
+    if (channelId === "discord") {
+      log.info(
+        `health-monitor: ${consecutiveRestarts} consecutive restart(s) for discord:${accountId}, requesting clean restart`,
+      );
+      requestDiscordCleanRestart(accountId);
+    }
+  };
+
+  const healthMonitorChannelStable: ChannelHealthMonitorDeps["onChannelStable"] = ({
+    channelId,
+    accountId,
+  }) => {
+    if (channelId === "discord") {
+      markDiscordStable(accountId);
+    }
+  };
+
   let channelHealthMonitor = healthCheckDisabled
     ? null
     : startChannelHealthMonitor({
         channelManager,
         checkIntervalMs: (healthCheckMinutes ?? 5) * 60_000,
+        onBeforeRestart: healthMonitorBeforeRestart,
+        onChannelStable: healthMonitorChannelStable,
       });
 
   if (!minimalTestGateway) {
@@ -981,7 +1017,12 @@ export async function startGatewayServer(
           logCron,
           logReload,
           createHealthMonitor: (checkIntervalMs: number) =>
-            startChannelHealthMonitor({ channelManager, checkIntervalMs }),
+            startChannelHealthMonitor({
+              channelManager,
+              checkIntervalMs,
+              onBeforeRestart: healthMonitorBeforeRestart,
+              onChannelStable: healthMonitorChannelStable,
+            }),
         });
 
         return startGatewayConfigReloader({
@@ -989,6 +1030,14 @@ export async function startGatewayServer(
           readSnapshot: readConfigFileSnapshot,
           onHotReload: async (plan, nextConfig) => {
             const previousSnapshot = getActiveSecretsRuntimeSnapshot();
+            // Snapshot discord account IDs BEFORE activating the new config so we
+            // capture the pre-reload (currently-running) set.  getRuntimeSnapshot()
+            // derives account IDs from loadConfig(), which already reflects the new
+            // config after activateRuntimeSecrets() — so calling it after activation
+            // would miss any accounts being removed, preventing their eviction.
+            const prevDiscordAccountIds = plan.restartChannels.has("discord")
+              ? Object.keys(getRuntimeSnapshot().channelAccounts["discord"] ?? {})
+              : [];
             const prepared = await activateRuntimeSecrets(nextConfig, {
               reason: "reload",
               activate: true,
@@ -1002,6 +1051,35 @@ export async function startGatewayServer(
                 clearSecretsRuntimeSnapshot();
               }
               throw err;
+            }
+            // Evict persistent state for discord accounts no longer in the new config.
+            if (prevDiscordAccountIds.length > 0) {
+              // Determine currently-active account IDs with care:
+              //   - listDiscordAccountIds returns ["default"] for BOTH the single-account
+              //     token shape (Discord still active) AND when Discord is fully removed
+              //     (wrong — would prevent eviction of the implicit default account).
+              //   - listConfiguredDiscordAccountIds returns [] for the single-account
+              //     token shape (wrong — causes "default" to be evicted on every reload).
+              //
+              // Fix: treat Discord as configured if a top-level token exists OR if any
+              // explicit accounts are configured.  When configured, listDiscordAccountIds
+              // correctly resolves the active account set (including the implicit "default"
+              // for the single-account token shape).  When not configured, use an empty
+              // set so all previous entries are evicted.  Also covers the env-var-only
+              // path where DISCORD_BOT_TOKEN is set but no config key is present.
+              const hasDiscordConfig = !!(
+                prepared.config.channels?.discord?.token ||
+                listConfiguredDiscordAccountIds(prepared.config).length > 0 ||
+                process.env.DISCORD_BOT_TOKEN
+              );
+              const nextDiscordAccountIds = new Set(
+                hasDiscordConfig ? listDiscordAccountIds(prepared.config) : [],
+              );
+              for (const id of prevDiscordAccountIds) {
+                if (!nextDiscordAccountIds.has(id)) {
+                  evictDiscordPersistentState(id);
+                }
+              }
             }
           },
           onRestart: async (plan, nextConfig) => {
