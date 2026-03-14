@@ -621,11 +621,7 @@ export async function textToSpeech(params: {
       }
 
       const outputFormat =
-        provider === "openai"
-          ? output.openai
-          : provider === "elevenlabs"
-            ? output.elevenlabs
-            : output.openai;
+        provider === "openai" ? output.openai : provider === "elevenlabs" ? output.elevenlabs : "";
 
       if (engine.synthesizeToFile) {
         const fileResult = await engine.synthesizeToFile({

@@ -72,13 +72,13 @@ export class EdgeTtsEngine implements TtsEngine {
         edgeOutputFormat = fallbackEdgeOutputFormat;
         try {
           edgeResult = await attemptEdgeTts(edgeOutputFormat);
-        } catch {
+        } catch (fallbackErr) {
           try {
             rmSync(tempDir, { recursive: true, force: true });
           } catch {
             // ignore cleanup errors
           }
-          throw err;
+          throw fallbackErr;
         }
       } else {
         try {

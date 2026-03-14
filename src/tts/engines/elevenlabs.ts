@@ -1,5 +1,11 @@
 import type { TtsEngine, TtsSynthesizeRequest, TtsSynthesizeResult } from "../engine.js";
-import { isValidVoiceId } from "../tts-core.js";
+import {
+  isValidVoiceId,
+  normalizeApplyTextNormalization,
+  normalizeLanguageCode,
+  normalizeSeed,
+  requireInRange,
+} from "../tts-core.js";
 import type { ResolvedTtsConfig } from "../tts.js";
 
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
@@ -23,41 +29,6 @@ function assertVoiceSettings(settings: ResolvedTtsConfig["elevenlabs"]["voiceSet
   requireInRange(settings.similarityBoost, 0, 1, "similarityBoost");
   requireInRange(settings.style, 0, 1, "style");
   requireInRange(settings.speed, 0.5, 2, "speed");
-}
-
-function normalizeLanguageCode(code?: string): string | undefined {
-  const trimmed = code?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = trimmed.toLowerCase();
-  if (!/^[a-z]{2}$/.test(normalized)) {
-    throw new Error("languageCode must be a 2-letter ISO 639-1 code (e.g. en, de, fr)");
-  }
-  return normalized;
-}
-
-function normalizeApplyTextNormalization(mode?: string): "auto" | "on" | "off" | undefined {
-  const trimmed = mode?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = trimmed.toLowerCase();
-  if (normalized === "auto" || normalized === "on" || normalized === "off") {
-    return normalized;
-  }
-  throw new Error("applyTextNormalization must be one of: auto, on, off");
-}
-
-function normalizeSeed(seed?: number): number | undefined {
-  if (seed == null) {
-    return undefined;
-  }
-  const next = Math.floor(seed);
-  if (!Number.isFinite(next) || next < 0 || next > 4_294_967_295) {
-    throw new Error("seed must be between 0 and 4294967295");
-  }
-  return next;
 }
 
 export class ElevenLabsTtsEngine implements TtsEngine {
