@@ -371,4 +371,84 @@ describe("loadPluginManifestRegistry", () => {
       fs.realpathSync(second.plugins.find((plugin) => plugin.id === "demo")?.rootDir ?? ""),
     ).toBe(fs.realpathSync(demoB));
   });
+
+  it("suppresses duplicate warning when plugin id matches a declared channel (channel registration pattern)", () => {
+    // This tests the fix for issue #45805:
+    // A plugin with id="X" that declares channels=["X"] is the expected pattern
+    // for channel plugins - the main plugin and its channel share the same id.
+    // This should not trigger a duplicate warning.
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+
+    // First plugin declares id="feishu" and channels=["feishu"]
+    writeManifest(dirA, {
+      id: "feishu",
+      channels: ["feishu"],
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(dirA, "index.ts"), "export default {}", "utf-8");
+
+    // Second plugin has the same id but from a different directory
+    writeManifest(dirB, {
+      id: "feishu",
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(dirB, "index.ts"), "export default {}", "utf-8");
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: dirA,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: dirB,
+        origin: "global",
+      }),
+    ];
+
+    const registry = loadRegistry(candidates);
+    // Should NOT emit a duplicate warning because the first plugin declares
+    // channels=["feishu"], indicating this is a channel registration pattern.
+    expect(countDuplicateWarnings(registry)).toBe(0);
+  });
+
+  it("still emits duplicate warning when channels do not match the plugin id", () => {
+    // Ensure we still warn when the channel registration pattern does NOT apply
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+
+    // First plugin declares id="alpha" and channels=["beta"] (different from id)
+    writeManifest(dirA, {
+      id: "alpha",
+      channels: ["beta"],
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(dirA, "index.ts"), "export default {}", "utf-8");
+
+    // Second plugin has the same id
+    writeManifest(dirB, {
+      id: "alpha",
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(dirB, "index.ts"), "export default {}", "utf-8");
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "alpha",
+        rootDir: dirA,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "alpha",
+        rootDir: dirB,
+        origin: "global",
+      }),
+    ];
+
+    const registry = loadRegistry(candidates);
+    // Should emit a duplicate warning because the channels array does NOT contain "alpha"
+    expect(countDuplicateWarnings(registry)).toBe(1);
+  });
 });

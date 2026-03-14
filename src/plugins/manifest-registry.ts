@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
@@ -10,6 +11,7 @@ import type { PluginConfigUiHint, PluginDiagnostic, PluginKind, PluginOrigin } f
 type SeenIdEntry = {
   candidate: PluginCandidate;
   recordIndex: number;
+  declaredChannels: string[];
 };
 
 // Precedence: config > workspace > global > bundled
@@ -216,7 +218,14 @@ export function loadPluginManifestRegistry(params: {
         }
         const existingReal = safeRealpathSync(existing.candidate.rootDir, realpathCache);
         const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
-        return Boolean(existingReal && candidateReal && existingReal === candidateReal);
+        // If either realpath fails, fall back to path comparison for Windows compatibility
+        if (!existingReal || !candidateReal) {
+          // Normalize and compare paths as a fallback when realpath is unavailable
+          const normalizedExisting = path.resolve(existing.candidate.rootDir).toLowerCase();
+          const normalizedCandidate = path.resolve(candidate.rootDir).toLowerCase();
+          return normalizedExisting === normalizedCandidate;
+        }
+        return existingReal === candidateReal;
       })();
       if (samePlugin) {
         // Prefer higher-precedence origins even if candidates are passed in
@@ -229,10 +238,25 @@ export function loadPluginManifestRegistry(params: {
             schemaCacheKey,
             configSchema,
           });
-          seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+          seenIds.set(manifest.id, {
+            candidate,
+            recordIndex: existing.recordIndex,
+            declaredChannels: manifest.channels ?? [],
+          });
         }
         continue;
       }
+
+      // Check if this is a channel being registered by its parent plugin.
+      // A plugin with id="X" that declares channels=["X"] is the expected pattern
+      // for channel plugins - the main plugin and its channel share the same id.
+      // This should not trigger a duplicate warning.
+      const isChannelRegistration = existing.declaredChannels.includes(manifest.id);
+      if (isChannelRegistration) {
+        // Same plugin registering a channel with matching id - skip warning.
+        continue;
+      }
+
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,
@@ -240,7 +264,11 @@ export function loadPluginManifestRegistry(params: {
         message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
       });
     } else {
-      seenIds.set(manifest.id, { candidate, recordIndex: records.length });
+      seenIds.set(manifest.id, {
+        candidate,
+        recordIndex: records.length,
+        declaredChannels: manifest.channels ?? [],
+      });
     }
 
     records.push(
