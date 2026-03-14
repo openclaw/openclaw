@@ -238,6 +238,60 @@ describe("installToolResultContextGuard", () => {
     expect(newResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
   });
 
+  it("does not crash on malformed {type:'text'} blocks with no text property", async () => {
+    // Reproduces the sentinel_control remove crash: a tool result with
+    // content: [{type: "text"}] (missing text key) caused undefined.length
+    // in estimateMessageChars → crash loop.
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    const malformedToolResult = castAgentMessage({
+      role: "toolResult",
+      toolCallId: "call_sentinel",
+      toolName: "sentinel_control",
+      content: [{ type: "text" }],
+      isError: false,
+      timestamp: Date.now(),
+    });
+
+    const contextForNextCall = [makeUser("remove watcher"), malformedToolResult];
+
+    // Should not throw TypeError: Cannot read properties of undefined (reading 'length')
+    await expect(
+      agent.transformContext?.(contextForNextCall, new AbortController().signal),
+    ).resolves.not.toThrow();
+  });
+
+  it("handles malformed text blocks mixed with valid ones during compaction", async () => {
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    const contextForNextCall = [
+      makeUser("u".repeat(2_000)),
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "test",
+        content: [{ type: "text" }],
+        isError: false,
+        timestamp: Date.now(),
+      }),
+      makeToolResult("call_2", "y".repeat(1_000)),
+    ];
+
+    await expect(
+      agent.transformContext?.(contextForNextCall, new AbortController().signal),
+    ).resolves.not.toThrow();
+  });
+
   it("drops oversized read-tool details payloads when compacting tool results", async () => {
     const agent = makeGuardableAgent();
 

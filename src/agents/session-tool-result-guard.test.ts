@@ -494,6 +494,77 @@ describe("installSessionToolResultGuard", () => {
     expect(roles).not.toContain("toolResult");
   });
 
+  it("sanitizes malformed {type:'text'} blocks with no text property during persistence", () => {
+    // Reproduces the sentinel_control remove bug: content [{type: "text"}]
+    // with no text key persisted to JSONL, crashing all subsequent reads.
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(toolCallMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "sentinel_control",
+        content: [{ type: "text" }],
+        isError: false,
+        timestamp: Date.now(),
+      }),
+    );
+
+    const messages = expectPersistedRoles(sm, ["assistant", "toolResult"]);
+    const toolResult = messages[1] as {
+      content: Array<{ type: string; text?: string }>;
+    };
+    const textBlock = toolResult.content.find((b) => b.type === "text");
+    expect(textBlock).toBeDefined();
+    expect(typeof textBlock!.text).toBe("string");
+  });
+
+  it("sanitizes {type:'text', text: undefined} blocks during persistence", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(toolCallMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "test_tool",
+        content: [{ type: "text", text: undefined }],
+        isError: false,
+        timestamp: Date.now(),
+      }),
+    );
+
+    const messages = expectPersistedRoles(sm, ["assistant", "toolResult"]);
+    const toolResult = messages[1] as {
+      content: Array<{ type: string; text?: string }>;
+    };
+    const textBlock = toolResult.content.find((b) => b.type === "text");
+    expect(typeof textBlock!.text).toBe("string");
+  });
+
+  it("does not modify well-formed tool result content blocks", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(toolCallMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "valid content" }],
+        isError: false,
+        timestamp: Date.now(),
+      }),
+    );
+
+    const text = getToolResultText(getPersistedMessages(sm));
+    expect(text).toBe("valid content");
+  });
+
   it("does NOT create synthetic toolResult for errored assistant messages with toolCalls", () => {
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm);
