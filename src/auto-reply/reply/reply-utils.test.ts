@@ -321,6 +321,38 @@ describe("normalizeReplyPayload", () => {
     expect(reasons).toEqual(["suspicious"]);
   });
 
+  it("suppresses standalone route-marker leakage without tool JSON", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      {
+        text: "assistant to=functions.exec",
+      },
+      {
+        onSkip: (reason) => reasons.push(reason),
+      },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["suspicious"]);
+  });
+
+  it("suppresses multiple standalone route-marker leakage lines", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      {
+        text: [
+          "assistant to=functions.exec",
+          "commentary to=functions.exec",
+          "user to=functions.exec",
+        ].join("\n"),
+      },
+      {
+        onSkip: (reason) => reasons.push(reason),
+      },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["suspicious"]);
+  });
+
   it("does not flag fenced code samples as suspicious by default", () => {
     expect(
       hasSuspiciousReplyLeakage(
@@ -352,6 +384,15 @@ describe("normalizeReplyPayload", () => {
           '"yieldMs":1000',
           "}",
         ].join("\n"),
+      ),
+    ).toBe(true);
+  });
+
+  it("flags standalone route-marker leakage without tool JSON", () => {
+    expect(hasSuspiciousReplyLeakage("assistant to=functions.exec")).toBe(true);
+    expect(
+      hasSuspiciousReplyLeakage(
+        ["assistant to=functions.exec", "commentary to=functions.exec"].join("\n"),
       ),
     ).toBe(true);
   });

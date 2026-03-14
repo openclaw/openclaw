@@ -104,5 +104,8 @@ export function hasSuspiciousReplyLeakage(
   ) {
     routeMarkerLineCount += 1;
   }
+  if (routeMarkerLineCount === lines.length) {
+    return true;
+  }
   return hasStructuredToolJsonBlock(lines.slice(routeMarkerLineCount));
 }
