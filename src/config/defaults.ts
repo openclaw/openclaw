@@ -45,7 +45,7 @@ const DEFAULT_MODEL_MAX_TOKENS = 8192;
 type ModelDefinitionLike = Partial<ModelDefinitionConfig> &
   Pick<ModelDefinitionConfig, "id" | "name">;
 
-function resolveDefaultProviderApi(
+export function resolveDefaultProviderApi(
   providerId: string,
   providerApi: ModelDefinitionConfig["api"] | undefined,
 ): ModelDefinitionConfig["api"] | undefined {
