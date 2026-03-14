@@ -61,7 +61,7 @@ function resolveLaunchAgentLabel(args?: { env?: Record<string, string | undefine
 }
 
 function resolveLaunchAgentPlistPathForLabel(
-  env: Record<string, string | undefined>,
+  _env: Record<string, string | undefined>,
   label: string,
 ): string {
   const home = resolveTrustedLaunchAgentHome();
@@ -285,7 +285,12 @@ async function writeLaunchAgentPlistSecure(plistPath: string, plist: string): Pr
     throw error;
   }
   await handle.close();
-  await fs.rename(tempPath, plistPath);
+  try {
+    await fs.rename(tempPath, plistPath);
+  } catch (error) {
+    await fs.unlink(tempPath).catch(() => undefined);
+    throw error;
+  }
 }
 
 export type LaunchctlPrintInfo = {
