@@ -31,6 +31,7 @@ const AGENT_HEARTBEAT_KEYS = new Set([
   "ackMaxChars",
   "suppressToolErrorWarnings",
   "lightContext",
+  "isolatedSession",
 ]);
 
 const CHANNEL_HEARTBEAT_KEYS = new Set(["showOk", "showAlerts", "useIndicator"]);
