@@ -20,5 +20,6 @@ export type PreparedSlackMessage = {
   preview: string;
   ackReactionMessageTs?: string;
   ackReactionValue: string;
+  ackReactionAllowed: boolean;
   ackReactionPromise: Promise<boolean> | null;
 };

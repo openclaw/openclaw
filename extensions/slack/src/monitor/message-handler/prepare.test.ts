@@ -570,6 +570,56 @@ describe("slack prepareSlackMessage inbound contract", () => {
     // MessageThreadId should be set for the reply
     expect(prepared!.ctxPayload.MessageThreadId).toBe("500.000");
   });
+
+  it("defers ack reactions when ackReactionTiming is run-start", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+        messages: { ackReaction: "👀", ackReactionScope: "direct" },
+      } as OpenClawConfig,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    slackCtx.ackReactionTiming = "run-start";
+    slackCtx.ackReactionScope = "direct";
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ ackReactionTiming: "run-start" }),
+      createSlackMessage({ ts: "700.000" }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ackReactionValue).toBe("👀");
+    expect(prepared!.ackReactionMessageTs).toBe("700.000");
+    expect(prepared!.ackReactionAllowed).toBe(true);
+    expect(prepared!.ackReactionPromise).toBeNull();
+  });
+
+  it("tracks deferred ack reactions as disallowed when the scope gate blocks them", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+        messages: { ackReaction: "👀", ackReactionScope: "off" },
+      } as OpenClawConfig,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    slackCtx.ackReactionTiming = "run-start";
+    slackCtx.ackReactionScope = "off";
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ ackReactionTiming: "run-start" }),
+      createSlackMessage({ ts: "701.000" }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ackReactionValue).toBe("👀");
+    expect(prepared!.ackReactionMessageTs).toBe("701.000");
+    expect(prepared!.ackReactionAllowed).toBe(false);
+    expect(prepared!.ackReactionPromise).toBeNull();
+  });
 });
 
 describe("prepareSlackMessage sender prefix", () => {
@@ -616,6 +666,7 @@ describe("prepareSlackMessage sender prefix", () => {
       threadInheritParent: false,
       slashCommand: params.slashCommand,
       textLimit: 2000,
+      ackReactionTiming: "received",
       ackReactionScope: "off",
       mediaMaxBytes: 1000,
       removeAckAfterReply: false,

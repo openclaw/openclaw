@@ -2,6 +2,7 @@ import type { App } from "@slack/bolt";
 import type { HistoryEntry } from "../../../../src/auto-reply/reply/history.js";
 import { formatAllowlistMatchMeta } from "../../../../src/channels/allowlist-match.js";
 import type {
+  AckReactionTiming,
   OpenClawConfig,
   SlackReactionNotificationMode,
 } from "../../../../src/config/config.js";
@@ -55,6 +56,7 @@ export type SlackMonitorContext = {
   threadInheritParent: boolean;
   slashCommand: Required<import("../../../../src/config/config.js").SlackSlashCommandConfig>;
   textLimit: number;
+  ackReactionTiming: AckReactionTiming;
   ackReactionScope: string;
   typingReaction: string;
   mediaMaxBytes: number;
@@ -119,6 +121,7 @@ export function createSlackMonitorContext(params: {
   threadInheritParent: SlackMonitorContext["threadInheritParent"];
   slashCommand: SlackMonitorContext["slashCommand"];
   textLimit: number;
+  ackReactionTiming: AckReactionTiming;
   ackReactionScope: string;
   typingReaction: string;
   mediaMaxBytes: number;
@@ -419,6 +422,7 @@ export function createSlackMonitorContext(params: {
     threadInheritParent: params.threadInheritParent,
     slashCommand: params.slashCommand,
     textLimit: params.textLimit,
+    ackReactionTiming: params.ackReactionTiming,
     ackReactionScope: params.ackReactionScope,
     typingReaction: params.typingReaction,
     mediaMaxBytes: params.mediaMaxBytes,

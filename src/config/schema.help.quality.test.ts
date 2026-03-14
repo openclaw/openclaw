@@ -248,6 +248,7 @@ const TARGET_KEYS = [
   "messages.removeAckAfterReply",
   "messages.tts",
   "channels",
+  "channels.slack.ackReactionTiming",
   "channels.defaults",
   "channels.defaults.groupPolicy",
   "channels.defaults.heartbeat",

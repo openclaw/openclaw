@@ -817,6 +817,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.slack.streaming": "Slack Streaming Mode",
   "channels.slack.nativeStreaming": "Slack Native Streaming",
   "channels.slack.streamMode": "Slack Stream Mode (Legacy)",
+  "channels.slack.ackReactionTiming": "Slack Ack Reaction Timing",
   "channels.slack.thread.historyScope": "Slack Thread History Scope",
   "channels.slack.thread.inheritParent": "Slack Thread Parent Inheritance",
   "channels.slack.thread.initialHistoryLimit": "Slack Thread Initial History Limit",

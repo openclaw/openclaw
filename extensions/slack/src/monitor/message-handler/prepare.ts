@@ -553,10 +553,14 @@ export async function prepareSlackMessage(params: {
         shouldBypassMention: mentionGate.shouldBypassMention,
       }),
     );
+  const ackReactionAllowed = shouldAckReaction();
 
   const ackReactionMessageTs = message.ts;
   const ackReactionPromise =
-    shouldAckReaction() && ackReactionMessageTs && ackReactionValue
+    ctx.ackReactionTiming === "received" &&
+    ackReactionAllowed &&
+    ackReactionMessageTs &&
+    ackReactionValue
       ? reactSlackMessage(message.channel, ackReactionMessageTs, ackReactionValue, {
           token: ctx.botToken,
           client: ctx.app.client,
@@ -799,6 +803,7 @@ export async function prepareSlackMessage(params: {
     preview,
     ackReactionMessageTs,
     ackReactionValue,
+    ackReactionAllowed,
     ackReactionPromise,
   };
 }

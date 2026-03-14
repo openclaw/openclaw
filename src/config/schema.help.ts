@@ -1473,6 +1473,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming is partial (default: true).",
   "channels.slack.streamMode":
     "Legacy Slack preview mode alias (replace | status_final | append); auto-migrated to channels.slack.streaming.",
+  "channels.slack.ackReactionTiming":
+    'When to send Slack ack reactions. "received" reacts as soon as the inbound message is accepted; "run-start" waits until the agent emits real run activity. Default: "received".',
   "channels.telegram.customCommands":
     "Additional Telegram bot menu commands (merged with native; conflicts ignored).",
   "messages.suppressToolErrors":
