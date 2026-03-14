@@ -49,7 +49,7 @@ import {
 import { ensureCustomApiRegistered } from "../../custom-api-registry.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
-import { isTimeoutError } from "../../failover-error.js";
+import { isTimeoutError, resolveFailoverStatus } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
@@ -58,11 +58,14 @@ import { createConfiguredOllamaStreamFn } from "../../ollama-stream.js";
 import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import {
+  classifyFailoverReason,
   downgradeOpenAIFunctionCallReasoningPairs,
   isCloudCodeAssistFormatError,
+  isTimeoutErrorMessage,
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
+  type FailoverReason,
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
@@ -134,7 +137,11 @@ import {
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
-import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+import type {
+  EmbeddedRunAttemptFailoverSignal,
+  EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptResult,
+} from "./types.js";
 
 type PromptBuildHookRunner = {
   hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
@@ -778,6 +785,230 @@ export function wrapStreamFnTrimToolCallNames(
       );
     }
     return wrapStreamTrimToolCallNames(maybeStream, allowedToolNames);
+  };
+}
+
+function extractErrorStatus(error: unknown): number | undefined {
+  const statusCandidates = [
+    (error as { status?: unknown } | null)?.status,
+    (error as { statusCode?: unknown } | null)?.statusCode,
+    (error as { cause?: { status?: unknown; statusCode?: unknown } } | null)?.cause?.status,
+    (error as { cause?: { status?: unknown; statusCode?: unknown } } | null)?.cause?.statusCode,
+  ];
+  for (const candidate of statusCandidates) {
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function resolveFailoverReasonFromStatus(status: number | undefined): FailoverReason | null {
+  switch (status) {
+    case 401:
+      return "auth";
+    case 402:
+      return "billing";
+    case 408:
+      return "timeout";
+    case 429:
+      return "rate_limit";
+    case 503:
+      return "overloaded";
+    default:
+      return null;
+  }
+}
+
+function resolveAttemptFailoverReason(params: {
+  rawError: string;
+  status?: number;
+  timedOut?: boolean;
+}): FailoverReason | null {
+  if (params.timedOut) {
+    return "timeout";
+  }
+  return resolveFailoverReasonFromStatus(params.status) ?? classifyFailoverReason(params.rawError);
+}
+
+function resolveAttemptSignalModelRef(params: {
+  model: { provider?: string; id?: string };
+  defaultProvider: string;
+  defaultModel: string;
+}) {
+  return {
+    provider:
+      typeof params.model.provider === "string" && params.model.provider.trim().length > 0
+        ? params.model.provider
+        : params.defaultProvider,
+    model:
+      typeof params.model.id === "string" && params.model.id.trim().length > 0
+        ? params.model.id
+        : params.defaultModel,
+  };
+}
+
+export function buildEmbeddedAttemptFailoverSignal(params: {
+  stage: EmbeddedRunAttemptFailoverSignal["stage"];
+  source: EmbeddedRunAttemptFailoverSignal["source"];
+  defaultProvider: string;
+  defaultModel: string;
+  model?: { provider?: string; id?: string };
+  error?: unknown;
+  rawError?: string | null;
+  timedOut?: boolean;
+}): EmbeddedRunAttemptFailoverSignal | undefined {
+  const rawError = (
+    params.rawError?.trim() || (params.error ? describeUnknownError(params.error) : "")
+  ).trim();
+  const status = extractErrorStatus(params.error);
+  const timedOut =
+    params.timedOut === true ||
+    (params.error ? isTimeoutError(params.error) : false) ||
+    isTimeoutErrorMessage(rawError);
+  const reason = resolveAttemptFailoverReason({
+    rawError,
+    status,
+    timedOut,
+  });
+  const effectiveStatus = status ?? (reason ? resolveFailoverStatus(reason) : undefined);
+  if (!reason && !timedOut) {
+    return undefined;
+  }
+  const modelRef = resolveAttemptSignalModelRef({
+    model: params.model ?? {},
+    defaultProvider: params.defaultProvider,
+    defaultModel: params.defaultModel,
+  });
+  return {
+    stage: params.stage,
+    source: params.source,
+    provider: modelRef.provider,
+    model: modelRef.model,
+    reason,
+    status: effectiveStatus,
+    rawError,
+    timedOut: timedOut || undefined,
+  };
+}
+
+function wrapStreamCaptureFailoverSignal(
+  stream: ReturnType<typeof streamSimple>,
+  params: {
+    stage: EmbeddedRunAttemptFailoverSignal["stage"];
+    defaultProvider: string;
+    defaultModel: string;
+    model: { provider?: string; id?: string };
+    onFailure: (failure: EmbeddedRunAttemptFailoverSignal) => void;
+  },
+): ReturnType<typeof streamSimple> {
+  let reported = false;
+  const reportFailure = (
+    error: unknown,
+    source: Extract<
+      EmbeddedRunAttemptFailoverSignal["source"],
+      "stream_result" | "stream_iterator"
+    >,
+  ) => {
+    if (reported) {
+      return;
+    }
+    const failure = buildEmbeddedAttemptFailoverSignal({
+      stage: params.stage,
+      source,
+      defaultProvider: params.defaultProvider,
+      defaultModel: params.defaultModel,
+      model: params.model,
+      error,
+    });
+    if (!failure) {
+      return;
+    }
+    reported = true;
+    params.onFailure(failure);
+  };
+
+  const originalResult = stream.result.bind(stream);
+  stream.result = async () => {
+    try {
+      return await originalResult();
+    } catch (error) {
+      reportFailure(error, "stream_result");
+      throw error;
+    }
+  };
+
+  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
+  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
+    function () {
+      const iterator = originalAsyncIterator();
+      return {
+        async next() {
+          try {
+            return await iterator.next();
+          } catch (error) {
+            reportFailure(error, "stream_iterator");
+            throw error;
+          }
+        },
+        async return(value?: unknown) {
+          return iterator.return?.(value) ?? { done: true as const, value: undefined };
+        },
+        async throw(error?: unknown) {
+          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
+        },
+      };
+    };
+
+  return stream;
+}
+
+export function wrapStreamFnCaptureFailoverSignal(
+  baseFn: StreamFn,
+  params: {
+    stage: EmbeddedRunAttemptFailoverSignal["stage"];
+    defaultProvider: string;
+    defaultModel: string;
+    onFailure: (failure: EmbeddedRunAttemptFailoverSignal) => void;
+  },
+): StreamFn {
+  return (model, context, options) => {
+    const reportCallFailure = (error: unknown) => {
+      const failure = buildEmbeddedAttemptFailoverSignal({
+        stage: params.stage,
+        source: "stream_call",
+        defaultProvider: params.defaultProvider,
+        defaultModel: params.defaultModel,
+        model: model as { provider?: string; id?: string },
+        error,
+      });
+      if (failure) {
+        params.onFailure(failure);
+      }
+    };
+    try {
+      const maybeStream = baseFn(model, context, options);
+      if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+        return Promise.resolve(maybeStream).then(
+          (stream) =>
+            wrapStreamCaptureFailoverSignal(stream, {
+              ...params,
+              model: model as { provider?: string; id?: string },
+            }),
+          (error) => {
+            reportCallFailure(error);
+            throw error;
+          },
+        );
+      }
+      return wrapStreamCaptureFailoverSignal(maybeStream, {
+        ...params,
+        model: model as { provider?: string; id?: string },
+      });
+    } catch (error) {
+      reportCallFailure(error);
+      throw error;
+    }
   };
 }
 
@@ -2060,6 +2291,19 @@ export async function runEmbeddedAttempt(
         );
       }
 
+      let promptFailureSignal: EmbeddedRunAttemptFailoverSignal | undefined;
+      activeSession.agent.streamFn = wrapStreamFnCaptureFailoverSignal(
+        activeSession.agent.streamFn,
+        {
+          stage: "prompt",
+          defaultProvider: params.provider,
+          defaultModel: params.modelId,
+          onFailure: (failure) => {
+            promptFailureSignal ??= failure;
+          },
+        },
+      );
+
       try {
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
@@ -2724,6 +2968,33 @@ export async function runEmbeddedAttempt(
         .slice()
         .toReversed()
         .find((m) => m.role === "assistant");
+      const resolvedPromptFailureSignal =
+        !timedOutDuringCompaction && promptError
+          ? (promptFailureSignal ??
+            buildEmbeddedAttemptFailoverSignal({
+              stage: "prompt",
+              source: "prompt_error",
+              defaultProvider: params.provider,
+              defaultModel: params.modelId,
+              error: promptError,
+            }))
+          : undefined;
+      const assistantFailureSignal =
+        !timedOutDuringCompaction && (timedOut || lastAssistant?.errorMessage)
+          ? buildEmbeddedAttemptFailoverSignal({
+              stage: "assistant",
+              source: timedOut ? "timeout" : "assistant_error",
+              defaultProvider: params.provider,
+              defaultModel: params.modelId,
+              model: {
+                provider:
+                  typeof lastAssistant?.provider === "string" ? lastAssistant.provider : undefined,
+                id: typeof lastAssistant?.model === "string" ? lastAssistant.model : undefined,
+              },
+              rawError: lastAssistant?.errorMessage?.trim(),
+              timedOut: timedOut && !timedOutDuringCompaction,
+            })
+          : undefined;
 
       const toolMetasNormalized = toolMetas
         .filter(
@@ -2781,6 +3052,8 @@ export async function runEmbeddedAttempt(
         cloudCodeAssistFormatError: Boolean(
           lastAssistant?.errorMessage && isCloudCodeAssistFormatError(lastAssistant.errorMessage),
         ),
+        promptFailureSignal: resolvedPromptFailureSignal,
+        assistantFailureSignal,
         attemptUsage: getUsageTotals(),
         compactionCount: getCompactionCount(),
         // Client tool call detected (OpenResponses hosted tools)

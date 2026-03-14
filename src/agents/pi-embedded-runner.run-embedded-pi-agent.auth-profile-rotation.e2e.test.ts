@@ -7,7 +7,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { registerLogTransport, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
-import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
+import type {
+  EmbeddedRunAttemptFailoverSignal,
+  EmbeddedRunAttemptResult,
+} from "./pi-embedded-runner/run/types.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const resolveCopilotApiTokenMock = vi.fn();
@@ -294,11 +297,15 @@ const mockFailedThenSuccessfulAttempt = (errorMessage = "rate limit") => {
     );
 };
 
-const mockPromptErrorThenSuccessfulAttempt = (errorMessage: string) => {
+const mockPromptErrorThenSuccessfulAttempt = (
+  errorMessage: string,
+  promptFailureSignal?: EmbeddedRunAttemptFailoverSignal,
+) => {
   runEmbeddedAttemptMock
     .mockResolvedValueOnce(
       makeAttempt({
         promptError: new Error(errorMessage),
+        promptFailureSignal,
       }),
     )
     .mockResolvedValueOnce(
@@ -384,11 +391,12 @@ async function runAutoPinnedPromptErrorRotationCase(params: {
   errorMessage: string;
   sessionKey: string;
   runId: string;
+  promptFailureSignal?: EmbeddedRunAttemptFailoverSignal;
 }) {
   runEmbeddedAttemptMock.mockClear();
   return withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
     await writeAuthStore(agentDir);
-    mockPromptErrorThenSuccessfulAttempt(params.errorMessage);
+    mockPromptErrorThenSuccessfulAttempt(params.errorMessage, params.promptFailureSignal);
     await runAutoPinnedOpenAiTurn({
       agentDir,
       workspaceDir,
@@ -818,6 +826,28 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     );
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
     expect(sleepWithAbortMock).toHaveBeenCalledWith(321, undefined);
+  });
+
+  it("uses prompt failover signal when prompt error text is generic", async () => {
+    const { usageStats } = await runAutoPinnedPromptErrorRotationCase({
+      errorMessage: "request failed",
+      promptFailureSignal: {
+        stage: "prompt",
+        source: "stream_call",
+        provider: "openai",
+        model: "mock-1",
+        reason: "overloaded",
+        status: 503,
+        rawError: "request failed",
+      },
+      sessionKey: "agent:test:structured-overloaded-prompt-rotation",
+      runId: "run:structured-overloaded-prompt-rotation",
+    });
+
+    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+    expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
+    expect(computeBackoffMock).toHaveBeenCalledTimes(1);
+    expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
   });
 
   it("rotates on timeout without cooling down the timed-out profile", async () => {

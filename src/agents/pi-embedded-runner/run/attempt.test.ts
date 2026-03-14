@@ -4,6 +4,7 @@ import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
 import {
   buildAfterTurnRuntimeContext,
   composeSystemPromptWithHookContext,
+  wrapStreamFnCaptureFailoverSignal,
   isOllamaCompatProvider,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
@@ -103,6 +104,42 @@ describe("resolvePromptBuildHookResult", () => {
     expect(result.prependContext).toBe("prompt context\n\nlegacy context");
     expect(result.prependSystemContext).toBe("prompt prepend\n\nlegacy prepend");
     expect(result.appendSystemContext).toBe("prompt append\n\nlegacy append");
+  });
+});
+
+describe("wrapStreamFnCaptureFailoverSignal", () => {
+  it("captures prompt failover signal from stream failures", async () => {
+    const failures: Array<Record<string, unknown>> = [];
+    const baseFn = vi.fn(async () => {
+      const err = new Error("request failed");
+      Object.assign(err, { status: 429 });
+      throw err;
+    });
+
+    const wrapped = wrapStreamFnCaptureFailoverSignal(baseFn as never, {
+      stage: "prompt",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.4",
+      onFailure: (failure) => {
+        failures.push(failure as unknown as Record<string, unknown>);
+      },
+    });
+
+    await expect(
+      wrapped({ provider: "openai", id: "gpt-5.4" } as never, {} as never, {} as never),
+    ).rejects.toThrow("request failed");
+
+    expect(failures).toEqual([
+      expect.objectContaining({
+        stage: "prompt",
+        source: "stream_call",
+        provider: "openai",
+        model: "gpt-5.4",
+        reason: "rate_limit",
+        status: 429,
+        rawError: "request failed",
+      }),
+    ]);
   });
 });
 
