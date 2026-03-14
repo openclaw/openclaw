@@ -126,6 +126,15 @@ function expectFirstInstallPlanCallOmitsToken() {
   expect(firstArg && "token" in firstArg).toBe(false);
 }
 
+function mockResolvedGatewayTokenSecretRef() {
+  resolveSecretInputRefMock.mockReturnValue({
+    ref: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
+  });
+  resolveSecretRefValuesMock.mockResolvedValue(
+    new Map([["env:default:OPENCLAW_GATEWAY_TOKEN", "resolved-from-secretref"]]),
+  );
+}
+
 const { runDaemonInstall } = await import("./install.js");
 const envSnapshot = captureFullEnv();
 
@@ -195,12 +204,7 @@ describe("runDaemonInstall", () => {
   });
 
   it("validates token SecretRef but does not serialize resolved token into service env", async () => {
-    resolveSecretInputRefMock.mockReturnValue({
-      ref: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
-    });
-    resolveSecretRefValuesMock.mockResolvedValue(
-      new Map([["env:default:OPENCLAW_GATEWAY_TOKEN", "resolved-from-secretref"]]),
-    );
+    mockResolvedGatewayTokenSecretRef();
 
     await runDaemonInstall({ json: true });
 
@@ -219,12 +223,7 @@ describe("runDaemonInstall", () => {
     loadConfigMock.mockReturnValue({
       gateway: { auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" } },
     });
-    resolveSecretInputRefMock.mockReturnValue({
-      ref: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
-    });
-    resolveSecretRefValuesMock.mockResolvedValue(
-      new Map([["env:default:OPENCLAW_GATEWAY_TOKEN", "resolved-from-secretref"]]),
-    );
+    mockResolvedGatewayTokenSecretRef();
 
     await runDaemonInstall({ json: true });
 
