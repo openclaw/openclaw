@@ -8,6 +8,7 @@ describe("isNonRecoverableSlackAuthError", () => {
     "An API error occurred: token_revoked",
     "An API error occurred: token_expired",
     "An API error occurred: not_authed",
+    "An API error occurred: not_allowed_token_type",
     "An API error occurred: org_login_required",
     "An API error occurred: team_access_not_granted",
     "An API error occurred: missing_scope",
