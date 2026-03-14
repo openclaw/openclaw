@@ -237,4 +237,123 @@ describe("pruneContextMessages", () => {
     const toolResult = result[1] as Extract<AgentMessage, { role: "toolResult" }>;
     expect(toolResult.content).toEqual([{ type: "text", text: placeholder }]);
   });
+
+  it("hardClear preserves thinking blocks in tool result content", () => {
+    const thinkingBlock = { type: "thinking", thinking: "deep thoughts" };
+    const messages: AgentMessage[] = [
+      makeUser("go"),
+      makeToolResult([
+        thinkingBlock as unknown as { type: "text"; text: string },
+        { type: "text", text: "A".repeat(20_000) },
+      ]),
+      makeAssistant([{ type: "text", text: "ok" }]),
+    ];
+
+    const placeholder = "[cleared]";
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0,
+        hardClearRatio: 0,
+        minPrunableToolChars: 1,
+        softTrim: {
+          maxChars: 50_000,
+          headChars: 25_000,
+          tailChars: 25_000,
+        },
+        hardClear: {
+          enabled: true,
+          placeholder,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 8,
+    });
+
+    const toolResult = result[1] as Extract<AgentMessage, { role: "toolResult" }>;
+    expect(toolResult.content).toHaveLength(2);
+    expect(toolResult.content[0]).toEqual(thinkingBlock);
+    expect(toolResult.content[1]).toEqual({ type: "text", text: placeholder });
+  });
+
+  it("hardClear preserves redacted_thinking blocks in tool result content", () => {
+    const redactedBlock = { type: "redacted_thinking", data: "encrypted" };
+    const messages: AgentMessage[] = [
+      makeUser("go"),
+      makeToolResult([
+        redactedBlock as unknown as { type: "text"; text: string },
+        { type: "text", text: "B".repeat(20_000) },
+      ]),
+      makeAssistant([{ type: "text", text: "ok" }]),
+    ];
+
+    const placeholder = "[cleared]";
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0,
+        hardClearRatio: 0,
+        minPrunableToolChars: 1,
+        softTrim: {
+          maxChars: 50_000,
+          headChars: 25_000,
+          tailChars: 25_000,
+        },
+        hardClear: {
+          enabled: true,
+          placeholder,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 8,
+    });
+
+    const toolResult = result[1] as Extract<AgentMessage, { role: "toolResult" }>;
+    expect(toolResult.content).toHaveLength(2);
+    expect(toolResult.content[0]).toEqual(redactedBlock);
+    expect(toolResult.content[1]).toEqual({ type: "text", text: placeholder });
+  });
+
+  it("softTrim preserves thinking blocks in tool result content", () => {
+    const thinkingBlock = { type: "thinking", thinking: "reasoning" };
+    const messages: AgentMessage[] = [
+      makeUser("go"),
+      makeToolResult([
+        thinkingBlock as unknown as { type: "text"; text: string },
+        { type: "text", text: "C".repeat(20_000) },
+      ]),
+      makeAssistant([{ type: "text", text: "ok" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0,
+        hardClearRatio: 10,
+        hardClear: { enabled: false, placeholder: "[cleared]" },
+        softTrim: {
+          maxChars: 100,
+          headChars: 30,
+          tailChars: 30,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 8,
+    });
+
+    const toolResult = result[1] as Extract<AgentMessage, { role: "toolResult" }>;
+    expect(toolResult.content[0]).toEqual(thinkingBlock);
+    expect((toolResult.content[1] as { type: "text"; text: string }).text).toContain(
+      "[Tool result trimmed:",
+    );
+  });
 });
