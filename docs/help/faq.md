@@ -385,7 +385,7 @@ Short version: it works, but expect rough edges.
 
 Docs: [Linux](/platforms/linux), [Install](/install).
 
-### It is stuck on wake up my friend onboarding will not hatch What now
+### It is stuck on "wake up my friend" / onboarding will not hatch. What now?
 
 That screen depends on the Gateway being reachable and authenticated. The TUI also sends
 "Wake up, my friend!" automatically on first hatch. If you see that line with **no reply**
