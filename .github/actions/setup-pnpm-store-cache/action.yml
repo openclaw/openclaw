@@ -61,14 +61,14 @@ runs:
     - name: Restore pnpm store cache (exact key only)
       # PRs that request sticky disks still need a safe cache restore path.
       if: inputs.use-actions-cache == 'true' && (inputs.use-sticky-disk != 'true' || github.event_name == 'pull_request') && inputs.use-restore-keys != 'true'
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ${{ steps.pnpm-store.outputs.path }}
         key: ${{ runner.os }}-pnpm-store-${{ inputs.cache-key-suffix }}-${{ hashFiles('pnpm-lock.yaml') }}
 
     - name: Restore pnpm store cache (with fallback keys)
       if: inputs.use-actions-cache == 'true' && (inputs.use-sticky-disk != 'true' || github.event_name == 'pull_request') && inputs.use-restore-keys == 'true'
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ${{ steps.pnpm-store.outputs.path }}
         key: ${{ runner.os }}-pnpm-store-${{ inputs.cache-key-suffix }}-${{ hashFiles('pnpm-lock.yaml') }}

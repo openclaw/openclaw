@@ -59,6 +59,21 @@ describe("isPidAlive", () => {
       expect(freshIsPidAlive(zombiePid)).toBe(false);
     });
   });
+
+  it("treats unreadable linux proc status as non-zombie when kill succeeds", async () => {
+    const readFileSyncSpy = vi.spyOn(fsSync, "readFileSync").mockImplementation(() => {
+      throw new Error("no proc status");
+    });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    await withLinuxProcessPlatform(async () => {
+      const { isPidAlive: freshIsPidAlive } = await import("./pid-alive.js");
+      expect(freshIsPidAlive(42)).toBe(true);
+    });
+
+    expect(readFileSyncSpy).toHaveBeenCalledWith("/proc/42/status", "utf8");
+    expect(killSpy).toHaveBeenCalledWith(42, 0);
+  });
 });
 
 describe("getProcessStartTime", () => {
@@ -112,6 +127,21 @@ describe("getProcessStartTime", () => {
     await withLinuxProcessPlatform(async () => {
       const { getProcessStartTime: fresh } = await import("./pid-alive.js");
       expect(fresh(42)).toBe(55555);
+    });
+  });
+
+  it("returns null for negative or non-integer start times", async () => {
+    const fakeStatPrefix = "42 (node) S 1 42 42 0 -1 4194304 12345 0 0 0 100 50 0 0 20 0 8 0 ";
+    const fakeStatSuffix =
+      " 123456789 5000 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0";
+    mockProcReads({
+      "/proc/42/stat": `${fakeStatPrefix}-1${fakeStatSuffix}`,
+      "/proc/43/stat": `${fakeStatPrefix}1.5${fakeStatSuffix}`,
+    });
+    await withLinuxProcessPlatform(async () => {
+      const { getProcessStartTime: fresh } = await import("./pid-alive.js");
+      expect(fresh(42)).toBeNull();
+      expect(fresh(43)).toBeNull();
     });
   });
 });

@@ -13,6 +13,13 @@ The OpenClaw Chrome extension lets the agent control your **existing Chrome tabs
 
 Attach/detach happens via a **single Chrome toolbar button**.
 
+If you want Chrome’s official DevTools MCP attach flow instead of the OpenClaw
+extension relay, use an `existing-session` browser profile instead. See
+[Browser](/tools/browser#chrome-existing-session-via-mcp). For Chrome’s own
+setup docs, see [Chrome for Developers: Use Chrome DevTools MCP with your
+browser session](https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session)
+and the [Chrome DevTools MCP README](https://github.com/ChromeDevTools/chrome-devtools-mcp).
+
 ## What it is (concept)
 
 There are three parts:

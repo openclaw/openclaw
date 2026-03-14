@@ -4,6 +4,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { generateSecureUuid } from "../secure-random.js";
+import type { OutboundMirror } from "./mirror.js";
 import type { OutboundChannel } from "./targets.js";
 
 const QUEUE_DIRNAME = "delivery-queue";
@@ -17,13 +18,6 @@ const BACKOFF_MS: readonly number[] = [
   120_000, // retry 3: 2m
   600_000, // retry 4: 10m
 ];
-
-type DeliveryMirrorPayload = {
-  sessionKey: string;
-  agentId?: string;
-  text?: string;
-  mediaUrls?: string[];
-};
 
 type QueuedDeliveryPayload = {
   channel: Exclude<OutboundChannel, "none">;
@@ -40,7 +34,7 @@ type QueuedDeliveryPayload = {
   bestEffort?: boolean;
   gifPlayback?: boolean;
   silent?: boolean;
-  mirror?: DeliveryMirrorPayload;
+  mirror?: OutboundMirror;
 };
 
 export interface QueuedDelivery extends QueuedDeliveryPayload {
