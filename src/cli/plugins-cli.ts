@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Command } from "commander";
+import { runPluginInit } from "./plugins-init.js";
+import type { PluginInitOptions } from "./plugins-init.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -822,5 +824,18 @@ export function registerPluginsCli(program: Command) {
       lines.push("");
       lines.push(`${theme.muted("Docs:")} ${docs}`);
       defaultRuntime.log(lines.join("\n"));
+    });
+
+  plugins
+    .command("init")
+    .description("Scaffold a new plugin project")
+    .argument("[directory]", "Target directory (defaults to current directory)")
+    .option("--id <id>", "Plugin id (derived from directory name if omitted)")
+    .option("--name <name>", "Display name")
+    .option("--description <desc>", "Short description")
+    .option("--kind <kind>", "Plugin kind (memory, context-engine)")
+    .option("--force", "Overwrite existing files", false)
+    .action((directory: string | undefined, opts: PluginInitOptions) => {
+      runPluginInit(directory, opts);
     });
 }
