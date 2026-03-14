@@ -12,6 +12,10 @@
 import { routeReply } from "../../../auto-reply/reply/route-reply.js";
 import { loadConfig } from "../../../config/config.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import {
+  deleteMessageTelegram,
+  resolveTelegramToken,
+} from "../../../plugin-sdk-internal/telegram.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 
@@ -23,6 +27,11 @@ const DEFAULT_EXPIRED_SECONDS = 300; // 5 minutes
 interface ConversationTimer {
   warningTimer: ReturnType<typeof setTimeout> | undefined;
   expiredTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Message ID of the most recent TTL notice (warning or expired), so we can delete it on reset. */
+  lastNoticeMessageId?: string;
+  /** Channel + to needed to delete the notice when the timer is reset by new activity. */
+  lastNoticeChannel?: string;
+  lastNoticeTo?: string;
 }
 
 // Singleton timer state — survives across hook invocations within one process
@@ -57,6 +66,14 @@ function clearConversationTimers(store: TimerStore, key: string): void {
     if (existing.expiredTimer) {
       clearTimeout(existing.expiredTimer);
     }
+    // Delete any previously sent TTL notice so only the most recent one is visible
+    if (existing.lastNoticeMessageId && existing.lastNoticeChannel && existing.lastNoticeTo) {
+      void deleteWarningMessage({
+        channelId: existing.lastNoticeChannel,
+        to: existing.lastNoticeTo,
+        messageId: existing.lastNoticeMessageId,
+      });
+    }
     store.delete(key);
   }
 }
@@ -66,7 +83,7 @@ async function sendCacheNotice(params: {
   to: string;
   conversationKey: string;
   kind: "warning" | "expired";
-}): Promise<void> {
+}): Promise<{ messageId?: string }> {
   const text =
     params.kind === "warning"
       ? "⏱️ Prompt cache expires in ~1 min — send any message to reset it."
@@ -77,17 +94,43 @@ async function sendCacheNotice(params: {
   sendingSet.add(params.conversationKey);
   try {
     const cfg = loadConfig();
-    await routeReply({
+    const result = await routeReply({
       payload: { text },
       channel: params.channelId as Parameters<typeof routeReply>[0]["channel"],
       to: params.to,
       cfg,
     });
     log.info(`cache-ttl-warning: sent ${params.kind} notice to ${params.to}`);
+    return { messageId: result.messageId };
   } catch (err) {
     log.warn(`cache-ttl-warning: failed to send ${params.kind} notice: ${String(err)}`);
+    return {};
   } finally {
     sendingSet.delete(params.conversationKey);
+  }
+}
+
+async function deleteWarningMessage(params: {
+  channelId: string;
+  to: string;
+  messageId: string;
+}): Promise<void> {
+  // Only Telegram supports delete-by-message-id in this hook
+  if (!params.channelId.includes("telegram")) {
+    return;
+  }
+  try {
+    const cfg = loadConfig();
+    const { token } = resolveTelegramToken(cfg, {});
+    if (!token) {
+      log.warn("cache-ttl-warning: no Telegram bot token — cannot delete warning message");
+      return;
+    }
+    await deleteMessageTelegram(params.to, params.messageId, { cfg, token });
+    log.info(`cache-ttl-warning: deleted warning message ${params.messageId} from ${params.to}`);
+  } catch (err) {
+    // Non-fatal — message may have already been deleted or expired in Telegram
+    log.warn(`cache-ttl-warning: failed to delete warning message: ${String(err)}`);
   }
 }
 
@@ -130,6 +173,21 @@ const handler: HookHandler = async (event) => {
   log.info(`cache-ttl-warning: handler invoked type=${event.type} action=${event.action}`);
   const isSent = event.type === "message" && event.action === "sent";
   const isReceived = event.type === "message" && event.action === "received";
+  const isSessionReset =
+    event.type === "command" && (event.action === "new" || event.action === "reset");
+
+  // On /new or /reset, cancel all active timers — the cache is being discarded
+  // and any pending warnings are now stale (and confusing).
+  if (isSessionReset) {
+    const timerStore = getTimerStore();
+    for (const key of timerStore.keys()) {
+      clearConversationTimers(timerStore, key);
+    }
+    log.info(
+      `cache-ttl-warning: session reset (command:${event.action}) — cleared all active timers`,
+    );
+    return;
+  }
 
   if (!isSent && !isReceived) {
     log.info(`cache-ttl-warning: not a message sent/received event — skipping`);
@@ -211,7 +269,11 @@ const handler: HookHandler = async (event) => {
   }
 
   const timerStore = getTimerStore();
-  const key = makeConversationKey(channelId, conversationId);
+  // Normalize conversationId to bare form (strip any provider/type prefix) so
+  // all key variants (e.g. "telegram:7898601152", "slash:7898601152", "7898601152")
+  // resolve to the same timer store entry and don't spawn independent timers.
+  const bareConversationId = conversationId.replace(/^.*:/, "");
+  const key = makeConversationKey(channelId, bareConversationId);
 
   // If the hook is currently sending a notice, the resulting message:sent event
   // must not reset the timer — that would create a self-triggering loop.
@@ -240,20 +302,48 @@ const handler: HookHandler = async (event) => {
       to: capturedTo,
       conversationKey: key,
       kind: "warning",
+    }).then(({ messageId }) => {
+      // Store the notice message ID so it can be deleted on reset or when expired fires
+      const currentEntry = timerStore.get(key);
+      if (currentEntry && messageId) {
+        currentEntry.lastNoticeMessageId = messageId;
+        currentEntry.lastNoticeChannel = capturedChannelId;
+        currentEntry.lastNoticeTo = capturedTo;
+      }
     });
   }, warningMs);
 
   // Set expired timer (if configured and after warning)
   if (expiredMs > 0 && expiredMs > warningMs) {
     entry.expiredTimer = setTimeout(() => {
-      void sendCacheNotice({
-        channelId: capturedChannelId,
-        to: capturedTo,
-        conversationKey: key,
-        kind: "expired",
+      const currentEntry = timerStore.get(key);
+      const lastNoticeMessageId = currentEntry?.lastNoticeMessageId;
+
+      // Delete the previous notice (warning) before sending the expired one
+      const deletePromise = lastNoticeMessageId
+        ? deleteWarningMessage({
+            channelId: capturedChannelId,
+            to: capturedTo,
+            messageId: lastNoticeMessageId,
+          })
+        : Promise.resolve();
+
+      void deletePromise.then(() => {
+        void sendCacheNotice({
+          channelId: capturedChannelId,
+          to: capturedTo,
+          conversationKey: key,
+          kind: "expired",
+        }).then(({ messageId }) => {
+          // Track the expired notice so it can be deleted if activity resumes
+          const currentEntry = timerStore.get(key);
+          if (currentEntry && messageId) {
+            currentEntry.lastNoticeMessageId = messageId;
+            currentEntry.lastNoticeChannel = capturedChannelId;
+            currentEntry.lastNoticeTo = capturedTo;
+          }
+        });
       });
-      // Clean up after firing
-      timerStore.delete(key);
     }, expiredMs);
   }
 
