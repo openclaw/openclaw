@@ -19,6 +19,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH, migrateLegacyConfig, readConfigFileSnapshot } from "../config/config.js";
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { LEGACY_CONFIG_FILENAMES, resolveStateDir } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { parseToolsBySenderTypedKey } from "../config/types.tools.js";
 import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
@@ -1674,6 +1675,48 @@ async function maybeMigrateLegacyConfig(): Promise<string[]> {
   return changes;
 }
 
+/**
+ * Rename stale legacy config files to `<name>.migrated` when `openclaw.json`
+ * already exists in the same directory.  This prevents the gateway from
+ * picking them up and producing validation-error log spam (issue #11465).
+ */
+export async function renameStaleLegacyConfigs(
+  env: NodeJS.ProcessEnv = process.env,
+  stateDir?: string,
+): Promise<string[]> {
+  const changes: string[] = [];
+  const dir = stateDir ?? resolveStateDir(env);
+  const primaryPath = path.join(dir, "openclaw.json");
+
+  try {
+    await fs.access(primaryPath);
+  } catch {
+    // openclaw.json doesn't exist — nothing to clean up
+    return changes;
+  }
+
+  for (const legacyName of LEGACY_CONFIG_FILENAMES) {
+    const legacyPath = path.join(dir, legacyName);
+    try {
+      await fs.access(legacyPath);
+    } catch {
+      continue;
+    }
+    const migratedPath = `${legacyPath}.migrated`;
+
+    try {
+      await fs.rename(legacyPath, migratedPath);
+      changes.push(`Renamed stale legacy config: ${legacyPath} -> ${migratedPath}`);
+    } catch (err) {
+      // Log the specific error for debugging, but continue best-effort
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      changes.push(`Failed to rename ${legacyPath}: ${errorMsg}`);
+    }
+  }
+
+  return changes;
+}
+
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
@@ -1690,6 +1733,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const legacyConfigChanges = await maybeMigrateLegacyConfig();
   if (legacyConfigChanges.length > 0) {
     note(legacyConfigChanges.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
+  }
+
+  const staleLegacyChanges = await renameStaleLegacyConfigs(process.env);
+  if (staleLegacyChanges.length > 0) {
+    note(staleLegacyChanges.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
   }
 
   let snapshot = await readConfigFileSnapshot();
