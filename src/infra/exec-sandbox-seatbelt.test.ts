@@ -183,6 +183,33 @@ describe("generateSeatbeltProfile", () => {
     expect(profile).not.toMatch(/allow file-read[^)]*\(subpath "\/private\/tmp"\)/);
   });
 
+  it("exec-only /tmp rule grants process-exec* on /private/tmp in restrictive mode", () => {
+    // Regression: when default:"---" and a rule grants exec on /tmp (e.g. "--x"),
+    // the seatbelt profile must emit (allow process-exec* (subpath "/private/tmp")).
+    // Without this fix, no exec allowance was emitted and binaries in /tmp could not
+    // be executed even though the policy explicitly permitted it.
+    const config: AccessPolicyConfig = {
+      default: "---",
+      rules: { "/tmp/**": "--x" },
+    };
+    const profile = generateSeatbeltProfile(config, HOME);
+    expect(profile).toMatch(/allow process-exec\*[^)]*\(subpath "\/private\/tmp"\)/);
+    // Read and write must NOT be granted.
+    expect(profile).not.toMatch(/allow file-read[^)]*\(subpath "\/private\/tmp"\)/);
+    expect(profile).not.toMatch(/allow file-write\*[^)]*\(subpath "\/private\/tmp"\)/);
+  });
+
+  it("r-x /tmp rule grants both read and exec on /private/tmp in restrictive mode", () => {
+    const config: AccessPolicyConfig = {
+      default: "---",
+      rules: { "/tmp/**": "r-x" },
+    };
+    const profile = generateSeatbeltProfile(config, HOME);
+    expect(profile).toMatch(/allow file-read[^)]*\(subpath "\/private\/tmp"\)/);
+    expect(profile).toMatch(/allow process-exec\*[^)]*\(subpath "\/private\/tmp"\)/);
+    expect(profile).not.toMatch(/allow file-write\*[^)]*\(subpath "\/private\/tmp"\)/);
+  });
+
   // ---------------------------------------------------------------------------
   // Symlink attack mitigation — profile ordering
   //

@@ -138,19 +138,57 @@ function validateAccessPolicyFileStructure(filePath: string, parsed: unknown): s
  */
 export const BROKEN_POLICY_FILE = Symbol("broken-policy-file");
 
+// In-process mtime cache — avoids re-parsing the file on every agent turn.
+// Cache is keyed by mtime so any write to the file automatically invalidates it.
+type _FileCacheEntry = {
+  mtimeMs: number;
+  result: AccessPolicyFile | typeof BROKEN_POLICY_FILE;
+};
+let _fileCache: _FileCacheEntry | undefined;
+
+/** Reset the in-process file cache. Only for use in tests. */
+export function _resetFileCacheForTest(): void {
+  _fileCache = undefined;
+}
+
 /**
  * Read and parse the sidecar file.
  * - Returns null if the file does not exist (opt-in not configured).
  * - Returns BROKEN_POLICY_FILE if the file exists but is malformed/unreadable
  *   (callers must treat this as default:"---" — fail-closed).
  * - Returns the parsed file on success.
+ *
+ * Result is cached in-process by mtime — re-parses only when the file changes.
  */
 export function loadAccessPolicyFile(): AccessPolicyFile | null | typeof BROKEN_POLICY_FILE {
   const filePath = resolveAccessPolicyPath();
-  if (!fs.existsSync(filePath)) {
+
+  // Single statSync per call: cheap enough and detects file changes.
+  let mtimeMs: number;
+  try {
+    mtimeMs = fs.statSync(filePath).mtimeMs;
+  } catch {
+    // File does not exist — clear cache and return null (feature is opt-in).
+    _fileCache = undefined;
     return null;
   }
 
+  // Cache hit: same mtime means same content — skip readFileSync + JSON.parse.
+  if (_fileCache && _fileCache.mtimeMs === mtimeMs) {
+    return _fileCache.result;
+  }
+
+  // Cache miss: parse fresh and store result (including BROKEN_POLICY_FILE).
+  const result = _parseAccessPolicyFile(filePath);
+  _fileCache = { mtimeMs, result: result ?? BROKEN_POLICY_FILE };
+  // _parseAccessPolicyFile returns null only for the non-existent case, which we
+  // handle above via statSync. If it somehow returns null here treat as broken.
+  return result ?? BROKEN_POLICY_FILE;
+}
+
+function _parseAccessPolicyFile(
+  filePath: string,
+): AccessPolicyFile | typeof BROKEN_POLICY_FILE | null {
   let parsed: unknown;
   try {
     const raw = fs.readFileSync(filePath, "utf8");

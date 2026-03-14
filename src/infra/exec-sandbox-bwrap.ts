@@ -205,7 +205,20 @@ export function generateBwrapArgs(
       // path is hidden even though --ro-bind / / made it readable by default.
       // This mirrors what deny[] does — without this, "---" rules under a permissive
       // default are silently ignored at the bwrap layer.
-      args.push("--tmpfs", p);
+      // Guard: bwrap --tmpfs only accepts a directory as the mount point. If the
+      // resolved path is a file, skip the mount and warn — same behaviour as deny[].
+      // Non-existent paths are assumed to be directories (forward-protection).
+      let isDir = true;
+      try {
+        isDir = fs.statSync(p).isDirectory();
+      } catch {
+        // Non-existent — assume directory.
+      }
+      if (isDir) {
+        args.push("--tmpfs", p);
+      } else {
+        _warnBwrapFileDenyOnce(p);
+      }
     }
     // Permissive base + read-only rule: already covered by --ro-bind / /; no extra mount.
   }

@@ -177,6 +177,23 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
     expect(bindMounts).not.toContain(`${HOME}/secret`);
   });
 
+  it("narrowing rule on an existing file does not emit --tmpfs (bwrap only accepts dirs)", () => {
+    // Reproducer: { "default": "r--", "rules": { "~/secrets.key": "---" } }
+    // where ~/secrets.key is an existing file. The old code emitted --tmpfs on the
+    // file path, causing bwrap to abort with "Not a directory". Fix: mirror the
+    // isDir guard already present in the deny[] branch.
+    // process.execPath is always an existing file — use it as the test target.
+    const filePath = process.execPath;
+    const config: AccessPolicyConfig = {
+      default: "r--",
+      rules: { [filePath]: "---" },
+    };
+    const args = generateBwrapArgs(config, HOME);
+    const tmpfsMounts = args.map((a, i) => (a === "--tmpfs" ? args[i + 1] : null)).filter(Boolean);
+    // Must NOT emit --tmpfs for a file path.
+    expect(tmpfsMounts).not.toContain(filePath);
+  });
+
   it('"--x" rule in permissive mode gets --tmpfs overlay to block reads', () => {
     // Execute-only rules have no read bit — same treatment as "---" in permissive mode.
     const config: AccessPolicyConfig = {

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BROKEN_POLICY_FILE,
+  _resetFileCacheForTest,
   _resetNotFoundWarnedForTest,
   loadAccessPolicyFile,
   mergeAccessPolicy,
@@ -29,6 +30,7 @@ const FP_DIR = path.dirname(FP_FILE);
 beforeEach(() => {
   fs.mkdirSync(FP_DIR, { recursive: true });
   _resetNotFoundWarnedForTest();
+  _resetFileCacheForTest();
 });
 
 afterEach(() => {
@@ -251,6 +253,57 @@ describe("loadAccessPolicyFile", () => {
     expect(result.version).toBe(1);
     expect(result.base?.default).toBe("r--");
     expect(result.agents?.subri?.rules?.["~/dev/**"]).toBe("rwx");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// loadAccessPolicyFile — mtime cache
+// ---------------------------------------------------------------------------
+
+describe("loadAccessPolicyFile — mtime cache", () => {
+  it("returns cached result on second call without re-reading the file", () => {
+    writeFile({ version: 1, base: { default: "r--" } });
+    const spy = vi.spyOn(fs, "readFileSync");
+    loadAccessPolicyFile(); // populate cache
+    loadAccessPolicyFile(); // should hit cache
+    // readFileSync should only be called once despite two loadAccessPolicyFile calls.
+    expect(spy.mock.calls.filter((c) => String(c[0]).includes("access-policy")).length).toBe(1);
+    spy.mockRestore();
+  });
+
+  it("re-reads when mtime changes (file updated)", () => {
+    writeFile({ version: 1, base: { default: "r--" } });
+    loadAccessPolicyFile(); // populate cache
+    // Rewrite the file — on most filesystems this bumps mtime. Force a detectable
+    // mtime change by setting it explicitly via utimesSync.
+    writeFile({ version: 1, base: { default: "rwx" } });
+    const future = Date.now() / 1000 + 1;
+    fs.utimesSync(FP_FILE, future, future);
+    const result = loadAccessPolicyFile();
+    expect(result).not.toBe(BROKEN_POLICY_FILE);
+    if (result === null || result === BROKEN_POLICY_FILE) {
+      throw new Error("unexpected");
+    }
+    expect(result.base?.default).toBe("rwx");
+  });
+
+  it("clears cache when file is deleted", () => {
+    writeFile({ version: 1, base: { default: "r--" } });
+    loadAccessPolicyFile(); // populate cache
+    fs.unlinkSync(FP_FILE);
+    expect(loadAccessPolicyFile()).toBeNull();
+  });
+
+  it("caches BROKEN_POLICY_FILE result for broken files", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    fs.writeFileSync(FP_FILE, "not json {{ broken");
+    loadAccessPolicyFile(); // populate cache with BROKEN
+    const spy2 = vi.spyOn(fs, "readFileSync");
+    const result = loadAccessPolicyFile(); // should hit cache
+    expect(result).toBe(BROKEN_POLICY_FILE);
+    expect(spy2.mock.calls.filter((c) => String(c[0]).includes("access-policy")).length).toBe(0);
+    spy.mockRestore();
+    spy2.mockRestore();
   });
 });
 
