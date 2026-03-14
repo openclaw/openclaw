@@ -27,8 +27,12 @@ OpenClaw auto-detects in this order and stops at the first working option:
    - `sherpa-onnx-offline` (requires `SHERPA_ONNX_MODEL_DIR` with encoder/decoder/joiner/tokens)
    - `whisper-cli` (from `whisper-cpp`; uses `WHISPER_CPP_MODEL` or the bundled tiny model)
    - `whisper` (Python CLI; downloads models automatically)
-2. **Gemini CLI** (`gemini`) using `read_many_files`
-3. **Provider keys** (OpenAI → Groq → Deepgram → Google)
+2. **Provider keys** (OpenAI → Groq → Deepgram → Google)
+
+> Note: Gemini CLI auto-detect is intentionally skipped for **audio** in headless flows.
+> We found `gemini -p` audio-path references can be treated as regular file context instead of
+> deterministic multimodal audio input, which makes Telegram voice-note transcription unreliable.
+> Gemini CLI auto-detect remains available for image/video understanding.
 
 To disable auto-detection, set `tools.media.audio.enabled: false`.
 To customize, set `tools.media.audio.models`.
