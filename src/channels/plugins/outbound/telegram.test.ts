@@ -15,7 +15,7 @@ describe("telegramOutbound", () => {
       accountId: "work",
       replyToId: "44",
       threadId: "55",
-      deps: { sendTelegram },
+      deps: { telegram: sendTelegram },
     });
 
     expect(sendTelegram).toHaveBeenCalledWith(
@@ -43,7 +43,7 @@ describe("telegramOutbound", () => {
       text: "<b>hello</b>",
       accountId: "work",
       threadId: "12345:99",
-      deps: { sendTelegram },
+      deps: { telegram: sendTelegram },
     });
 
     expect(sendTelegram).toHaveBeenCalledWith(
@@ -70,7 +70,7 @@ describe("telegramOutbound", () => {
       mediaUrl: "https://example.com/a.jpg",
       mediaLocalRoots: ["/tmp/media"],
       accountId: "default",
-      deps: { sendTelegram },
+      deps: { telegram: sendTelegram },
     });
 
     expect(sendTelegram).toHaveBeenCalledWith(
@@ -112,7 +112,7 @@ describe("telegramOutbound", () => {
       payload,
       mediaLocalRoots: ["/tmp/media"],
       accountId: "default",
-      deps: { sendTelegram },
+      deps: { telegram: sendTelegram },
     });
 
     expect(sendTelegram).toHaveBeenCalledTimes(2);
