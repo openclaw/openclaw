@@ -2,15 +2,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
 import {
   loadConfigMock as loadConfig,
   resolveGatewayPortMock as resolveGatewayPort,
 } from "../gateway/gateway-connection.test-mocks.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 
-const readCommandMock = vi.fn(async () => null);
+const readCommandMock = vi.fn<() => Promise<GatewayServiceCommandConfig | null>>(async () => null);
+const readRuntimeMock = vi.fn(async () => ({ status: "running" as const }));
 vi.mock("../daemon/service.js", () => ({
-  resolveGatewayService: () => ({ readCommand: readCommandMock }),
+  resolveGatewayService: () => ({ readCommand: readCommandMock, readRuntime: readRuntimeMock }),
 }));
 
 const { resolveGatewayConnection } = await import("./gateway-chat.js");
