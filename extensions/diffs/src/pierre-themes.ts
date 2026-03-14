@@ -4,8 +4,10 @@ import { fileURLToPath } from "node:url";
 import { RegisteredCustomThemes, ResolvedThemes, ResolvingThemes } from "@pierre/diffs";
 
 let pierreThemesRegistration: Promise<void> | null = null;
+type RegisteredThemeLoader = NonNullable<ReturnType<typeof RegisteredCustomThemes.get>>;
+type RegisteredTheme = Awaited<ReturnType<RegisteredThemeLoader>>;
 
-async function loadPierreTheme(themeFileName: string, themeName: string): Promise<unknown> {
+async function loadPierreTheme(themeFileName: string, themeName: string): Promise<RegisteredTheme> {
   const diffsPackageRoot = await fs.realpath(
     fileURLToPath(new URL("../node_modules/@pierre/diffs", import.meta.url)),
   );
