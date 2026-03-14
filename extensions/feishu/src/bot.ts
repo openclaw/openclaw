@@ -1157,7 +1157,10 @@ export async function handleFeishuMessage(params: {
     const feishuTo = isGroup ? `chat:${ctx.chatId}` : `user:${ctx.senderOpenId}`;
     const peerId = isGroup ? (groupSession?.peerId ?? ctx.chatId) : ctx.senderOpenId;
     const parentPeer = isGroup ? (groupSession?.parentPeer ?? null) : null;
-    const replyInThread = isGroup ? (groupSession?.replyInThread ?? false) : false;
+    // P2P threads: when a DM message carries a thread_id, the user is inside a
+    // thread and the bot should reply there — not as a standalone message.
+    const isDmThread = isDirect && Boolean(ctx.threadId);
+    const replyInThread = isGroup ? (groupSession?.replyInThread ?? false) : isDmThread;
 
     if (isGroup && groupSession) {
       log(
@@ -1355,8 +1358,10 @@ export async function handleFeishuMessage(params: {
       isGroup &&
       (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
     const replyTargetMessageId =
-      isTopicSession || configReplyInThread ? (ctx.rootId ?? ctx.messageId) : ctx.messageId;
-    const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
+      isTopicSession || configReplyInThread || isDmThread
+        ? (ctx.rootId ?? ctx.messageId)
+        : ctx.messageId;
+    const threadReply = isGroup ? (groupSession?.threadReply ?? false) : isDmThread;
 
     if (broadcastAgents) {
       // Cross-account dedup: in multi-account setups, Feishu delivers the same
@@ -1407,7 +1412,7 @@ export async function handleFeishuMessage(params: {
             runtime: runtime as RuntimeEnv,
             chatId: ctx.chatId,
             replyToMessageId: replyTargetMessageId,
-            skipReplyToInMessages: !isGroup,
+            skipReplyToInMessages: isDirect && !isDmThread,
             replyInThread,
             rootId: ctx.rootId,
             threadReply,
@@ -1505,7 +1510,7 @@ export async function handleFeishuMessage(params: {
         runtime: runtime as RuntimeEnv,
         chatId: ctx.chatId,
         replyToMessageId: replyTargetMessageId,
-        skipReplyToInMessages: !isGroup,
+        skipReplyToInMessages: isDirect && !isDmThread,
         replyInThread,
         rootId: ctx.rootId,
         threadReply,
