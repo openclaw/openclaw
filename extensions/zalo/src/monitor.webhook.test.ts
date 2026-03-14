@@ -283,6 +283,7 @@ describe("handleZaloWebhookRequest", () => {
 
     try {
       await withServer(webhookRequestHandler, async (baseUrl) => {
+        let saw429 = false;
         for (let i = 0; i < 200; i += 1) {
           const response = await fetch(`${baseUrl}/hook-query-status?nonce=${i}`, {
             method: "POST",
@@ -292,10 +293,15 @@ describe("handleZaloWebhookRequest", () => {
             },
             body: "{}",
           });
-          expect(response.status).toBe(401);
+          expect([401, 429]).toContain(response.status);
+          if (response.status === 429) {
+            saw429 = true;
+            break;
+          }
         }
 
-        expect(getZaloWebhookStatusCounterSizeForTest()).toBe(1);
+        expect(saw429).toBe(true);
+        expect(getZaloWebhookStatusCounterSizeForTest()).toBe(2);
       });
     } finally {
       unregister();
@@ -316,6 +322,91 @@ describe("handleZaloWebhookRequest", () => {
 
         expect(saw429).toBe(true);
         expect(getZaloWebhookRateLimitStateSizeForTest()).toBe(1);
+      });
+    } finally {
+      unregister();
+    }
+  });
+
+  it("rate limits unauthorized secret guesses before authentication succeeds", async () => {
+    const unregister = registerTarget({ path: "/hook-preauth-rate" });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const saw429 = await postUntilRateLimited({
+          baseUrl,
+          path: "/hook-preauth-rate",
+          secret: "invalid-token", // pragma: allowlist secret
+          withNonceQuery: true,
+        });
+
+        expect(saw429).toBe(true);
+        expect(getZaloWebhookRateLimitStateSizeForTest()).toBe(1);
+      });
+    } finally {
+      unregister();
+    }
+  });
+
+  it("does not let unauthorized floods rate-limit authenticated traffic from a different trusted forwarded client IP", async () => {
+    const unregister = registerTarget({
+      path: "/hook-preauth-split",
+      config: {
+        gateway: {
+          trustedProxies: ["127.0.0.1"],
+        },
+      } as OpenClawConfig,
+    });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        for (let i = 0; i < 130; i += 1) {
+          const response = await fetch(`${baseUrl}/hook-preauth-split?nonce=${i}`, {
+            method: "POST",
+            headers: {
+              "x-bot-api-secret-token": "invalid-token", // pragma: allowlist secret
+              "content-type": "application/json",
+              "x-forwarded-for": "203.0.113.10",
+            },
+            body: "{}",
+          });
+          if (response.status === 429) {
+            break;
+          }
+        }
+
+        const validResponse = await fetch(`${baseUrl}/hook-preauth-split`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret",
+            "content-type": "application/json",
+            "x-forwarded-for": "198.51.100.20",
+          },
+          body: JSON.stringify({ event_name: "message.unsupported.received" }),
+        });
+
+        expect(validResponse.status).toBe(200);
+      });
+    } finally {
+      unregister();
+    }
+  });
+
+  it("still returns 401 before 415 when both secret and content-type are invalid", async () => {
+    const unregister = registerTarget({ path: "/hook-auth-before-type" });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/hook-auth-before-type`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "invalid-token", // pragma: allowlist secret
+            "content-type": "text/plain",
+          },
+          body: "not-json",
+        });
+
+        expect(response.status).toBe(401);
       });
     } finally {
       unregister();

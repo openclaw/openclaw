@@ -546,6 +546,60 @@ describe("resolveModel", () => {
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
   });
 
+  it("builds an openai-codex fallback for gpt-5.3-codex-spark", () => {
+    mockOpenAICodexTemplateModel();
+
+    const result = resolveModel("openai-codex", "gpt-5.3-codex-spark", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject(
+      buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex-spark"),
+    );
+  });
+
+  it("keeps openai-codex gpt-5.3-codex-spark when discovery provides it", () => {
+    mockDiscoveredModel({
+      provider: "openai-codex",
+      modelId: "gpt-5.3-codex-spark",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex-spark"),
+        name: "GPT-5.3 Codex Spark",
+        input: ["text"],
+      },
+    });
+
+    const result = resolveModel("openai-codex", "gpt-5.3-codex-spark", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.3-codex-spark",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+    });
+  });
+
+  it("rejects stale direct openai gpt-5.3-codex-spark discovery rows", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5.3-codex-spark",
+      templateModel: buildForwardCompatTemplate({
+        id: "gpt-5.3-codex-spark",
+        name: "GPT-5.3 Codex Spark",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+    });
+
+    const result = resolveModel("openai", "gpt-5.3-codex-spark", "/tmp/agent");
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.",
+    );
+  });
+
   it("applies provider overrides to openai gpt-5.4 forward-compat models", () => {
     mockDiscoveredModel({
       provider: "openai",
@@ -723,6 +777,24 @@ describe("resolveModel", () => {
 
   it("keeps unknown-model errors for non-gpt-5 openai-codex ids", () => {
     expectUnknownModelError("openai-codex", "gpt-4.1-mini");
+  });
+
+  it("rejects direct openai gpt-5.3-codex-spark with a codex-only hint", () => {
+    const result = resolveModel("openai", "gpt-5.3-codex-spark", "/tmp/agent");
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.",
+    );
+  });
+
+  it("rejects azure openai gpt-5.3-codex-spark with a codex-only hint", () => {
+    const result = resolveModel("azure-openai-responses", "gpt-5.3-codex-spark", "/tmp/agent");
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: azure-openai-responses/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.",
+    );
   });
 
   it("uses codex fallback even when openai-codex provider is configured", () => {
@@ -912,6 +984,43 @@ describe("resolveModel", () => {
     expect(result.error).toBeUndefined();
     expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
       "X-Custom-Auth": "token-123",
+    });
+  });
+
+  it("lets provider config override registry-found kimi user agent headers", () => {
+    mockDiscoveredModel({
+      provider: "kimi-coding",
+      modelId: "k2p5",
+      templateModel: {
+        ...buildForwardCompatTemplate({
+          id: "k2p5",
+          name: "Kimi for Coding",
+          provider: "kimi-coding",
+          api: "anthropic-messages",
+          baseUrl: "https://api.kimi.com/coding/",
+        }),
+        headers: { "User-Agent": "claude-code/0.1.0" },
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          "kimi-coding": {
+            headers: {
+              "User-Agent": "custom-kimi-client/1.0",
+              "X-Kimi-Tenant": "tenant-a",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("kimi-coding", "k2p5", "/tmp/agent", cfg);
+    expect(result.error).toBeUndefined();
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "User-Agent": "custom-kimi-client/1.0",
+      "X-Kimi-Tenant": "tenant-a",
     });
   });
 

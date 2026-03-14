@@ -51,8 +51,10 @@ export function getProxyUrlFromFetch(fetchImpl?: typeof fetch): string | undefin
  * Returns undefined when no proxy is configured.
  * Gracefully returns undefined if the proxy URL is malformed.
  */
-export function resolveProxyFetchFromEnv(): typeof fetch | undefined {
-  if (!hasEnvHttpProxyConfigured("https")) {
+export function resolveProxyFetchFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): typeof fetch | undefined {
+  if (!hasEnvHttpProxyConfigured("https", env)) {
     return undefined;
   }
   try {

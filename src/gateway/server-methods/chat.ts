@@ -980,6 +980,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionId,
       messages: bounded.messages,
       thinkingLevel,
+      fastMode: entry?.fastMode,
       verboseLevel,
     });
   },
@@ -1470,7 +1471,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       storePath,
       sessionFile: entry?.sessionFile,
       agentId: resolveSessionAgentId({ sessionKey: rawSessionKey, config: cfg }),
-      createIfMissing: false,
+      createIfMissing: true,
     });
     if (!appended.ok || !appended.messageId || !appended.message) {
       respond(

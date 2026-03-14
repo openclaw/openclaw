@@ -25,37 +25,12 @@ import { ErrorCodes, errorShape } from "./protocol/index.js";
 import {
   archiveSessionTranscripts,
   loadSessionEntry,
-  pruneLegacyStoreKeys,
+  migrateAndPruneGatewaySessionStoreKey,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
 } from "./session-utils.js";
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
-
-function migrateAndPruneSessionStoreKey(params: {
-  cfg: ReturnType<typeof loadConfig>;
-  key: string;
-  store: Record<string, SessionEntry>;
-}) {
-  const target = resolveGatewaySessionStoreTarget({
-    cfg: params.cfg,
-    key: params.key,
-    store: params.store,
-  });
-  const primaryKey = target.canonicalKey;
-  if (!params.store[primaryKey]) {
-    const existingKey = target.storeKeys.find((candidate) => Boolean(params.store[candidate]));
-    if (existingKey) {
-      params.store[primaryKey] = params.store[existingKey];
-    }
-  }
-  pruneLegacyStoreKeys({
-    store: params.store,
-    canonicalKey: primaryKey,
-    candidates: target.storeKeys,
-  });
-  return { target, primaryKey, entry: params.store[primaryKey] };
-}
 
 function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined {
   if (!entry) {
@@ -311,7 +286,11 @@ export async function performGatewaySessionReset(params: {
   let oldSessionId: string | undefined;
   let oldSessionFile: string | undefined;
   const next = await updateSessionStore(storePath, (store) => {
-    const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key: params.key, store });
+    const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+      cfg,
+      key: params.key,
+      store,
+    });
     const currentEntry = store[primaryKey];
     const resetEntry = stripRuntimeModelState(currentEntry);
     const parsed = parseAgentSessionKey(primaryKey);
@@ -326,6 +305,7 @@ export async function performGatewaySessionReset(params: {
       systemSent: false,
       abortedLastRun: false,
       thinkingLevel: currentEntry?.thinkingLevel,
+      fastMode: currentEntry?.fastMode,
       verboseLevel: currentEntry?.verboseLevel,
       reasoningLevel: currentEntry?.reasoningLevel,
       responseUsage: currentEntry?.responseUsage,
@@ -337,6 +317,8 @@ export async function performGatewaySessionReset(params: {
       origin: snapshotSessionOrigin(currentEntry),
       lastChannel: currentEntry?.lastChannel,
       lastTo: currentEntry?.lastTo,
+      lastAccountId: currentEntry?.lastAccountId,
+      lastThreadId: currentEntry?.lastThreadId,
       skillsSnapshot: currentEntry?.skillsSnapshot,
       inputTokens: 0,
       outputTokens: 0,

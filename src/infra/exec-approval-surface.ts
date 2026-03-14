@@ -50,8 +50,18 @@ export function resolveExecApprovalInitiatingSurfaceState(params: {
   return { kind: "unsupported", channel, channelLabel };
 }
 
-export function hasConfiguredExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
-  for (const account of listEnabledDiscordAccounts(cfg)) {
+function hasExecApprovalDmRoute(
+  accounts: Array<{
+    config: {
+      execApprovals?: {
+        enabled?: boolean;
+        approvers?: unknown[];
+        target?: string;
+      };
+    };
+  }>,
+): boolean {
+  for (const account of accounts) {
     const execApprovals = account.config.execApprovals;
     if (!execApprovals?.enabled || (execApprovals.approvers?.length ?? 0) === 0) {
       continue;
@@ -61,17 +71,12 @@ export function hasConfiguredExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
       return true;
     }
   }
-
-  for (const account of listEnabledTelegramAccounts(cfg)) {
-    const execApprovals = account.config.execApprovals;
-    if (!execApprovals?.enabled || (execApprovals.approvers?.length ?? 0) === 0) {
-      continue;
-    }
-    const target = execApprovals.target ?? "dm";
-    if (target === "dm" || target === "both") {
-      return true;
-    }
-  }
-
   return false;
+}
+
+export function hasConfiguredExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
+  return (
+    hasExecApprovalDmRoute(listEnabledDiscordAccounts(cfg)) ||
+    hasExecApprovalDmRoute(listEnabledTelegramAccounts(cfg))
+  );
 }
