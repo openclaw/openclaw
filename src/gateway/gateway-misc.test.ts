@@ -19,6 +19,7 @@ import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
 import { formatError, normalizeVoiceWakeTriggers } from "./server-utils.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import * as sessionUtils from "./session-utils.js";
 
 function makeControlUiResponse() {
   const res = {
@@ -307,6 +308,59 @@ describe("node subscription manager", () => {
     manager.sendToSession("secondary", "tick", {}, sendEvent);
 
     expect(sent).toEqual([]);
+  });
+
+  test("falls back through spawnedBy lineage and caches canonical parent subscribers", () => {
+    const manager = createNodeSubscriptionManager();
+    const sent: Array<{
+      nodeId: string;
+      event: string;
+      payloadJSON?: string | null;
+    }> = [];
+    const sendEvent = (evt: { nodeId: string; event: string; payloadJSON?: string | null }) =>
+      sent.push(evt);
+    const loadSpy = vi.spyOn(sessionUtils, "loadSessionEntry").mockImplementation((key: string) => {
+      if (key === "agent:child:main") {
+        return {
+          canonicalKey: key,
+          entry: { spawnedBy: "parent-alias" },
+          cfg: {} as never,
+          storePath: undefined,
+          store: {},
+          legacyKey: undefined,
+        } as ReturnType<typeof sessionUtils.loadSessionEntry>;
+      }
+      if (key === "parent-alias") {
+        return {
+          canonicalKey: "agent:parent:main",
+          entry: undefined,
+          cfg: {} as never,
+          storePath: undefined,
+          store: {},
+          legacyKey: undefined,
+        } as ReturnType<typeof sessionUtils.loadSessionEntry>;
+      }
+      return {
+        canonicalKey: key,
+        entry: undefined,
+        cfg: {} as never,
+        storePath: undefined,
+        store: {},
+        legacyKey: undefined,
+      } as ReturnType<typeof sessionUtils.loadSessionEntry>;
+    });
+
+    try {
+      manager.subscribe("node-a", "agent:parent:main");
+      manager.sendToSession("agent:child:main", "chat", { ok: true }, sendEvent);
+      manager.sendToSession("agent:child:main", "chat", { ok: true }, sendEvent);
+
+      expect(sent).toHaveLength(2);
+      expect(sent[0]).toMatchObject({ nodeId: "node-a", event: "chat" });
+      expect(loadSpy.mock.calls).toEqual([["agent:child:main"], ["parent-alias"]]);
+    } finally {
+      loadSpy.mockRestore();
+    }
   });
 });
 
