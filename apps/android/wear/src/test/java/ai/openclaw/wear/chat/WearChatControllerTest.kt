@@ -190,7 +190,7 @@ class WearChatControllerTest {
     assertTrue(controller.isSending.value)
 
     advanceTimeBy(1_500)
-    advanceUntilIdle()
+    runCurrent()
 
     assertFalse(controller.isSending.value)
     assertEquals(listOf("Ping", "Pong from polling"), controller.messages.value.map { it.text })
@@ -233,6 +233,68 @@ class WearChatControllerTest {
     assertTrue(replies.isEmpty())
 
     collectJob.cancel()
+    controllerScope.cancel()
+  }
+
+  @Test
+  fun `polling only resolves the oldest pending run when two sends are waiting`() = runTest {
+    val client = FakeGatewayClient().apply {
+      chatSendResponse = """{}"""
+      historyResponses += """{"messages":[]}"""
+      historyResponses += historyJson(userText = "First", assistantText = "Reply one")
+      historyResponses += """
+        {
+          "messages": [
+            {
+              "role": "user",
+              "timestamp": 1,
+              "content": [{"type":"text","text":"First"}]
+            },
+            {
+              "role": "assistant",
+              "timestamp": 2,
+              "content": [{"type":"text","text":"Reply one"}]
+            },
+            {
+              "role": "user",
+              "timestamp": 3,
+              "content": [{"type":"text","text":"Second"}]
+            },
+            {
+              "role": "assistant",
+              "timestamp": 4,
+              "content": [{"type":"text","text":"Reply two"}]
+            }
+          ]
+        }
+      """.trimIndent()
+    }
+    val controllerScope = TestScope(StandardTestDispatcher(testScheduler))
+    val controller = WearChatController(controllerScope, client, ::testString)
+    advanceUntilIdle()
+
+    controller.sendMessage("First")
+    runCurrent()
+    controller.sendMessage("Second")
+    runCurrent()
+
+    assertTrue(controller.isSending.value)
+    assertEquals(listOf("First", "Second"), controller.messages.value.map { it.text })
+
+    advanceTimeBy(1_500)
+    runCurrent()
+
+    assertTrue(controller.isSending.value)
+    assertEquals(listOf("First", "Reply one", "Second"), controller.messages.value.map { it.text })
+
+    advanceTimeBy(1_500)
+    advanceUntilIdle()
+
+    assertFalse(controller.isSending.value)
+    assertEquals(
+      listOf("First", "Reply one", "Second", "Reply two"),
+      controller.messages.value.map { it.text },
+    )
     controllerScope.cancel()
   }
 
