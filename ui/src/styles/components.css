@@ -4286,6 +4286,6 @@
   }
 
   .cron-timeline-mobile-item:last-child {
-    border-bottom: none;>>>>>>> ac5b847c (feat(control-ui): add cron calendar timeline view)
+    border-bottom: none;
   }
 }
