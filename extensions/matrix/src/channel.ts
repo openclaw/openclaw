@@ -16,6 +16,7 @@ import {
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/matrix";
+import { buildTrafficStatusSummary } from "../../shared/channel-status-summary.js";
 import { matrixMessageActions } from "./actions.js";
 import { MatrixConfigSchema } from "./config-schema.js";
 import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
@@ -423,8 +424,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       lastError: runtime?.lastError ?? null,
       probe,
       lastProbeAt: runtime?.lastProbeAt ?? null,
-      lastInboundAt: runtime?.lastInboundAt ?? null,
-      lastOutboundAt: runtime?.lastOutboundAt ?? null,
+      ...buildTrafficStatusSummary(runtime),
     }),
   },
   gateway: {
