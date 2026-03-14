@@ -177,18 +177,28 @@ export async function deliverAgentCommandResult(params: {
 
   const normalizedPayloads = normalizeOutboundPayloadsForJson(payloads ?? []);
   if (opts.json) {
+    let meta = result.meta;
+    if (
+      opts.omitSystemPrompt &&
+      meta != null &&
+      typeof meta === "object" &&
+      "systemPromptReport" in meta
+    ) {
+      meta = { ...meta } as typeof meta;
+      delete (meta as Record<string, unknown>).systemPromptReport;
+    }
     runtime.log(
       JSON.stringify(
         buildOutboundResultEnvelope({
           payloads: normalizedPayloads,
-          meta: result.meta,
+          meta,
         }),
         null,
         2,
       ),
     );
     if (!deliver) {
-      return { payloads: normalizedPayloads, meta: result.meta };
+      return { payloads: normalizedPayloads, meta };
     }
   }
 
