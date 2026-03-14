@@ -11,6 +11,7 @@ export type ChannelHealthSnapshot = {
   lastRunActivityAt?: number | null;
   lastEventAt?: number | null;
   lastStartAt?: number | null;
+  lastDisconnectAt?: number | null;
   reconnectAttempts?: number;
   mode?: string;
 };
@@ -35,6 +36,7 @@ export type ChannelHealthPolicy = {
   now: number;
   staleEventThresholdMs: number;
   channelConnectGraceMs: number;
+  reconnectGraceMs: number;
 };
 
 export type ChannelRestartReason =
@@ -53,6 +55,17 @@ const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
 // probes so both surfaces evaluate channel lifecycle windows consistently.
 export const DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS = 30 * 60_000;
 export const DEFAULT_CHANNEL_CONNECT_GRACE_MS = 120_000;
+/**
+ * How long a running channel is allowed to stay in `connected: false` state
+ * before the health monitor intervenes. This gives the channel's built-in
+ * reconnection logic (e.g. Discord.js resume/identify) time to recover
+ * without the health monitor tearing down and recreating the entire provider.
+ *
+ * The gateway lifecycle has its own reconnect stall watchdog (typically 5min).
+ * The health monitor should not race with it — only intervene if the channel
+ * remains disconnected well beyond what the internal reconnect can handle.
+ */
+export const DEFAULT_RECONNECT_GRACE_MS = 5 * 60_000;
 
 export function evaluateChannelHealth(
   snapshot: ChannelHealthSnapshot,
@@ -104,6 +117,36 @@ export function evaluateChannelHealth(
     }
   }
   if (snapshot.connected === false) {
+    // If the channel is still running, its built-in reconnection logic may be
+    // actively trying to re-establish the connection (e.g. Discord.js resume).
+    // Grant a grace period after the disconnect before the health monitor
+    // intervenes with a full teardown/restart cycle.
+    if (snapshot.running) {
+      const disconnectAt =
+        typeof snapshot.lastDisconnectAt === "number" && Number.isFinite(snapshot.lastDisconnectAt)
+          ? snapshot.lastDisconnectAt
+          : null;
+      if (disconnectAt != null) {
+        const disconnectAge = Math.max(0, policy.now - disconnectAt);
+        if (disconnectAge < policy.reconnectGraceMs) {
+          return { healthy: true, reason: "healthy" };
+        }
+      } else {
+        // No disconnect timestamp — fall back to lastEventAt as a proxy.
+        // The gateway lifecycle pushes lastEventAt on debug events during
+        // reconnection, so recent activity means a reconnect is in progress.
+        const lastEvent =
+          typeof snapshot.lastEventAt === "number" && Number.isFinite(snapshot.lastEventAt)
+            ? snapshot.lastEventAt
+            : null;
+        if (lastEvent != null) {
+          const eventAge = Math.max(0, policy.now - lastEvent);
+          if (eventAge < policy.reconnectGraceMs) {
+            return { healthy: true, reason: "healthy" };
+          }
+        }
+      }
+    }
     return { healthy: false, reason: "disconnected" };
   }
   // Skip stale-socket check for Telegram (long-polling mode) and any channel
