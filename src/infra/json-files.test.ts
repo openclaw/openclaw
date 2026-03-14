@@ -65,4 +65,24 @@ describe("json file helpers", () => {
     await expect(second).resolves.toBe("ok");
     expect(events).toEqual(["first:start", "first:end", "second:start", "second:end"]);
   });
+
+  it("releases the async lock after synchronous throws", async () => {
+    const withLock = createAsyncLock();
+    const events: string[] = [];
+
+    const first = withLock(async () => {
+      events.push("first:start");
+      throw new Error("sync boom");
+    });
+
+    const second = withLock(async () => {
+      events.push("second:start");
+      events.push("second:end");
+      return "ok";
+    });
+
+    await expect(first).rejects.toThrow("sync boom");
+    await expect(second).resolves.toBe("ok");
+    expect(events).toEqual(["first:start", "second:start", "second:end"]);
+  });
 });
