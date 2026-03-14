@@ -148,6 +148,18 @@ describe("stripMarkdown", () => {
     }
   });
 
+  it("preserves underscores inside words", () => {
+    expect(stripMarkdown("here_is_a_message")).toBe("here_is_a_message");
+    expect(stripMarkdown("snake_case_var")).toBe("snake_case_var");
+    expect(stripMarkdown("use foo_bar_baz in code")).toBe("use foo_bar_baz in code");
+  });
+
+  it("still strips proper italic _text_", () => {
+    expect(stripMarkdown("This is _italic_ text")).toBe("This is italic text");
+    expect(stripMarkdown("_italic_ at start")).toBe("italic at start");
+    expect(stripMarkdown("end _italic_")).toBe("end italic");
+  });
+
   it("handles complex markdown", () => {
     const input = `# Title
 
