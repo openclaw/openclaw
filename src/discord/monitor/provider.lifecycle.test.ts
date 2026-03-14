@@ -411,6 +411,99 @@ describe("runDiscordGatewayLifecycle", () => {
     }
   });
 
+  it("clears resume state after consecutive resume failures (rapid 1005 close loop)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+      const { emitter, gateway } = createGatewayHarness({
+        state: {
+          sessionId: "session-stale",
+          resumeGatewayUrl: "wss://resume.discord.gg",
+          sequence: 789,
+        },
+        sequence: 789,
+      });
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+      // Simulate the 1005 resume loop: open→close(1005) five times rapidly
+      // without isConnected ever becoming true.
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
+        for (let i = 0; i < 5; i++) {
+          emitter.emit("debug", "WebSocket connection opened");
+          // Close immediately with 1005 — no READY/RESUMED received
+          emitter.emit("debug", "WebSocket connection closed with code 1005");
+        }
+      });
+
+      const { lifecycleParams, runtimeLog } = createLifecycleHarness({ gateway });
+      await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+
+      // Resume state should have been cleared after 5 consecutive failures
+      expect(gateway.state).toBeDefined();
+      expect(gateway.state?.sessionId).toBeNull();
+      expect(gateway.state?.resumeGatewayUrl).toBeNull();
+      expect(gateway.state?.sequence).toBeNull();
+      expect(gateway.sequence).toBeNull();
+
+      // Should have logged the force-fresh-identify message
+      expect(runtimeLog).toHaveBeenCalledWith(
+        expect.stringContaining("consecutive resume failures"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resets resume failure counter when connection becomes connected", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+      const { emitter, gateway } = createGatewayHarness({
+        state: {
+          sessionId: "session-ok",
+          resumeGatewayUrl: "wss://resume.discord.gg",
+          sequence: 100,
+        },
+        sequence: 100,
+      });
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+      // 3 failures, then a successful connection, then 3 more failures.
+      // The counter should reset after success, so we never hit the threshold of 5.
+      waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
+        // 3 failed resume attempts
+        for (let i = 0; i < 3; i++) {
+          emitter.emit("debug", "WebSocket connection opened");
+          emitter.emit("debug", "WebSocket connection closed with code 1005");
+        }
+
+        // Successful connection
+        gateway.isConnected = true;
+        emitter.emit("debug", "WebSocket connection opened");
+        await vi.advanceTimersByTimeAsync(500); // let connected poll fire
+
+        // Drop and 3 more failures
+        emitter.emit("debug", "WebSocket connection closed with code 1006");
+        gateway.isConnected = false;
+        for (let i = 0; i < 3; i++) {
+          emitter.emit("debug", "WebSocket connection opened");
+          emitter.emit("debug", "WebSocket connection closed with code 1005");
+        }
+      });
+
+      const { lifecycleParams, runtimeLog } = createLifecycleHarness({ gateway });
+      await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+
+      // Session state should NOT have been cleared — never hit 5 consecutive
+      expect(gateway.state?.sessionId).toBe("session-ok");
+      expect(runtimeLog).not.toHaveBeenCalledWith(
+        expect.stringContaining("consecutive resume failures"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not push connected: true when abortSignal is already aborted", async () => {
     const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const emitter = new EventEmitter();

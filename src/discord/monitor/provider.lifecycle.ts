@@ -32,6 +32,7 @@ export async function runDiscordGatewayLifecycle(params: {
   const HELLO_TIMEOUT_MS = 30000;
   const HELLO_CONNECTED_POLL_MS = 250;
   const MAX_CONSECUTIVE_HELLO_STALLS = 3;
+  const MAX_CONSECUTIVE_RESUME_FAILURES = 5;
   const RECONNECT_STALL_TIMEOUT_MS = 5 * 60_000;
   const gateway = params.client.getPlugin<GatewayPlugin>("gateway");
   if (gateway) {
@@ -111,6 +112,7 @@ export async function runDiscordGatewayLifecycle(params: {
   let helloTimeoutId: ReturnType<typeof setTimeout> | undefined;
   let helloConnectedPollId: ReturnType<typeof setInterval> | undefined;
   let consecutiveHelloStalls = 0;
+  let consecutiveResumeFailures = 0;
   const clearHelloWatch = () => {
     if (helloTimeoutId) {
       clearTimeout(helloTimeoutId);
@@ -123,6 +125,9 @@ export async function runDiscordGatewayLifecycle(params: {
   };
   const resetHelloStallCounter = () => {
     consecutiveHelloStalls = 0;
+  };
+  const resetResumeFailureCounter = () => {
+    consecutiveResumeFailures = 0;
   };
   const parseGatewayCloseCode = (message: string): number | undefined => {
     const match = /code\s+(\d{3,5})/i.exec(message);
@@ -160,6 +165,25 @@ export async function runDiscordGatewayLifecycle(params: {
       // false during reconnect handling after this debug line is emitted.
       if (gateway?.isConnected) {
         resetHelloStallCounter();
+        resetResumeFailureCounter();
+      } else {
+        // Connection closed without ever becoming connected (no READY/RESUMED).
+        // This happens when resume attempts fail — Discord closes with 1005
+        // because the session is stale.  Track consecutive failures and force
+        // a fresh IDENTIFY after the threshold so we don't loop forever.
+        // This runs synchronously before Carbon's handleClose, so clearing
+        // the resume state here causes Carbon's canResume() to return false
+        // on the next reconnection attempt.
+        consecutiveResumeFailures += 1;
+        if (consecutiveResumeFailures >= MAX_CONSECUTIVE_RESUME_FAILURES) {
+          params.runtime.log?.(
+            danger(
+              `discord: ${consecutiveResumeFailures} consecutive resume failures; clearing session to force fresh identify`,
+            ),
+          );
+          clearResumeState();
+          resetResumeFailureCounter();
+        }
       }
       reconnectStallWatchdog.arm(at);
       pushStatus({
@@ -191,6 +215,7 @@ export async function runDiscordGatewayLifecycle(params: {
       }
       sawConnected = true;
       resetHelloStallCounter();
+      resetResumeFailureCounter();
       const connectedAt = Date.now();
       reconnectStallWatchdog.disarm();
       pushStatus({
@@ -210,6 +235,7 @@ export async function runDiscordGatewayLifecycle(params: {
       }
       if (sawConnected || gateway?.isConnected) {
         resetHelloStallCounter();
+        resetResumeFailureCounter();
       } else {
         consecutiveHelloStalls += 1;
         const forceFreshIdentify = consecutiveHelloStalls >= MAX_CONSECUTIVE_HELLO_STALLS;
