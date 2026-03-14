@@ -51,6 +51,8 @@ export function isTransientGatewayConnectError(err: unknown): boolean {
   return (
     /gateway not connected/i.test(msg) ||
     /gateway connect failed/i.test(msg) ||
+    /gateway closed/i.test(msg) ||
+    /gateway timeout/i.test(msg) ||
     /ECONNREFUSED|ETIMEDOUT|EAI_AGAIN/i.test(msg) ||
     /not reachable/i.test(msg) ||
     /closed before connect/i.test(msg) ||
