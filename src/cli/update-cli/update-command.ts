@@ -12,6 +12,7 @@ import {
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { detectShadowInstall } from "../../infra/shadow-install.js";
 import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
@@ -914,7 +915,35 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         });
 
   stop();
-  printResult(result, { ...opts, hideSteps: showProgress });
+
+  // Detect shadow installs for package-manager updates before printResult so
+  // the warning can be included in the --json output as a single document.
+  let shadowWarning: Awaited<ReturnType<typeof detectShadowInstall>> = null;
+  if (
+    result.status === "ok" &&
+    result.root &&
+    (result.mode === "npm" || result.mode === "pnpm" || result.mode === "bun")
+  ) {
+    try {
+      shadowWarning = await detectShadowInstall({ updatedRoot: result.root });
+    } catch {
+      // Shadow detection is best-effort — never block the update flow.
+    }
+  }
+
+  if (opts.json) {
+    // Emit a single JSON document. Merge shadowInstallWarning into the result
+    // object so callers never have to parse two top-level objects from stdout.
+    defaultRuntime.log(
+      JSON.stringify(
+        shadowWarning ? { ...result, shadowInstallWarning: shadowWarning } : result,
+        null,
+        2,
+      ),
+    );
+  } else {
+    printResult(result, { ...opts, hideSteps: showProgress });
+  }
 
   if (result.status === "error") {
     defaultRuntime.exit(1);
@@ -943,6 +972,27 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     }
     defaultRuntime.exit(0);
     return;
+  }
+
+  if (!opts.json && shadowWarning) {
+    defaultRuntime.log("");
+    defaultRuntime.log(
+      theme.warn(
+        "⚠ Shadow install detected: the running binary is NOT from the install that was just updated.",
+      ),
+    );
+    defaultRuntime.log(theme.warn(`  Active binary:   ${shadowWarning.activeBinaryPath}`));
+    defaultRuntime.log(theme.warn(`  Active install:  ${shadowWarning.activeInstallRoot}`));
+    defaultRuntime.log(theme.warn(`  Updated install: ${shadowWarning.updatedInstallRoot}`));
+    defaultRuntime.log("");
+    defaultRuntime.log(
+      theme.warn("  The update succeeded, but your shell will keep running the old version."),
+    );
+    defaultRuntime.log(
+      theme.warn(
+        `  Fix: remove the shadowing install at ${shadowWarning.activeInstallRoot} or update it directly.`,
+      ),
+    );
   }
 
   await updatePluginsAfterCoreUpdate({
