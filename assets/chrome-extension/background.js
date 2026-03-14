@@ -1691,7 +1691,10 @@ chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => void whenReady(
     const bufferEntries = commandBuffers.get(removedTabId)
     if (bufferEntries) {
       commandBuffers.delete(removedTabId)
-      commandBuffers.set(addedTabId, bufferEntries)
+      commandBuffers.set(addedTabId, bufferEntries.map((entry) => ({
+        ...entry,
+        targetTabId: addedTabId,
+      })))
     }
 
     // 7. Migrate Ancestry Tree with Origin-Check Safety
