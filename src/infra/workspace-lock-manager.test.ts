@@ -24,7 +24,12 @@ async function expectedLockPath(targetPath: string, kind: "file" | "dir"): Promi
           path.basename(resolved),
         );
   const digest = createHash("sha256").update(`${kind}:${normalized}`).digest("hex").slice(0, 24);
-  const lockBaseDir = kind === "dir" ? normalized : path.join(os.tmpdir(), "openclaw");
+  const ownerScope =
+    typeof process.getuid === "function"
+      ? `uid-${process.getuid()}`
+      : `user-${process.env.USER || process.env.USERNAME || "default"}`;
+  const lockBaseDir =
+    kind === "dir" ? normalized : path.join(os.tmpdir(), `openclaw-${ownerScope}`);
   return path.join(lockBaseDir, ".openclaw.workspace-locks", `${kind}-${digest}.lock`);
 }
 
@@ -606,5 +611,29 @@ describe("workspace lock manager", () => {
     expect(after.expiresAt).toBe(before.expiresAt);
 
     await second.release();
+  });
+
+  it("aborts lock acquisition while waiting on a contended lock", async () => {
+    const dir = await makeCaseDir();
+    const target = path.join(dir, "abort-wait.txt");
+    const held = await acquireWorkspaceLock(target, {
+      kind: "file",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 5_000,
+    });
+
+    const controller = new AbortController();
+    const pending = acquireWorkspaceLock(target, {
+      kind: "file",
+      timeoutMs: 120_000,
+      pollIntervalMs: 20,
+      ttlMs: 5_000,
+      signal: controller.signal,
+    });
+
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await held.release();
   });
 });

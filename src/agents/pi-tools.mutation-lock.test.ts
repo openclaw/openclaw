@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
+import { acquireWorkspaceLock } from "../infra/workspace-lock-manager.js";
 import { wrapToolMutationLock } from "./pi-tools.read.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
@@ -115,6 +116,41 @@ describe("wrapToolMutationLock", () => {
     firstGate.resolve();
     await expect(p1).resolves.toMatchObject({ content: [{ type: "text", text: "one" }] });
     expect(events).toEqual(["start:one", "end:one"]);
+  });
+
+  it("aborts during filesystem lock contention", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mutation-lock-abort-"));
+    try {
+      const target = path.join(tempRoot, "same.txt");
+      const held = await acquireWorkspaceLock(target, {
+        kind: "file",
+        timeoutMs: 100,
+        pollIntervalMs: 5,
+        ttlMs: 5_000,
+      });
+
+      const base: AnyAgentTool = {
+        name: "write",
+        label: "write",
+        description: "test write",
+        parameters: {},
+        execute: async () => textResult("ok"),
+      };
+
+      const wrapped = wrapToolMutationLock(base, tempRoot);
+      const controller = new AbortController();
+      const pending = wrapped.execute(
+        "call-1",
+        { path: target, content: "one" },
+        controller.signal,
+      );
+
+      controller.abort();
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      await held.release();
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("allows different paths to run concurrently", async () => {

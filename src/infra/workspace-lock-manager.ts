@@ -16,6 +16,7 @@ export type WorkspaceLockOptions = {
   timeoutMs?: number;
   pollIntervalMs?: number;
   ttlMs?: number;
+  signal?: AbortSignal;
 };
 
 type LockPayload = {
@@ -83,13 +84,33 @@ async function normalizeTargetPath(targetPath: string, kind: WorkspaceLockKind):
 }
 
 async function resolveLockPath(normalizedTarget: string, kind: WorkspaceLockKind): Promise<string> {
-  const lockBaseDir = kind === "dir" ? normalizedTarget : path.join(os.tmpdir(), "openclaw");
+  const lockBaseDir =
+    kind === "dir"
+      ? normalizedTarget
+      : path.join(os.tmpdir(), `openclaw-${resolveLockOwnerScope()}`);
   const lockDir = path.join(lockBaseDir, ".openclaw.workspace-locks");
   const digest = createHash("sha256")
     .update(`${kind}:${normalizedTarget}`)
     .digest("hex")
     .slice(0, 24);
   return path.join(lockDir, `${kind}-${digest}.lock`);
+}
+
+function resolveLockOwnerScope(): string {
+  if (typeof process.getuid === "function") {
+    return `uid-${process.getuid()}`;
+  }
+  const username =
+    (typeof process.env.USER === "string" && process.env.USER.trim()) ||
+    (typeof process.env.USERNAME === "string" && process.env.USERNAME.trim()) ||
+    "default";
+  return `user-${username}`;
+}
+
+function createAbortError(): Error {
+  const error = new Error("Operation aborted.");
+  error.name = "AbortError";
+  return error;
 }
 
 function isTimestampExpired(isoTimestamp: string | undefined): boolean {
@@ -234,6 +255,11 @@ export async function acquireWorkspaceLock(
   const timeoutMs = Math.max(0, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS);
   const ttlMs = Math.max(1, options.ttlMs ?? DEFAULT_TTL_MS);
+  const signal = options.signal;
+
+  if (signal?.aborted) {
+    throw createAbortError();
+  }
 
   const normalizedTarget = await normalizeTargetPath(targetPath, kind);
   const lockPath = await resolveLockPath(normalizedTarget, kind);
@@ -245,10 +271,28 @@ export async function acquireWorkspaceLock(
 
   const startedAt = Date.now();
   const sleep = async (ms: number): Promise<void> => {
-    await new Promise((resolve) => setTimeout(resolve, ms));
+    if (!signal) {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", onAbort);
+        reject(createAbortError());
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
   };
 
   while (Date.now() - startedAt <= timeoutMs) {
+    if (signal?.aborted) {
+      throw createAbortError();
+    }
     try {
       const handle = await fs.open(lockPath, "wx");
       const now = Date.now();

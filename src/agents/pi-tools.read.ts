@@ -396,6 +396,7 @@ export function wrapToolMutationLock(
             kind: "file",
             timeoutMs: WORKSPACE_MUTATION_LOCK_TIMEOUT_MS,
             ttlMs: WORKSPACE_MUTATION_LOCK_TTL_MS,
+            signal,
           },
           async () => {
             return await tool.execute(toolCallId, params, signal, onUpdate);
