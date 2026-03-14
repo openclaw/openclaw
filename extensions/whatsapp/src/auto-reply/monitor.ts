@@ -8,6 +8,7 @@ import { loadConfig } from "../../../../src/config/config.js";
 import { createConnectedChannelStatusPatch } from "../../../../src/gateway/channel-status-patches.js";
 import { logVerbose } from "../../../../src/globals.js";
 import { formatDurationPrecise } from "../../../../src/infra/format-time/format-duration.ts";
+import { drainReconnectQueue } from "../../../../src/infra/outbound/delivery-queue.js";
 import { enqueueSystemEvent } from "../../../../src/infra/system-events.js";
 import { registerUnhandledRejectionHandler } from "../../../../src/infra/unhandled-rejections.js";
 import { getChildLogger } from "../../../../src/logging.js";
@@ -227,6 +228,16 @@ export async function monitorWebChannel(
     });
 
     setActiveWebListener(account.accountId, listener);
+
+    // Drain any messages that failed with "no listener" during the disconnect window.
+    void drainReconnectQueue({
+      accountId: account.accountId,
+      cfg,
+      log: reconnectLogger,
+    }).catch((err) => {
+      reconnectLogger.warn({ connectionId, error: String(err) }, "reconnect drain failed");
+    });
+
     unregisterUnhandled = registerUnhandledRejectionHandler((reason) => {
       if (!isLikelyWhatsAppCryptoError(reason)) {
         return false;
