@@ -114,6 +114,49 @@ describe("roleScopesAllow", () => {
     ).toBe(true);
   });
 
+  it("enforces full operator scope hierarchy: read < write < admin", () => {
+    // admin satisfies all lower scopes
+    expect(
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: ["operator.read", "operator.write"],
+        allowedScopes: ["operator.admin"],
+      }),
+    ).toBe(true);
+
+    // write satisfies read but not admin
+    expect(
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: ["operator.read"],
+        allowedScopes: ["operator.write"],
+      }),
+    ).toBe(true);
+    expect(
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: ["operator.admin"],
+        allowedScopes: ["operator.write"],
+      }),
+    ).toBe(false);
+
+    // read does not satisfy write or admin
+    expect(
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: ["operator.write"],
+        allowedScopes: ["operator.read"],
+      }),
+    ).toBe(false);
+    expect(
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: ["operator.admin"],
+        allowedScopes: ["operator.read"],
+      }),
+    ).toBe(false);
+  });
+
   it("rejects unsatisfied operator write scopes and empty allowed scopes", () => {
     expect(
       roleScopesAllow({
