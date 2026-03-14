@@ -604,6 +604,83 @@ describe("runReplyAgent auto-compaction token update", () => {
 });
 
 describe("runReplyAgent block streaming", () => {
+  it("skips block transforms when block streaming is disabled", async () => {
+    const onBlockReply = vi.fn();
+    const runOutboundTransforms = vi.fn((text: string) => text.toUpperCase());
+    hookRunnerMocks.getGlobalHookRunner.mockReturnValue({
+      runOutboundTransforms,
+    });
+    runEmbeddedPiAgentMock.mockImplementationOnce(async (params) => {
+      const block = params.onBlockReply as ((payload: { text?: string }) => void) | undefined;
+      block?.({ text: "Chunk" });
+      return {
+        payloads: [{ text: "Final message" }],
+        meta: {},
+      };
+    });
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "discord",
+      OriginatingTo: "channel:C1",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "discord",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "text_end",
+      },
+    } as unknown as FollowupRun;
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      opts: { onBlockReply },
+      typing,
+      sessionCtx,
+      defaultModel: "anthropic/claude-opus-4-5",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "text_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(runOutboundTransforms).toHaveBeenCalledTimes(1);
+    expect(runOutboundTransforms).toHaveBeenCalledWith("Final message");
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ text: "FINAL MESSAGE" });
+  });
+
   it("coalesces duplicate text_end block replies", async () => {
     const onBlockReply = vi.fn();
     runEmbeddedPiAgentMock.mockImplementationOnce(async (params) => {

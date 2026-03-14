@@ -116,6 +116,10 @@ export function createBlockReplyDeliveryHandler(params: {
     if (normalized.isSilent && !blockHasMedia) {
       return;
     }
+    // When block streaming is disabled entirely, blocks are accumulated in final text instead.
+    if (!params.blockStreamingEnabled) {
+      return;
+    }
 
     // Apply plugin outbound transforms to block-streamed text for delivery,
     // but use the pre-transform payload for dedup keys so they match final payloads.
@@ -140,6 +144,5 @@ export function createBlockReplyDeliveryHandler(params: {
       params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
       await params.onBlockReply(deliveryPayload);
     }
-    // When streaming is disabled entirely, blocks are accumulated in final text instead.
   };
 }
