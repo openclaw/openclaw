@@ -241,6 +241,12 @@ describe("model-selection", () => {
         defaultProvider: "anthropic",
         expected: { provider: "openai", model: "gpt-5.3-codex-codex" },
       },
+      {
+        name: "normalizes gemini 3.1 flash-lite ids for google-vertex",
+        variants: ["google-vertex/gemini-3.1-flash-lite", "gemini-3.1-flash-lite"],
+        defaultProvider: "google-vertex",
+        expected: { provider: "google-vertex", model: "gemini-3.1-flash-lite-preview" },
+      },
     ])("$name", ({ variants, defaultProvider, expected }) => {
       expectParsedModelVariants(variants, defaultProvider, expected);
     });
@@ -252,7 +258,6 @@ describe("model-selection", () => {
         "anthropic/claude-opus-4-6",
       );
     });
-
     it.each(["", "  ", "/", "anthropic/", "/model"])("returns null for invalid ref %j", (raw) => {
       expect(parseModelRef(raw, "anthropic")).toBeNull();
     });
