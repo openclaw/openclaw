@@ -51,7 +51,15 @@ vi.mock("../agents/custom-api-registry.js", () => ({
   ensureCustomApiRegistered: vi.fn(),
 }));
 
-const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
+const {
+  _test,
+  resolveTtsConfig,
+  maybeApplyTtsToPayload,
+  getTtsProvider,
+  getTtsVoice,
+  setTtsVoice,
+  resolveVoiceOverrideForPersist,
+} = tts;
 
 const {
   isValidVoiceId,
@@ -349,6 +357,97 @@ describe("tts", () => {
 
       expect(result.overrides.openai?.voice).toBeUndefined();
       expect(result.warnings).toContain('invalid OpenAI voice "kokoro-chinese"');
+    });
+
+    it("sets persist=true when directive contains persist=true", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowVoice: true });
+      const input = "Hello [[tts:voice=alloy persist=true]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.persist).toBe(true);
+      expect(result.overrides.openai?.voice).toBe("alloy");
+      expect(result.cleanedText.trim()).toBe("Hello  world");
+    });
+
+    it("sets persist=true when directive contains persist=1", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowVoice: true });
+      const input = "[[tts:voice=alloy persist=1]] Hello";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.persist).toBe(true);
+    });
+
+    it("leaves persist=false when no persist token is present", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowVoice: true });
+      const result = parseTtsDirectives("[[tts:voice=alloy]] Hello", policy);
+
+      expect(result.persist).toBe(false);
+    });
+
+    it("leaves persist=false when directives are disabled", () => {
+      const policy = resolveModelOverridePolicy({ enabled: false });
+      const result = parseTtsDirectives("[[tts:voice=alloy persist=true]] Hello", policy);
+
+      expect(result.persist).toBe(false);
+    });
+  });
+
+  describe("getTtsVoice / setTtsVoice", () => {
+    it("returns undefined when no voice is persisted", () => {
+      const prefsPath = `/tmp/tts-voice-test-${Math.random().toString(36).slice(2)}.json`;
+      expect(getTtsVoice(prefsPath, "elevenlabs")).toBeUndefined();
+      expect(getTtsVoice(prefsPath, "openai")).toBeUndefined();
+    });
+
+    it("persists and retrieves voice per provider", () => {
+      const prefsPath = `/tmp/tts-voice-test-${Math.random().toString(36).slice(2)}.json`;
+      setTtsVoice(prefsPath, "elevenlabs", "pMsXgVXv3BLzUgSXRplE");
+      setTtsVoice(prefsPath, "openai", "alloy");
+
+      expect(getTtsVoice(prefsPath, "elevenlabs")).toBe("pMsXgVXv3BLzUgSXRplE");
+      expect(getTtsVoice(prefsPath, "openai")).toBe("alloy");
+    });
+
+    it("isolates voices per provider — setting one does not affect another", () => {
+      const prefsPath = `/tmp/tts-voice-test-${Math.random().toString(36).slice(2)}.json`;
+      setTtsVoice(prefsPath, "elevenlabs", "pMsXgVXv3BLzUgSXRplE");
+
+      expect(getTtsVoice(prefsPath, "openai")).toBeUndefined();
+    });
+
+    it("clears the persisted voice when an empty string is passed", () => {
+      const prefsPath = `/tmp/tts-voice-test-${Math.random().toString(36).slice(2)}.json`;
+      setTtsVoice(prefsPath, "openai", "alloy");
+      setTtsVoice(prefsPath, "openai", "");
+
+      expect(getTtsVoice(prefsPath, "openai")).toBeUndefined();
+    });
+
+    it("works generically for any provider name (future-proof)", () => {
+      const prefsPath = `/tmp/tts-voice-test-${Math.random().toString(36).slice(2)}.json`;
+      setTtsVoice(prefsPath, "minimax", "female-shaonv");
+
+      expect(getTtsVoice(prefsPath, "minimax")).toBe("female-shaonv");
+    });
+  });
+
+  describe("resolveVoiceOverrideForPersist", () => {
+    it("returns elevenlabs voiceId for elevenlabs provider", () => {
+      const overrides = { elevenlabs: { voiceId: "pMsXgVXv3BLzUgSXRplE" } };
+      expect(resolveVoiceOverrideForPersist(overrides, "elevenlabs")).toBe("pMsXgVXv3BLzUgSXRplE");
+    });
+
+    it("returns openai voice for openai provider", () => {
+      const overrides = { openai: { voice: "alloy" } };
+      expect(resolveVoiceOverrideForPersist(overrides, "openai")).toBe("alloy");
+    });
+
+    it("returns undefined for unknown providers", () => {
+      expect(resolveVoiceOverrideForPersist({}, "minimax")).toBeUndefined();
+    });
+
+    it("returns undefined when provider has no voice override", () => {
+      expect(resolveVoiceOverrideForPersist({}, "elevenlabs")).toBeUndefined();
     });
   });
 

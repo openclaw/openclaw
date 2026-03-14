@@ -35,7 +35,14 @@ import {
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { parseTtsDirectives } from "../../tts/tts-core.js";
-import { resolveTtsConfig, textToSpeech, type ResolvedTtsConfig } from "../../tts/tts.js";
+import {
+  resolveTtsConfig,
+  resolveTtsPrefsPath,
+  resolveVoiceOverrideForPersist,
+  setTtsVoice,
+  textToSpeech,
+  type ResolvedTtsConfig,
+} from "../../tts/tts.js";
 import { formatMention } from "../mentions.js";
 import { resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { formatDiscordUserTag } from "../monitor/format.js";
@@ -686,15 +693,31 @@ export class DiscordVoiceManager {
       return;
     }
 
+    const ttsPrefsPath = resolveTtsPrefsPath(ttsConfig);
     const ttsResult = await textToSpeech({
       text: speakText,
       cfg: ttsCfg,
+      prefsPath: ttsPrefsPath,
       channel: "discord",
       overrides: directive.overrides,
     });
     if (!ttsResult.success || !ttsResult.audioPath) {
       logger.warn(`discord voice: TTS failed: ${ttsResult.error ?? "unknown error"}`);
       return;
+    }
+    // Persist voice when the directive included persist=true and TTS succeeded.
+    // Best-effort: a prefs write failure must not abort audio playback.
+    if (directive.persist && ttsResult.provider) {
+      const voice = resolveVoiceOverrideForPersist(directive.overrides, ttsResult.provider);
+      if (voice) {
+        try {
+          setTtsVoice(ttsPrefsPath, ttsResult.provider, voice);
+        } catch (err) {
+          logger.warn(
+            `discord voice: failed to persist voice for provider "${ttsResult.provider}": ${(err as Error).message}`,
+          );
+        }
+      }
     }
     const audioPath = ttsResult.audioPath;
     logVoiceVerbose(

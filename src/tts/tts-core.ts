@@ -118,13 +118,14 @@ export function parseTtsDirectives(
   openaiBaseUrl?: string,
 ): TtsDirectiveParseResult {
   if (!policy.enabled) {
-    return { cleanedText: text, overrides: {}, warnings: [], hasDirective: false };
+    return { cleanedText: text, overrides: {}, warnings: [], hasDirective: false, persist: false };
   }
 
   const overrides: TtsDirectiveOverrides = {};
   const warnings: string[] = [];
   let cleanedText = text;
   let hasDirective = false;
+  let persist = false;
 
   const blockRegex = /\[\[tts:text\]\]([\s\S]*?)\[\[\/tts:text\]\]/gi;
   cleanedText = cleanedText.replace(blockRegex, (_match, inner: string) => {
@@ -323,6 +324,13 @@ export function parseTtsDirectives(
               seed: normalizeSeed(Number.parseInt(rawValue, 10)),
             };
             break;
+          case "persist":
+            // persist=true: write the active voice override to user prefs after TTS succeeds.
+            // Gated by allowVoice so the persist flag cannot bypass the voice policy.
+            if (policy.allowVoice && (rawValue === "true" || rawValue === "1")) {
+              persist = true;
+            }
+            break;
           default:
             break;
         }
@@ -339,6 +347,7 @@ export function parseTtsDirectives(
     hasDirective,
     overrides,
     warnings,
+    persist,
   };
 }
 
