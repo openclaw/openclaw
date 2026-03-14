@@ -432,6 +432,9 @@ export function resolveSubagentConfiguredModelSelection(params: {
   agentId: string;
 }): string | undefined {
   const agentConfig = resolveAgentConfig(params.cfg, params.agentId);
+  // Order: subagents.model → defaults.subagents.model → agentConfig.model
+  // This order ensures session-patch auto-allow logic sees the global subagent
+  // default, while also recognizing the agent's own model as a valid selection.
   return (
     normalizeModelSelection(agentConfig?.subagents?.model) ??
     normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model) ??
@@ -448,12 +451,14 @@ export function resolveSubagentSpawnModelSelection(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
+  const agentConfig = resolveAgentConfig(params.cfg, params.agentId);
+  // For spawn, prefer the agent-level model over the global subagent default
+  // so that an agent's own model setting takes precedence at spawn time.
   return (
     normalizeModelSelection(params.modelOverride) ??
-    resolveSubagentConfiguredModelSelection({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    }) ??
+    normalizeModelSelection(agentConfig?.subagents?.model) ??
+    normalizeModelSelection(agentConfig?.model) ??
+    normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model) ??
     normalizeModelSelection(resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)) ??
     `${runtimeDefault.provider}/${runtimeDefault.model}`
   );
