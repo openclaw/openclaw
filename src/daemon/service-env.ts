@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { VERSION } from "../version.js";
@@ -71,6 +72,13 @@ function addNonEmptyDir(dirs: string[], dir: string | undefined): void {
   }
 }
 
+/** Add dir to list only if it exists on disk; avoids stale paths in service PATH. */
+function addDirIfExists(dirs: string[], dir: string): void {
+  if (dir && fs.existsSync(dir)) {
+    dirs.push(dir);
+  }
+}
+
 function appendSubdir(base: string | undefined, subdir: string): string | undefined {
   if (!base) {
     return undefined;
@@ -79,12 +87,12 @@ function appendSubdir(base: string | undefined, subdir: string): string | undefi
 }
 
 function addCommonUserBinDirs(dirs: string[], home: string): void {
-  dirs.push(`${home}/.local/bin`);
-  dirs.push(`${home}/.npm-global/bin`);
-  dirs.push(`${home}/bin`);
-  dirs.push(`${home}/.volta/bin`);
-  dirs.push(`${home}/.asdf/shims`);
-  dirs.push(`${home}/.bun/bin`);
+  addDirIfExists(dirs, `${home}/.local/bin`);
+  addDirIfExists(dirs, `${home}/.npm-global/bin`);
+  addDirIfExists(dirs, `${home}/bin`);
+  addDirIfExists(dirs, `${home}/.volta/bin`);
+  addDirIfExists(dirs, `${home}/.asdf/shims`);
+  addDirIfExists(dirs, `${home}/.bun/bin`);
 }
 
 function addCommonEnvConfiguredBinDirs(
@@ -174,10 +182,10 @@ export function resolveLinuxUserBinDirs(
   // Common user bin directories
   addCommonUserBinDirs(dirs, home);
 
-  // Node version managers
-  dirs.push(`${home}/.nvm/current/bin`); // nvm with current symlink
-  dirs.push(`${home}/.fnm/current/bin`); // fnm
-  dirs.push(`${home}/.local/share/pnpm`); // pnpm global bin
+  // Node version managers (only add if dir exists; nvm/fnm may not create current symlink)
+  addDirIfExists(dirs, `${home}/.nvm/current/bin`);
+  addDirIfExists(dirs, `${home}/.fnm/current/bin`);
+  addDirIfExists(dirs, `${home}/.local/share/pnpm`); // pnpm global bin
 
   return dirs;
 }
