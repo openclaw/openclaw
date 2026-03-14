@@ -1461,6 +1461,11 @@ export async function runEmbeddedPiAgent(
 
           const authFailure = isAuthAssistantError(lastAssistant);
           const rateLimitFailure = isRateLimitAssistantError(lastAssistant);
+          // Reset rate-limit retry budget on any non-rate-limit iteration so each
+          // new rate-limit event gets a fresh set of retries.
+          if (!rateLimitFailure) {
+            rateLimitRetryCount = 0;
+          }
           const billingFailure = isBillingAssistantError(lastAssistant);
           const failoverFailure = isFailoverAssistantError(lastAssistant);
           const assistantFailoverReason = classifyFailoverReason(lastAssistant?.errorMessage ?? "");
