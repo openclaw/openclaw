@@ -112,7 +112,7 @@ describe("exec approvals store helpers", () => {
     expect(missing.exists).toBe(false);
     expect(missing.raw).toBeNull();
     expect(missing.file).toEqual(normalizeExecApprovals({ version: 1, agents: {} }));
-    expect(missing.path).toBe(approvalsFilePath(dir));
+    expect(path.normalize(missing.path)).toBe(path.normalize(approvalsFilePath(dir)));
 
     fs.mkdirSync(path.dirname(approvalsFilePath(dir)), { recursive: true });
     fs.writeFileSync(approvalsFilePath(dir), "{invalid", "utf8");

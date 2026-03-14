@@ -59,6 +59,14 @@ function busyPortUsage(
   };
 }
 
+function expectGatewayTermination(pid: number) {
+  if (process.platform === "win32") {
+    expect(killProcessTree).not.toHaveBeenCalled();
+    return;
+  }
+  expect(killProcessTree).toHaveBeenCalledWith(pid, { graceMs: 300 });
+}
+
 async function withPreparedGatewayTask(
   run: (context: { env: Record<string, string>; stdout: PassThrough }) => Promise<void>,
 ) {
@@ -92,7 +100,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
       await stopScheduledTask({ env, stdout });
 
       expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
-      expect(killProcessTree).toHaveBeenCalledWith(4242, { graceMs: 300 });
+      expectGatewayTermination(4242);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
     });
   });
@@ -111,8 +119,12 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
       await stopScheduledTask({ env, stdout });
 
-      expect(killProcessTree).toHaveBeenNthCalledWith(1, 4242, { graceMs: 300 });
-      expect(killProcessTree).toHaveBeenNthCalledWith(2, expect.any(Number), { graceMs: 300 });
+      if (process.platform !== "win32") {
+        expect(killProcessTree).toHaveBeenNthCalledWith(1, 4242, { graceMs: 300 });
+        expect(killProcessTree).toHaveBeenNthCalledWith(2, expect.any(Number), { graceMs: 300 });
+      } else {
+        expect(killProcessTree).not.toHaveBeenCalled();
+      }
       expect(inspectPortUsage.mock.calls.length).toBeGreaterThanOrEqual(22);
     });
   });
@@ -132,7 +144,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
       await stopScheduledTask({ env, stdout });
 
-      expect(killProcessTree).toHaveBeenCalledWith(6262, { graceMs: 300 });
+      expectGatewayTermination(6262);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
     });
   });
@@ -150,7 +162,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
       });
 
       expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
-      expect(killProcessTree).toHaveBeenCalledWith(5151, { graceMs: 300 });
+      expectGatewayTermination(5151);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
       expect(schtasksCalls.at(-1)).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
     });

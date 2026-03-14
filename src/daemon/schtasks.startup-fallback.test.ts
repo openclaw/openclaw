@@ -59,6 +59,14 @@ function expectStartupFallbackSpawn(env: Record<string, string>) {
   );
 }
 
+function expectGatewayTermination(pid: number) {
+  if (process.platform === "win32") {
+    expect(killProcessTree).not.toHaveBeenCalled();
+    return;
+  }
+  expect(killProcessTree).toHaveBeenCalledWith(pid, { graceMs: 300 });
+}
+
 function addStartupFallbackMissingResponses(
   extraResponses: Array<{ code: number; stdout: string; stderr: string }> = [],
 ) {
@@ -179,7 +187,7 @@ describe("Windows startup fallback", () => {
       await expect(restartScheduledTask({ env, stdout })).resolves.toEqual({
         outcome: "completed",
       });
-      expect(killProcessTree).toHaveBeenCalledWith(5151, { graceMs: 300 });
+      expectGatewayTermination(5151);
       expectStartupFallbackSpawn(env);
     });
   });
@@ -214,7 +222,7 @@ describe("Windows startup fallback", () => {
       delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
       await stopScheduledTask({ env: envWithoutPort, stdout });
 
-      expect(killProcessTree).toHaveBeenCalledWith(5151, { graceMs: 300 });
+      expectGatewayTermination(5151);
     });
   });
 });
