@@ -15,6 +15,12 @@ metadata:
               "package": "@alicloud/openapi-client",
               "label": "Install AliCloud SDK",
             },
+            {
+              "id": "node-aliyun-ecs-sdk",
+              "kind": "node",
+              "package": "@alicloud/ecs20140526",
+              "label": "Install AliCloud ECS SDK",
+            },
           ],
       },
   }
@@ -82,9 +88,8 @@ node {baseDir}/src/index.js <command> [options]
 | 地域查询 | 获取可用地域列表 |
 | 实例管理 | 查询、启动、停止、重启实例 |
 | 监控与告警 | 获取多指标监控数据 |
-| 快照管理 | 创建、删除、回滚快照 |
+| 快照管理 | 创建、查询、回滚快照 |
 | 安全组 | 规则增删改查 |
-| 远程命令 | 在实例上执行命令 |
 
 ## 常用操作
 
@@ -132,16 +137,13 @@ aliyun-ecs monitor --region cn-hangzhou --id i-xxxxxxxxxx --metrics CPUUtilizati
 
 ```bash
 # 创建快照
-aliyun-ecs snapshot create --region cn-hangzhou --id i-xxxxxxxxxx --name "backup-20260312"
+aliyun-ecs snapshot create --region cn-hangzhou --disk-id d-xxxxxxxxxx --name "backup-20260312"
 
 # 列出快照
 aliyun-ecs snapshot list --region cn-hangzhou --id i-xxxxxxxxxx
 
-# 删除快照
-aliyun-ecs snapshot delete --region cn-hangzhou --snapshot-id s-xxxxxxxxxx
-
 # 回滚快照
-aliyun-ecs snapshot rollback --region cn-hangzhou --id i-xxxxxxxxxx --snapshot-id s-xxxxxxxxxx
+aliyun-ecs snapshot rollback --region cn-hangzhou --disk-id d-xxxxxxxxxx --snapshot-id s-xxxxxxxxxx
 ```
 
 ### 安全组（防火墙）
@@ -155,16 +157,6 @@ aliyun-ecs security-group add --region cn-hangzhou --group-id sg-xxxxxxxxxx --po
 
 # 删除安全组规则
 aliyun-ecs security-group remove --region cn-hangzhou --group-id sg-xxxxxxxxxx --port 80 --protocol tcp
-```
-
-### 远程命令执行 (云助手)
-
-```bash
-# 在 Linux 实例上执行命令
-aliyun-ecs exec --region cn-hangzhou --id i-xxxxxxxxxx --command "uptime && df -h && free -m"
-
-# 在 Windows 实例上执行命令
-aliyun-ecs exec --region cn-hangzhou --id i-xxxxxxxxxx --command "Get-Process | Sort-Object CPU -Descending | Select-Object -First 10" --windows
 ```
 
 ## 使用规范
