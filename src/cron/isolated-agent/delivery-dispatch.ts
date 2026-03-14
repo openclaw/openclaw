@@ -90,6 +90,7 @@ type DispatchCronDeliveryParams = {
   deliveryBestEffort: boolean;
   deliveryPayloadHasStructuredContent: boolean;
   deliveryPayloads: ReplyPayload[];
+  yieldDetected?: boolean;
   synthesizedText?: string;
   summary?: string;
   outputText?: string;
@@ -430,13 +431,18 @@ export async function dispatchCronDelivery(
             runStartedAt: params.runStartedAt,
           })
         : undefined;
-    const hadDescendants = activeSubagentRuns > 0 || Boolean(completedDescendantReply);
-    if (activeSubagentRuns > 0 || expectedSubagentFollowup) {
+    const hadDescendants =
+      activeSubagentRuns > 0 || Boolean(completedDescendantReply) || params.yieldDetected === true;
+    // When sessions_yield was called, always wait for subagents even if the
+    // yield message doesn't match expected hint patterns.
+    const shouldWaitForSubagents =
+      activeSubagentRuns > 0 || expectedSubagentFollowup || params.yieldDetected === true;
+    if (shouldWaitForSubagents) {
       let finalReply = await waitForDescendantSubagentSummary({
         sessionKey: params.agentSessionKey,
         initialReply: initialSynthesizedText,
         timeoutMs: params.timeoutMs,
-        observedActiveDescendants: activeSubagentRuns > 0 || expectedSubagentFollowup,
+        observedActiveDescendants: true,
       });
       activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
       if (!finalReply && activeSubagentRuns === 0) {

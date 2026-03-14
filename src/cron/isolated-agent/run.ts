@@ -854,6 +854,7 @@ export async function runCronIsolatedAgentTurn(params: {
     deliveryBestEffort,
     deliveryPayloadHasStructuredContent,
     deliveryPayloads,
+    yieldDetected: finalRunResult.meta?.yieldDetected,
     synthesizedText,
     summary,
     outputText,
