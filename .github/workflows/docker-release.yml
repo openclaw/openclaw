@@ -3,7 +3,7 @@ name: Docker Release
 on:
   push:
     branches:
-      - build
+      - main
     tags:
       - "v*"
     paths-ignore:
