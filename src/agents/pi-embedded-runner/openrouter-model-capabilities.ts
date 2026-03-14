@@ -9,6 +9,10 @@
  * 2. On-disk JSON file (~/.openclaw/cache/openrouter-models.json)
  * 3. OpenRouter API fetch (fire-and-forget, populates both layers)
  *
+ * Model capabilities are assumed stable — the cache has no TTL expiry.
+ * A background refresh is triggered only when a model is not found in
+ * the cache (i.e. a newly added model on OpenRouter).
+ *
  * All public APIs are synchronous. The first lookup for an unknown model may
  * return `undefined` (cache miss while fetch is in-flight), but subsequent
  * calls will hit the populated cache.
@@ -24,7 +28,6 @@ const log = createSubsystemLogger("openrouter-model-capabilities");
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const FETCH_TIMEOUT_MS = 10_000;
-const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 // ---------------------------------------------------------------------------
 // Types
@@ -64,7 +67,6 @@ export interface OpenRouterModelCapabilities {
 }
 
 interface DiskCachePayload {
-  timestamp: number;
   models: Record<string, OpenRouterModelCapabilities>;
 }
 
@@ -84,7 +86,6 @@ function writeDiskCache(map: Map<string, OpenRouterModelCapabilities>): void {
       mkdirSync(cacheDir, { recursive: true });
     }
     const payload: DiskCachePayload = {
-      timestamp: Date.now(),
       models: Object.fromEntries(map),
     };
     writeFileSync(cachePath, JSON.stringify(payload));
@@ -94,9 +95,7 @@ function writeDiskCache(map: Map<string, OpenRouterModelCapabilities>): void {
   }
 }
 
-function readDiskCache():
-  | { map: Map<string, OpenRouterModelCapabilities>; timestamp: number }
-  | undefined {
+function readDiskCache(): Map<string, OpenRouterModelCapabilities> | undefined {
   try {
     const cachePath = resolveDiskCachePath();
     if (!existsSync(cachePath)) {
@@ -104,13 +103,10 @@ function readDiskCache():
     }
     const raw = readFileSync(cachePath, "utf-8");
     const payload = JSON.parse(raw) as DiskCachePayload;
-    if (!payload.models || typeof payload.timestamp !== "number") {
+    if (!payload.models) {
       return undefined;
     }
-    return {
-      map: new Map(Object.entries(payload.models)),
-      timestamp: payload.timestamp,
-    };
+    return new Map(Object.entries(payload.models));
   } catch {
     return undefined;
   }
@@ -121,12 +117,7 @@ function readDiskCache():
 // ---------------------------------------------------------------------------
 
 let cache: Map<string, OpenRouterModelCapabilities> | undefined;
-let cacheTimestamp = 0;
 let fetchInFlight: Promise<void> | undefined;
-
-function isCacheValid(): boolean {
-  return cache !== undefined && Date.now() - cacheTimestamp < CACHE_TTL_MS;
-}
 
 function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
   const input: Array<"text" | "image"> = ["text"];
@@ -181,7 +172,6 @@ async function doFetch(): Promise<void> {
     }
 
     cache = map;
-    cacheTimestamp = Date.now();
     writeDiskCache(map);
     log.debug(`Cached ${map.size} OpenRouter models from API`);
   } catch (err: unknown) {
@@ -204,26 +194,21 @@ function triggerFetch(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Trigger a background fetch if the cache is stale or empty.
+ * Ensure the cache is populated. Checks in-memory first, then disk, then
+ * triggers a background API fetch as a last resort.
  * Does not block — returns immediately.
  */
 export function ensureOpenRouterModelCache(): void {
-  if (isCacheValid()) {
+  if (cache) {
     return;
   }
 
   // Try loading from disk before hitting the network.
-  if (!cache) {
-    const disk = readDiskCache();
-    if (disk) {
-      cache = disk.map;
-      cacheTimestamp = disk.timestamp;
-      log.debug(`Loaded ${disk.map.size} OpenRouter models from disk cache`);
-      if (isCacheValid()) {
-        return;
-      }
-      // Disk cache is stale — keep it in memory as fallback, but refresh.
-    }
+  const disk = readDiskCache();
+  if (disk) {
+    cache = disk;
+    log.debug(`Loaded ${disk.size} OpenRouter models from disk cache`);
+    return;
   }
 
   triggerFetch();
