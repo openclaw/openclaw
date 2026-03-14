@@ -34,6 +34,7 @@ import { buildChannelsTable } from "./status-all/channels.js";
 import { formatDurationPrecise, formatGatewayAuthUsed } from "./status-all/format.js";
 import { pickGatewaySelfPresence } from "./status-all/gateway.js";
 import { buildStatusAllReportLines } from "./status-all/report-lines.js";
+import { isGatewayProbeReachable } from "./status.gateway-probe.js";
 import { readServiceStatusSummary } from "./status.service-summary.js";
 import { formatUpdateOneLiner } from "./status.update.js";
 
@@ -133,7 +134,7 @@ export async function statusAllCommand(
       auth: probeAuth,
       timeoutMs: Math.min(5000, opts?.timeoutMs ?? 10_000),
     }).catch(() => null);
-    const gatewayReachable = gatewayProbe?.ok === true;
+    const gatewayReachable = isGatewayProbeReachable(gatewayProbe);
     const gatewaySelf = pickGatewaySelfPresence(gatewayProbe?.presence ?? null);
     progress.tick();
 
@@ -252,7 +253,9 @@ export async function statusAllCommand(
 
     const gatewayTarget = remoteUrlMissing ? `fallback ${connection.url}` : connection.url;
     const gatewayStatus = gatewayReachable
-      ? `reachable ${formatDurationPrecise(gatewayProbe?.connectLatencyMs ?? 0)}`
+      ? `reachable ${formatDurationPrecise(gatewayProbe?.connectLatencyMs ?? 0)}${
+          gatewayProbe?.error ? ` · diagnostics limited (${gatewayProbe.error})` : ""
+        }`
       : gatewayProbe?.error
         ? `unreachable (${gatewayProbe.error})`
         : "unreachable";
