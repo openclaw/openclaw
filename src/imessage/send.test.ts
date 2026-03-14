@@ -90,36 +90,40 @@ describe("sendMessageIMessage", () => {
     expect(result.messageId).toBe("123");
   });
 
-  it("prepends reply tag as the first token when replyToId is provided", async () => {
+  it("sends reply_to_id param when replyToId is provided", async () => {
     await sendWithDefaults("chat_id:123", "  hello\nworld", {
       replyToId: "abc-123",
     });
     const params = getSentParams();
-    expect(params.text).toBe("[[reply_to:abc-123]] hello\nworld");
+    expect(params.text).toBe("  hello\nworld");
+    expect(params.reply_to_id).toBe("abc-123");
   });
 
-  it("rewrites an existing leading reply tag to keep the requested id first", async () => {
+  it("does not rewrite user text when it already starts with an inline reply tag", async () => {
     await sendWithDefaults("chat_id:123", " [[reply_to:old-id]] hello", {
       replyToId: "new-id",
     });
     const params = getSentParams();
-    expect(params.text).toBe("[[reply_to:new-id]] hello");
+    expect(params.text).toBe(" [[reply_to:old-id]] hello");
+    expect(params.reply_to_id).toBe("new-id");
   });
 
-  it("sanitizes replyToId before writing the leading reply tag", async () => {
+  it("sanitizes replyToId before writing reply_to_id param", async () => {
     await sendWithDefaults("chat_id:123", "hello", {
       replyToId: " [ab]\n\u0000c\td ] ",
     });
     const params = getSentParams();
-    expect(params.text).toBe("[[reply_to:abcd]] hello");
+    expect(params.text).toBe("hello");
+    expect(params.reply_to_id).toBe("abcd");
   });
 
-  it("skips reply tagging when sanitized replyToId is empty", async () => {
+  it("skips reply_to_id param when sanitized replyToId is empty", async () => {
     await sendWithDefaults("chat_id:123", "hello", {
       replyToId: "[]\u0000\n\r",
     });
     const params = getSentParams();
     expect(params.text).toBe("hello");
+    expect(params.reply_to_id).toBeUndefined();
   });
 
   it("normalizes string message_id values from rpc result", async () => {
