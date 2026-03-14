@@ -53,8 +53,7 @@ export function resolveSlackRoomContextHints(params: {
     params.isDirectMessage ? params.dmSystemPrompt?.trim() || null : null,
   ].filter((entry): entry is string => Boolean(entry));
 
-  const groupSystemPrompt =
-    systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+  const groupSystemPrompt = systemPromptParts.join("\n\n");
 
   return {
     untrustedChannelMetadata,
