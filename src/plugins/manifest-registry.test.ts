@@ -210,6 +210,30 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins.length).toBe(2);
   });
 
+  it("warns on config/config duplicates because both paths are user-explicit", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const manifest = { id: "feishu", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: dirA,
+        origin: "config",
+      }),
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: dirB,
+        origin: "config",
+      }),
+    ];
+
+    const registry = loadRegistry(candidates);
+    expect(countDuplicateWarnings(registry)).toBe(1);
+  });
+
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {
     const realDir = makeTempDir();
     const manifest = { id: "feishu", configSchema: { type: "object" } };

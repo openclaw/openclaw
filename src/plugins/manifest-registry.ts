@@ -239,7 +239,7 @@ export function loadPluginManifestRegistry(params: {
       }
 
       const hasConfigOrigin =
-        candidate.origin === "config" || existing.candidate.origin === "config";
+        (candidate.origin === "config") !== (existing.candidate.origin === "config");
 
       if (!hasConfigOrigin) {
         // Neither candidate was explicitly loaded via plugins.load.paths or
