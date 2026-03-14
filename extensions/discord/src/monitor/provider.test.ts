@@ -69,6 +69,84 @@ vi.mock("../voice/manager.runtime.js", () => {
   };
 });
 
+vi.mock("./agent-components.js", () => ({
+  createAgentComponentButton: () => ({ id: "btn" }),
+  createAgentSelectMenu: () => ({ id: "menu" }),
+  createDiscordComponentButton: () => ({ id: "btn2" }),
+  createDiscordComponentChannelSelect: () => ({ id: "channel" }),
+  createDiscordComponentMentionableSelect: () => ({ id: "mentionable" }),
+  createDiscordComponentModal: () => ({ id: "modal" }),
+  createDiscordComponentRoleSelect: () => ({ id: "role" }),
+  createDiscordComponentStringSelect: () => ({ id: "string" }),
+  createDiscordComponentUserSelect: () => ({ id: "user" }),
+}));
+
+vi.mock("./commands.js", () => ({
+  resolveDiscordSlashCommandConfig: () => ({ ephemeral: false }),
+}));
+
+vi.mock("./exec-approvals.js", () => ({
+  createExecApprovalButton: () => ({ id: "exec-approval" }),
+  DiscordExecApprovalHandler: class DiscordExecApprovalHandler {
+    async start() {
+      return undefined;
+    }
+    async stop() {
+      return undefined;
+    }
+  },
+}));
+
+vi.mock("./gateway-plugin.js", () => ({
+  createDiscordGatewayPlugin: () => ({ id: "gateway-plugin" }),
+}));
+
+vi.mock("./listeners.js", () => ({
+  DiscordMessageListener: class DiscordMessageListener {},
+  DiscordPresenceListener: class DiscordPresenceListener {},
+  DiscordReactionListener: class DiscordReactionListener {},
+  DiscordReactionRemoveListener: class DiscordReactionRemoveListener {},
+  DiscordThreadUpdateListener: class DiscordThreadUpdateListener {},
+  registerDiscordListener: vi.fn(),
+}));
+
+vi.mock("./message-handler.js", () => ({
+  createDiscordMessageHandler: createDiscordMessageHandlerMock,
+}));
+
+vi.mock("./native-command.js", () => ({
+  createDiscordCommandArgFallbackButton: () => ({ id: "arg-fallback" }),
+  createDiscordModelPickerFallbackButton: () => ({ id: "model-fallback-btn" }),
+  createDiscordModelPickerFallbackSelect: () => ({ id: "model-fallback-select" }),
+  createDiscordNativeCommand: createDiscordNativeCommandMock,
+}));
+
+vi.mock("./presence.js", () => ({
+  resolveDiscordPresenceUpdate: () => undefined,
+}));
+
+vi.mock("./auto-presence.js", () => ({
+  createDiscordAutoPresenceController: createDiscordAutoPresenceControllerMock,
+}));
+
+vi.mock("./provider.allowlist.js", () => ({
+  resolveDiscordAllowlistConfig: resolveDiscordAllowlistConfigMock,
+}));
+
+vi.mock("./provider.lifecycle.js", () => ({
+  runDiscordGatewayLifecycle: monitorLifecycleMock,
+}));
+
+vi.mock("./rest-fetch.js", () => ({
+  patchDiscordRequestClientFetch: vi.fn(),
+  resolveDiscordRestFetch: () => async () => undefined,
+}));
+
+vi.mock("./thread-bindings.js", () => ({
+  createNoopThreadBindingManager: createNoopThreadBindingManagerMock,
+  createThreadBindingManager: createThreadBindingManagerMock,
+  reconcileAcpThreadBindingsOnStartup: reconcileAcpThreadBindingsOnStartupMock,
+}));
 describe("monitorDiscordProvider", () => {
   type ReconcileHealthProbeParams = {
     cfg: OpenClawConfig;
