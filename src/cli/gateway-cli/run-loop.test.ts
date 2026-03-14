@@ -28,6 +28,7 @@ const getActiveEmbeddedRunCount = vi.fn(() => 0);
 const waitForActiveEmbeddedRuns = vi.fn(async (_timeoutMs: number) => ({
   drained: true,
 }));
+const getPendingInboundDebounceBufferCount = vi.fn(() => 0);
 const flushAllInboundDebouncers = vi.fn(async () => 0);
 const waitForFollowupQueueDrain = vi.fn(async (_timeoutMs: number) => ({
   drained: true,
@@ -41,6 +42,7 @@ const gatewayLog = {
 };
 
 vi.mock("../../auto-reply/inbound-debounce.js", () => ({
+  getPendingInboundDebounceBufferCount: () => getPendingInboundDebounceBufferCount(),
   flushAllInboundDebouncers: () => flushAllInboundDebouncers(),
 }));
 
@@ -322,6 +324,7 @@ describe("runGatewayLoop", () => {
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       // Simulate debouncers having buffered messages
+      getPendingInboundDebounceBufferCount.mockReturnValueOnce(2);
       flushAllInboundDebouncers.mockResolvedValueOnce(2);
       waitForFollowupQueueDrain.mockResolvedValueOnce({
         drained: true,
@@ -364,6 +367,7 @@ describe("runGatewayLoop", () => {
     vi.clearAllMocks();
 
     await withIsolatedSignals(async ({ captureSignal }) => {
+      getPendingInboundDebounceBufferCount.mockReturnValueOnce(1);
       flushAllInboundDebouncers.mockResolvedValueOnce(1);
       waitForFollowupQueueDrain.mockResolvedValueOnce({
         drained: true,
@@ -397,25 +401,33 @@ describe("runGatewayLoop", () => {
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       // No debouncers had buffered messages
+      getPendingInboundDebounceBufferCount.mockReturnValueOnce(0);
       flushAllInboundDebouncers.mockResolvedValueOnce(0);
 
-      const { exited } = await createSignaledLoopHarness();
-      const sigusr1 = captureSignal("SIGUSR1");
-      const sigterm = captureSignal("SIGTERM");
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      try {
+        const { exited } = await createSignaledLoopHarness();
+        const sigusr1 = captureSignal("SIGUSR1");
+        const sigterm = captureSignal("SIGTERM");
 
-      sigusr1();
+        sigusr1();
 
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => setImmediate(resolve));
 
-      expect(flushAllInboundDebouncers).toHaveBeenCalledTimes(1);
-      // Should NOT wait for followup drain when nothing was flushed
-      expect(waitForFollowupQueueDrain).not.toHaveBeenCalled();
-      // Should still mark draining
-      expect(markGatewayDraining).toHaveBeenCalledTimes(1);
+        expect(flushAllInboundDebouncers).toHaveBeenCalledTimes(1);
+        // Should NOT wait for followup drain when nothing was flushed
+        expect(waitForFollowupQueueDrain).not.toHaveBeenCalled();
+        // Should still mark draining
+        expect(markGatewayDraining).toHaveBeenCalledTimes(1);
+        const forceExitCall = setTimeoutSpy.mock.calls.find((call) => call[1] === 95_000);
+        expect(forceExitCall).toBeDefined();
 
-      sigterm();
-      await expect(exited).resolves.toBe(0);
+        sigterm();
+        await expect(exited).resolves.toBe(0);
+      } finally {
+        setTimeoutSpy.mockRestore();
+      }
     });
   });
 
@@ -423,6 +435,7 @@ describe("runGatewayLoop", () => {
     vi.clearAllMocks();
 
     await withIsolatedSignals(async ({ captureSignal }) => {
+      getPendingInboundDebounceBufferCount.mockReturnValueOnce(1);
       flushAllInboundDebouncers.mockResolvedValueOnce(1);
       waitForFollowupQueueDrain.mockResolvedValueOnce({
         drained: false,

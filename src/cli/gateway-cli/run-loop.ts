@@ -3,7 +3,10 @@ import {
   getActiveEmbeddedRunCount,
   waitForActiveEmbeddedRuns,
 } from "../../agents/pi-embedded-runner/runs.js";
-import { flushAllInboundDebouncers } from "../../auto-reply/inbound-debounce.js";
+import {
+  flushAllInboundDebouncers,
+  getPendingInboundDebounceBufferCount,
+} from "../../auto-reply/inbound-debounce.js";
 import { waitForFollowupQueueDrain } from "../../auto-reply/reply/queue/drain-all.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
@@ -110,10 +113,16 @@ export async function runGatewayLoop(params: {
     const isRestart = action === "restart";
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
 
-    // Allow extra time for draining active turns on restart.
-    const forceExitMs = isRestart
-      ? DRAIN_TIMEOUT_MS + FOLLOWUP_DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS
-      : SHUTDOWN_TIMEOUT_MS;
+    // Allow extra time for followup drain only when restart will actually
+    // flush buffered inbound messages into followup queues.
+    const hasPendingInboundDebounceBuffers = getPendingInboundDebounceBufferCount() > 0;
+    let forceExitMs = SHUTDOWN_TIMEOUT_MS;
+    if (isRestart) {
+      forceExitMs += DRAIN_TIMEOUT_MS;
+      if (hasPendingInboundDebounceBuffers) {
+        forceExitMs += FOLLOWUP_DRAIN_TIMEOUT_MS;
+      }
+    }
     const forceExitTimer = setTimeout(() => {
       gatewayLog.error("shutdown timed out; exiting without full cleanup");
       // Exit non-zero on restart timeout so launchd/systemd treats it as a

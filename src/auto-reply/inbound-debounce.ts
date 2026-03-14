@@ -21,6 +21,13 @@ export function clearInboundDebouncerRegistry(): void {
   INBOUND_DEBOUNCERS.clear();
 }
 
+export function getPendingInboundDebounceBufferCount(): number {
+  return [...INBOUND_DEBOUNCERS.values()].reduce(
+    (count, handle) => count + handle.getPendingBufferCount(),
+    0,
+  );
+}
+
 /**
  * Flush all registered inbound debouncers immediately. Called during SIGUSR1
  * restart to push buffered messages into the session before reinitializing.
@@ -32,10 +39,7 @@ export async function flushAllInboundDebouncers(): Promise<number> {
   if (entries.length === 0) {
     return 0;
   }
-  const pendingBufferCount = entries.reduce(
-    (count, [, handle]) => count + handle.getPendingBufferCount(),
-    0,
-  );
+  const pendingBufferCount = getPendingInboundDebounceBufferCount();
   await Promise.all(
     entries.map(async ([key, handle]) => {
       try {
