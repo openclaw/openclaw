@@ -128,12 +128,7 @@ export async function runCliAgent(params: {
   const normalizedModel = normalizeCliModel(modelId, backend);
   const modelDisplay = `${params.provider}/${modelId}`;
 
-  const extraSystemPrompt = [
-    params.extraSystemPrompt?.trim(),
-    "Tools are disabled in this session. Do not call tools.",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
   const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
