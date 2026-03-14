@@ -70,13 +70,13 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   };
 }
 
-export function buildAgentToAgentMessageContext(params: {
+function buildAgentSessionLines(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
-}) {
-  const lines = [
-    "Agent-to-agent message context:",
+  targetChannel?: string;
+}): string[] {
+  return [
     params.requesterSessionKey
       ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
       : undefined,
@@ -84,7 +84,18 @@ export function buildAgentToAgentMessageContext(params: {
       ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
       : undefined,
     `Agent 2 (target) session: ${params.targetSessionKey}.`,
-  ].filter(Boolean);
+    params.targetChannel ? `Agent 2 (target) channel: ${params.targetChannel}.` : undefined,
+  ].filter((line): line is string => Boolean(line));
+}
+
+export function buildAgentToAgentMessageContext(params: {
+  requesterSessionKey?: string;
+  requesterChannel?: string;
+  targetSessionKey: string;
+}) {
+  const lines = ["Agent-to-agent message context:", ...buildAgentSessionLines(params)].filter(
+    Boolean,
+  );
   return lines.join("\n");
 }
 
@@ -103,14 +114,7 @@ export function buildAgentToAgentReplyContext(params: {
     "Agent-to-agent reply step:",
     `Current agent: ${currentLabel}.`,
     `Turn ${params.turn} of ${params.maxTurns}.`,
-    params.requesterSessionKey
-      ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
-      : undefined,
-    params.requesterChannel
-      ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
-      : undefined,
-    `Agent 2 (target) session: ${params.targetSessionKey}.`,
-    params.targetChannel ? `Agent 2 (target) channel: ${params.targetChannel}.` : undefined,
+    ...buildAgentSessionLines(params),
     `If you want to stop the ping-pong, reply exactly "${REPLY_SKIP_TOKEN}".`,
   ].filter(Boolean);
   return lines.join("\n");
@@ -127,14 +131,7 @@ export function buildAgentToAgentAnnounceContext(params: {
 }) {
   const lines = [
     "Agent-to-agent announce step:",
-    params.requesterSessionKey
-      ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
-      : undefined,
-    params.requesterChannel
-      ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
-      : undefined,
-    `Agent 2 (target) session: ${params.targetSessionKey}.`,
-    params.targetChannel ? `Agent 2 (target) channel: ${params.targetChannel}.` : undefined,
+    ...buildAgentSessionLines(params),
     `Original request: ${params.originalMessage}`,
     params.roundOneReply
       ? `Round 1 reply: ${params.roundOneReply}`
