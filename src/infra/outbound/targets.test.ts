@@ -339,7 +339,7 @@ describe("resolveSessionDeliveryTarget", () => {
 
   const expectHeartbeatTarget = (params: {
     name: string;
-    entry: Parameters<typeof resolveHeartbeatDeliveryTarget>[0]["entry"];
+    entry: SessionEntry;
     directPolicy?: "allow" | "block";
     expectedChannel: string;
     expectedTo?: string;
