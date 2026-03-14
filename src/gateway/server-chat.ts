@@ -387,7 +387,9 @@ export function createAgentEventHandler({
       },
     };
     broadcast("chat", payload, { dropIfSlow: true });
-    nodeSendToSession(sessionKey, "chat", payload);
+    if (shouldStreamAssistantTextToSession(sourceRunId, sessionKey)) {
+      nodeSendToSession(sessionKey, "chat", payload);
+    }
   };
 
   const resolveBufferedChatTextState = (clientRunId: string, sourceRunId: string) => {
@@ -444,7 +446,9 @@ export function createAgentEventHandler({
       },
     };
     broadcast("chat", flushPayload, { dropIfSlow: true });
-    nodeSendToSession(sessionKey, "chat", flushPayload);
+    if (shouldStreamAssistantTextToSession(sourceRunId, sessionKey)) {
+      nodeSendToSession(sessionKey, "chat", flushPayload);
+    }
     chatRunState.deltaLastBroadcastLen.set(clientRunId, text.length);
     chatRunState.deltaSentAt.set(clientRunId, now);
   };
@@ -498,14 +502,14 @@ export function createAgentEventHandler({
     nodeSendToSession(sessionKey, "chat", payload);
   };
 
-  const resolveToolVerboseLevel = (runId: string, sessionKey?: string) => {
+  const resolveVerboseLevel = (runId: string, sessionKey?: string) => {
     const runContext = getAgentRunContext(runId);
     const runVerbose = normalizeVerboseLevel(runContext?.verboseLevel);
     if (runVerbose) {
       return runVerbose;
     }
     if (!sessionKey) {
-      return "off";
+      return undefined;
     }
     try {
       const { cfg, entry } = loadSessionEntry(sessionKey);
@@ -513,11 +517,21 @@ export function createAgentEventHandler({
       if (sessionVerbose) {
         return sessionVerbose;
       }
-      const defaultVerbose = normalizeVerboseLevel(cfg.agents?.defaults?.verboseDefault);
-      return defaultVerbose ?? "off";
+      return normalizeVerboseLevel(cfg.agents?.defaults?.verboseDefault);
     } catch {
-      return "off";
+      return undefined;
     }
+  };
+
+  const resolveToolVerboseLevel = (runId: string, sessionKey?: string) =>
+    resolveVerboseLevel(runId, sessionKey) ?? "off";
+
+  const shouldStreamAssistantTextToSession = (runId: string, sessionKey?: string) => {
+    const verboseLevel = resolveVerboseLevel(runId, sessionKey);
+    if (!verboseLevel) {
+      return true;
+    }
+    return verboseLevel !== "off";
   };
 
   return (evt: AgentEventPayload) => {
