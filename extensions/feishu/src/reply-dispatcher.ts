@@ -137,8 +137,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
   // Card streaming may miss thread affinity in topic contexts; use direct replies there.
+  // Support both boolean and object config for streaming
+  const streamingConfig = account.config?.streaming;
   const streamingEnabled =
-    !threadReplyMode && account.config?.streaming !== false && renderMode !== "raw";
+    !threadReplyMode &&
+    renderMode !== "raw" &&
+    (streamingConfig === true ||
+      (typeof streamingConfig === "object" && streamingConfig?.enabled !== false));
 
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
@@ -190,14 +195,24 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         return;
       }
 
-      streaming = new FeishuStreamingSession(createFeishuClient(account), creds, (message) =>
-        params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
+      // Extract streaming config options
+      const streamingOpts = typeof streamingConfig === "object" ? streamingConfig : {};
+      const throttleMs = streamingOpts.throttleMs ?? 150;
+      const title = streamingOpts.title ?? "🤖 AI 助手";
+
+      streaming = new FeishuStreamingSession(
+        createFeishuClient(account),
+        creds,
+        (message) => params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
+        throttleMs,
       );
+
       try {
         await streaming.start(chatId, resolveReceiveIdType(chatId), {
           replyToMessageId,
           replyInThread: effectiveReplyInThread,
           rootId,
+          header: { title, template: "blue" },
         });
       } catch (error) {
         params.runtime.error?.(`feishu: streaming start failed: ${String(error)}`);
@@ -266,6 +281,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
       onReplyStart: () => {
         deliveredFinalTexts.clear();
+        // Don't start streaming here for auto mode - wait until we know the message type
+        // For explicit card mode, we can start early
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
         }
@@ -385,10 +402,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (!payload.text) {
               return;
             }
-            queueStreamingUpdate(payload.text, {
-              dedupeWithLastPartial: true,
-              mode: "snapshot",
-            });
+            // Start streaming on first partial if we haven't already (auto mode)
+            if (!streaming?.isActive()) {
+              const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(payload.text));
+              if (useCard) {
+                startStreaming();
+              }
+            }
+            if (streaming?.isActive()) {
+              queueStreamingUpdate(payload.text, {
+                dedupeWithLastPartial: true,
+                mode: "snapshot",
+              });
+            }
           }
         : undefined,
     },
