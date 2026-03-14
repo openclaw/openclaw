@@ -166,6 +166,10 @@ export function normalizeBlueBubblesMessagingTarget(raw: string): string | undef
       // This allows "chat_guid:iMessage;-;+1234567890" to match "+1234567890".
       const handle = extractHandleFromChatGuid(parsed.chatGuid);
       if (handle) {
+        // Preserve service prefix to ensure correct routing (iMessage vs SMS)
+        const guidService = parsed.chatGuid.split(";")[0]?.trim().toLowerCase();
+        if (guidService === "imessage") return `imessage:${handle}`;
+        if (guidService === "sms") return `sms:${handle}`;
         return handle;
       }
       // For group chats or unrecognized formats, keep the full chat_guid
