@@ -1,6 +1,6 @@
-export { extractQueueDirective } from "./queue/directive.js";
-export { clearSessionQueues } from "./queue/cleanup.js";
 export type { ClearSessionQueueResult } from "./queue/cleanup.js";
+export { clearSessionQueues } from "./queue/cleanup.js";
+export { extractQueueDirective } from "./queue/directive.js";
 export { scheduleFollowupDrain } from "./queue/drain.js";
 export {
   enqueueFollowupRun,
@@ -10,6 +10,7 @@ export {
 export { resolveQueueSettings } from "./queue/settings.js";
 export { clearFollowupQueue } from "./queue/state.js";
 export type {
+  FollowupMediaContext,
   FollowupRun,
   QueueDedupeMode,
   QueueDropPolicy,

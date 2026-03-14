@@ -9,10 +9,13 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
+import { formatMediaUnderstandingBody } from "../../media-understanding/format.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import type { OriginatingChannelType } from "../templating.js";
+import { buildInboundMediaNote } from "../media-note.js";
+import type { MsgContext, OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-utils.js";
@@ -154,6 +157,66 @@ export function createFollowupRunner(params: {
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
       );
+
+      // Apply media understanding for followup-queued messages when it was
+      // not applied (or failed) in the primary path.  This ensures voice
+      // notes that arrived while the agent was mid-turn still get transcribed.
+      if (queued.mediaContext && !queued.mediaContext.MediaUnderstanding?.length) {
+        const hasMedia = Boolean(
+          queued.mediaContext.MediaPath?.trim() ||
+          (Array.isArray(queued.mediaContext.MediaPaths) &&
+            queued.mediaContext.MediaPaths.length > 0),
+        );
+        if (hasMedia) {
+          try {
+            const mediaCtx = { ...queued.mediaContext } as MsgContext;
+            const muResult = await applyMediaUnderstanding({
+              ctx: mediaCtx,
+              cfg: queued.run.config,
+              agentDir: queued.run.agentDir,
+              activeModel: {
+                provider: queued.run.provider,
+                model: queued.run.model,
+              },
+            });
+            if (muResult.outputs.length > 0) {
+              // Rebuild the prompt with media understanding results baked in,
+              // matching the primary path's formatting.
+              const newMediaNote = buildInboundMediaNote(mediaCtx);
+              const transcriptBody = formatMediaUnderstandingBody({
+                body: undefined,
+                outputs: muResult.outputs,
+              });
+
+              // Strip existing [media attached ...] lines from the prompt so
+              // they can be replaced by the updated media note (which excludes
+              // successfully-understood attachments like transcribed audio).
+              const stripped = queued.prompt
+                .replace(/\[media attached: \d+ files\]\n?/g, "")
+                .replace(/\[media attached[^\]]*\]\n?/g, "");
+
+              const parts: string[] = [];
+              if (newMediaNote) {
+                parts.push(newMediaNote);
+              }
+              if (transcriptBody) {
+                parts.push(transcriptBody);
+              }
+              parts.push(stripped.trim());
+              queued.prompt = parts.filter(Boolean).join("\n\n");
+
+              logVerbose(
+                `followup: applied media understanding (audio=${muResult.appliedAudio}, image=${muResult.appliedImage})`,
+              );
+            }
+          } catch (err) {
+            logVerbose(
+              `followup: media understanding failed, proceeding with raw content: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
+      }
+
       try {
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,

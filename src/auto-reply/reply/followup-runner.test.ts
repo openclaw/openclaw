@@ -2,13 +2,14 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { loadSessionStore, type SessionEntry, saveSessionStore } from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
 const routeReplyMock = vi.fn();
 const isRoutableChannelMock = vi.fn();
+const applyMediaUnderstandingMock = vi.fn();
 
 vi.mock(
   "../../agents/model-fallback.js",
@@ -17,6 +18,10 @@ vi.mock(
 
 vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
+}));
+
+vi.mock("../../media-understanding/apply.js", () => ({
+  applyMediaUnderstanding: (params: unknown) => applyMediaUnderstandingMock(params),
 }));
 
 vi.mock("./route-reply.js", async (importOriginal) => {
@@ -47,13 +52,24 @@ beforeEach(() => {
   isRoutableChannelMock.mockImplementation((ch: string | undefined) =>
     Boolean(ch?.trim() && ROUTABLE_TEST_CHANNELS.has(ch.trim().toLowerCase())),
   );
+  applyMediaUnderstandingMock.mockReset();
+  applyMediaUnderstandingMock.mockResolvedValue({
+    outputs: [],
+    decisions: [],
+    appliedImage: false,
+    appliedAudio: false,
+    appliedVideo: false,
+    appliedFile: false,
+  });
 });
 
 const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
   createMockFollowupRun({ run: { messageProvider } });
 
 function createQueuedRun(
-  overrides: Partial<Omit<FollowupRun, "run">> & { run?: Partial<FollowupRun["run"]> } = {},
+  overrides: Partial<Omit<FollowupRun, "run">> & {
+    run?: Partial<FollowupRun["run"]>;
+  } = {},
 ): FollowupRun {
   return createMockFollowupRun(overrides);
 }
@@ -294,7 +310,12 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       agentResult: {
         ...makeTextReplyDedupeResult(),
         messagingToolSentTargets: [
-          { tool: "telegram", provider: "telegram", to: "268300329", accountId: "work" },
+          {
+            tool: "telegram",
+            provider: "telegram",
+            to: "268300329",
+            accountId: "work",
+          },
         ],
       },
       queued: {
@@ -344,8 +365,13 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       "sessions.json",
     );
     const sessionKey = "main";
-    const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      [sessionKey]: sessionEntry,
+    };
     await saveSessionStore(storePath, sessionStore);
 
     const { onBlockReply } = await runMessagingCase({
@@ -539,7 +565,254 @@ describe("createFollowupRunner agentDir forwarding", () => {
     });
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as { agentDir?: string };
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      agentDir?: string;
+    };
     expect(call?.agentDir).toBe(agentDir);
+  });
+});
+
+describe("createFollowupRunner media understanding", () => {
+  it("applies audio transcription when mediaContext has untranscribed audio", async () => {
+    const transcriptText = "Hello, this is a voice note.";
+    // The real applyMediaUnderstanding mutates the ctx; the mock must do the same
+    // so buildInboundMediaNote sees MediaUnderstanding and suppresses the audio line.
+    applyMediaUnderstandingMock.mockImplementationOnce(
+      async (params: { ctx: Record<string, unknown> }) => {
+        params.ctx.MediaUnderstanding = [
+          {
+            kind: "audio.transcription",
+            text: transcriptText,
+            attachmentIndex: 0,
+            provider: "whisper",
+          },
+        ];
+        params.ctx.Transcript = transcriptText;
+        return {
+          outputs: [
+            {
+              kind: "audio.transcription",
+              text: transcriptText,
+              attachmentIndex: 0,
+              provider: "whisper",
+            },
+          ],
+          decisions: [],
+          appliedImage: false,
+          appliedAudio: true,
+          appliedVideo: false,
+          appliedFile: false,
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Got it!" }],
+      meta: {},
+    });
+
+    const onBlockReply = vi.fn(async () => {});
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    const queued = createQueuedRun({
+      prompt: "[media attached: /tmp/voice.ogg (audio/ogg)]\nsome text",
+      mediaContext: {
+        Body: "some text",
+        MediaPaths: ["/tmp/voice.ogg"],
+        MediaTypes: ["audio/ogg"],
+        // MediaUnderstanding is empty — transcription not yet applied
+      },
+    });
+    await runner(queued);
+
+    // applyMediaUnderstanding should have been called
+    expect(applyMediaUnderstandingMock).toHaveBeenCalledTimes(1);
+    expect(applyMediaUnderstandingMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: queued.run.config,
+        agentDir: queued.run.agentDir,
+      }),
+    );
+
+    // The prompt passed to the agent should include the transcript, not the
+    // raw audio attachment line.
+    const agentCall = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      prompt?: string;
+    };
+    expect(agentCall?.prompt).toContain(transcriptText);
+    expect(agentCall?.prompt).not.toContain("[media attached: /tmp/voice.ogg");
+
+    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "Got it!" }));
+  });
+
+  it("skips media understanding when MediaUnderstanding is already populated", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "reply" }],
+      meta: {},
+    });
+
+    const onBlockReply = vi.fn(async () => {});
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    const queued = createQueuedRun({
+      prompt: "[Audio]\nTranscript:\nAlready transcribed.\n\nsome text",
+      mediaContext: {
+        Body: "some text",
+        MediaPaths: ["/tmp/voice.ogg"],
+        MediaTypes: ["audio/ogg"],
+        // MediaUnderstanding already populated — transcription was applied in primary path
+        MediaUnderstanding: [
+          {
+            kind: "audio.transcription",
+            text: "Already transcribed.",
+            attachmentIndex: 0,
+            provider: "whisper",
+          },
+        ],
+      },
+    });
+    await runner(queued);
+
+    // Should NOT re-run media understanding
+    expect(applyMediaUnderstandingMock).not.toHaveBeenCalled();
+
+    // The original prompt should be passed through unchanged
+    const agentCall = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      prompt?: string;
+    };
+    expect(agentCall?.prompt).toContain("Already transcribed.");
+  });
+
+  it("skips media understanding when no mediaContext is present", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "reply" }],
+      meta: {},
+    });
+
+    const onBlockReply = vi.fn(async () => {});
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    // No mediaContext (plain text message)
+    const queued = createQueuedRun({ prompt: "just text" });
+    await runner(queued);
+
+    expect(applyMediaUnderstandingMock).not.toHaveBeenCalled();
+  });
+
+  it("continues with raw prompt when media understanding fails", async () => {
+    applyMediaUnderstandingMock.mockRejectedValueOnce(new Error("transcription service down"));
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "fallback reply" }],
+      meta: {},
+    });
+
+    const onBlockReply = vi.fn(async () => {});
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    const originalPrompt = "[media attached: /tmp/voice.ogg (audio/ogg)]\nsome text";
+    const queued = createQueuedRun({
+      prompt: originalPrompt,
+      mediaContext: {
+        Body: "some text",
+        MediaPaths: ["/tmp/voice.ogg"],
+        MediaTypes: ["audio/ogg"],
+      },
+    });
+    await runner(queued);
+
+    // Should have attempted media understanding
+    expect(applyMediaUnderstandingMock).toHaveBeenCalledTimes(1);
+
+    // Agent should still run with the original prompt
+    const agentCall = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      prompt?: string;
+    };
+    expect(agentCall?.prompt).toBe(originalPrompt);
+
+    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "fallback reply" }));
+  });
+
+  it("preserves non-audio media lines when only audio is transcribed", async () => {
+    applyMediaUnderstandingMock.mockImplementationOnce(
+      async (params: { ctx: Record<string, unknown> }) => {
+        // Simulate transcription updating the context
+        params.ctx.MediaUnderstanding = [
+          {
+            kind: "audio.transcription",
+            text: "voice transcript",
+            attachmentIndex: 0,
+            provider: "whisper",
+          },
+        ];
+        params.ctx.Transcript = "voice transcript";
+        return {
+          outputs: [
+            {
+              kind: "audio.transcription",
+              text: "voice transcript",
+              attachmentIndex: 0,
+              provider: "whisper",
+            },
+          ],
+          decisions: [],
+          appliedImage: false,
+          appliedAudio: true,
+          appliedVideo: false,
+          appliedFile: false,
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "got both" }],
+      meta: {},
+    });
+
+    const onBlockReply = vi.fn(async () => {});
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    const queued = createQueuedRun({
+      prompt:
+        "[media attached: 2 files]\n[media attached 1/2: /tmp/voice.ogg (audio/ogg)]\n[media attached 2/2: /tmp/photo.jpg (image/jpeg)]\nsome text",
+      mediaContext: {
+        Body: "some text",
+        MediaPaths: ["/tmp/voice.ogg", "/tmp/photo.jpg"],
+        MediaTypes: ["audio/ogg", "image/jpeg"],
+      },
+    });
+    await runner(queued);
+
+    const agentCall = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      prompt?: string;
+    };
+    // Audio attachment line should be stripped
+    expect(agentCall?.prompt).not.toContain("voice.ogg");
+    // Image attachment line should also be stripped (all media-attached lines are
+    // removed and replaced by the new buildInboundMediaNote output)
+    // The transcript should be present
+    expect(agentCall?.prompt).toContain("voice transcript");
   });
 });
