@@ -82,6 +82,30 @@ class WearChatControllerTest {
   }
 
   @Test
+  fun `not connected send failures keep the pending timeout armed`() = runTest {
+    val client = FakeGatewayClient().apply {
+      chatSendDeferred = CompletableDeferred<String>().also {
+        it.completeExceptionally(Exception("not connected"))
+      }
+      historyResponse = """{"messages":[]}"""
+    }
+    val controllerScope = TestScope(StandardTestDispatcher(testScheduler))
+    val controller = WearChatController(controllerScope, client, ::testString)
+    advanceUntilIdle()
+
+    controller.sendMessage("Retry later")
+    runCurrent()
+    assertTrue(controller.isSending.value)
+
+    advanceTimeBy(120_000)
+    advanceUntilIdle()
+
+    assertFalse(controller.isSending.value)
+    assertEquals("Timed out waiting for a reply. Try again.", controller.errorText.value)
+    controllerScope.cancel()
+  }
+
+  @Test
   fun `final event emits latest assistant reply for native tts`() = runTest {
     val client = FakeGatewayClient().apply {
       chatSendResponse = """{"runId":"run-1"}"""
@@ -166,6 +190,38 @@ class WearChatControllerTest {
 
     client.chatSendDeferred?.complete("""{"runId":"server-run"}""")
     advanceUntilIdle()
+    controllerScope.cancel()
+  }
+
+  @Test
+  fun `late send failures do not overwrite a completed reply with an error`() = runTest {
+    val client = FakeGatewayClient().apply {
+      chatSendDeferred = CompletableDeferred()
+      historyResponses += """{"messages":[]}"""
+      historyResponses += historyJson(userText = "Question", assistantText = "Delivered reply")
+    }
+    val controllerScope = TestScope(StandardTestDispatcher(testScheduler))
+    val controller = WearChatController(controllerScope, client, ::testString)
+    advanceUntilIdle()
+
+    controller.sendMessage("Question")
+    runCurrent()
+    assertTrue(controller.isSending.value)
+
+    client.emitEvent(
+      GatewayEvent(
+        event = "chat",
+        payloadJson = """{"sessionKey":"main","state":"final","runId":"server-run"}""",
+      ),
+    )
+    advanceUntilIdle()
+
+    client.chatSendDeferred?.completeExceptionally(Exception("send failed after final"))
+    advanceUntilIdle()
+
+    assertFalse(controller.isSending.value)
+    assertEquals(listOf("Question", "Delivered reply"), controller.messages.value.map { it.text })
+    assertEquals(null, controller.errorText.value)
     controllerScope.cancel()
   }
 
