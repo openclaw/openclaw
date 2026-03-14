@@ -66,6 +66,11 @@ export function renderOverview(props: OverviewProps) {
         authMode?: "none" | "token" | "password" | "trusted-proxy";
       }
     | undefined;
+  const activeLocale = i18n.getLocale();
+  const currentLocale = props.settings.locale || activeLocale;
+  if (currentLocale !== activeLocale) {
+    void i18n.setLocale(currentLocale);
+  }
   const uptime = snapshot?.uptimeMs ? formatDurationHuman(snapshot.uptimeMs) : t("common.na");
   const tickIntervalMs = props.hello?.policy?.tickIntervalMs;
   const tick = tickIntervalMs
@@ -189,8 +194,6 @@ export function renderOverview(props: OverviewProps) {
     `;
   })();
 
-  const currentLocale = i18n.getLocale();
-
   return html`
     <section class="grid">
       <div class="card">
@@ -285,7 +288,7 @@ export function renderOverview(props: OverviewProps) {
           <label class="field">
             <span>${t("overview.access.language")}</span>
             <select
-              .value=${currentLocale}
+              value=${currentLocale}
               @change=${(e: Event) => {
                 const v = (e.target as HTMLSelectElement).value as Locale;
                 void i18n.setLocale(v);
@@ -294,7 +297,7 @@ export function renderOverview(props: OverviewProps) {
             >
               ${SUPPORTED_LOCALES.map((loc) => {
                 const key = loc.replace(/-([a-zA-Z])/g, (_, c) => c.toUpperCase());
-                return html`<option value=${loc}>${t(`languages.${key}`)}</option>`;
+                return html`<option value=${loc} ?selected=${loc === currentLocale}>${t(`languages.${key}`)}</option>`;
               })}
             </select>
           </label>
