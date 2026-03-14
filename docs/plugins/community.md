@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **Codex CLI Session** — Use your Codex subscription from OpenClaw: run local Codex CLI in chat via `/codex` and ACP commands; supports persistent and oneshot sessions.
+  npm: `codex-cli-session`
+  repo: `https://github.com/sunsiyuan/openclaw-codex-cli-session`
+  install: `openclaw plugins install codex-cli-session`
