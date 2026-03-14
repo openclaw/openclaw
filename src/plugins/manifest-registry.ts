@@ -221,16 +221,10 @@ export function loadPluginManifestRegistry(params: {
 
       const existingRank = PLUGIN_ORIGIN_RANK[existing.candidate.origin];
       const candidateRank = PLUGIN_ORIGIN_RANK[candidate.origin];
-      const hasConfigOrigin =
-        candidate.origin === "config" || existing.candidate.origin === "config";
 
-      if (samePlugin || hasConfigOrigin) {
-        // Either the same physical directory, or one candidate was explicitly
-        // loaded via plugins.load.paths / plugins.installs (origin "config").
-        // Silently keep the higher-precedence candidate without warning.
-        // This covers the common case where plugins.installs places a plugin
-        // into the extensions dir and auto-discovery finds it again with a
-        // different origin (e.g. config vs global).
+      if (samePlugin) {
+        // Same physical directory (possibly via symlink). Silently keep the
+        // higher-precedence candidate and skip the duplicate entirely.
         if (candidateRank < existingRank) {
           records[existing.recordIndex] = buildRecord({
             manifest,
@@ -243,12 +237,23 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
-      diagnostics.push({
-        level: "warn",
-        pluginId: manifest.id,
-        source: candidate.source,
-        message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
-      });
+
+      const hasConfigOrigin =
+        candidate.origin === "config" || existing.candidate.origin === "config";
+
+      if (!hasConfigOrigin) {
+        // Neither candidate was explicitly loaded via plugins.load.paths or
+        // plugins.installs; this is a genuine duplicate worth warning about.
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
+        });
+      }
+      // When one candidate has config origin (user-explicit intent), suppress
+      // the warning but still emit both records so the loader can resolve
+      // precedence and mark the lower-priority candidate as overridden.
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }

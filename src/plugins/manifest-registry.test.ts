@@ -182,11 +182,10 @@ describe("loadPluginManifestRegistry", () => {
 
     const registry = loadRegistry(candidates);
     expect(countDuplicateWarnings(registry)).toBe(0);
-    expect(registry.plugins.length).toBe(1);
-    expect(registry.plugins[0]?.origin).toBe("config");
+    expect(registry.plugins.length).toBe(2);
   });
 
-  it("suppresses duplicate warning and prefers config when lower-precedence candidate is discovered first", () => {
+  it("suppresses duplicate warning and emits both records when lower-precedence candidate is discovered first", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
     const manifest = { id: "feishu", configSchema: { type: "object" } };
@@ -208,8 +207,7 @@ describe("loadPluginManifestRegistry", () => {
 
     const registry = loadRegistry(candidates);
     expect(countDuplicateWarnings(registry)).toBe(0);
-    expect(registry.plugins.length).toBe(1);
-    expect(registry.plugins[0]?.origin).toBe("config");
+    expect(registry.plugins.length).toBe(2);
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {
