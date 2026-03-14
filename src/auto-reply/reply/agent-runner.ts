@@ -419,33 +419,10 @@ export async function runReplyAgent(params: {
       blockReplyPipeline.stop();
     }
 
-    // Send the compaction completion notice *after* the pipeline has flushed and
-    // stopped, so the enqueue does not set didStream() = true and cause
-    // buildReplyPayloads to discard the real assistant reply.  We still apply a
-    // timeout so the notice cannot stall the run indefinitely.
-    if (autoCompactionCompleted && blockStreamingEnabled && opts?.onBlockReply) {
-      const verboseEnabled = resolvedVerboseLevel !== "off";
-      const completionText = verboseEnabled
-        ? `🧹 Auto-compaction complete.`
-        : `✅ Context compacted.`;
-      const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
-      const noticePayload = applyReplyToMode({
-        text: completionText,
-        replyToId: currentMessageId,
-        replyToCurrent: true,
-        isCompactionNotice: true,
-      });
-      // Fire-and-forget with timeout — best-effort delivery; failure must not
-      // propagate to the caller.
-      void Promise.race([
-        opts.onBlockReply(noticePayload),
-        new Promise<void>((_, reject) =>
-          setTimeout(() => reject(new Error("compaction notice timeout")), blockReplyTimeoutMs),
-        ),
-      ]).catch(() => {
-        // Intentionally swallowed — the notice is informational only.
-      });
-    }
+    // NOTE: The compaction completion notice for block-streaming mode is sent
+    // further below — after incrementRunCompactionCount — so it can include
+    // the `(count N)` suffix.  Sending it here (before the count is known)
+    // would omit that information.
     if (pendingToolTasks.size > 0) {
       await Promise.allSettled(pendingToolTasks);
     }
@@ -734,14 +711,39 @@ export async function runReplyAgent(params: {
         ? `🧹 Auto-compaction complete${suffix}.`
         : `✅ Context compacted${suffix}.`;
 
-      // In block-streaming mode the completion notice is sent above (after the
-      // pipeline has flushed) via a fire-and-forget call to opts.onBlockReply,
-      // so that it does not set didStream()=true and cause buildReplyPayloads to
-      // discard the real assistant reply.
-      // In non-streaming mode, push into verboseNotices so it is included in
-      // the final payload batch.
-      if (!blockReplyPipeline) {
-        verboseNotices.push({ text: completionText });
+      if (blockReplyPipeline && opts?.onBlockReply) {
+        // In block-streaming mode, send the completion notice via
+        // fire-and-forget *after* the pipeline has flushed (so it does not set
+        // didStream()=true and cause buildReplyPayloads to discard the real
+        // assistant reply).  Now that the count is known we can include it.
+        const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+        const noticePayload = applyReplyToMode({
+          text: completionText,
+          replyToId: currentMessageId,
+          replyToCurrent: true,
+          isCompactionNotice: true,
+        });
+        void Promise.race([
+          opts.onBlockReply(noticePayload),
+          new Promise<void>((_, reject) =>
+            setTimeout(() => reject(new Error("compaction notice timeout")), blockReplyTimeoutMs),
+          ),
+        ]).catch(() => {
+          // Intentionally swallowed — the notice is informational only.
+        });
+      } else {
+        // Non-streaming: push into verboseNotices with full compaction metadata
+        // so threading exemptions apply and replyToMode=first does not thread
+        // the notice instead of the real assistant reply.
+        const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+        verboseNotices.push(
+          applyReplyToMode({
+            text: completionText,
+            replyToId: currentMessageId,
+            replyToCurrent: true,
+            isCompactionNotice: true,
+          }),
+        );
       }
     }
     if (verboseNotices.length > 0) {
