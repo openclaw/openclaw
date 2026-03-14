@@ -1,10 +1,14 @@
-# Contributing to OpenClaw
+# Contributing to GODSClaw
 
 Welcome to the lobster tank! 🦞
 
+GODSClaw is the personal AI assistant ecosystem built on [OpenClaw](https://github.com/openclaw/openclaw).
+Contributions here extend that foundation with additional integrations, safety capabilities, and platform features.
+
 ## Quick Links
 
-- **GitHub:** https://github.com/openclaw/openclaw
+- **GitHub:** https://github.com/mgllc/GODSclaw
+- **Upstream OpenClaw:** https://github.com/openclaw/openclaw
 - **Vision:** [`VISION.md`](VISION.md)
 - **Discord:** https://discord.gg/qkhbAGHRBT
 - **X/Twitter:** [@steipete](https://x.com/steipete) / [@openclaw](https://x.com/openclaw)
@@ -79,12 +83,63 @@ Welcome to the lobster tank! 🦞
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!
-2. **New features / architecture** → Start a [GitHub Discussion](https://github.com/openclaw/openclaw/discussions) or ask in Discord first
+2. **New features / architecture** → Start a [GitHub Discussion](https://github.com/mgllc/GODSclaw/discussions) or ask in Discord first
 3. **Questions** → Discord [#help](https://discord.com/channels/1456350064065904867/1459642797895319552) / [#users-helping-users](https://discord.com/channels/1456350064065904867/1459007081603403828)
+
+## Language-Specific Guidelines
+
+GODSClaw is multi-language. Follow the conventions for the language you are editing:
+
+### TypeScript (core, CLI, extensions)
+
+- Use strict ESM with `.js` extensions on imports.
+- Avoid `any`; never add `@ts-nocheck`.
+- Run `pnpm check` (Oxlint + Oxfmt) before committing.
+- Run `pnpm tsgo` for a full type-check pass.
+- Keep files under ~700 LOC; extract helpers when larger.
+
+### Python (superagent integration, auxiliary scripts)
+
+- Target Python 3.10+.
+- Format with `black` and lint with `ruff` (`pyproject.toml` defines the config).
+- Python code paths that bridge to TypeScript should expose a clean subprocess or HTTP interface; do not mix runtimes in the same hot path.
+- Any new Python dependency must be added to `pyproject.toml` under `[project.dependencies]`.
+
+### Shell (install scripts, CI helpers)
+
+- Use `#!/usr/bin/env bash` and `set -euo pipefail`.
+- Avoid bashisms that break `sh`-only environments unless the script is explicitly macOS-only.
+- Lint with `shellcheck` where available.
+
+### Swift (macOS / iOS companion apps)
+
+- Follow the existing project structure under `apps/macos` and `apps/ios`.
+- Use the `Observation` framework (`@Observable`, `@Bindable`) for SwiftUI state — do **not** introduce new `ObservableObject` instances.
+- Do not rebuild the macOS app over SSH; rebuilds must run directly on the Mac.
+
+## superagent SDK Integration Guidelines
+
+When adding or modifying superagent (`Guard`, `Redact`, `Scan`, `Test`) integration code:
+
+1. **TypeScript wrappers live in `extensions/`** — create a dedicated extension package (e.g., `extensions/superagent-guard/`) rather than embedding SDK calls directly in core gateway code.
+2. **Keep the hot path sync** — superagent SDK calls that block the agent reply pipeline must be awaited with a configurable timeout; never block indefinitely.
+3. **Configuration via gateway config** — expose superagent options through the standard gateway config (`openclaw config set`) rather than environment variables or separate config files.
+4. **Test coverage required** — any Guard/Redact middleware must ship with a Vitest test covering at least the pass-through and block/redact cases.
+
+Example extension skeleton:
+
+```
+extensions/
+  superagent-guard/
+    package.json          # { "name": "@godsclaw/superagent-guard", ... }
+    src/
+      index.ts            # exports BeforeReplyHook
+      guard.test.ts       # vitest unit tests
+```
 
 ## Before You PR
 
-- Test locally with your OpenClaw instance
+- Test locally with your GODSClaw instance
 - Run tests: `pnpm build && pnpm check && pnpm test`
 - If you have access to Codex, run `codex review --base origin/main` locally before opening or updating your PR. Treat this as the current highest standard of AI review, even if GitHub Codex review also runs.
 - Ensure CI checks pass
@@ -144,19 +199,21 @@ We are currently prioritizing:
 - **UX**: Improving the onboarding wizard and error messages.
 - **Skills**: For skill contributions, head to [ClawHub](https://clawhub.ai/) — the community hub for OpenClaw skills.
 - **Performance**: Optimizing token usage and compaction logic.
+- **Safety integrations**: Expanding and stabilizing the superagent (`Guard`, `Redact`, `Scan`) middleware layer.
+- **Multi-language runtime**: Improving the Python ↔ TypeScript bridge for superagent SDK tooling.
 
-Check the [GitHub Issues](https://github.com/openclaw/openclaw/issues) for "good first issue" labels!
+Check the [GitHub Issues](https://github.com/mgllc/GODSclaw/issues) for "good first issue" labels!
 
 ## Maintainers
 
 We're selectively expanding the maintainer team.
-If you're an experienced contributor who wants to help shape OpenClaw's direction — whether through code, docs, or community — we'd like to hear from you.
+If you're an experienced contributor who wants to help shape GODSClaw's direction — whether through code, docs, or community — we'd like to hear from you.
 
 Being a maintainer is a responsibility, not an honorary title. We expect active, consistent involvement — triaging issues, reviewing PRs, and helping move the project forward.
 
 Still interested? Email contributing@openclaw.ai with:
 
-- Links to your PRs on OpenClaw (if you don't have any, start there first)
+- Links to your PRs on GODSClaw or OpenClaw (if you don't have any, start there first)
 - Links to open source projects you maintain or actively contribute to
 - Your GitHub, Discord, and X/Twitter handles
 - A brief intro: background, experience, and areas of interest
@@ -171,7 +228,8 @@ Please allow a few weeks for a response.
 
 We take security reports seriously. Report vulnerabilities directly to the repository where the issue lives:
 
-- **Core CLI and gateway** — [openclaw/openclaw](https://github.com/openclaw/openclaw)
+- **GODSClaw core** — [mgllc/GODSclaw](https://github.com/mgllc/GODSclaw)
+- **Upstream OpenClaw CLI and gateway** — [openclaw/openclaw](https://github.com/openclaw/openclaw)
 - **macOS desktop app** — [openclaw/openclaw](https://github.com/openclaw/openclaw) (apps/macos)
 - **iOS app** — [openclaw/openclaw](https://github.com/openclaw/openclaw) (apps/ios)
 - **Android app** — [openclaw/openclaw](https://github.com/openclaw/openclaw) (apps/android)
