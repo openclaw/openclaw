@@ -59,6 +59,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/Control UI: restore the operator-only device-auth bypass and classify browser connect failures so origin and device-identity problems no longer show up as auth errors in the Control UI and web chat. (#45512) thanks @sallyom.
 - macOS/voice wake: stop crashing wake-word command extraction when speech segment ranges come from a different transcript instance.
 - Discord/allowlists: honor raw `guild_id` when hydrated guild objects are missing so allowlisted channels and threads like `#maintainers` no longer get false-dropped before channel allowlist checks.
+- macOS/runtime locator: require Node >=22.16.0 during macOS runtime discovery so the app no longer accepts Node versions that the main runtime guard rejects later. Thanks @sumleo.
 
 ## 2026.3.12
 
