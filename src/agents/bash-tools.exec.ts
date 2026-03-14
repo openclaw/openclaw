@@ -357,6 +357,8 @@ export function createExecTool(
         });
         workdir = resolved.hostWorkdir;
         containerWorkdir = resolved.containerWorkdir;
+      } else if (host === "node") {
+        // host=node: workdir lives on the remote node — skip gateway-side validation
       } else {
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
