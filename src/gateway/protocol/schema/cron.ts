@@ -179,6 +179,10 @@ const CronDeliverySharedProperties = {
   accountId: Type.Optional(NonEmptyString),
   bestEffort: Type.Optional(Type.Boolean()),
   failureDestination: Type.Optional(CronFailureDestinationSchema),
+  /** Snapshot of the originating session's delivery context (set at job creation time). */
+  originChannel: Type.Optional(NonEmptyString),
+  originTo: Type.Optional(NonEmptyString),
+  originAccountId: Type.Optional(NonEmptyString),
 };
 
 const CronDeliveryNoopSchema = Type.Object(

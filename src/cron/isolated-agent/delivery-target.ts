@@ -124,7 +124,10 @@ export async function resolveDeliveryTarget(
   // no usable `to`, fall back to the snapshotted originTo so that isolated cron
   // jobs deliver to the chat where the job was originally created.
   if (originSnapshotApplied && !toCandidate && typeof jobPayload.originTo === "string") {
-    toCandidate = jobPayload.originTo;
+    const trimmedOriginTo = jobPayload.originTo.trim();
+    if (trimmedOriginTo) {
+      toCandidate = trimmedOriginTo;
+    }
   }
 
   // Prefer an explicit accountId from the job's delivery config (set via
@@ -139,7 +142,10 @@ export async function resolveDeliveryTarget(
   // When the origin snapshot was used and no accountId was resolved from the
   // session or explicit config, fall back to the snapshotted originAccountId.
   if (originSnapshotApplied && !accountId && typeof jobPayload.originAccountId === "string") {
-    accountId = jobPayload.originAccountId;
+    const trimmedOriginAccountId = jobPayload.originAccountId.trim();
+    if (trimmedOriginAccountId) {
+      accountId = trimmedOriginAccountId;
+    }
   }
   if (!accountId && channel) {
     const bindings = buildChannelAccountBindings(cfg);

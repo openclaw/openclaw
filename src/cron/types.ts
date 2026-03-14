@@ -35,7 +35,7 @@ export type CronDelivery = {
    * has no `lastChannel` (because fresh isolated sessions clear inherited routing
    * state).
    */
-  originChannel?: string;
+  originChannel?: ChannelId;
   originTo?: string;
   originAccountId?: string;
 };
