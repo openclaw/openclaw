@@ -60,6 +60,26 @@ describe("onboardCommand", () => {
     expect(mocks.runNonInteractiveOnboarding).not.toHaveBeenCalled();
   });
 
+  it("logs ASCII-safe Windows guidance before onboarding", async () => {
+    const runtime = makeRuntime();
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    try {
+      await onboardCommand({}, runtime);
+
+      expect(runtime.log).toHaveBeenCalledWith(
+        [
+          "Windows detected - OpenClaw runs great on WSL2!",
+          "Native Windows might be trickier.",
+          "Quick setup: wsl --install (one command, one reboot)",
+          "Guide: https://docs.openclaw.ai/windows",
+        ].join("\n"),
+      );
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
   it("defaults --reset to config+creds+sessions scope", async () => {
     const runtime = makeRuntime();
 
