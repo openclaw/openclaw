@@ -24,6 +24,7 @@ import { mcpHandlers } from "./server-methods/mcp.js";
 import { memoryDashboardHandlers } from "./server-methods/memory-dashboard.js";
 import { modelsHandlers } from "./server-methods/models.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
+import { personasHandlers } from "./server-methods/personas.js";
 import { projectsHandlers } from "./server-methods/projects.js";
 import { pushHandlers } from "./server-methods/push.js";
 import { sendHandlers } from "./server-methods/send.js";
@@ -111,6 +112,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...teamsHandlers,
   ...commandsHandlers,
   ...stateHandlers,
+  ...personasHandlers,
 };
 
 export async function handleGatewayRequest(

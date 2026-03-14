@@ -186,6 +186,12 @@ const BASE_METHODS = [
   "commands.update",
   "commands.delete",
   "commands.invoke",
+  // Persona library
+  "personas.list",
+  "personas.get",
+  "personas.categories",
+  "personas.search",
+  "personas.expand",
   // State DB introspection
   "state.info",
   "state.tables",
