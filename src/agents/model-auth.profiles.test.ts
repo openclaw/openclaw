@@ -430,7 +430,7 @@ describe("getApiKeyForModel", () => {
   it("resolveEnvApiKey('google-vertex') returns GOOGLE_CLOUD_API_KEY when set", async () => {
     await withEnvAsync(
       {
-        GOOGLE_CLOUD_API_KEY: "AIzaSyTest1234567890",
+        GOOGLE_CLOUD_API_KEY: "AIzaSyTest1234567890", // pragma: allowlist secret
       },
       async () => {
         const resolved = resolveEnvApiKey("google-vertex");
