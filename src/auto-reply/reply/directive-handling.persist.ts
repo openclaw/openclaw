@@ -85,6 +85,7 @@ export async function persistInlineDirectives(params: {
     let reasoningChanged =
       directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
     let updated = false;
+    const telegramChannelHint = sessionEntry.channel ?? sessionEntry.lastChannel;
 
     if (directives.hasThinkDirective && directives.thinkLevel) {
       sessionEntry.thinkingLevel = directives.thinkLevel;
@@ -178,6 +179,7 @@ export async function persistInlineDirectives(params: {
           });
           const telegramParentSessionKey = resolveTelegramThreadParentSessionKey({
             sessionKey,
+            channelHint: telegramChannelHint,
           });
           if (telegramParentSessionKey) {
             const parentEntry =
@@ -228,6 +230,7 @@ export async function persistInlineDirectives(params: {
           store[sessionKey] = sessionEntry;
           const telegramParentSessionKey = resolveTelegramThreadParentSessionKey({
             sessionKey,
+            channelHint: telegramChannelHint,
           });
           if (telegramParentSessionKey && sessionStore[telegramParentSessionKey]) {
             store[telegramParentSessionKey] = sessionStore[telegramParentSessionKey]!;

@@ -318,6 +318,7 @@ export async function handleDirectiveOnly(
     directives.hasFastDirective &&
     directives.fastMode !== undefined &&
     directives.fastMode !== currentFastMode;
+  const telegramChannelHint = sessionEntry.channel ?? sessionEntry.lastChannel;
   let reasoningChanged =
     directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
   if (directives.hasThinkDirective && directives.thinkLevel) {
@@ -373,6 +374,7 @@ export async function handleDirectiveOnly(
 
     const telegramParentSessionKey = resolveTelegramThreadParentSessionKey({
       sessionKey,
+      channelHint: telegramChannelHint,
     });
     if (telegramParentSessionKey) {
       const parentEntry =
@@ -420,6 +422,7 @@ export async function handleDirectiveOnly(
       store[sessionKey] = sessionEntry;
       const telegramParentSessionKey = resolveTelegramThreadParentSessionKey({
         sessionKey,
+        channelHint: telegramChannelHint,
       });
       if (telegramParentSessionKey && sessionStore[telegramParentSessionKey]) {
         store[telegramParentSessionKey] = sessionStore[telegramParentSessionKey]!;
@@ -519,7 +522,7 @@ export async function handleDirectiveOnly(
         ? `Model reset to default (${labelWithAlias}).`
         : `Model set to ${labelWithAlias}.`,
     );
-    if (resolveTelegramThreadParentSessionKey({ sessionKey })) {
+    if (resolveTelegramThreadParentSessionKey({ sessionKey, channelHint: telegramChannelHint })) {
       parts.push(
         modelSelection.isDefault
           ? "New Telegram threads in this chat now follow the default model."

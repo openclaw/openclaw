@@ -131,7 +131,11 @@ export function resolveThreadParentSessionKey(
   return parent ? parent : null;
 }
 
-function resolveTelegramChatRoot(sessionKey: string | undefined | null): string | null {
+function resolveTelegramChatRoot(params: {
+  sessionKey: string | undefined | null;
+  allowMainScopedThreads: boolean;
+}): string | null {
+  const { sessionKey, allowMainScopedThreads } = params;
   const raw = (sessionKey ?? "").trim();
   if (!raw) {
     return null;
@@ -139,6 +143,23 @@ function resolveTelegramChatRoot(sessionKey: string | undefined | null): string 
   const parsed = parseAgentSessionKey(raw);
   const scoped = (parsed?.rest ?? raw).toLowerCase();
   if (!scoped.startsWith("telegram:")) {
+    if (!allowMainScopedThreads) {
+      return null;
+    }
+    if (!scoped.startsWith("main:") && scoped !== "main") {
+      return null;
+    }
+  }
+  const hasThreadMarker = scoped.includes(":thread:") || scoped.includes(":topic:");
+  if (!hasThreadMarker) {
+    if (scoped === "main" && allowMainScopedThreads) {
+      return "main";
+    }
+    if (!scoped.startsWith("telegram:")) {
+      return null;
+    }
+  }
+  if (!scoped.startsWith("telegram:") && !allowMainScopedThreads) {
     return null;
   }
   const threadIndex = scoped.indexOf(":thread:");
@@ -160,6 +181,7 @@ function resolveTelegramChatRoot(sessionKey: string | undefined | null): string 
 export function resolveTelegramThreadParentSessionKey(params: {
   sessionKey: string | undefined | null;
   parentSessionKey?: string | null;
+  channelHint?: string | null;
 }): string | null {
   const raw = (params.sessionKey ?? "").trim();
   if (!raw) {
@@ -168,20 +190,29 @@ export function resolveTelegramThreadParentSessionKey(params: {
 
   const parsed = parseAgentSessionKey(raw);
   const scoped = (parsed?.rest ?? raw).toLowerCase();
-  if (!scoped.startsWith("telegram:")) {
-    return null;
-  }
   if (!scoped.includes(":thread:") && !scoped.includes(":topic:")) {
     return null;
   }
-  const sessionChatRoot = resolveTelegramChatRoot(raw);
+  const channelHint = (params.channelHint ?? "").trim().toLowerCase();
+  const allowMainScopedThreads = channelHint === "telegram";
+  if (!scoped.startsWith("telegram:") && !allowMainScopedThreads) {
+    return null;
+  }
+
+  const sessionChatRoot = resolveTelegramChatRoot({
+    sessionKey: raw,
+    allowMainScopedThreads,
+  });
   if (!sessionChatRoot) {
     return null;
   }
 
   const explicitParent = (params.parentSessionKey ?? "").trim();
   if (explicitParent && explicitParent !== raw) {
-    const explicitParentRoot = resolveTelegramChatRoot(explicitParent);
+    const explicitParentRoot = resolveTelegramChatRoot({
+      sessionKey: explicitParent,
+      allowMainScopedThreads,
+    });
     if (explicitParentRoot && explicitParentRoot === sessionChatRoot) {
       return explicitParent;
     }
@@ -191,7 +222,10 @@ export function resolveTelegramThreadParentSessionKey(params: {
   if (!derivedParent || derivedParent === raw) {
     return null;
   }
-  const derivedParentRoot = resolveTelegramChatRoot(derivedParent);
+  const derivedParentRoot = resolveTelegramChatRoot({
+    sessionKey: derivedParent,
+    allowMainScopedThreads,
+  });
   if (!derivedParentRoot || derivedParentRoot !== sessionChatRoot) {
     return null;
   }

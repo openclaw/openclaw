@@ -460,9 +460,16 @@ export async function initSessionState(params: {
     sessionEntry.displayName = threadLabel;
   }
   const parentSessionKey = ctx.ParentSessionKey?.trim();
+  const telegramChannelHint =
+    sessionEntry.channel ??
+    sessionEntry.lastChannel ??
+    ctx.OriginatingChannel ??
+    ctx.Surface ??
+    ctx.Provider;
   const telegramThreadParentSessionKey = resolveTelegramThreadParentSessionKey({
     sessionKey,
     parentSessionKey,
+    channelHint: telegramChannelHint,
   });
   if (!hasExistingSessionEntry && telegramThreadParentSessionKey) {
     const parentEntry = sessionStore[telegramThreadParentSessionKey];

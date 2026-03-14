@@ -43,6 +43,23 @@ describe("resolveTelegramThreadParentSessionKey", () => {
     ).toBeNull();
   });
 
+  it("derives parent for Telegram DM main-scoped thread keys when channel hint is telegram", () => {
+    expect(
+      resolveTelegramThreadParentSessionKey({
+        sessionKey: "agent:main:main:thread:123456789:42",
+        channelHint: "telegram",
+      }),
+    ).toBe("agent:main:main");
+  });
+
+  it("returns null for main-scoped thread keys without telegram channel hint", () => {
+    expect(
+      resolveTelegramThreadParentSessionKey({
+        sessionKey: "agent:main:main:thread:123456789:42",
+      }),
+    ).toBeNull();
+  });
+
   it("ignores explicit parent when it is a different Telegram chat scope", () => {
     expect(
       resolveTelegramThreadParentSessionKey({

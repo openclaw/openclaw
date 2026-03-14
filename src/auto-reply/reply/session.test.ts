@@ -2189,6 +2189,61 @@ describe("initSessionState Telegram future-thread model defaults", () => {
     expect(result.sessionEntry.modelOverride).toBe("gpt-5.3-codex");
   });
 
+  it("seeds new Telegram DM main-scoped thread sessions when channel context is telegram", async () => {
+    const storePath = await createStorePath("telegram-dm-main-thread-future-model-default-");
+    const parentSessionKey = "agent:main:main";
+    const threadSessionKey = "agent:main:main:thread:123456789:9001";
+    await writeSessionStoreFast(storePath, {
+      [parentSessionKey]: {
+        sessionId: "parent-main-dm",
+        updatedAt: Date.now(),
+        futureThreadProviderOverride: "openai-codex",
+        futureThreadModelOverride: "gpt-5.3-codex",
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello dm main thread",
+        SessionKey: threadSessionKey,
+        Provider: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.providerOverride).toBe("openai-codex");
+    expect(result.sessionEntry.modelOverride).toBe("gpt-5.3-codex");
+  });
+
+  it("does not seed main-scoped thread sessions without telegram channel context", async () => {
+    const storePath = await createStorePath("main-thread-no-telegram-hint-no-seed-");
+    const parentSessionKey = "agent:main:main";
+    const threadSessionKey = "agent:main:main:thread:123456789:9001";
+    await writeSessionStoreFast(storePath, {
+      [parentSessionKey]: {
+        sessionId: "parent-main-nohint",
+        updatedAt: Date.now(),
+        futureThreadProviderOverride: "openai-codex",
+        futureThreadModelOverride: "gpt-5.3-codex",
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello main thread no hint",
+        SessionKey: threadSessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.providerOverride).toBeUndefined();
+    expect(result.sessionEntry.modelOverride).toBeUndefined();
+  });
+
   it("does not mutate existing thread sessions when parent future-thread defaults change", async () => {
     const storePath = await createStorePath("telegram-existing-thread-not-retrofit-");
     const parentSessionKey = "agent:main:telegram:group:-100123";
