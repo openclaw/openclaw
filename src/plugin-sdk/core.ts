@@ -17,7 +17,9 @@ export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export {
   applyProviderDefaultModel,
   configureOpenAICompatibleSelfHostedProviderNonInteractive,
+  discoverOpenAICompatibleSelfHostedProvider,
   promptAndConfigureOpenAICompatibleSelfHostedProvider,
+  promptAndConfigureOpenAICompatibleSelfHostedProviderAuth,
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
