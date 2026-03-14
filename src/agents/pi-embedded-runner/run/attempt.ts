@@ -92,6 +92,7 @@ import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { normalizeToolName } from "../../tool-policy.js";
+import { resolveImageCompressionSettings } from "../../tools/image-compression.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -2387,6 +2388,10 @@ export async function runEmbeddedAttempt(
 
           // Detect and load images referenced in the prompt for vision-capable models.
           // Images are prompt-local only (pi-like behavior).
+          const imageCompressionConfig = params.config?.agents?.defaults?.imageCompression;
+          const compressionSettings = resolveImageCompressionSettings({
+            compression: imageCompressionConfig,
+          });
           const imageResult = await detectAndLoadPromptImages({
             prompt: effectivePrompt,
             workspaceDir: effectiveWorkspace,
@@ -2400,6 +2405,7 @@ export async function runEmbeddedAttempt(
               sandbox?.enabled && sandbox?.fsBridge
                 ? { root: sandbox.workspaceDir, bridge: sandbox.fsBridge }
                 : undefined,
+            compressionSettings,
           });
 
           cacheTrace?.recordStage("prompt:images", {

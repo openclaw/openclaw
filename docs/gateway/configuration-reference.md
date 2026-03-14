@@ -837,6 +837,43 @@ Higher values preserve more visual detail.
 }
 ```
 
+### `agents.defaults.imageCompression`
+
+Image quality settings for the `image` tool. Controls resolution and JPEG quality when sending images to vision models.
+
+Default: `"medium"` (max 1200px side, quality 70).
+
+**Presets:**
+
+- `"none"` - No compression, send original image (may hit API limits)
+- `"low"` - Max 800px side, quality 50 (smallest payload)
+- `"medium"` - Max 1200px side, quality 70 (balanced)
+- `"high"` - Max 2000px side, quality 95 (best quality for text-heavy images)
+
+```json5
+{
+  agents: { defaults: { imageCompression: "high" } },
+}
+```
+
+**Detailed settings** for fine-grained control:
+
+```json5
+{
+  agents: {
+    defaults: {
+      imageCompression: {
+        maxWidth: 2000,
+        maxHeight: 2000,
+        quality: 95,
+      },
+    },
+  },
+}
+```
+
+Use `"high"` or detailed settings with higher quality values (85-95) for text-heavy images like documents, contracts, or licenses where OCR accuracy matters.
+
 ### `agents.defaults.userTimezone`
 
 Timezone for system prompt context (not message timestamps). Falls back to host timezone.

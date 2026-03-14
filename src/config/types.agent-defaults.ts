@@ -8,6 +8,33 @@ import type {
 } from "./types.base.js";
 import type { MemorySearchConfig } from "./types.tools.js";
 
+/**
+ * Image compression preset modes for the image tool.
+ * - "none": No compression, send original image
+ * - "low": Aggressive compression (max 800px side, quality 50)
+ * - "medium": Balanced compression (max 1200px side, quality 70)
+ * - "high": Minimal compression (max 2000px side, quality 95)
+ */
+export type ImageCompressionPreset = "none" | "low" | "medium" | "high";
+
+/**
+ * Detailed image compression settings for fine-grained control.
+ */
+export type ImageCompressionDetailConfig = {
+  /** Maximum image width in pixels. Default: 2000 */
+  maxWidth?: number;
+  /** Maximum image height in pixels. Default: 2000 */
+  maxHeight?: number;
+  /** JPEG quality (1-100). Default: 95 */
+  quality?: number;
+};
+
+/**
+ * Image compression configuration for the image tool.
+ * Accepts either a preset string or detailed settings object.
+ */
+export type ImageCompressionConfig = ImageCompressionPreset | ImageCompressionDetailConfig;
+
 export type AgentModelEntryConfig = {
   alias?: string;
   /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
@@ -214,6 +241,14 @@ export type AgentDefaultsConfig = {
    * Default: 1200.
    */
   imageMaxDimensionPx?: number;
+  /**
+   * Image compression settings for the image tool.
+   * Controls quality/resolution when sending images to vision models.
+   * - Preset mode: "none" | "low" | "medium" | "high"
+   * - Detail mode: { maxWidth?: number; maxHeight?: number; quality?: number }
+   * Default: "medium" (max 1200px side, quality 70)
+   */
+  imageCompression?: ImageCompressionConfig;
   typingIntervalSeconds?: number;
   /** Typing indicator start mode (never|instant|thinking|message). */
   typingMode?: TypingMode;

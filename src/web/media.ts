@@ -32,6 +32,12 @@ type WebMediaOptions = {
   /** Caller already validated the local path (sandbox/other guards); requires readFile override. */
   sandboxValidated?: boolean;
   readFile?: (filePath: string) => Promise<Buffer>;
+  /** Custom max side length for image optimization (overrides default grid) */
+  maxSideOverride?: number;
+  /** Custom quality for image optimization (overrides default grid) */
+  qualityOverride?: number;
+  /** Skip image optimization entirely */
+  skipOptimization?: boolean;
 };
 
 function resolveWebMediaOptions(params: {
@@ -241,6 +247,9 @@ async function loadWebMediaInternal(
     localRoots,
     sandboxValidated = false,
     readFile: readFileOverride,
+    maxSideOverride,
+    qualityOverride,
+    skipOptimization,
   } = options;
   // Strip MEDIA: prefix used by agent tools (e.g. TTS) to tag media paths.
   // Be lenient: LLM output may add extra whitespace (e.g. "  MEDIA :  /tmp/x.png").
@@ -292,7 +301,8 @@ async function loadWebMediaInternal(
     const cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind ?? "document");
     if (params.kind === "image") {
       const isGif = params.contentType === "image/gif";
-      if (isGif || !optimizeImages) {
+      // Skip optimization if explicitly requested, GIF, or optimization disabled
+      if (isGif || !optimizeImages || skipOptimization) {
         if (params.buffer.length > cap) {
           throw new Error(formatCapLimit(isGif ? "GIF" : "Media", cap, params.buffer.length));
         }
@@ -303,6 +313,47 @@ async function loadWebMediaInternal(
           fileName: params.fileName,
         };
       }
+
+      // Use custom settings if both overrides provided
+      if (maxSideOverride !== undefined && qualityOverride !== undefined) {
+        console.log(
+          `[media] Using compression overrides: maxSide=${maxSideOverride}, quality=${qualityOverride}`,
+        );
+        const originalSize = params.buffer.length;
+        const optimized = await optimizeImageToJpegWithOverrides(params.buffer, cap, {
+          contentType: params.contentType,
+          fileName: params.fileName,
+          maxSide: maxSideOverride,
+          quality: qualityOverride,
+        });
+        console.log(
+          `[media] Compressed: ${originalSize} -> ${optimized.optimizedSize} bytes (side=${optimized.resizeSide}, q=${optimized.quality})`,
+        );
+        logOptimizedImage({
+          originalSize,
+          optimized: {
+            buffer: optimized.buffer,
+            optimizedSize: optimized.optimizedSize,
+            resizeSide: optimized.resizeSide,
+            format: "jpeg",
+            quality: optimized.quality,
+          },
+        });
+
+        if (optimized.buffer.length > cap) {
+          throw new Error(formatCapReduce("Media", cap, optimized.buffer.length));
+        }
+
+        return {
+          buffer: optimized.buffer,
+          contentType: "image/jpeg",
+          kind: params.kind,
+          fileName: isHeicSource({ fileName: params.fileName })
+            ? toJpegFileName(params.fileName)
+            : params.fileName,
+        };
+      }
+
       return {
         ...(await optimizeAndClampImage(params.buffer, cap, {
           contentType: params.contentType,
@@ -488,6 +539,53 @@ export async function optimizeImageToJpeg(
   }
 
   throw new Error("Failed to optimize image");
+}
+
+/**
+ * Optimize image to JPEG with optional custom maxSide and quality overrides.
+ * When both overrides are provided, uses them directly instead of grid search.
+ */
+export async function optimizeImageToJpegWithOverrides(
+  buffer: Buffer,
+  maxBytes: number,
+  opts: {
+    contentType?: string;
+    fileName?: string;
+    maxSide?: number;
+    quality?: number;
+  } = {},
+): Promise<{
+  buffer: Buffer;
+  optimizedSize: number;
+  resizeSide: number;
+  quality: number;
+}> {
+  // If both overrides provided, use them directly
+  if (opts.maxSide !== undefined && opts.quality !== undefined) {
+    let source = buffer;
+    if (isHeicSource(opts)) {
+      try {
+        source = await convertHeicToJpeg(buffer);
+      } catch (err) {
+        throw new Error(`HEIC image conversion failed: ${String(err)}`, { cause: err });
+      }
+    }
+    const out = await resizeToJpeg({
+      buffer: source,
+      maxSide: opts.maxSide,
+      quality: opts.quality,
+      withoutEnlargement: true,
+    });
+    return {
+      buffer: out,
+      optimizedSize: out.length,
+      resizeSide: opts.maxSide,
+      quality: opts.quality,
+    };
+  }
+
+  // Otherwise fall back to existing grid search
+  return optimizeImageToJpeg(buffer, maxBytes, opts);
 }
 
 export { optimizeImageToPng };
