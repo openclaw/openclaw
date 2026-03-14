@@ -27,6 +27,12 @@ const api = {
   config: {
     use: vi.fn(),
   },
+  getMe: vi.fn(async () => ({
+    id: 1,
+    is_bot: true,
+    username: "mybot",
+    first_name: "MyBot",
+  })),
 };
 const { initSpy, runSpy, loadConfig } = vi.hoisted(() => ({
   initSpy: vi.fn(async () => undefined),
@@ -94,6 +100,9 @@ const makeRunnerStub = (overrides: Partial<RunnerStub> = {}): RunnerStub => ({
   stop: overrides.stop ?? vi.fn<() => void | Promise<void>>(),
   isRunning: overrides.isRunning ?? (() => false),
 });
+
+// Must match the constant in polling-session.ts
+const HEALTH_CHECK_INTERVAL_MS = 2 * 60 * 1000;
 
 function makeRecoverableFetchError() {
   return Object.assign(new TypeError("fetch failed"), {
@@ -262,6 +271,8 @@ describe("monitorTelegramProvider (grammY)", () => {
     resetUnhandledRejection();
     createTelegramBotErrors.length = 0;
     createdBotStops.length = 0;
+    api.getMe.mockClear();
+    api.getMe.mockResolvedValue({ id: 1, is_bot: true, username: "mybot", first_name: "MyBot" });
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -699,5 +710,159 @@ describe("monitorTelegramProvider (grammY)", () => {
       }),
     );
     expect(runSpy).not.toHaveBeenCalled();
+  });
+
+  describe("health check watchdog", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("restarts polling immediately without backoff on health check failure", async () => {
+      const abort = new AbortController();
+
+      // First runner is held open; health check failure triggers stop and restart.
+      let releaseTask: (() => void) | undefined;
+      runSpy
+        .mockImplementationOnce(() =>
+          makeRunnerStub({
+            task: () =>
+              new Promise<void>((resolve) => {
+                releaseTask = resolve;
+              }),
+            stop: vi.fn(() => {
+              releaseTask?.();
+            }),
+          }),
+        )
+        .mockImplementationOnce(() =>
+          makeRunnerStub({
+            task: async () => {
+              abort.abort();
+            },
+          }),
+        );
+
+      // Use a network error that isRecoverableTelegramNetworkError recognises as a
+      // stale connection (error code ECONNRESET).
+      api.getMe.mockRejectedValueOnce(
+        Object.assign(new Error("ECONNRESET"), { code: "ECONNRESET" }),
+      );
+
+      const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+      await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
+
+      // Advance timers to fire the health check, then let the second runner finish.
+      await vi.runAllTimersAsync();
+      await monitor;
+
+      // Stale-connection restart must skip backoff entirely.
+      expect(computeBackoff).not.toHaveBeenCalled();
+      expect(sleepWithAbort).not.toHaveBeenCalled();
+      expect(runSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it("exits cleanly when abort fires concurrently with stale connection detection", async () => {
+      const abort = new AbortController();
+
+      let releaseTask: (() => void) | undefined;
+      runSpy.mockImplementationOnce(() =>
+        makeRunnerStub({
+          task: () =>
+            new Promise<void>((resolve) => {
+              releaseTask = resolve;
+            }),
+          stop: vi.fn(() => {
+            // Abort fires at same time as health-check-triggered stop.
+            abort.abort();
+            releaseTask?.();
+          }),
+        }),
+      );
+
+      api.getMe.mockRejectedValueOnce(new Error("timeout"));
+
+      const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+      await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
+
+      await vi.runAllTimersAsync();
+      await monitor;
+
+      // Abort wins — must exit cleanly with no second runner.
+      expect(runSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not restart polling on transient API errors (e.g. 429)", async () => {
+      const abort = new AbortController();
+
+      // Runner stays open; health check fires with a non-network API error.
+      let releaseTask: (() => void) | undefined;
+      runSpy.mockImplementationOnce(() =>
+        makeRunnerStub({
+          task: () =>
+            new Promise<void>((resolve) => {
+              releaseTask = resolve;
+            }),
+          stop: vi.fn(() => {
+            releaseTask?.();
+          }),
+        }),
+      );
+
+      // Simulate a 429 rate-limit error (not a connection/network error).
+      const rateLimitError = Object.assign(new Error("Too Many Requests: retry after 30"), {
+        error_code: 429,
+      });
+      api.getMe.mockRejectedValueOnce(rateLimitError);
+
+      // After the transient error, the next health check succeeds and then runner aborts.
+      api.getMe.mockResolvedValueOnce({
+        id: 1,
+        is_bot: true,
+        username: "mybot",
+        first_name: "MyBot",
+      });
+
+      const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+      await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
+
+      // Fire the first health check (transient error -- should NOT restart).
+      await vi.advanceTimersByTimeAsync(HEALTH_CHECK_INTERVAL_MS);
+      // Runner must still be the same (no restart).
+      expect(runSpy).toHaveBeenCalledTimes(1);
+
+      // Fire the second health check (succeeds), then abort.
+      await vi.advanceTimersByTimeAsync(HEALTH_CHECK_INTERVAL_MS);
+      // Still no restart.
+      expect(runSpy).toHaveBeenCalledTimes(1);
+
+      // Now abort to clean up.
+      abort.abort();
+      releaseTask?.();
+      await monitor;
+
+      // Confirm polling was never restarted.
+      expect(runSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops the health check timer when the runner exits before the interval elapses", async () => {
+      const abort = new AbortController();
+      runSpy.mockImplementationOnce(() =>
+        makeRunnerStub({
+          task: async () => {
+            abort.abort();
+          },
+        }),
+      );
+
+      // Runner aborts; do not advance the fake clock.
+      await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+
+      // Timer was cancelled — getMe must never be called.
+      expect(api.getMe).not.toHaveBeenCalled();
+    });
   });
 });
