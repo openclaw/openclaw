@@ -56,11 +56,9 @@ export const doctorHandlers: GatewayRequestHandlers = {
       };
       respond(true, payload, undefined);
     } finally {
-      try {
-        await manager.close();
-      } catch {
-        // Ignore close errors - response already sent
-      }
+      // Do NOT close the manager here — it may be the long-lived cached
+      // instance from startup whose file watcher must stay active.
+      // Manager lifecycle is handled by closeAllMemorySearchManagers at shutdown.
     }
   },
 };
