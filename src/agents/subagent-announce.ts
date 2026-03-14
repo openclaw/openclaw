@@ -1,5 +1,15 @@
+import {
+  bumpContinuationGeneration,
+  currentContinuationGeneration,
+  setDelegatePending,
+} from "../auto-reply/reply/agent-runner.js";
+import { resolveContinuationRuntimeConfig } from "../auto-reply/reply/continuation-runtime.js";
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import {
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+  stripContinuationSignal,
+} from "../auto-reply/tokens.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -7,10 +17,14 @@ import {
   resolveAgentIdFromSessionKey,
   resolveMainSessionKey,
   resolveStorePath,
+  updateSessionStore,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
+import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-router.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -44,16 +58,18 @@ import {
 } from "./subagent-announce-dispatch.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
-import type { SpawnSubagentMode } from "./subagent-spawn.js";
+import { spawnSubagentDirect, type SpawnSubagentMode } from "./subagent-spawn.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
 import { isAnnounceSkip } from "./tools/sessions-send-helpers.js";
 
 const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
-const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 90_000;
+const FAST_TEST_REPLY_CHANGE_WAIT_MS = 20;
+const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 60_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
 const GATEWAY_TIMEOUT_PATTERN = /gateway timeout/i;
+const continuationGuardLog = createSubsystemLogger("continuation/guard");
 let subagentRegistryRuntimePromise: Promise<
   typeof import("./subagent-registry-runtime.js")
 > | null = null;
@@ -410,6 +426,31 @@ function buildChildCompletionFindings(
   return ["Child completion results:", "", ...sections].join("\n\n");
 }
 
+async function waitForSubagentOutputChange(params: {
+  sessionKey: string;
+  baselineReply: string;
+  maxWaitMs: number;
+}): Promise<string> {
+  const baseline = params.baselineReply.trim();
+  if (!baseline) {
+    return params.baselineReply;
+  }
+  const RETRY_INTERVAL_MS = FAST_TEST_MODE ? FAST_TEST_RETRY_INTERVAL_MS : 100;
+  const deadline = Date.now() + Math.max(0, Math.min(params.maxWaitMs, 5_000));
+  let latest = params.baselineReply;
+  while (Date.now() < deadline) {
+    const next = await readLatestSubagentOutput(params.sessionKey);
+    if (next?.trim()) {
+      latest = next;
+      if (next.trim() !== baseline) {
+        return next;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, RETRY_INTERVAL_MS));
+  }
+  return latest;
+}
+
 function formatDurationShort(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
     return "n/a";
@@ -594,6 +635,7 @@ async function resolveSubagentCompletionOrigin(params: {
 
 async function sendAnnounce(item: AnnounceQueueItem) {
   const cfg = loadConfig();
+  const continuationEnabled = cfg?.agents?.defaults?.continuation?.enabled === true;
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const requesterIsSubagent = isInternalAnnounceRequesterSession(item.sessionKey);
   const origin = item.origin;
@@ -616,6 +658,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       to: requesterIsSubagent ? undefined : origin?.to,
       threadId: requesterIsSubagent ? undefined : threadId,
       deliver: !requesterIsSubagent,
+      continuationTrigger: continuationEnabled ? "delegate-return" : undefined,
       internalEvents: item.internalEvents,
       inputProvenance: {
         kind: "inter_session",
@@ -759,6 +802,7 @@ async function sendSubagentAnnounceDirectly(params: {
     };
   }
   const cfg = loadConfig();
+  const continuationEnabled = cfg?.agents?.defaults?.continuation?.enabled === true;
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const canonicalRequesterSessionKey = resolveRequesterStoreKey(
     cfg,
@@ -809,6 +853,7 @@ async function sendSubagentAnnounceDirectly(params: {
             message: params.triggerMessage,
             deliver: shouldDeliverExternally,
             bestEffortDeliver: params.bestEffortDeliver,
+            continuationTrigger: continuationEnabled ? "delegate-return" : undefined,
             internalEvents: params.internalEvents,
             channel: shouldDeliverExternally ? directChannel : undefined,
             accountId: shouldDeliverExternally ? effectiveDirectOrigin?.accountId : undefined,
@@ -997,6 +1042,35 @@ export function buildSubagentSystemPrompt(params: {
     );
   }
 
+  // Continuation chaining — inject bracket template when continuation is enabled
+  const cfg = loadConfig();
+  const continuationEnabled = cfg?.agents?.defaults?.continuation?.enabled === true;
+  if (continuationEnabled && canSpawn) {
+    lines.push(
+      "## Continuation Chaining",
+      "To dispatch a follow-up sub-agent from your output, end your ENTIRE response with:",
+      "  [[CONTINUE_DELEGATE: task description]]",
+      "",
+      "Use this when your branch of work should continue or fan out without asking the parent",
+      "to relay every hop. This keeps the parent/main session free while your subtree runs.",
+      "",
+      "Optional modifiers (append inside the brackets):",
+      "  +30s           — delay spawn by N seconds",
+      "  | silent        — result as internal context only (no channel output)",
+      "  | silent-wake   — silent result + triggers parent's next turn",
+      "",
+      "Example: [[CONTINUE_DELEGATE: Summarize the findings from step 1 +10s | silent]]",
+      "",
+      "Rules:",
+      "- Emit exactly ONE [[CONTINUE_DELEGATE:]] per response, as the LAST line",
+      "- Do NOT nest brackets inside brackets",
+      "- Use `| silent` for enrichment that should only color the parent's future context",
+      "- Use `| silent-wake` when the return should enrich the parent and wake it to act",
+      "- The gateway handles chain tracking, cost caps, and depth limits",
+      "",
+    );
+  }
+
   lines.push(
     "## Session Context",
     ...[
@@ -1025,7 +1099,11 @@ function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
   announceType: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
+  silentEnrichment?: boolean;
 }): string {
+  if (params.silentEnrichment) {
+    return `This is a silent enrichment return from a background ${params.announceType}. Absorb the context into your working knowledge — do NOT send a user-facing message. Reply ONLY: ${SILENT_REPLY_TOKEN}`;
+  }
   if (params.requesterIsSubagent) {
     return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
   }
@@ -1136,12 +1214,19 @@ async function wakeSubagentRunAfterDescendants(params: {
     return false;
   }
 
-  const { replaceSubagentRunAfterSteer } = await loadSubagentRegistryRuntime();
-  return replaceSubagentRunAfterSteer({
-    previousRunId: params.runId,
-    nextRunId: wakeRunId,
-    preserveFrozenResultFallback: true,
-  });
+  try {
+    const { replaceSubagentRunAfterSteer } = await loadSubagentRegistryRuntime();
+    return replaceSubagentRunAfterSteer({
+      previousRunId: params.runId,
+      nextRunId: wakeRunId,
+      preserveFrozenResultFallback: true,
+    });
+  } catch (err) {
+    defaultRuntime.log(
+      `[subagent-descendant-wake] Failed to persist wake reroute for ${params.runId}: ${String(err)}`,
+    );
+    return false;
+  }
 }
 
 export async function runSubagentAnnounceFlow(params: {
@@ -1170,6 +1255,13 @@ export async function runSubagentAnnounceFlow(params: {
   wakeOnDescendantSettle?: boolean;
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
+  /** When true, deliver completion as a silent system event instead of a
+   *  visible channel message. Used for ambient enrichment (DELEGATE | silent). */
+  silentAnnounce?: boolean;
+  /** When true (with silentAnnounce), trigger a generation cycle on the parent
+   *  session after enrichment delivery. Enables autonomous cognition loops
+   *  (DELEGATE | silent-wake). */
+  wakeOnReturn?: boolean;
 }): Promise<boolean> {
   let didAnnounce = false;
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
@@ -1273,6 +1365,45 @@ export async function runSubagentAnnounceFlow(params: {
       // Best-effort only.
     }
 
+    let requesterIsSubagent = requesterIsInternalSession();
+    // If the requester subagent has already finished, bubble the announce to its
+    // requester (typically main) so descendant completion is not silently lost.
+    // Resolve this BEFORE continuation-chain accounting so token/cost tracking
+    // lands on the session that will actually receive the completion.
+    if (requesterIsSubagent) {
+      const { isSubagentSessionRunActive, resolveRequesterForChildSession } =
+        await loadSubagentRegistryRuntime();
+      if (!isSubagentSessionRunActive(targetRequesterSessionKey)) {
+        const parentSessionEntry = loadSessionEntryByKey(targetRequesterSessionKey);
+        const parentSessionAlive =
+          parentSessionEntry &&
+          typeof parentSessionEntry.sessionId === "string" &&
+          parentSessionEntry.sessionId.trim();
+
+        if (!parentSessionAlive) {
+          const fallback = resolveRequesterForChildSession(targetRequesterSessionKey);
+          if (!fallback?.requesterSessionKey) {
+            shouldDeleteChildSession = false;
+            return false;
+          }
+          targetRequesterSessionKey = fallback.requesterSessionKey;
+          targetRequesterOrigin =
+            normalizeDeliveryContext(fallback.requesterOrigin) ?? targetRequesterOrigin;
+          requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
+          requesterIsSubagent = requesterIsInternalSession();
+        }
+      }
+    }
+
+    if (requesterDepth >= 1 && reply?.trim()) {
+      const minReplyChangeWaitMs = FAST_TEST_MODE ? FAST_TEST_REPLY_CHANGE_WAIT_MS : 250;
+      reply = await waitForSubagentOutputChange({
+        sessionKey: params.childSessionKey,
+        baselineReply: reply,
+        maxWaitMs: Math.max(minReplyChangeWaitMs, Math.min(params.timeoutMs, 2_000)),
+      });
+    }
+
     const announceId = buildAnnounceIdFromChildRun({
       childSessionKey: params.childSessionKey,
       childRunId: params.childRunId,
@@ -1302,7 +1433,11 @@ export async function runSubagentAnnounceFlow(params: {
       }
     }
 
-    if (!childCompletionFindings) {
+    if (childCompletionFindings?.trim()) {
+      // Descendant completions were synthesized successfully; announce that
+      // result upward unless we converted it into a wake continuation above.
+      reply = childCompletionFindings;
+    } else {
       const fallbackReply = params.fallbackReply?.trim() ? params.fallbackReply.trim() : undefined;
       const fallbackIsSilent =
         Boolean(fallbackReply) &&
@@ -1354,33 +1489,205 @@ export async function runSubagentAnnounceFlow(params: {
 
     const taskLabel = params.label || params.task || "task";
     const announceSessionId = childSessionId || "unknown";
-    const findings = childCompletionFindings || reply || "(no output)";
+    let findings = reply || "(no output)";
 
-    let requesterIsSubagent = requesterIsInternalSession();
-    if (requesterIsSubagent) {
-      const {
-        isSubagentSessionRunActive,
-        resolveRequesterForChildSession,
-        shouldIgnorePostCompletionAnnounceForSession,
-      } = subagentRegistryRuntime ?? (await loadSubagentRegistryRuntime());
-      if (!isSubagentSessionRunActive(targetRequesterSessionKey)) {
-        if (shouldIgnorePostCompletionAnnounceForSession(targetRequesterSessionKey)) {
-          return true;
-        }
-        const parentSessionEntry = loadSessionEntryByKey(targetRequesterSessionKey);
-        const parentSessionAlive = hasUsableSessionEntry(parentSessionEntry);
+    // --- Sub-agent continuation chain: parse [[CONTINUE_DELEGATE:]] from sub-agent output ---
+    const cfg = loadConfig();
+    const continuationEnabled = cfg?.agents?.defaults?.continuation?.enabled === true;
+    if (continuationEnabled && findings !== "(no output)") {
+      const continuationResult = stripContinuationSignal(findings);
+      if (continuationResult.signal?.kind === "work") {
+        defaultRuntime.log(
+          `[subagent-chain-hop] CONTINUE_WORK not supported in sub-agent chain (from ${params.childSessionKey}), ignoring`,
+        );
+      } else if (continuationResult.signal?.kind === "delegate") {
+        findings = continuationResult.text || "(no output)";
+        const chainTask = continuationResult.signal.task;
+        const chainDelayMs = continuationResult.signal.delayMs;
+        // Sticky silent: if the completing shard was spawned silent, inherit that
+        // for all subsequent hops even if the LLM drops `| silent` from its bracket.
+        const parentWasSilent = params.silentAnnounce === true;
+        const chainSilent =
+          continuationResult.signal.silent ||
+          continuationResult.signal.silentWake ||
+          parentWasSilent;
+        const chainWake =
+          continuationResult.signal.silentWake || (parentWasSilent && params.wakeOnReturn === true);
 
-        if (!parentSessionAlive) {
-          const fallback = resolveRequesterForChildSession(targetRequesterSessionKey);
-          if (!fallback?.requesterSessionKey) {
-            shouldDeleteChildSession = false;
-            return false;
+        // --- P0-3: Enforce parent session's chain bounds before spawning ---
+        const { maxChainLength, costCapTokens, minDelayMs, maxDelayMs } =
+          resolveContinuationRuntimeConfig(cfg);
+
+        // --- Per-chain hop guard: depth encoded in task prefix, cost tracked on parent ---
+        // Chain hop index: parsed from the completing shard's task prefix [continuation:chain-hop:N].
+        // This avoids store timing races — the hop index travels IN the task string.
+        const childTask = params.task ?? "";
+        const hopMatch = childTask.match(/\[continuation:chain-hop:(\d+)\]/);
+        const childChainHop = hopMatch ? parseInt(hopMatch[1], 10) : 0;
+        const nextChainHop = childChainHop + 1;
+
+        // --- Accumulate completing shard's token cost to parent (parity with sessions_spawn) ---
+        // Retry loop: token data may not be persisted yet when the announce handler fires.
+        // Same pattern as buildCompactAnnounceStatsLine (3 attempts, 150ms apart).
+        let childEntry = loadSessionEntryByKey(params.childSessionKey);
+        const tokenRetryAttempts = FAST_TEST_MODE ? 1 : 3;
+        for (let attempt = 0; attempt < tokenRetryAttempts; attempt += 1) {
+          const hasTokenData =
+            typeof childEntry?.inputTokens === "number" ||
+            typeof childEntry?.outputTokens === "number";
+          if (hasTokenData) {
+            break;
           }
-          targetRequesterSessionKey = fallback.requesterSessionKey;
-          targetRequesterOrigin =
-            normalizeDeliveryContext(fallback.requesterOrigin) ?? targetRequesterOrigin;
-          requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
-          requesterIsSubagent = requesterIsInternalSession();
+          if (!FAST_TEST_MODE) {
+            await new Promise((resolve) => setTimeout(resolve, 150));
+          }
+          childEntry = loadSessionEntryByKey(params.childSessionKey);
+        }
+        const childTokens =
+          (typeof childEntry?.inputTokens === "number" ? childEntry.inputTokens : 0) +
+          (typeof childEntry?.outputTokens === "number" ? childEntry.outputTokens : 0);
+        if (childTokens > 0) {
+          const parentAgentId = resolveAgentIdFromSessionKey(targetRequesterSessionKey);
+          const parentStorePath = resolveStorePath(cfg?.session?.store, {
+            agentId: parentAgentId,
+          });
+          try {
+            await updateSessionStore(parentStorePath, (store) => {
+              const parentEntry = store[targetRequesterSessionKey];
+              if (parentEntry) {
+                const prev =
+                  typeof parentEntry.continuationChainTokens === "number"
+                    ? parentEntry.continuationChainTokens
+                    : 0;
+                parentEntry.continuationChainTokens = prev + childTokens;
+              }
+            });
+            defaultRuntime.log(
+              `[subagent-chain-hop] Accumulated ${childTokens} tokens from ${params.childSessionKey} to parent chain cost`,
+            );
+          } catch (err) {
+            // Non-fatal: token accounting failure must not block announcement delivery.
+            defaultRuntime.log(
+              `[subagent-chain-hop] Failed to persist token accumulation for ${targetRequesterSessionKey}: ${String(err)}`,
+            );
+          }
+        }
+
+        // Check chain depth (per-chain, from child's hop index)
+        let chainGuardResult:
+          | { allowed: false; reason: "chain-length"; chainCount: number; maxChainLength: number }
+          | { allowed: false; reason: "cost-cap"; chainTokens: number; costCapTokens: number }
+          | { allowed: true; nextChainHop: number };
+
+        // Repo convention: reject once the current count/hop has reached the
+        // configured max. `childChainHop` is the hop the completing shard
+        // already occupies, so a child already at hop N cannot spawn hop N+1
+        // when `maxChainLength` is N.
+        if (childChainHop >= maxChainLength) {
+          chainGuardResult = {
+            allowed: false,
+            reason: "chain-length",
+            chainCount: nextChainHop,
+            maxChainLength,
+          };
+        } else {
+          // Check cost cap atomically from parent session (global budget, now includes bracket chain costs)
+          const parentEntry = loadSessionEntryByKey(targetRequesterSessionKey);
+          const parentChainTokens = parentEntry?.continuationChainTokens ?? 0;
+          if (costCapTokens > 0 && parentChainTokens > costCapTokens) {
+            chainGuardResult = {
+              allowed: false,
+              reason: "cost-cap",
+              chainTokens: parentChainTokens,
+              costCapTokens,
+            };
+          } else {
+            chainGuardResult = { allowed: true, nextChainHop };
+          }
+        }
+
+        if (!chainGuardResult.allowed) {
+          if (chainGuardResult.reason === "chain-length") {
+            defaultRuntime.log(
+              `[subagent-chain-hop] Chain length ${chainGuardResult.chainCount} > ${chainGuardResult.maxChainLength}, rejecting hop from ${params.childSessionKey}`,
+            );
+          } else {
+            defaultRuntime.log(
+              `[subagent-chain-hop] Cost cap exceeded (${chainGuardResult.chainTokens} > ${chainGuardResult.costCapTokens}), rejecting hop from ${params.childSessionKey}`,
+            );
+          }
+        } else {
+          const nextChainHop = chainGuardResult.nextChainHop;
+
+          // Mark delegate-pending on the parent so isDelegateWake is true when
+          // the chain-hop shard completes — prevents per-message reset from
+          // zeroing continuationChainTokens between hops.
+          // Uses a dedicated per-session flag (not the system event queue)
+          // so it survives buildQueuedSystemPrompt draining on intervening turns.
+          setDelegatePending(targetRequesterSessionKey);
+
+          const doChainSpawn = async (timerTriggered = false) => {
+            try {
+              const childDepth = getSubagentDepthFromSessionStore(params.childSessionKey);
+              const spawnResult = await spawnSubagentDirect(
+                {
+                  task: `[continuation:chain-hop:${nextChainHop}] Delegated from sub-agent (depth ${childDepth}): ${chainTask}`,
+                  ...(chainSilent ? { silentAnnounce: true } : {}),
+                  ...(chainWake ? { silentAnnounce: true, wakeOnReturn: true } : {}),
+                },
+                {
+                  agentSessionKey: targetRequesterSessionKey,
+                  agentChannel: targetRequesterOrigin?.channel ?? undefined,
+                  agentAccountId: targetRequesterOrigin?.accountId ?? undefined,
+                  agentTo: targetRequesterOrigin?.to ?? undefined,
+                  agentThreadId: targetRequesterOrigin?.threadId ?? undefined,
+                },
+              );
+              if (spawnResult.status === "accepted") {
+                defaultRuntime.log(
+                  timerTriggered
+                    ? `[subagent-chain-hop] Timer fired and spawned chain delegate (${nextChainHop}/${maxChainLength}) from ${params.childSessionKey}: ${chainTask.slice(0, 80)}`
+                    : `[subagent-chain-hop] Spawned chain delegate (${nextChainHop}/${maxChainLength}) from ${params.childSessionKey}: ${chainTask.slice(0, 80)}`,
+                );
+              } else {
+                defaultRuntime.log(
+                  `[subagent-chain-hop] Spawn rejected (${spawnResult.status}) from ${params.childSessionKey}: ${chainTask.slice(0, 80)}`,
+                );
+              }
+            } catch (err) {
+              defaultRuntime.log(
+                `[subagent-chain-hop] Spawn failed from ${params.childSessionKey}: ${String(err)}`,
+              );
+            }
+          };
+
+          if (chainDelayMs && chainDelayMs > 0) {
+            const clampedDelay = Math.max(minDelayMs, Math.min(maxDelayMs, chainDelayMs));
+            // Generation guard: cancel if parent session receives new input during delay.
+            // Honors generationGuardTolerance (same as agent-runner delegate timers).
+            const hopGeneration = bumpContinuationGeneration(targetRequesterSessionKey);
+            continuationGuardLog.debug(
+              `[continuation-guard] Chain-hop timer set: generation=${hopGeneration} delayMs=${clampedDelay} session=${targetRequesterSessionKey}`,
+            );
+            setTimeout(() => {
+              const { generationGuardTolerance } = resolveContinuationRuntimeConfig();
+              const currentGen = currentContinuationGeneration(targetRequesterSessionKey);
+              const drift = currentGen - hopGeneration;
+              continuationGuardLog.debug(
+                `[continuation-guard] Chain-hop timer check: stored=${hopGeneration} current=${currentGen} drift=${drift} tolerance=${generationGuardTolerance} session=${targetRequesterSessionKey}`,
+              );
+              if (drift > generationGuardTolerance) {
+                defaultRuntime.log(
+                  `[subagent-chain-hop] Timer cancelled (generation drift=${drift} > tolerance=${generationGuardTolerance}) for ${targetRequesterSessionKey}`,
+                );
+                return;
+              }
+              doChainSpawn(true).catch(() => {});
+            }, clampedDelay);
+          } else {
+            // Fire-and-forget — don't block the announce flow
+            doChainSpawn().catch(() => {});
+          }
         }
       }
     }
@@ -1389,6 +1696,7 @@ export async function runSubagentAnnounceFlow(params: {
       requesterIsSubagent,
       announceType,
       expectsCompletionMessage,
+      silentEnrichment: params.silentAnnounce === true,
     });
     const statsLine = await buildCompactAnnounceStatsLine({
       sessionKey: params.childSessionKey,
@@ -1411,6 +1719,30 @@ export async function runSubagentAnnounceFlow(params: {
       },
     ];
     const triggerMessage = buildAnnounceSteerMessage(internalEvents);
+
+    // --- Silent announce gate: inject as system event, skip channel delivery ---
+    if (params.silentAnnounce) {
+      const rendered = formatAgentInternalEventsForPrompt(internalEvents);
+      if (rendered) {
+        enqueueSystemEvent(`[continuation:enrichment-return] ${rendered}`, {
+          sessionKey: targetRequesterSessionKey,
+        });
+      }
+      // silent-wake: trigger generation cycle without channel echo
+      if (params.wakeOnReturn) {
+        defaultRuntime.log(
+          `[continuation/silent-wake] wakeOnReturn=true target=${targetRequesterSessionKey ?? "none"} silentAnnounce=${params.silentAnnounce}`,
+        );
+      }
+      if (params.wakeOnReturn && targetRequesterSessionKey) {
+        requestHeartbeatNow({
+          sessionKey: targetRequesterSessionKey,
+          reason: "silent-wake-enrichment",
+        });
+      }
+      didAnnounce = true;
+      return true;
+    }
 
     // Send to the requester session. For nested subagents this is an internal
     // follow-up injection (deliver=false) so the orchestrator receives it.

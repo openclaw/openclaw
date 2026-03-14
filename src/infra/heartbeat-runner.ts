@@ -769,14 +769,23 @@ export async function runHeartbeatOnce(opts: {
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
+    // Map heartbeat wake reason to structured continuation trigger.
+    // "continuation" = CONTINUE_WORK timer fired; "silent-wake-enrichment" = delegate returned.
+    const continuationTrigger =
+      opts.reason === "continuation"
+        ? ("work-wake" as const)
+        : opts.reason === "silent-wake-enrichment"
+          ? ("delegate-return" as const)
+          : undefined;
     const replyOpts = heartbeatModelOverride
       ? {
           isHeartbeat: true,
           heartbeatModelOverride,
           suppressToolErrorWarnings,
           bootstrapContextMode,
+          continuationTrigger,
         }
-      : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
+      : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode, continuationTrigger };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;

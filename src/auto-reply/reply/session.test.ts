@@ -1381,6 +1381,8 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       thinkingLevel: "high",
       reasoningLevel: "low",
       label: "telegram-priority",
+      lastContextPressureBand: 95,
+      pendingPostCompactionDelegates: [{ task: "carry notes", createdAt: 1 }],
     } as const;
     const cases = [
       {
@@ -1424,7 +1426,14 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.isNewSession, testCase.name).toBe(true);
       expect(result.resetTriggered, testCase.name).toBe(true);
       expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
-      expect(result.sessionEntry, testCase.name).toMatchObject(overrides);
+      expect(result.sessionEntry, testCase.name).toMatchObject({
+        verboseLevel: "on",
+        thinkingLevel: "high",
+        reasoningLevel: "low",
+        label: "telegram-priority",
+      });
+      expect(result.sessionEntry.lastContextPressureBand, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.pendingPostCompactionDelegates, testCase.name).toBeUndefined();
     }
   });
 
