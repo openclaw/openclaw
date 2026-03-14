@@ -107,6 +107,15 @@ vi.mock("../../config/sessions.js", async () => {
     appendAssistantMessageToSessionTranscript: _mocks.appendAssistantMessageToSessionTranscript,
   };
 });
+vi.mock("../../config/sessions/transcript.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/transcript.js")>(
+    "../../config/sessions/transcript.js",
+  );
+  return {
+    ...actual,
+    appendAssistantMessageToSessionTranscript: _mocks.appendAssistantMessageToSessionTranscript,
+  };
+});
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => _hookMocks.runner,
 }));
