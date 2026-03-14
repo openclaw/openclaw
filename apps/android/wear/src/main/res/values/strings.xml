@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OpenClaw</string>
+    <string name="wear_complication_talk_label">Talk</string>
+    <string name="wear_complication_talk_description">Start voice chat</string>
+    <string name="wear_complication_reply_label">Reply</string>
+    <string name="wear_complication_talk_via_phone">Talk via phone</string>
+    <string name="wear_complication_reply_via_phone">Reply via phone</string>
+    <string name="wear_complication_talk_on_watch">Talk on watch</string>
+    <string name="wear_complication_reply_on_watch">Reply on watch</string>
+
+    <string name="wear_tile_talk_label">Talk</string>
+    <string name="wear_tile_talk_description">Open OpenClaw and start talking</string>
+    <string name="wear_tile_open_label">Open</string>
+
+    <string name="wear_sessions_title">Sessions</string>
+    <string name="wear_sessions_empty">No sessions found</string>
+
+    <string name="wear_chat_dismiss">Dismiss</string>
+    <string name="wear_chat_not_connected">Not connected.\nConfigure gateway in settings.</string>
+    <string name="wear_chat_loading">Loading chat…</string>
+    <string name="wear_chat_empty">No messages yet.\nUse reply to start.</string>
+    <string name="wear_chat_scroll_latest_content_description">Scroll to latest</string>
+    <string name="wear_chat_latest">Latest</string>
+    <string name="wear_chat_reply">Reply</string>
+    <string name="wear_chat_change_session">Change session</string>
+    <string name="wear_chat_settings">Settings</string>
+    <string name="wear_chat_behavior">Behavior</string>
+    <string name="wear_chat_connection">Connection</string>
+    <string name="wear_chat_disconnect">Disconnect</string>
+    <string name="wear_chat_reconnect">Reconnect</string>
+    <string name="wear_chat_opening">Opening chat…</string>
+    <string name="wear_chat_voice_in_voice_out">Voice in • Voice out</string>
+    <string name="wear_chat_voice_in_silent_out">Voice in • Silent out</string>
+    <string name="wear_chat_text_in_voice_out">Text in • Voice out</string>
+    <string name="wear_chat_text_in_silent_out">Text in • Silent out</string>
+    <string name="wear_chat_setup_required">Please configure the gateway first.</string>
+    <string name="wear_chat_open_settings">Open settings</string>
+    <string name="wear_chat_input_label_reply">Reply</string>
+    <string name="wear_chat_voice_prompt">Speak your reply</string>
+    <string name="wear_chat_error_failed">Chat failed</string>
+    <string name="wear_chat_error_loading_failed">Couldn\'t load chat</string>
+    <string name="wear_chat_error_send_failed">Couldn\'t send reply</string>
+    <string name="wear_chat_error_timed_out">Timed out waiting for a reply. Try again.</string>
+    <string name="wear_notification_reply_channel_name">Replies</string>
+    <string name="wear_notification_reply_channel_description">Assistant replies while OpenClaw is off-screen</string>
+    <string name="wear_notification_reply_title">New reply</string>
+
+    <string name="wear_settings_behavior_title">Behavior</string>
+    <string name="wear_settings_reply_voice_default">Reply with voice by default</string>
+    <string name="wear_settings_tts_label">Auto-play replies via TTS</string>
+    <string name="wear_settings_screen_awake">Screen awake</string>
+    <string name="wear_settings_screen_default">Default</string>
+    <string name="wear_settings_screen_default_helper">Use the normal Wear OS screen behavior.</string>
+    <string name="wear_settings_screen_while_waiting">While waiting</string>
+    <string name="wear_settings_screen_while_waiting_helper">Keep the screen awake while waiting for replies.</string>
+    <string name="wear_settings_screen_always_on">Always on</string>
+    <string name="wear_settings_screen_always_on_helper">Keep the chat screen awake the whole time.</string>
+
+    <string name="wear_connection_title">Connection</string>
+    <string name="wear_connection_route_phone">Route through phone</string>
+    <string name="wear_connection_route_phone_help">Recommended when the watch has no direct gateway path.</string>
+    <string name="wear_connection_phone_proxy_title">Phone proxy</string>
+    <string name="wear_connection_phone_proxy_body">The phone app must stay paired, connected to the gateway, and allowed to run in the background.</string>
+    <string name="wear_connection_host">Host</string>
+    <string name="wear_connection_port">Port</string>
+    <string name="wear_connection_token">Token</string>
+    <string name="wear_connection_use_tls">Use TLS</string>
+    <string name="wear_connection_not_set">Not set</string>
+    <string name="wear_connection_saved">Saved</string>
+    <string name="wear_connection_gateway_host">Gateway host</string>
+    <string name="wear_connection_gateway_port">Gateway port</string>
+    <string name="wear_connection_gateway_token">Gateway token</string>
+    <string name="wear_connection_connect_wss">Connect with wss://</string>
+    <string name="wear_connection_connect_ws">Connect with ws://</string>
+    <string name="wear_status_offline">Offline</string>
+    <string name="wear_status_no_gateway_configured">No gateway configured</string>
+    <string name="wear_status_connecting">Connecting…</string>
+    <string name="wear_status_connected">Connected</string>
+    <string name="wear_status_reconnecting">Reconnecting…</string>
+    <string name="wear_status_phone_proxy_offline">Phone proxy offline</string>
+    <string name="wear_status_finding_phone">Finding phone…</string>
+    <string name="wear_status_connected_via_phone">Connected via phone</string>
+    <string name="wear_status_no_phone_found">No phone found</string>
+    <string name="wear_status_pinging_phone">Pinging phone…</string>
+    <string name="wear_status_phone_ping_timed_out">Phone ping timed out, retrying…</string>
+    <string name="wear_status_phone_not_responding">Phone not responding, retrying…</string>
+    <string name="wear_status_failed">Failed: %1$s</string>
+</resources>
