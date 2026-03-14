@@ -1063,7 +1063,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       );
       const workspaceContext = await readWorkspaceContextForSummary();
       const reservedSuffix = appendSummarySection(diagnosticSuffix, workspaceContext);
-      summary = capCompactionSummaryPreservingSuffix(summary, reservedSuffix);
+      // Ensure leading separator so suffix does not merge with body (e.g. when body
+      // ends without newline from buildStructuredFallbackSummary: "...## Exact identifiers## Tool Failures").
+      const normalizedSuffix =
+        reservedSuffix && !/^\s/.test(reservedSuffix) ? `\n\n${reservedSuffix}` : reservedSuffix;
+      summary = capCompactionSummaryPreservingSuffix(summary, normalizedSuffix);
 
       return {
         compaction: {

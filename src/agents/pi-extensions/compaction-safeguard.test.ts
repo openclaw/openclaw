@@ -316,6 +316,19 @@ describe("compaction-safeguard summary budgets", () => {
     expect(capped).toContain("<workspace-critical-rules>");
     expect(capped.endsWith(diagnosticSuffix)).toBe(true);
   });
+
+  it("keeps section separator when body ends without newline (e.g. buildStructuredFallbackSummary)", () => {
+    const bodyNoNewline = "## Exact identifiers\nNone.";
+    const suffixNoLeadingNewline = "## Tool Failures\n- exec: failed";
+
+    const capped = capCompactionSummaryPreservingSuffix(
+      bodyNoNewline,
+      `\n\n${suffixNoLeadingNewline}`,
+    );
+
+    expect(capped).toContain("None.\n\n## Tool Failures");
+    expect(capped).not.toMatch(/None\.## Tool Failures/);
+  });
 });
 
 describe("computeAdaptiveChunkRatio", () => {
