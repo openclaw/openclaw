@@ -13,6 +13,7 @@ import {
   isFailoverErrorMessage,
   isImageDimensionErrorMessage,
   isLikelyContextOverflowError,
+  isSseJsonParseError,
   isTimeoutErrorMessage,
   isTransientHttpError,
   parseImageDimensionError,
@@ -858,6 +859,41 @@ describe("classifyFailoverReason", () => {
       classifyFailoverReason(
         '{"type":"error","error":{"type":"api_error","message":"Internal server error"}}',
       ),
+    ).toBe("timeout");
+  });
+});
+
+describe("isSseJsonParseError", () => {
+  it("matches Node ≤19 V8 JSON parse error format", () => {
+    expect(isSseJsonParseError("Unexpected token '<' in JSON at position 0")).toBe(true);
+  });
+
+  it("matches Node ≥20 V8 JSON parse error format", () => {
+    expect(
+      isSseJsonParseError("Expected ',' or '}' after property value in JSON at position 4"),
+    ).toBe(true);
+  });
+
+  it("is case-insensitive", () => {
+    expect(isSseJsonParseError("Unexpected token x IN JSON AT POSITION 123")).toBe(true);
+  });
+
+  it("does not match unrelated JSON errors", () => {
+    expect(isSseJsonParseError("Unexpected end of JSON input")).toBe(false);
+  });
+
+  it("does not match non-JSON errors", () => {
+    expect(isSseJsonParseError("rate limit reached")).toBe(false);
+  });
+
+  it("returns false for empty input", () => {
+    expect(isSseJsonParseError("")).toBe(false);
+  });
+
+  it("classifies SSE JSON parse errors as timeout via classifyFailoverReason", () => {
+    expect(classifyFailoverReason("Unexpected token '<' in JSON at position 0")).toBe("timeout");
+    expect(
+      classifyFailoverReason("Expected ',' or '}' after property value in JSON at position 4"),
     ).toBe("timeout");
   });
 });

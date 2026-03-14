@@ -10,6 +10,7 @@ import {
   isOverloadedErrorMessage,
   isPeriodicUsageLimitErrorMessage,
   isRateLimitErrorMessage,
+  isSseJsonParseError,
   isTimeoutErrorMessage,
   matchesFormatErrorPattern,
 } from "./failover-matches.js";
@@ -21,6 +22,7 @@ export {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
+  isSseJsonParseError,
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
 
@@ -1007,6 +1009,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     return "timeout";
   }
   if (isJsonApiInternalServerError(raw)) {
+    return "timeout";
+  }
+  if (isSseJsonParseError(raw)) {
     return "timeout";
   }
   if (isCloudCodeAssistFormatError(raw)) {
