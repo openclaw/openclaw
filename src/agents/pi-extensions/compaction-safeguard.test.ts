@@ -1469,7 +1469,7 @@ describe("compaction-safeguard extension model fallback", () => {
       apiKey: null,
     });
 
-    expect(result).toEqual({ cancel: true });
+    expect(result).toBeUndefined();
 
     // KEY ASSERTION: Prove the fallback path was exercised
     // The handler should have called getApiKey with runtime.model (via ctx.model ?? runtime?.model)
@@ -1495,10 +1495,37 @@ describe("compaction-safeguard extension model fallback", () => {
       apiKey: null,
     });
 
-    expect(result).toEqual({ cancel: true });
+    expect(result).toBeUndefined();
 
     // Verify early return: getApiKey should NOT have been called when both models are missing
     expect(getApiKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to built-in compaction when model is undefined (returns undefined, not cancel)", async () => {
+    const sessionManager = stubSessionManager();
+    // Do NOT set runtime model
+    const mockEvent = createCompactionEvent({ messageText: "test", tokensBefore: 500 });
+    const { result, getApiKeyMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: null,
+    });
+    expect(result).toBeUndefined();
+    expect(getApiKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to built-in compaction when API key is missing (returns undefined, not cancel)", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+    const mockEvent = createCompactionEvent({ messageText: "test", tokensBefore: 500 });
+    const { result, getApiKeyMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: null,
+    });
+    expect(result).toBeUndefined();
+    expect(getApiKeyMock).toHaveBeenCalledWith(model);
   });
 });
 
@@ -1542,7 +1569,7 @@ describe("compaction-safeguard double-compaction guard", () => {
       event: mockEvent,
       apiKey: null,
     });
-    expect(result).toEqual({ cancel: true });
+    expect(result).toBeUndefined();
     expect(getApiKeyMock).toHaveBeenCalled();
   });
 });
