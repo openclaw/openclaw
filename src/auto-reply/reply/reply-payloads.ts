@@ -10,6 +10,8 @@ import type { ReplyPayload } from "../types.js";
 import { extractReplyToTag } from "./reply-tags.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 
+const WINDOWS_ABSOLUTE_PATH_RE = /^[a-zA-Z]:[\\/]/;
+
 function resolveReplyThreadingForPayload(params: {
   payload: ReplyPayload;
   implicitReplyToId?: string;
@@ -112,12 +114,16 @@ export function filterMessagingToolMediaDuplicates(params: {
       return "";
     }
     if (!trimmed.toLowerCase().startsWith("file://")) {
-      return trimmed;
+      return WINDOWS_ABSOLUTE_PATH_RE.test(trimmed) ? trimmed.replaceAll("/", "\\") : trimmed;
     }
     try {
       const parsed = new URL(trimmed);
       if (parsed.protocol === "file:") {
-        return decodeURIComponent(parsed.pathname || "");
+        const decodedPath = decodeURIComponent(parsed.pathname || "");
+        if (/^\/[a-zA-Z]:\//.test(decodedPath)) {
+          return decodedPath.slice(1).replaceAll("/", "\\");
+        }
+        return decodedPath;
       }
     } catch {
       // Keep fallback below for non-URL-like inputs.
