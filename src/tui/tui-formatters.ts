@@ -349,13 +349,18 @@ export function formatTokens(total?: number | null, context?: number | null) {
   if (total == null && context == null) {
     return "tokens ?";
   }
-  const totalLabel = total == null ? "?" : formatTokenCount(total);
+  // When we know the context window but total tokens are missing, treat usage
+  // as 0 so the UI shows "0/ctx" instead of "?/ctx". This matches the
+  // gateway's session_status output and is less confusing than an unknown
+  // placeholder.
+  const effectiveTotal = total == null && context != null ? 0 : total;
+  const totalLabel = effectiveTotal == null ? "?" : formatTokenCount(effectiveTotal);
   if (context == null) {
     return `tokens ${totalLabel}`;
   }
   const pct =
-    typeof total === "number" && context > 0
-      ? Math.min(999, Math.round((total / context) * 100))
+    typeof effectiveTotal === "number" && context > 0
+      ? Math.min(999, Math.round((effectiveTotal / context) * 100))
       : null;
   return `tokens ${totalLabel}/${formatTokenCount(context)}${pct !== null ? ` (${pct}%)` : ""}`;
 }
