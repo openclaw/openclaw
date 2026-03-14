@@ -157,6 +157,18 @@ describe("stream-wrapper integration", () => {
       const filtered = filterMessages(messages, ctx);
       expect(filtered).not.toBe(messages);
     });
+
+    it("handles legacy assistant string content without throwing", () => {
+      const ctx = createPrivacyFilterContext("test-session");
+      const legacy = {
+        ...assistantMessage([{ type: "text", text: "placeholder" }]),
+        content: "legacy admin@company.com",
+      };
+      const messages = [legacy] as unknown as Message[];
+      const filtered = filterMessages(messages, ctx) as unknown as Array<{ content: unknown }>;
+      expect(typeof filtered[0]?.content).toBe("string");
+      expect(String(filtered[0]?.content)).not.toContain("admin@company.com");
+    });
   });
 
   describe("disabled config", () => {
@@ -278,6 +290,44 @@ describe("stream-wrapper integration", () => {
       const streamWithResult = stream as { result?: () => Promise<AssistantMessage> };
       expect(typeof streamWithResult.result).toBe("function");
       await expect(streamWithResult.result?.()).resolves.toEqual(finalMessage);
+    });
+
+    it("restores placeholders in final stream result payloads", async () => {
+      const ctx = createPrivacyFilterContext("test-session");
+      const original = "admin@company.com";
+      filterText(`contact ${original}`, ctx);
+      const replacement = ctx.replacer.getMappings()[0]?.replacement;
+      if (!replacement) {
+        throw new Error("expected replacement mapping");
+      }
+
+      const baseFn: StreamFn = () =>
+        ({
+          async *[Symbol.asyncIterator]() {
+            yield { type: "text_delta", delta: "partial" };
+          },
+          async result() {
+            return assistantMessage([{ type: "text", text: `final ${replacement}` }]);
+          },
+        }) as unknown as ReturnType<StreamFn>;
+
+      const wrapped = wrapStreamFnPrivacyFilter(baseFn, ctx);
+      const stream = wrapped(
+        {
+          api: "openai-completions",
+          provider: "openai",
+          id: "gpt-test",
+        } as Parameters<StreamFn>[0],
+        { messages: [] },
+      );
+
+      const final = await (stream as { result: () => Promise<AssistantMessage> }).result();
+      const first = final.content[0];
+      if (!first || first.type !== "text") {
+        throw new Error("expected text content");
+      }
+      expect(first.text).toContain(original);
+      expect(first.text).not.toContain("pf_");
     });
   });
 });
