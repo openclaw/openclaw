@@ -541,6 +541,61 @@ describe("workspace lock manager", () => {
     }
   });
 
+  it("does not delete a refreshed lock during stale-reclaim race", async () => {
+    const dir = await makeCaseDir();
+    const target = path.join(dir, "stale-race.txt");
+    const lockPath = await expectedLockPath(target, "file");
+
+    const stalePayload = {
+      token: "stale-token",
+      pid: 999_999,
+      createdAt: new Date(Date.now() - 60_000).toISOString(),
+      expiresAt: new Date(Date.now() - 30_000).toISOString(),
+      targetPath: target,
+      kind: "file",
+    };
+    const freshPayload = {
+      token: "fresh-token",
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      targetPath: target,
+      kind: "file",
+    };
+
+    await fs.mkdir(path.dirname(lockPath), { recursive: true });
+    await fs.writeFile(lockPath, JSON.stringify(stalePayload), "utf8");
+
+    const originalReadFile = fs.readFile.bind(fs);
+    let staged = false;
+    const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
+      if (typeof filePath === "string" && filePath === lockPath && !staged) {
+        staged = true;
+        const out = await originalReadFile(filePath, options as never);
+        await fs.writeFile(lockPath, JSON.stringify(freshPayload), "utf8");
+        return out;
+      }
+      return await originalReadFile(filePath, options as never);
+    });
+
+    try {
+      await expect(
+        acquireWorkspaceLock(target, {
+          kind: "file",
+          timeoutMs: 40,
+          pollIntervalMs: 10,
+          ttlMs: 1,
+        }),
+      ).rejects.toThrow(/workspace lock timeout/);
+
+      const persisted = JSON.parse(await fs.readFile(lockPath, "utf8")) as { token: string };
+      expect(persisted.token).toBe("fresh-token");
+    } finally {
+      readSpy.mockRestore();
+      await fs.rm(lockPath, { force: true });
+    }
+  });
+
   it("does not let stale handle callbacks release a newer lock owner", async () => {
     const dir = await makeCaseDir();
     const target = path.join(dir, "stale-handle.txt");

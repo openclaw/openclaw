@@ -165,19 +165,23 @@ async function readPayloadFromHandle(handle: fs.FileHandle): Promise<LockPayload
   }
 }
 
+async function isStalePayload(payload: LockPayload): Promise<boolean> {
+  if (!Number.isFinite(Date.parse(payload.createdAt))) {
+    return true;
+  }
+  if (isTimestampExpired(payload.expiresAt)) {
+    return true;
+  }
+  if (payload.pid && !isPidAlive(payload.pid)) {
+    return true;
+  }
+  return false;
+}
+
 async function isStaleLock(lockPath: string, ttlMs: number): Promise<boolean> {
   const payload = await readPayload(lockPath);
   if (payload) {
-    if (!Number.isFinite(Date.parse(payload.createdAt))) {
-      return true;
-    }
-    if (isTimestampExpired(payload.expiresAt)) {
-      return true;
-    }
-    if (payload.pid && !isPidAlive(payload.pid)) {
-      return true;
-    }
-    return false;
+    return await isStalePayload(payload);
   }
 
   try {
@@ -186,6 +190,40 @@ async function isStaleLock(lockPath: string, ttlMs: number): Promise<boolean> {
   } catch {
     return true;
   }
+}
+
+async function tryRemoveStaleLock(lockPath: string, ttlMs: number): Promise<boolean> {
+  const firstPayload = await readPayload(lockPath);
+  if (firstPayload) {
+    if (!(await isStalePayload(firstPayload))) {
+      return false;
+    }
+
+    const snapshot = JSON.stringify(firstPayload);
+    const secondPayload = await readPayload(lockPath);
+    if (!secondPayload) {
+      return false;
+    }
+    if (JSON.stringify(secondPayload) !== snapshot) {
+      return false;
+    }
+    if (!(await isStalePayload(secondPayload))) {
+      return false;
+    }
+
+    return await fs
+      .rm(lockPath, { force: true })
+      .then(() => true)
+      .catch(() => false);
+  }
+
+  if (!(await isStaleLock(lockPath, ttlMs))) {
+    return false;
+  }
+  return await fs
+    .rm(lockPath, { force: true })
+    .then(() => true)
+    .catch(() => false);
 }
 
 async function refreshLock(mapKey: string, token: string): Promise<void> {
@@ -327,14 +365,8 @@ export async function acquireWorkspaceLock(
         throw err;
       }
 
-      if (await isStaleLock(lockPath, ttlMs)) {
-        const removed = await fs
-          .rm(lockPath, { force: true })
-          .then(() => true)
-          .catch(() => false);
-        if (removed) {
-          continue;
-        }
+      if (await tryRemoveStaleLock(lockPath, ttlMs)) {
+        continue;
       }
 
       if (Date.now() - startedAt >= timeoutMs) {
