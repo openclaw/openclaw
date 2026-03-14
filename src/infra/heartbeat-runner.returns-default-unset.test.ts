@@ -187,6 +187,16 @@ describe("isHeartbeatEnabledForAgent", () => {
   it("enables only explicit heartbeat agents when configured", () => {
     const cfg: OpenClawConfig = {
       agents: {
+        list: [{ id: "main" }, { id: "ops", heartbeat: { every: "1h" } }],
+      },
+    };
+    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(false);
+    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
+  });
+
+  it("enables only explicit heartbeat agents when defaults are set", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
         defaults: { heartbeat: { every: "30m" } },
         list: [{ id: "main" }, { id: "ops", heartbeat: { every: "1h" } }],
       },
@@ -195,10 +205,9 @@ describe("isHeartbeatEnabledForAgent", () => {
     expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
   });
 
-  it("falls back to default agent when no explicit heartbeat entries", () => {
+  it("falls back to the default agent when heartbeat is unset", () => {
     const cfg: OpenClawConfig = {
       agents: {
-        defaults: { heartbeat: { every: "30m" } },
         list: [{ id: "main" }, { id: "ops" }],
       },
     };
@@ -481,7 +490,6 @@ describe("runHeartbeatOnce", () => {
   it("skips when agent heartbeat is not enabled", async () => {
     const cfg: OpenClawConfig = {
       agents: {
-        defaults: { heartbeat: { every: "30m" } },
         list: [{ id: "main" }, { id: "ops", heartbeat: { every: "1h" } }],
       },
     };

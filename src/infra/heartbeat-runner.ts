@@ -124,13 +124,26 @@ function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
 export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string): boolean {
   const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
   const list = cfg.agents?.list ?? [];
-  const hasExplicit = hasExplicitHeartbeatAgents(cfg);
-  if (hasExplicit) {
-    return list.some(
-      (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
-    );
+  const hasDefaults = Boolean(cfg.agents?.defaults?.heartbeat);
+  if (hasDefaults) {
+    const hasExplicit = hasExplicitHeartbeatAgents(cfg);
+    if (hasExplicit) {
+      return list.some(
+        (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
+      );
+    }
+    if (list.length === 0) {
+      return resolvedAgentId === resolveDefaultAgentId(cfg);
+    }
+    return list.some((entry) => normalizeAgentId(entry?.id) === resolvedAgentId);
   }
-  return resolvedAgentId === resolveDefaultAgentId(cfg);
+  const hasExplicit = hasExplicitHeartbeatAgents(cfg);
+  if (!hasExplicit) {
+    return resolvedAgentId === resolveDefaultAgentId(cfg);
+  }
+  return list.some(
+    (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
+  );
 }
 
 function resolveHeartbeatConfig(
@@ -198,17 +211,39 @@ export function resolveHeartbeatSummaryForAgent(
 
 function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
   const list = cfg.agents?.list ?? [];
-  if (hasExplicitHeartbeatAgents(cfg)) {
+  const hasDefaults = Boolean(cfg.agents?.defaults?.heartbeat);
+  if (hasDefaults) {
+    if (hasExplicitHeartbeatAgents(cfg)) {
+      return list
+        .filter((entry) => entry?.heartbeat)
+        .map((entry) => {
+          const id = normalizeAgentId(entry.id);
+          return { agentId: id, heartbeat: resolveHeartbeatConfig(cfg, id) };
+        })
+        .filter((entry) => entry.agentId);
+    }
+    if (list.length === 0) {
+      const fallbackId = resolveDefaultAgentId(cfg);
+      return [{ agentId: fallbackId, heartbeat: resolveHeartbeatConfig(cfg, fallbackId) }];
+    }
     return list
-      .filter((entry) => entry?.heartbeat)
       .map((entry) => {
         const id = normalizeAgentId(entry.id);
         return { agentId: id, heartbeat: resolveHeartbeatConfig(cfg, id) };
       })
       .filter((entry) => entry.agentId);
   }
-  const fallbackId = resolveDefaultAgentId(cfg);
-  return [{ agentId: fallbackId, heartbeat: resolveHeartbeatConfig(cfg, fallbackId) }];
+  if (!hasExplicitHeartbeatAgents(cfg)) {
+    const fallbackId = resolveDefaultAgentId(cfg);
+    return [{ agentId: fallbackId, heartbeat: resolveHeartbeatConfig(cfg, fallbackId) }];
+  }
+  return list
+    .filter((entry) => entry?.heartbeat)
+    .map((entry) => {
+      const id = normalizeAgentId(entry.id);
+      return { agentId: id, heartbeat: resolveHeartbeatConfig(cfg, id) };
+    })
+    .filter((entry) => entry.agentId);
 }
 
 export function resolveHeartbeatIntervalMs(
