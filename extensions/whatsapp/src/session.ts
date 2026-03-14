@@ -39,14 +39,15 @@ function enqueueSaveCreds(
   logger: ReturnType<typeof getChildLogger>,
 ): void {
   const prev = credsSaveQueues.get(authDir) ?? Promise.resolve();
-  credsSaveQueues.set(
-    authDir,
-    prev
-      .then(() => safeSaveCreds(authDir, saveCreds, logger))
-      .catch((err) => {
-        logger.warn({ error: String(err) }, "WhatsApp creds save queue error");
-      }),
-  );
+  const next = prev
+    .then(() => safeSaveCreds(authDir, saveCreds, logger))
+    .catch((err) => {
+      logger.warn({ error: String(err) }, "WhatsApp creds save queue error");
+    })
+    .finally(() => {
+      if (credsSaveQueues.get(authDir) === next) credsSaveQueues.delete(authDir);
+    });
+  credsSaveQueues.set(authDir, next);
 }
 
 async function safeSaveCreds(
