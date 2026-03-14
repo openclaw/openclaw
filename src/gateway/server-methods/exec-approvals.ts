@@ -1,12 +1,18 @@
 import {
   ensureExecApprovals,
+  getTrustWindow,
+  grantTrustWindow,
+  isTrustWindowActive,
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
+  normalizeExecApprovalAgentId,
   readExecApprovalsSnapshot,
+  revokeTrustWindow,
   saveExecApprovals,
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
 } from "../../infra/exec-approvals.js";
+import { cleanupTrustAudit } from "../../infra/trust-audit.js";
 import {
   ErrorCodes,
   errorShape,
@@ -14,6 +20,9 @@ import {
   validateExecApprovalsNodeGetParams,
   validateExecApprovalsNodeSetParams,
   validateExecApprovalsSetParams,
+  validateExecApprovalsTrustParams,
+  validateExecApprovalsTrustStatusParams,
+  validateExecApprovalsUntrustParams,
 } from "../protocol/index.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
@@ -189,5 +198,98 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       const payload = safeParseJson(res.payloadJSON ?? null);
       respond(true, payload, undefined);
     });
+  },
+  "exec.approvals.trust.status": ({ params, respond }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateExecApprovalsTrustStatusParams,
+        "exec.approvals.trust.status",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const agentId = normalizeExecApprovalAgentId((params as { agentId?: string }).agentId);
+    const trustWindow = getTrustWindow(agentId);
+    const now = Date.now();
+    if (!isTrustWindowActive(trustWindow, now)) {
+      respond(true, { agentId, trustWindow: null }, undefined);
+      return;
+    }
+    respond(
+      true,
+      {
+        agentId,
+        trustWindow: {
+          status: trustWindow.status,
+          expiresAt: trustWindow.expiresAt,
+          grantedAt: trustWindow.grantedAt,
+          grantedBy: trustWindow.grantedBy,
+          security: trustWindow.security,
+          ask: trustWindow.ask,
+          remainingMs: Math.max(0, trustWindow.expiresAt - now),
+        },
+      },
+      undefined,
+    );
+  },
+  "exec.approvals.trust": ({ params, respond }) => {
+    if (
+      !assertValidParams(params, validateExecApprovalsTrustParams, "exec.approvals.trust", respond)
+    ) {
+      return;
+    }
+    const trustParams = params as {
+      agentId?: string;
+      minutes: number;
+      grantedBy?: string;
+      force?: boolean;
+    };
+    const result = grantTrustWindow({
+      agentId: trustParams.agentId,
+      minutes: trustParams.minutes,
+      grantedBy: trustParams.grantedBy,
+      force: trustParams.force,
+    });
+    if (!result.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error));
+      return;
+    }
+    respond(true, { ok: true, agentId: result.agentId, expiresAt: result.expiresAt }, undefined);
+  },
+  "exec.approvals.untrust": ({ params, respond }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateExecApprovalsUntrustParams,
+        "exec.approvals.untrust",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const untrustParams = params as { agentId?: string; revokedBy?: string; keepAudit?: boolean };
+    const result = revokeTrustWindow({
+      agentId: untrustParams.agentId,
+      revokedBy: untrustParams.revokedBy,
+      keepAudit: untrustParams.keepAudit,
+    });
+    if (!result.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error));
+      return;
+    }
+    if (untrustParams.keepAudit !== true) {
+      cleanupTrustAudit(result.agentId);
+    }
+    respond(
+      true,
+      {
+        ok: true,
+        agentId: result.agentId,
+        summary: result.summary ?? null,
+      },
+      undefined,
+    );
   },
 };

@@ -5,12 +5,15 @@ import {
   type ExecAsk,
   type ExecSecurity,
   evaluateShellAllowlist,
+  getTrustWindow,
+  isTrustWindowActive,
   requiresExecApproval,
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
 import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
+import { appendTrustAuditEntry } from "../infra/trust-audit.js";
 import { logInfo } from "../logger.js";
 import {
   buildExecApprovalRequesterContext,
@@ -116,6 +119,7 @@ export async function executeNodeHostCommand(
   const runCwd = prepared.plan.cwd ?? params.workdir;
   const runAgentId = prepared.plan.agentId ?? params.agentId;
   const runSessionKey = prepared.plan.sessionKey ?? params.sessionKey;
+  const trustWindowActiveAtStart = isTrustWindowActive(getTrustWindow(runAgentId));
 
   const nodeEnv = params.requestedEnv ? { ...params.requestedEnv } : undefined;
   const baseAllowlistEval = evaluateShellAllowlist({
@@ -353,11 +357,24 @@ export async function executeNodeHostCommand(
   }
 
   const startedAt = Date.now();
-  const raw = await callGatewayTool(
-    "node.invoke",
-    { timeoutMs: invokeTimeoutMs },
-    buildInvokeParams(false, null),
-  );
+  let raw: unknown;
+  try {
+    raw = await callGatewayTool(
+      "node.invoke",
+      { timeoutMs: invokeTimeoutMs },
+      buildInvokeParams(false, null),
+    );
+  } catch (error) {
+    if (trustWindowActiveAtStart) {
+      appendTrustAuditEntry({
+        agentId: runAgentId,
+        command: params.command,
+        exitCode: null,
+        durationMs: Date.now() - startedAt,
+      });
+    }
+    throw error;
+  }
   const payload =
     raw && typeof raw === "object" ? (raw as { payload?: unknown }).payload : undefined;
   const payloadObj =
@@ -367,6 +384,14 @@ export async function executeNodeHostCommand(
   const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
   const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
   const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
+  if (trustWindowActiveAtStart) {
+    appendTrustAuditEntry({
+      agentId: runAgentId,
+      command: params.command,
+      exitCode,
+      durationMs: Date.now() - startedAt,
+    });
+  }
   return {
     content: [
       {

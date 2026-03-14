@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { normalizeSafeBins } from "./exec-approvals-allowlist.js";
-import { evaluateExecAllowlist, type ExecAllowlistEntry } from "./exec-approvals.js";
+import {
+  ABSOLUTE_MAX_TRUST_MINUTES,
+  DEFAULT_MAX_TRUST_MINUTES,
+  evaluateExecAllowlist,
+  getTrustWindow,
+  grantTrustWindow,
+  initTrustWindowCache,
+  resolveExecApprovalsFromFile,
+  revokeTrustWindow,
+  type ExecAllowlistEntry,
+} from "./exec-approvals.js";
 
 describe("exec approvals allowlist evaluation", () => {
   function evaluateAutoAllowSkills(params: {
@@ -217,5 +227,97 @@ describe("exec approvals allowlist evaluation", () => {
     expect(result.allowlistSatisfied).toBe(true);
     expect(result.allowlistMatches.map((entry) => entry.pattern)).toEqual(["/usr/bin/tool"]);
     expect(result.segmentSatisfiedBy).toEqual(["allowlist", "safeBins"]);
+  });
+});
+
+describe("trust window", () => {
+  it("overrides resolved agent policy while active", () => {
+    initTrustWindowCache();
+    const granted = grantTrustWindow({ agentId: "main", minutes: 5 });
+    expect(granted.ok).toBe(true);
+
+    const resolved = resolveExecApprovalsFromFile({
+      file: {
+        version: 1,
+        agents: {
+          main: {
+            security: "deny",
+            ask: "always",
+          },
+        },
+      },
+      agentId: "main",
+    });
+    expect(resolved.agent.security).toBe("full");
+    expect(resolved.agent.ask).toBe("off");
+  });
+
+  it("does not stack active trust windows", () => {
+    initTrustWindowCache();
+    expect(grantTrustWindow({ agentId: "main", minutes: 5 }).ok).toBe(true);
+    const duplicate = grantTrustWindow({ agentId: "main", minutes: 5 });
+    expect(duplicate.ok).toBe(false);
+    if (!duplicate.ok) {
+      expect(duplicate.error).toContain("already active");
+    }
+  });
+
+  it("enforces default and absolute trust duration caps", () => {
+    initTrustWindowCache();
+    const aboveDefault = grantTrustWindow({
+      agentId: "main",
+      minutes: DEFAULT_MAX_TRUST_MINUTES + 1,
+    });
+    expect(aboveDefault.ok).toBe(false);
+
+    const forced = grantTrustWindow({
+      agentId: "main",
+      minutes: DEFAULT_MAX_TRUST_MINUTES + 1,
+      force: true,
+    });
+    expect(forced.ok).toBe(true);
+    initTrustWindowCache();
+
+    const aboveAbsolute = grantTrustWindow({
+      agentId: "main",
+      minutes: ABSOLUTE_MAX_TRUST_MINUTES + 1,
+      force: true,
+    });
+    expect(aboveAbsolute.ok).toBe(false);
+  });
+
+  it("ignores expired trust windows during policy resolution", () => {
+    initTrustWindowCache();
+    const granted = grantTrustWindow({ agentId: "main", minutes: 1 });
+    expect(granted.ok).toBe(true);
+    const trustWindow = getTrustWindow("main");
+    expect(trustWindow).toBeTruthy();
+    if (!trustWindow) {
+      return;
+    }
+    trustWindow.expiresAt = Date.now() - 1000;
+
+    const resolved = resolveExecApprovalsFromFile({
+      file: {
+        version: 1,
+        agents: {
+          main: {
+            security: "allowlist",
+            ask: "on-miss",
+          },
+        },
+      },
+      agentId: "main",
+    });
+    expect(resolved.agent.security).toBe("allowlist");
+    expect(resolved.agent.ask).toBe("on-miss");
+  });
+
+  it("revokes active trust windows", () => {
+    initTrustWindowCache();
+    expect(grantTrustWindow({ agentId: "main", minutes: 5 }).ok).toBe(true);
+    const revoked = revokeTrustWindow({ agentId: "main" });
+    expect(revoked.ok).toBe(true);
+    expect(getTrustWindow("main")).toBeUndefined();
   });
 });

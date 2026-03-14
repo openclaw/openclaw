@@ -16,6 +16,7 @@ import { describeUnknownError } from "./gateway-cli/shared.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { nodesCallOpts, resolveNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
+import { promptYesNo } from "./prompt.js";
 
 type ExecApprovalsSnapshot = {
   path: string;
@@ -479,4 +480,170 @@ export function registerExecApprovalsCli(program: Command) {
       return true;
     },
   });
+
+  type TrustOpts = NodesRpcOpts & {
+    agent?: string;
+    minutes?: string;
+    yes?: boolean;
+    force?: boolean;
+  };
+
+  const trustCmd = approvals
+    .command("trust")
+    .description("Grant a time-bounded trust window (full exec with ask=off)")
+    .requiredOption("--minutes <n>", "Duration in minutes (1-480)")
+    .option("--agent <id>", "Agent id (defaults to main)")
+    .option("--yes", "Skip confirmation prompt", false)
+    .option("--force", "Allow durations above 60 minutes", false)
+    .action(async (opts: TrustOpts) => {
+      try {
+        if (!process.stdin.isTTY) {
+          exitWithError(
+            "Trust window grants require an interactive terminal to prevent automated self-escalation.",
+          );
+        }
+        if (process.env.OPENCLAW_SESSION_KEY || process.env.OPENCLAW_AGENT_ID) {
+          exitWithError(
+            "Trust window grants are blocked from agent sessions. Use a direct terminal session.",
+          );
+        }
+
+        const minutes = Number.parseInt(String(opts.minutes ?? ""), 10);
+        if (!Number.isInteger(minutes) || minutes < 1 || minutes > 480) {
+          exitWithError("minutes must be an integer between 1 and 480.");
+        }
+        const agentId = opts.agent?.trim() || "main";
+
+        if (!opts.yes) {
+          const confirmed = await promptYesNo(
+            `Allow unrestricted exec for agent "${agentId}" for ${minutes} minutes?`,
+            false,
+          );
+          if (!confirmed) {
+            defaultRuntime.log("Cancelled.");
+            return;
+          }
+        }
+
+        const result = (await callGatewayFromCli("exec.approvals.trust", opts, {
+          agentId,
+          minutes,
+          grantedBy: "cli",
+          force: Boolean(opts.force),
+        })) as { ok: boolean; agentId: string; expiresAt: number };
+
+        if (opts.json) {
+          defaultRuntime.log(JSON.stringify(result));
+          return;
+        }
+
+        const expiresLabel = new Date(result.expiresAt).toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+        defaultRuntime.log(`🔓 Trust window active for "${result.agentId}"`);
+        defaultRuntime.log(`Duration: ${minutes}m`);
+        defaultRuntime.log(`Expires: ${expiresLabel}`);
+      } catch (err) {
+        defaultRuntime.error(formatCliError(err));
+        defaultRuntime.exit(1);
+      }
+    });
+  nodesCallOpts(trustCmd);
+
+  type UntrustOpts = NodesRpcOpts & {
+    agent?: string;
+    yes?: boolean;
+    keepAudit?: boolean;
+  };
+
+  const untrustCmd = approvals
+    .command("untrust")
+    .description("Revoke an active trust window")
+    .option("--agent <id>", "Agent id (defaults to main)")
+    .option("--yes", "Skip audit cleanup confirmation", false)
+    .option("--keep-audit", "Keep audit file after revoke", false)
+    .action(async (opts: UntrustOpts) => {
+      try {
+        const agentId = opts.agent?.trim() || "main";
+        let keepAudit = Boolean(opts.keepAudit);
+        if (!keepAudit && !opts.yes && process.stdin.isTTY) {
+          const shouldDelete = await promptYesNo("Delete trust audit log?", true);
+          keepAudit = !shouldDelete;
+        }
+
+        const result = (await callGatewayFromCli("exec.approvals.untrust", opts, {
+          agentId,
+          revokedBy: "cli",
+          keepAudit,
+        })) as { ok: boolean; agentId: string; summary?: string | null };
+
+        if (opts.json) {
+          defaultRuntime.log(JSON.stringify(result));
+          return;
+        }
+
+        defaultRuntime.log(`🔒 Trust window revoked for "${result.agentId}"`);
+        if (result.summary) {
+          defaultRuntime.log("");
+          defaultRuntime.log(result.summary);
+        }
+        if (keepAudit) {
+          defaultRuntime.log(theme.muted("Audit log preserved."));
+        }
+      } catch (err) {
+        const message = formatCliError(err);
+        if (message.includes("No active trust window")) {
+          defaultRuntime.log(message);
+          return;
+        }
+        defaultRuntime.error(message);
+        defaultRuntime.exit(1);
+      }
+    });
+  nodesCallOpts(untrustCmd);
+
+  type TrustStatusOpts = NodesRpcOpts & { agent?: string };
+
+  const trustStatusCmd = approvals
+    .command("trust-status")
+    .description("Show current trust window status")
+    .option("--agent <id>", "Agent id (defaults to main)")
+    .action(async (opts: TrustStatusOpts) => {
+      try {
+        const agentId = opts.agent?.trim() || "main";
+        const result = (await callGatewayFromCli("exec.approvals.trust.status", opts, {
+          agentId,
+        })) as {
+          agentId: string;
+          trustWindow: null | {
+            expiresAt: number;
+            grantedAt: number;
+            grantedBy?: string;
+            remainingMs?: number;
+          };
+        };
+
+        if (opts.json) {
+          defaultRuntime.log(JSON.stringify(result));
+          return;
+        }
+
+        if (!result.trustWindow) {
+          defaultRuntime.log(`Trust status: inactive (agent "${result.agentId}")`);
+          return;
+        }
+        const remainingMs =
+          typeof result.trustWindow.remainingMs === "number"
+            ? result.trustWindow.remainingMs
+            : Math.max(0, result.trustWindow.expiresAt - Date.now());
+        const remainingMinutes = Math.ceil(remainingMs / 60_000);
+        defaultRuntime.log(`Trust status: active (agent "${result.agentId}")`);
+        defaultRuntime.log(`Remaining: ${remainingMinutes}m`);
+      } catch (err) {
+        defaultRuntime.error(formatCliError(err));
+        defaultRuntime.exit(1);
+      }
+    });
+  nodesCallOpts(trustStatusCmd);
 }

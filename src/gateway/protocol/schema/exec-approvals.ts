@@ -85,6 +85,32 @@ export const ExecApprovalsNodeSetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ExecApprovalsTrustStatusParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const ExecApprovalsTrustParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    minutes: Type.Integer({ minimum: 1, maximum: 480 }),
+    grantedBy: Type.Optional(NonEmptyString),
+    force: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const ExecApprovalsUntrustParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    revokedBy: Type.Optional(NonEmptyString),
+    keepAudit: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
 export const ExecApprovalRequestParamsSchema = Type.Object(
   {
     id: Type.Optional(NonEmptyString),

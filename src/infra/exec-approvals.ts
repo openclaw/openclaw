@@ -4,6 +4,7 @@ import path from "node:path";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
+import { summarizeTrustAudit } from "./trust-audit.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
 
@@ -111,6 +112,17 @@ export type ExecAllowlistEntry = {
   lastResolvedPath?: string;
 };
 
+export type TrustWindow = {
+  status: "active";
+  expiresAt: number;
+  grantedAt: number;
+  grantedBy?: string;
+  security: ExecSecurity;
+  ask: ExecAsk;
+  expiredNotified?: boolean;
+  grantNotified?: boolean;
+};
+
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
   allowlist?: ExecAllowlistEntry[];
 };
@@ -152,6 +164,54 @@ const DEFAULT_ASK_FALLBACK: ExecSecurity = "deny";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
 const DEFAULT_FILE = "~/.openclaw/exec-approvals.json";
+const TRUST_AGENT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+
+export const DEFAULT_MAX_TRUST_MINUTES = 60;
+export const ABSOLUTE_MAX_TRUST_MINUTES = 480;
+
+const trustWindowCache = new Map<string, TrustWindow>();
+
+export type GrantTrustResult =
+  | { ok: true; agentId: string; expiresAt: number }
+  | { ok: false; error: string };
+
+export type RevokeTrustResult =
+  | { ok: true; agentId: string; summary: string | undefined }
+  | { ok: false; error: string };
+
+export function normalizeExecApprovalAgentId(agentId?: string | null): string {
+  const trimmed = agentId?.trim() ?? "";
+  return trimmed ? trimmed.toLowerCase() : DEFAULT_AGENT_ID;
+}
+
+function resolveTrustAgentIdOrError(agentId?: string | null): { agentId?: string; error?: string } {
+  const normalized = normalizeExecApprovalAgentId(agentId);
+  if (!TRUST_AGENT_ID_RE.test(normalized)) {
+    return {
+      error: "agentId must be 1-64 characters using letters, numbers, dash, or underscore",
+    };
+  }
+  return { agentId: normalized };
+}
+
+export function initTrustWindowCache() {
+  trustWindowCache.clear();
+}
+
+export function getTrustWindow(agentId?: string): TrustWindow | undefined {
+  return trustWindowCache.get(normalizeExecApprovalAgentId(agentId));
+}
+
+export function isTrustWindowActive(
+  trustWindow: TrustWindow | undefined,
+  now = Date.now(),
+): trustWindow is TrustWindow {
+  return (
+    trustWindow?.status === "active" &&
+    Number.isFinite(trustWindow.expiresAt) &&
+    now < trustWindow.expiresAt
+  );
+}
 
 function hashExecApprovalsRaw(raw: string | null): string {
   return crypto
@@ -372,6 +432,87 @@ export function saveExecApprovals(file: ExecApprovalsFile) {
   }
 }
 
+export function grantTrustWindow(params: {
+  agentId?: string;
+  minutes: number;
+  grantedBy?: string;
+  force?: boolean;
+}): GrantTrustResult {
+  const validated = resolveTrustAgentIdOrError(params.agentId);
+  if (!validated.agentId) {
+    return { ok: false, error: validated.error ?? "invalid agentId" };
+  }
+
+  if (
+    !Number.isInteger(params.minutes) ||
+    params.minutes < 1 ||
+    params.minutes > ABSOLUTE_MAX_TRUST_MINUTES
+  ) {
+    return {
+      ok: false,
+      error: `minutes must be an integer between 1 and ${ABSOLUTE_MAX_TRUST_MINUTES}`,
+    };
+  }
+
+  if (params.minutes > DEFAULT_MAX_TRUST_MINUTES && params.force !== true) {
+    return {
+      ok: false,
+      error: `Duration exceeds default cap (${DEFAULT_MAX_TRUST_MINUTES}m). Use force to allow up to ${ABSOLUTE_MAX_TRUST_MINUTES}m.`,
+    };
+  }
+
+  const now = Date.now();
+  const existing = trustWindowCache.get(validated.agentId);
+  if (isTrustWindowActive(existing, now)) {
+    const remainingMinutes = Math.ceil((existing.expiresAt - now) / 60_000);
+    return {
+      ok: false,
+      error: `Trust window already active (${remainingMinutes}m remaining). Revoke it first.`,
+    };
+  }
+
+  const expiresAt = now + params.minutes * 60_000;
+  trustWindowCache.set(validated.agentId, {
+    status: "active",
+    expiresAt,
+    grantedAt: now,
+    grantedBy: params.grantedBy?.slice(0, 256),
+    security: "full",
+    ask: "off",
+    expiredNotified: false,
+    grantNotified: false,
+  });
+
+  return { ok: true, agentId: validated.agentId, expiresAt };
+}
+
+export function revokeTrustWindow(params: {
+  agentId?: string;
+  revokedBy?: string;
+  keepAudit?: boolean;
+}): RevokeTrustResult {
+  const validated = resolveTrustAgentIdOrError(params.agentId);
+  if (!validated.agentId) {
+    return { ok: false, error: validated.error ?? "invalid agentId" };
+  }
+
+  const trustWindow = trustWindowCache.get(validated.agentId);
+  if (!trustWindow || trustWindow.status !== "active") {
+    return { ok: false, error: `No active trust window for agent "${validated.agentId}"` };
+  }
+
+  const now = Date.now();
+  const endedAt = trustWindow.expiresAt > now ? now : trustWindow.expiresAt;
+  const summary = summarizeTrustAudit({
+    agentId: validated.agentId,
+    startedAt: trustWindow.grantedAt,
+    endedAt,
+  });
+
+  trustWindowCache.delete(validated.agentId);
+  return { ok: true, agentId: validated.agentId, summary: summary ?? undefined };
+}
+
 export function ensureExecApprovals(): ExecApprovalsFile {
   const loaded = loadExecApprovals();
   const next = normalizeExecApprovals(loaded);
@@ -464,6 +605,14 @@ export function resolveExecApprovalsFromFile(params: {
       agent.autoAllowSkills ?? wildcard.autoAllowSkills ?? resolvedDefaults.autoAllowSkills,
     ),
   };
+  const trustWindow = getTrustWindow(agentKey);
+  const finalAgent: Required<ExecApprovalsDefaults> = isTrustWindowActive(trustWindow)
+    ? {
+        ...resolvedAgent,
+        security: normalizeSecurity(trustWindow.security, resolvedAgent.security),
+        ask: normalizeAsk(trustWindow.ask, resolvedAgent.ask),
+      }
+    : resolvedAgent;
   const allowlist = [
     ...(Array.isArray(wildcard.allowlist) ? wildcard.allowlist : []),
     ...(Array.isArray(agent.allowlist) ? agent.allowlist : []),
@@ -475,7 +624,7 @@ export function resolveExecApprovalsFromFile(params: {
     ),
     token: params.token ?? file.socket?.token ?? "",
     defaults: resolvedDefaults,
-    agent: resolvedAgent,
+    agent: finalAgent,
     allowlist,
     file,
   };
