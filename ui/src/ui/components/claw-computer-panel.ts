@@ -232,6 +232,10 @@ export class ClawComputerPanel extends LitElement {
       return;
     }
 
+    // Clear previous VNC canvas elements to prevent duplication
+    const existingCanvases = screen.querySelectorAll("canvas");
+    existingCanvases.forEach((canvas) => canvas.remove());
+
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const Constructor = RFBClass as new (
