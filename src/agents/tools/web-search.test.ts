@@ -295,6 +295,66 @@ describe("web_search grok response parsing", () => {
     expect(result.annotationCitations).toEqual([]);
   });
 
+  it("handles null entries in output array", () => {
+    const result = extractGrokContent({
+      output: [
+        null as never,
+        {
+          type: "message",
+          content: [{ type: "output_text", text: "after null" }],
+        },
+      ],
+    });
+    expect(result.text).toBe("after null");
+    expect(result.annotationCitations).toEqual([]);
+  });
+
+  it("handles null entries in content array", () => {
+    const result = extractGrokContent({
+      output: [
+        {
+          type: "message",
+          content: [null as never, { type: "output_text", text: "after null content" }],
+        },
+      ],
+    });
+    expect(result.text).toBe("after null content");
+    expect(result.annotationCitations).toEqual([]);
+  });
+
+  it("handles entries missing type in output array", () => {
+    const result = extractGrokContent({
+      output: [
+        {} as never,
+        {
+          type: "message",
+          content: [{ type: "output_text", text: "after empty" }],
+        },
+      ],
+    });
+    expect(result.text).toBe("after empty");
+  });
+
+  it("handles entries missing type in content array", () => {
+    const result = extractGrokContent({
+      output: [
+        {
+          type: "message",
+          content: [{} as never, { type: "output_text", text: "after typeless" }],
+        },
+      ],
+    });
+    expect(result.text).toBe("after typeless");
+  });
+
+  it("returns undefined text when all output entries are malformed", () => {
+    const result = extractGrokContent({
+      output: [null as never, undefined as never, {} as never],
+    });
+    expect(result.text).toBeUndefined();
+    expect(result.annotationCitations).toEqual([]);
+  });
+
   it("extracts output_text blocks directly in output array (no message wrapper)", () => {
     const result = extractGrokContent({
       output: [
