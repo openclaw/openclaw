@@ -167,13 +167,16 @@ export function validateAccessPolicyConfig(config: AccessPolicyConfig): string[]
               .replace(/[/\\]$/, "")
               .split(/[/\\]/)
               .pop() ?? "";
-          // Looks like a file when either:
-          //   a) Pure dotfile name: leading dot, no further dot/slash — covers ".env",
-          //      ".netrc", ".htpasswd". These are typically files, not directories.
-          //   b) Non-leading dot with a letter-containing extension — covers "secrets.key",
-          //      "config.json". Digit-only extensions (v1.0, app-2.3) are treated as
-          //      versioned directory names and excluded.
-          looksLikeFile = /^\.[^./\\]+$/.test(lastName) || /[^.]\.[a-zA-Z][^/\\]*$/.test(lastName);
+          // Looks like a file when the last segment has a non-leading dot followed by a
+          // letter-containing extension — covers "secrets.key", "config.json", ".npmrc".
+          // Digit-only suffixes (v1.0, app-2.3) are treated as versioned directory names.
+          // Bare dotnames without a secondary extension (.ssh, .aws, .env, .gnupg) are
+          // NOT treated as file-like: they are expanded to /** so the subtree is protected
+          // when the path does not yet exist. For .env-style plain files the expansion is
+          // conservative but safe — once the file exists, statSync confirms it and the bare
+          // path is kept. The leading-dot heuristic was removed because it also matched
+          // common directory names (.ssh, .aws, .config) and silently skipped expansion.
+          looksLikeFile = /[^.]\.[a-zA-Z][^/\\]*$/.test(lastName);
         }
         if (!isExistingFile && !looksLikeFile) {
           const fixed = `${pattern}/**`;

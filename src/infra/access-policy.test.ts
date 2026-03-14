@@ -128,16 +128,18 @@ describe("validateAccessPolicyConfig", () => {
     expect(config.deny?.[0]).toBe(fileLikePath); // must NOT be expanded to /**
   });
 
-  it("does NOT auto-expand dotfile-style non-existent deny[] paths (.env, .netrc)", () => {
-    // Leading-dot names like ".env" or ".netrc" are files, not directories. Expanding
-    // "~/.env" to "~/.env/**" would protect only non-existent children, leaving the
-    // file itself unprotected once created. The heuristic treats leading-dot names
-    // (no further dot/slash) as file-like and skips auto-expansion.
+  it("auto-expands non-existent bare dotnames (.ssh, .aws, .env) to /** — treats as future directory", () => {
+    // Bare dotnames without a secondary extension (.ssh, .aws, .env, .gnupg) cannot be
+    // reliably identified as file vs. directory before they exist. The safe choice is to
+    // expand to /** so the subtree is protected if a directory is created there.
+    // When the path later exists as a file, statSync confirms it and the bare pattern is kept.
     const base = os.tmpdir();
-    for (const name of [".env", ".netrc", ".htpasswd", ".npmrc"]) {
-      const config: AccessPolicyConfig = { deny: [path.join(base, name)] };
+    for (const name of [".ssh", ".aws", ".env", ".netrc", ".gnupg", ".config"]) {
+      _resetAutoExpandedWarnedForTest();
+      const p = path.join(base, name);
+      const config: AccessPolicyConfig = { deny: [p] };
       validateAccessPolicyConfig(config);
-      expect(config.deny?.[0]).toBe(path.join(base, name)); // must NOT be expanded to /**
+      expect(config.deny?.[0]).toBe(`${p}/**`); // expanded to protect subtree
     }
   });
 

@@ -164,7 +164,12 @@ export function generateBwrapArgs(
   // control tmpfs access explicitly (e.g. "/tmp/**":"rwx" is handled by the rules loop).
   if (defaultAllowsRead) {
     const explicitTmpPerm = findBestRule("/tmp/.", config.rules ?? {}, homeDir);
-    if (explicitTmpPerm === null || explicitTmpPerm[1] === "w") {
+    if (explicitTmpPerm === null) {
+      // Only emit --tmpfs /tmp when there is no explicit rule for /tmp.
+      // When an explicit write rule exists, the rules loop below emits --bind-try /tmp /tmp
+      // which (as a later mount) wins over --tmpfs anyway — emitting --tmpfs here too
+      // is dead code. When an explicit read-only rule exists, /tmp is already readable
+      // via --ro-bind / / and no extra mount is needed.
       args.push("--tmpfs", "/tmp");
     }
   }

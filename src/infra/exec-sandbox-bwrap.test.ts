@@ -138,6 +138,21 @@ describe.skipIf(process.platform !== "linux")("generateBwrapArgs", () => {
     expect(tmpfsMounts).not.toContain("/tmp");
   });
 
+  it("skips --tmpfs /tmp when an explicit write rule covers /tmp (rules loop emits --bind-try)", () => {
+    // Regression: the old code also emitted --tmpfs /tmp when explicitTmpPerm[1] === "w",
+    // but the rules loop always follows with --bind-try /tmp /tmp which wins (last mount wins
+    // in bwrap). The --tmpfs was dead code. Confirm: explicit rw- rule → no --tmpfs /tmp,
+    // but --bind-try /tmp IS present.
+    const config: AccessPolicyConfig = { default: "r--", rules: { "/tmp/**": "rw-" } };
+    const args = generateBwrapArgs(config, HOME);
+    const tmpfsMounts = args.map((a, i) => (a === "--tmpfs" ? args[i + 1] : null)).filter(Boolean);
+    const bindMounts = args
+      .map((a, i) => (a === "--bind-try" ? args[i + 1] : null))
+      .filter(Boolean);
+    expect(tmpfsMounts).not.toContain("/tmp");
+    expect(bindMounts).toContain("/tmp");
+  });
+
   it("does not add --tmpfs /tmp in restrictive mode (default: ---)", () => {
     const config: AccessPolicyConfig = { default: "---" };
     const args = generateBwrapArgs(config, HOME);
