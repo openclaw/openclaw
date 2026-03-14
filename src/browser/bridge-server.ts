@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
@@ -28,7 +29,12 @@ type ResolvedNoVncObserver = {
   password?: string;
 };
 
-function buildNoVncBootstrapHtml(params: ResolvedNoVncObserver): string {
+type NoVncBootstrapResponse = {
+  csp: string;
+  html: string;
+};
+
+function buildNoVncBootstrapResponse(params: ResolvedNoVncObserver): NoVncBootstrapResponse {
   const hash = new URLSearchParams({
     autoconnect: "1",
     resize: "remote",
@@ -38,7 +44,16 @@ function buildNoVncBootstrapHtml(params: ResolvedNoVncObserver): string {
   }
   const targetUrl = `http://127.0.0.1:${params.noVncPort}/vnc.html#${hash.toString()}`;
   const encodedTarget = JSON.stringify(targetUrl);
-  return `<!doctype html>
+  const nonce = crypto.randomBytes(16).toString("base64");
+  return {
+    csp: [
+      "default-src 'none'",
+      "base-uri 'none'",
+      "form-action 'none'",
+      "frame-ancestors 'none'",
+      `script-src 'nonce-${nonce}'`,
+    ].join("; "),
+    html: `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -48,12 +63,13 @@ function buildNoVncBootstrapHtml(params: ResolvedNoVncObserver): string {
 </head>
 <body>
   <p>Opening sandbox observer...</p>
-  <script>
+  <script nonce="${nonce}">
     const target = ${encodedTarget};
     window.location.replace(target);
   </script>
 </body>
-</html>`;
+</html>`,
+  };
 }
 
 export async function startBrowserBridgeServer(params: {
@@ -90,7 +106,11 @@ export async function startBrowserBridgeServer(params: {
         res.status(404).send("Invalid or expired token");
         return;
       }
-      res.type("html").status(200).send(buildNoVncBootstrapHtml(resolved));
+      const bootstrap = buildNoVncBootstrapResponse(resolved);
+      res.setHeader("Content-Security-Policy", bootstrap.csp);
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("X-Frame-Options", "DENY");
+      res.type("html").status(200).send(bootstrap.html);
     });
   }
 

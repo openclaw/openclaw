@@ -99,7 +99,13 @@ describe("startBrowserBridgeServer auth", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("location")).toBeNull();
     expect(res.headers.get("cache-control")).toContain("no-store");
+    const csp = res.headers.get("content-security-policy");
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain("script-src 'nonce-");
     expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("x-frame-options")).toBe("DENY");
 
     const body = await res.text();
     expect(body).toContain("window.location.replace");
@@ -107,5 +113,8 @@ describe("startBrowserBridgeServer auth", () => {
       "http://127.0.0.1:45678/vnc.html#autoconnect=1&resize=remote&password=Abc123xy",
     );
     expect(body).not.toContain("?password=");
+    const nonce = body.match(/<script nonce="([^"]+)">/)?.[1];
+    expect(nonce).toBeTruthy();
+    expect(csp).toContain(`script-src 'nonce-${nonce}'`);
   });
 });
