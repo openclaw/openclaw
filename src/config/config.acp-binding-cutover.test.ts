@@ -109,7 +109,7 @@ describe("ACP binding cutover schema", () => {
     expect(parsed.success).toBe(false);
   });
 
-  it("rejects ACP bindings on unsupported channels", () => {
+  it("accepts ACP bindings on any channel (plugin channels)", () => {
     const parsed = OpenClawSchema.safeParse({
       bindings: [
         {
@@ -117,6 +117,24 @@ describe("ACP binding cutover schema", () => {
           agentId: "codex",
           match: {
             channel: "slack",
+            accountId: "default",
+            peer: { kind: "channel", id: "C123456" },
+          },
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects ACP bindings with empty channel", () => {
+    const parsed = OpenClawSchema.safeParse({
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "  ",
             accountId: "default",
             peer: { kind: "channel", id: "C123456" },
           },

@@ -5,14 +5,13 @@ import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   ensureConfiguredAcpBindingSession,
   resolveConfiguredAcpBindingRecord,
-  type ConfiguredAcpBindingChannel,
   type ResolvedConfiguredAcpBinding,
 } from "./persistent-bindings.js";
 
 export function resolveConfiguredAcpRoute(params: {
   cfg: OpenClawConfig;
   route: ResolvedAgentRoute;
-  channel: ConfiguredAcpBindingChannel;
+  channel: string;
   accountId: string;
   conversationId: string;
   parentConversationId?: string;

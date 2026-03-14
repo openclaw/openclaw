@@ -3,7 +3,7 @@ import type { SessionBindingRecord } from "../infra/outbound/session-binding-ser
 import { sanitizeAgentId } from "../routing/session-key.js";
 import type { AcpRuntimeSessionMode } from "./runtime/types.js";
 
-export type ConfiguredAcpBindingChannel = "discord" | "telegram";
+export type ConfiguredAcpBindingChannel = "discord" | "telegram" | (string & {});
 
 export type ConfiguredAcpBindingSpec = {
   channel: ConfiguredAcpBindingChannel;
@@ -60,7 +60,7 @@ export function normalizeBindingConfig(raw: unknown): AcpBindingConfigShape {
 }
 
 function buildBindingHash(params: {
-  channel: ConfiguredAcpBindingChannel;
+  channel: string;
   accountId: string;
   conversationId: string;
 }): string {
@@ -70,13 +70,21 @@ function buildBindingHash(params: {
     .slice(0, 16);
 }
 
+/**
+ * Encode a channel name for use in session keys.
+ * Replaces `:` with `_` to avoid breaking the colon-delimited key format.
+ */
+function encodeChannelForKey(channel: string): string {
+  return channel.replace(/:/g, "_");
+}
+
 export function buildConfiguredAcpSessionKey(spec: ConfiguredAcpBindingSpec): string {
   const hash = buildBindingHash({
     channel: spec.channel,
     accountId: spec.accountId,
     conversationId: spec.conversationId,
   });
-  return `agent:${sanitizeAgentId(spec.agentId)}:acp:binding:${spec.channel}:${spec.accountId}:${hash}`;
+  return `agent:${sanitizeAgentId(spec.agentId)}:acp:binding:${encodeChannelForKey(spec.channel)}:${spec.accountId}:${hash}`;
 }
 
 export function toConfiguredAcpBindingRecord(spec: ConfiguredAcpBindingSpec): SessionBindingRecord {

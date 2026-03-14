@@ -42,6 +42,8 @@ export type PluginRuntimeChannel = {
   routing: {
     buildAgentSessionKey: typeof import("../../routing/resolve-route.js").buildAgentSessionKey;
     resolveAgentRoute: typeof import("../../routing/resolve-route.js").resolveAgentRoute;
+    resolveConfiguredAcpRoute: typeof import("../../acp/persistent-bindings.route.js").resolveConfiguredAcpRoute;
+    ensureConfiguredAcpRouteReady: typeof import("../../acp/persistent-bindings.route.js").ensureConfiguredAcpRouteReady;
   };
   pairing: {
     buildPairingReply: typeof import("../../pairing/pairing-messages.js").buildPairingReply;
