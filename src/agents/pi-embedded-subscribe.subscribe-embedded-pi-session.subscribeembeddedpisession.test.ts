@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   THINKING_TAG_CASES,
+  createSubscribedSessionHarness,
   createStubSessionHarness,
   emitAssistantLifecycleErrorAndEnd,
   emitMessageStartAndEndForAssistantText,
@@ -106,7 +107,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
   it.each(THINKING_TAG_CASES)(
     "streams <%s> reasoning via onReasoningStream without leaking into final text",
-    ({ open, close }) => {
+    async ({ open, close }) => {
       const onReasoningStream = vi.fn();
       const onBlockReply = vi.fn();
 
@@ -132,8 +133,8 @@ describe("subscribeEmbeddedPiSession", () => {
       } as AssistantMessage;
 
       emit({ type: "message_end", message: assistantMessage });
+      await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledTimes(1));
 
-      expect(onBlockReply).toHaveBeenCalledTimes(1);
       expect(onBlockReply.mock.calls[0][0].text).toBe("Final answer");
 
       const streamTexts = onReasoningStream.mock.calls
@@ -149,7 +150,7 @@ describe("subscribeEmbeddedPiSession", () => {
   );
   it.each(THINKING_TAG_CASES)(
     "suppresses <%s> blocks across chunk boundaries",
-    ({ open, close }) => {
+    async ({ open, close }) => {
       const onBlockReply = vi.fn();
 
       const { emit } = createSubscribedHarness({
@@ -174,6 +175,7 @@ describe("subscribeEmbeddedPiSession", () => {
         message: { role: "assistant" },
         assistantMessageEvent: { type: "text_end" },
       });
+      await vi.waitFor(() => expect(onBlockReply.mock.calls.length).toBeGreaterThan(0));
 
       const payloadTexts = onBlockReply.mock.calls
         .map((call) => call[0]?.text)
@@ -255,6 +257,109 @@ describe("subscribeEmbeddedPiSession", () => {
     emitAssistantTextDelta(emit, " files</think>\nFinal answer");
 
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits llm hooks for each assistant round instead of once per run", () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "llm_input" || hookName === "llm_output"),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+    };
+
+    const userMessage = {
+      role: "user",
+      content: [{ type: "text", text: "find AI news" }],
+    };
+    const firstAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "Searching now" }],
+      usage: { input: 100, output: 20, total: 120 },
+    };
+    const toolResult = {
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "exec",
+      content: [{ type: "text", text: "HN results" }],
+      isError: false,
+    };
+    const secondAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "Here are the results" }],
+      usage: { input: 120, output: 40, total: 160 },
+    };
+
+    const { emit, session } = createSubscribedSessionHarness({
+      runId: "run-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:test",
+      agentId: "main",
+      provider: "openai",
+      model: "gpt-5",
+      hookRunner: hookRunner as never,
+      resolveLlmInputPrompt: (_history, roundIndex) =>
+        roundIndex === 0 ? "prepended context\n\nfind AI news" : "",
+      sessionExtras: {
+        sessionId: "session-1",
+        systemPrompt: "be helpful",
+        messages: [],
+      } as never,
+    });
+
+    (session as { messages: unknown[] }).messages = [
+      userMessage,
+      { role: "assistant", content: [] },
+    ];
+    emit({ type: "message_start", message: { role: "assistant", content: [] } });
+    emit({ type: "message_end", message: firstAssistant });
+
+    (session as { messages: unknown[] }).messages = [
+      userMessage,
+      firstAssistant,
+      toolResult,
+      { role: "assistant", content: [] },
+    ];
+    emit({ type: "message_start", message: { role: "assistant", content: [] } });
+    emit({ type: "message_end", message: secondAssistant });
+
+    expect(hookRunner.runLlmInput).toHaveBeenCalledTimes(2);
+    expect(hookRunner.runLlmInput).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        prompt: "prepended context\n\nfind AI news",
+        historyMessages: [userMessage],
+        systemPrompt: "be helpful",
+      }),
+      expect.objectContaining({
+        sessionId: "session-1",
+        sessionKey: "agent:main:test",
+      }),
+    );
+    expect(hookRunner.runLlmInput).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        prompt: "",
+        historyMessages: [userMessage, firstAssistant, toolResult],
+      }),
+      expect.any(Object),
+    );
+
+    expect(hookRunner.runLlmOutput).toHaveBeenCalledTimes(2);
+    expect(hookRunner.runLlmOutput).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        assistantTexts: ["Searching now"],
+        usage: { input: 100, output: 20, total: 120 },
+      }),
+      expect.any(Object),
+    );
+    expect(hookRunner.runLlmOutput).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        assistantTexts: ["Here are the results"],
+        usage: { input: 120, output: 40, total: 160 },
+      }),
+      expect.any(Object),
+    );
   });
 
   it("emits delta chunks in agent events for streaming assistant text", () => {

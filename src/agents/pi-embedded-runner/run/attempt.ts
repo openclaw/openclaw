@@ -1239,6 +1239,32 @@ export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "f
   return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) ? "minimal" : "full";
 }
 
+function extractPromptTextFromAgentMessage(message: AgentMessage | undefined): string {
+  if (!message || message.role !== "user") {
+    return "";
+  }
+  const { content } = message as { content?: unknown };
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .flatMap((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return [];
+      }
+      if ((entry as { type?: unknown }).type !== "text") {
+        return [];
+      }
+      const text = (entry as { text?: unknown }).text;
+      return typeof text === "string" ? [text] : [];
+    })
+    .join("\n\n")
+    .trim();
+}
+
 export function resolveAttemptFsWorkspaceOnly(params: {
   config?: OpenClawConfig;
   sessionAgentId: string;
@@ -2184,6 +2210,7 @@ export async function runEmbeddedAttempt(
         });
       };
 
+      let currentPromptForHook = params.prompt;
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
@@ -2208,6 +2235,18 @@ export async function runEmbeddedAttempt(
         sessionKey: sandboxSessionKey,
         sessionId: params.sessionId,
         agentId: sessionAgentId,
+        provider: params.provider,
+        model: params.modelId,
+        workspaceDir: params.workspaceDir,
+        messageProvider: params.messageProvider ?? undefined,
+        trigger: params.trigger,
+        channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+        resolveLlmInputPrompt: (historyMessages, roundIndex) => {
+          if (roundIndex === 0) {
+            return currentPromptForHook;
+          }
+          return extractPromptTextFromAgentMessage(historyMessages.at(-1));
+        },
       });
 
       const {
@@ -2354,6 +2393,7 @@ export async function runEmbeddedAttempt(
             );
           }
         }
+        currentPromptForHook = effectivePrompt;
 
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
         cacheTrace?.recordStage("prompt:before", {
@@ -2424,34 +2464,6 @@ export async function runEmbeddedAttempt(
                 `promptImages=${imageResult.images.length} ` +
                 `provider=${params.provider}/${params.modelId} sessionFile=${params.sessionFile}`,
             );
-          }
-
-          if (hookRunner?.hasHooks("llm_input")) {
-            hookRunner
-              .runLlmInput(
-                {
-                  runId: params.runId,
-                  sessionId: params.sessionId,
-                  provider: params.provider,
-                  model: params.modelId,
-                  systemPrompt: systemPromptText,
-                  prompt: effectivePrompt,
-                  historyMessages: activeSession.messages,
-                  imagesCount: imageResult.images.length,
-                },
-                {
-                  agentId: hookAgentId,
-                  sessionKey: params.sessionKey,
-                  sessionId: params.sessionId,
-                  workspaceDir: params.workspaceDir,
-                  messageProvider: params.messageProvider ?? undefined,
-                  trigger: params.trigger,
-                  channelId: params.messageChannel ?? params.messageProvider ?? undefined,
-                },
-              )
-              .catch((err) => {
-                log.warn(`llm_input hook failed: ${String(err)}`);
-              });
           }
 
           // Only pass images option if there are actually images to pass
@@ -2731,33 +2743,6 @@ export async function runEmbeddedAttempt(
             typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
         )
         .map((entry) => ({ toolName: entry.toolName, meta: entry.meta }));
-
-      if (hookRunner?.hasHooks("llm_output")) {
-        hookRunner
-          .runLlmOutput(
-            {
-              runId: params.runId,
-              sessionId: params.sessionId,
-              provider: params.provider,
-              model: params.modelId,
-              assistantTexts,
-              lastAssistant,
-              usage: getUsageTotals(),
-            },
-            {
-              agentId: hookAgentId,
-              sessionKey: params.sessionKey,
-              sessionId: params.sessionId,
-              workspaceDir: params.workspaceDir,
-              messageProvider: params.messageProvider ?? undefined,
-              trigger: params.trigger,
-              channelId: params.messageChannel ?? params.messageProvider ?? undefined,
-            },
-          )
-          .catch((err) => {
-            log.warn(`llm_output hook failed: ${String(err)}`);
-          });
-      }
 
       return {
         aborted,

@@ -6,6 +6,7 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
+import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
@@ -18,7 +19,11 @@ import type {
 } from "./pi-embedded-subscribe.handlers.types.js";
 import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
-import { formatReasoningMessage, stripDowngradedToolCallText } from "./pi-embedded-utils.js";
+import {
+  extractAssistantText,
+  formatReasoningMessage,
+  stripDowngradedToolCallText,
+} from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
@@ -88,6 +93,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     total: 0,
   };
   let compactionCount = 0;
+  let llmInputRoundCount = 0;
 
   const assistantTexts = state.assistantTexts;
   const toolMetas = state.toolMetas;
@@ -305,6 +311,117 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
   const incrementCompactionCount = () => {
     compactionCount += 1;
+  };
+  const buildHookContext = () => ({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    workspaceDir: params.workspaceDir,
+    messageProvider: params.messageProvider,
+    trigger: params.trigger,
+    channelId: params.channelId,
+  });
+  const snapshotHistoryMessages = (): AgentMessage[] => {
+    const history = params.session.messages.slice();
+    const last = history.at(-1);
+    if (last?.role === "assistant") {
+      history.pop();
+    }
+    return history;
+  };
+  const extractLatestPrompt = (historyMessages: AgentMessage[]): string => {
+    const roundIndex = llmInputRoundCount;
+    if (params.resolveLlmInputPrompt) {
+      return params.resolveLlmInputPrompt(historyMessages, roundIndex);
+    }
+    for (let index = historyMessages.length - 1; index >= 0; index -= 1) {
+      const message = historyMessages[index];
+      if (message?.role !== "user") {
+        continue;
+      }
+      return (
+        extractTextFromChatContent((message as { content?: unknown }).content, {
+          joinWith: "\n\n",
+          normalizeText: (text) => text.trim(),
+        }) ?? ""
+      );
+    }
+    return "";
+  };
+  const countImagesInMessage = (message: AgentMessage | undefined): number => {
+    if (!message || !Array.isArray((message as { content?: unknown }).content)) {
+      return 0;
+    }
+    return ((message as { content: unknown[] }).content ?? []).filter((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return false;
+      }
+      const type = (entry as { type?: unknown }).type;
+      return type === "image" || type === "image_url" || type === "input_image";
+    }).length;
+  };
+  const emitLlmInputHook = () => {
+    if (!params.hookRunner?.hasHooks("llm_input") || !params.provider || !params.model) {
+      return;
+    }
+    const historyMessages = snapshotHistoryMessages();
+    const prompt = extractLatestPrompt(historyMessages);
+    const latestUserMessage = [...historyMessages]
+      .toReversed()
+      .find((message) => message?.role === "user");
+    const imagesCount = countImagesInMessage(latestUserMessage);
+    const roundIndex = llmInputRoundCount;
+    llmInputRoundCount += 1;
+    params.hookRunner
+      .runLlmInput(
+        {
+          runId: params.runId,
+          sessionId: params.sessionId ?? params.session.sessionId,
+          provider: params.provider,
+          model: params.model,
+          systemPrompt: params.session.systemPrompt,
+          prompt,
+          historyMessages,
+          imagesCount,
+        },
+        buildHookContext(),
+      )
+      .catch((err) => {
+        log.warn(`llm_input hook failed during round ${roundIndex + 1}: ${String(err)}`);
+      });
+  };
+  const emitLlmOutputHook = (message: AgentMessage) => {
+    if (!params.hookRunner?.hasHooks("llm_output") || !params.provider || !params.model) {
+      return;
+    }
+    const assistantText = message.role === "assistant" ? extractAssistantText(message) : "";
+    params.hookRunner
+      .runLlmOutput(
+        {
+          runId: params.runId,
+          sessionId: params.sessionId ?? params.session.sessionId,
+          provider: params.provider,
+          model: params.model,
+          assistantTexts: assistantText ? [assistantText] : [],
+          lastAssistant: message,
+          usage:
+            message.role === "assistant"
+              ? ((message as { usage?: unknown }).usage as
+                  | {
+                      input?: number;
+                      output?: number;
+                      cacheRead?: number;
+                      cacheWrite?: number;
+                      total?: number;
+                    }
+                  | undefined)
+              : undefined,
+        },
+        buildHookContext(),
+      )
+      .catch((err) => {
+        log.warn(`llm_output hook failed: ${String(err)}`);
+      });
   };
 
   const blockChunking = params.blockReplyChunking;
@@ -639,6 +756,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     incrementCompactionCount,
     getUsageTotals,
     getCompactionCount: () => compactionCount,
+    emitLlmInputHook,
+    emitLlmOutputHook,
   };
 
   const sessionUnsubscribe = params.session.subscribe(createEmbeddedPiSessionEventHandler(ctx));
