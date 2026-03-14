@@ -6,6 +6,7 @@ import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-
 import {
   archiveSessionTranscripts,
   readFirstUserMessageFromTranscript,
+  readLastAssistantMessagePreviewFromTranscript,
   readLastMessagePreviewFromTranscript,
   readSessionMessages,
   readSessionTitleFieldsFromTranscript,
@@ -347,6 +348,41 @@ describe("readLastMessagePreviewFromTranscript", () => {
 
     const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
     expect(result).toBe("Hello  world");
+  });
+});
+
+describe("readLastAssistantMessagePreviewFromTranscript", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-session-fs-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  test("returns the last assistant message and ignores trailing user/tool entries", () => {
+    const sessionId = "test-last-assistant-only";
+    writeTranscript(tmpDir, sessionId, [
+      { message: { role: "user", content: "Question" } },
+      { message: { role: "assistant", content: "First reply" } },
+      { message: { role: "toolResult", content: [{ type: "text", text: "tool data" }] } },
+      { message: { role: "user", content: "Follow-up" } },
+      { message: { role: "assistant", content: "Final assistant reply" } },
+    ]);
+
+    expect(readLastAssistantMessagePreviewFromTranscript(sessionId, storePath)).toBe(
+      "Final assistant reply",
+    );
+  });
+
+  test("returns null when there is no assistant message", () => {
+    const sessionId = "test-last-assistant-missing";
+    writeTranscript(tmpDir, sessionId, [
+      { message: { role: "user", content: "Question" } },
+      { message: { role: "toolResult", content: [{ type: "text", text: "tool data" }] } },
+    ]);
+
+    expect(readLastAssistantMessagePreviewFromTranscript(sessionId, storePath)).toBeNull();
   });
 });
 

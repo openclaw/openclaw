@@ -585,10 +585,30 @@ export const QueueSchema = z
   .strict()
   .optional();
 
+export const SmartDebounceConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    incompleteSignals: z.array(z.string()).optional(),
+    completeSignals: z.array(z.string()).optional(),
+    executionIntentSignals: z.array(z.string()).optional(),
+    chatIntentSignals: z.array(z.string()).optional(),
+    followupIntentSignals: z.array(z.string()).optional(),
+    incompleteMultiplier: z.number().positive().optional(),
+    completeMultiplier: z.number().positive().optional(),
+    chatMultiplier: z.number().positive().optional(),
+    executionMultiplier: z.number().positive().optional(),
+    followupMultiplier: z.number().positive().optional(),
+    minMessageLength: z.number().int().nonnegative().optional(),
+    maxMultiplier: z.number().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 export const InboundDebounceSchema = z
   .object({
     debounceMs: z.number().int().nonnegative().optional(),
     byChannel: DebounceMsBySurfaceSchema,
+    smartDebounce: SmartDebounceConfigSchema,
   })
   .strict()
   .optional();

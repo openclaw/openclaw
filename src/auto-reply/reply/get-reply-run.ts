@@ -8,6 +8,7 @@ import {
   isEmbeddedPiRunStreaming,
   resolveEmbeddedSessionLane,
 } from "../../agents/pi-embedded.js";
+import { type IntentAnalysisResult } from "../../channels/smart-debounce.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveGroupSessionKey,
@@ -46,6 +47,7 @@ import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
 import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents, ensureSkillSnapshot } from "./session-updates.js";
+import { shouldRouteToTrackedExecution, routeToTrackedExecution } from "./tracked-execution.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
@@ -125,6 +127,7 @@ async function sendResetSessionNotice(params: {
 }
 
 type RunPreparedReplyParams = {
+  intentResult?: IntentAnalysisResult;
   ctx: MsgContext;
   sessionCtx: TemplateContext;
   cfg: OpenClawConfig;
@@ -219,6 +222,7 @@ export async function runPreparedReply(
     storePath,
     workspaceDir,
     sessionStore,
+    intentResult,
   } = params;
   let {
     sessionEntry,
@@ -333,6 +337,39 @@ export async function runPreparedReply(
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
+
+  // Intent-based routing logic
+  if (intentResult) {
+    console.log("intentResult:", intentResult);
+
+    if (shouldRouteToTrackedExecution(intentResult)) {
+      // For execution intent, check if we should go to tracked orchestrator
+      console.log("Execution intent detected, should route to tracked orchestrator");
+
+      const routedResult = await routeToTrackedExecution({
+        ctx,
+        intentResult,
+        cfg,
+        agentId,
+        workspaceDir,
+      });
+
+      console.log("routedResult:", routedResult);
+
+      if (routedResult.status === "routed") {
+        // Execution intent has been routed to tracked orchestrator
+        typing.cleanup();
+        return undefined; // Return undefined to signal that we've handled the message
+      } else {
+        // Fallback to normal flow
+        console.log(`Tracked execution routing failed: ${routedResult.reason}`);
+      }
+    } else {
+      console.log("Not routing to tracked execution - shouldRoute returned false");
+    }
+  } else {
+    console.log("intentResult is undefined");
+  }
   // Extract first-token think hint from the user body BEFORE prepending system events.
   // If done after, the System: prefix becomes parts[0] and silently shadows any
   // low|medium|high shorthand the user typed.

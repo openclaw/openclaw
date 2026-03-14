@@ -4,6 +4,7 @@ import type { CliDeps } from "../cli/deps.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
+import { readLastAssistantMessagePreviewFromTranscript } from "../gateway/session-utils.fs.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -29,6 +30,19 @@ type GatewayAgentResponse = {
   summary?: string;
   result?: AgentGatewayResult;
 };
+
+function extractSessionId(response: GatewayAgentResponse | undefined): string | undefined {
+  const meta = response?.result?.meta;
+  if (!meta || typeof meta !== "object") {
+    return undefined;
+  }
+  const agentMeta = (meta as { agentMeta?: unknown }).agentMeta;
+  if (!agentMeta || typeof agentMeta !== "object") {
+    return undefined;
+  }
+  const sessionId = (agentMeta as { sessionId?: unknown }).sessionId;
+  return typeof sessionId === "string" && sessionId.trim() ? sessionId.trim() : undefined;
+}
 
 const NO_GATEWAY_TIMEOUT_MS = 2_147_000_000;
 
@@ -163,7 +177,20 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   const payloads = result?.payloads ?? [];
 
   if (payloads.length === 0) {
-    runtime.log(response?.summary ? String(response.summary) : "No reply from agent.");
+    const recoveredSessionId = extractSessionId(response);
+    const sessionStorePath =
+      cfg.session && typeof cfg.session.store === "string" ? cfg.session.store : undefined;
+    const recovered = recoveredSessionId
+      ? readLastAssistantMessagePreviewFromTranscript(
+          recoveredSessionId,
+          sessionStorePath,
+          undefined,
+          agentId,
+        )
+      : null;
+    runtime.log(
+      recovered || (response?.summary ? String(response.summary) : "No reply from agent."),
+    );
     return response;
   }
 

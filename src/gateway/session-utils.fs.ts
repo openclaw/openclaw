@@ -505,6 +505,38 @@ function readLastMessagePreviewFromOpenTranscript(params: {
   return null;
 }
 
+function readLastAssistantMessagePreviewFromOpenTranscript(params: {
+  fd: number;
+  size: number;
+}): string | null {
+  const readStart = Math.max(0, params.size - LAST_MSG_MAX_BYTES);
+  const readLen = Math.min(params.size, LAST_MSG_MAX_BYTES);
+  const buf = Buffer.alloc(readLen);
+  fs.readSync(params.fd, buf, 0, readLen, readStart);
+
+  const chunk = buf.toString("utf-8");
+  const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
+  const tailLines = lines.slice(-LAST_MSG_MAX_LINES);
+
+  for (let i = tailLines.length - 1; i >= 0; i--) {
+    const line = tailLines[i];
+    try {
+      const parsed = JSON.parse(line);
+      const msg = parsed?.message as TranscriptMessage | undefined;
+      if (msg?.role !== "assistant") {
+        continue;
+      }
+      const text = extractTextFromContent(msg.content);
+      if (text) {
+        return text;
+      }
+    } catch {
+      // skip malformed
+    }
+  }
+  return null;
+}
+
 export function readLastMessagePreviewFromTranscript(
   sessionId: string,
   storePath: string | undefined,
@@ -523,6 +555,27 @@ export function readLastMessagePreviewFromTranscript(
       return null;
     }
     return readLastMessagePreviewFromOpenTranscript({ fd, size });
+  });
+}
+
+export function readLastAssistantMessagePreviewFromTranscript(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+): string | null {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  if (!filePath) {
+    return null;
+  }
+
+  return withOpenTranscriptFd(filePath, (fd) => {
+    const stat = fs.fstatSync(fd);
+    const size = stat.size;
+    if (size === 0) {
+      return null;
+    }
+    return readLastAssistantMessagePreviewFromOpenTranscript({ fd, size });
   });
 }
 

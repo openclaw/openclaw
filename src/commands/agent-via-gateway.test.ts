@@ -68,6 +68,22 @@ function mockGatewaySuccessReply(text = "hello") {
   });
 }
 
+function mockGatewayEmptyReply(sessionId: string, summary = "completed") {
+  vi.mocked(callGateway).mockResolvedValue({
+    runId: "idem-1",
+    status: "ok",
+    summary,
+    result: {
+      payloads: [],
+      meta: {
+        agentMeta: {
+          sessionId,
+        },
+      },
+    },
+  });
+}
+
 function mockLocalAgentReply(text = "local") {
   vi.mocked(agentCommand).mockImplementationOnce(async (_opts, rt) => {
     rt?.log?.(text);
@@ -136,6 +152,35 @@ describe("agentCliCommand", () => {
       expect(callGateway).not.toHaveBeenCalled();
       expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(runtime.log).toHaveBeenCalledWith("local");
+    });
+  });
+
+  it("recovers the last assistant transcript message when gateway returns empty payloads", async () => {
+    await withTempStore(async ({ dir }) => {
+      const sessionId = "sess-recover";
+      fs.writeFileSync(
+        path.join(dir, `${sessionId}.jsonl`),
+        [
+          JSON.stringify({ message: { role: "user", content: "Question" } }),
+          JSON.stringify({ message: { role: "assistant", content: "Recovered final reply" } }),
+        ].join("\n"),
+        "utf-8",
+      );
+      mockGatewayEmptyReply(sessionId);
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(runtime.log).toHaveBeenCalledWith("Recovered final reply");
+    });
+  });
+
+  it("falls back to gateway summary when payloads are empty and no transcript reply exists", async () => {
+    await withTempStore(async () => {
+      mockGatewayEmptyReply("missing-session", "completed");
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(runtime.log).toHaveBeenCalledWith("completed");
     });
   });
 });
