@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1.7
-
 # Opt-in extension dependencies at build time (space-separated directory names).
 # Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel matrix" .
 #
@@ -14,6 +12,7 @@
 #   Slim (bookworm-slim):    docker build --build-arg OPENCLAW_VARIANT=slim .
 ARG OPENCLAW_EXTENSIONS=""
 ARG OPENCLAW_VARIANT=default
+ARG OPENCLAW_INSTALL_QMD=""
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
 ARG OPENCLAW_NODE_BOOKWORM_DIGEST="sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:24-bookworm-slim@sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"
@@ -113,7 +112,7 @@ LABEL org.opencontainers.image.base.name="docker.io/library/node:24-bookworm-sli
 # ── Stage 3: Runtime ────────────────────────────────────────────
 FROM base-${OPENCLAW_VARIANT}
 ARG OPENCLAW_VARIANT
-
+ARG OPENCLAW_INSTALL_QMD=""
 # OCI base-image metadata for downstream image consumers.
 # If you change these annotations, also update:
 # - docs/install/docker.md ("Base image metadata" section)
@@ -135,6 +134,17 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       procps hostname curl git openssl
+
+# Optional: install QMD CLI for memory.backend="qmd"
+# Enable with: docker build --build-arg OPENCLAW_INSTALL_QMD=1 ...
+# Symlink into /usr/local/bin so OpenClaw doesn't depend on PATH.
+ENV BUN_INSTALL="/home/node/.bun"
+RUN if [ -n "$OPENCLAW_INSTALL_QMD" ]; then \
+      curl -fsSL https://bun.sh/install | bash && \
+      /home/node/.bun/bin/bun install -g @tobilu/qmd && \
+      ln -sf /home/node/.bun/bin/qmd /usr/local/bin/qmd && \
+      chown -R node:node /home/node/.bun ; \
+    fi
 
 RUN chown node:node /app
 
