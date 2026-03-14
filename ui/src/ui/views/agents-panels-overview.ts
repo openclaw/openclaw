@@ -135,7 +135,7 @@ export function renderAgentOverview(params: {
                       </option>
                     `
               }
-              ${buildModelOptions(configForm, effectivePrimary ?? undefined)}
+              ${buildModelOptions(configForm, isDefault ? (effectivePrimary ?? undefined) : (entryPrimary ?? undefined))}
             </select>
           </label>
           <div class="field">
