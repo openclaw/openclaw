@@ -15,7 +15,7 @@ import {
   updatePairedDeviceMetadata,
   verifyDeviceToken,
 } from "../../../infra/device-pairing.js";
-import { updatePairedNodeMetadata } from "../../../infra/node-pairing.js";
+import { requestNodePairing, updatePairedNodeMetadata } from "../../../infra/node-pairing.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skills-remote.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
@@ -743,6 +743,34 @@ export function attachGatewayWsMessageHandler(params: {
               silent: allowSilentLocalPairing,
             });
             const context = buildRequestContext();
+            // When the connecting client is a node, mirror the device pairing
+            // request into the node-pairing subsystem so that `nodes pending`
+            // can list it and `nodes approve` can resolve the request ID.
+            if (role === "node") {
+              const nodeId = device.id;
+              try {
+                const nodeResult = await requestNodePairing({
+                  nodeId,
+                  deviceRequestId: pairing.request.requestId,
+                  displayName: connectParams.client.displayName,
+                  platform: connectParams.client.platform,
+                  version: connectParams.client.version,
+                  deviceFamily: connectParams.client.deviceFamily,
+                  modelIdentifier: connectParams.client.modelIdentifier,
+                  remoteIp: reportedClientIp,
+                  silent: allowSilentLocalPairing,
+                });
+                if (nodeResult.created) {
+                  context.broadcast("node.pair.requested", nodeResult.request, {
+                    dropIfSlow: true,
+                  });
+                }
+              } catch (err) {
+                logGateway.warn(
+                  `failed to create node pairing linkage for ${nodeId}: ${formatForLog(err)}`,
+                );
+              }
+            }
             if (pairing.request.silent === true) {
               const approved = await approveDevicePairing(pairing.request.requestId);
               if (approved) {

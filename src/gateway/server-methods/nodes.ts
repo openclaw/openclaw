@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { loadConfig } from "../../config/config.js";
-import { listDevicePairing } from "../../infra/device-pairing.js";
+import { approveDevicePairing, listDevicePairing } from "../../infra/device-pairing.js";
 import {
   approveNodePairing,
+  findPendingNodeByDeviceRequestId,
   listNodePairing,
   rejectNodePairing,
   renamePairedNode,
@@ -517,7 +518,33 @@ export const nodeHandlers: GatewayRequestHandlers = {
     }
     const { requestId } = params as { requestId: string };
     await respondUnavailableOnThrow(respond, async () => {
-      const approved = await approveNodePairing(requestId);
+      // Look up the pending request before approving so we can capture its
+      // deviceRequestId (the approve call removes it from state).
+      const pendingList = await listNodePairing();
+      const pendingEntry = pendingList.pending.find((p) => p.requestId === requestId);
+
+      let approved = await approveNodePairing(requestId);
+      let linkedDeviceRequestId: string | undefined;
+      if (approved) {
+        // Direct node-ID approval — also approve the linked device pairing if
+        // present so the node can reconnect as paired.
+        linkedDeviceRequestId = pendingEntry?.deviceRequestId;
+      } else {
+        // The caller may have supplied a device request ID from the WS connect
+        // pairing flow. Resolve via the deviceRequestId linkage.
+        const linked = await findPendingNodeByDeviceRequestId(requestId);
+        if (linked) {
+          approved = await approveNodePairing(linked.requestId);
+          linkedDeviceRequestId = requestId;
+        }
+      }
+      if (linkedDeviceRequestId) {
+        void approveDevicePairing(linkedDeviceRequestId).catch((err) => {
+          context.logGateway.warn(
+            `failed to approve device pairing ${linkedDeviceRequestId}: ${err}`,
+          );
+        });
+      }
       if (!approved) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
         return;
