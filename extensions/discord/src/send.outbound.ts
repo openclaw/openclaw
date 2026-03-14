@@ -569,7 +569,11 @@ export async function sendVoiceMessageDiscord(
         hasMedia: true,
       });
     }
-    throw err;
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `discord voice message failed: ${!msg || msg === "Error" ? "(no detail)" : msg}`,
+      { cause: err },
+    );
   } finally {
     await unlinkIfExists(oggCleanup ? oggPath : null);
     await unlinkIfExists(localInputPath);
