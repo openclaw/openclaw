@@ -15,7 +15,12 @@ const gatewayClientCalls: Array<{
 }> = [];
 const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
 const installGatewayDaemonNonInteractiveMock = vi.hoisted(() =>
-  vi.fn(async () => ({ installed: true as const })),
+  vi.fn(
+    async (): Promise<{
+      installed: boolean;
+      skippedReason?: "systemd-user-unavailable";
+    }> => ({ installed: true }),
+  ),
 );
 const gatewayServiceMock = vi.hoisted(() => ({
   label: "LaunchAgent",
