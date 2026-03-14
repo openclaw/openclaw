@@ -193,9 +193,10 @@ export function isManagedSessionsDir(
     return false;
   }
 
+  const expectedSessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, homedir);
   return (
-    resolvedSessionsDir ===
-    path.resolve(resolveSessionTranscriptsDirForAgent(agentId, env, homedir))
+    resolveComparableManagedPath(resolvedSessionsDir) ===
+    resolveComparableManagedPath(expectedSessionsDir)
   );
 }
 
@@ -374,6 +375,25 @@ function safeRealpathSync(filePath: string): string | undefined {
     return fs.realpathSync(filePath);
   } catch {
     return undefined;
+  }
+}
+
+function resolveComparableManagedPath(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  const pendingSegments: string[] = [];
+  let cursor = resolved;
+  while (true) {
+    const real = safeRealpathSync(cursor);
+    if (real) {
+      // Canonicalize any existing prefix so symlink aliases still compare as the same managed path.
+      return path.resolve(real, ...pendingSegments.toReversed());
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      return resolved;
+    }
+    pendingSegments.push(path.basename(cursor));
+    cursor = parent;
   }
 }
 

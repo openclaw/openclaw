@@ -1,9 +1,11 @@
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.resetModules();
   vi.clearAllMocks();
   vi.doUnmock("node:fs/promises");
@@ -65,49 +67,100 @@ describe("ensurePrivateSessionsDir", () => {
       return;
     }
 
-    const mkdir = vi.fn(async () => undefined);
-    const lstat = vi
-      .fn()
-      .mockRejectedValueOnce(Object.assign(new Error("missing"), { code: "ENOENT" }))
-      .mockResolvedValueOnce({
-        isSymbolicLink: () => false,
-        isDirectory: () => true,
-        dev: 10,
-        ino: 20,
-      });
-    const chmod = vi.fn(async () => undefined);
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-race-"));
+    const sessionsDir = path.join(tempDir, "sessions");
+    const realLstat = fsPromises.lstat.bind(fsPromises);
+    const realMkdir = fsPromises.mkdir.bind(fsPromises);
+    const realOpen = fsPromises.open.bind(fsPromises);
     const handleChmod = vi.fn(async () => undefined);
     const handleClose = vi.fn(async () => undefined);
-    const open = vi.fn(async () => ({
-      stat: async () => ({
-        isDirectory: () => true,
-        dev: 11,
-        ino: 21,
-      }),
-      chmod: handleChmod,
-      close: handleClose,
-    }));
+    let targetLstatCalls = 0;
 
-    vi.doMock("node:fs/promises", async () => {
-      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-      const patched = {
-        ...actual,
-        mkdir,
-        lstat,
-        chmod,
-        open,
-      };
-      return { ...patched, default: patched };
+    vi.spyOn(fsPromises, "mkdir").mockImplementation(
+      async (filePath, options) => await realMkdir(filePath, options),
+    );
+    vi.spyOn(fsPromises, "lstat").mockImplementation(async (filePath) => {
+      const resolved = path.resolve(String(filePath));
+      if (resolved !== sessionsDir) {
+        return await realLstat(filePath);
+      }
+      targetLstatCalls++;
+      if (targetLstatCalls === 1) {
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      }
+      if (targetLstatCalls === 2) {
+        return {
+          isSymbolicLink: () => false,
+          isDirectory: () => true,
+          dev: 10,
+          ino: 20,
+        } as fs.Stats;
+      }
+      return await realLstat(filePath);
+    });
+    const open = vi.spyOn(fsPromises, "open").mockImplementation(async (filePath, flags) => {
+      const resolved = path.resolve(String(filePath));
+      if (resolved !== sessionsDir) {
+        return await realOpen(filePath, flags);
+      }
+      return {
+        stat: async () =>
+          ({
+            isDirectory: () => true,
+            dev: 11,
+            ino: 21,
+          }) as fs.Stats,
+        chmod: handleChmod,
+        close: handleClose,
+      } as unknown as fsPromises.FileHandle;
     });
 
-    const { ensurePrivateSessionsDir } = await import("./paths.js");
+    try {
+      const { ensurePrivateSessionsDir } = await import("./paths.js");
 
-    await expect(ensurePrivateSessionsDir("/tmp/openclaw-race")).rejects.toThrow(
-      /changed during permission update/i,
-    );
-    expect(open).toHaveBeenCalledTimes(1);
-    expect(chmod).not.toHaveBeenCalled();
-    expect(handleChmod).not.toHaveBeenCalled();
-    expect(handleClose).toHaveBeenCalledTimes(1);
+      await expect(ensurePrivateSessionsDir(sessionsDir)).rejects.toThrow(
+        /changed during permission update/i,
+      );
+      expect(open).toHaveBeenCalled();
+      expect(handleChmod).not.toHaveBeenCalled();
+      expect(handleClose).toHaveBeenCalledTimes(1);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("isManagedSessionsDir", () => {
+  it("treats symlink-alias managed paths as managed", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-managed-symlink-alias-"));
+    try {
+      const realStateDir = path.join(tempDir, "real-state");
+      const aliasStateDir = path.join(tempDir, "alias-state");
+      const realSessionsDir = path.join(realStateDir, "agents", "main", "sessions");
+      fs.mkdirSync(realSessionsDir, { recursive: true });
+      fs.symlinkSync(realStateDir, aliasStateDir, "dir");
+
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: aliasStateDir,
+      } as NodeJS.ProcessEnv;
+
+      const { isManagedSessionStorePath, isManagedSessionTranscriptPath, isManagedSessionsDir } =
+        await import("./paths.js");
+
+      expect(isManagedSessionsDir(realSessionsDir, env)).toBe(true);
+      expect(isManagedSessionStorePath(path.join(realSessionsDir, "sessions.json"), env)).toBe(
+        true,
+      );
+      expect(isManagedSessionTranscriptPath(path.join(realSessionsDir, "sess-1.jsonl"), env)).toBe(
+        true,
+      );
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });
