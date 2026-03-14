@@ -1,31 +1,21 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { clearPluginDiscoveryCache, discoverOpenClawPlugins } from "./discovery.js";
+import {
+  cleanupTrackedTempDirs,
+  makeTrackedTempDir,
+  mkdirSafeDir,
+} from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 const previousUmask = process.umask(0o022);
 
-function chmodSafeDir(dir: string) {
-  if (process.platform === "win32") {
-    return;
-  }
-  fs.chmodSync(dir, 0o755);
-}
-
-function mkdirSafe(dir: string) {
-  fs.mkdirSync(dir, { recursive: true });
-  chmodSafeDir(dir);
-}
-
 function makeTempDir() {
-  const dir = path.join(os.tmpdir(), `openclaw-plugins-${randomUUID()}`);
-  mkdirSafe(dir);
-  tempDirs.push(dir);
-  return dir;
+  return makeTrackedTempDir("openclaw-plugins", tempDirs);
 }
+
+const mkdirSafe = mkdirSafeDir;
 
 function buildDiscoveryEnv(stateDir: string): NodeJS.ProcessEnv {
   return {
@@ -66,13 +56,7 @@ function expectEscapesPackageDiagnostic(diagnostics: Array<{ message: string }>)
 
 afterEach(() => {
   clearPluginDiscoveryCache();
-  for (const dir of tempDirs.splice(0)) {
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup failures
-    }
-  }
+  cleanupTrackedTempDirs(tempDirs);
 });
 
 afterAll(() => {
@@ -198,6 +182,29 @@ describe("discoverOpenClawPlugins", () => {
 
     const ids = candidates.map((c) => c.idHint);
     expect(ids).toContain("voice-call");
+  });
+
+  it("normalizes bundled provider package ids to canonical plugin ids", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions", "ollama-provider-pack");
+    mkdirSafe(path.join(globalExt, "src"));
+
+    writePluginPackageManifest({
+      packageDir: globalExt,
+      packageName: "@openclaw/ollama-provider",
+      extensions: ["./src/index.ts"],
+    });
+    fs.writeFileSync(
+      path.join(globalExt, "src", "index.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+
+    const ids = candidates.map((c) => c.idHint);
+    expect(ids).toContain("ollama");
+    expect(ids).not.toContain("ollama-provider");
   });
 
   it("treats configured directory paths as plugin packages", async () => {

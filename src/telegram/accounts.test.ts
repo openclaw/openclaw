@@ -17,6 +17,18 @@ function warningLines(): string[] {
   return warnMock.mock.calls.map(([line]) => String(line));
 }
 
+function expectNoMissingDefaultWarning() {
+  expect(warningLines().every((line) => !line.includes("accounts.default is missing"))).toBe(true);
+}
+
+function resolveAccountWithEnv(
+  env: Record<string, string>,
+  cfg: OpenClawConfig,
+  accountId?: string,
+) {
+  return withEnv(env, () => resolveTelegramAccount({ cfg, ...(accountId ? { accountId } : {}) }));
+}
+
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => {
     const logger = {
@@ -34,63 +46,60 @@ describe("resolveTelegramAccount", () => {
   });
 
   it("falls back to the first configured account when accountId is omitted", () => {
-    withEnv({ TELEGRAM_BOT_TOKEN: "" }, () => {
-      const cfg: OpenClawConfig = {
+    const account = resolveAccountWithEnv(
+      { TELEGRAM_BOT_TOKEN: "" },
+      {
         channels: {
           telegram: { accounts: { work: { botToken: "tok-work" } } },
         },
-      };
-
-      const account = resolveTelegramAccount({ cfg });
-      expect(account.accountId).toBe("work");
-      expect(account.token).toBe("tok-work");
-      expect(account.tokenSource).toBe("config");
-    });
+      },
+    );
+    expect(account.accountId).toBe("work");
+    expect(account.token).toBe("tok-work");
+    expect(account.tokenSource).toBe("config");
   });
 
   it("uses TELEGRAM_BOT_TOKEN when default account config is missing", () => {
-    withEnv({ TELEGRAM_BOT_TOKEN: "tok-env" }, () => {
-      const cfg: OpenClawConfig = {
+    const account = resolveAccountWithEnv(
+      { TELEGRAM_BOT_TOKEN: "tok-env" },
+      {
         channels: {
           telegram: { accounts: { work: { botToken: "tok-work" } } },
         },
-      };
-
-      const account = resolveTelegramAccount({ cfg });
-      expect(account.accountId).toBe("default");
-      expect(account.token).toBe("tok-env");
-      expect(account.tokenSource).toBe("env");
-    });
+      },
+    );
+    expect(account.accountId).toBe("default");
+    expect(account.token).toBe("tok-env");
+    expect(account.tokenSource).toBe("env");
   });
 
   it("prefers default config token over TELEGRAM_BOT_TOKEN", () => {
-    withEnv({ TELEGRAM_BOT_TOKEN: "tok-env" }, () => {
-      const cfg: OpenClawConfig = {
+    const account = resolveAccountWithEnv(
+      { TELEGRAM_BOT_TOKEN: "tok-env" },
+      {
         channels: {
           telegram: { botToken: "tok-config" },
         },
-      };
-
-      const account = resolveTelegramAccount({ cfg });
-      expect(account.accountId).toBe("default");
-      expect(account.token).toBe("tok-config");
-      expect(account.tokenSource).toBe("config");
-    });
+      },
+    );
+    expect(account.accountId).toBe("default");
+    expect(account.token).toBe("tok-config");
+    expect(account.tokenSource).toBe("config");
   });
 
   it("does not fall back when accountId is explicitly provided", () => {
-    withEnv({ TELEGRAM_BOT_TOKEN: "" }, () => {
-      const cfg: OpenClawConfig = {
+    const account = resolveAccountWithEnv(
+      { TELEGRAM_BOT_TOKEN: "" },
+      {
         channels: {
           telegram: { accounts: { work: { botToken: "tok-work" } } },
         },
-      };
-
-      const account = resolveTelegramAccount({ cfg, accountId: "default" });
-      expect(account.accountId).toBe("default");
-      expect(account.tokenSource).toBe("none");
-      expect(account.token).toBe("");
-    });
+      },
+      "default",
+    );
+    expect(account.accountId).toBe("default");
+    expect(account.tokenSource).toBe("none");
+    expect(account.token).toBe("");
   });
 
   it("formats debug logs with inspect-style output when debug env is enabled", () => {
@@ -145,9 +154,7 @@ describe("resolveDefaultTelegramAccountId", () => {
     };
 
     resolveDefaultTelegramAccountId(cfg);
-    expect(warningLines().every((line) => !line.includes("accounts.default is missing"))).toBe(
-      true,
-    );
+    expectNoMissingDefaultWarning();
   });
 
   it("does not warn when defaultAccount is explicitly set", () => {
@@ -161,9 +168,7 @@ describe("resolveDefaultTelegramAccountId", () => {
     };
 
     resolveDefaultTelegramAccountId(cfg);
-    expect(warningLines().every((line) => !line.includes("accounts.default is missing"))).toBe(
-      true,
-    );
+    expectNoMissingDefaultWarning();
   });
 
   it("does not warn when only one non-default account is configured", () => {
@@ -176,9 +181,7 @@ describe("resolveDefaultTelegramAccountId", () => {
     };
 
     resolveDefaultTelegramAccountId(cfg);
-    expect(warningLines().every((line) => !line.includes("accounts.default is missing"))).toBe(
-      true,
-    );
+    expectNoMissingDefaultWarning();
   });
 
   it("warns only once per process lifetime", () => {

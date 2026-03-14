@@ -176,6 +176,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.requestCanvasRehydrate(source = source, force = true)
   }
 
+  fun refreshHomeCanvasOverviewIfConnected() {
+    runtime.refreshHomeCanvasOverviewIfConnected()
+  }
+
   fun loadChat(sessionKey: String) {
     runtime.loadChat(sessionKey)
   }
