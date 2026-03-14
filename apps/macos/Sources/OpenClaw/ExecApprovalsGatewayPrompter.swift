@@ -57,8 +57,10 @@ final class ExecApprovalsGatewayPrompter {
                 return
             }
             guard presentation.canPresent else {
-                // Can't show prompt – use askFallback policy
-                let decision: ExecApprovalDecision = presentation.askFallback == .full ? .allowOnce : .deny
+                let decision = Self.fallbackDecision(
+                    request: request.request,
+                    askFallback: presentation.askFallback,
+                    allowlist: presentation.allowlist)
                 try await GatewayConnection.shared.requestVoid(
                     method: .execApprovalResolve,
                     params: [
@@ -104,6 +106,7 @@ final class ExecApprovalsGatewayPrompter {
         var security: ExecSecurity
         /// Fallback security policy when a prompt is needed but can't be presented.
         var askFallback: ExecSecurity
+        var allowlist: [ExecAllowlistEntry]
     }
 
     private func shouldPresent(request: GatewayApprovalRequest) -> PresentationDecision {
@@ -129,7 +132,40 @@ final class ExecApprovalsGatewayPrompter {
             shouldAsk: shouldAsk,
             canPresent: canPresent,
             security: security,
-            askFallback: approvals.agent.askFallback)
+            askFallback: approvals.agent.askFallback,
+            allowlist: approvals.allowlist)
+    }
+
+    private static func fallbackDecision(
+        request: ExecApprovalPromptRequest,
+        askFallback: ExecSecurity,
+        allowlist: [ExecAllowlistEntry]) -> ExecApprovalDecision
+    {
+        guard askFallback == .allowlist else {
+            return askFallback == .full ? .allowOnce : .deny
+        }
+        let resolution = self.fallbackResolution(for: request)
+        let match = ExecAllowlistMatcher.match(entries: allowlist, resolution: resolution)
+        return match == nil ? .deny : .allowOnce
+    }
+
+    private static func fallbackResolution(for request: ExecApprovalPromptRequest) -> ExecCommandResolution? {
+        let resolvedPath = request.resolvedPath?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedResolvedPath = (resolvedPath?.isEmpty == false) ? resolvedPath : nil
+        let rawExecutable = self.firstToken(from: request.command) ?? trimmedResolvedPath ?? ""
+        guard !rawExecutable.isEmpty || trimmedResolvedPath != nil else { return nil }
+        let executableName = trimmedResolvedPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? rawExecutable
+        return ExecCommandResolution(
+            rawExecutable: rawExecutable,
+            resolvedPath: trimmedResolvedPath,
+            executableName: executableName,
+            cwd: request.cwd)
+    }
+
+    private static func firstToken(from command: String) -> String? {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return trimmed.split(whereSeparator: { $0.isWhitespace }).first.map(String.init)
     }
 
     private static func shouldPresent(
@@ -183,6 +219,26 @@ extension ExecApprovalsGatewayPrompter {
 
     static func _testShouldAsk(security: ExecSecurity, ask: ExecAsk) -> Bool {
         self.shouldAsk(security: security, ask: ask)
+    }
+
+    static func _testFallbackDecision(
+        command: String,
+        resolvedPath: String?,
+        askFallback: ExecSecurity,
+        allowlistPatterns: [String]) -> ExecApprovalDecision
+    {
+        self.fallbackDecision(
+            request: ExecApprovalPromptRequest(
+                command: command,
+                cwd: nil,
+                host: nil,
+                security: nil,
+                ask: nil,
+                agentId: nil,
+                resolvedPath: resolvedPath,
+                sessionKey: nil),
+            askFallback: askFallback,
+            allowlist: allowlistPatterns.map { ExecAllowlistEntry(pattern: $0) })
     }
 }
 #endif

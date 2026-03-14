@@ -72,4 +72,31 @@ struct ExecApprovalsGatewayPrompterTests {
         #expect(!ExecApprovalsGatewayPrompter._testShouldAsk(security: .allowlist, ask: .off))
         #expect(!ExecApprovalsGatewayPrompter._testShouldAsk(security: .full, ask: .off))
     }
+
+    @Test func fallbackAllowlistAllowsMatchingResolvedPath() {
+        let decision = ExecApprovalsGatewayPrompter._testFallbackDecision(
+            command: "git status",
+            resolvedPath: "/usr/bin/git",
+            askFallback: .allowlist,
+            allowlistPatterns: ["/usr/bin/git"])
+        #expect(decision == .allowOnce)
+    }
+
+    @Test func fallbackAllowlistDeniesAllowlistMiss() {
+        let decision = ExecApprovalsGatewayPrompter._testFallbackDecision(
+            command: "git status",
+            resolvedPath: "/usr/bin/git",
+            askFallback: .allowlist,
+            allowlistPatterns: ["/usr/bin/rg"])
+        #expect(decision == .deny)
+    }
+
+    @Test func fallbackFullAllowsWhenPromptCannotBeShown() {
+        let decision = ExecApprovalsGatewayPrompter._testFallbackDecision(
+            command: "git status",
+            resolvedPath: "/usr/bin/git",
+            askFallback: .full,
+            allowlistPatterns: [])
+        #expect(decision == .allowOnce)
+    }
 }
