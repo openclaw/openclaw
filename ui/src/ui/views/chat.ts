@@ -893,7 +893,12 @@ export function renderChat(props: ChatProps) {
   };
 
   const chatItems = buildChatItems(props);
-  const isEmpty = chatItems.length === 0 && !props.loading;
+  // Fix #45707: Check total message count, not just renderable items
+  // Sessions with tool-call messages (heartbeat/cron) should not be treated as empty
+  const history = Array.isArray(props.messages) ? props.messages : [];
+  const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
+  const hasAnyMessages = history.length > 0 || tools.length > 0;
+  const isEmpty = !hasAnyMessages && !props.loading;
 
   const thread = html`
     <div
