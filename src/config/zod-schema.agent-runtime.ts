@@ -589,12 +589,14 @@ export const MemorySearchSchema = z
         z.literal("voyage"),
         z.literal("mistral"),
         z.literal("ollama"),
+        z.literal("kilocode"),
       ])
       .optional(),
     remote: z
       .object({
         baseUrl: z.string().optional(),
         apiKey: SecretInputSchema.optional().register(sensitive),
+        organizationId: z.string().optional(),
         headers: z.record(z.string(), z.string()).optional(),
         batch: z
           .object({
@@ -617,6 +619,7 @@ export const MemorySearchSchema = z
         z.literal("voyage"),
         z.literal("mistral"),
         z.literal("ollama"),
+        z.literal("kilocode"),
         z.literal("none"),
       ])
       .optional(),

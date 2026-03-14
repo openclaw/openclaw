@@ -802,7 +802,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.experimental.sessionMemory":
     "Indexes session transcripts into memory search so responses can reference prior chat turns. Keep this off unless transcript recall is needed, because indexing cost and storage usage both increase.",
   "agents.defaults.memorySearch.provider":
-    'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
+    'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "ollama", "kilocode", or "local". Keep your most reliable provider here and configure fallback for resilience.',
   "agents.defaults.memorySearch.model":
     "Embedding model override used by the selected memory provider when a non-default model is required. Set this only when you need explicit recall quality/cost tuning beyond provider defaults.",
   "agents.defaults.memorySearch.outputDimensionality":
@@ -811,6 +811,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Overrides the embedding API endpoint, such as an OpenAI-compatible proxy or custom Gemini base URL. Use this only when routing through your own gateway or vendor endpoint; keep provider defaults otherwise.",
   "agents.defaults.memorySearch.remote.apiKey":
     "Supplies a dedicated API key for remote embedding calls used by memory indexing and query-time embeddings. Use this when memory embeddings should use different credentials than global defaults or environment variables.",
+  "agents.defaults.memorySearch.remote.organizationId":
+    "Kilocode organization ID for embedding requests. Takes precedence over the KILOCODE_ORG_ID environment variable and provider config headers. Use this when embedding calls should be scoped to a specific organization and you need per-agent control over which organization is billed.",
   "agents.defaults.memorySearch.remote.headers":
     "Adds custom HTTP headers to remote embedding requests, merged with provider defaults. Use this for proxy auth and tenant routing headers, and keep values minimal to avoid leaking sensitive metadata.",
   "agents.defaults.memorySearch.remote.batch.enabled":
@@ -826,7 +828,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.local.modelPath":
     "Specifies the local embedding model source for local memory search, such as a GGUF file path or `hf:` URI. Use this only when provider is `local`, and verify model compatibility before large index rebuilds.",
   "agents.defaults.memorySearch.fallback":
-    'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "ollama", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
+    'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "ollama", "kilocode", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
   "agents.defaults.memorySearch.store.path":
     "Sets where the SQLite memory index is stored on disk for each agent. Keep the default `~/.openclaw/memory/{agentId}.sqlite` unless you need custom storage placement or backup policy alignment.",
   "agents.defaults.memorySearch.store.vector.enabled":

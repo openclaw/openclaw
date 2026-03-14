@@ -288,7 +288,7 @@ describe("noteMemorySearchHealth", () => {
     expect(note).toHaveBeenCalledTimes(1);
     const providerCalls = resolveApiKeyForProvider.mock.calls as Array<[{ provider: string }]>;
     const providersChecked = providerCalls.map(([arg]) => arg.provider);
-    expect(providersChecked).toEqual(["openai", "google", "voyage", "mistral"]);
+    expect(providersChecked).toEqual(["openai", "google", "voyage", "mistral", "kilocode"]);
   });
 });
 

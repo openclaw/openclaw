@@ -708,7 +708,7 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
   withApiKey("openrouter", async ({ apiKey }) => ({ ...buildOpenrouterProvider(), apiKey })),
   withApiKey("nvidia", async ({ apiKey }) => ({ ...buildNvidiaProvider(), apiKey })),
   withApiKey("kilocode", async ({ apiKey }) => ({
-    ...(await buildKilocodeProviderWithDiscovery()),
+    ...(await buildKilocodeProviderWithDiscovery(apiKey)),
     apiKey,
   })),
 ];

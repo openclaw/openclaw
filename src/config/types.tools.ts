@@ -334,10 +334,12 @@ export type MemorySearchConfig = {
     sessionMemory?: boolean;
   };
   /** Embedding provider mode. */
-  provider?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama";
+  provider?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "kilocode";
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
+    /** Kilocode organization ID override for embedding requests. Takes precedence over KILOCODE_ORG_ID env var and provider config headers. */
+    organizationId?: string;
     headers?: Record<string, string>;
     batch?: {
       /** Enable batch API for embedding indexing (OpenAI/Gemini; default: true). */
@@ -353,7 +355,7 @@ export type MemorySearchConfig = {
     };
   };
   /** Fallback behavior when embeddings fail. */
-  fallback?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
+  fallback?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "kilocode" | "none";
   /** Embedding model id (remote) or alias (local). */
   model?: string;
   /**

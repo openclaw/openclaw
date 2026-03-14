@@ -1,4 +1,35 @@
 export const KILOCODE_BASE_URL = "https://api.kilo.ai/api/gateway/";
+
+/** Header name for Kilocode organization ID */
+export const KILOCODE_ORG_ID_HEADER = "X-KILOCODE-ORGANIZATIONID";
+
+/** Environment variable name for Kilocode organization ID */
+export const KILOCODE_ORG_ID_ENV_VAR = "KILOCODE_ORG_ID";
+
+/**
+ * Resolve the Kilocode organization ID.
+ *
+ * Resolution order (highest priority first):
+ * 1. Provider config `organizationId` field: `models.providers.kilocode.organizationId`
+ * 2. Provider config headers: `models.providers.kilocode.headers["X-KILOCODE-ORGANIZATIONID"]`
+ * 3. Environment variable: `KILOCODE_ORG_ID`
+ */
+export function resolveKilocodeOrgId(providerConfig?: {
+  organizationId?: string;
+  headers?: Record<string, unknown>;
+}): string | undefined {
+  const fromField = providerConfig?.organizationId?.trim();
+  if (fromField) {
+    return fromField;
+  }
+  const fromHeaders = providerConfig?.headers?.[KILOCODE_ORG_ID_HEADER];
+  if (typeof fromHeaders === "string" && fromHeaders.trim()) {
+    return fromHeaders.trim();
+  }
+  const fromEnv = process.env[KILOCODE_ORG_ID_ENV_VAR]?.trim();
+  return fromEnv || undefined;
+}
+
 export const KILOCODE_DEFAULT_MODEL_ID = "kilo/auto";
 export const KILOCODE_DEFAULT_MODEL_REF = `kilocode/${KILOCODE_DEFAULT_MODEL_ID}`;
 export const KILOCODE_DEFAULT_MODEL_NAME = "Kilo Auto";

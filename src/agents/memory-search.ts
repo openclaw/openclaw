@@ -17,10 +17,11 @@ export type ResolvedMemorySearchConfig = {
   sources: Array<"memory" | "sessions">;
   extraPaths: string[];
   multimodal: MemoryMultimodalSettings;
-  provider: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama" | "auto";
+  provider: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama" | "kilocode" | "auto";
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
+    organizationId?: string;
     headers?: Record<string, string>;
     batch?: {
       enabled: boolean;
@@ -33,7 +34,7 @@ export type ResolvedMemorySearchConfig = {
   experimental: {
     sessionMemory: boolean;
   };
-  fallback: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
+  fallback: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "kilocode" | "none";
   model: string;
   outputDimensionality?: number;
   local: {
@@ -93,6 +94,7 @@ const DEFAULT_GEMINI_MODEL = "gemini-embedding-001";
 const DEFAULT_VOYAGE_MODEL = "voyage-4-large";
 const DEFAULT_MISTRAL_MODEL = "mistral-embed";
 const DEFAULT_OLLAMA_MODEL = "nomic-embed-text";
+const DEFAULT_KILOCODE_MODEL = "mistralai/mistral-embed";
 const DEFAULT_CHUNK_TOKENS = 400;
 const DEFAULT_CHUNK_OVERLAP = 80;
 const DEFAULT_WATCH_DEBOUNCE_MS = 1500;
@@ -155,9 +157,11 @@ function mergeConfig(
   const hasRemoteConfig = Boolean(
     overrideRemote?.baseUrl ||
     overrideRemote?.apiKey ||
+    overrideRemote?.organizationId ||
     overrideRemote?.headers ||
     defaultRemote?.baseUrl ||
     defaultRemote?.apiKey ||
+    defaultRemote?.organizationId ||
     defaultRemote?.headers,
   );
   const includeRemote =
@@ -167,6 +171,7 @@ function mergeConfig(
     provider === "voyage" ||
     provider === "mistral" ||
     provider === "ollama" ||
+    provider === "kilocode" ||
     provider === "auto";
   const batch = {
     enabled: overrideRemote?.batch?.enabled ?? defaultRemote?.batch?.enabled ?? false,
@@ -184,6 +189,7 @@ function mergeConfig(
     ? {
         baseUrl: overrideRemote?.baseUrl ?? defaultRemote?.baseUrl,
         apiKey: overrideRemote?.apiKey ?? defaultRemote?.apiKey,
+        organizationId: overrideRemote?.organizationId ?? defaultRemote?.organizationId,
         headers: overrideRemote?.headers ?? defaultRemote?.headers,
         batch,
       }
@@ -200,7 +206,9 @@ function mergeConfig(
             ? DEFAULT_MISTRAL_MODEL
             : provider === "ollama"
               ? DEFAULT_OLLAMA_MODEL
-              : undefined;
+              : provider === "kilocode"
+                ? DEFAULT_KILOCODE_MODEL
+                : undefined;
   const model = overrides?.model ?? defaults?.model ?? modelDefault ?? "";
   const outputDimensionality = overrides?.outputDimensionality ?? defaults?.outputDimensionality;
   const local = {

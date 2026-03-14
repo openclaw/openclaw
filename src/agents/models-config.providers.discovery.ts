@@ -230,9 +230,10 @@ export async function buildSglangProvider(params?: {
 /**
  * Build the Kilocode provider with dynamic model discovery from the gateway
  * API. Falls back to the static catalog on failure.
+ * Pass apiKey so org-scoped discovery requests include an Authorization header.
  */
-export async function buildKilocodeProviderWithDiscovery(): Promise<ProviderConfig> {
-  const models = await discoverKilocodeModels();
+export async function buildKilocodeProviderWithDiscovery(apiKey?: string): Promise<ProviderConfig> {
+  const models = await discoverKilocodeModels(apiKey);
   return {
     baseUrl: KILOCODE_BASE_URL,
     api: "openai-completions",
