@@ -186,6 +186,11 @@ describe("runMessageAction context isolation", () => {
     ).rejects.toThrow(/message required/i);
   });
 
+  // Poll params on send actions are now silently stripped instead of rejected.
+  // This prevents false positives when models auto-fill poll fields from the
+  // shared tool schema on plain send requests.
+  // See: https://github.com/openclaw/openclaw/issues/42820
+  //      https://github.com/openclaw/openclaw/issues/43015
   it.each([
     {
       name: "structured poll params",
@@ -218,14 +223,15 @@ describe("runMessageAction context isolation", () => {
         poll_public: "true",
       },
     },
-  ])("rejects send actions that include $name", async ({ actionParams }) => {
+  ])("strips poll params from send actions that include $name", async ({ actionParams }) => {
+    // Should NOT reject — poll params are stripped and send proceeds normally
     await expect(
       runDrySend({
         cfg: slackConfig,
         actionParams,
         toolContext: { currentChannelId: "C12345678" },
       }),
-    ).rejects.toThrow(/use action "poll" instead of "send"/i);
+    ).resolves.not.toThrow();
   });
 
   it.each([

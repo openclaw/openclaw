@@ -35,43 +35,43 @@ export function resolveTelegramPollVisibility(params: {
   return params.pollAnonymous ? true : params.pollPublic ? false : undefined;
 }
 
+/**
+ * Check whether params contain meaningful poll creation intent.
+ *
+ * Models frequently auto-fill optional poll fields from the tool schema even
+ * when the user only wants a plain send. To avoid false positives we require
+ * **pollQuestion** (the one field that unambiguously signals poll intent) to
+ * be present and non-empty. Without a question there is no actionable poll,
+ * so stray defaults like `pollDurationHours: 0` or `pollMulti: false` are
+ * harmless noise.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/42820
+ *      https://github.com/openclaw/openclaw/issues/43015
+ */
 export function hasPollCreationParams(params: Record<string, unknown>): boolean {
+  // Gate on pollQuestion — the only required field for a real poll.
+  const question = readPollParamRaw(params, "pollQuestion");
+  if (typeof question !== "string" || question.trim().length === 0) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Strip all poll-creation parameters from a params bag.
+ * Useful for sanitizing `action="send"` requests where models may have
+ * auto-populated poll fields from the shared tool schema.
+ */
+export function stripPollCreationParams(params: Record<string, unknown>): void {
   for (const key of POLL_CREATION_PARAM_NAMES) {
-    const def = POLL_CREATION_PARAM_DEFS[key];
-    const value = readPollParamRaw(params, key);
-    if (def.kind === "string" && typeof value === "string" && value.trim().length > 0) {
-      return true;
-    }
-    if (def.kind === "stringArray") {
-      if (
-        Array.isArray(value) &&
-        value.some((entry) => typeof entry === "string" && entry.trim())
-      ) {
-        return true;
-      }
-      if (typeof value === "string" && value.trim().length > 0) {
-        return true;
-      }
-    }
-    if (def.kind === "number") {
-      if (typeof value === "number" && Number.isFinite(value)) {
-        return true;
-      }
-      if (typeof value === "string") {
-        const trimmed = value.trim();
-        if (trimmed.length > 0 && Number.isFinite(Number(trimmed))) {
-          return true;
-        }
-      }
-    }
-    if (def.kind === "boolean") {
-      if (value === true) {
-        return true;
-      }
-      if (typeof value === "string" && value.trim().toLowerCase() === "true") {
-        return true;
-      }
+    delete params[key];
+    // Also delete snake_case variants (e.g. poll_question)
+    const snakeKey = key
+      .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+      .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+      .toLowerCase();
+    if (snakeKey !== key) {
+      delete params[snakeKey];
     }
   }
-  return false;
 }

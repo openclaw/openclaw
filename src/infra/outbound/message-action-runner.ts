@@ -14,7 +14,11 @@ import type {
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import { hasPollCreationParams, resolveTelegramPollVisibility } from "../../poll-params.js";
+import {
+  hasPollCreationParams,
+  resolveTelegramPollVisibility,
+  stripPollCreationParams,
+} from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -33,6 +37,7 @@ import {
   parseButtonsParam,
   parseCardParam,
   parseComponentsParam,
+  stripEmptyComponents,
   readBooleanParam,
   resolveAttachmentMediaPolicy,
   resolveSlackAutoThreadId,
@@ -708,6 +713,11 @@ export async function runMessageAction(
   parseButtonsParam(params);
   parseCardParam(params);
   parseComponentsParam(params);
+  // Strip empty/skeleton components that models auto-populate from the schema.
+  // Empty components containers cause Discord rendering issues (e.g. broken
+  // attachment display) and modal validation errors.
+  // See: https://github.com/openclaw/openclaw/issues/43015
+  stripEmptyComponents(params);
 
   const action = input.action;
   if (action === "broadcast") {
@@ -768,6 +778,15 @@ export async function runMessageAction(
     toolContext: input.toolContext,
     cfg,
   });
+
+  // Strip auto-populated poll fields from send requests.
+  // Models often fill optional poll params from the shared tool schema even
+  // when only a plain message/attachment send is intended.
+  // See: https://github.com/openclaw/openclaw/issues/42820
+  //      https://github.com/openclaw/openclaw/issues/43015
+  if (action === "send") {
+    stripPollCreationParams(params);
+  }
 
   if (action === "send" && hasPollCreationParams(params)) {
     throw new Error('Poll fields require action "poll"; use action "poll" instead of "send".');

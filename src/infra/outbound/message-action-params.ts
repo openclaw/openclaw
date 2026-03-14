@@ -422,3 +422,43 @@ export function parseComponentsParam(params: Record<string, unknown>): void {
     throw new Error("--components must be valid JSON");
   }
 }
+
+/**
+ * Strip components that are empty or auto-populated skeletons.
+ *
+ * Models (especially GPT-family) tend to fill the `components` schema with
+ * empty scaffolding like `{ blocks: [], modal: { fields: [], title: "" } }`
+ * even when the user only wants a plain send. These empty containers cause
+ * Discord rendering issues (broken attachment display, red X buttons) and
+ * modal validation errors (`components.modal.fields must be a non-empty array`).
+ *
+ * See: https://github.com/openclaw/openclaw/issues/43015
+ */
+export function stripEmptyComponents(params: Record<string, unknown>): void {
+  const components = params.components;
+  if (components == null || typeof components !== "object") {
+    return;
+  }
+
+  const comp = components as Record<string, unknown>;
+
+  // Strip empty modal (no fields or only empty fields array)
+  if (comp.modal != null && typeof comp.modal === "object") {
+    const modal = comp.modal as Record<string, unknown>;
+    const fields = modal.fields;
+    if (!Array.isArray(fields) || fields.length === 0) {
+      delete comp.modal;
+    }
+  }
+
+  // Check if the remaining components have any meaningful content
+  const blocks = comp.blocks;
+  const hasBlocks = Array.isArray(blocks) && blocks.length > 0;
+  const hasText = typeof comp.text === "string" && comp.text.trim().length > 0;
+  const hasModal = comp.modal != null;
+
+  // If nothing meaningful remains, remove the entire components object
+  if (!hasBlocks && !hasText && !hasModal) {
+    delete params.components;
+  }
+}
