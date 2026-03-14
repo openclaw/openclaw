@@ -140,6 +140,8 @@ type RegisterTelegramNativeCommandsParams = {
   ) => { groupConfig?: TelegramGroupConfig; topicConfig?: TelegramTopicConfig };
   shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
   opts: { token: string };
+  /** Maximum outbound media size in bytes (from configured mediaMaxMb). */
+  mediaMaxBytes?: number;
 };
 
 async function resolveTelegramCommandAuth(params: {
@@ -362,6 +364,7 @@ export const registerTelegramNativeCommands = ({
   resolveTelegramGroupConfig,
   shouldSkipUpdate,
   opts,
+  mediaMaxBytes,
 }: RegisterTelegramNativeCommandsParams) => {
   const boundRoute =
     nativeEnabled && nativeSkillsEnabled
@@ -542,6 +545,7 @@ export const registerTelegramNativeCommands = ({
     tableMode: params.tableMode,
     chunkMode: params.chunkMode,
     linkPreview: telegramCfg.linkPreview,
+    mediaMaxBytes,
   });
 
   if (commandsToRegister.length > 0 || pluginCatalog.commands.length > 0) {

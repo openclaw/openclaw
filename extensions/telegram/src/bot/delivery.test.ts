@@ -855,4 +855,41 @@ describe("deliverReplies", () => {
     expect(sendVoice).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
   });
+
+  it("passes mediaMaxBytes to loadWebMedia for outbound media replies", async () => {
+    const { runtime, bot } = createSendMessageHarness();
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 5, chat: { id: "123" } });
+    (bot.api as Record<string, unknown>).sendPhoto = sendPhoto;
+    mockMediaLoad("photo.jpg", "image/jpeg", "img-data");
+
+    await deliverReplies({
+      ...baseDeliveryParams,
+      replies: [{ text: "caption", mediaUrl: "https://example.com/photo.jpg" }],
+      runtime,
+      bot,
+      mediaMaxBytes: 50 * 1024 * 1024,
+    });
+
+    expect(loadWebMedia).toHaveBeenCalledTimes(1);
+    const loadOpts = loadWebMedia.mock.calls[0]?.[1] as { maxBytes?: number } | undefined;
+    expect(loadOpts?.maxBytes).toBe(50 * 1024 * 1024);
+  });
+
+  it("omits maxBytes from loadWebMedia when mediaMaxBytes is not set", async () => {
+    const { runtime, bot } = createSendMessageHarness();
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 5, chat: { id: "123" } });
+    (bot.api as Record<string, unknown>).sendPhoto = sendPhoto;
+    mockMediaLoad("photo.jpg", "image/jpeg", "img-data");
+
+    await deliverReplies({
+      ...baseDeliveryParams,
+      replies: [{ text: "caption", mediaUrl: "https://example.com/photo.jpg" }],
+      runtime,
+      bot,
+    });
+
+    expect(loadWebMedia).toHaveBeenCalledTimes(1);
+    const loadOpts = loadWebMedia.mock.calls[0]?.[1] as { maxBytes?: number } | undefined;
+    expect(loadOpts?.maxBytes).toBeUndefined();
+  });
 });

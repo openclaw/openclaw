@@ -111,6 +111,8 @@ type DispatchTelegramMessageParams = {
   textLimit: number;
   telegramCfg: TelegramAccountConfig;
   opts: Pick<TelegramBotOptions, "token">;
+  /** Maximum outbound media size in bytes (from configured mediaMaxMb). */
+  mediaMaxBytes?: number;
 };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
@@ -148,6 +150,7 @@ export const dispatchTelegramMessage = async ({
   textLimit,
   telegramCfg,
   opts,
+  mediaMaxBytes,
 }: DispatchTelegramMessageParams) => {
   const {
     ctxPayload,
@@ -457,6 +460,7 @@ export const dispatchTelegramMessage = async ({
     runtime,
     bot,
     mediaLocalRoots,
+    mediaMaxBytes,
     replyToMode,
     textLimit,
     thread: threadSpec,
