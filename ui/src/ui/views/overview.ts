@@ -1,10 +1,11 @@
 import { html, nothing } from "lit";
-import { t, i18n, SUPPORTED_LOCALES, type Locale } from "../../i18n/index.ts";
+import { t, i18n, type Locale } from "../../i18n/index.ts";
 import type { EventLogEntry } from "../app-events.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
 import { icons } from "../icons.ts";
+import { ORDERED_DASHBOARD_LOCALES, localeLabelKey } from "../language-options.ts";
 import type { UiSettings } from "../storage.ts";
 import type {
   AttentionItem,
@@ -293,10 +294,10 @@ export function renderOverview(props: OverviewProps) {
                 props.onSettingsChange({ ...props.settings, locale: v });
               }}
             >
-              ${SUPPORTED_LOCALES.map((loc) => {
-                const key = loc.replace(/-([a-zA-Z])/g, (_, c) => c.toUpperCase());
-                return html`<option value=${loc}>${t(`languages.${key}`)}</option>`;
-              })}
+              ${ORDERED_DASHBOARD_LOCALES.map(
+                (loc) =>
+                  html`<option value=${loc}>${t(`languages.${localeLabelKey(loc)}`)}</option>`,
+              )}
             </select>
           </label>
         </div>

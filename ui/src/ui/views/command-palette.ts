@@ -54,6 +54,13 @@ const PALETTE_ITEMS: PaletteItem[] = [
     action: "nav:config",
   },
   {
+    id: "nav-language",
+    label: "Language",
+    icon: "globe",
+    category: "navigation",
+    action: "nav:language",
+  },
+  {
     id: "nav-agents",
     label: "Agents",
     icon: "folder",

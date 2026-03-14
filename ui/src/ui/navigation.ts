@@ -14,6 +14,7 @@ export const TAB_GROUPS = [
       "config",
       "communications",
       "appearance",
+      "language",
       "automation",
       "infrastructure",
       "aiAgents",
@@ -37,6 +38,7 @@ export type Tab =
   | "config"
   | "communications"
   | "appearance"
+  | "language"
   | "automation"
   | "infrastructure"
   | "aiAgents"
@@ -57,6 +59,7 @@ const TAB_PATHS: Record<Tab, string> = {
   config: "/config",
   communications: "/communications",
   appearance: "/appearance",
+  language: "/language",
   automation: "/automation",
   infrastructure: "/infrastructure",
   aiAgents: "/ai-agents",
@@ -173,6 +176,8 @@ export function iconForTab(tab: Tab): IconName {
       return "send";
     case "appearance":
       return "spark";
+    case "language":
+      return "globe";
     case "automation":
       return "terminal";
     case "infrastructure":

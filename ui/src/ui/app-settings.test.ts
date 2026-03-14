@@ -22,6 +22,7 @@ type Tab =
   | "config"
   | "communications"
   | "appearance"
+  | "language"
   | "automation"
   | "infrastructure"
   | "aiAgents"

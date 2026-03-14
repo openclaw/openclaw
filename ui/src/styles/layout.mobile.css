@@ -219,6 +219,15 @@
 
 /* Mobile-specific styles */
 @media (max-width: 768px) {
+  .language-settings__hero-head,
+  .language-option__top {
+    flex-direction: column;
+  }
+
+  .language-option__badges {
+    justify-content: flex-start;
+  }
+
   .shell {
     --shell-pad: 8px;
     --shell-gap: 8px;

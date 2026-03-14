@@ -10,7 +10,8 @@ type LazyLocaleRegistration = {
 
 export const DEFAULT_LOCALE: Locale = "en";
 
-const LAZY_LOCALES: readonly LazyLocale[] = ["zh-CN", "zh-TW", "pt-BR", "de", "es"];
+const LAZY_LOCALES: readonly LazyLocale[] = ["zh-CN", "zh-TW", "pt-BR", "pt-PT", "de", "es"];
+const FEATURED_LOCALES: readonly LazyLocale[] = ["pt-BR", "pt-PT", "es"];
 
 const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
   "zh-CN": {
@@ -25,6 +26,10 @@ const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
     exportName: "pt_BR",
     loader: () => import("../locales/pt-BR.ts"),
   },
+  "pt-PT": {
+    exportName: "pt_PT",
+    loader: () => import("../locales/pt-PT.ts"),
+  },
   de: {
     exportName: "de",
     loader: () => import("../locales/de.ts"),
@@ -35,7 +40,11 @@ const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
   },
 };
 
-export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = [DEFAULT_LOCALE, ...LAZY_LOCALES];
+export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = [
+  DEFAULT_LOCALE,
+  ...FEATURED_LOCALES,
+  ...LAZY_LOCALES.filter((locale) => !FEATURED_LOCALES.includes(locale)),
+];
 
 export function isSupportedLocale(value: string | null | undefined): value is Locale {
   return value !== null && value !== undefined && SUPPORTED_LOCALES.includes(value as Locale);
@@ -46,11 +55,12 @@ function isLazyLocale(locale: Locale): locale is LazyLocale {
 }
 
 export function resolveNavigatorLocale(navLang: string): Locale {
+  const normalized = navLang.toLowerCase();
   if (navLang.startsWith("zh")) {
     return navLang === "zh-TW" || navLang === "zh-HK" ? "zh-TW" : "zh-CN";
   }
   if (navLang.startsWith("pt")) {
-    return "pt-BR";
+    return normalized === "pt-pt" ? "pt-PT" : "pt-BR";
   }
   if (navLang.startsWith("de")) {
     return "de";

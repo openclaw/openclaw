@@ -51,4 +51,14 @@ describe("tailnet helpers", () => {
     expect(pickPrimaryTailnetIPv4()).toBe("100.99.1.1");
     expect(pickPrimaryTailnetIPv6()).toBe("fd7a:115c:a1e0::9");
   });
+
+  it("returns no addresses when network interface enumeration throws", () => {
+    vi.spyOn(os, "networkInterfaces").mockImplementation(() => {
+      throw new Error("uv_interface_addresses failed");
+    });
+
+    expect(listTailnetAddresses()).toEqual({ ipv4: [], ipv6: [] });
+    expect(pickPrimaryTailnetIPv4()).toBeUndefined();
+    expect(pickPrimaryTailnetIPv6()).toBeUndefined();
+  });
 });

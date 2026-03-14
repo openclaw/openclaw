@@ -4,7 +4,7 @@ const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
 
 type PersistedUiSettings = Omit<UiSettings, "token"> & { token?: never };
 
-import { isSupportedLocale } from "../i18n/index.ts";
+import { isSupportedLocale, type Locale } from "../i18n/index.ts";
 import { inferBasePathFromPathname, normalizeBasePath } from "./navigation.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 
@@ -21,7 +21,7 @@ export type UiSettings = {
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
-  locale?: string;
+  locale?: Locale;
 };
 
 function isViteDevPage(): boolean {
