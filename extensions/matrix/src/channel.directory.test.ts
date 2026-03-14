@@ -2,26 +2,12 @@ import type { PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/matrix";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixPlugin } from "./channel.js";
 import { setMatrixRuntime } from "./runtime.js";
+import { createMatrixBotSdkMock } from "./test-mocks.js";
 import type { CoreConfig } from "./types.js";
 
-vi.mock("@vector-im/matrix-bot-sdk", () => ({
-  ConsoleLogger: class {
-    trace = vi.fn();
-    debug = vi.fn();
-    info = vi.fn();
-    warn = vi.fn();
-    error = vi.fn();
-  },
-  MatrixClient: class {},
-  LogService: {
-    setLogger: vi.fn(),
-    warn: vi.fn(),
-    info: vi.fn(),
-    debug: vi.fn(),
-  },
-  SimpleFsStorageProvider: class {},
-  RustSdkCryptoStorageProvider: class {},
-}));
+vi.mock("@vector-im/matrix-bot-sdk", () =>
+  createMatrixBotSdkMock({ includeVerboseLogService: true }),
+);
 
 describe("matrix directory", () => {
   const runtimeEnv: RuntimeEnv = {

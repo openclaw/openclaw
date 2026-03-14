@@ -345,14 +345,16 @@ async function deliverMediaReply(params: {
         logFallback: logVerbose,
       });
       if (useVoice) {
-        await params.onVoiceRecording?.();
-        try {
+        const sendVoiceMedia = async (
+          requestParams: typeof mediaParams,
+          shouldLog?: (err: unknown) => boolean,
+        ) => {
           const result = await sendTelegramWithThreadFallback({
             operation: "sendVoice",
             runtime: params.runtime,
             thread: params.thread,
-            requestParams: mediaParams,
-            shouldLog: (err) => !isVoiceMessagesForbidden(err),
+            requestParams,
+            shouldLog,
             send: (effectiveParams) =>
               params.bot.api.sendVoice(params.chatId, file, { ...effectiveParams }),
           });
@@ -360,6 +362,10 @@ async function deliverMediaReply(params: {
             firstDeliveredMessageId = result.message_id;
           }
           markDelivered(params.progress);
+        };
+        await params.onVoiceRecording?.();
+        try {
+          await sendVoiceMedia(mediaParams, (err) => !isVoiceMessagesForbidden(err));
         } catch (voiceErr) {
           if (isVoiceMessagesForbidden(voiceErr)) {
             const fallbackText = params.reply.text;
@@ -400,18 +406,7 @@ async function deliverMediaReply(params: {
             const noCaptionParams = { ...mediaParams };
             delete noCaptionParams.caption;
             delete noCaptionParams.parse_mode;
-            const result = await sendTelegramWithThreadFallback({
-              operation: "sendVoice",
-              runtime: params.runtime,
-              thread: params.thread,
-              requestParams: noCaptionParams,
-              send: (effectiveParams) =>
-                params.bot.api.sendVoice(params.chatId, file, { ...effectiveParams }),
-            });
-            if (firstDeliveredMessageId == null) {
-              firstDeliveredMessageId = result.message_id;
-            }
-            markDelivered(params.progress);
+            await sendVoiceMedia(noCaptionParams);
             const fallbackText = params.reply.text;
             if (fallbackText?.trim()) {
               await sendTelegramVoiceFallbackText({

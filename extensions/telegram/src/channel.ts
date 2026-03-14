@@ -78,6 +78,61 @@ function formatDuplicateTelegramTokenReason(params: {
   );
 }
 
+type TelegramSendFn = ReturnType<
+  typeof getTelegramRuntime
+>["channel"]["telegram"]["sendMessageTelegram"];
+type TelegramSendOptions = NonNullable<Parameters<TelegramSendFn>[2]>;
+
+function buildTelegramSendOptions(params: {
+  cfg: OpenClawConfig;
+  mediaUrl?: string | null;
+  mediaLocalRoots?: readonly string[] | null;
+  accountId?: string | null;
+  replyToId?: string | null;
+  threadId?: string | number | null;
+  silent?: boolean | null;
+}): TelegramSendOptions {
+  return {
+    verbose: false,
+    cfg: params.cfg,
+    ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
+    ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
+    messageThreadId: parseTelegramThreadId(params.threadId),
+    replyToMessageId: parseTelegramReplyToMessageId(params.replyToId),
+    accountId: params.accountId ?? undefined,
+    silent: params.silent ?? undefined,
+  };
+}
+
+async function sendTelegramOutbound(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  text: string;
+  mediaUrl?: string | null;
+  mediaLocalRoots?: readonly string[] | null;
+  accountId?: string | null;
+  deps?: { sendTelegram?: TelegramSendFn };
+  replyToId?: string | null;
+  threadId?: string | number | null;
+  silent?: boolean | null;
+}) {
+  const send =
+    params.deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
+  return await send(
+    params.to,
+    params.text,
+    buildTelegramSendOptions({
+      cfg: params.cfg,
+      mediaUrl: params.mediaUrl,
+      mediaLocalRoots: params.mediaLocalRoots,
+      accountId: params.accountId,
+      replyToId: params.replyToId,
+      threadId: params.threadId,
+      silent: params.silent,
+    }),
+  );
+}
+
 const telegramMessageActions: ChannelMessageActionAdapter = {
   listActions: (ctx) =>
     getTelegramRuntime().channel.telegram.messageActions?.listActions?.(ctx) ?? [],
@@ -327,35 +382,31 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       silent,
     }) => {
       const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
-      const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
-      const messageThreadId = parseTelegramThreadId(threadId);
       const result = await sendTelegramPayloadMessages({
         send,
         to,
         payload,
-        baseOpts: {
-          verbose: false,
+        baseOpts: buildTelegramSendOptions({
           cfg,
           mediaLocalRoots,
-          messageThreadId,
-          replyToMessageId,
-          accountId: accountId ?? undefined,
-          silent: silent ?? undefined,
-        },
+          accountId,
+          replyToId,
+          threadId,
+          silent,
+        }),
       });
       return { channel: "telegram", ...result };
     },
     sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, silent }) => {
-      const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
-      const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
-      const messageThreadId = parseTelegramThreadId(threadId);
-      const result = await send(to, text, {
-        verbose: false,
+      const result = await sendTelegramOutbound({
         cfg,
-        messageThreadId,
-        replyToMessageId,
-        accountId: accountId ?? undefined,
-        silent: silent ?? undefined,
+        to,
+        text,
+        accountId,
+        deps,
+        replyToId,
+        threadId,
+        silent,
       });
       return { channel: "telegram", ...result };
     },
@@ -371,18 +422,17 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       threadId,
       silent,
     }) => {
-      const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
-      const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
-      const messageThreadId = parseTelegramThreadId(threadId);
-      const result = await send(to, text, {
-        verbose: false,
+      const result = await sendTelegramOutbound({
         cfg,
+        to,
+        text,
         mediaUrl,
         mediaLocalRoots,
-        messageThreadId,
-        replyToMessageId,
-        accountId: accountId ?? undefined,
-        silent: silent ?? undefined,
+        accountId,
+        deps,
+        replyToId,
+        threadId,
+        silent,
       });
       return { channel: "telegram", ...result };
     },

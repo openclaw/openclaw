@@ -7,6 +7,7 @@ import {
   countActiveDescendantRunsMock,
   listDescendantRunsForRequesterMock,
   loadRunCronIsolatedAgentTurn,
+  mockRunCronFallbackPassthrough,
   pickLastNonEmptyTextFromPayloadsMock,
   runEmbeddedPiAgentMock,
   runWithModelFallbackMock,
@@ -16,13 +17,6 @@ const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
 describe("runCronIsolatedAgentTurn — interim ack retry", () => {
   setupRunCronIsolatedAgentTurnSuite();
-
-  const mockFallbackPassthrough = () => {
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-      const result = await run(provider, model);
-      return { result, provider, model, attempts: [] };
-    });
-  };
 
   const runTurnAndExpectOk = async (expectedFallbackCalls: number, expectedAgentCalls: number) => {
     const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
@@ -62,7 +56,7 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
         meta: { agentMeta: { usage: { input: 10, output: 20 } } },
       });
 
-    mockFallbackPassthrough();
+    mockRunCronFallbackPassthrough();
     await runTurnAndExpectOk(2, 2);
     expect(runEmbeddedPiAgentMock.mock.calls[1]?.[0]?.prompt).toContain(
       "previous response was only an acknowledgement",
@@ -76,7 +70,7 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
       meta: { agentMeta: { usage: { input: 10, output: 20 } } },
     });
 
-    mockFallbackPassthrough();
+    mockRunCronFallbackPassthrough();
     await runTurnAndExpectOk(1, 1);
   });
 
@@ -93,7 +87,7 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     ]);
     countActiveDescendantRunsMock.mockReturnValue(0);
 
-    mockFallbackPassthrough();
+    mockRunCronFallbackPassthrough();
     await runTurnAndExpectOk(1, 1);
   });
 });
