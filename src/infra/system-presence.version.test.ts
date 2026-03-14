@@ -78,4 +78,4 @@ describe("system-presence version fallback", () => {
       async () => (await import("../version.js")).VERSION,
     );
   });
-}
+});
