@@ -33,6 +33,7 @@ import {
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
+import { resolveElevatedPermissions } from "../../auto-reply/reply/reply-elevated.js";
 import {
   normalizeThinkLevel,
   normalizeVerboseLevel,
@@ -550,6 +551,13 @@ export async function runCronIsolatedAgentTurn(params: {
       cronSession.sessionEntry.systemPromptReport,
     );
 
+    const cronElevated = resolveElevatedPermissions({
+      cfg: cfgWithAgentDefaults,
+      agentId,
+      ctx: { Provider: "cron-event", AccountId: "", SenderId: "cron" },
+      provider: "cron-event",
+    });
+
     const runPrompt = async (promptText: string) => {
       const fallbackResult = await runWithModelFallback({
         cfg: cfgWithAgentDefaults,
@@ -631,6 +639,11 @@ export async function runCronIsolatedAgentTurn(params: {
             runId: cronSession.sessionEntry.sessionId,
             requireExplicitMessageTarget: toolPolicy.requireExplicitMessageTarget,
             disableMessageTool: toolPolicy.disableMessageTool,
+            bashElevated: {
+              enabled: cronElevated.enabled,
+              allowed: cronElevated.allowed,
+              defaultLevel: "off",
+            },
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             abortSignal,
             bootstrapPromptWarningSignaturesSeen,
