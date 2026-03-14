@@ -6,7 +6,7 @@
  *
  * Cache layers (checked in order):
  * 1. In-memory Map (instant, cleared on process restart)
- * 2. On-disk JSON file (~/.openclaw/cache/openrouter-models.json)
+ * 2. On-disk JSON file (<stateDir>/cache/openrouter-models.json)
  * 3. OpenRouter API fetch (fire-and-forget, populates both layers)
  *
  * Model capabilities are assumed stable — the cache has no TTL expiry.
@@ -19,8 +19,8 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { resolveStateDir } from "../../config/paths.js";
 import { resolveProxyFetchFromEnv } from "../../infra/net/proxy-fetch.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
@@ -28,6 +28,7 @@ const log = createSubsystemLogger("openrouter-model-capabilities");
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const FETCH_TIMEOUT_MS = 10_000;
+const DISK_CACHE_FILENAME = "openrouter-models.json";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -74,25 +75,42 @@ interface DiskCachePayload {
 // Disk cache
 // ---------------------------------------------------------------------------
 
+function resolveDiskCacheDir(): string {
+  return join(resolveStateDir(), "cache");
+}
+
 function resolveDiskCachePath(): string {
-  return join(homedir(), ".openclaw", "cache", "openrouter-models.json");
+  return join(resolveDiskCacheDir(), DISK_CACHE_FILENAME);
 }
 
 function writeDiskCache(map: Map<string, OpenRouterModelCapabilities>): void {
   try {
-    const cachePath = resolveDiskCachePath();
-    const cacheDir = join(cachePath, "..");
+    const cacheDir = resolveDiskCacheDir();
     if (!existsSync(cacheDir)) {
       mkdirSync(cacheDir, { recursive: true });
     }
     const payload: DiskCachePayload = {
       models: Object.fromEntries(map),
     };
-    writeFileSync(cachePath, JSON.stringify(payload));
+    writeFileSync(resolveDiskCachePath(), JSON.stringify(payload), "utf-8");
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     log.debug(`Failed to write OpenRouter disk cache: ${message}`);
   }
+}
+
+function isValidCapabilities(value: unknown): value is OpenRouterModelCapabilities {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.name === "string" &&
+    Array.isArray(record.input) &&
+    typeof record.reasoning === "boolean" &&
+    typeof record.contextWindow === "number" &&
+    typeof record.maxTokens === "number"
+  );
 }
 
 function readDiskCache(): Map<string, OpenRouterModelCapabilities> | undefined {
@@ -102,11 +120,21 @@ function readDiskCache(): Map<string, OpenRouterModelCapabilities> | undefined {
       return undefined;
     }
     const raw = readFileSync(cachePath, "utf-8");
-    const payload = JSON.parse(raw) as DiskCachePayload;
-    if (!payload.models) {
+    const payload = JSON.parse(raw) as unknown;
+    if (!payload || typeof payload !== "object") {
       return undefined;
     }
-    return new Map(Object.entries(payload.models));
+    const models = (payload as DiskCachePayload).models;
+    if (!models || typeof models !== "object") {
+      return undefined;
+    }
+    const map = new Map<string, OpenRouterModelCapabilities>();
+    for (const [id, caps] of Object.entries(models)) {
+      if (isValidCapabilities(caps)) {
+        map.set(id, caps);
+      }
+    }
+    return map.size > 0 ? map : undefined;
   } catch {
     return undefined;
   }
@@ -121,7 +149,8 @@ let fetchInFlight: Promise<void> | undefined;
 
 function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
   const input: Array<"text" | "image"> = ["text"];
-  if (model.architecture?.modality?.includes("image")) {
+  const inputModalities = model.architecture?.modality?.split("->")[0] ?? "";
+  if (inputModalities.includes("image")) {
     input.push("image");
   }
 
@@ -145,15 +174,14 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
 // ---------------------------------------------------------------------------
 
 async function doFetch(): Promise<void> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     const fetchFn = resolveProxyFetchFromEnv() ?? globalThis.fetch;
 
     const response = await fetchFn(OPENROUTER_MODELS_URL, {
       signal: controller.signal,
     });
-    clearTimeout(timeout);
 
     if (!response.ok) {
       log.warn(`OpenRouter models API returned ${response.status}`);
@@ -177,6 +205,8 @@ async function doFetch(): Promise<void> {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     log.warn(`Failed to fetch OpenRouter models: ${message}`);
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
