@@ -8,6 +8,7 @@ import { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { setVerbose } from "../globals.js";
+import { resolveEmbeddingAuthDiagnostics } from "../memory/embedding-auth-diagnostics.js";
 import { getMemorySearchManager, type MemorySearchManagerResult } from "../memory/index.js";
 import { listMemoryFiles, normalizeExtraMemoryPaths } from "../memory/internal.js";
 import { defaultRuntime } from "../runtime.js";
@@ -51,12 +52,6 @@ type LoadedMemoryCommandConfig = {
   diagnostics: string[];
 };
 
-type MemoryEmbeddingAuthDiagnostics = {
-  provider?: string;
-  source?: string;
-  fingerprint?: string;
-};
-
 async function loadMemoryCommandConfig(commandName: string): Promise<LoadedMemoryCommandConfig> {
   const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
     config: loadConfig(),
@@ -85,31 +80,6 @@ function emitMemorySecretResolveDiagnostics(
       defaultRuntime.log(message);
     }
   }
-}
-
-function resolveEmbeddingAuthDiagnostics(
-  status: ReturnType<MemoryManager["status"]>,
-): MemoryEmbeddingAuthDiagnostics | null {
-  const custom = status.custom as
-    | {
-        embeddingAuth?: {
-          provider?: unknown;
-          source?: unknown;
-          fingerprint?: unknown;
-        };
-      }
-    | undefined;
-  const raw = custom?.embeddingAuth;
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-  const provider = typeof raw.provider === "string" ? raw.provider : undefined;
-  const source = typeof raw.source === "string" ? raw.source : undefined;
-  const fingerprint = typeof raw.fingerprint === "string" ? raw.fingerprint : undefined;
-  if (!provider && !source && !fingerprint) {
-    return null;
-  }
-  return { provider, source, fingerprint };
 }
 
 function formatSourceLabel(source: string, workspaceDir: string, agentId: string): string {

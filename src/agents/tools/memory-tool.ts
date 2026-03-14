@@ -2,6 +2,10 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import { resolveMemoryBackendConfig } from "../../memory/backend-config.js";
+import {
+  resolveEmbeddingAuthDiagnostics,
+  type EmbeddingAuthDiagnostics,
+} from "../../memory/embedding-auth-diagnostics.js";
 import { getMemorySearchManager } from "../../memory/index.js";
 import type { MemorySearchResult } from "../../memory/types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -21,12 +25,6 @@ const MemoryGetSchema = Type.Object({
   from: Type.Optional(Type.Number()),
   lines: Type.Optional(Type.Number()),
 });
-
-type EmbeddingAuthDiagnostics = {
-  provider?: string;
-  source?: string;
-  fingerprint?: string;
-};
 
 function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessionKey?: string }) {
   const cfg = options.config;
@@ -56,23 +54,6 @@ async function getMemoryManagerContext(params: { cfg: OpenClawConfig; agentId: s
     agentId: params.agentId,
   });
   return manager ? { manager } : { error };
-}
-
-function resolveEmbeddingAuthDiagnostics(status: {
-  custom?: Record<string, unknown>;
-}): EmbeddingAuthDiagnostics | undefined {
-  const raw = (status.custom as { embeddingAuth?: unknown } | undefined)?.embeddingAuth;
-  if (!raw || typeof raw !== "object") {
-    return undefined;
-  }
-  const auth = raw as { provider?: unknown; source?: unknown; fingerprint?: unknown };
-  const provider = typeof auth.provider === "string" ? auth.provider : undefined;
-  const source = typeof auth.source === "string" ? auth.source : undefined;
-  const fingerprint = typeof auth.fingerprint === "string" ? auth.fingerprint : undefined;
-  if (!provider && !source && !fingerprint) {
-    return undefined;
-  }
-  return { provider, source, fingerprint };
 }
 
 function createMemoryTool(params: {

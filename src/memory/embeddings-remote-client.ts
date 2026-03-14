@@ -40,7 +40,7 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
         cfg: params.options.config,
         agentDir: params.options.agentDir,
       });
-  const apiKey = remoteApiKey ? remoteApiKey : requireApiKey(resolvedAuth, params.provider);
+  const apiKey = requireApiKey(resolvedAuth, params.provider);
   const baseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || params.defaultBaseUrl;
   const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
   const headers: Record<string, string> = {

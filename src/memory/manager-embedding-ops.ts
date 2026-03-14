@@ -556,7 +556,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         }
         const retryDelayMs = scopeMismatch ? EMBEDDING_SCOPE_RETRY_DELAY_MS : delayMs;
         const retryAction = scopeMismatch ? "retrying auth check" : "retrying";
-        await this.waitForEmbeddingRetry(retryDelayMs, retryAction);
+        await this.waitForEmbeddingRetry(retryDelayMs, retryAction, message);
         if (!scopeMismatch) {
           delayMs *= 2;
         }
@@ -600,7 +600,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         const retryAction = scopeMismatch
           ? "retrying structured auth check"
           : "retrying structured batch";
-        await this.waitForEmbeddingRetry(retryDelayMs, retryAction);
+        await this.waitForEmbeddingRetry(retryDelayMs, retryAction, message);
         if (!scopeMismatch) {
           delayMs *= 2;
         }
@@ -609,12 +609,25 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
   }
 
-  private async waitForEmbeddingRetry(delayMs: number, action: string): Promise<void> {
+  private summarizeEmbeddingErrorForLog(message: string): string {
+    const normalized = message.replace(/\s+/g, " ").trim();
+    if (normalized.length <= 220) {
+      return normalized;
+    }
+    return `${normalized.slice(0, 217)}...`;
+  }
+
+  private async waitForEmbeddingRetry(
+    delayMs: number,
+    action: string,
+    message: string,
+  ): Promise<void> {
     const waitMs = Math.min(
       EMBEDDING_RETRY_MAX_DELAY_MS,
       Math.round(delayMs * (1 + Math.random() * 0.2)),
     );
-    log.warn(`memory embeddings transient error; ${action} in ${waitMs}ms`);
+    const reason = this.summarizeEmbeddingErrorForLog(message);
+    log.warn(`memory embeddings transient error; ${action} in ${waitMs}ms: ${reason}`);
     await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
 
@@ -662,7 +675,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         }
         const retryDelayMs = scopeMismatch ? EMBEDDING_SCOPE_RETRY_DELAY_MS : delayMs;
         const retryAction = scopeMismatch ? "retrying query auth check" : "retrying query";
-        await this.waitForEmbeddingRetry(retryDelayMs, retryAction);
+        await this.waitForEmbeddingRetry(retryDelayMs, retryAction, message);
         if (!scopeMismatch) {
           delayMs *= 2;
         }
