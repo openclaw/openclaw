@@ -711,7 +711,8 @@ export async function startGatewayServer(
       nodeSendToAllSubscribed,
       getPresenceVersion,
       getHealthVersion,
-      refreshGatewayHealthSnapshot,
+      refreshGatewayHealthSnapshot: (opts) =>
+        refreshGatewayHealthSnapshot({ ...opts, runtimeSnapshot: getRuntimeSnapshot() }),
       logHealth,
       dedupe,
       chatAbortControllers,
@@ -821,7 +822,8 @@ export async function startGatewayServer(
     execApprovalManager,
     loadGatewayModelCatalog,
     getHealthCache,
-    refreshHealthSnapshot: refreshGatewayHealthSnapshot,
+    refreshHealthSnapshot: (opts) =>
+      refreshGatewayHealthSnapshot({ ...opts, runtimeSnapshot: getRuntimeSnapshot() }),
     logHealth,
     logGateway: log,
     incrementPresenceVersion,
