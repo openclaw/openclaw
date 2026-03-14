@@ -111,10 +111,12 @@ def validate_skill(skill_path):
     if "description" not in frontmatter:
         return False, "Missing 'description' in frontmatter"
 
-    name = frontmatter.get("name", "")
+    name = frontmatter.get("name", "") or ""
     if not isinstance(name, str):
         return False, f"Name must be a string, got {type(name).__name__}"
     name = name.strip()
+    if not name:
+        return False, "Name cannot be empty"
     if name:
         if not re.match(r"^[a-z0-9-]+$", name):
             return (
@@ -133,10 +135,12 @@ def validate_skill(skill_path):
                 f"Maximum is {MAX_SKILL_NAME_LENGTH} characters.",
             )
 
-    description = frontmatter.get("description", "")
+    description = frontmatter.get("description", "") or ""
     if not isinstance(description, str):
         return False, f"Description must be a string, got {type(description).__name__}"
     description = description.strip()
+    if not description:
+        return False, "Description cannot be empty"
     if description:
         if "<" in description or ">" in description:
             return False, "Description cannot contain angle brackets (< or >)"
