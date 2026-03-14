@@ -27,17 +27,13 @@ describe("matchesExecAllowlistPattern", () => {
   it("expands home-prefix patterns", () => {
     const prevOpenClawHome = process.env.OPENCLAW_HOME;
     const prevHome = process.env.HOME;
-    const openClawHome = path.resolve("/srv/openclaw-home");
-    const otherHome = path.resolve("/home/other");
-    process.env.OPENCLAW_HOME = openClawHome;
-    process.env.HOME = otherHome;
+    process.env.OPENCLAW_HOME = "/srv/openclaw-home";
+    process.env.HOME = "/home/other";
+    const openClawHome = path.join(path.resolve("/srv/openclaw-home"), "bin", "tool");
+    const fallbackHome = path.join(path.resolve("/home/other"), "bin", "tool");
     try {
-      expect(
-        matchesExecAllowlistPattern("~/bin/tool", path.join(openClawHome, "bin", "tool")),
-      ).toBe(true);
-      expect(matchesExecAllowlistPattern("~/bin/tool", path.join(otherHome, "bin", "tool"))).toBe(
-        false,
-      );
+      expect(matchesExecAllowlistPattern("~/bin/tool", openClawHome)).toBe(true);
+      expect(matchesExecAllowlistPattern("~/bin/tool", fallbackHome)).toBe(false);
     } finally {
       if (prevOpenClawHome === undefined) {
         delete process.env.OPENCLAW_HOME;

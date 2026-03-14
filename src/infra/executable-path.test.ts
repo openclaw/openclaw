@@ -70,9 +70,13 @@ describe("executable path helpers", () => {
 
     expect(resolveExecutablePath(absoluteTool)).toBe(absoluteTool);
     expect(
-      resolveExecutablePath(`~/home-tool${executableSuffix}`, { env: { HOME: homeDir } }),
-    ).toBe(homeTool);
-    expect(resolveExecutablePath("runner", { env: { Path: binDir } })).toBe(pathTool);
+      path.normalize(
+        resolveExecutablePath(`~/home-tool${executableSuffix}`, { env: { HOME: homeDir } }) ?? "",
+      ),
+    ).toBe(path.normalize(homeTool));
+    expect(path.normalize(resolveExecutablePath("runner", { env: { Path: binDir } }) ?? "")).toBe(
+      path.normalize(pathTool),
+    );
     expect(
       resolveExecutablePath(`~/missing-tool${executableSuffix}`, { env: { HOME: homeDir } }),
     ).toBeUndefined();
