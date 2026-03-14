@@ -14,7 +14,7 @@ export async function startGatewayMemoryBackend(params: {
       continue;
     }
     const resolved = resolveMemoryBackendConfig({ cfg: params.cfg, agentId });
-    const backendLabel = resolved.backend === "qmd" ? "qmd" : "builtin";
+    const backendLabel = resolved.backend;
 
     const { manager, error } = await getMemorySearchManager({ cfg: params.cfg, agentId });
     if (!manager) {

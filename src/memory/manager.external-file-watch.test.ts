@@ -132,7 +132,10 @@ describe("memory manager external file watch", () => {
   });
 
   it("reindexes modified file content after external change", async () => {
-    vi.useRealTimers(); // Need real timers for actual file operations
+    // Need real timers for actual file operations. Note: chokidar may fire a
+    // concurrent sync between writeFile and manual sync, but this is benign
+    // since we only assert dirty=false. afterEach handles cleanup properly.
+    vi.useRealTimers();
 
     const cfg = {
       agents: {
