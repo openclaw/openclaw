@@ -71,6 +71,7 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
   private var reconnectJob: Job? = null
   private var deviceId: String = UUID.randomUUID().toString()
   private var connectNonceDeferred: CompletableDeferred<String>? = null
+  private var connectionEpoch = 0L
 
   private val _connected = MutableStateFlow(false)
   override val connected: StateFlow<Boolean> = _connected.asStateFlow()
@@ -98,8 +99,10 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
   fun disconnect() {
     reconnectJob?.cancel()
     reconnectJob = null
-    ws?.close(1000, "bye")
+    connectionEpoch += 1
+    val socket = ws
     ws = null
+    socket?.close(1000, "bye")
     _connected.value = false
     _statusText.value = context.getString(R.string.wear_status_offline)
     pendingRequests.values.forEach { it.completeExceptionally(Exception("Disconnected")) }
@@ -134,6 +137,8 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
     val url = config.wsUrl()
     val request = Request.Builder().url(url).build()
     connectNonceDeferred = CompletableDeferred()
+    val epoch = connectionEpoch + 1
+    connectionEpoch = epoch
 
     ws = httpClient.newWebSocket(request, object : WebSocketListener() {
       override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -142,10 +147,10 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
         scope.launch {
           try {
             val nonce = withTimeoutOrNull(5_000) { connectNonceDeferred?.await() } ?: ""
-            sendConnect(webSocket, nonce)
+            sendConnect(webSocket, nonce, epoch)
           } catch (e: Throwable) {
             Log.w(TAG, "Connect handshake failed: ${e.message}")
-            handleDisconnect("Connect handshake failed")
+            handleDisconnect("Connect handshake failed", epoch)
           }
         }
       }
@@ -156,17 +161,17 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
 
       override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
         Log.w(TAG, "WebSocket failure: ${t.message}")
-        handleDisconnect("Connection failed: ${t.message}")
+        handleDisconnect("Connection failed: ${t.message}", epoch)
       }
 
       override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
         Log.i(TAG, "WebSocket closed: $code $reason")
-        handleDisconnect("Disconnected")
+        handleDisconnect("Disconnected", epoch)
       }
     })
   }
 
-  private fun sendConnect(socket: WebSocket, nonce: String) {
+  private fun sendConnect(socket: WebSocket, nonce: String, epoch: Long) {
     val connectParams = buildJsonObject {
       put("minProtocol", JsonPrimitive(3))
       put("maxProtocol", JsonPrimitive(3))
@@ -219,10 +224,10 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
             _events.tryEmit(GatewayEvent("mainSessionKey", mainSessionKey))
           }
         } else {
-          handleDisconnect("Connect timed out")
+          handleDisconnect("Connect timed out", epoch)
         }
       } catch (e: Throwable) {
-        handleDisconnect("Connect failed: ${e.message}")
+        handleDisconnect("Connect failed: ${e.message}", epoch)
       }
     }
   }
@@ -273,7 +278,8 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
     _events.tryEmit(GatewayEvent(event, payloadJson))
   }
 
-  private fun handleDisconnect(message: String) {
+  private fun handleDisconnect(message: String, epoch: Long) {
+    if (epoch != connectionEpoch) return
     _connected.value = false
     _statusText.value = message
     ws = null
@@ -284,7 +290,7 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
     reconnectJob?.cancel()
     reconnectJob = scope.launch {
       delay(3000)
-      if (!_connected.value && config.isValid) {
+      if (epoch == connectionEpoch && !_connected.value && config.isValid) {
         Log.i(TAG, "Attempting reconnect…")
         _statusText.value = context.getString(R.string.wear_status_reconnecting)
         doConnect()

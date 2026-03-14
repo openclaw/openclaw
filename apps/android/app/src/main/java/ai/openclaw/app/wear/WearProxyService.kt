@@ -53,9 +53,15 @@ class WearProxyService : WearableListenerService() {
     Log.i(TAG, "Watch ping from $sourceNodeId, sending pong…")
     scope.launch {
       try {
-        messageClient.sendMessage(sourceNodeId, PONG_PATH, ByteArray(0)).await()
+        val handshakePayload = runtime.wearProxyHandshakePayload().toByteArray(Charsets.UTF_8)
+        messageClient.sendMessage(sourceNodeId, PONG_PATH, handshakePayload).await()
         Log.i(TAG, "Pong sent successfully to $sourceNodeId")
-        startEventForwarding(sourceNodeId)
+        if (runtime.isConnected.value) {
+          startEventForwarding(sourceNodeId)
+        } else {
+          eventForwardingJob?.cancel()
+          eventForwardingJob = null
+        }
       } catch (e: Throwable) {
         Log.e(TAG, "Failed to send pong: ${e.message}", e)
       }

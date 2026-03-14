@@ -1394,6 +1394,21 @@ class NodeRuntime(
     _wearProxyEvents.tryEmit(Pair(event, payloadJson))
   }
 
+  fun wearProxyHandshakePayload(): String {
+    val status =
+      when {
+        operatorConnected -> "Connected"
+        operatorStatusText.isNotBlank() -> operatorStatusText
+        _statusText.value.isNotBlank() -> _statusText.value
+        else -> "Offline"
+      }
+
+    return buildJsonObject {
+      put("ready", JsonPrimitive(operatorConnected))
+      put("statusText", JsonPrimitive(status))
+    }.toString()
+  }
+
   suspend fun requestForWearProxy(method: String, paramsJson: String?, timeoutMs: Long = 15_000): String {
     return operatorSession.request(method, paramsJson, timeoutMs)
   }
