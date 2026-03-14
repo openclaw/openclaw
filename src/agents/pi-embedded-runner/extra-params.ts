@@ -364,7 +364,7 @@ export function applyExtraParamsToAgent(
   }
 
   const anthropicBetas = resolveAnthropicBetas(merged, provider, modelId);
-  if (anthropicBetas?.length) {
+  if (provider === "anthropic" && anthropicBetas?.length) {
     log.debug(
       `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
     );
