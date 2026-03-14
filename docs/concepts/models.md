@@ -206,6 +206,19 @@ mode, pass `--yes` to accept defaults.
 
 ## Models registry (`models.json`)
 
+<Tip title="Using periods in provider IDs?">
+If your custom provider ID contains a period (e.g., `llama.cpp`), you must use bracket notation in CLI config commands to avoid breaking the path resolution:
+
+```bash
+# Correct: Bracket notation protects the period
+/config set models.providers["llama.cpp"].baseUrl=http://127.0.0.1:8080
+
+# Incorrect: The path parser will split this into nested objects
+/config set models.providers.llama.cpp.baseUrl http://127.0.0.1:8080
+```
+
+</Tip>
+
 Custom providers in `models.providers` are written into `models.json` under the
 agent directory (default `~/.openclaw/agents/<agentId>/agent/models.json`). This file
 is merged by default unless `models.mode` is set to `replace`.
