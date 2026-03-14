@@ -15,6 +15,7 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
+import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
@@ -369,6 +370,18 @@ export async function runReplyAgent(params: {
     });
 
     if (runOutcome.kind === "final") {
+      if (isDiagnosticsEnabled(cfg)) {
+        emitDiagnosticEvent({
+          type: "final.path",
+          runId: runOutcome.runId,
+          sessionKey,
+          sessionId: followupRun.run.sessionId,
+          stage: "runOutcome.final",
+          payloadCount: runOutcome.payload ? 1 : 0,
+          summary: "Entered runOutcome.kind=final branch",
+          sourceFile: "src/auto-reply/reply/agent-runner.ts",
+        });
+      }
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
@@ -477,6 +490,21 @@ export async function runReplyAgent(params: {
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
     });
+
+    if (isDiagnosticsEnabled(cfg)) {
+      emitDiagnosticEvent({
+        type: "final.path",
+        runId,
+        sessionKey,
+        sessionId: followupRun.run.sessionId,
+        provider: providerUsed,
+        model: modelUsed,
+        stage: "payloadArray",
+        payloadCount: payloadArray.length,
+        summary: "Collected runResult payload array before final payload shaping",
+        sourceFile: "src/auto-reply/reply/agent-runner.ts",
+      });
+    }
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and

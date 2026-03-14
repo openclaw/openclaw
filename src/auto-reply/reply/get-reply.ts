@@ -9,6 +9,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -247,6 +248,38 @@ export async function getReplyFromConfig(
     skillFilter: mergedSkillFilter,
   });
   if (directiveResult.kind === "reply") {
+    if (isDiagnosticsEnabled(cfg)) {
+      emitDiagnosticEvent({
+        type: "dispatch.path",
+        runId: resolvedOpts?.runId,
+        sessionKey,
+        sessionId,
+        provider,
+        model,
+        stage: "getReply.directive.reply",
+        chosenPath: "directive.reply",
+        reason: "resolveReplyDirectives returned a direct reply before runPreparedReply",
+        willCreateAgentRun: false,
+        willFallback: true,
+        hasMessage: Array.isArray(directiveResult.reply)
+          ? directiveResult.reply.length > 0
+          : Boolean(directiveResult.reply),
+        summary: "First routing split selected directive direct-reply path",
+        sourceFile: "src/auto-reply/reply/get-reply.ts",
+      });
+      emitDiagnosticEvent({
+        type: "final.path",
+        runId: resolvedOpts?.runId,
+        sessionKey,
+        sessionId,
+        provider,
+        model,
+        stage: "directive.reply",
+        payloadCount: Array.isArray(directiveResult.reply) ? directiveResult.reply.length : 1,
+        summary: "Direct reply returned from resolveReplyDirectives",
+        sourceFile: "src/auto-reply/reply/get-reply.ts",
+      });
+    }
     return directiveResult.reply;
   }
 
@@ -343,6 +376,38 @@ export async function getReplyFromConfig(
     skillFilter: mergedSkillFilter,
   });
   if (inlineActionResult.kind === "reply") {
+    if (isDiagnosticsEnabled(cfg)) {
+      emitDiagnosticEvent({
+        type: "dispatch.path",
+        runId: resolvedOpts?.runId,
+        sessionKey,
+        sessionId,
+        provider,
+        model,
+        stage: "getReply.inlineAction.reply",
+        chosenPath: "inlineAction.reply",
+        reason: "handleInlineActions returned a direct reply before runPreparedReply",
+        willCreateAgentRun: false,
+        willFallback: true,
+        hasMessage: Array.isArray(inlineActionResult.reply)
+          ? inlineActionResult.reply.length > 0
+          : Boolean(inlineActionResult.reply),
+        summary: "First routing split selected inline-action direct-reply path",
+        sourceFile: "src/auto-reply/reply/get-reply.ts",
+      });
+      emitDiagnosticEvent({
+        type: "final.path",
+        runId: resolvedOpts?.runId,
+        sessionKey,
+        sessionId,
+        provider,
+        model,
+        stage: "inlineAction.reply",
+        payloadCount: Array.isArray(inlineActionResult.reply) ? inlineActionResult.reply.length : 1,
+        summary: "Direct reply returned from handleInlineActions",
+        sourceFile: "src/auto-reply/reply/get-reply.ts",
+      });
+    }
     await maybeEmitMissingResetHooks();
     return inlineActionResult.reply;
   }
@@ -357,6 +422,24 @@ export async function getReplyFromConfig(
     sessionKey,
     workspaceDir,
   });
+
+  if (isDiagnosticsEnabled(cfg)) {
+    emitDiagnosticEvent({
+      type: "dispatch.path",
+      runId: resolvedOpts?.runId,
+      sessionKey,
+      sessionId,
+      provider,
+      model,
+      stage: "getReply.runPreparedReply",
+      chosenPath: "runPreparedReply",
+      reason: "No direct-reply early return matched; proceeding into agent reply pipeline",
+      willCreateAgentRun: true,
+      willFallback: false,
+      summary: "First routing split selected runPreparedReply path",
+      sourceFile: "src/auto-reply/reply/get-reply.ts",
+    });
+  }
 
   return runPreparedReply({
     ctx,

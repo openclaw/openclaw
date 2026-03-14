@@ -69,6 +69,91 @@ export type DiagnosticMessageQueuedEvent = DiagnosticBaseEvent & {
   queueDepth?: number;
 };
 
+export type DiagnosticMessageIngressedEvent = DiagnosticBaseEvent & {
+  type: "message.ingressed";
+  runId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+  provider?: string;
+  messageId?: string | number;
+  summary?: string;
+  sourceFile?: string;
+};
+
+export type DiagnosticPromptAssembledEvent = DiagnosticBaseEvent & {
+  type: "prompt.assembled";
+  runId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider?: string;
+  model?: string;
+  queueMode?: string;
+  hasThreadContext?: boolean;
+  hasSystemEvents?: boolean;
+  summary?: string;
+  bodyPreview?: string;
+  sourceFile?: string;
+};
+
+export type DiagnosticFinalCommittedEvent = DiagnosticBaseEvent & {
+  type: "final.committed";
+  runId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider?: string;
+  model?: string;
+  payloadKind?: "text" | "media" | "mixed" | "empty";
+  textPreview?: string;
+  summary?: string;
+  sourceFile?: string;
+};
+
+export type DiagnosticFinalPathEvent = DiagnosticBaseEvent & {
+  type: "final.path";
+  runId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider?: string;
+  model?: string;
+  stage?: "runOutcome.final" | "payloadArray" | "directive.reply" | "inlineAction.reply";
+  payloadCount?: number;
+  summary?: string;
+  sourceFile?: string;
+};
+
+export type DiagnosticDispatchPathEvent = DiagnosticBaseEvent & {
+  type: "dispatch.path";
+  runId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider?: string;
+  model?: string;
+  stage?:
+    | "getReply.directive.reply"
+    | "getReply.inlineAction.reply"
+    | "getReply.runPreparedReply"
+    | "dispatch.return"
+    | "chat.fallback.no_agent_run"
+    | "chat.broadcast.final";
+  chosenPath?: string;
+  reason?: string;
+  willCreateAgentRun?: boolean;
+  willFallback?: boolean;
+  queuedFinal?: boolean;
+  counts?: {
+    final?: number;
+    block?: number;
+    tool?: number;
+  };
+  finalReplyPartsCount?: number;
+  hasCombinedReply?: boolean;
+  hasMessage?: boolean;
+  messageStopReason?: string;
+  summary?: string;
+  sourceFile?: string;
+};
+
 export type DiagnosticMessageProcessedEvent = DiagnosticBaseEvent & {
   type: "message.processed";
   channel: string;
@@ -153,6 +238,11 @@ export type DiagnosticEventPayload =
   | DiagnosticWebhookProcessedEvent
   | DiagnosticWebhookErrorEvent
   | DiagnosticMessageQueuedEvent
+  | DiagnosticMessageIngressedEvent
+  | DiagnosticPromptAssembledEvent
+  | DiagnosticFinalCommittedEvent
+  | DiagnosticFinalPathEvent
+  | DiagnosticDispatchPathEvent
   | DiagnosticMessageProcessedEvent
   | DiagnosticSessionStateEvent
   | DiagnosticSessionStuckEvent
