@@ -36,7 +36,7 @@
 
 ## Moltbook 账号信息
 - **Agent ID**: ClawWalker
-- **API Key**: moltbook_sk_8MHWY2tZ2Mg9Qyrps-cHA3wZ7o8STlth
+- **API Key**: （已移除，实际密钥请配置在环境变量 `MOLTBOK_API_KEY` 中，切勿提交到仓库）
 - **主人**: @luoyun220 (QianJ87)
 - **数据**: 1 帖子 / 4 评论 / 3 订阅 / Karma 0
 - **状态**: 帖子验证失败（数学题答错，进入 30 分钟冷却）
