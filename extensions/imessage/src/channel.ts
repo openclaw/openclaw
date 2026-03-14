@@ -29,6 +29,8 @@ import {
   type ChannelPlugin,
   type ResolvedIMessageAccount,
 } from "openclaw/plugin-sdk/imessage";
+import { resolveOutboundSendDep } from "../../../src/infra/outbound/deliver.js";
+import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { getIMessageRuntime } from "./runtime.js";
 
 const meta = getChatChannelMeta("imessage");
@@ -58,11 +60,12 @@ async function sendIMessageOutbound(params: {
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   accountId?: string;
-  deps?: { sendIMessage?: IMessageSendFn };
+  deps?: { [channelId: string]: unknown };
   replyToId?: string;
 }) {
   const send =
-    params.deps?.sendIMessage ?? getIMessageRuntime().channel.imessage.sendMessageIMessage;
+    resolveOutboundSendDep<IMessageSendFn>(params.deps, "imessage") ??
+    getIMessageRuntime().channel.imessage.sendMessageIMessage;
   const maxBytes = resolveChannelMediaMaxBytes({
     cfg: params.cfg,
     resolveChannelLimitMb: ({ cfg, accountId }) =>
@@ -264,17 +267,11 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       dbPath: null,
     },
     collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("imessage", accounts),
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      running: snapshot.running ?? false,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-      cliPath: snapshot.cliPath ?? null,
-      dbPath: snapshot.dbPath ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) =>
+      buildPassiveProbedChannelStatusSummary(snapshot, {
+        cliPath: snapshot.cliPath ?? null,
+        dbPath: snapshot.dbPath ?? null,
+      }),
     probeAccount: async ({ timeoutMs }) =>
       getIMessageRuntime().channel.imessage.probeIMessage(timeoutMs),
     buildAccountSnapshot: ({ account, runtime, probe }) => ({
