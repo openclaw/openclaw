@@ -961,6 +961,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       let summary = "";
       let lastHistorySummary = "";
       let lastSplitTurnSection = "";
+      let usedLastSuccessfulSummary = false;
       let currentInstructions = structuredInstructions;
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
       let lastSuccessfulSummary: string | null = null;
@@ -968,8 +969,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
         let summaryWithoutPreservedTurns = "";
         let summaryWithPreservedTurns = "";
+        let splitTurnSection = "";
+        let historySummary = "";
         try {
-          const historySummary =
+          historySummary =
             messagesToSummarize.length > 0
               ? await summarizeInStages({
                   messages: messagesToSummarize,
@@ -986,8 +989,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
 
           summaryWithoutPreservedTurns = historySummary;
-          lastHistorySummary = historySummary;
-          lastSplitTurnSection = "";
           if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
             const prefixSummary = await summarizeInStages({
               messages: turnPrefixMessages,
@@ -1004,11 +1005,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               summarizationInstructions,
               previousSummary: undefined,
             });
-            const splitTurnSection = `**Turn Context (split turn):**\n\n${prefixSummary}`;
+            splitTurnSection = `**Turn Context (split turn):**\n\n${prefixSummary}`;
             summaryWithoutPreservedTurns = historySummary.trim()
               ? `${historySummary}\n\n---\n\n${splitTurnSection}`
               : splitTurnSection;
-            lastSplitTurnSection = splitTurnSection;
           }
           summaryWithPreservedTurns = appendSummarySection(
             summaryWithoutPreservedTurns,
@@ -1023,11 +1023,14 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 }`,
             );
             summary = lastSuccessfulSummary;
+            usedLastSuccessfulSummary = true;
             break;
           }
           throw attemptError;
         }
         lastSuccessfulSummary = summaryWithPreservedTurns;
+        lastHistorySummary = historySummary;
+        lastSplitTurnSection = splitTurnSection;
 
         const canRegenerate =
           messagesToSummarize.length > 0 ||
@@ -1083,7 +1086,18 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         fullReservedSuffix && !/^\s/.test(fullReservedSuffix)
           ? `\n\n${fullReservedSuffix}`
           : fullReservedSuffix;
-      summary = capCompactionSummaryPreservingSuffix(lastHistorySummary, normalizedSuffix);
+      const bodyToCap = usedLastSuccessfulSummary ? summary : lastHistorySummary;
+      const suffixToUse = usedLastSuccessfulSummary
+        ? (() => {
+            const diag = appendSummarySection(
+              appendSummarySection("", toolFailureSection),
+              fileOpsSummary,
+            );
+            const withWk = appendSummarySection(diag, workspaceContext);
+            return withWk && !/^\s/.test(withWk) ? `\n\n${withWk}` : withWk;
+          })()
+        : normalizedSuffix;
+      summary = capCompactionSummaryPreservingSuffix(bodyToCap, suffixToUse ?? "");
 
       return {
         compaction: {
