@@ -360,26 +360,35 @@ export async function sendWebhookMessageDiscord(
   const replyTo = typeof opts.replyTo === "string" ? opts.replyTo.trim() : "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
 
-  const response = await fetch(
-    resolveWebhookExecutionUrl({
-      webhookId,
-      webhookToken,
-      threadId: opts.threadId,
-      wait: opts.wait,
-    }),
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        content: rewrittenText,
-        username: opts.username?.trim() || undefined,
-        avatar_url: opts.avatarUrl?.trim() || undefined,
-        ...(messageReference ? { message_reference: messageReference } : {}),
+  let response: Response;
+  try {
+    response = await fetch(
+      resolveWebhookExecutionUrl({
+        webhookId,
+        webhookToken,
+        threadId: opts.threadId,
+        wait: opts.wait,
       }),
-    },
-  );
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          content: rewrittenText,
+          username: opts.username?.trim() || undefined,
+          avatar_url: opts.avatarUrl?.trim() || undefined,
+          ...(messageReference ? { message_reference: messageReference } : {}),
+        }),
+        signal: AbortSignal.timeout(30_000),
+      },
+    );
+  } catch (err) {
+    throw new Error(
+      `Discord webhook send failed: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
   if (!response.ok) {
     const raw = await response.text().catch(() => "");
     throw new Error(
