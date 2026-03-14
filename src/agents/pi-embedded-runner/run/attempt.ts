@@ -33,6 +33,7 @@ import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
+import { createAgentTraceLogger } from "../../agent-trace-log.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import {
   analyzeBootstrapBudget,
@@ -48,7 +49,6 @@ import {
 } from "../../channel-tools.js";
 import { ensureCustomApiRegistered } from "../../custom-api-registry.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
-import { createAgentTraceLogger } from "../../agent-trace-log.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
@@ -2072,9 +2072,7 @@ export async function runEmbeddedAttempt(
         );
       }
       if (agentTraceLogger) {
-        activeSession.agent.streamFn = agentTraceLogger.wrapStreamFn(
-          activeSession.agent.streamFn,
-        );
+        activeSession.agent.streamFn = agentTraceLogger.wrapStreamFn(activeSession.agent.streamFn);
       }
       try {
         const prior = await sanitizeSessionHistory({

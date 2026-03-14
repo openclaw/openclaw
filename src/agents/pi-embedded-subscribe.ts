@@ -641,7 +641,6 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getCompactionCount: () => compactionCount,
   };
 
-
   const innerHandler = createEmbeddedPiSessionEventHandler(ctx);
   const handleEvent = params.onTraceEvent
     ? (evt: Parameters<typeof innerHandler>[0]) => {
