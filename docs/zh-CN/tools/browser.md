@@ -165,7 +165,7 @@ OpenClaw 在调用 `/json/*` 端点和连接 CDP WebSocket 时会保留认证信
     remoteCdpHandshakeTimeoutMs: 4000,
     profiles: {
       browserless: {
-        cdpUrl: "https://production-sfo.browserless.io?token=<BROWSERLESS_API_KEY>",
+        cdpUrl: "wss://production-sfo.browserless.io?token=<BROWSERLESS_API_KEY>",
         color: "#00AA00",
       },
     },
