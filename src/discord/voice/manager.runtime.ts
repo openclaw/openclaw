@@ -1,1 +1,1 @@
-export { DiscordVoiceManager, DiscordVoiceReadyListener } from "./manager.js";
+export * from "../../../extensions/discord/src/voice/manager.runtime.js";
