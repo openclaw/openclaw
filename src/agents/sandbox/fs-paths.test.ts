@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -43,6 +44,20 @@ describe("parseSandboxBindMount", () => {
     expect(parseSandboxBindMount("//server/share:/workspace:ro")).toEqual({
       hostRoot: path.resolve("//server/share"),
       containerRoot: "/workspace",
+      writable: false,
+    });
+  });
+
+  it("expands ~ in host path of bind spec", () => {
+    const home = os.homedir();
+    expect(parseSandboxBindMount("~/mydata:/data:rw")).toEqual({
+      hostRoot: path.resolve(path.join(home, "mydata")),
+      containerRoot: "/data",
+      writable: true,
+    });
+    expect(parseSandboxBindMount("~:/home-mount:ro")).toEqual({
+      hostRoot: path.resolve(home),
+      containerRoot: "/home-mount",
       writable: false,
     });
   });
