@@ -2,6 +2,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Load .env if present so variables like OPENCLAW_DOCKER_APT_PACKAGES are available
+if [[ -f "$ROOT_DIR/.env" ]]; then
+set -a
+# shellcheck source=/dev/null
+source "$ROOT_DIR/.env"
+set +a
+fi
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
