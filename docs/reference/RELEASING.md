@@ -99,8 +99,7 @@ Historical note:
 - [ ] Run `OpenClaw NPM Release` manually with the same tag to publish after `npm-release` environment approval.
   - Stable tags publish to npm `latest`.
   - Beta tags publish to npm `beta`.
-  - The preview run rejects tags that do not match `package.json`, are not on `main`, or whose CalVer date is more than 2 UTC calendar days away from the release date.
-  - The manual publish run rechecks tag/package/main alignment, but it does not expire a tag just because approval happens later.
+  - Both the preview run and the manual publish run reject tags that do not match `package.json`, are not on `main`, or whose CalVer date is more than 2 UTC calendar days away from the release date.
 - [ ] Verify the registry: `npm view openclaw version`, `npm view openclaw dist-tags`, and `npx -y openclaw@X.Y.Z --version` (or `--help`).
 
 ### Troubleshooting (notes from 2.0.0-beta2 release)

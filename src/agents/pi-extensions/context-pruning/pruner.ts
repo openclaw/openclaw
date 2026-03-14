@@ -8,6 +8,19 @@ const CHARS_PER_TOKEN_ESTIMATE = 4;
 const IMAGE_CHAR_ESTIMATE = 8_000;
 const PRUNED_CONTEXT_IMAGE_MARKER = "[image removed during context pruning]";
 
+/**
+ * Returns true when a content block is a thinking or redacted_thinking block.
+ * These must never be pruned — Anthropic's API rejects requests when thinking
+ * blocks in an assistant turn are modified or removed.
+ */
+function isThinkingBlock(block: unknown): boolean {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const type = (block as { type?: unknown }).type;
+  return type === "thinking" || type === "redacted_thinking";
+}
+
 function asText(text: string): TextContent {
   return { type: "text", text };
 }
@@ -157,7 +170,17 @@ function estimateMessageChars(message: AgentMessage): number {
   }
 
   if (message.role === "toolResult") {
-    return estimateTextAndImageChars(message.content);
+    let chars = estimateTextAndImageChars(message.content);
+    // Account for thinking/redacted_thinking blocks preserved during hard-clear.
+    if (Array.isArray(message.content)) {
+      for (const block of message.content as unknown[]) {
+        if (isThinkingBlock(block)) {
+          const b = block as { thinking?: string; data?: string };
+          chars += (b.thinking ?? b.data ?? "").length;
+        }
+      }
+    }
+    return chars;
   }
 
   return 256;
@@ -205,6 +228,9 @@ function softTrimToolResultMessage(params: {
   settings: EffectiveContextPruningSettings;
 }): ToolResultMessage | null {
   const { msg, settings } = params;
+  // Preserve thinking/redacted_thinking blocks — Anthropic rejects modified thinking blocks.
+  const contentArr = Array.isArray(msg.content) ? msg.content : [];
+  const preserved = (contentArr as unknown[]).filter(isThinkingBlock) as typeof msg.content;
   const hasImages = hasImageBlocks(msg.content);
   const parts = hasImages
     ? collectPrunableToolResultSegments(msg.content)
@@ -214,7 +240,7 @@ function softTrimToolResultMessage(params: {
     if (!hasImages) {
       return null;
     }
-    return { ...msg, content: [asText(parts.join("\n"))] };
+    return { ...msg, content: [...preserved, asText(parts.join("\n"))] };
   }
 
   const headChars = Math.max(0, settings.softTrim.headChars);
@@ -223,7 +249,7 @@ function softTrimToolResultMessage(params: {
     if (!hasImages) {
       return null;
     }
-    return { ...msg, content: [asText(parts.join("\n"))] };
+    return { ...msg, content: [...preserved, asText(parts.join("\n"))] };
   }
 
   const head = takeHeadFromJoinedText(parts, headChars);
@@ -236,7 +262,7 @@ ${tail}`;
 
 [Tool result trimmed: kept first ${headChars} chars and last ${tailChars} chars of ${rawLen} chars.]`;
 
-  return { ...msg, content: [asText(trimmed + note)] };
+  return { ...msg, content: [...preserved, asText(trimmed + note)] };
 }
 
 export function pruneContextMessages(params: {
@@ -327,7 +353,18 @@ export function pruneContextMessages(params: {
     if (!msg || msg.role !== "toolResult") {
       continue;
     }
-    prunableToolChars += estimateMessageChars(msg);
+    // Exclude preserved thinking/redacted_thinking block sizes — those blocks
+    // survive hard-clear and are not actually prunable.
+    let thinkingChars = 0;
+    if (Array.isArray(msg.content)) {
+      for (const block of msg.content as unknown[]) {
+        if (isThinkingBlock(block)) {
+          const b = block as { thinking?: string; data?: string };
+          thinkingChars += (b.thinking ?? b.data ?? "").length;
+        }
+      }
+    }
+    prunableToolChars += estimateMessageChars(msg) - thinkingChars;
   }
   if (prunableToolChars < settings.minPrunableToolChars) {
     return outputAfterSoftTrim;
@@ -343,9 +380,12 @@ export function pruneContextMessages(params: {
     }
 
     const beforeChars = estimateMessageChars(msg);
+    // Preserve thinking/redacted_thinking blocks — Anthropic rejects modified thinking blocks.
+    const thinkingArr = Array.isArray(msg.content) ? msg.content : [];
+    const thinking = (thinkingArr as unknown[]).filter(isThinkingBlock) as typeof msg.content;
     const cleared: ToolResultMessage = {
       ...msg,
-      content: [asText(settings.hardClear.placeholder)],
+      content: [...thinking, asText(settings.hardClear.placeholder)],
     };
     if (!next) {
       next = messages.slice();
