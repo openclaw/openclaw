@@ -868,6 +868,42 @@ describe("Agent-specific tool filtering", () => {
     expect(ownerNames).toContain("exec");
   });
 
+  it("should preserve case-insensitive explicit group matches over ambiguous DM fallback", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "*": {
+              tools: { allow: ["read"] },
+            },
+            "DIRECT:ABC": {
+              tools: { allow: ["read"] },
+            },
+          },
+          accounts: {
+            group: {
+              dms: {
+                abc: {
+                  tools: { allow: ["read", "exec"] },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:group:direct:abc",
+      workspaceDir: "/tmp/test-feishu-group-case-insensitive-explicit-match",
+      agentDir: "/tmp/agent-feishu-group-case-insensitive-explicit-match",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).not.toContain("exec");
+  });
+
   it("should not fall through from direct session parsing to group policy candidates", () => {
     const cfg: OpenClawConfig = {
       channels: {
