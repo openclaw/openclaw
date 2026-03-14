@@ -36,6 +36,7 @@ type LiveDiscordCommand = {
   id: string;
   name: string;
   signatureHash: string;
+  body: Record<string, unknown>;
 };
 
 type DesiredDiscordCommand = {
@@ -52,6 +53,20 @@ type DiscordNativeCommandReconcileSummary = {
   deleted: number;
   leftAlone: number;
 };
+
+type LoadedDiscordNativeCommandState = {
+  exists: boolean;
+  state: DiscordNativeCommandState;
+};
+
+const DISCORD_COMMAND_RESPONSE_ONLY_FIELDS = new Set([
+  "application_id",
+  "description_localized",
+  "guild_id",
+  "id",
+  "name_localized",
+  "version",
+]);
 
 export type DiscordNativeCommandReconcileResult = {
   mode: "reconcile";
@@ -89,7 +104,7 @@ function toSortedObject(value: unknown): unknown {
   );
 }
 
-function hashDefinition(definition: DiscordNativeCommandDeploymentDefinition): string {
+function hashDefinition(definition: unknown): string {
   return crypto
     .createHash("sha256")
     .update(JSON.stringify(toSortedObject(definition)))
@@ -143,7 +158,7 @@ function toPersistedState(params: {
 async function loadState(params: {
   accountId: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<DiscordNativeCommandState> {
+}): Promise<LoadedDiscordNativeCommandState> {
   const filePath = resolveStatePath(params);
   const fallback: DiscordNativeCommandState = {
     version: 1,
@@ -151,36 +166,42 @@ async function loadState(params: {
     applicationId: "",
     commands: [],
   };
-  const { value } = await readJsonFileWithFallback<DiscordNativeCommandState>(filePath, fallback);
+  const { value, exists } = await readJsonFileWithFallback<DiscordNativeCommandState>(
+    filePath,
+    fallback,
+  );
   if (
     !value ||
     typeof value !== "object" ||
     value.version !== 1 ||
     !Array.isArray(value.commands)
   ) {
-    return fallback;
+    return { exists, state: fallback };
   }
   return {
-    version: 1,
-    accountId:
-      typeof value.accountId === "string"
-        ? normalizeAccountId(value.accountId)
-        : fallback.accountId,
-    applicationId: typeof value.applicationId === "string" ? value.applicationId : "",
-    commands: value.commands
-      .filter((entry): entry is PersistedDiscordNativeCommand =>
-        Boolean(entry && typeof entry === "object"),
-      )
-      .map((entry) => ({
-        id: typeof entry.id === "string" ? entry.id : "",
-        name: typeof entry.name === "string" ? entry.name.trim().toLowerCase() : "",
-        signatureHash: typeof entry.signatureHash === "string" ? entry.signatureHash : "",
-        deployedAt:
-          typeof entry.deployedAt === "string" ? entry.deployedAt : new Date(0).toISOString(),
-        lastSeenAt:
-          typeof entry.lastSeenAt === "string" ? entry.lastSeenAt : new Date(0).toISOString(),
-      }))
-      .filter((entry) => entry.id && entry.name && entry.signatureHash),
+    exists,
+    state: {
+      version: 1,
+      accountId:
+        typeof value.accountId === "string"
+          ? normalizeAccountId(value.accountId)
+          : fallback.accountId,
+      applicationId: typeof value.applicationId === "string" ? value.applicationId : "",
+      commands: value.commands
+        .filter((entry): entry is PersistedDiscordNativeCommand =>
+          Boolean(entry && typeof entry === "object"),
+        )
+        .map((entry) => ({
+          id: typeof entry.id === "string" ? entry.id : "",
+          name: typeof entry.name === "string" ? entry.name.trim().toLowerCase() : "",
+          signatureHash: typeof entry.signatureHash === "string" ? entry.signatureHash : "",
+          deployedAt:
+            typeof entry.deployedAt === "string" ? entry.deployedAt : new Date(0).toISOString(),
+          lastSeenAt:
+            typeof entry.lastSeenAt === "string" ? entry.lastSeenAt : new Date(0).toISOString(),
+        }))
+        .filter((entry) => entry.id && entry.name && entry.signatureHash),
+    },
   };
 }
 
@@ -195,28 +216,37 @@ async function saveState(params: {
   await writeJsonFileAtomically(filePath, params.state);
 }
 
+function sanitizeLiveCommandBody(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const sanitized = Object.fromEntries(
+    Object.entries(record).filter(([key]) => !DISCORD_COMMAND_RESPONSE_ONLY_FIELDS.has(key)),
+  );
+  const name = typeof sanitized.name === "string" ? sanitized.name.trim() : "";
+  if (!name) {
+    return null;
+  }
+  return sanitized;
+}
+
 function normalizeLiveCommand(raw: unknown): LiveDiscordCommand | null {
   if (!raw || typeof raw !== "object") {
     return null;
   }
   const record = raw as Record<string, unknown>;
   const id = typeof record.id === "string" ? record.id : "";
-  const name = typeof record.name === "string" ? record.name.trim().toLowerCase() : "";
-  const description = typeof record.description === "string" ? record.description : "";
-  const type = typeof record.type === "number" ? record.type : 1;
-  const options = Array.isArray(record.options) ? record.options : undefined;
-  if (!id || !name) {
+  const body = sanitizeLiveCommandBody(raw);
+  const name = typeof body?.name === "string" ? body.name.trim().toLowerCase() : "";
+  if (!id || !name || !body) {
     return null;
   }
   return {
     id,
     name,
-    signatureHash: hashDefinition({
-      name,
-      description,
-      type: type as 1,
-      options: options as DiscordNativeCommandDeploymentDefinition["options"],
-    }),
+    signatureHash: hashDefinition(body),
+    body,
   };
 }
 
@@ -259,16 +289,30 @@ export async function reconcileDiscordNativeCommands(params: {
     })),
   ];
   const desiredByName = new Map(desiredCommands.map((command) => [command.name, command]));
-  const savedState = await loadState({ accountId: params.accountId, env: params.env });
+  const loadedState = await loadState({ accountId: params.accountId, env: params.env });
+  const savedState = loadedState.state;
   const savedByName = new Map(savedState.commands.map((command) => [command.name, command]));
   const liveCommands = await fetchLiveCommands({
     client: params.client,
     applicationId: params.applicationId,
   });
   const liveByName = new Map(liveCommands.map((command) => [command.name, command]));
-  const unexpectedLiveCommands = liveCommands.filter(
-    (command) => !desiredByName.has(command.name) && !savedByName.has(command.name),
-  );
+  const treatMissingStateAsLegacyOverwrite = !loadedState.exists && liveCommands.length > 0;
+  const preservedLiveCommands = treatMissingStateAsLegacyOverwrite
+    ? []
+    : liveCommands.filter(
+        (command) => !desiredByName.has(command.name) && !savedByName.has(command.name),
+      );
+  const deletedLiveCommands = liveCommands.filter((command) => {
+    if (desiredByName.has(command.name)) {
+      return false;
+    }
+    if (treatMissingStateAsLegacyOverwrite) {
+      return true;
+    }
+    const saved = savedByName.get(command.name);
+    return saved?.id === command.id;
+  });
 
   const summary: DiscordNativeCommandReconcileSummary = {
     validated: 0,
@@ -281,11 +325,15 @@ export async function reconcileDiscordNativeCommands(params: {
   const resultingCommands: LiveDiscordCommand[] = [];
 
   params.runtime.log?.(
-    `discord: native command reconcile loaded saved=${savedState.commands.length} live=${liveCommands.length} desired=${desiredCommands.length} trackedLive=${liveCommands.length - unexpectedLiveCommands.length} unexpectedLive=${unexpectedLiveCommands.length}`,
+    `discord: native command reconcile loaded saved=${savedState.commands.length} live=${liveCommands.length} desired=${desiredCommands.length} trackedLive=${liveCommands.length - preservedLiveCommands.length} unexpectedLive=${preservedLiveCommands.length}`,
   );
-  if (unexpectedLiveCommands.length > 0) {
+  if (treatMissingStateAsLegacyOverwrite) {
     params.runtime.log?.(
-      `discord: native command reconcile leaving unexpected live commands untouched: ${summarizeCommandNames(unexpectedLiveCommands.map((command) => command.name))}`,
+      "discord: native command reconcile state missing; using legacy bulk overwrite to seed managed state",
+    );
+  } else if (preservedLiveCommands.length > 0) {
+    params.runtime.log?.(
+      `discord: native command reconcile leaving unexpected live commands untouched: ${summarizeCommandNames(preservedLiveCommands.map((command) => command.name))}`,
     );
   }
 
@@ -295,55 +343,63 @@ export async function reconcileDiscordNativeCommands(params: {
       if (live.signatureHash === desired.signatureHash) {
         summary.validated += 1;
         summary.unchanged += 1;
-        resultingCommands.push(live);
         continue;
       }
-      const updated = await params.client.rest.patch(
-        Routes.applicationCommand(params.applicationId, live.id),
-        {
-          body: desired.body,
-        },
-      );
-      const normalizedUpdated = normalizeLiveCommand(updated) ?? {
-        id: live.id,
-        name: desired.name,
-        signatureHash: desired.signatureHash,
-      };
       summary.validated += 1;
       summary.updated += 1;
-      resultingCommands.push(normalizedUpdated);
       continue;
     }
 
-    const created = await params.client.rest.post(
-      Routes.applicationCommands(params.applicationId),
-      {
-        body: desired.body,
-      },
-    );
-    const normalizedCreated = normalizeLiveCommand(created);
     summary.created += 1;
-    resultingCommands.push(
-      normalizedCreated ?? {
-        id: "",
-        name: desired.name,
-        signatureHash: desired.signatureHash,
-      },
-    );
   }
 
-  for (const live of liveCommands) {
-    if (desiredByName.has(live.name)) {
-      continue;
-    }
-    const saved = savedByName.get(live.name);
-    if (!saved || saved.id !== live.id) {
-      summary.leftAlone += 1;
-      continue;
-    }
-    await params.client.rest.delete(Routes.applicationCommand(params.applicationId, live.id));
-    summary.deleted += 1;
+  summary.deleted = deletedLiveCommands.length;
+  summary.leftAlone = preservedLiveCommands.length;
+
+  if (summary.created === 0 && summary.updated === 0 && summary.deleted === 0) {
+    await saveState({
+      env: params.env,
+      state: toPersistedState({
+        accountId: params.accountId,
+        applicationId: params.applicationId,
+        commands: liveCommands.filter((command) => desiredByName.has(command.name)),
+      }),
+    });
+
+    params.runtime.log?.(
+      `discord: native command reconcile summary validated=${summary.validated} unchanged=${summary.unchanged} created=${summary.created} updated=${summary.updated} deleted=${summary.deleted} leftAlone=${summary.leftAlone}`,
+    );
+
+    return {
+      mode: "reconcile",
+      liveCount: liveCommands.length,
+      savedCount: savedState.commands.length,
+      summary,
+    };
   }
+
+  const overwriteBody = [
+    ...preservedLiveCommands.map((command) => command.body),
+    ...desiredCommands.map((command) => command.body),
+  ];
+  const overwriteResult = await params.client.rest.put(
+    Routes.applicationCommands(params.applicationId),
+    {
+      body: overwriteBody,
+    },
+  );
+  const syncedLiveCommands = Array.isArray(overwriteResult)
+    ? overwriteResult
+        .map((entry) => normalizeLiveCommand(entry))
+        .filter((entry): entry is LiveDiscordCommand => Boolean(entry))
+    : await fetchLiveCommands({
+        client: params.client,
+        applicationId: params.applicationId,
+      });
+
+  resultingCommands.push(
+    ...syncedLiveCommands.filter((command) => desiredByName.has(command.name)),
+  );
 
   const persistedCommands = resultingCommands.filter((command) => command.id);
   await saveState({
@@ -365,6 +421,26 @@ export async function reconcileDiscordNativeCommands(params: {
     savedCount: savedState.commands.length,
     summary,
   };
+}
+
+export async function snapshotDiscordNativeCommandState(params: {
+  client: Client;
+  accountId: string;
+  applicationId: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  const liveCommands = await fetchLiveCommands({
+    client: params.client,
+    applicationId: params.applicationId,
+  });
+  await saveState({
+    env: params.env,
+    state: toPersistedState({
+      accountId: params.accountId,
+      applicationId: params.applicationId,
+      commands: liveCommands,
+    }),
+  });
 }
 
 export const __testing = {

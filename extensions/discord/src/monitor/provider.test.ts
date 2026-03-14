@@ -36,6 +36,7 @@ const {
   createNoopThreadBindingManagerMock,
   createThreadBindingManagerMock,
   reconcileDiscordNativeCommandsMock,
+  snapshotDiscordNativeCommandStateMock,
   reconcileAcpThreadBindingsOnStartupMock,
   createdBindingManagers,
   getAcpSessionStatusMock,
@@ -93,6 +94,7 @@ const {
         leftAlone: 0,
       },
     })),
+    snapshotDiscordNativeCommandStateMock: vi.fn(async () => undefined),
     reconcileAcpThreadBindingsOnStartupMock: vi.fn(() => ({
       checked: 0,
       removed: 0,
@@ -350,6 +352,7 @@ vi.mock("./native-command.js", () => ({
 
 vi.mock("./native-command-state.js", () => ({
   reconcileDiscordNativeCommands: reconcileDiscordNativeCommandsMock,
+  snapshotDiscordNativeCommandState: snapshotDiscordNativeCommandStateMock,
 }));
 
 vi.mock("./presence.js", () => ({
@@ -466,6 +469,7 @@ describe("monitorDiscordProvider", () => {
         leftAlone: 0,
       },
     });
+    snapshotDiscordNativeCommandStateMock.mockClear().mockResolvedValue(undefined);
     reconcileAcpThreadBindingsOnStartupMock.mockClear().mockReturnValue({
       checked: 0,
       removed: 0,
@@ -885,6 +889,7 @@ describe("monitorDiscordProvider", () => {
 
     expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
     expect(reconcileDiscordNativeCommandsMock).not.toHaveBeenCalled();
+    expect(snapshotDiscordNativeCommandStateMock).toHaveBeenCalledTimes(1);
   });
 
   it("uses the reconcile path when reconcileOnStartup is enabled on the provider config", async () => {
@@ -909,6 +914,7 @@ describe("monitorDiscordProvider", () => {
 
     expect(reconcileDiscordNativeCommandsMock).toHaveBeenCalledTimes(1);
     expect(clientHandleDeployRequestMock).not.toHaveBeenCalled();
+    expect(snapshotDiscordNativeCommandStateMock).not.toHaveBeenCalled();
   });
 
   it("passes plugin commands into the reconcile path", async () => {
