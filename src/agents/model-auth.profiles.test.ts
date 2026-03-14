@@ -426,4 +426,34 @@ describe("getApiKeyForModel", () => {
       },
     );
   });
+
+  it("resolveEnvApiKey('google-vertex') returns GOOGLE_CLOUD_API_KEY when set", async () => {
+    await withEnvAsync(
+      {
+        GOOGLE_CLOUD_API_KEY: "AIzaSyTest1234567890",
+      },
+      async () => {
+        const resolved = resolveEnvApiKey("google-vertex");
+        expect(resolved?.apiKey).toBe("AIzaSyTest1234567890");
+        expect(resolved?.source).toContain("GOOGLE_CLOUD_API_KEY");
+      },
+    );
+  });
+
+  it("resolveEnvApiKey('google-vertex') does not return GOOGLE_CLOUD_API_KEY when the env var is unset", async () => {
+    await withEnvAsync(
+      {
+        GOOGLE_CLOUD_API_KEY: undefined,
+      },
+      async () => {
+        const resolved = resolveEnvApiKey("google-vertex");
+        // Without GOOGLE_CLOUD_API_KEY, the candidates check finds nothing.
+        // The ADC fallback may or may not return depending on local
+        // credential files, but the source must never reference the API key.
+        if (resolved) {
+          expect(resolved.source).not.toContain("GOOGLE_CLOUD_API_KEY");
+        }
+      },
+    );
+  });
 });

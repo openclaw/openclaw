@@ -17,6 +17,11 @@ describe("provider env vars", () => {
     expect(listKnownSecretEnvVarNames()).not.toContain("OPENCLAW_API_KEY");
   });
 
+  it("includes GOOGLE_CLOUD_API_KEY in both secret and auth env var lists", () => {
+    expect(listKnownSecretEnvVarNames()).toContain("GOOGLE_CLOUD_API_KEY");
+    expect(listKnownProviderAuthEnvVarNames()).toContain("GOOGLE_CLOUD_API_KEY");
+  });
+
   it("omits env keys case-insensitively", () => {
     const env = omitEnvKeysCaseInsensitive(
       {

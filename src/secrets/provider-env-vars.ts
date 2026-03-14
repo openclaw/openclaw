@@ -2,6 +2,7 @@ export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   openai: ["OPENAI_API_KEY"],
   anthropic: ["ANTHROPIC_API_KEY"],
   google: ["GEMINI_API_KEY"],
+  "google-vertex": ["GOOGLE_CLOUD_API_KEY"],
   minimax: ["MINIMAX_API_KEY"],
   "minimax-cn": ["MINIMAX_API_KEY"],
   moonshot: ["MOONSHOT_API_KEY"],

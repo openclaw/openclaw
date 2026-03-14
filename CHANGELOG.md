@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 - Feishu/streaming: add `onReasoningStream` and `onReasoningEnd` support to streaming cards, so `/reasoning stream` renders thinking tokens as markdown blockquotes in the same card — matching the Telegram channel's reasoning lane behavior.
 - Refactor/channels: remove the legacy channel shim directories and point channel-specific imports directly at the extension-owned implementations. (#45967) thanks @scoootscooob.
 - Android/nodes: add `callLog.search` plus shared Call Log permission wiring so Android nodes can search recent call history through the gateway. (#44073) Thanks @lxk7280.
+- Auth/Vertex AI: recognize `GOOGLE_CLOUD_API_KEY` for the `google-vertex` provider so `models auth` status, secret scrubbing, and env-var detection work without relying solely on gcloud ADC. (#45876)
 
 ### Fixes
 
