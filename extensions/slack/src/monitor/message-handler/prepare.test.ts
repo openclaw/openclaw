@@ -331,7 +331,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
     );
 
     expect(prepared).toBeTruthy();
-    expect(prepared!.ctxPayload.GroupSystemPrompt).toBe("Config prompt");
+    expect(prepared!.ctxPayload.GroupSystemPrompt).toContain("*Slack Formatting Rules*");
+    expect(prepared!.ctxPayload.GroupSystemPrompt).toContain("Config prompt");
     expect(prepared!.ctxPayload.UntrustedContext?.length).toBe(1);
     const untrusted = prepared!.ctxPayload.UntrustedContext?.[0] ?? "";
     expect(untrusted).toContain("UNTRUSTED channel metadata (slack)");
