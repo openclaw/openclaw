@@ -16,6 +16,7 @@ const WhatsAppGroupEntrySchema = z
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
+    systemPrompt: z.string().optional(),
   })
   .strict()
   .optional();
@@ -56,6 +57,7 @@ const WhatsAppSharedSchema = z.object({
   ackReaction: WhatsAppAckReactionSchema,
   debounceMs: z.number().int().nonnegative().optional().default(0),
   heartbeat: ChannelHeartbeatVisibilitySchema,
+  systemPrompt: z.string().optional(),
 });
 
 function enforceOpenDmPolicyAllowFromStar(params: {

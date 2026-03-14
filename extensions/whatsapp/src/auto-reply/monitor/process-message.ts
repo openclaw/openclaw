@@ -30,6 +30,7 @@ import {
 } from "../../../../../src/security/dm-policy-shared.js";
 import { jidToE164, normalizeE164 } from "../../../../../src/utils.js";
 import { resolveWhatsAppAccount } from "../../accounts.js";
+import { resolveWhatsAppGroupSystemPrompt } from "../../group-config-helpers.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
 import { deliverWebReply } from "../deliver-reply.js";
@@ -296,6 +297,20 @@ export async function processMessage(params: {
         )
       : undefined;
 
+  const whatsAppAccount = resolveWhatsAppAccount({
+    cfg: params.cfg,
+    accountId: params.msg.accountId,
+  });
+  const groupConfig =
+    params.msg.chatType === "group"
+      ? (whatsAppAccount.groups?.[params.msg.chatId ?? params.msg.from] ??
+        whatsAppAccount.groups?.["*"])
+      : undefined;
+  const groupSystemPrompt = resolveWhatsAppGroupSystemPrompt({
+    accountSystemPrompt: whatsAppAccount.systemPrompt,
+    groupConfig,
+  });
+
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     BodyForAgent: params.msg.body,
@@ -321,6 +336,7 @@ export async function processMessage(params: {
       roster: params.groupMemberNames.get(params.groupHistoryKey),
       fallbackE164: params.msg.senderE164,
     }),
+    GroupSystemPrompt: groupSystemPrompt,
     SenderName: params.msg.senderName,
     SenderId: params.msg.senderJid?.trim() || params.msg.senderE164,
     SenderE164: params.msg.senderE164,
