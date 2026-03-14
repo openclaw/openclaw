@@ -12,6 +12,7 @@ import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payl
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   DEFAULT_HEARTBEAT_EVERY,
+  HEARTBEAT_PROMPT,
   isHeartbeatContentEffectivelyEmpty,
   resolveHeartbeatPrompt as resolveHeartbeatPromptText,
   stripHeartbeatToken,
@@ -595,12 +596,18 @@ function resolveHeartbeatRunPrompt(params: {
     .map((event) => event.text);
   const hasExecCompletion = pendingEvents.some(isExecCompletionEvent);
   const hasCronEvents = cronEvents.length > 0;
+  const effectiveHeartbeatPrompt = resolveHeartbeatPrompt(params.cfg, params.heartbeat);
   const basePrompt = hasExecCompletion
     ? buildExecEventPrompt({ deliverToUser: params.canRelayToUser })
     : hasCronEvents
       ? buildCronEventPrompt(cronEvents, { deliverToUser: params.canRelayToUser })
-      : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
-  const prompt = appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir);
+      : effectiveHeartbeatPrompt;
+  // Only append the workspace path hint when the built-in default prompt is in use.
+  // User-configured prompts already express user intent and must not be modified.
+  const prompt =
+    !hasExecCompletion && !hasCronEvents && effectiveHeartbeatPrompt === HEARTBEAT_PROMPT
+      ? appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir)
+      : basePrompt;
 
   return { prompt, hasExecCompletion, hasCronEvents };
 }
