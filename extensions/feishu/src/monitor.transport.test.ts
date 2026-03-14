@@ -1,7 +1,11 @@
-import { Lark } from "@larksuiteoapi/node-sdk";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { connectFeishuWs } from "./monitor.transport.js";
-import { ResolvedFeishuAccount } from "./types.js";
+import { monitorWebSocket } from "./monitor.transport.js";
+import type { ResolvedFeishuAccount } from "./types.js";
+vi.mock("../../../src/infra/restart.js", () => ({
+  scheduleGatewaySigusr1Restart: vi.fn(),
+}));
+
+import { scheduleGatewaySigusr1Restart } from "../../../src/infra/restart.js";
 
 vi.mock("./client.js", () => {
   return {
@@ -10,14 +14,14 @@ vi.mock("./client.js", () => {
 });
 
 describe("Feishu WebSocket Transport", () => {
-  const originalKill = process.kill;
+  // noop
 
   beforeEach(() => {
-    process.kill = vi.fn();
+    // noop
   });
 
   afterEach(() => {
-    process.kill = originalKill;
+    // noop
     vi.restoreAllMocks();
   });
 
@@ -30,7 +34,7 @@ describe("Feishu WebSocket Transport", () => {
     } as any);
 
     const account = {
-      id: "test",
+      accountId: "test",
       appId: "foo",
       appSecret: "bar",
       encryptKey: "",
@@ -39,27 +43,16 @@ describe("Feishu WebSocket Transport", () => {
     const abortController = new AbortController();
 
     await expect(
-      connectFeishuWs({
+      monitorWebSocket({
         account,
+        accountId: "test",
+        runtime: undefined,
         abortSignal: abortController.signal,
-        handleEvent: vi.fn(),
+        eventDispatcher: vi.fn() as any,
       }),
     ).rejects.toThrow("ETIMEDOUT");
 
-    // Process.kill should not be called synchronously, it's inside a floated promise
-    // Wait for event loop to handle catch
     await new Promise((resolve) => setTimeout(resolve, 10));
-
-    // We shouldn't call process.kill if the start promise itself is being explicitly awaited.
-    // Wait, earlier my patch put:
-    // Promise.resolve(wsClient.start({ eventDispatcher })).catch((err: any) => { ... })
-    // And actually, `wsClient.start` was NOT awaited in `monitor.transport.ts`.
-
-    // In my patch:
-    // try {
-    //  Promise.resolve(wsClient.start({ ... })).catch((err) => { process.kill(...) })
-    // }
-
-    expect(process.kill).toHaveBeenCalledWith(process.pid, "SIGUSR1");
+    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalled();
   });
 });
