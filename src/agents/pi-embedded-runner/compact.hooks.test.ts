@@ -372,7 +372,7 @@ function wrappedCompactionArgs(overrides: Record<string, unknown> = {}) {
     sessionFile: TEST_SESSION_FILE,
     workspaceDir: TEST_WORKSPACE_DIR,
     customInstructions: TEST_CUSTOM_INSTRUCTIONS,
-    enqueue: (task: () => unknown) => task(),
+    enqueue: async <T>(task: () => Promise<T> | T) => await task(),
     ...overrides,
   };
 }
