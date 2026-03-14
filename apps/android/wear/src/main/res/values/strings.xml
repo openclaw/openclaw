@@ -83,6 +83,7 @@
     <string name="wear_status_connected_via_phone">Connected via phone</string>
     <string name="wear_status_no_phone_found">No phone found</string>
     <string name="wear_status_pinging_phone">Pinging phone…</string>
+    <string name="wear_status_phone_gateway_unavailable">Phone reachable, gateway unavailable</string>
     <string name="wear_status_phone_ping_timed_out">Phone ping timed out, retrying…</string>
     <string name="wear_status_phone_not_responding">Phone not responding, retrying…</string>
     <string name="wear_status_failed">Failed: %1$s</string>

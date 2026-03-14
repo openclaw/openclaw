@@ -237,7 +237,7 @@ class WearChatControllerTest {
   }
 
   @Test
-  fun `send message prepends wear steering instructions to gateway prompt`() = runTest {
+  fun `send message preserves the original user text in gateway prompt`() = runTest {
     val client = FakeGatewayClient().apply {
       chatSendResponse = """{"runId":"run-1"}"""
       historyResponse = """{"messages":[]}"""
@@ -257,9 +257,7 @@ class WearChatControllerTest {
         ?.jsonPrimitive
         ?.content ?: error("missing message field")
 
-    assertTrue(message.contains("Wear app active. Reply in a concise, plain-text tone."))
-    assertTrue(message.contains("Avoid emoji, Markdown tables, and decorative formatting."))
-    assertTrue(message.endsWith("How are you?"))
+    assertEquals("How are you?", message)
     controllerScope.cancel()
   }
 }
