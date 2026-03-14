@@ -475,6 +475,9 @@ function isConfigShadowingBundledPlugin(params: {
   return candidateRoot === candidateBundledDir || isPathInside(candidateBundledDir, candidateRoot);
 }
 
+// Explicitly configured/workspace plugins may override bundled plugins. The only
+// exception here is a config load path that points into another OpenClaw checkout
+//'s bundled extensions, which should defer to the active checkout's bundled copy.
 function choosePreferredDiscoveredPlugin(params: {
   current: ResolvedDiscoveredPlugin;
   next: ResolvedDiscoveredPlugin;
