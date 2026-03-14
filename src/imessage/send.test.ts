@@ -132,4 +132,22 @@ describe("sendMessageIMessage", () => {
     await sendWithDefaults("chat_id:123", "hello");
     expect(stopMock).not.toHaveBeenCalled();
   });
+
+  it("strips markdown formatting from outbound messages", async () => {
+    await sendWithDefaults("chat_id:123", "**bold** and _italic_ text");
+    const params = getSentParams();
+    expect(params.text).toBe("bold and italic text");
+  });
+
+  it("strips headers and blockquotes from outbound messages", async () => {
+    await sendWithDefaults("chat_id:123", "## Title\n> quoted text\nnormal");
+    const params = getSentParams();
+    expect(params.text).toBe("Title\nquoted text\nnormal");
+  });
+
+  it("strips inline code backticks from outbound messages", async () => {
+    await sendWithDefaults("chat_id:123", "run `npm install` to setup");
+    const params = getSentParams();
+    expect(params.text).toBe("run npm install to setup");
+  });
 });
