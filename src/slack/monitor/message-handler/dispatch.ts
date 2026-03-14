@@ -41,6 +41,13 @@ export function isSlackStreamingEnabled(params: {
   return params.nativeStreaming;
 }
 
+export function isSlackDraftPreviewEnabled(params: {
+  mode: "off" | "partial" | "block" | "progress";
+  blockStreaming: boolean | undefined;
+}): boolean {
+  return params.mode !== "off" && params.blockStreaming !== false;
+}
+
 export function resolveSlackStreamingThreadHint(params: {
   replyToMode: "off" | "first" | "all";
   incomingThreadTs: string | undefined;
@@ -206,6 +213,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     nativeStreaming: account.config.nativeStreaming,
   });
   const previewStreamingEnabled = slackStreaming.mode !== "off";
+  const draftPreviewEnabled = isSlackDraftPreviewEnabled({
+    mode: slackStreaming.mode,
+    blockStreaming: account.config.blockStreaming,
+  });
+  if (previewStreamingEnabled && !draftPreviewEnabled) {
+    logVerbose("slack: draft preview disabled (blockStreaming=false)");
+  }
   const streamingEnabled = isSlackStreamingEnabled({
     mode: slackStreaming.mode,
     nativeStreaming: slackStreaming.nativeStreaming,
@@ -306,7 +320,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       const draftChannelId = draftStream?.channelId();
       const finalText = payload.text;
       const canFinalizeViaPreviewEdit =
-        previewStreamingEnabled &&
+        draftPreviewEnabled &&
         streamMode !== "status_final" &&
         mediaCount === 0 &&
         !payload.isError &&
@@ -330,7 +344,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             `slack: preview final edit failed; falling back to standard send (${String(err)})`,
           );
         }
-      } else if (previewStreamingEnabled && streamMode === "status_final" && hasStreamedMessage) {
+      } else if (draftPreviewEnabled && streamMode === "status_final" && hasStreamedMessage) {
         try {
           const statusChannelId = draftStream?.channelId();
           const statusMessageId = draftStream?.messageId();
@@ -415,7 +429,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     hasStreamedMessage = true;
   };
   const onDraftBoundary =
-    useStreaming || !previewStreamingEnabled
+    useStreaming || !draftPreviewEnabled
       ? undefined
       : async () => {
           if (hasStreamedMessage) {
@@ -443,7 +457,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       onModelSelected,
       onPartialReply: useStreaming
         ? undefined
-        : !previewStreamingEnabled
+        : !draftPreviewEnabled
           ? undefined
           : async (payload) => {
               updateDraftFromPartial(payload.text);
