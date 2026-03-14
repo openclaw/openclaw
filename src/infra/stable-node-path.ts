@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 
 /**
  * Homebrew Cellar paths (e.g. /opt/homebrew/Cellar/node/25.7.0/bin/node)
@@ -8,15 +9,18 @@ import fs from "node:fs/promises";
  *   - Versioned formula "node@22":  <prefix>/opt/node@22/bin/node  (keg-only)
  */
 export async function resolveStableNodePath(nodePath: string): Promise<string> {
-  const cellarMatch = nodePath.match(/^(.+?)\/Cellar\/([^/]+)\/[^/]+\/bin\/node$/);
+  const cellarMatch = nodePath.match(
+    /^(.+?)[\\/]Cellar[\\/]([^\\/]+)[\\/][^\\/]+[\\/]bin[\\/]node$/,
+  );
   if (!cellarMatch) {
     return nodePath;
   }
   const prefix = cellarMatch[1]; // e.g. /opt/homebrew
   const formula = cellarMatch[2]; // e.g. "node" or "node@22"
+  const pathModule = nodePath.includes("\\") ? path.win32 : path.posix;
 
   // Try the Homebrew opt symlink first — works for both default and versioned formulas.
-  const optPath = `${prefix}/opt/${formula}/bin/node`;
+  const optPath = pathModule.join(prefix, "opt", formula, "bin", "node");
   try {
     await fs.access(optPath);
     return optPath;
@@ -26,7 +30,7 @@ export async function resolveStableNodePath(nodePath: string): Promise<string> {
 
   // For the default "node" formula, also try the direct bin symlink.
   if (formula === "node") {
-    const binPath = `${prefix}/bin/node`;
+    const binPath = pathModule.join(prefix, "bin", "node");
     try {
       await fs.access(binPath);
       return binPath;

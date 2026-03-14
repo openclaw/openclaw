@@ -310,17 +310,16 @@ Profile management:
 
 Common parameters:
 
-- `browserSession` (`agent` | `user`)
 - `profile` (optional; defaults to `browser.defaultProfile`)
 - `target` (`sandbox` | `host` | `node`)
 - `node` (optional; picks a specific node id/name)
   Notes:
 - Requires `browser.enabled=true` (default is `true`; set `false` to disable).
-- `browserSession="agent"` is the safe default: isolated OpenClaw-managed browser.
-- `browserSession="user"` means the real local host browser. Use it only when existing logins/cookies matter and the user is present to click/approve any attach prompt.
-- `browserSession="user"` is host-only; do not combine it with sandbox/node targets.
 - All actions accept optional `profile` parameter for multi-instance support.
-- `profile` overrides `browserSession` when both are supplied.
+- Omit `profile` for the safe default: isolated OpenClaw-managed browser (`openclaw`).
+- Use `profile="user"` for the real local host browser when existing logins/cookies matter and the user is present to click/approve any attach prompt.
+- Use `profile="chrome-relay"` only for the Chrome extension / toolbar-button attach flow.
+- `profile="user"` and `profile="chrome-relay"` are host-only; do not combine them with sandbox/node targets.
 - When `profile` is omitted, uses `browser.defaultProfile` (defaults to `openclaw`).
 - Profile names: lowercase alphanumeric + hyphens only (max 64 chars).
 - Port range: 18800-18899 (~100 profiles max).
