@@ -28,6 +28,8 @@ export type TranscriptPolicy = {
   applyGoogleTurnOrdering: boolean;
   validateGeminiTurns: boolean;
   validateAnthropicTurns: boolean;
+  /** True only for Anthropic-native endpoints (not strict OpenAI-compatible). */
+  isAnthropicBackend: boolean;
   allowSyntheticToolResults: boolean;
 };
 
@@ -122,6 +124,7 @@ export function resolveTranscriptPolicy(params: {
     applyGoogleTurnOrdering: !isOpenAi && (isGoogle || isStrictOpenAiCompatible),
     validateGeminiTurns: !isOpenAi && (isGoogle || isStrictOpenAiCompatible),
     validateAnthropicTurns: !isOpenAi && (isAnthropic || isStrictOpenAiCompatible),
+    isAnthropicBackend: isAnthropicProviderFamily(provider),
     allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
   };
 }

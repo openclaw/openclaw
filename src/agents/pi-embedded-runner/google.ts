@@ -554,6 +554,12 @@ export async function sanitizeSessionHistory(params: {
     : sanitizedImages;
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
     allowedToolNames: params.allowedToolNames,
+    // Anthropic rejects requests when the latest assistant message with
+    // thinking/redacted_thinking blocks is modified.  Even when
+    // dropThinkingBlocks is true, redacted_thinking survives the drop,
+    // so we must preserve for Anthropic-native backends only (not strict
+    // OpenAI-compatible providers that also validate turn structure).
+    preserveThinkingBlocks: policy.isAnthropicBackend,
   });
   const repairedTools = policy.repairToolUseResultPairing
     ? sanitizeToolUseResultPairing(sanitizedToolCalls)
