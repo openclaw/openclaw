@@ -7,6 +7,22 @@ import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
 import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
 
+function formatFullCommand(name: string, args: unknown): string {
+  if (!args || typeof args !== "object") {
+    return name;
+  }
+  const argsObj = args as Record<string, unknown>;
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(argsObj)) {
+    if (key === "run" || key === "command") {
+      parts.push(String(value));
+    } else if (typeof value === "string" && value.length > 0) {
+      parts.push(`${key}=${value}`);
+    }
+  }
+  return parts.length > 0 ? parts.join(" ") : name;
+}
+
 export function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
   const content = normalizeContent(m.content);
@@ -52,17 +68,17 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
   const hasText = Boolean(card.text?.trim());
+  const fullCommand = card.kind === "call" ? formatFullCommand(card.name, card.args) : detail;
 
   const canClick = Boolean(onOpenSidebar);
   const handleClick = canClick
     ? () => {
+        const commandInfo = fullCommand ? `**Command:** \`${fullCommand}\`\n\n` : "";
         if (hasText) {
-          onOpenSidebar!(formatToolOutputForSidebar(card.text!));
+          onOpenSidebar!(commandInfo + formatToolOutputForSidebar(card.text!));
           return;
         }
-        const info = `## ${display.label}\n\n${
-          detail ? `**Command:** \`${detail}\`\n\n` : ""
-        }*No output — tool completed successfully.*`;
+        const info = `## ${display.label}\n\n${commandInfo}*No output — tool completed successfully.*`;
         onOpenSidebar!(info);
       }
     : undefined;
