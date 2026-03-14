@@ -1,4 +1,5 @@
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/msteams";
+import { resolveOutboundSendDep } from "../../../src/infra/outbound/deliver.js";
 import { createMSTeamsPollStoreFs } from "./polls.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMessageMSTeams, sendPollMSTeams } from "./send.js";
@@ -15,7 +16,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       text: string,
     ) => Promise<{ messageId: string; conversationId: string }>;
     const send =
-      (deps?.["msteams"] as SendFn | undefined) ??
+      resolveOutboundSendDep<SendFn>(deps, "msteams") ??
       ((to, text) => sendMessageMSTeams({ cfg, to, text }));
     const result = await send(to, text);
     return { channel: "msteams", ...result };
@@ -27,7 +28,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       opts?: { mediaUrl?: string; mediaLocalRoots?: readonly string[] },
     ) => Promise<{ messageId: string; conversationId: string }>;
     const send =
-      (deps?.["msteams"] as SendFn | undefined) ??
+      resolveOutboundSendDep<SendFn>(deps, "msteams") ??
       ((to, text, opts) =>
         sendMessageMSTeams({
           cfg,

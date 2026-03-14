@@ -39,6 +39,7 @@ import {
   type ResolvedSlackAccount,
 } from "openclaw/plugin-sdk/slack";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
+import { resolveOutboundSendDep } from "../../../src/infra/outbound/deliver.js";
 import { getSlackRuntime } from "./runtime.js";
 
 const meta = getChatChannelMeta("slack");
@@ -82,7 +83,7 @@ function resolveSlackSendContext(params: {
   threadId?: string | number | null;
 }) {
   const send =
-    (params.deps?.["slack"] as SlackSendFn | undefined) ??
+    resolveOutboundSendDep<SlackSendFn>(params.deps, "slack") ??
     getSlackRuntime().channel.slack.sendMessageSlack;
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
   const token = getTokenForOperation(account, "write");

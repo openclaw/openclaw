@@ -1,3 +1,4 @@
+import { resolveOutboundSendDep } from "../../../infra/outbound/deliver.js";
 import type { OutboundIdentity } from "../../../infra/outbound/identity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { parseSlackBlocksInput } from "../../../slack/blocks-input.js";
@@ -61,7 +62,8 @@ async function sendSlackOutboundMessage(params: {
   threadId?: string | number | null;
   identity?: OutboundIdentity;
 }) {
-  const send = (params.deps?.["slack"] as typeof sendMessageSlack | undefined) ?? sendMessageSlack;
+  const send =
+    resolveOutboundSendDep<typeof sendMessageSlack>(params.deps, "slack") ?? sendMessageSlack;
   // Use threadId fallback so routed tool notifications stay in the Slack thread.
   const threadTs =
     params.replyToId ?? (params.threadId != null ? String(params.threadId) : undefined);

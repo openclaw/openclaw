@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createOutboundSendDepsFromCliSource } from "./outbound-send-mapping.js";
 
 describe("createOutboundSendDepsFromCliSource", () => {
-  it("passes channel-keyed send deps through", () => {
+  it("adds legacy aliases for channel-keyed send deps", () => {
     const deps = {
       whatsapp: vi.fn(),
       telegram: vi.fn(),
@@ -21,6 +21,12 @@ describe("createOutboundSendDepsFromCliSource", () => {
       slack: deps.slack,
       signal: deps.signal,
       imessage: deps.imessage,
+      sendWhatsApp: deps.whatsapp,
+      sendTelegram: deps.telegram,
+      sendDiscord: deps.discord,
+      sendSlack: deps.slack,
+      sendSignal: deps.signal,
+      sendIMessage: deps.imessage,
     });
   });
 });

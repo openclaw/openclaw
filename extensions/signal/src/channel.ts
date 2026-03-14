@@ -30,6 +30,7 @@ import {
   type ChannelPlugin,
   type ResolvedSignalAccount,
 } from "openclaw/plugin-sdk/signal";
+import { resolveOutboundSendDep } from "../../../src/infra/outbound/deliver.js";
 import { getSignalRuntime } from "./runtime.js";
 
 const signalMessageActions: ChannelMessageActionAdapter = {
@@ -87,7 +88,7 @@ async function sendSignalOutbound(params: {
   deps?: { [channelId: string]: unknown };
 }) {
   const send =
-    (params.deps?.["signal"] as SignalSendFn | undefined) ??
+    resolveOutboundSendDep<SignalSendFn>(params.deps, "signal") ??
     getSignalRuntime().channel.signal.sendMessageSignal;
   const maxBytes = resolveChannelMediaMaxBytes({
     cfg: params.cfg,

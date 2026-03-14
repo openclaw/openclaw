@@ -1,4 +1,5 @@
 import type { PluginRuntimeChannel } from "../../plugins/runtime/types-channel.js";
+import { resolveOutboundSendDep } from "../../infra/outbound/deliver.js";
 import { escapeRegExp } from "../../utils.js";
 import { resolveWhatsAppOutboundTarget } from "../../whatsapp/resolve-outbound-target.js";
 import type { ChannelOutboundAdapter } from "./types.js";
@@ -66,7 +67,8 @@ export function createWhatsAppOutboundBase({
       if (skipEmptyText && !normalizedText) {
         return { channel: "whatsapp", messageId: "" };
       }
-      const send = deps?.sendWhatsApp ?? sendMessageWhatsApp;
+      const send =
+        resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp") ?? sendMessageWhatsApp;
       const result = await send(to, normalizedText, {
         verbose: false,
         cfg,
@@ -85,7 +87,8 @@ export function createWhatsAppOutboundBase({
       deps,
       gifPlayback,
     }) => {
-      const send = deps?.sendWhatsApp ?? sendMessageWhatsApp;
+      const send =
+        resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp") ?? sendMessageWhatsApp;
       const result = await send(to, normalizeText(text), {
         verbose: false,
         cfg,

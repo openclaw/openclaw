@@ -1,5 +1,5 @@
 import type { ReplyPayload } from "../../../auto-reply/types.js";
-import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
+import { resolveOutboundSendDep, type OutboundSendDeps } from "../../../infra/outbound/deliver.js";
 import type { TelegramInlineButtons } from "../../../telegram/button-types.js";
 import { markdownToTelegramHtmlChunks } from "../../../telegram/format.js";
 import {
@@ -31,7 +31,8 @@ function resolveTelegramSendContext(params: {
   };
 } {
   const send =
-    (params.deps?.["telegram"] as typeof sendMessageTelegram | undefined) ?? sendMessageTelegram;
+    resolveOutboundSendDep<typeof sendMessageTelegram>(params.deps, "telegram") ??
+    sendMessageTelegram;
   return {
     send,
     baseOpts: {

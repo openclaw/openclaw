@@ -37,6 +37,7 @@ import {
   type ChannelPlugin,
   type ResolvedDiscordAccount,
 } from "openclaw/plugin-sdk/discord";
+import { resolveOutboundSendDep } from "../../../src/infra/outbound/deliver.js";
 import { getDiscordRuntime } from "./runtime.js";
 
 type DiscordSendFn = ReturnType<
@@ -305,7 +306,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
     sendText: async ({ cfg, to, text, accountId, deps, replyToId, silent }) => {
       const send =
-        (deps?.["discord"] as DiscordSendFn | undefined) ??
+        resolveOutboundSendDep<DiscordSendFn>(deps, "discord") ??
         getDiscordRuntime().channel.discord.sendMessageDiscord;
       const result = await send(to, text, {
         verbose: false,
@@ -328,7 +329,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       silent,
     }) => {
       const send =
-        (deps?.["discord"] as DiscordSendFn | undefined) ??
+        resolveOutboundSendDep<DiscordSendFn>(deps, "discord") ??
         getDiscordRuntime().channel.discord.sendMessageDiscord;
       const result = await send(to, text, {
         verbose: false,
