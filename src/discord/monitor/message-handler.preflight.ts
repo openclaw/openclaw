@@ -408,7 +408,7 @@ export async function preflightDiscordMessage(
     botId &&
     (message.mentionedUsers?.some((user: User) => user.id === botId) ||
       new RegExp(`(?<!\\\\)<@!?${botId}>`).test(
-        (message.content ?? "").replace(/```[\s\S]*?```|`[^`]*`/g, ""),
+        (message.content ?? "").replace(/```[\s\S]*?```|``[\s\S]*?``|`[^`]*`/g, ""),
       )),
   );
   const hasAnyMention = Boolean(
