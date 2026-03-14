@@ -745,7 +745,7 @@ async function sweepSubagentRuns() {
         method: "sessions.delete",
         params: {
           key: entry.childSessionKey,
-          deleteTranscript: true,
+          deleteTranscript: false,
           emitLifecycleHooks: false,
         },
         timeoutMs: 10_000,
@@ -760,6 +760,10 @@ async function sweepSubagentRuns() {
   if (subagentRuns.size === 0) {
     stopSweeper();
   }
+}
+
+export async function sweepSubagentRunsForTests() {
+  await sweepSubagentRuns();
 }
 
 function ensureListener() {
