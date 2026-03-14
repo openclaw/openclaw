@@ -482,6 +482,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   let draftText = "";
   let hasStreamedMessage = false;
   let finalizedViaPreviewMessage = false;
+  const stripLeadingEmptyLines = (value: string) => value.replace(/^(?:[ \t]*\r?\n)+/, "");
 
   const resolvePreviewFinalText = (text?: string) => {
     if (typeof text !== "string") {
@@ -499,19 +500,19 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     if (chunks.length !== 1) {
       return undefined;
     }
-    const trimmed = chunks[0].trim();
-    if (!trimmed) {
+    const previewText = stripLeadingEmptyLines(chunks[0]).trimEnd();
+    if (!previewText.trim()) {
       return undefined;
     }
     const currentPreviewText = discordStreamMode === "block" ? draftText : lastPartialText;
     if (
       currentPreviewText &&
-      currentPreviewText.startsWith(trimmed) &&
-      trimmed.length < currentPreviewText.length
+      currentPreviewText.startsWith(previewText) &&
+      previewText.length < currentPreviewText.length
     ) {
       return undefined;
     }
-    return trimmed;
+    return previewText;
   };
 
   const updateDraftFromPartial = (text?: string) => {
@@ -519,9 +520,12 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       return;
     }
     // Strip reasoning/thinking tags that may leak through the stream.
-    const cleaned = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
+    const cleaned = stripLeadingEmptyLines(
+      stripReasoningTagsFromText(text, { mode: "strict", trim: "none" }),
+    ).trimEnd();
+    const cleanedForGuard = cleaned.trimStart();
     // Skip pure-reasoning messages (e.g. "Reasoning:\n…") that contain no answer text.
-    if (!cleaned || cleaned.startsWith("Reasoning:\n")) {
+    if (!cleanedForGuard || cleanedForGuard.startsWith("Reasoning:\n")) {
       return;
     }
     if (cleaned === lastPartialText) {

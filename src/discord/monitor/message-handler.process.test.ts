@@ -218,13 +218,8 @@ function createMockDraftStreamForTest() {
   return draftStream;
 }
 
-function expectSinglePreviewEdit() {
-  expect(editMessageDiscord).toHaveBeenCalledWith(
-    "c1",
-    "preview-1",
-    { content: "Hello\nWorld" },
-    { rest: {} },
-  );
+function expectSinglePreviewEdit(content: string = "Hello\nWorld") {
+  expect(editMessageDiscord).toHaveBeenCalledWith("c1", "preview-1", { content }, { rest: {} });
   expect(deliverDiscordReply).not.toHaveBeenCalled();
 }
 
@@ -532,6 +527,39 @@ describe("processDiscordMessage draft streaming", () => {
     expectSinglePreviewEdit();
   });
 
+  it("preserves indentation when finalizing a streamed code block via preview edit", async () => {
+    const codeBlock = '```json\n  {\n    "ok": true\n  }\n```';
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: codeBlock });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createBaseContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 10 },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expectSinglePreviewEdit(codeBlock);
+  });
+
+  it("strips trailing whitespace when finalizing a preview edit", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "Hello\nWorld\n\n" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createBaseContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 10 },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expectSinglePreviewEdit("Hello\nWorld");
+  });
+
   it("falls back to standard send when final needs multiple chunks", async () => {
     await runSingleChunkFinalScenario({ streamMode: "partial", maxLinesPerMessage: 1 });
 
@@ -653,6 +681,52 @@ describe("processDiscordMessage draft streaming", () => {
     for (const text of updates) {
       expect(text).not.toContain("<thinking>");
     }
+  });
+
+  it("skips reasoning-only partials even when leading spaces remain after tag stripping", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPartialReply?.({
+        text: "<thinking>x</thinking>  Reasoning:\ninternal notes",
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    await runInPartialStreamMode();
+
+    expect(draftStream.update).not.toHaveBeenCalled();
+  });
+
+  it("preserves indentation in partial stream updates after leading blank lines", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    const codeBlock = '```json\n  {\n    "ok": true\n  }\n```';
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPartialReply?.({
+        text: `\n\n${codeBlock}`,
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    await runInPartialStreamMode();
+
+    expect(draftStream.update).toHaveBeenCalledWith(codeBlock);
+  });
+
+  it("strips trailing whitespace in partial stream updates", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPartialReply?.({
+        text: "Hello\nWorld\n\n",
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    await runInPartialStreamMode();
+
+    expect(draftStream.update).toHaveBeenCalledWith("Hello\nWorld");
   });
 
   it("skips pure-reasoning partial updates without updating draft", async () => {
