@@ -78,6 +78,16 @@ export function resolveStateDir(
   if (explicitHome) {
     const resolvedHome = effectiveHomedir();
     if (ALL_STATE_DIRNAMES.has(path.basename(resolvedHome))) {
+      // Backward compat: if a nested state dir already exists from the old
+      // buggy behavior, prefer it so we don't orphan existing state data.
+      const nestedState = path.join(resolvedHome, ".openclaw");
+      try {
+        if (fs.existsSync(nestedState)) {
+          return nestedState;
+        }
+      } catch {
+        // best-effort
+      }
       return resolvedHome;
     }
   }
