@@ -27,8 +27,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -402,6 +404,7 @@ class NodeRuntime(context: Context) {
     if (isCanonicalMainSessionKey(_mainSessionKey.value)) return
     if (_mainSessionKey.value == trimmed) return
     _mainSessionKey.value = trimmed
+    emitWearProxyEvent("mainSessionKey", trimmed)
     talkMode.setMainSessionKey(trimmed)
     chat.applyMainSessionKey(trimmed)
     updateHomeCanvasState()
@@ -923,6 +926,7 @@ class NodeRuntime(context: Context) {
     micCapture.handleGatewayEvent(event, payloadJson)
     talkMode.handleGatewayEvent(event, payloadJson)
     chat.handleGatewayEvent(event, payloadJson)
+    emitWearProxyEvent(event, payloadJson)
   }
 
   private fun parseChatSendRunId(response: String): String? {
@@ -1134,6 +1138,22 @@ class NodeRuntime(context: Context) {
         if (_cameraHud.value?.token == token) _cameraHud.value = null
       }
     }
+  }
+
+  // -- Wear OS proxy support --
+
+  private val _wearProxyEvents = MutableSharedFlow<Pair<String, String?>>(
+    extraBufferCapacity = 64,
+  )
+  val wearProxyEvents: kotlinx.coroutines.flow.SharedFlow<Pair<String, String?>> =
+    _wearProxyEvents.asSharedFlow()
+
+  internal fun emitWearProxyEvent(event: String, payloadJson: String?) {
+    _wearProxyEvents.tryEmit(Pair(event, payloadJson))
+  }
+
+  suspend fun requestForWearProxy(method: String, paramsJson: String?, timeoutMs: Long = 15_000): String {
+    return operatorSession.request(method, paramsJson, timeoutMs)
   }
 
 }
