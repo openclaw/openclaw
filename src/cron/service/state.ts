@@ -1,4 +1,6 @@
 import type { CronConfig } from "../../config/types.cron.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { CliDeps } from "../../cli/deps.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type {
   CronDeliveryStatus,
@@ -48,6 +50,10 @@ export type CronServiceDeps = {
   resolveSessionStorePath?: (agentId?: string) => string;
   /** Path to the session store (sessions.json) for reaper use. */
   sessionStorePath?: string;
+  /** OpenClaw config for workflow execution */
+  config: OpenClawConfig;
+  /** CLI dependencies for workflow execution */
+  cliDeps: import("../../cli/deps.js").CliDeps;
   enqueueSystemEvent: (
     text: string,
     opts?: { agentId?: string; sessionKey?: string; contextKey?: string },

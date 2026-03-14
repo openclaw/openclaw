@@ -1,0 +1,55 @@
+{
+  "_comment": "Office Skill Configuration Example",
+  "_description": "Add these settings to ~/.openclaw/openclaw.json",
+  
+  "skills": {
+    "office": {
+      "enabled": true,
+      "defaultOrchestrator": "main",
+      "maxTeamSize": 10,
+      "sessionPrefix": "office",
+      "autoArchive": true,
+      "archiveAfterMinutes": 120
+    }
+  },
+  
+  "agents": {
+    "defaults": {
+      "subagents": {
+        "maxSpawnDepth": 2,
+        "maxChildrenPerAgent": 5,
+        "maxConcurrent": 8,
+        "runTimeoutSeconds": 1800,
+        "model": "bailian/qwen3.5-plus",
+        "thinking": "off",
+        "archiveAfterMinutes": 60
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "name": "Main Agent",
+        "subagents": {
+          "allowAgents": ["*"]
+        }
+      }
+    ]
+  },
+  
+  "session": {
+    "threadBindings": {
+      "enabled": true,
+      "idleHours": 24,
+      "maxAgeHours": 168
+    }
+  },
+  
+  "tools": {
+    "subagents": {
+      "tools": {
+        "deny": [],
+        "allow": ["read", "write", "edit", "exec", "process", "web_search", "web_fetch", "browser", "sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "subagents"]
+      }
+    }
+  }
+}

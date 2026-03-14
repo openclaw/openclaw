@@ -1,0 +1,103 @@
+{
+  "$schema": "../../../src/config/schema.cron.json",
+  "id": "data-sync-workflow",
+  "name": "Data Sync Workflow",
+  "description": "Synchronize data between tables - useful for maintaining denormalized data or updating related records",
+  "enabled": true,
+  "trigger": {
+    "type": "schedule",
+    "cron": "0 */6 * * *"
+  },
+  "steps": [
+    {
+      "id": "step-1-fetch-pending-syncs",
+      "nodeId": "fetch-pending",
+      "label": "Fetch Pending Sync Records",
+      "actionType": "supabase-select",
+      "instance": "default",
+      "table": "sync_queue",
+      "columns": "id,source_table,target_table,record_id,data,sync_type,created_at",
+      "filters": {
+        "status": { "eq": "pending" },
+        "retry_count": { "lt": 3 }
+      },
+      "orderBy": {
+        "column": "created_at",
+        "ascending": true
+      },
+      "limit": 100
+    },
+    {
+      "id": "step-2-process-each-record",
+      "nodeId": "process-records",
+      "label": "Process Each Sync Record",
+      "actionType": "ai-agent-prompt",
+      "agentId": "sync-processor",
+      "prompt": "Process the following sync queue records. For each record, determine the appropriate action and return a JSON array of sync operations with: recordId, action (insert/update/delete), targetTable, data, and success probability. Records: {{step-1-fetch-pending-syncs.data}}",
+      "outputSchema": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "recordId": { "type": "number" },
+            "action": { "type": "string", "enum": ["insert", "update", "delete"] },
+            "targetTable": { "type": "string" },
+            "data": { "type": "object" },
+            "successProbability": { "type": "number" }
+          },
+          "required": ["recordId", "action", "targetTable"]
+        }
+      },
+      "sessionConfig": {
+        "target": "isolated",
+        "contextMode": "minimal"
+      }
+    },
+    {
+      "id": "step-3-update-sync-queue",
+      "nodeId": "update-queue",
+      "label": "Mark Records as Processing",
+      "actionType": "supabase-update",
+      "instance": "default",
+      "table": "sync_queue",
+      "data": {
+        "status": "processing",
+        "processed_at": "{{step-1-fetch-pending-syncs.timestamp}}"
+      },
+      "filters": {
+        "id": {
+          "in": "{{step-1-fetch-pending-syncs.data[*].id}}"
+        }
+      },
+      "returning": "minimal"
+    },
+    {
+      "id": "step-4-log-sync-start",
+      "nodeId": "log-sync",
+      "label": "Log Sync Operation",
+      "actionType": "supabase-insert",
+      "instance": "default",
+      "table": "sync_logs",
+      "data": {
+        "operation": "batch_sync",
+        "records_count": "{{step-1-fetch-pending-syncs.count}}",
+        "started_at": "{{step-1-fetch-pending-syncs.timestamp}}",
+        "status": "in_progress"
+      },
+      "returning": "representation"
+    }
+  ],
+  "errorHandling": {
+    "onFailure": "continue",
+    "notify": true,
+    "retry": {
+      "maxAttempts": 2,
+      "backoffMs": [10000, 30000]
+    }
+  },
+  "metadata": {
+    "version": "1.0",
+    "author": "OpenClaw",
+    "tags": ["sync", "data", "batch"]
+  }
+}

@@ -20,6 +20,16 @@ export interface WorkflowTriggerConfig {
   type: "cron" | "chat";
   triggerNodeId: string;
   enabled: boolean;
+  
+  // NEW: Session configuration
+  sessionConfig?: {
+    target: 'isolated' | 'reuse' | 'main';
+    contextMode: 'minimal' | 'full' | 'custom';
+    model?: string;
+    maxTokens?: number;
+    thinking?: 'on' | 'off';
+  };
+  
   // Cron-specific
   cronExpr?: string;
   // Chat-specific
@@ -39,6 +49,7 @@ export interface WorkflowChainStep {
   // Agent Prompt
   agentId?: string;
   prompt?: string; // Hỗ trợ {{input}} — backend replace bằng output bước trước
+  outputSchema?: Record<string, unknown>; // ✅ NEW: JSON Schema for structured output
 
   // Send Message
   body?: string;
@@ -70,6 +81,27 @@ export interface WorkflowChainStep {
 
   // Custom JS
   jsCode?: string;
+
+  // Supabase fields
+  supabaseInstance?: string;
+  table?: string;
+  columns?: string;
+  filters?: Record<string, unknown>;
+  limit?: number;
+  orderBy?: string;
+  row?: Record<string, unknown>;
+  updates?: Record<string, unknown>;
+  function?: string;
+  paramsData?: Record<string, unknown>;
+
+  // NEW: Session Configuration (passed from trigger)
+  sessionConfig?: {
+    target: 'isolated' | 'reuse' | 'main';
+    contextMode: 'minimal' | 'full' | 'custom';
+    model?: string;
+    maxTokens?: number;
+    thinking?: 'on' | 'off';
+  };
 }
 
 const WF_CHAIN_PREFIX = "__wf_chain__:";
@@ -86,11 +118,21 @@ function extractChainFromTrigger(
   const chain: WorkflowChainStep[] = [];
   const visited = new Set<string>();
 
+  // Extract session config from trigger node data
+  const triggerNode = nodes.find((n) => n.id === triggerId);
+  const sessionConfig = (triggerNode?.data as any)?.sessionConfig ? {
+    target: ((triggerNode?.data as any).sessionConfig.target as 'isolated' | 'reuse' | 'main') || 'isolated',
+    contextMode: ((triggerNode?.data as any).sessionConfig.contextMode as 'minimal' | 'full' | 'custom') || 'minimal',
+    model: (triggerNode?.data as any).sessionConfig.model as string | undefined,
+    maxTokens: (triggerNode?.data as any).sessionConfig.maxTokens as number | undefined,
+    thinking: ((triggerNode?.data as any).sessionConfig.thinking as 'on' | 'off') || 'off',
+  } : undefined;
+
   // Find all edges from trigger
   const outgoingEdges = edges.filter((e) => e.source === triggerId);
 
   for (const edge of outgoingEdges) {
-    const step = extractNodeChain(edge.target, nodes, edges, visited);
+    const step = extractNodeChain(edge.target, nodes, edges, visited, sessionConfig);
     if (step) {
       chain.push(step);
     }
@@ -107,6 +149,7 @@ function extractNodeChain(
   nodes: Node[],
   edges: Edge[],
   visited: Set<string>,
+  sessionConfig?: WorkflowChainStep['sessionConfig'],
 ): WorkflowChainStep | null {
   if (visited.has(nodeId)) {
     return null;
@@ -136,11 +179,25 @@ function extractNodeChain(
     label,
     agentId: (node.data?.agentId as string) || undefined,
     prompt: (node.data?.prompt as string) || undefined,
+    outputSchema: (node.data?.outputSchema as string) ? JSON.parse(node.data.outputSchema as string) : undefined,
     body: (node.data?.body as string) || undefined,
     channel: (node.data?.channel as string) || undefined,
     recipientId: (node.data?.recipientId as string) || undefined,
     accountId: (node.data?.accountId as string) || undefined,
     condition: (node.data?.condition as string) || undefined,
+    // Supabase fields
+    supabaseInstance: (node.data?.supabaseInstance as string) || undefined,
+    table: (node.data?.table as string) || undefined,
+    columns: (node.data?.columns as string) || undefined,
+    filters: (node.data?.filters as string) ? JSON.parse(node.data.filters as string) : undefined,
+    limit: (node.data?.limit as number | string) ? Number(node.data.limit) : undefined,
+    orderBy: (node.data?.orderBy as string) || undefined,
+    row: (node.data?.row as string) ? JSON.parse(node.data.row as string) : undefined,
+    updates: (node.data?.updates as string) ? JSON.parse(node.data.updates as string) : undefined,
+    function: (node.data?.function as string) || undefined,
+    paramsData: (node.data?.paramsStr as string) ? JSON.parse(node.data.paramsStr as string) : undefined,
+    // Include session config from trigger (only on first step)
+    sessionConfig: sessionConfig,
   };
 
   // If this is a logic node (If/Else), extract branches separately
@@ -421,10 +478,20 @@ export function useWorkflows() {
       if (isCronTrigger) {
         // === CRON TRIGGER ===
         const cronExpr = (trigger.data.cronExpr as string) || "*/5 * * * *";
+        
+        // Extract session config from trigger node
+        const sessionConfig = trigger.data?.sessionConfig as {
+          target?: 'isolated' | 'reuse' | 'main';
+          contextMode?: 'minimal' | 'full' | 'custom';
+          model?: string;
+          maxTokens?: number;
+          thinking?: 'on' | 'off';
+        } | undefined;
 
         console.log("[WORKFLOW DEBUG] Processing CRON trigger:", {
           triggerId: trigger.id,
           cronExpr,
+          sessionConfig,
         });
 
         if (chain.length === 0) {
@@ -442,7 +509,7 @@ export function useWorkflows() {
             enabled: true,
             agentId,
             schedule: { kind: "cron", expr: cronExpr },
-            sessionTarget: "isolated",
+            sessionTarget: sessionConfig?.target || "isolated",
             wakeMode: "now",
             payload: { kind: "agentTurn", message: firstPrompt },
           };
@@ -453,7 +520,7 @@ export function useWorkflows() {
             description,
             enabled: true,
             schedule: { kind: "cron", expr: cronExpr },
-            sessionTarget: "isolated",
+            sessionTarget: sessionConfig?.target || "isolated",
             wakeMode: "now",
             payload: { kind: "systemEvent", text: firstStep.body || "Hello from workflow!" },
             delivery: { mode: "announce" },
@@ -478,6 +545,13 @@ export function useWorkflows() {
             triggerNodeId: trigger.id,
             enabled: true,
             cronExpr,
+            sessionConfig: sessionConfig ? {
+              target: sessionConfig.target || 'isolated',
+              contextMode: ((trigger.data as any)?.contextMode as 'minimal' | 'full' | 'custom') || 'minimal',
+              model: sessionConfig.model,
+              maxTokens: sessionConfig.maxTokens,
+              thinking: sessionConfig.thinking || 'off',
+            } : undefined,
           });
         } catch (e) {
           console.error("[WORKFLOW DEBUG] Failed to add cron job for workflow chain", e);
@@ -487,11 +561,21 @@ export function useWorkflows() {
         // === CHAT MESSAGE TRIGGER ===
         const sessionKey = trigger.data?.targetSessionKey as string | undefined;
         const matchKeyword = trigger.data?.matchKeyword as string | undefined;
+        
+        // Extract session config from trigger node
+        const sessionConfig = trigger.data?.sessionConfig as {
+          target?: 'isolated' | 'reuse' | 'main';
+          contextMode?: 'minimal' | 'full' | 'custom';
+          model?: string;
+          maxTokens?: number;
+          thinking?: 'on' | 'off';
+        } | undefined;
 
         console.log("[WORKFLOW DEBUG] Processing CHAT trigger:", {
           triggerId: trigger.id,
           sessionKey,
           matchKeyword,
+          sessionConfig,
         });
 
         if (!sessionKey) {
@@ -507,7 +591,7 @@ export function useWorkflows() {
           enabled: true,
           agentId,
           schedule: { kind: "event", type: "chat-message" }, // Event-based schedule
-          sessionTarget: "isolated",
+          sessionTarget: sessionConfig?.target || "isolated",
           wakeMode: "now",
           payload: {
             kind: "agentTurn",
@@ -527,6 +611,13 @@ export function useWorkflows() {
             enabled: true,
             sessionKey,
             matchKeyword,
+            sessionConfig: sessionConfig ? {
+              target: sessionConfig.target || 'isolated',
+              contextMode: ((trigger.data as any)?.contextMode as 'minimal' | 'full' | 'custom') || 'minimal',
+              model: sessionConfig.model,
+              maxTokens: sessionConfig.maxTokens,
+              thinking: sessionConfig.thinking || 'off',
+            } : undefined,
           });
         } catch (e) {
           console.error("[WORKFLOW DEBUG] Failed to add chat trigger cron job", e);

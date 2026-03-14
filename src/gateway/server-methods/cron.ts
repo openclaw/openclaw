@@ -7,6 +7,11 @@ import {
 import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import {
+  parseWorkflowChainFromDescription,
+  executeWorkflowCronJob,
+  type WorkflowCronJob,
+} from "../../infra/cron/server-cron.js";
+import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -212,6 +217,52 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+
+    // ✅ Check if this is a workflow job for synchronous execution
+    const job = context.cron.getJob(jobId);
+    if (!job) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "cron job not found"),
+      );
+      return;
+    }
+    const workflowChain = parseWorkflowChainFromDescription(job.description);
+
+    if (workflowChain && workflowChain.length > 0) {
+      context.logGateway.info(
+        `[gateway] Executing workflow: ${job.id} with ${workflowChain.length} steps`,
+      );
+
+      try {
+        // Execute workflow synchronously
+        const result = await executeWorkflowCronJob(
+          context.config,
+          context.deps,
+          { ...job, workflowChain } as WorkflowCronJob,
+          "manual",
+        );
+
+        context.logGateway.info(
+          `[gateway] Workflow execution completed: ${job.id}, success: ${result.success}`,
+        );
+
+        respond(true, result, undefined);
+        return;
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        context.logGateway.warn(`[gateway] Workflow execution error: ${errorMessage}`);
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INTERNAL_ERROR, `Workflow execution failed: ${errorMessage}`),
+        );
+        return;
+      }
+    }
+
+    // ✅ Fallback: Normal cron job execution (async)
     const result = await context.cron.run(jobId, p.mode ?? "force");
     respond(true, result, undefined);
   },

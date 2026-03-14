@@ -96,6 +96,48 @@ function generateUUID(): string {
   });
 }
 
+// Singleton gateway client for non-React usage
+let singletonClient: GatewayClient | null = null;
+
+/**
+ * Initialize the singleton gateway client.
+ * Call this once at app startup before using requestGateway().
+ */
+export function initGatewayClient(opts: GatewayClientOptions): GatewayClient {
+  if (singletonClient) {
+    singletonClient.stop();
+  }
+  singletonClient = new GatewayClient(opts);
+  singletonClient.start();
+  return singletonClient;
+}
+
+/**
+ * Get the current singleton gateway client.
+ * Returns null if initGatewayClient() hasn't been called yet.
+ */
+export function getGatewayClient(): GatewayClient | null {
+  return singletonClient;
+}
+
+/**
+ * Request helper for non-React usage.
+ * Uses the singleton gateway client initialized via initGatewayClient().
+ * @throws {GatewayRequestError} if request fails
+ * @throws {Error} if gateway is not connected
+ */
+export async function requestGateway<T = unknown>(
+  method: string,
+  params?: unknown,
+): Promise<T> {
+  if (!singletonClient) {
+    throw new Error(
+      "Gateway client not initialized. Call initGatewayClient() first or use useGateway() hook in React components.",
+    );
+  }
+  return singletonClient.request<T>(method, params);
+}
+
 export class GatewayClient {
   private ws: WebSocket | null = null;
   private pending = new Map<string, Pending>();

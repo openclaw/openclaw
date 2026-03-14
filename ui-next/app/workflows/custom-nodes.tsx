@@ -50,6 +50,51 @@ export interface NodeData extends Record<string, unknown> {
   label: string;
   subline?: string;
   icon?: string;
+  
+  // Trigger node fields
+  cronExpr?: string;
+  targetSessionKey?: string;
+  matchKeyword?: string;
+  
+  // Session configuration (for trigger nodes)
+  sessionTarget?: 'isolated' | 'reuse' | 'main';
+  contextMode?: 'minimal' | 'full' | 'custom';
+  modelOverride?: string;
+  maxTokens?: number | string;
+  thinking?: 'on' | 'off';
+  
+  // Action node fields
+  agentId?: string;
+  prompt?: string;
+  outputSchema?: string; // ✅ NEW: JSON Schema string for AI Agent Prompt
+  body?: string;
+  channel?: string;
+  recipientId?: string;
+  accountId?: string;
+  condition?: string;
+  trueLabel?: string;
+  falseLabel?: string;
+  toolName?: string;
+  toolArgs?: string;
+  targetNodeId?: string;
+  command?: string;
+  params?: string;
+  ttsText?: string;
+  ttsProvider?: string;
+  durationMs?: string;
+  jsCode?: string;
+  
+  // Supabase fields
+  supabaseInstance?: string;
+  table?: string;
+  columns?: string;
+  filters?: string; // JSON string
+  limit?: number | string;
+  orderBy?: string;
+  row?: string; // JSON string
+  updates?: string; // JSON string
+  function?: string;
+  paramsStr?: string; // JSON string (renamed to avoid conflict with command params)
 }
 
 export function TriggerNode({ data }: { data: NodeData }) {

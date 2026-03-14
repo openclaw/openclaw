@@ -1,0 +1,29 @@
+{
+  "name": "@openclaw/skill-office",
+  "version": "1.0.0",
+  "description": "Multi-Agent Team Management Skill for OpenClaw",
+  "main": "office-cli.js",
+  "bin": {
+    "office": "./office-cli.js"
+  },
+  "scripts": {
+    "start": "node office-cli.js",
+    "dashboard": "node office-cli.js dashboard",
+    "test": "echo \"No tests specified\" && exit 0"
+  },
+  "keywords": [
+    "openclaw",
+    "skill",
+    "office",
+    "multi-agent",
+    "team",
+    "orchestration"
+  ],
+  "author": "Tei Openclaw",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw",
+    "directory": "skills/office"
+  }
+}

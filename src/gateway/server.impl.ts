@@ -774,6 +774,7 @@ export async function startGatewayServer(
     },
     broadcast,
     context: {
+      config: cfgAtStart,
       deps,
       cron,
       cronStorePath,

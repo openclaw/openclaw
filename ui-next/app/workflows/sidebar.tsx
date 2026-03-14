@@ -124,6 +124,43 @@ const NODES = {
       actionType: "tts",
     },
   ],
+  database: [
+    {
+      type: "action",
+      label: "Supabase Select",
+      subline: "Query data",
+      icon: "🔍",
+      actionType: "supabase-select",
+    },
+    {
+      type: "action",
+      label: "Supabase Insert",
+      subline: "Insert row",
+      icon: "➕",
+      actionType: "supabase-insert",
+    },
+    {
+      type: "action",
+      label: "Supabase Update",
+      subline: "Update rows",
+      icon: "✏️",
+      actionType: "supabase-update",
+    },
+    {
+      type: "action",
+      label: "Supabase Delete",
+      subline: "Delete rows",
+      icon: "🗑️",
+      actionType: "supabase-delete",
+    },
+    {
+      type: "action",
+      label: "Supabase RPC",
+      subline: "Call function",
+      icon: "⚡",
+      actionType: "supabase-rpc",
+    },
+  ],
   logic: [
     {
       type: "logic",
@@ -215,6 +252,13 @@ export function Sidebar() {
         <div style={styles.section}>
           <div style={styles.sectionTitle}>Actions</div>
           {NODES.action.map((item) => (
+            <DraggableItem key={item.label} item={item} />
+          ))}
+        </div>
+
+        <div style={styles.section}>
+          <div style={styles.sectionTitle}>Database</div>
+          {NODES.database.map((item) => (
             <DraggableItem key={item.label} item={item} />
           ))}
         </div>

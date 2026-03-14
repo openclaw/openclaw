@@ -1,0 +1,135 @@
+{
+  "$schema": "../../../src/config/schema.cron.json",
+  "id": "report-generation-workflow",
+  "name": "Report Generation Workflow",
+  "description": "Generate periodic reports by querying data, analyzing trends, and storing results",
+  "enabled": true,
+  "trigger": {
+    "type": "schedule",
+    "cron": "0 8 * * 1"
+  },
+  "steps": [
+    {
+      "id": "step-1-fetch-user-stats",
+      "nodeId": "user-stats",
+      "label": "Fetch User Statistics",
+      "actionType": "supabase-select",
+      "instance": "default",
+      "table": "users",
+      "columns": "id,created_at,last_active_at,status,subscription_tier",
+      "filters": {
+        "created_at": {
+          "gte": "now() - interval '30 days'"
+        }
+      },
+      "limit": 10000
+    },
+    {
+      "id": "step-2-fetch-activity-stats",
+      "nodeId": "activity-stats",
+      "label": "Fetch Activity Statistics",
+      "actionType": "supabase-select",
+      "instance": "default",
+      "table": "activity_logs",
+      "columns": "user_id,action_type,created_at",
+      "filters": {
+        "created_at": {
+          "gte": "now() - interval '30 days'"
+        }
+      },
+      "limit": 50000
+    },
+    {
+      "id": "step-3-analyze-data",
+      "nodeId": "analyze",
+      "label": "Analyze Data and Generate Insights",
+      "actionType": "ai-agent-prompt",
+      "agentId": "analyst",
+      "prompt": "Analyze the following data and generate a comprehensive weekly report with:\n1. User growth metrics (new users, active users, churn rate)\n2. Activity trends (most common actions, peak times)\n3. Subscription tier distribution\n4. Key insights and recommendations\n\nUser data: {{step-1-fetch-user-stats.data}}\nActivity data: {{step-2-fetch-activity-stats.data}}\n\nReturn as JSON with sections: executiveSummary, userMetrics, activityMetrics, insights, recommendations.",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "executiveSummary": { "type": "string" },
+          "userMetrics": {
+            "type": "object",
+            "properties": {
+              "newUsers": { "type": "number" },
+              "activeUsers": { "type": "number" },
+              "churnRate": { "type": "number" }
+            }
+          },
+          "activityMetrics": {
+            "type": "object",
+            "properties": {
+              "totalActions": { "type": "number" },
+              "topActions": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "insights": { "type": "array", "items": { "type": "string" } },
+          "recommendations": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["executiveSummary", "userMetrics", "insights"]
+      },
+      "sessionConfig": {
+        "target": "isolated",
+        "contextMode": "full",
+        "maxTokens": 8192
+      }
+    },
+    {
+      "id": "step-4-store-report",
+      "nodeId": "store-report",
+      "label": "Store Generated Report",
+      "actionType": "supabase-insert",
+      "instance": "default",
+      "table": "reports",
+      "data": {
+        "report_type": "weekly_analytics",
+        "period_start": "now() - interval '30 days'",
+        "period_end": "now()",
+        "generated_at": "{{step-1-fetch-user-stats.timestamp}}",
+        "data": "{{step-3-analyze-data.output}}",
+        "status": "completed"
+      },
+      "returning": "representation"
+    },
+    {
+      "id": "step-5-update-dashboard",
+      "nodeId": "update-dashboard",
+      "label": "Update Dashboard Cache",
+      "actionType": "supabase-rpc",
+      "instance": "default",
+      "functionName": "refresh_dashboard_cache",
+      "args": {
+        "report_id": "{{step-4-store-report.data.id}}",
+        "metrics": "{{step-3-analyze-data.output.userMetrics}}"
+      }
+    },
+    {
+      "id": "step-6-notify-completion",
+      "nodeId": "notify",
+      "label": "Generate Notification Summary",
+      "actionType": "ai-agent-prompt",
+      "agentId": "notifier",
+      "prompt": "Create a brief summary notification for the weekly report. Include: total new users, active users percentage, and one key insight. Keep it under 280 characters. Report data: {{step-3-analyze-data.output}}",
+      "sessionConfig": {
+        "target": "isolated",
+        "contextMode": "minimal"
+      }
+    }
+  ],
+  "errorHandling": {
+    "onFailure": "notify",
+    "notify": true,
+    "retry": {
+      "maxAttempts": 2,
+      "backoffMs": [30000, 120000]
+    }
+  },
+  "metadata": {
+    "version": "1.0",
+    "author": "OpenClaw",
+    "tags": ["reporting", "analytics", "weekly"],
+    "schedule": "Every Monday at 8:00 AM"
+  }
+}

@@ -1,6 +1,11 @@
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import { isCronSystemEvent } from "../../infra/heartbeat-events-filter.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import {
+  parseWorkflowChainFromDescription,
+  executeWorkflowCronJob,
+  type WorkflowCronJob,
+} from "../../infra/cron/server-cron.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import { shouldEnqueueCronMainSummary } from "../heartbeat-policy.js";
@@ -880,6 +885,49 @@ export async function executeJobCore(
   if (abortSignal?.aborted) {
     return resolveAbortError();
   }
+
+  // ✅ Check if this is a workflow job
+  const workflowChain = parseWorkflowChainFromDescription(job.description);
+  if (workflowChain && workflowChain.length > 0) {
+    state.deps.log.info(
+      `[cron:${job.id}] Executing workflow with ${workflowChain.length} steps`,
+    );
+
+    try {
+      const workflowResult = await executeWorkflowCronJob(
+        state.deps.config,
+        state.deps.cliDeps,
+        { ...job, workflowChain, workflowType: "chain" as const } as WorkflowCronJob,
+        "scheduled",
+      );
+
+      if (workflowResult.success) {
+        return {
+          status: "ok",
+          summary: `Workflow completed: ${workflowResult.stepResults.length} steps executed`,
+          usage: workflowResult.tokenUsage ? {
+            input_tokens: workflowResult.tokenUsage.inputTokens,
+            output_tokens: workflowResult.tokenUsage.outputTokens,
+            total_tokens: workflowResult.tokenUsage.totalTokens,
+          } : undefined,
+        };
+      } else {
+        return {
+          status: "error",
+          error: workflowResult.error ?? "Workflow execution failed",
+          summary: `Workflow failed after ${workflowResult.stepResults.filter((s) => s.success).length}/${workflowResult.stepResults.length} steps`,
+        };
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      state.deps.log.warn(`[cron:${job.id}] Workflow execution error: ${errorMessage}`);
+      return {
+        status: "error",
+        error: errorMessage,
+      };
+    }
+  }
+
   if (job.sessionTarget === "main") {
     const text = resolveJobPayloadTextForMain(job);
     if (!text) {

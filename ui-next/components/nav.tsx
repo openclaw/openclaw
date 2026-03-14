@@ -198,6 +198,22 @@ function IconMcporter() {
     </svg>
   );
 }
+function IconSupabase() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      stroke="currentColor"
+    >
+      <path d="M12 3L4 7v10l8 4 8-4V7l-8-4z" />
+      <path d="M4 7l8 4 8-4" />
+      <path d="M12 11v10" />
+    </svg>
+  );
+}
 
 const NAV_GROUPS: NavGroup[] = [
   {
@@ -217,6 +233,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/workflows", label: "Workflows", icon: <IconWorkflows /> },
       { href: "/cron", label: "Automations", icon: <IconCron /> },
       { href: "/mcporter", label: "MCPorter", icon: <IconMcporter /> },
+      { href: "/settings/supabase", label: "Supabase", icon: <IconSupabase /> },
       { href: "/config", label: "Config", icon: <IconConfig /> },
     ],
   },

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import type { SessionsListResult, GatewaySessionRow } from "@/lib/types";
 import { useGateway } from "@/lib/use-gateway";
 import { NodeData } from "./custom-nodes";
+import { SupabaseProfileSelector } from "./supabase-profile-selector";
 
 const styles = {
   panel: {
@@ -90,6 +91,14 @@ const styles = {
     color: "var(--text-strong)",
     outline: "none",
   } as React.CSSProperties,
+  infoBox: {
+    padding: "12px",
+    background: "var(--info-subtle)",
+    color: "var(--info)",
+    borderRadius: "var(--radius-md)",
+    fontSize: 11,
+    lineHeight: 1.6,
+  } as React.CSSProperties,
 };
 
 interface NodeConfigPanelProps {
@@ -101,6 +110,7 @@ interface NodeConfigPanelProps {
 export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanelProps) {
   const { state, request } = useGateway();
   const [sessions, setSessions] = useState<GatewaySessionRow[]>([]);
+  const [jsonErrors, setJsonErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (state === "connected") {
@@ -120,7 +130,38 @@ export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanel
 
   const data: NodeData = (node.data as NodeData) || { label: "Node" };
 
+  // Validate JSON helper
+  const validateJson = (value: string, field: string): boolean => {
+    if (!value || value.trim() === "") {
+      setJsonErrors((prev) => {
+        const next = { ...prev };
+        delete next[field];
+        return next;
+      });
+      return true;
+    }
+    try {
+      JSON.parse(value);
+      setJsonErrors((prev) => {
+        const next = { ...prev };
+        delete next[field];
+        return next;
+      });
+      return true;
+    } catch (e) {
+      setJsonErrors((prev) => ({
+        ...prev,
+        [field]: "Invalid JSON format",
+      }));
+      return false;
+    }
+  };
+
   const handleChange = (key: string, value: string) => {
+    // Validate JSON fields
+    if (["filters", "row", "updates", "paramsStr", "outputSchema", "toolArgs", "params"].includes(key)) {
+      validateJson(value, key);
+    }
     onUpdateData(node.id, { ...data, [key]: value });
   };
 
@@ -157,15 +198,89 @@ export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanel
 
         {/* Dynamic Fields based on Label (Mock) */}
         {data.label === "Schedule (Cron)" && (
-          <div style={styles.field}>
-            <span style={styles.label}>Cron Expression</span>
-            <input
-              style={styles.input}
-              placeholder="* * * * *"
-              value={(data.cronExpr as string) || ""}
-              onChange={(e) => handleChange("cronExpr", e.target.value)}
-            />
-          </div>
+          <>
+            <div style={styles.field}>
+              <span style={styles.label}>Cron Expression</span>
+              <input
+                style={styles.input}
+                placeholder="* * * * *"
+                value={(data.cronExpr as string) || ""}
+                onChange={(e) => handleChange("cronExpr", e.target.value)}
+              />
+            </div>
+
+            {/* Session Configuration Section */}
+            <div style={{ marginTop: 8, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
+              <span style={{ ...styles.label, fontWeight: 600, marginBottom: 12, display: "block" }}>
+                ⚙️ Session Configuration
+              </span>
+
+              <div style={styles.field}>
+                <span style={styles.label}>Session Target</span>
+                <select
+                  style={styles.select}
+                  value={(data.sessionTarget as string) || "isolated"}
+                  onChange={(e) => handleChange("sessionTarget", e.target.value)}
+                >
+                  <option value="isolated">Isolated (New session per execution)</option>
+                  <option value="reuse">Reuse (Same session for all steps)</option>
+                  <option value="main">Main (Use main agent session)</option>
+                </select>
+              </div>
+
+              <div style={styles.field}>
+                <span style={styles.label}>Context Mode</span>
+                <select
+                  style={styles.select}
+                  value={(data.contextMode as string) || "minimal"}
+                  onChange={(e) => handleChange("contextMode", e.target.value)}
+                >
+                  <option value="minimal">Minimal (Only current step input)</option>
+                  <option value="full">Full (Include conversation history)</option>
+                  <option value="custom">Custom (Define custom context)</option>
+                </select>
+              </div>
+
+              <div style={styles.field}>
+                <span style={styles.label}>Model Override</span>
+                <input
+                  style={styles.input}
+                  placeholder="bailian/qwen3.5-plus"
+                  value={(data.modelOverride as string) || ""}
+                  onChange={(e) => handleChange("modelOverride", e.target.value)}
+                />
+              </div>
+
+              <div style={styles.field}>
+                <span style={styles.label}>Max Tokens</span>
+                <input
+                  style={styles.input}
+                  type="number"
+                  placeholder="4096"
+                  value={(data.maxTokens as string) || ""}
+                  onChange={(e) => handleChange("maxTokens", e.target.value)}
+                />
+              </div>
+
+              <div style={styles.field}>
+                <span style={styles.label}>Thinking Mode</span>
+                <select
+                  style={styles.select}
+                  value={(data.thinking as string) || "off"}
+                  onChange={(e) => handleChange("thinking", e.target.value)}
+                >
+                  <option value="off">Off (Faster, cheaper)</option>
+                  <option value="on">On (Better reasoning)</option>
+                </select>
+              </div>
+
+              <div style={{ ...styles.infoBox, marginTop: 12 }}>
+                <strong>💰 Cost Optimization:</strong>
+                <br />• Isolated + Minimal = ~90% token reduction
+                <br />• Thinking Off = 2x faster, lower cost
+              </div>
+            </div>
+          </>
         )}
 
         {data.label === "Chat Message" && (
@@ -194,6 +309,78 @@ export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanel
                 onChange={(e) => handleChange("matchKeyword", e.target.value)}
               />
             </div>
+
+            {/* Session Configuration Section */}
+            <div style={{ marginTop: 8, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
+              <span style={{ ...styles.label, fontWeight: 600, marginBottom: 12, display: "block" }}>
+                ⚙️ Session Configuration
+              </span>
+
+              <div style={styles.field}>
+                <span style={styles.label}>Session Target</span>
+                <select
+                  style={styles.select}
+                  value={(data.sessionTarget as string) || "isolated"}
+                  onChange={(e) => handleChange("sessionTarget", e.target.value)}
+                >
+                  <option value="isolated">Isolated (New session per execution)</option>
+                  <option value="reuse">Reuse (Same session for all steps)</option>
+                  <option value="main">Main (Use main agent session)</option>
+                </select>
+              </div>
+
+              <div style={styles.field}>
+                <span style={styles.label}>Context Mode</span>
+                <select
+                  style={styles.select}
+                  value={(data.contextMode as string) || "minimal"}
+                  onChange={(e) => handleChange("contextMode", e.target.value)}
+                >
+                  <option value="minimal">Minimal (Only current step input)</option>
+                  <option value="full">Full (Include conversation history)</option>
+                  <option value="custom">Custom (Define custom context)</option>
+                </select>
+              </div>
+
+              <div style={styles.field}>
+                <span style={styles.label}>Model Override</span>
+                <input
+                  style={styles.input}
+                  placeholder="bailian/qwen3.5-plus"
+                  value={(data.modelOverride as string) || ""}
+                  onChange={(e) => handleChange("modelOverride", e.target.value)}
+                />
+              </div>
+
+              <div style={styles.field}>
+                <span style={styles.label}>Max Tokens</span>
+                <input
+                  style={styles.input}
+                  type="number"
+                  placeholder="4096"
+                  value={(data.maxTokens as string) || ""}
+                  onChange={(e) => handleChange("maxTokens", e.target.value)}
+                />
+              </div>
+
+              <div style={styles.field}>
+                <span style={styles.label}>Thinking Mode</span>
+                <select
+                  style={styles.select}
+                  value={(data.thinking as string) || "off"}
+                  onChange={(e) => handleChange("thinking", e.target.value)}
+                >
+                  <option value="off">Off (Faster, cheaper)</option>
+                  <option value="on">On (Better reasoning)</option>
+                </select>
+              </div>
+
+              <div style={{ ...styles.infoBox, marginTop: 12 }}>
+                <strong>💰 Cost Optimization:</strong>
+                <br />• Isolated + Minimal = ~90% token reduction
+                <br />• Thinking Off = 2x faster, lower cost
+              </div>
+            </div>
           </>
         )}
 
@@ -208,6 +395,42 @@ export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanel
                 onChange={(e) => handleChange("agentId", e.target.value)}
               />
             </div>
+
+            {/* ✅ NEW: Output Schema Configuration */}
+            <div style={styles.field}>
+              <span style={styles.label}>Output Schema (JSON Schema)</span>
+              <textarea
+                style={{ ...styles.textarea, fontFamily: "monospace", fontSize: 11 }}
+                placeholder={`{
+  "type": "object",
+  "properties": {
+    "name": { "type": "string" },
+    "description": { "type": "string" }
+  },
+  "required": ["name", "description"]
+}`}
+                value={(data.outputSchema as string) || ""}
+                onChange={(e) => handleChange("outputSchema", e.target.value)}
+              />
+            </div>
+
+            <div style={styles.infoBox}>
+              <strong>📋 Output Schema:</strong>
+              <br />
+              Define the JSON structure you want the AI to return.
+              <br />
+              Next step will receive validated JSON matching this schema.
+              <br />
+              <a
+                href="https://json-schema.org/learn/getting-started-step-by-step"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: "var(--info)", textDecoration: "underline" }}
+              >
+                Learn JSON Schema →
+              </a>
+            </div>
+
             <div style={styles.field}>
               <span style={styles.label}>Prompt Template</span>
               <textarea
@@ -216,6 +439,16 @@ export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanel
                 value={(data.prompt as string) || ""}
                 onChange={(e) => handleChange("prompt", e.target.value)}
               />
+            </div>
+
+            <div style={styles.infoBox}>
+              <strong>💡 Template Variables:</strong>
+              <br />
+              • <code>{"{{input}}"}</code> - Output from previous step
+              <br />
+              • <code>{"{{input.fieldName}}"}</code> - Specific field
+              <br />
+              • <code>{"{{step1.name}}"}</code> - Output from step 1
             </div>
           </>
         )}
@@ -572,6 +805,303 @@ return input.toUpperCase();`}
             >
               <strong>✅ Available:</strong> Secure JS execution with sandbox (5s timeout, 100KB
               limit)
+            </div>
+          </>
+        )}
+
+        {/* Supabase Select */}
+        {data.label === "Supabase Select" && (
+          <>
+            <SupabaseProfileSelector
+              value={(data.supabaseInstance as string) || ""}
+              onChange={(value) => handleChange("supabaseInstance", value)}
+            />
+
+            <div style={styles.field}>
+              <span style={styles.label}>Table Name</span>
+              <input
+                style={styles.input}
+                placeholder="users"
+                value={(data.table as string) || ""}
+                onChange={(e) => handleChange("table", e.target.value)}
+              />
+            </div>
+
+            <div style={styles.field}>
+              <span style={styles.label}>Columns (optional)</span>
+              <input
+                style={styles.input}
+                placeholder="id, name, email, created_at"
+                value={(data.columns as string) || ""}
+                onChange={(e) => handleChange("columns", e.target.value)}
+              />
+            </div>
+
+            <div style={styles.field}>
+              <span style={styles.label}>Filters (JSON)</span>
+              <textarea
+                style={{
+                  ...styles.textarea,
+                  fontFamily: "monospace",
+                  fontSize: 11,
+                  borderColor: jsonErrors.filters ? "var(--danger)" : "var(--border)",
+                }}
+                placeholder={`{
+  "status": { "eq": "active" },
+  "created_at": { "gte": "2026-01-01" }
+}`}
+                value={(data.filters as string) || ""}
+                onChange={(e) => handleChange("filters", e.target.value)}
+              />
+              {jsonErrors.filters && (
+                <span style={{ fontSize: 10, color: "var(--danger)", marginTop: 4 }}>
+                  ⚠️ {jsonErrors.filters}
+                </span>
+              )}
+            </div>
+
+            <div style={styles.field}>
+              <span style={styles.label}>Limit</span>
+              <input
+                style={styles.input}
+                type="number"
+                placeholder="100"
+                value={(data.limit as string) || ""}
+                onChange={(e) => handleChange("limit", e.target.value)}
+              />
+            </div>
+
+            <div style={styles.field}>
+              <span style={styles.label}>Order By</span>
+              <input
+                style={styles.input}
+                placeholder="created_at DESC"
+                value={(data.orderBy as string) || ""}
+                onChange={(e) => handleChange("orderBy", e.target.value)}
+              />
+            </div>
+
+            <div style={styles.infoBox}>
+              <strong>📤 Output:</strong> {`{ data: [...], count: number }`}
+            </div>
+          </>
+        )}
+
+        {/* Supabase Insert */}
+        {data.label === "Supabase Insert" && (
+          <>
+            <SupabaseProfileSelector
+              value={(data.supabaseInstance as string) || ""}
+              onChange={(value) => handleChange("supabaseInstance", value)}
+            />
+
+            <div style={styles.field}>
+              <span style={styles.label}>Table Name</span>
+              <input
+                style={styles.input}
+                placeholder="users"
+                value={(data.table as string) || ""}
+                onChange={(e) => handleChange("table", e.target.value)}
+              />
+            </div>
+
+            <div style={styles.field}>
+              <span style={styles.label}>Row Data (JSON)</span>
+              <textarea
+                style={{
+                  ...styles.textarea,
+                  fontFamily: "monospace",
+                  fontSize: 11,
+                  borderColor: jsonErrors.row ? "var(--danger)" : "var(--border)",
+                }}
+                placeholder={`{
+  "name": "{{input.name}}",
+  "email": "{{input.email}}",
+  "status": "active"
+}`}
+                value={(data.row as string) || ""}
+                onChange={(e) => handleChange("row", e.target.value)}
+              />
+              {jsonErrors.row && (
+                <span style={{ fontSize: 10, color: "var(--danger)", marginTop: 4 }}>
+                  ⚠️ {jsonErrors.row}
+                </span>
+              )}
+            </div>
+
+            <div style={styles.infoBox}>
+              <strong>💡 Template Variables:</strong>
+              <br />• <code>{"{{input.field}}"}</code> - From previous step
+              <br />• <code>{"{{step.nodeId.field}}"}</code> - From specific step
+            </div>
+
+            <div style={styles.infoBox}>
+              <strong>📤 Output:</strong> {`{ id, created_at, ...inserted_row }`}
+            </div>
+          </>
+        )}
+
+        {/* Supabase Update */}
+        {data.label === "Supabase Update" && (
+          <>
+            <SupabaseProfileSelector
+              value={(data.supabaseInstance as string) || ""}
+              onChange={(value) => handleChange("supabaseInstance", value)}
+            />
+
+            <div style={styles.field}>
+              <span style={styles.label}>Table Name</span>
+              <input
+                style={styles.input}
+                placeholder="users"
+                value={(data.table as string) || ""}
+                onChange={(e) => handleChange("table", e.target.value)}
+              />
+            </div>
+
+            <div style={styles.field}>
+              <span style={styles.label}>Filters (JSON)</span>
+              <textarea
+                style={{
+                  ...styles.textarea,
+                  fontFamily: "monospace",
+                  fontSize: 11,
+                  borderColor: jsonErrors.filters ? "var(--danger)" : "var(--border)",
+                }}
+                placeholder={`{
+  "id": { "eq": "123" },
+  "status": { "eq": "pending" }
+}`}
+                value={(data.filters as string) || ""}
+                onChange={(e) => handleChange("filters", e.target.value)}
+              />
+              {jsonErrors.filters && (
+                <span style={{ fontSize: 10, color: "var(--danger)", marginTop: 4 }}>
+                  ⚠️ {jsonErrors.filters}
+                </span>
+              )}
+            </div>
+
+            <div style={styles.field}>
+              <span style={styles.label}>Updates (JSON)</span>
+              <textarea
+                style={{
+                  ...styles.textarea,
+                  fontFamily: "monospace",
+                  fontSize: 11,
+                  borderColor: jsonErrors.updates ? "var(--danger)" : "var(--border)",
+                }}
+                placeholder={`{
+  "status": "completed",
+  "updated_at": "{{input.timestamp}}"
+}`}
+                value={(data.updates as string) || ""}
+                onChange={(e) => handleChange("updates", e.target.value)}
+              />
+              {jsonErrors.updates && (
+                <span style={{ fontSize: 10, color: "var(--danger)", marginTop: 4 }}>
+                  ⚠️ {jsonErrors.updates}
+                </span>
+              )}
+            </div>
+
+            <div style={styles.infoBox}>
+              <strong>📤 Output:</strong> {`{ count: number }`}
+            </div>
+          </>
+        )}
+
+        {/* Supabase Delete */}
+        {data.label === "Supabase Delete" && (
+          <>
+            <SupabaseProfileSelector
+              value={(data.supabaseInstance as string) || ""}
+              onChange={(value) => handleChange("supabaseInstance", value)}
+            />
+
+            <div style={styles.field}>
+              <span style={styles.label}>Table Name</span>
+              <input
+                style={styles.input}
+                placeholder="users"
+                value={(data.table as string) || ""}
+                onChange={(e) => handleChange("table", e.target.value)}
+              />
+            </div>
+
+            <div style={styles.field}>
+              <span style={styles.label}>Filters (JSON)</span>
+              <textarea
+                style={{
+                  ...styles.textarea,
+                  fontFamily: "monospace",
+                  fontSize: 11,
+                  borderColor: jsonErrors.filters ? "var(--danger)" : "var(--border)",
+                }}
+                placeholder={`{
+  "status": { "eq": "inactive" },
+  "created_at": { "lt": "2025-01-01" }
+}`}
+                value={(data.filters as string) || ""}
+                onChange={(e) => handleChange("filters", e.target.value)}
+              />
+              {jsonErrors.filters && (
+                <span style={{ fontSize: 10, color: "var(--danger)", marginTop: 4 }}>
+                  ⚠️ {jsonErrors.filters}
+                </span>
+              )}
+            </div>
+
+            <div style={styles.infoBox}>
+              <strong>📤 Output:</strong> {`{ count: number }`}
+            </div>
+          </>
+        )}
+
+        {/* Supabase RPC */}
+        {data.label === "Supabase RPC" && (
+          <>
+            <SupabaseProfileSelector
+              value={(data.supabaseInstance as string) || ""}
+              onChange={(value) => handleChange("supabaseInstance", value)}
+            />
+
+            <div style={styles.field}>
+              <span style={styles.label}>Function Name</span>
+              <input
+                style={styles.input}
+                placeholder="calculate_total"
+                value={(data.function as string) || ""}
+                onChange={(e) => handleChange("function", e.target.value)}
+              />
+            </div>
+
+            <div style={styles.field}>
+              <span style={styles.label}>Parameters (JSON)</span>
+              <textarea
+                style={{
+                  ...styles.textarea,
+                  fontFamily: "monospace",
+                  fontSize: 11,
+                  borderColor: jsonErrors.paramsStr ? "var(--danger)" : "var(--border)",
+                }}
+                placeholder={`{
+  "user_id": "123",
+  "start_date": "2026-01-01",
+  "end_date": "2026-12-31"
+}`}
+                value={(data.paramsStr as string) || ""}
+                onChange={(e) => handleChange("paramsStr", e.target.value)}
+              />
+              {jsonErrors.paramsStr && (
+                <span style={{ fontSize: 10, color: "var(--danger)", marginTop: 4 }}>
+                  ⚠️ {jsonErrors.paramsStr}
+                </span>
+              )}
+            </div>
+
+            <div style={styles.infoBox}>
+              <strong>📤 Output:</strong> {`{ result: any }`}
             </div>
           </>
         )}

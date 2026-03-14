@@ -1,0 +1,99 @@
+{
+  "$schema": "../../../src/config/schema.cron.json",
+  "id": "user-onboarding-workflow",
+  "name": "User Onboarding Workflow",
+  "description": "Automated workflow for new user onboarding - creates user record, sends welcome message, and sets up initial preferences",
+  "enabled": true,
+  "trigger": {
+    "type": "webhook",
+    "event": "user.created"
+  },
+  "steps": [
+    {
+      "id": "step-1-validate-input",
+      "nodeId": "validate-input",
+      "label": "Validate User Input",
+      "actionType": "ai-agent-prompt",
+      "agentId": "validator",
+      "prompt": "Validate the following user data and return a JSON object with: isValid (boolean), errors (array of strings if any), and sanitizedData (object with cleaned data). User data: {{input}}",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "isValid": { "type": "boolean" },
+          "errors": { "type": "array", "items": { "type": "string" } },
+          "sanitizedData": { "type": "object" }
+        },
+        "required": ["isValid", "sanitizedData"]
+      },
+      "sessionConfig": {
+        "target": "isolated",
+        "contextMode": "minimal"
+      }
+    },
+    {
+      "id": "step-2-insert-user",
+      "nodeId": "insert-user",
+      "label": "Create User Record",
+      "actionType": "supabase-insert",
+      "instance": "default",
+      "table": "users",
+      "data": "{{step-1-validate-input.sanitizedData}}",
+      "returning": "representation",
+      "upsert": false
+    },
+    {
+      "id": "step-3-create-preferences",
+      "nodeId": "create-preferences",
+      "label": "Create User Preferences",
+      "actionType": "supabase-insert",
+      "instance": "default",
+      "table": "user_preferences",
+      "data": {
+        "user_id": "{{step-2-insert-user.data.id}}",
+        "theme": "light",
+        "notifications_enabled": true,
+        "language": "en",
+        "timezone": "UTC"
+      },
+      "returning": "representation"
+    },
+    {
+      "id": "step-4-log-onboarding",
+      "nodeId": "log-onboarding",
+      "label": "Log Onboarding Event",
+      "actionType": "supabase-insert",
+      "instance": "default",
+      "table": "audit_logs",
+      "data": {
+        "event_type": "user_onboarding",
+        "user_id": "{{step-2-insert-user.data.id}}",
+        "metadata": {
+          "source": "automated_workflow",
+          "timestamp": "{{step-2-insert-user.timestamp}}"
+        },
+        "created_at": "{{step-2-insert-user.timestamp}}"
+      },
+      "returning": "minimal"
+    },
+    {
+      "id": "step-5-send-welcome",
+      "nodeId": "send-welcome",
+      "label": "Send Welcome Message",
+      "actionType": "ai-agent-prompt",
+      "agentId": "messenger",
+      "prompt": "Generate a personalized welcome message for user {{step-2-insert-user.data.name}} (email: {{step-2-insert-user.data.email}}). Keep it friendly and helpful, mention they can customize their preferences.",
+      "sessionConfig": {
+        "target": "isolated",
+        "contextMode": "minimal"
+      }
+    }
+  ],
+  "errorHandling": {
+    "onFailure": "rollback",
+    "notify": true,
+    "retry": {
+      "maxAttempts": 3,
+      "backoffMs": [5000, 15000, 60000]
+    }
+  }
+}

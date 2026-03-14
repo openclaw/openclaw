@@ -1,0 +1,117 @@
+{
+  "$schema": "../../../src/config/schema.cron.json",
+  "id": "cleanup-old-records",
+  "name": "Cleanup Old Records",
+  "description": "Automated cleanup workflow to delete old/expired records and maintain database hygiene",
+  "enabled": true,
+  "trigger": {
+    "type": "schedule",
+    "cron": "0 2 * * *"
+  },
+  "steps": [
+    {
+      "id": "step-1-count-old-sessions",
+      "nodeId": "count-sessions",
+      "label": "Count Old Sessions",
+      "actionType": "supabase-select",
+      "instance": "default",
+      "table": "sessions",
+      "columns": "id",
+      "filters": {
+        "expires_at": {
+          "lt": "now()"
+        }
+      },
+      "limit": 1
+    },
+    {
+      "id": "step-2-delete-old-sessions",
+      "nodeId": "delete-sessions",
+      "label": "Delete Expired Sessions",
+      "actionType": "supabase-delete",
+      "instance": "default",
+      "table": "sessions",
+      "filters": {
+        "expires_at": {
+          "lt": "now()"
+        }
+      },
+      "returning": "minimal"
+    },
+    {
+      "id": "step-3-count-old-logs",
+      "nodeId": "count-logs",
+      "label": "Count Old Audit Logs",
+      "actionType": "supabase-select",
+      "instance": "default",
+      "table": "audit_logs",
+      "columns": "id",
+      "filters": {
+        "created_at": {
+          "lt": "now() - interval '90 days'"
+        }
+      },
+      "limit": 1
+    },
+    {
+      "id": "step-4-delete-old-logs",
+      "nodeId": "delete-logs",
+      "label": "Delete Old Audit Logs",
+      "actionType": "supabase-delete",
+      "instance": "default",
+      "table": "audit_logs",
+      "filters": {
+        "created_at": {
+          "lt": "now() - interval '90 days'"
+        }
+      },
+      "returning": "minimal"
+    },
+    {
+      "id": "step-5-archive-important-data",
+      "nodeId": "archive-data",
+      "label": "Archive Important Old Data",
+      "actionType": "supabase-rpc",
+      "instance": "default",
+      "functionName": "archive_old_records",
+      "args": {
+        "days_old": 30,
+        "archive_table": "archived_data"
+      }
+    },
+    {
+      "id": "step-6-log-cleanup",
+      "nodeId": "log-cleanup",
+      "label": "Log Cleanup Operation",
+      "actionType": "supabase-insert",
+      "instance": "default",
+      "table": "maintenance_logs",
+      "data": {
+        "operation": "daily_cleanup",
+        "sessions_deleted": "{{step-2-delete-old-sessions.count}}",
+        "logs_deleted": "{{step-4-delete-old-logs.count}}",
+        "completed_at": "{{step-1-count-old-sessions.timestamp}}",
+        "status": "completed",
+        "details": {
+          "sessions_found": "{{step-1-count-old-sessions.count}}",
+          "logs_found": "{{step-3-count-old-logs.count}}"
+        }
+      },
+      "returning": "minimal"
+    }
+  ],
+  "errorHandling": {
+    "onFailure": "notify",
+    "notify": true,
+    "retry": {
+      "maxAttempts": 1,
+      "backoffMs": [60000]
+    }
+  },
+  "metadata": {
+    "version": "1.0",
+    "author": "OpenClaw",
+    "tags": ["cleanup", "maintenance", "database"],
+    "schedule": "Daily at 2:00 AM"
+  }
+}

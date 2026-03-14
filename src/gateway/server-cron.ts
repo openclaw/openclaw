@@ -238,6 +238,8 @@ export function buildGatewayCronService(params: {
   const warnedLegacyWebhookJobs = new Set<string>();
 
   const cron = new CronService({
+    config: params.cfg,
+    cliDeps: params.deps,
     storePath,
     cronEnabled,
     cronConfig: params.cfg.cron,
