@@ -1,0 +1,9 @@
+{
+  "id": "lanxin",
+  "channels": ["lanxin"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
