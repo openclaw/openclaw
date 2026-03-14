@@ -31,6 +31,15 @@ const ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS = ["claude-sonnet-4-5", "claude-sonnet
 const ZAI_GLM5_MODEL_ID = "glm-5";
 const ZAI_GLM5_TEMPLATE_MODEL_IDS = ["glm-4.7"] as const;
 
+// xAI's grok models may not be present in pi-ai's built-in model catalog.
+// Support grok-4 and grok-4.1 variants that users configure but aren't in the registry.
+const XAI_GROK_4_PREFIX = "grok-4";
+const XAI_GROK_4_TEMPLATE_IDS = ["grok-4-1-fast"] as const;
+
+function inferXaiGrokReasoning(modelId: string): boolean {
+  return modelId.toLowerCase().includes("reasoning");
+}
+
 // gemini-3.1-pro-preview / gemini-3.1-flash-preview are not yet in pi-ai's built-in
 // google-gemini-cli catalog. Clone the gemini-3-pro/flash-preview template so users
 // don't get "Unknown model" errors when Google releases a new minor version.
@@ -341,6 +350,53 @@ function resolveZaiGlm5ForwardCompatModel(
   } as Model<Api>);
 }
 
+// xAI's grok-4 family models may not be present in pi-ai's built-in model catalog.
+// Support grok-4, grok-4.1, grok-4.20, etc. variants that users configure but aren't in the registry.
+function resolveXaiGrokForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (normalizedProvider !== "xai") {
+    return undefined;
+  }
+  const trimmed = modelId.trim();
+  const lower = trimmed.toLowerCase();
+
+  // Support grok-4, grok-4.1, grok-4.20, grok-4.1-fast-reasoning, etc.
+  if (!lower.startsWith(XAI_GROK_4_PREFIX)) {
+    return undefined;
+  }
+
+  // Try to find a template model in the registry
+  for (const templateId of XAI_GROK_4_TEMPLATE_IDS) {
+    const template = modelRegistry.find("xai", templateId) as Model<Api> | null;
+    if (template) {
+      return normalizeModelCompat({
+        ...template,
+        id: trimmed,
+        name: trimmed,
+        reasoning: template.reasoning ?? inferXaiGrokReasoning(trimmed),
+      } as Model<Api>);
+    }
+  }
+
+  // If no template found, create a basic forward-compat model with xAI's API
+  return normalizeModelCompat({
+    id: trimmed,
+    name: trimmed,
+    api: "openai-completions",
+    provider: normalizedProvider,
+    baseUrl: "https://api.x.ai/v1",
+    reasoning: inferXaiGrokReasoning(trimmed),
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: DEFAULT_CONTEXT_TOKENS,
+    maxTokens: DEFAULT_CONTEXT_TOKENS,
+  } as Model<Api>);
+}
+
 export function resolveForwardCompatModel(
   provider: string,
   modelId: string,
@@ -352,6 +408,7 @@ export function resolveForwardCompatModel(
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
+    resolveXaiGrokForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveGoogle31ForwardCompatModel(provider, modelId, modelRegistry)
   );
 }

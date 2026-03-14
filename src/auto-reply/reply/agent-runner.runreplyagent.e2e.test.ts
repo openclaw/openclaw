@@ -737,10 +737,41 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
-  it("announces model fallback only when verbose mode is enabled", async () => {
+  it("announces model fallback only when verbose mode is enabled, except unknown-model fallback", async () => {
     const cases = [
-      { name: "verbose on", verbose: "on" as const, expectNotice: true },
-      { name: "verbose off", verbose: "off" as const, expectNotice: false },
+      {
+        name: "verbose on",
+        verbose: "on" as const,
+        expectNotice: true,
+        attempt: {
+          provider: "fireworks",
+          model: "fireworks/minimax-m2p5",
+          error: "Provider fireworks is in cooldown (all profiles unavailable)",
+          reason: "rate_limit",
+        },
+      },
+      {
+        name: "verbose off",
+        verbose: "off" as const,
+        expectNotice: false,
+        attempt: {
+          provider: "fireworks",
+          model: "fireworks/minimax-m2p5",
+          error: "Provider fireworks is in cooldown (all profiles unavailable)",
+          reason: "rate_limit",
+        },
+      },
+      {
+        name: "verbose off unknown model",
+        verbose: "off" as const,
+        expectNotice: true,
+        attempt: {
+          provider: "xai",
+          model: "grok-4.99-preview",
+          error: "Unknown model: xai/grok-4.99-preview",
+          reason: "model_not_found",
+        },
+      },
     ] as const;
     for (const testCase of cases) {
       const sessionEntry: SessionEntry = {
@@ -757,14 +788,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
           provider: "deepinfra",
           model: "moonshotai/Kimi-K2.5",
-          attempts: [
-            {
-              provider: "fireworks",
-              model: "fireworks/minimax-m2p5",
-              error: "Provider fireworks is in cooldown (all profiles unavailable)",
-              reason: "rate_limit",
-            },
-          ],
+          attempts: [testCase.attempt],
         }),
       );
 
@@ -789,7 +813,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
       if (testCase.expectNotice) {
         expect(payload.text, testCase.name).toContain("Model Fallback:");
         expect(payload.text, testCase.name).toContain("deepinfra/moonshotai/Kimi-K2.5");
-        expect(sessionEntry.fallbackNoticeReason, testCase.name).toBe("rate limit");
+        expect(sessionEntry.fallbackNoticeReason, testCase.name).toBe(
+          testCase.attempt.reason.replace(/_/g, " "),
+        );
         continue;
       }
       expect(payload.text, testCase.name).not.toContain("Model Fallback:");

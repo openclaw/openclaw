@@ -626,7 +626,9 @@ export async function runReplyAgent(params: {
           attempts: fallbackAttempts,
         },
       });
-      if (verboseEnabled) {
+      const shouldShowFallbackNotice =
+        verboseEnabled || fallbackAttempts.some((attempt) => attempt.reason === "model_not_found");
+      if (shouldShowFallbackNotice) {
         const fallbackNotice = buildFallbackNotice({
           selectedProvider,
           selectedModel,
