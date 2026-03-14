@@ -61,7 +61,7 @@ Welcome to the lobster tank! 🦞
 - **Josh Lehman** - Compaction, Tlon/Urbit subsystem
   - GitHub [@jalehman](https://github.com/jalehman) · X: [@jlehman\_](https://x.com/jlehman_)
 
-- **Radek Sienkiewicz** - Control UI + WebChat correctness
+- **Radek Sienkiewicz** - Docs, Control UI
   - GitHub [@velvet-shark](https://github.com/velvet-shark) · X: [@velvet_shark](https://twitter.com/velvet_shark)
 
 - **Muhammed Mukhthar** - Mattermost, CLI
