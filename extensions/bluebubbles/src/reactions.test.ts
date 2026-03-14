@@ -106,18 +106,24 @@ describe("reactions", () => {
       ).rejects.toThrow("password is required");
     });
 
-    it("throws for unsupported reaction type", async () => {
-      await expect(
-        sendBlueBubblesReaction({
-          chatGuid: "chat-123",
-          messageGuid: "msg-123",
-          emoji: "unsupported",
-          opts: {
-            serverUrl: "http://localhost:1234",
-            password: "test",
-          },
-        }),
-      ).rejects.toThrow("Unsupported BlueBubbles reaction");
+    it("falls back to like for unsupported reaction type", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(""),
+      });
+
+      await sendBlueBubblesReaction({
+        chatGuid: "chat-123",
+        messageGuid: "msg-123",
+        emoji: "unsupported",
+        opts: {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        },
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.reaction).toBe("like");
     });
 
     describe("reaction type normalization", () => {

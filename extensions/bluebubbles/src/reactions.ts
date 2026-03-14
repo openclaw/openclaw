@@ -115,7 +115,7 @@ function resolveAccount(params: BlueBubblesReactionOpts) {
   return resolveBlueBubblesServerAccount(params);
 }
 
-export function normalizeBlueBubblesReactionInput(emoji: string, remove?: boolean): string {
+export function normalizeBlueBubblesReactionInput(emoji: string, remove?: boolean): string | null {
   const trimmed = emoji.trim();
   if (!trimmed) {
     throw new Error("BlueBubbles reaction requires an emoji or name.");
@@ -127,7 +127,7 @@ export function normalizeBlueBubblesReactionInput(emoji: string, remove?: boolea
   const aliased = REACTION_ALIASES.get(raw) ?? raw;
   const mapped = REACTION_EMOJIS.get(trimmed) ?? REACTION_EMOJIS.get(raw) ?? aliased;
   if (!REACTION_TYPES.has(mapped)) {
-    throw new Error(`Unsupported BlueBubbles reaction: ${trimmed}`);
+    return null;
   }
   return remove ? `-${mapped}` : mapped;
 }
@@ -148,7 +148,9 @@ export async function sendBlueBubblesReaction(params: {
   if (!messageGuid) {
     throw new Error("BlueBubbles reaction requires messageGuid.");
   }
-  const reaction = normalizeBlueBubblesReactionInput(params.emoji, params.remove);
+  const reaction =
+    normalizeBlueBubblesReactionInput(params.emoji, params.remove) ??
+    (params.remove ? "-like" : "like");
   const { baseUrl, password, accountId } = resolveAccount(params.opts ?? {});
   if (getCachedBlueBubblesPrivateApiStatus(accountId) === false) {
     throw new Error(
