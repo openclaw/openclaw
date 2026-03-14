@@ -1974,6 +1974,49 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("store");
   });
 
+  it("strips prompt cache fields for non-OpenAI responses-compatible endpoints", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "custom-ark-cn-beijing-volces-com",
+      applyModelId: "ep-20260310072239-f9rhn",
+      model: {
+        api: "openai-responses",
+        provider: "custom-ark-cn-beijing-volces-com",
+        id: "ep-20260310072239-f9rhn",
+        name: "doubao-seed-2-0-pro-260215",
+        baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        prompt_cache_key: "session-123",
+        prompt_cache_retention: "24h",
+      },
+    });
+
+    expect(payload).not.toHaveProperty("prompt_cache_key");
+    expect(payload).not.toHaveProperty("prompt_cache_retention");
+  });
+
+  it("keeps prompt cache fields for direct OpenAI responses endpoints", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        prompt_cache_key: "session-123",
+        prompt_cache_retention: "24h",
+      },
+    });
+
+    expect(payload.prompt_cache_key).toBe("session-123");
+    expect(payload.prompt_cache_retention).toBe("24h");
+  });
+
   it("keeps existing context_management when stripping store for supportsStore=false models", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "custom-openai-responses",
