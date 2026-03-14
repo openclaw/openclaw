@@ -5,25 +5,21 @@ import {
 } from "../../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
-import { resolveIsNixMode } from "../../config/paths.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
+import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
 import {
-  buildDaemonServiceSnapshot,
-  createDaemonActionContext,
-  installDaemonServiceAndEmit,
-} from "./response.js";
-import { parsePort } from "./shared.js";
+  createDaemonInstallActionContext,
+  failIfNixDaemonInstallMode,
+  parsePort,
+} from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
 
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
-  const json = Boolean(opts.json);
-  const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "install", json });
-
-  if (resolveIsNixMode(process.env)) {
-    fail("Nix mode detected; service install is disabled.");
+  const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
+  if (failIfNixDaemonInstallMode(fail)) {
     return;
   }
 

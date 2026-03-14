@@ -84,8 +84,28 @@ vi.mock("../../commands/daemon-install-helpers.js", () => ({
 
 vi.mock("./shared.js", () => ({
   parsePort: parsePortMock,
+  createDaemonInstallActionContext: (jsonFlag: unknown) => {
+    const json = Boolean(jsonFlag);
+    return {
+      json,
+      stdout: process.stdout,
+      warnings: actionState.warnings,
+      emit: (payload: DaemonActionResponse) => {
+        actionState.emitted.push(payload);
+      },
+      fail: (message: string, hints?: string[]) => {
+        actionState.failed.push({ message, hints });
+      },
+    };
+  },
+  failIfNixDaemonInstallMode: (fail: (message: string, hints?: string[]) => void) => {
+    if (!resolveIsNixModeMock()) {
+      return false;
+    }
+    fail("Nix mode detected; service install is disabled.");
+    return true;
+  },
 }));
-
 vi.mock("../../commands/daemon-runtime.js", () => ({
   DEFAULT_GATEWAY_DAEMON_RUNTIME: "node",
   isGatewayDaemonRuntime: isGatewayDaemonRuntimeMock,
@@ -97,16 +117,6 @@ vi.mock("../../daemon/service.js", () => ({
 
 vi.mock("./response.js", () => ({
   buildDaemonServiceSnapshot: vi.fn(),
-  createDaemonActionContext: vi.fn(() => ({
-    stdout: process.stdout,
-    warnings: actionState.warnings,
-    emit: (payload: DaemonActionResponse) => {
-      actionState.emitted.push(payload);
-    },
-    fail: (message: string, hints?: string[]) => {
-      actionState.failed.push({ message, hints });
-    },
-  })),
   installDaemonServiceAndEmit: installDaemonServiceAndEmitMock,
 }));
 

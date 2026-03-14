@@ -3,7 +3,6 @@ import {
   DEFAULT_NODE_DAEMON_RUNTIME,
   isNodeDaemonRuntime,
 } from "../../commands/node-daemon-runtime.js";
-import { resolveIsNixMode } from "../../config/paths.js";
 import {
   resolveNodeLaunchAgentLabel,
   resolveNodeSystemdServiceName,
@@ -25,13 +24,11 @@ import {
   runServiceStop,
   runServiceUninstall,
 } from "../daemon-cli/lifecycle-core.js";
-import {
-  buildDaemonServiceSnapshot,
-  createDaemonActionContext,
-  installDaemonServiceAndEmit,
-} from "../daemon-cli/response.js";
+import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "../daemon-cli/response.js";
 import {
   createCliStatusTextStyles,
+  createDaemonInstallActionContext,
+  failIfNixDaemonInstallMode,
   formatRuntimeStatus,
   parsePort,
   resolveRuntimeStatusColor,
@@ -89,11 +86,8 @@ function resolveNodeDefaults(
 }
 
 export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
-  const json = Boolean(opts.json);
-  const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "install", json });
-
-  if (resolveIsNixMode(process.env)) {
-    fail("Nix mode detected; service install is disabled.");
+  const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
+  if (failIfNixDaemonInstallMode(fail)) {
     return;
   }
 
