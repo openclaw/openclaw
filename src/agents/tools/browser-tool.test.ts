@@ -54,7 +54,45 @@ const browserConfigMocks = vi.hoisted(() => ({
   resolveBrowserConfig: vi.fn(() => ({
     enabled: true,
     controlPort: 18791,
+    profiles: {},
+    defaultProfile: "openclaw",
   })),
+  resolveProfile: vi.fn((resolved: Record<string, unknown>, name: string) => {
+    const profile = (resolved.profiles as Record<string, Record<string, unknown>> | undefined)?.[
+      name
+    ];
+    if (!profile) {
+      return null;
+    }
+    const driver =
+      profile.driver === "extension"
+        ? "extension"
+        : profile.driver === "existing-session"
+          ? "existing-session"
+          : "openclaw";
+    if (driver === "existing-session") {
+      return {
+        name,
+        driver,
+        cdpPort: 0,
+        cdpUrl: "",
+        cdpHost: "",
+        cdpIsLoopback: true,
+        color: typeof profile.color === "string" ? profile.color : "#FF4500",
+        attachOnly: true,
+      };
+    }
+    return {
+      name,
+      driver,
+      cdpPort: typeof profile.cdpPort === "number" ? profile.cdpPort : 18792,
+      cdpUrl: typeof profile.cdpUrl === "string" ? profile.cdpUrl : "http://127.0.0.1:18792",
+      cdpHost: "127.0.0.1",
+      cdpIsLoopback: true,
+      color: typeof profile.color === "string" ? profile.color : "#FF4500",
+      attachOnly: profile.attachOnly === true,
+    };
+  }),
 }));
 vi.mock("../../browser/config.js", () => browserConfigMocks);
 
@@ -117,7 +155,25 @@ function mockSingleBrowserProxyNode() {
 function resetBrowserToolMocks() {
   vi.clearAllMocks();
   configMocks.loadConfig.mockReturnValue({ browser: {} });
+  browserConfigMocks.resolveBrowserConfig.mockReturnValue({
+    enabled: true,
+    controlPort: 18791,
+    profiles: {},
+    defaultProfile: "openclaw",
+  });
   nodesUtilsMocks.listNodes.mockResolvedValue([]);
+}
+
+function setResolvedBrowserProfiles(
+  profiles: Record<string, Record<string, unknown>>,
+  defaultProfile = "openclaw",
+) {
+  browserConfigMocks.resolveBrowserConfig.mockReturnValue({
+    enabled: true,
+    controlPort: 18791,
+    profiles,
+    defaultProfile,
+  });
 }
 
 function registerBrowserToolAfterEachReset() {
@@ -131,6 +187,7 @@ async function runSnapshotToolCall(params: {
   refs?: "aria" | "dom";
   maxChars?: number;
   profile?: string;
+  browserSession?: "agent" | "user";
 }) {
   const tool = createBrowserTool();
   await tool.execute?.("call-1", { action: "snapshot", ...params });
@@ -241,6 +298,90 @@ describe("browser tool snapshot maxChars", () => {
         profile: "chrome",
       }),
     );
+  });
+
+  it('uses the isolated openclaw profile for browserSession="agent"', async () => {
+    await runSnapshotToolCall({ browserSession: "agent", snapshotFormat: "ai" });
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        profile: "openclaw",
+      }),
+    );
+  });
+
+  it('uses the host user browser for browserSession="user"', async () => {
+    setResolvedBrowserProfiles({
+      openclaw: { cdpPort: 18800, color: "#FF4500" },
+      chrome: { driver: "extension", cdpUrl: "http://127.0.0.1:18792", color: "#0066CC" },
+    });
+    const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
+    await tool.execute?.("call-1", {
+      action: "snapshot",
+      browserSession: "user",
+      snapshotFormat: "ai",
+    });
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        profile: "chrome",
+      }),
+    );
+  });
+
+  it('uses a sole existing-session profile for browserSession="user"', async () => {
+    setResolvedBrowserProfiles({
+      openclaw: { cdpPort: 18800, color: "#FF4500" },
+      "chrome-live": { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
+    await tool.execute?.("call-1", {
+      action: "snapshot",
+      browserSession: "user",
+      snapshotFormat: "ai",
+    });
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        profile: "chrome-live",
+      }),
+    );
+  });
+
+  it('fails when browserSession="user" is ambiguous', async () => {
+    setResolvedBrowserProfiles({
+      openclaw: { cdpPort: 18800, color: "#FF4500" },
+      personal: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+      work: { driver: "existing-session", attachOnly: true, color: "#0066CC" },
+    });
+    const tool = createBrowserTool();
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "snapshot",
+        browserSession: "user",
+        snapshotFormat: "ai",
+      }),
+    ).rejects.toThrow(/Multiple user-browser profiles are configured/);
+  });
+
+  it('rejects browserSession="user" with target="sandbox"', async () => {
+    setResolvedBrowserProfiles({
+      chrome: { driver: "extension", cdpUrl: "http://127.0.0.1:18792", color: "#0066CC" },
+    });
+    const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "snapshot",
+        browserSession: "user",
+        target: "sandbox",
+        snapshotFormat: "ai",
+      }),
+    ).rejects.toThrow(/cannot use the sandbox browser/);
   });
 
   it("lets the server choose snapshot format when the user does not request one", async () => {

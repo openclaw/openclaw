@@ -51,6 +51,15 @@ Gateway.
 - `existing-session`: official Chrome MCP attach flow for a running Chrome
   profile.
 
+For agent browser tool calls:
+
+- Default: use the isolated `openclaw` browser.
+- Use the **user browser** only when existing logged-in sessions matter and the
+  user is at the computer to click/approve any attach prompt.
+- If you need to force the choice, use `browserSession="agent"` or
+  `browserSession="user"`.
+- `profile` is the explicit override when you already know which profile to use.
+
 Set `browser.defaultProfile: "openclaw"` if you want managed mode by default.
 
 ## Configuration
@@ -70,7 +79,7 @@ Browser settings live in `~/.openclaw/openclaw.json`.
     // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
     remoteCdpTimeoutMs: 1500, // remote CDP HTTP timeout (ms)
     remoteCdpHandshakeTimeoutMs: 3000, // remote CDP WebSocket handshake timeout (ms)
-    defaultProfile: "chrome",
+    defaultProfile: "openclaw",
     color: "#FF4500",
     headless: false,
     noSandbox: false,
@@ -79,8 +88,7 @@ Browser settings live in `~/.openclaw/openclaw.json`.
     profiles: {
       openclaw: { cdpPort: 18800, color: "#FF4500" },
       work: { cdpPort: 18801, color: "#0066CC" },
-      chromeLive: {
-        cdpPort: 18802,
+      "chrome-live": {
         driver: "existing-session",
         attachOnly: true,
         color: "#00AA00",
@@ -324,7 +332,7 @@ openclaw browser extension install
 2. Use it:
 
 - CLI: `openclaw browser --browser-profile chrome tabs`
-- Agent tool: `browser` with `profile="chrome"`
+- Agent tool: `browser` with `browserSession="user"` (or `profile="chrome"`)
 
 Optional: if you want a different name or relay port, create your own profile:
 
@@ -340,6 +348,8 @@ Notes:
 
 - This mode relies on Playwright-on-CDP for most operations (screenshots/snapshots/actions).
 - Detach by clicking the extension icon again.
+- Agent use: prefer `browserSession="user"` for logged-in sites. The user must be
+  present to click the extension and attach the tab.
 
 ## Chrome existing-session via MCP
 
@@ -379,6 +389,7 @@ openclaw browser --browser-profile chrome-live snapshot --format ai
 What success looks like:
 
 - `status` shows `driver: existing-session`
+- `status` shows `transport: chrome-mcp`
 - `status` shows `running: true`
 - `tabs` lists your already-open Chrome tabs
 - `snapshot` returns refs from the selected live tab
@@ -388,6 +399,14 @@ What to check if attach does not work:
 - Chrome is version `144+`
 - remote debugging is enabled at `chrome://inspect/#remote-debugging`
 - Chrome showed and you accepted the attach consent prompt
+
+Agent use:
+
+- Use `browserSession="user"` when you need the user’s logged-in browser state.
+- If you know the profile name, pass `profile="chrome-live"` (or your custom
+  existing-session profile).
+- Only choose this mode when the user is at the computer to approve the attach
+  prompt.
 - the Gateway or node host can spawn `npx chrome-devtools-mcp@latest --autoConnect`
 
 Notes:

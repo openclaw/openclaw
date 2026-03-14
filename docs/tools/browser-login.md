@@ -20,6 +20,13 @@ Back to the main browser docs: [Browser](/tools/browser).
 
 OpenClaw controls a **dedicated Chrome profile** (named `openclaw`, orange‑tinted UI). This is separate from your daily browser profile.
 
+For agent browser tool calls:
+
+- Default choice: the agent should use its isolated `openclaw` browser.
+- Use the **user browser** only when existing logged-in sessions matter and the user is at the computer to click/approve any attach prompt.
+- If you need to force the choice, use `browserSession="agent"` or `browserSession="user"`.
+- If you have multiple user-browser profiles, specify the profile explicitly instead of guessing.
+
 Two easy ways to access it:
 
 1. **Ask the agent to open the browser** and then log in yourself.
