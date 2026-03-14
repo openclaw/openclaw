@@ -149,10 +149,12 @@ describe("chrome extension relay server", () => {
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_EXTENSION_RELAY_RECONNECT_GRACE_MS",
       "OPENCLAW_EXTENSION_RELAY_COMMAND_RECONNECT_WAIT_MS",
+      "OPENCLAW_EXTENSION_RELAY_ALLOW_QUERY_TOKEN",
     ]);
     process.env.OPENCLAW_GATEWAY_TOKEN = TEST_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_EXTENSION_RELAY_RECONNECT_GRACE_MS;
     delete process.env.OPENCLAW_EXTENSION_RELAY_COMMAND_RECONNECT_WAIT_MS;
+    delete process.env.OPENCLAW_EXTENSION_RELAY_ALLOW_QUERY_TOKEN;
   });
 
   afterEach(async () => {
@@ -573,9 +575,25 @@ describe("chrome extension relay server", () => {
       .toBe(true);
   });
 
-  it("accepts extension websocket access with relay token query param", async () => {
+  it("rejects extension websocket access with relay token query param by default", async () => {
     const sharedUrl = await ensureSharedRelayServer();
     const sharedPort = new URL(sharedUrl).port;
+
+    const token = relayAuthHeaders(`ws://127.0.0.1:${sharedPort}/extension`)[
+      "x-openclaw-relay-token"
+    ];
+    expect(token).toBeTruthy();
+    const ext = new WebSocket(
+      `ws://127.0.0.1:${sharedPort}/extension?token=${encodeURIComponent(String(token))}`,
+    );
+    const err = await waitForError(ext);
+    expect(err.message).toContain("401");
+  });
+
+  it("accepts extension websocket access with relay token query param when explicitly enabled", async () => {
+    const sharedUrl = await ensureSharedRelayServer();
+    const sharedPort = new URL(sharedUrl).port;
+    process.env.OPENCLAW_EXTENSION_RELAY_ALLOW_QUERY_TOKEN = "1";
 
     const token = relayAuthHeaders(`ws://127.0.0.1:${sharedPort}/extension`)[
       "x-openclaw-relay-token"
@@ -588,8 +606,20 @@ describe("chrome extension relay server", () => {
     ext.close();
   });
 
-  it("accepts /json endpoints with relay token query param", async () => {
+  it("rejects /json endpoints with relay token query param by default", async () => {
     const sharedUrl = await ensureSharedRelayServer();
+
+    const token = relayAuthHeaders(sharedUrl)["x-openclaw-relay-token"];
+    expect(token).toBeTruthy();
+    const versionRes = await fetch(
+      `${sharedUrl}/json/version?token=${encodeURIComponent(String(token))}`,
+    );
+    expect(versionRes.status).toBe(401);
+  });
+
+  it("accepts /json endpoints with relay token query param when explicitly enabled", async () => {
+    const sharedUrl = await ensureSharedRelayServer();
+    process.env.OPENCLAW_EXTENSION_RELAY_ALLOW_QUERY_TOKEN = "1";
 
     const token = relayAuthHeaders(sharedUrl)["x-openclaw-relay-token"];
     expect(token).toBeTruthy();
@@ -602,6 +632,7 @@ describe("chrome extension relay server", () => {
   it("accepts raw gateway token for relay auth compatibility", async () => {
     const sharedUrl = await ensureSharedRelayServer();
     const sharedPort = new URL(sharedUrl).port;
+    process.env.OPENCLAW_EXTENSION_RELAY_ALLOW_QUERY_TOKEN = "1";
 
     const versionRes = await fetch(`${sharedUrl}/json/version`, {
       headers: { "x-openclaw-relay-token": TEST_GATEWAY_TOKEN },

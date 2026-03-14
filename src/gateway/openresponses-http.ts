@@ -84,10 +84,13 @@ function resolveResponsesLimits(
         : DEFAULT_MAX_URL_PARTS,
     files: {
       ...fileLimits,
+      // URL inputs are a powerful egress capability. Default to disabled unless explicitly enabled.
+      allowUrl: files?.allowUrl ?? false,
       urlAllowlist: normalizeInputHostnameAllowlist(files?.urlAllowlist),
     },
     images: {
-      allowUrl: images?.allowUrl ?? true,
+      // URL inputs are a powerful egress capability. Default to disabled unless explicitly enabled.
+      allowUrl: images?.allowUrl ?? false,
       urlAllowlist: normalizeInputHostnameAllowlist(images?.urlAllowlist),
       allowedMimes: normalizeMimeList(images?.allowedMimes, DEFAULT_INPUT_IMAGE_MIMES),
       maxBytes: images?.maxBytes ?? DEFAULT_INPUT_IMAGE_MAX_BYTES,
