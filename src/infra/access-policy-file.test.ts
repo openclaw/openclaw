@@ -81,6 +81,34 @@ describe("mergeAccessPolicy", () => {
     expect(override.policy["/tmp/**" as keyof typeof override.policy]).toBeUndefined();
   });
 
+  it("deep-copies nested scripts policy maps — mutations do not corrupt cache", () => {
+    // Shallow-copying scripts is not enough: scripts["policy"] and per-script entry.policy
+    // are nested objects that would still be references into the cached _fileCache object.
+    const scriptPolicy = { "/tmp/**": "rwx" as const };
+    const entryPolicy = { "/data/**": "r--" as const };
+    const override = {
+      scripts: {
+        policy: scriptPolicy,
+        "/deploy.sh": { policy: entryPolicy },
+      },
+    };
+    const result = mergeAccessPolicy(undefined, override);
+    // Mutate the returned scripts["policy"] and per-script policy.
+    const sp = result?.scripts?.["policy"];
+    if (sp) {
+      sp["/added/**"] = "---";
+    }
+    const entry = result?.scripts?.["/deploy.sh"] as
+      | { policy?: Record<string, string> }
+      | undefined;
+    if (entry?.policy) {
+      entry.policy["/added/**"] = "---";
+    }
+    // Originals must be unchanged.
+    expect(scriptPolicy).toEqual({ "/tmp/**": "rwx" });
+    expect(entryPolicy).toEqual({ "/data/**": "r--" });
+  });
+
   it("rules are shallow-merged, override key wins on collision", () => {
     const result = mergeAccessPolicy(
       { policy: { "/**": "r--", "~/**": "rw-" } },

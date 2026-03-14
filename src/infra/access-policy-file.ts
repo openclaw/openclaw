@@ -46,10 +46,31 @@ export function mergeAccessPolicy(
     // does not mutate the cached agents["*"] object in _fileCache. Without this,
     // the first call permanently corrupts policy entries for all subsequent calls
     // in the same process.
+    // Deep-copy nested policy records so validateAccessPolicyConfig → autoExpandBareDir
+    // cannot mutate the cached _fileCache object. Shallow-copying `scripts` is not enough:
+    // `scripts["policy"]` (shared rules map) and per-script `entry.policy` maps are nested
+    // objects that would still be references into the cache.
+    const overrideScripts = override.scripts;
+    const scriptsCopy: AccessPolicyConfig["scripts"] | undefined = overrideScripts
+      ? Object.fromEntries(
+          Object.entries(overrideScripts).map(([k, v]) => {
+            if (k === "policy") {
+              // scripts["policy"] is a Record<string, PermStr> — shallow copy is sufficient.
+              return [k, v != null && typeof v === "object" ? { ...v } : v];
+            }
+            // Per-script entries: copy the entry and its nested policy map.
+            if (v != null && typeof v === "object" && !Array.isArray(v)) {
+              const entry = v as import("../config/types.tools.js").ScriptPolicyEntry;
+              return [k, { ...entry, policy: entry.policy ? { ...entry.policy } : undefined }];
+            }
+            return [k, v];
+          }),
+        )
+      : undefined;
     return {
       ...override,
       policy: override.policy ? { ...override.policy } : undefined,
-      scripts: override.scripts ? { ...override.scripts } : undefined,
+      scripts: scriptsCopy,
     };
   }
   if (!override) {

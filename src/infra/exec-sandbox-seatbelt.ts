@@ -248,7 +248,7 @@ export function generateSeatbeltProfile(
       lines.push(`(allow ${SEATBELT_READ_OPS} (subpath "/private/tmp"))`);
     }
     if (tmpPerm[1] === "w") {
-      lines.push(`(allow file-write* (subpath "/private/tmp"))`);
+      lines.push(`(allow ${SEATBELT_WRITE_OPS} (subpath "/private/tmp"))`);
     }
     if (tmpPerm[2] === "x") {
       lines.push(`(allow ${SEATBELT_EXEC_OPS} (subpath "/private/tmp"))`);
