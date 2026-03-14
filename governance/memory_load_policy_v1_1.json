@@ -1,0 +1,11 @@
+{
+  "version": "v1.1",
+  "entrypoint": "MEMORY.md",
+  "topicAllowlist": ["MEMORY.md", "memory/topics/*.md", "memory/*.md"],
+  "deepAllowlist": ["memory/mission_log.md", "memory/runbook.md", "memory/**/*.md"],
+  "hardDenies": ["**/.env*", "**/secrets/**"],
+  "escalation": {
+    "minConfidence": 0.6,
+    "missSignalThreshold": 1
+  }
+}
