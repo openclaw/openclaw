@@ -9,6 +9,12 @@ describe("resolveGlobalLane", () => {
     expect(resolveGlobalLane("  ")).toBe(CommandLane.Main);
   });
 
+  it("partitions default global lane by agent when agent id is provided", () => {
+    expect(resolveGlobalLane(undefined, "risk")).toBe("agent:risk");
+    expect(resolveGlobalLane("", "gateway")).toBe("agent:gateway");
+    expect(resolveGlobalLane("  ", "ops")).toBe("agent:ops");
+  });
+
   it("maps cron lane to nested lane to prevent deadlocks", () => {
     // When cron jobs trigger nested agent runs, the outer execution holds
     // the cron lane slot. Inner work must use a separate lane to avoid
@@ -23,6 +29,11 @@ describe("resolveGlobalLane", () => {
     expect(resolveGlobalLane("nested")).toBe(CommandLane.Nested);
     expect(resolveGlobalLane("custom-lane")).toBe("custom-lane");
     expect(resolveGlobalLane(" custom ")).toBe("custom");
+  });
+
+  it("keeps explicit lane higher priority than inferred agent lane", () => {
+    expect(resolveGlobalLane("main", "risk")).toBe(CommandLane.Main);
+    expect(resolveGlobalLane("custom", "gateway")).toBe("custom");
   });
 });
 

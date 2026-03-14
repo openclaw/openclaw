@@ -1039,7 +1039,11 @@ export async function compactEmbeddedPiSession(
   params: CompactEmbeddedPiSessionParams,
 ): Promise<EmbeddedPiCompactResult> {
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
-  const globalLane = resolveGlobalLane(params.lane);
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+  });
+  const globalLane = resolveGlobalLane(params.lane, sessionAgentId);
   const enqueueGlobal =
     params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
   return enqueueCommandInLane(sessionLane, () =>
@@ -1072,10 +1076,6 @@ export async function compactEmbeddedPiSession(
         const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
         const hookRunner = engineOwnsCompaction ? getGlobalHookRunner() : null;
         const hookSessionKey = params.sessionKey?.trim() || params.sessionId;
-        const { sessionAgentId } = resolveSessionAgentIds({
-          sessionKey: params.sessionKey,
-          config: params.config,
-        });
         const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
         const hookCtx = {
           sessionId: params.sessionId,

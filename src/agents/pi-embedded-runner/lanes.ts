@@ -5,13 +5,18 @@ export function resolveSessionLane(key: string) {
   return cleaned.startsWith("session:") ? cleaned : `session:${cleaned}`;
 }
 
-export function resolveGlobalLane(lane?: string) {
+function resolveAgentGlobalLane(agentId?: string) {
+  const cleaned = agentId?.trim();
+  return cleaned ? `agent:${cleaned}` : CommandLane.Main;
+}
+
+export function resolveGlobalLane(lane?: string, agentId?: string) {
   const cleaned = lane?.trim();
   // Cron jobs hold the cron lane slot; inner operations must use nested to avoid deadlock.
   if (cleaned === CommandLane.Cron) {
     return CommandLane.Nested;
   }
-  return cleaned ? cleaned : CommandLane.Main;
+  return cleaned ? cleaned : resolveAgentGlobalLane(agentId);
 }
 
 export function resolveEmbeddedSessionLane(key: string) {
