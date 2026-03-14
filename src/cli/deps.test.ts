@@ -24,27 +24,27 @@ vi.mock("../channels/web/index.js", () => {
   return { sendMessageWhatsApp: sendFns.whatsapp };
 });
 
-vi.mock("../../extensions/telegram/src/send.js", () => {
+vi.mock("../telegram/send.js", () => {
   moduleLoads.telegram();
   return { sendMessageTelegram: sendFns.telegram };
 });
 
-vi.mock("../../extensions/discord/src/send.js", () => {
+vi.mock("../discord/send.js", () => {
   moduleLoads.discord();
   return { sendMessageDiscord: sendFns.discord };
 });
 
-vi.mock("../../extensions/slack/src/send.js", () => {
+vi.mock("../slack/send.js", () => {
   moduleLoads.slack();
   return { sendMessageSlack: sendFns.slack };
 });
 
-vi.mock("../../extensions/signal/src/send.js", () => {
+vi.mock("../signal/send.js", () => {
   moduleLoads.signal();
   return { sendMessageSignal: sendFns.signal };
 });
 
-vi.mock("../../extensions/imessage/src/send.js", () => {
+vi.mock("../imessage/send.js", () => {
   moduleLoads.imessage();
   return { sendMessageIMessage: sendFns.imessage };
 });
@@ -74,7 +74,7 @@ describe("createDefaultDeps", () => {
     expect(moduleLoads.signal).not.toHaveBeenCalled();
     expect(moduleLoads.imessage).not.toHaveBeenCalled();
 
-    const sendTelegram = deps.sendMessageTelegram as (...args: unknown[]) => Promise<unknown>;
+    const sendTelegram = deps["telegram"] as (...args: unknown[]) => Promise<unknown>;
     await sendTelegram("chat", "hello", { verbose: false });
 
     expect(moduleLoads.telegram).toHaveBeenCalledTimes(1);
@@ -84,7 +84,7 @@ describe("createDefaultDeps", () => {
 
   it("reuses module cache after first dynamic import", async () => {
     const deps = createDefaultDeps();
-    const sendDiscord = deps.sendMessageDiscord as (...args: unknown[]) => Promise<unknown>;
+    const sendDiscord = deps["discord"] as (...args: unknown[]) => Promise<unknown>;
 
     await sendDiscord("channel", "first", { verbose: false });
     await sendDiscord("channel", "second", { verbose: false });
