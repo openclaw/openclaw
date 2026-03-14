@@ -5,6 +5,7 @@ import { feishuPlugin } from "./src/channel.js";
 import { registerFeishuChatTools } from "./src/chat.js";
 import { registerFeishuDocTools } from "./src/docx.js";
 import { registerFeishuDriveTools } from "./src/drive.js";
+import { registerFeishuMessageTools } from "./src/message.js";
 import { registerFeishuPermTools } from "./src/perm.js";
 import { setFeishuRuntime } from "./src/runtime.js";
 import { registerFeishuWikiTools } from "./src/wiki.js";
@@ -55,6 +56,7 @@ const plugin = {
     api.registerChannel({ plugin: feishuPlugin });
     registerFeishuDocTools(api);
     registerFeishuChatTools(api);
+    registerFeishuMessageTools(api);
     registerFeishuWikiTools(api);
     registerFeishuDriveTools(api);
     registerFeishuPermTools(api);
