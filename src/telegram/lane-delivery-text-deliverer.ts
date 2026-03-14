@@ -464,6 +464,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       !hasMedia && text.length > 0 && text.length <= params.draftMaxChars && !payload.isError;
 
     if (infoKind === "final") {
+      // Transient previews must decide cleanup retention per final attempt.
+      // Completed previews intentionally stay retained so later extra payloads
+      // do not clear the already-finalized message.
+      if (params.activePreviewLifecycleByLane[laneName] === "transient") {
+        params.retainPreviewOnCleanupByLane[laneName] = false;
+      }
       if (laneName === "answer") {
         const archivedResult = await consumeArchivedAnswerPreviewForFinal({
           lane,

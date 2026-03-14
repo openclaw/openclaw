@@ -1,5 +1,6 @@
 import type { Bot } from "grammy";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../test/helpers/import-fresh.js";
 import {
   getTelegramSendTestMocks,
   importTelegramSendModule,
@@ -87,6 +88,29 @@ describe("sent-message-cache", () => {
 
     clearSentMessageCache();
     expect(wasSentByBot(123, 1)).toBe(false);
+  });
+
+  it("shares sent-message state across distinct module instances", async () => {
+    const cacheA = await importFreshModule<typeof import("./sent-message-cache.js")>(
+      import.meta.url,
+      "./sent-message-cache.js?scope=shared-a",
+    );
+    const cacheB = await importFreshModule<typeof import("./sent-message-cache.js")>(
+      import.meta.url,
+      "./sent-message-cache.js?scope=shared-b",
+    );
+
+    cacheA.clearSentMessageCache();
+
+    try {
+      cacheA.recordSentMessage(123, 1);
+      expect(cacheB.wasSentByBot(123, 1)).toBe(true);
+
+      cacheB.clearSentMessageCache();
+      expect(cacheA.wasSentByBot(123, 1)).toBe(false);
+    } finally {
+      cacheA.clearSentMessageCache();
+    }
   });
 });
 

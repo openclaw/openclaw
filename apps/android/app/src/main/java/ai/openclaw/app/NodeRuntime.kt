@@ -503,6 +503,7 @@ class NodeRuntime(context: Context) {
   val gatewayToken: StateFlow<String> = prefs.gatewayToken
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   fun setGatewayToken(value: String) = prefs.setGatewayToken(value)
+  fun setGatewayBootstrapToken(value: String) = prefs.setGatewayBootstrapToken(value)
   fun setGatewayPassword(value: String) = prefs.setGatewayPassword(value)
   fun setOnboardingCompleted(value: Boolean) = prefs.setOnboardingCompleted(value)
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
@@ -698,10 +699,25 @@ class NodeRuntime(context: Context) {
     operatorStatusText = "Connecting…"
     updateStatus()
     val token = prefs.loadGatewayToken()
+    val bootstrapToken = prefs.loadGatewayBootstrapToken()
     val password = prefs.loadGatewayPassword()
     val tls = connectionManager.resolveTlsParams(endpoint)
-    operatorSession.connect(endpoint, token, password, connectionManager.buildOperatorConnectOptions(), tls)
-    nodeSession.connect(endpoint, token, password, connectionManager.buildNodeConnectOptions(), tls)
+    operatorSession.connect(
+      endpoint,
+      token,
+      bootstrapToken,
+      password,
+      connectionManager.buildOperatorConnectOptions(),
+      tls,
+    )
+    nodeSession.connect(
+      endpoint,
+      token,
+      bootstrapToken,
+      password,
+      connectionManager.buildNodeConnectOptions(),
+      tls,
+    )
     operatorSession.reconnect()
     nodeSession.reconnect()
   }
@@ -726,9 +742,24 @@ class NodeRuntime(context: Context) {
     nodeStatusText = "Connecting…"
     updateStatus()
     val token = prefs.loadGatewayToken()
+    val bootstrapToken = prefs.loadGatewayBootstrapToken()
     val password = prefs.loadGatewayPassword()
-    operatorSession.connect(endpoint, token, password, connectionManager.buildOperatorConnectOptions(), tls)
-    nodeSession.connect(endpoint, token, password, connectionManager.buildNodeConnectOptions(), tls)
+    operatorSession.connect(
+      endpoint,
+      token,
+      bootstrapToken,
+      password,
+      connectionManager.buildOperatorConnectOptions(),
+      tls,
+    )
+    nodeSession.connect(
+      endpoint,
+      token,
+      bootstrapToken,
+      password,
+      connectionManager.buildNodeConnectOptions(),
+      tls,
+    )
   }
 
   fun acceptGatewayTrustPrompt() {

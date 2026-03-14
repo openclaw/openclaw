@@ -138,21 +138,23 @@ public final class OpenClawChatViewModel {
         let now = Date().timeIntervalSince1970 * 1000
         let cutoff = now - (24 * 60 * 60 * 1000)
         let sorted = self.sessions.sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
+        let mainSessionKey = self.resolvedMainSessionKey
 
         var result: [OpenClawChatSessionEntry] = []
         var included = Set<String>()
 
-        // Always show the main session first, even if it hasn't been updated recently.
-        if let main = sorted.first(where: { $0.key == "main" }) {
+        // Always show the resolved main session first, even if it hasn't been updated recently.
+        if let main = sorted.first(where: { $0.key == mainSessionKey }) {
             result.append(main)
             included.insert(main.key)
         } else {
-            result.append(self.placeholderSession(key: "main"))
-            included.insert("main")
+            result.append(self.placeholderSession(key: mainSessionKey))
+            included.insert(mainSessionKey)
         }
 
         for entry in sorted {
             guard !included.contains(entry.key) else { continue }
+            guard entry.key == self.sessionKey || !Self.isHiddenInternalSession(entry.key) else { continue }
             guard (entry.updatedAt ?? 0) >= cutoff else { continue }
             result.append(entry)
             included.insert(entry.key)
@@ -167,6 +169,18 @@ public final class OpenClawChatViewModel {
         }
 
         return result
+    }
+
+    private var resolvedMainSessionKey: String {
+        let trimmed = self.sessionDefaults?.mainSessionKey?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (trimmed?.isEmpty == false ? trimmed : nil) ?? "main"
+    }
+
+    private static func isHiddenInternalSession(_ key: String) -> Bool {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return trimmed == "onboarding" || trimmed.hasSuffix(":onboarding")
     }
 
     public var showsModelPicker: Bool {
@@ -365,10 +379,19 @@ public final class OpenClawChatViewModel {
         return "\(message.role)|\(timestamp)|\(text)"
     }
 
+    private static let resetTriggers: Set<String> = ["/new", "/reset", "/clear"]
+
     private func performSend() async {
         guard !self.isSending else { return }
         let trimmed = self.input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !self.attachments.isEmpty else { return }
+
+        if Self.resetTriggers.contains(trimmed.lowercased()) {
+            self.input = ""
+            await self.performReset()
+            return
+        }
+
         let sessionKey = self.sessionKey
 
         guard self.healthOK else {
@@ -499,6 +522,22 @@ public final class OpenClawChatViewModel {
         await self.bootstrap()
     }
 
+    private func performReset() async {
+        self.isLoading = true
+        self.errorText = nil
+        defer { self.isLoading = false }
+
+        do {
+            try await self.transport.resetSession(sessionKey: self.sessionKey)
+        } catch {
+            self.errorText = error.localizedDescription
+            chatUILogger.error("session reset failed \(error.localizedDescription, privacy: .public)")
+            return
+        }
+
+        await self.bootstrap()
+    }
+
     private func performSelectThinkingLevel(_ level: String) async {
         let next = Self.normalizedThinkingLevel(level) ?? "off"
         guard next != self.thinkingLevel else { return }
@@ -549,7 +588,9 @@ public final class OpenClawChatViewModel {
                 sessionKey: sessionKey,
                 model: nextModelRef)
             guard requestID == self.latestModelSelectionRequestIDsBySession[sessionKey] else {
-                self.applySuccessfulModelSelection(next, sessionKey: sessionKey, syncSelection: false)
+                // Keep older successful patches as rollback state, but do not replay
+                // stale UI/session state over a newer in-flight or completed selection.
+                self.lastSuccessfulModelSelectionIDsBySession[sessionKey] = next
                 return
             }
             self.applySuccessfulModelSelection(next, sessionKey: sessionKey, syncSelection: true)
