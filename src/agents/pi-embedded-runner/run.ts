@@ -63,6 +63,7 @@ import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
+import { createEmbeddedFailoverRouter } from "./run/failover-router.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
@@ -658,6 +659,22 @@ export async function runEmbeddedPiAgent(
         return false;
       };
 
+      const hasRotatableAuthProfile = (): boolean => {
+        if (lockedProfileId) {
+          return false;
+        }
+        let nextIndex = profileIndex + 1;
+        while (nextIndex < profileCandidates.length) {
+          const candidate = profileCandidates[nextIndex];
+          if (candidate && isProfileInCooldown(authStore, candidate)) {
+            nextIndex += 1;
+            continue;
+          }
+          return true;
+        }
+        return false;
+      };
+
       try {
         const autoProfileCandidates = profileCandidates.filter(
           (candidate): candidate is string =>
@@ -749,6 +766,7 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
+      const failoverRouter = createEmbeddedFailoverRouter();
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
@@ -1290,6 +1308,20 @@ export async function runEmbeddedPiAgent(
             const promptFailoverFailure = isFailoverErrorMessage(errorText);
             // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
             const failedPromptProfileId = lastProfileId;
+            const promptRoute =
+              promptFailoverFailure || promptFailoverReason
+                ? failoverRouter.route({
+                    provider,
+                    model: modelId,
+                    profileId: failedPromptProfileId,
+                    reason: promptFailoverReason,
+                    canRotateProfile:
+                      promptFailoverFailure &&
+                      promptFailoverReason !== "timeout" &&
+                      hasRotatableAuthProfile(),
+                    fallbackConfigured,
+                  })
+                : null;
             const logPromptFailoverDecision = createFailoverDecisionLogger({
               stage: "prompt",
               runId: params.runId,
@@ -1302,14 +1334,18 @@ export async function runEmbeddedPiAgent(
               fallbackConfigured,
               aborted,
             });
-            if (
-              promptFailoverFailure &&
-              promptFailoverReason !== "timeout" &&
-              (await advanceAuthProfile())
-            ) {
-              logPromptFailoverDecision("rotate_profile");
-              await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
-              continue;
+            if (promptRoute?.decision === "rotate_profile") {
+              const advanced = await advanceAuthProfile();
+              if (advanced) {
+                logPromptFailoverDecision("rotate_profile", {
+                  circuitOpen: promptRoute.circuitOpen,
+                  failureCount: promptRoute.failureCount,
+                  threshold: promptRoute.threshold,
+                  scope: promptRoute.scope,
+                });
+                await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
+                continue;
+              }
             }
             const fallbackThinking = pickFallbackThinkingLevel({
               message: errorText,
@@ -1325,9 +1361,19 @@ export async function runEmbeddedPiAgent(
             // Throw FailoverError for prompt-side failover reasons when fallbacks
             // are configured so outer model fallback can continue on overload,
             // rate-limit, auth, or billing failures.
-            if (fallbackConfigured && promptFailoverFailure) {
+            if (
+              fallbackConfigured &&
+              promptFailoverFailure &&
+              promptRoute?.decision === "fallback_model"
+            ) {
               const status = resolveFailoverStatus(promptFailoverReason ?? "unknown");
-              logPromptFailoverDecision("fallback_model", { status });
+              logPromptFailoverDecision("fallback_model", {
+                status,
+                circuitOpen: promptRoute.circuitOpen,
+                failureCount: promptRoute.failureCount,
+                threshold: promptRoute.threshold,
+                scope: promptRoute.scope,
+              });
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
               throw new FailoverError(errorText, {
                 reason: promptFailoverReason ?? "unknown",
@@ -1338,7 +1384,12 @@ export async function runEmbeddedPiAgent(
               });
             }
             if (promptFailoverFailure || promptFailoverReason) {
-              logPromptFailoverDecision("surface_error");
+              logPromptFailoverDecision("surface_error", {
+                circuitOpen: promptRoute?.circuitOpen,
+                failureCount: promptRoute?.failureCount,
+                threshold: promptRoute?.threshold,
+                scope: promptRoute?.scope,
+              });
             }
             throw promptError;
           }
@@ -1413,6 +1464,17 @@ export async function runEmbeddedPiAgent(
           // but exclude post-prompt compaction timeouts (model succeeded; no profile issue).
           const shouldRotate =
             (!aborted && failoverFailure) || (timedOut && !timedOutDuringCompaction);
+          const routedAssistantReason = timedOut ? "timeout" : assistantFailoverReason;
+          const assistantRoute = shouldRotate
+            ? failoverRouter.route({
+                provider: activeErrorContext.provider,
+                model: activeErrorContext.model,
+                profileId: failedAssistantProfileId,
+                reason: routedAssistantReason,
+                canRotateProfile: hasRotatableAuthProfile(),
+                fallbackConfigured,
+              })
+            : null;
 
           if (shouldRotate) {
             if (lastProfileId) {
@@ -1434,15 +1496,22 @@ export async function runEmbeddedPiAgent(
               }
             }
 
-            const rotated = await advanceAuthProfile();
-            if (rotated) {
-              logAssistantFailoverDecision("rotate_profile");
-              await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
-              continue;
+            if (assistantRoute?.decision === "rotate_profile") {
+              const rotated = await advanceAuthProfile();
+              if (rotated) {
+                logAssistantFailoverDecision("rotate_profile", {
+                  circuitOpen: assistantRoute.circuitOpen,
+                  failureCount: assistantRoute.failureCount,
+                  threshold: assistantRoute.threshold,
+                  scope: assistantRoute.scope,
+                });
+                await maybeBackoffBeforeOverloadFailover(routedAssistantReason);
+                continue;
+              }
             }
 
-            if (fallbackConfigured) {
-              await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
+            if (fallbackConfigured && assistantRoute?.decision === "fallback_model") {
+              await maybeBackoffBeforeOverloadFailover(routedAssistantReason);
               // Prefer formatted error message (user-friendly) over raw errorMessage
               const message =
                 (lastAssistant
@@ -1467,18 +1536,29 @@ export async function runEmbeddedPiAgent(
                         ? "LLM request unauthorized."
                         : "LLM request failed.");
               const status =
-                resolveFailoverStatus(assistantFailoverReason ?? "unknown") ??
+                resolveFailoverStatus(routedAssistantReason ?? "unknown") ??
                 (isTimeoutErrorMessage(message) ? 408 : undefined);
-              logAssistantFailoverDecision("fallback_model", { status });
+              logAssistantFailoverDecision("fallback_model", {
+                status,
+                circuitOpen: assistantRoute.circuitOpen,
+                failureCount: assistantRoute.failureCount,
+                threshold: assistantRoute.threshold,
+                scope: assistantRoute.scope,
+              });
               throw new FailoverError(message, {
-                reason: assistantFailoverReason ?? "unknown",
+                reason: routedAssistantReason ?? "unknown",
                 provider: activeErrorContext.provider,
                 model: activeErrorContext.model,
                 profileId: lastProfileId,
                 status,
               });
             }
-            logAssistantFailoverDecision("surface_error");
+            logAssistantFailoverDecision("surface_error", {
+              circuitOpen: assistantRoute?.circuitOpen,
+              failureCount: assistantRoute?.failureCount,
+              threshold: assistantRoute?.threshold,
+              scope: assistantRoute?.scope,
+            });
           }
 
           const usage = toNormalizedUsage(usageAccumulator);

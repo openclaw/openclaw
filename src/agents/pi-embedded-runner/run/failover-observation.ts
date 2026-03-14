@@ -35,11 +35,14 @@ export function normalizeFailoverDecisionObservationBase(
   };
 }
 
-export function createFailoverDecisionLogger(
-  base: FailoverDecisionLoggerBase,
-): (
+export function createFailoverDecisionLogger(base: FailoverDecisionLoggerBase): (
   decision: FailoverDecisionLoggerInput["decision"],
-  extra?: Pick<FailoverDecisionLoggerInput, "status">,
+  extra?: Pick<FailoverDecisionLoggerInput, "status"> & {
+    circuitOpen?: boolean;
+    failureCount?: number;
+    threshold?: number | null;
+    scope?: "model" | "profile";
+  },
 ) => void {
   const normalizedBase = normalizeFailoverDecisionObservationBase(base);
   const safeProfileId = normalizedBase.profileId
@@ -67,10 +70,17 @@ export function createFailoverDecisionLogger(
       timedOut: normalizedBase.timedOut,
       aborted: normalizedBase.aborted,
       status: extra?.status,
+      circuitOpen: extra?.circuitOpen,
+      failureCount: extra?.failureCount,
+      threshold: extra?.threshold,
+      scope: extra?.scope,
       ...observedError,
       consoleMessage:
         `embedded run failover decision: runId=${safeRunId} stage=${normalizedBase.stage} decision=${decision} ` +
-        `reason=${reasonText} provider=${safeProvider}/${safeModel} profile=${profileText}`,
+        `reason=${reasonText} provider=${safeProvider}/${safeModel} profile=${profileText}` +
+        (extra?.circuitOpen
+          ? ` circuit=open scope=${extra.scope ?? "-"} count=${extra.failureCount ?? "-"} threshold=${extra.threshold ?? "-"}`
+          : ""),
     });
   };
 }
