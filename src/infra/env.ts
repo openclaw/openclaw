@@ -1,7 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 
@@ -51,70 +47,15 @@ export function isTruthyEnvValue(value?: string): boolean {
   return parseBooleanValue(value) === true;
 }
 
-/**
- * Load ~/.openclaw/.env into process.env if the file exists.
- * Only keys that are NOT already present in process.env are injected, so
- * real environment variables always take precedence over the file.
- * Lines starting with '#' and blank lines are ignored.
- */
-export function loadOpenClawDotEnv(): void {
-  // Skip during test runs to avoid polluting the test environment.
-  if (process.env.VITEST || process.env.NODE_ENV === "test") return;
-
-  const homeDir =
-    process.env.OPENCLAW_HOME?.trim() ||
-    process.env.HOME?.trim() ||
-    process.env.USERPROFILE?.trim() ||
-    os.homedir();
-
-  if (!homeDir) return;
-
-  const envFilePath = path.join(homeDir, ".openclaw", ".env");
-
-  let content: string;
-  try {
-    content = fs.readFileSync(envFilePath, "utf-8");
-  } catch {
-    // File does not exist or is not readable – silently skip.
-    return;
-  }
-
-  let loaded = 0;
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-
-    const eqIndex = line.indexOf("=");
-    if (eqIndex < 1) continue;
-
-    const key = line.slice(0, eqIndex).trim();
-    // Strip optional surrounding quotes from value.
-    const rawValue = line.slice(eqIndex + 1).trim();
-    const value = rawValue.replace(/^(['"])(.*)\1$/, "$2");
-
-    if (key && !(key in process.env)) {
-      process.env[key] = value;
-      loaded += 1;
-    }
-  }
-
-  if (loaded > 0) {
-    log.info(`loaded ${loaded} var(s) from ${envFilePath}`);
-  }
-}
-
 export function normalizeEnv(): void {
-  // Load ~/.openclaw/.env first so PMTINSP_* and other keys are available.
-  loadOpenClawDotEnv();
+  // NOTE: ~/.openclaw/.env (and OPENCLAW_STATE_DIR/.env) is loaded by
+  // loadDotEnv() in run-main.ts, which runs BEFORE this call on the second
+  // invocation. Do NOT load it here: normalizeEnv() is also called from
+  // entry.ts before loadDotEnv() runs, and loading the global file at that
+  // point would let it shadow CWD .env values (wrong precedence).
+  //
+  // Prompt Inspector (pi-client.ts) uses lazy init: the first detectSafety()
+  // call invokes initPiClient() internally, by which time loadDotEnv() has
+  // already populated process.env with PMTINSP_API_KEY / PMTINSP_BASE_URL.
   normalizeZaiEnv();
-
-  // Initialize the Prompt Inspector detection client with the now-resolved env.
-  // Imported lazily to avoid circular dependency at module parse time.
-  import("../security/pi-client.js")
-    .then(({ initPiClient }) => {
-      initPiClient();
-    })
-    .catch(() => {
-      // Non-fatal: detection simply remains unavailable.
-    });
 }
