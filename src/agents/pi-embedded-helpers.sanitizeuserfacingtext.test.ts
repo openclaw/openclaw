@@ -57,6 +57,21 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(text)).toBe(text);
   });
 
+  it("does not rewrite long assistant text discussing 402/billing even with errorContext", () => {
+    const longReply =
+      "Here is how HTTP status codes work in REST APIs.\n\n" +
+      "A 402 Payment Required response indicates the request cannot be processed until " +
+      "the client makes a payment. The status code 402 was originally created for digital " +
+      "cash schemes but is now used by some APIs to indicate billing issues.\n\n" +
+      "For example, if your API returns status: 402, it usually means the user's " +
+      "credits have been exhausted and they need to upgrade their plan.\n\n" +
+      "Here is a code sample:\n```\nif (response.code === 402) {\n" +
+      '  showError("Payment required - please upgrade");\n}\n```\n\n' +
+      "Let me know if you need more details on handling payment-related HTTP errors!";
+    expect(longReply.length).toBeGreaterThan(512);
+    expect(sanitizeUserFacingText(longReply, { errorContext: true })).toBe(longReply);
+  });
+
   it("does not rewrite billing error-shaped text without errorContext", () => {
     const text = "billing: please upgrade your plan";
     expect(sanitizeUserFacingText(text)).toBe(text);

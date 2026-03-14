@@ -3,6 +3,20 @@ type ErrorPattern = RegExp | string;
 const PERIODIC_USAGE_LIMIT_RE =
   /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b/i;
 
+// Explicit 402 status-code markers — unambiguous even inside long payloads
+// (JSON error blobs, stack traces wrapping "Error: 402 …", etc.).
+// Also matches short-form phrases like "got a 402", "returned 402",
+// "received a 402 response" to avoid regressing billing classification.
+const BILLING_EXPLICIT_402_RE =
+  /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|^\s*402\s+payment|\b(?:got|returned|received)\s+(?:a\s+)?402\b/i;
+
+// Structured-only 402 markers for long messages — excludes prose forms like
+// "returned 402" that can appear in normal assistant explanations.
+// Allows unquoted status/code with colon (YAML, plain-text errors) but not
+// prose-style mentions.
+const BILLING_STRUCTURED_402_RE =
+  /["']?(?:status|code)["']?\s*:\s*402\b|\bhttp\s*402\b|\berror\s+code\s*[:=]?\s*402\b|^\s*402\s+payment/i;
+
 const ERROR_PATTERNS = {
   rateLimit: [
     /rate[_ ]limit|too many requests|429/,
@@ -52,7 +66,7 @@ const ERROR_PATTERNS = {
     /\bunhandled stop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
   ],
   billing: [
-    /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
+    BILLING_EXPLICIT_402_RE,
     "payment required",
     "insufficient credits",
     /insufficient[_ ]quota/i,
@@ -104,8 +118,6 @@ const ERROR_PATTERNS = {
 
 const BILLING_ERROR_HEAD_RE =
   /^(?:error[:\s-]+)?billing(?:\s+error)?(?:[:\s-]+|$)|^(?:error[:\s-]+)?(?:credit balance|insufficient credits?|payment required|http\s*402\b)/i;
-const BILLING_ERROR_HARD_402_RE =
-  /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|^\s*402\s+payment/i;
 const BILLING_ERROR_MAX_LENGTH = 512;
 
 function matchesErrorPatterns(raw: string, patterns: readonly ErrorPattern[]): boolean {
@@ -140,8 +152,13 @@ export function isBillingErrorMessage(raw: string): boolean {
     return false;
   }
 
+  // Real API billing errors are short machine-generated messages; anything longer
+  // than BILLING_ERROR_MAX_LENGTH is almost certainly normal assistant text that
+  // happens to mention billing topics.  For long messages we still honour
+  // explicit 402 status-code markers which are unambiguous, but skip the
+  // heuristic/fuzzy patterns to avoid false positives.
   if (raw.length > BILLING_ERROR_MAX_LENGTH) {
-    return BILLING_ERROR_HARD_402_RE.test(value);
+    return BILLING_STRUCTURED_402_RE.test(value);
   }
   if (matchesErrorPatterns(value, ERROR_PATTERNS.billing)) {
     return true;
