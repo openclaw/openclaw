@@ -46,19 +46,31 @@ export function resolveBundledInstallPlanBeforeNpm(params: {
   rawSpec: string;
   findBundledSource: BundledLookup;
 }): { bundledSource: BundledPluginSource; warning: string } | null {
-  if (!isBareNpmPackageName(params.rawSpec)) {
-    return null;
+  const trimmed = params.rawSpec.trim();
+  if (isBareNpmPackageName(trimmed)) {
+    const bundledSource = params.findBundledSource({
+      kind: "pluginId",
+      value: trimmed,
+    });
+    if (!bundledSource) {
+      return null;
+    }
+    return {
+      bundledSource,
+      warning: `Using bundled plugin "${bundledSource.pluginId}" from ${shortenHomePath(bundledSource.localPath)} for bare install spec "${trimmed}". To install an npm package with the same name, use a scoped package name (for example @scope/${trimmed}).`,
+    };
   }
+
   const bundledSource = params.findBundledSource({
-    kind: "pluginId",
-    value: params.rawSpec,
+    kind: "npmSpec",
+    value: trimmed,
   });
   if (!bundledSource) {
     return null;
   }
   return {
     bundledSource,
-    warning: `Using bundled plugin "${bundledSource.pluginId}" from ${shortenHomePath(bundledSource.localPath)} for bare install spec "${params.rawSpec}". To install an npm package with the same name, use a scoped package name (for example @scope/${params.rawSpec}).`,
+    warning: `Using bundled plugin "${bundledSource.pluginId}" from ${shortenHomePath(bundledSource.localPath)} for npm install spec "${trimmed}".`,
   };
 }
 

@@ -24,14 +24,36 @@ describe("plugin install plan helpers", () => {
     expect(result?.warning).toContain('bare install spec "voice-call"');
   });
 
-  it("skips bundled pre-plan for scoped npm specs", () => {
-    const findBundledSource = vi.fn();
+  it("prefers bundled plugin for scoped npm specs", () => {
+    const findBundledSource = vi.fn().mockReturnValue({
+      pluginId: "voice-call",
+      localPath: "/tmp/extensions/voice-call",
+      npmSpec: "@openclaw/voice-call",
+    });
     const result = resolveBundledInstallPlanBeforeNpm({
       rawSpec: "@openclaw/voice-call",
       findBundledSource,
     });
 
-    expect(findBundledSource).not.toHaveBeenCalled();
+    expect(findBundledSource).toHaveBeenCalledWith({
+      kind: "npmSpec",
+      value: "@openclaw/voice-call",
+    });
+    expect(result?.bundledSource.pluginId).toBe("voice-call");
+    expect(result?.warning).toContain('npm install spec "@openclaw/voice-call"');
+  });
+
+  it("skips bundled pre-plan for non-matching scoped npm specs", () => {
+    const findBundledSource = vi.fn().mockReturnValue(undefined);
+    const result = resolveBundledInstallPlanBeforeNpm({
+      rawSpec: "@openclaw/not-found",
+      findBundledSource,
+    });
+
+    expect(findBundledSource).toHaveBeenCalledWith({
+      kind: "npmSpec",
+      value: "@openclaw/not-found",
+    });
     expect(result).toBeNull();
   });
 
