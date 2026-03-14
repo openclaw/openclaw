@@ -766,17 +766,11 @@ export abstract class MemoryManagerSyncOps {
     });
     await runWithConcurrency(tasks, this.getIndexConcurrency());
 
-    // Bulk-load stale paths to avoid per-file queries during cleanup.
-    const allIndexedPaths = params.needsFullReindex
-      ? existingRecords
-      : new Map(
-          (
-            this.db.prepare(`SELECT path FROM files WHERE source = ?`).all("memory") as Array<{
-              path: string;
-            }>
-          ).map((row) => [row.path, ""]),
-        );
-    for (const [stalePath] of allIndexedPaths) {
+    // Fresh query for stale paths after indexing (consistent with syncSessionFiles).
+    const indexedRows = this.db
+      .prepare(`SELECT path FROM files WHERE source = ?`)
+      .all("memory") as Array<{ path: string }>;
+    for (const { path: stalePath } of indexedRows) {
       if (activePaths.has(stalePath)) {
         continue;
       }
