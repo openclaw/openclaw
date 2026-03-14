@@ -633,8 +633,10 @@ describe("model-selection", () => {
         });
         const warning = warnSpy.mock.calls[0]?.[0] as string;
         expect(warning).toContain('Falling back to "anthropic/claude-3-5-sonnet"');
-        expect(warning).not.toContain("\u001B");
-        expect(warning).not.toContain("\n");
+        // The logger may add its own ANSI (e.g. \x1B[33m for warnings), but the
+        // injected user-supplied escape (\x1B[31m) and newline must be stripped.
+        expect(warning).not.toContain("\u001B[31m");
+        expect(warning).not.toMatch(/\n/);
       } finally {
         warnSpy.mockRestore();
         setLoggerOverride(null);
