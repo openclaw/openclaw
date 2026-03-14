@@ -103,6 +103,29 @@ describe("applyJobPatch", () => {
     });
   });
 
+  it("maps legacy payload delivery updates for custom session targets", () => {
+    const job = createIsolatedAgentTurnJob(
+      "job-custom-session",
+      {
+        mode: "announce",
+        channel: "telegram",
+        to: "123",
+      },
+      { sessionTarget: "session:project-alpha" },
+    );
+
+    applyJobPatch(job, {
+      payload: { kind: "agentTurn", to: "555" },
+    });
+
+    expect(job.delivery).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "555",
+      bestEffort: undefined,
+    });
+  });
+
   it("treats legacy payload targets as announce requests", () => {
     const job = createIsolatedAgentTurnJob("job-3", {
       mode: "none",
@@ -556,5 +579,49 @@ describe("cron stagger defaults", () => {
     if (job.schedule.kind === "cron") {
       expect(job.schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
     }
+  });
+});
+
+describe("createJob delivery defaults", () => {
+  const now = Date.parse("2026-02-28T12:00:00.000Z");
+
+  it('defaults delivery to { mode: "announce" } for isolated agentTurn jobs without explicit delivery', () => {
+    const state = createMockState(now);
+    const job = createJob(state, {
+      name: "isolated-no-delivery",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "hello" },
+    });
+    expect(job.delivery).toEqual({ mode: "announce" });
+  });
+
+  it("preserves explicit delivery for isolated agentTurn jobs", () => {
+    const state = createMockState(now);
+    const job = createJob(state, {
+      name: "isolated-explicit-delivery",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "hello" },
+      delivery: { mode: "none" },
+    });
+    expect(job.delivery).toEqual({ mode: "none" });
+  });
+
+  it("does not set delivery for main systemEvent jobs without explicit delivery", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    const job = createJob(state, {
+      name: "main-no-delivery",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "ping" },
+    });
+    expect(job.delivery).toBeUndefined();
   });
 });

@@ -35,6 +35,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { resolveGatewayRequestContext } from "./http-utils.js";
+import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import {
   CreateResponseBodySchema,
   type CreateResponseBody,
@@ -69,14 +70,6 @@ type ResolvedResponsesLimits = {
   images: InputImageLimits;
 };
 
-function normalizeHostnameAllowlist(values: string[] | undefined): string[] | undefined {
-  if (!values || values.length === 0) {
-    return undefined;
-  }
-  const normalized = values.map((value) => value.trim()).filter((value) => value.length > 0);
-  return normalized.length > 0 ? normalized : undefined;
-}
-
 function resolveResponsesLimits(
   config: GatewayHttpResponsesConfig | undefined,
 ): ResolvedResponsesLimits {
@@ -91,11 +84,11 @@ function resolveResponsesLimits(
         : DEFAULT_MAX_URL_PARTS,
     files: {
       ...fileLimits,
-      urlAllowlist: normalizeHostnameAllowlist(files?.urlAllowlist),
+      urlAllowlist: normalizeInputHostnameAllowlist(files?.urlAllowlist),
     },
     images: {
       allowUrl: images?.allowUrl ?? true,
-      urlAllowlist: normalizeHostnameAllowlist(images?.urlAllowlist),
+      urlAllowlist: normalizeInputHostnameAllowlist(images?.urlAllowlist),
       allowedMimes: normalizeMimeList(images?.allowedMimes, DEFAULT_INPUT_IMAGE_MIMES),
       maxBytes: images?.maxBytes ?? DEFAULT_INPUT_IMAGE_MAX_BYTES,
       maxRedirects: images?.maxRedirects ?? DEFAULT_INPUT_MAX_REDIRECTS,
@@ -343,12 +336,18 @@ export async function handleOpenResponsesHttpRequest(
               if (sourceType === "url") {
                 markUrlPart();
               }
-              const imageSource: InputImageSource = {
-                type: sourceType,
-                url: source.url,
-                data: source.data,
-                mediaType: source.media_type,
-              };
+              const imageSource: InputImageSource =
+                sourceType === "url"
+                  ? {
+                      type: "url",
+                      url: source.url ?? "",
+                      mediaType: source.media_type,
+                    }
+                  : {
+                      type: "base64",
+                      data: source.data ?? "",
+                      mediaType: source.media_type,
+                    };
               const image = await extractImageContentFromSource(imageSource, limits.images);
               images.push(image);
               continue;
@@ -371,13 +370,20 @@ export async function handleOpenResponsesHttpRequest(
                 markUrlPart();
               }
               const file = await extractFileContentFromSource({
-                source: {
-                  type: sourceType,
-                  url: source.url,
-                  data: source.data,
-                  mediaType: source.media_type,
-                  filename: source.filename,
-                },
+                source:
+                  sourceType === "url"
+                    ? {
+                        type: "url",
+                        url: source.url ?? "",
+                        mediaType: source.media_type,
+                        filename: source.filename,
+                      }
+                    : {
+                        type: "base64",
+                        data: source.data ?? "",
+                        mediaType: source.media_type,
+                        filename: source.filename,
+                      },
                 limits: limits.files,
               });
               if (file.text?.trim()) {

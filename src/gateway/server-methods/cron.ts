@@ -89,7 +89,14 @@ export const cronHandlers: GatewayRequestHandlers = {
     respond(true, status, undefined);
   },
   "cron.add": async ({ params, respond, context }) => {
-    const normalized = normalizeCronJobCreate(params) ?? params;
+    const sessionKey =
+      typeof (params as { sessionKey?: unknown } | null)?.sessionKey === "string"
+        ? (params as { sessionKey: string }).sessionKey
+        : undefined;
+    const normalized =
+      normalizeCronJobCreate(params, {
+        sessionContext: { sessionKey },
+      }) ?? params;
     if (!validateCronAddParams(normalized)) {
       respond(
         false,
@@ -212,7 +219,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const result = await context.cron.run(jobId, p.mode ?? "force");
+    const result = await context.cron.enqueueRun(jobId, p.mode ?? "force");
     respond(true, result, undefined);
   },
   "cron.runs": async ({ params, respond, context }) => {

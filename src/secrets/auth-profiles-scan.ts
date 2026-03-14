@@ -73,6 +73,25 @@ export function getAuthProfileFieldSpec(type: AuthProfileCredentialType): AuthPr
   return AUTH_PROFILE_FIELD_SPEC_BY_TYPE[type];
 }
 
+function toSecretCredentialVisit(params: {
+  kind: AuthProfileCredentialType;
+  profileId: string;
+  provider: string;
+  profile: Record<string, unknown>;
+}): ApiKeyCredentialVisit | TokenCredentialVisit {
+  const spec = getAuthProfileFieldSpec(params.kind);
+  return {
+    kind: params.kind,
+    profileId: params.profileId,
+    provider: params.provider,
+    profile: params.profile,
+    valueField: spec.valueField,
+    refField: spec.refField,
+    value: params.profile[spec.valueField],
+    refValue: params.profile[spec.refField],
+  };
+}
+
 export function* iterateAuthProfileCredentials(
   profiles: Record<string, unknown>,
 ): Iterable<AuthProfileCredentialVisit> {
@@ -81,32 +100,13 @@ export function* iterateAuthProfileCredentials(
       continue;
     }
     const provider = String(value.provider);
-    if (value.type === "api_key") {
-      const spec = getAuthProfileFieldSpec("api_key");
-      yield {
-        kind: "api_key",
+    if (value.type === "api_key" || value.type === "token") {
+      yield toSecretCredentialVisit({
+        kind: value.type,
         profileId,
         provider,
         profile: value,
-        valueField: spec.valueField,
-        refField: spec.refField,
-        value: value[spec.valueField],
-        refValue: value[spec.refField],
-      };
-      continue;
-    }
-    if (value.type === "token") {
-      const spec = getAuthProfileFieldSpec("token");
-      yield {
-        kind: "token",
-        profileId,
-        provider,
-        profile: value,
-        valueField: spec.valueField,
-        refField: spec.refField,
-        value: value[spec.valueField],
-        refValue: value[spec.refField],
-      };
+      });
       continue;
     }
     if (value.type === "oauth") {

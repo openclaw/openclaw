@@ -71,7 +71,7 @@ function makeAnthropicAnalyzeParams(
   }> = {},
 ) {
   return {
-    apiKey: "test-key",
+    apiKey: "test-key", // pragma: allowlist secret
     modelId: "claude-opus-4-6",
     prompt: "test",
     pdfs: [TEST_PDF_INPUT],
@@ -89,7 +89,7 @@ function makeGeminiAnalyzeParams(
   }> = {},
 ) {
   return {
-    apiKey: "test-key",
+    apiKey: "test-key", // pragma: allowlist secret
     modelId: "gemini-2.5-pro",
     prompt: "test",
     pdfs: [TEST_PDF_INPUT],
@@ -156,7 +156,7 @@ async function stubPdfToolInfra(
   });
 
   const modelAuth = await import("../model-auth.js");
-  vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({ apiKey: "test-key" } as never);
+  vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({ apiKey: "test-key" } as never); // pragma: allowlist secret
   vi.spyOn(modelAuth, "requireApiKey").mockReturnValue("test-key");
 
   return { loadSpy };
@@ -710,6 +710,26 @@ describe("native PDF provider API calls", () => {
     await expect(geminiAnalyzePdf(makeGeminiAnalyzeParams({ apiKey: "" }))).rejects.toThrow(
       "apiKey required",
     );
+  });
+
+  it("geminiAnalyzePdf does not duplicate /v1beta when baseUrl already includes it", async () => {
+    const { geminiAnalyzePdf } = await import("./pdf-native-providers.js");
+    const fetchMock = mockFetchResponse({
+      ok: true,
+      json: async () => ({
+        candidates: [{ content: { parts: [{ text: "ok" }] } }],
+      }),
+    });
+
+    await geminiAnalyzePdf(
+      makeGeminiAnalyzeParams({
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      }),
+    );
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain("/v1beta/models/");
+    expect(url).not.toContain("/v1beta/v1beta");
   });
 });
 
