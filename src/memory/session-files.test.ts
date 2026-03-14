@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildSessionEntry } from "./session-files.js";
+import { buildSessionEntry, sessionPathForFile } from "./session-files.js";
 
 describe("buildSessionEntry", () => {
   let tmpDir: string;
@@ -83,5 +83,11 @@ describe("buildSessionEntry", () => {
     const entry = await buildSessionEntry(filePath);
     expect(entry).not.toBeNull();
     expect(entry!.lineMap).toEqual([3, 5]);
+  });
+
+  it("normalizes Windows-style separators when deriving session paths", () => {
+    expect(sessionPathForFile("C:\\Users\\kai\\sessions\\thread.jsonl")).toBe(
+      "sessions/thread.jsonl",
+    );
   });
 });
