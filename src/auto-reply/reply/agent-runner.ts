@@ -140,6 +140,12 @@ export async function runReplyAgent(params: {
     storePath,
     resolvedVerboseLevel,
   });
+  const applyOutboundTransformsToPayload = (payload: ReplyPayload): ReplyPayload => {
+    const hookRunner = getGlobalHookRunner();
+    return hookRunner && typeof payload.text === "string"
+      ? { ...payload, text: hookRunner.runOutboundTransforms(payload.text) }
+      : payload;
+  };
 
   const pendingToolTasks = new Set<Promise<void>>();
   const blockReplyTimeoutMs = opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
@@ -370,7 +376,11 @@ export async function runReplyAgent(params: {
     });
 
     if (runOutcome.kind === "final") {
-      return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
+      return finalizeWithFollowup(
+        applyOutboundTransformsToPayload(runOutcome.payload),
+        queueKey,
+        runFollowupTurn,
+      );
     }
 
     const {
@@ -533,12 +543,7 @@ export async function runReplyAgent(params: {
         : false;
     // Apply plugin outbound transforms to LLM-generated reply payloads only,
     // before verbose notices and usage lines are prepended.
-    const hookRunner = getGlobalHookRunner();
-    const transformedPayloads = hookRunner
-      ? replyPayloads.map((p) =>
-          typeof p.text === "string" ? { ...p, text: hookRunner.runOutboundTransforms(p.text) } : p,
-        )
-      : replyPayloads;
+    const transformedPayloads = replyPayloads.map(applyOutboundTransformsToPayload);
 
     const guardedReplyPayloads =
       hasReminderCommitment && successfulCronAdds === 0 && !coveredByExistingCron
