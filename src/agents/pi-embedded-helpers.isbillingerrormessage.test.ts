@@ -44,6 +44,8 @@ const GROQ_TOO_MANY_REQUESTS_MESSAGE =
   "429 Too Many Requests: Too many requests were sent in a given timeframe.";
 const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
   "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance."; // pragma: allowlist secret
+const OPENAI_SERVER_ERROR_PAYLOAD =
+  'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
 
 function expectMessageMatches(
   matcher: (message: string) => boolean,
@@ -557,6 +559,13 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
       ),
     ).toBe("overloaded");
   });
+
+  it("does not let structured server_error markers override 4xx status handling", () => {
+    const payload = '{"type":"error","error":{"type":"server_error","code":"server_error"}}';
+    expect(classifyFailoverReasonFromHttpStatus(401, payload)).toBe("auth");
+    expect(classifyFailoverReasonFromHttpStatus(402, payload)).toBe("billing");
+    expect(classifyFailoverReasonFromHttpStatus(422, payload)).toBe("format");
+  });
 });
 
 describe("isFailoverErrorMessage", () => {
@@ -859,5 +868,10 @@ describe("classifyFailoverReason", () => {
         '{"type":"error","error":{"type":"api_error","message":"Internal server error"}}',
       ),
     ).toBe("timeout");
+  });
+
+  it("classifies OpenAI-compatible server_error payloads as server_error", () => {
+    expect(classifyFailoverReason(OPENAI_SERVER_ERROR_PAYLOAD)).toBe("server_error");
+    expect(isFailoverErrorMessage(OPENAI_SERVER_ERROR_PAYLOAD)).toBe(true);
   });
 });
