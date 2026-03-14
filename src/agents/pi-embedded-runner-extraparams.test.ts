@@ -412,6 +412,53 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]).not.toHaveProperty("reasoning_effort");
   });
 
+  it("applies thinking=false for Ollama when thinkingLevel is off", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "ollama", "qwen35-opus-q4km", undefined, "off");
+
+    const model = {
+      api: "ollama-chat",
+      provider: "ollama",
+      id: "qwen35-opus-q4km",
+    } as unknown as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.thinking).toBe(false);
+  });
+
+  it("applies configured thinking=false for Ollama model params", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "ollama/qwen35-opus-q4km": {
+              params: {
+                thinking: "off",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "ollama", "qwen35-opus-q4km");
+
+    const model = {
+      api: "ollama-chat",
+      provider: "ollama",
+      id: "qwen35-opus-q4km",
+    } as unknown as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.thinking).toBe(false);
+  });
+
   it("injects parallel_tool_calls for openai-completions payloads when configured", () => {
     const payload = runParallelToolCallsPayloadMutationCase({
       applyProvider: "nvidia-nim",
