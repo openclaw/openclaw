@@ -12,11 +12,22 @@ import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { parseSlackBlocksInput } from "../../slack/blocks-input.js";
+import { isSlackInteractiveRepliesEnabled } from "../../slack/interactive-replies.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
+
+let deliverRuntimePromise: Promise<
+  typeof import("../../infra/outbound/deliver-runtime.js")
+> | null = null;
+
+function loadDeliverRuntime() {
+  deliverRuntimePromise ??= import("../../infra/outbound/deliver-runtime.js");
+  return deliverRuntimePromise;
+}
 
 export type RouteReplyParams = {
   /** The reply payload to send. */
@@ -85,6 +96,8 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       : cfg.messages?.responsePrefix;
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
+    enableSlackInteractiveReplies:
+      channel === "slack" ? isSlackInteractiveRepliesEnabled({ cfg, accountId }) : false,
   });
   if (!normalized) {
     return { ok: true };
@@ -97,9 +110,25 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       ? [normalized.mediaUrl]
       : [];
   const replyToId = normalized.replyToId;
+  let hasSlackBlocks = false;
+  if (
+    channel === "slack" &&
+    normalized.channelData?.slack &&
+    typeof normalized.channelData.slack === "object" &&
+    !Array.isArray(normalized.channelData.slack)
+  ) {
+    try {
+      hasSlackBlocks = Boolean(
+        parseSlackBlocksInput((normalized.channelData.slack as { blocks?: unknown }).blocks)
+          ?.length,
+      );
+    } catch {
+      hasSlackBlocks = false;
+    }
+  }
 
   // Skip empty replies.
-  if (!text.trim() && mediaUrls.length === 0) {
+  if (!text.trim() && mediaUrls.length === 0 && !hasSlackBlocks) {
     return { ok: true };
   }
 
@@ -126,7 +155,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   try {
     // Provider docking: this is an execution boundary (we're about to send).
     // Keep the module cheap to import by loading outbound plumbing lazily.
-    const { deliverOutboundPayloads } = await import("../../infra/outbound/deliver.js");
+    const { deliverOutboundPayloads } = await loadDeliverRuntime();
     const outboundSession = buildOutboundSessionContext({
       cfg,
       agentId: resolvedAgentId,

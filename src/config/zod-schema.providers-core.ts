@@ -49,12 +49,21 @@ const DiscordIdSchema = z
 const DiscordIdListSchema = z.array(DiscordIdSchema);
 
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
+const TelegramIdListSchema = z.array(z.union([z.string(), z.number()]));
 
 const TelegramCapabilitiesSchema = z.union([
   z.array(z.string()),
   z
     .object({
       inlineButtons: TelegramInlineButtonsScopeSchema.optional(),
+    })
+    .strict(),
+]);
+const SlackCapabilitiesSchema = z.union([
+  z.array(z.string()),
+  z
+    .object({
+      interactiveReplies: z.boolean().optional(),
     })
     .strict(),
 ]);
@@ -68,6 +77,7 @@ export const TelegramTopicSchema = z
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
+    agentId: z.string().optional(),
   })
   .strict();
 
@@ -102,8 +112,8 @@ export const TelegramDirectSchema = z
 
 const TelegramCustomCommandSchema = z
   .object({
-    command: z.string().transform(normalizeTelegramCommandName),
-    description: z.string().transform(normalizeTelegramCommandDescription),
+    command: z.string().overwrite(normalizeTelegramCommandName),
+    description: z.string().overwrite(normalizeTelegramCommandDescription),
   })
   .strict();
 
@@ -152,6 +162,16 @@ export const TelegramAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     capabilities: TelegramCapabilitiesSchema.optional(),
+    execApprovals: z
+      .object({
+        enabled: z.boolean().optional(),
+        approvers: TelegramIdListSchema.optional(),
+        agentFilter: z.array(z.string()).optional(),
+        sessionFilter: z.array(z.string()).optional(),
+        target: z.enum(["dm", "channel", "both"]).optional(),
+      })
+      .strict()
+      .optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,
@@ -220,12 +240,31 @@ export const TelegramAccountSchemaBase = z
       .describe(
         "Local bind port for the webhook listener. Defaults to 8787; set to 0 to let the OS assign an ephemeral port.",
       ),
+    webhookCertPath: z
+      .string()
+      .optional()
+      .describe(
+        "Path to the self-signed certificate (PEM) to upload to Telegram during webhook registration. Required for self-signed certs (direct IP or no domain).",
+      ),
     actions: z
       .object({
         reactions: z.boolean().optional(),
         sendMessage: z.boolean().optional(),
+        poll: z.boolean().optional(),
         deleteMessage: z.boolean().optional(),
+        editMessage: z.boolean().optional(),
         sticker: z.boolean().optional(),
+        createForumTopic: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    threadBindings: z
+      .object({
+        enabled: z.boolean().optional(),
+        idleHours: z.number().nonnegative().optional(),
+        maxAgeHours: z.number().nonnegative().optional(),
+        spawnSubagentSessions: z.boolean().optional(),
+        spawnAcpSessions: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -345,6 +384,7 @@ export const DiscordGuildChannelSchema = z
   .object({
     allow: z.boolean().optional(),
     requireMention: z.boolean().optional(),
+    ignoreOtherMentions: z.boolean().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     skills: z.array(z.string()).optional(),
@@ -354,6 +394,16 @@ export const DiscordGuildChannelSchema = z
     systemPrompt: z.string().optional(),
     includeThreadStarter: z.boolean().optional(),
     autoThread: z.boolean().optional(),
+    /** Archive duration for auto-created threads in minutes. Discord supports 60, 1440 (1 day), 4320 (3 days), 10080 (1 week). Default: 60. */
+    autoArchiveDuration: z
+      .union([
+        z.enum(["60", "1440", "4320", "10080"]),
+        z.literal(60),
+        z.literal(1440),
+        z.literal(4320),
+        z.literal(10080),
+      ])
+      .optional(),
   })
   .strict();
 
@@ -361,6 +411,7 @@ export const DiscordGuildSchema = z
   .object({
     slug: z.string().optional(),
     requireMention: z.boolean().optional(),
+    ignoreOtherMentions: z.boolean().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
@@ -410,7 +461,7 @@ export const DiscordAccountSchema = z
     configWrites: z.boolean().optional(),
     token: SecretInputSchema.optional().register(sensitive),
     proxy: z.string().optional(),
-    allowBots: z.boolean().optional(),
+    allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     historyLimit: z.number().int().min(0).optional(),
@@ -471,6 +522,12 @@ export const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    agentComponents: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     ui: DiscordUiSchema,
     slashCommand: z
       .object({
@@ -510,10 +567,27 @@ export const DiscordAccountSchema = z
       .optional(),
     activity: z.string().optional(),
     status: z.enum(["online", "dnd", "idle", "invisible"]).optional(),
+    autoPresence: z
+      .object({
+        enabled: z.boolean().optional(),
+        intervalMs: z.number().int().positive().optional(),
+        minUpdateIntervalMs: z.number().int().positive().optional(),
+        healthyText: z.string().optional(),
+        degradedText: z.string().optional(),
+        exhaustedText: z.string().optional(),
+      })
+      .strict()
+      .optional(),
     activityType: z
       .union([z.literal(0), z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)])
       .optional(),
     activityUrl: z.string().url().optional(),
+    inboundWorker: z
+      .object({
+        runTimeoutMs: z.number().int().nonnegative().optional(),
+      })
+      .strict()
+      .optional(),
     eventQueue: z
       .object({
         listenerTimeout: z.number().int().positive().optional(),
@@ -554,6 +628,21 @@ export const DiscordAccountSchema = z
         code: z.ZodIssueCode.custom,
         message: "channels.discord.activityType must be 1 (Streaming) when activityUrl is set",
         path: ["activityType"],
+      });
+    }
+
+    const autoPresenceInterval = value.autoPresence?.intervalMs;
+    const autoPresenceMinUpdate = value.autoPresence?.minUpdateIntervalMs;
+    if (
+      typeof autoPresenceInterval === "number" &&
+      typeof autoPresenceMinUpdate === "number" &&
+      autoPresenceMinUpdate > autoPresenceInterval
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "channels.discord.autoPresence.minUpdateIntervalMs must be less than or equal to channels.discord.autoPresence.intervalMs",
+        path: ["autoPresence", "minUpdateIntervalMs"],
       });
     }
 
@@ -750,7 +839,7 @@ export const SlackAccountSchema = z
     mode: z.enum(["socket", "http"]).optional(),
     signingSecret: SecretInputSchema.optional().register(sensitive),
     webhookPath: z.string().optional(),
-    capabilities: z.array(z.string()).optional(),
+    capabilities: SlackCapabilitiesSchema.optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,
@@ -811,6 +900,7 @@ export const SlackAccountSchema = z
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    typingReaction: z.string().optional(),
   })
   .strict()
   .superRefine((value) => {
@@ -889,6 +979,16 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   validateSlackSigningSecretRequirements(value, ctx);
 });
 
+const SignalGroupEntrySchema = z
+  .object({
+    requireMention: z.boolean().optional(),
+    tools: ToolPolicySchema,
+    toolsBySender: ToolPolicyBySenderSchema,
+  })
+  .strict();
+
+const SignalGroupsSchema = z.record(z.string(), SignalGroupEntrySchema.optional()).optional();
+
 export const SignalAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -897,6 +997,7 @@ export const SignalAccountSchemaBase = z
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
     account: z.string().optional(),
+    accountUuid: z.string().optional(),
     httpUrl: z.string().optional(),
     httpHost: z.string().optional(),
     httpPort: z.number().int().positive().optional(),
@@ -912,6 +1013,7 @@ export const SignalAccountSchemaBase = z
     defaultTo: z.string().optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    groups: SignalGroupsSchema,
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),

@@ -4,7 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
-import { createMockTypingController } from "./test-helpers.js";
+import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
 const routeReplyMock = vi.fn();
@@ -50,47 +50,12 @@ beforeEach(() => {
 });
 
 const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
-  ({
-    prompt: "hello",
-    summaryLine: "hello",
-    enqueuedAt: Date.now(),
-    originatingTo: "channel:C1",
-    run: {
-      sessionId: "session",
-      sessionKey: "main",
-      messageProvider,
-      agentAccountId: "primary",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      config: {},
-      skillsSnapshot: {},
-      provider: "anthropic",
-      model: "claude",
-      thinkLevel: "low",
-      verboseLevel: "off",
-      elevatedLevel: "off",
-      bashElevated: {
-        enabled: false,
-        allowed: false,
-        defaultLevel: "off",
-      },
-      timeoutMs: 1_000,
-      blockReplyBreak: "message_end",
-    },
-  }) as FollowupRun;
+  createMockFollowupRun({ run: { messageProvider } });
 
 function createQueuedRun(
   overrides: Partial<Omit<FollowupRun, "run">> & { run?: Partial<FollowupRun["run"]> } = {},
 ): FollowupRun {
-  const base = baseQueuedRun();
-  return {
-    ...base,
-    ...overrides,
-    run: {
-      ...base.run,
-      ...overrides.run,
-    },
-  };
+  return createMockFollowupRun(overrides);
 }
 
 function mockCompactionRun(params: {
@@ -160,6 +125,70 @@ describe("createFollowupRunner compaction", () => {
     const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(1);
+  });
+});
+
+describe("createFollowupRunner bootstrap warning dedupe", () => {
+  it("passes stored warning signature history to embedded followup runs", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      systemPromptReport: {
+        source: "run",
+        generatedAt: Date.now(),
+        systemPrompt: {
+          chars: 1,
+          projectContextChars: 0,
+          nonProjectContextChars: 1,
+        },
+        injectedWorkspaceFiles: [],
+        skills: {
+          promptChars: 0,
+          entries: [],
+        },
+        tools: {
+          listChars: 0,
+          schemaChars: 0,
+          entries: [],
+        },
+        bootstrapTruncation: {
+          warningMode: "once",
+          warningShown: true,
+          promptWarningSignature: "sig-b",
+          warningSignaturesSeen: ["sig-a", "sig-b"],
+          truncatedFiles: 1,
+          nearLimitFiles: 0,
+          totalNearLimit: false,
+        },
+      },
+    };
+    const sessionStore: Record<string, SessionEntry> = { main: sessionEntry };
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(baseQueuedRun());
+
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+      | {
+          bootstrapPromptWarningSignaturesSeen?: string[];
+          bootstrapPromptWarningSignature?: string;
+        }
+      | undefined;
+    expect(call?.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
+    expect(call?.bootstrapPromptWarningSignature).toBe("sig-b");
   });
 });
 

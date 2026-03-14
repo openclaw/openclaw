@@ -141,6 +141,66 @@ describe("gateway server chat", () => {
     expect(res.payload?.startedAt).toBe(startedAt);
   };
 
+  const sendChatAndExpectStarted = async (runId: string, message = "/context list") => {
+    const res = await rpcReq(ws, "chat.send", {
+      sessionKey: "main",
+      message,
+      idempotencyKey: runId,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.payload?.status).toBe("started");
+    return res;
+  };
+
+  const waitForAgentRunOk = async (runId: string, timeoutMs = 1_000) => {
+    const res = await rpcReq(ws, "agent.wait", {
+      runId,
+      timeoutMs,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.payload?.status).toBe("ok");
+    return res;
+  };
+
+  const abortChatRun = async (runId: string) => {
+    const res = await rpcReq(ws, "chat.abort", {
+      sessionKey: "main",
+      runId,
+    });
+    expect(res.ok).toBe(true);
+    return res;
+  };
+
+  const mockBlockedChatReply = () => {
+    let releaseBlockedReply: (() => void) | undefined;
+    const blockedReply = new Promise<void>((resolve) => {
+      releaseBlockedReply = resolve;
+    });
+    const replySpy = vi.mocked(getReplyFromConfig);
+    replySpy.mockImplementationOnce(async (_ctx, opts) => {
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          resolve();
+        };
+        void blockedReply.then(finish);
+        if (opts?.abortSignal?.aborted) {
+          finish();
+          return;
+        }
+        opts?.abortSignal?.addEventListener("abort", finish, { once: true });
+      });
+      return undefined;
+    });
+    return () => {
+      releaseBlockedReply?.();
+    };
+  };
+
   test("sanitizes inbound chat.send message text and rejects null bytes", async () => {
     const nullByteRes = await rpcReq(ws, "chat.send", {
       sessionKey: "main",
@@ -464,6 +524,136 @@ describe("gateway server chat", () => {
       "user:NO_REPLY",
       "assistant:NO_REPLY",
     ]);
+  });
+
+  test("agent.wait resolves chat.send runs that finish without lifecycle events", async () => {
+    await withMainSessionStore(async () => {
+      const runId = "idem-wait-chat-1";
+      await sendChatAndExpectStarted(runId);
+      await waitForAgentRunOk(runId);
+    });
+  });
+
+  test("agent.wait ignores stale chat dedupe when an agent run with the same runId is in flight", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    let resolveAgentRun: (() => void) | undefined;
+    const blockedAgentRun = new Promise<void>((resolve) => {
+      resolveAgentRun = resolve;
+    });
+    const agentSpy = vi.mocked(agentCommand);
+    agentSpy.mockImplementationOnce(async () => {
+      await blockedAgentRun;
+      return undefined;
+    });
+
+    try {
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const runId = "idem-wait-chat-vs-agent";
+      await sendChatAndExpectStarted(runId);
+      await waitForAgentRunOk(runId);
+
+      const agentRes = await rpcReq(ws, "agent", {
+        sessionKey: "main",
+        message: "hold this run open",
+        idempotencyKey: runId,
+      });
+      expect(agentRes.ok).toBe(true);
+      expect(agentRes.payload?.status).toBe("accepted");
+
+      const waitWhileAgentInFlight = await rpcReq(ws, "agent.wait", {
+        runId,
+        timeoutMs: 40,
+      });
+      expectAgentWaitTimeout(waitWhileAgentInFlight);
+
+      resolveAgentRun?.();
+      await waitForAgentRunOk(runId);
+    } finally {
+      resolveAgentRun?.();
+      testState.sessionStorePath = undefined;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("agent.wait ignores stale agent snapshots while same-runId chat.send is active", async () => {
+    await withMainSessionStore(async () => {
+      const runId = "idem-wait-chat-active-vs-stale-agent";
+      const seedAgentRes = await rpcReq(ws, "agent", {
+        sessionKey: "main",
+        message: "seed stale agent snapshot",
+        idempotencyKey: runId,
+      });
+      expect(seedAgentRes.ok).toBe(true);
+      expect(seedAgentRes.payload?.status).toBe("accepted");
+
+      const seedWaitRes = await rpcReq(ws, "agent.wait", {
+        runId,
+        timeoutMs: 1_000,
+      });
+      expect(seedWaitRes.ok).toBe(true);
+      expect(seedWaitRes.payload?.status).toBe("ok");
+
+      const releaseBlockedReply = mockBlockedChatReply();
+
+      try {
+        await sendChatAndExpectStarted(runId, "hold chat run open");
+
+        const waitWhileChatActive = await rpcReq(ws, "agent.wait", {
+          runId,
+          timeoutMs: 40,
+        });
+        expectAgentWaitTimeout(waitWhileChatActive);
+
+        await abortChatRun(runId);
+      } finally {
+        releaseBlockedReply();
+      }
+    });
+  });
+
+  test("agent.wait keeps lifecycle wait active while same-runId chat.send is active", async () => {
+    await withMainSessionStore(async () => {
+      const runId = "idem-wait-chat-active-with-agent-lifecycle";
+      const releaseBlockedReply = mockBlockedChatReply();
+
+      try {
+        await sendChatAndExpectStarted(runId, "hold chat run open");
+
+        const waitP = rpcReq(ws, "agent.wait", {
+          runId,
+          timeoutMs: 1_000,
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: { phase: "start", startedAt: 1 },
+        });
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: { phase: "end", startedAt: 1, endedAt: 2 },
+        });
+
+        const waitRes = await waitP;
+        expect(waitRes.ok).toBe(true);
+        expect(waitRes.payload?.status).toBe("ok");
+
+        await abortChatRun(runId);
+      } finally {
+        releaseBlockedReply();
+      }
+    });
   });
 
   test("agent events include sessionKey and agent.wait covers lifecycle flows", async () => {

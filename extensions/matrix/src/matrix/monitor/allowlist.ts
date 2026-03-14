@@ -1,7 +1,12 @@
-import { resolveAllowlistMatchByCandidates, type AllowlistMatch } from "openclaw/plugin-sdk";
+import {
+  compileAllowlist,
+  normalizeStringEntries,
+  resolveCompiledAllowlistMatch,
+  type AllowlistMatch,
+} from "openclaw/plugin-sdk/matrix";
 
 function normalizeAllowList(list?: Array<string | number>) {
-  return (list ?? []).map((entry) => String(entry).trim()).filter(Boolean);
+  return normalizeStringEntries(list);
 }
 
 function normalizeMatrixUser(raw?: string | null): string {
@@ -71,20 +76,17 @@ export function resolveMatrixAllowListMatch(params: {
   allowList: string[];
   userId?: string;
 }): MatrixAllowListMatch {
-  const allowList = params.allowList;
-  if (allowList.length === 0) {
-    return { allowed: false };
-  }
-  if (allowList.includes("*")) {
-    return { allowed: true, matchKey: "*", matchSource: "wildcard" };
-  }
+  const compiledAllowList = compileAllowlist(params.allowList);
   const userId = normalizeMatrixUser(params.userId);
   const candidates: Array<{ value?: string; source: MatrixAllowListSource }> = [
     { value: userId, source: "id" },
     { value: userId ? `matrix:${userId}` : "", source: "prefixed-id" },
     { value: userId ? `user:${userId}` : "", source: "prefixed-user" },
   ];
-  return resolveAllowlistMatchByCandidates({ allowList, candidates });
+  return resolveCompiledAllowlistMatch({
+    compiledAllowlist: compiledAllowList,
+    candidates,
+  });
 }
 
 export function resolveMatrixAllowListMatches(params: { allowList: string[]; userId?: string }) {

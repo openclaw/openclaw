@@ -1,6 +1,7 @@
 import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
+import { truncateSlackText } from "../../truncate.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
@@ -37,26 +38,7 @@ type SelectOption = {
   text?: { text?: string };
 };
 
-type InteractionSelectionFields = {
-  actionType?: string;
-  blockId?: string;
-  inputKind?: "text" | "number" | "email" | "url" | "rich_text";
-  value?: string;
-  selectedValues?: string[];
-  selectedUsers?: string[];
-  selectedChannels?: string[];
-  selectedConversations?: string[];
-  selectedLabels?: string[];
-  selectedDate?: string;
-  selectedTime?: string;
-  selectedDateTime?: number;
-  inputValue?: string;
-  inputNumber?: number;
-  inputEmail?: string;
-  inputUrl?: string;
-  richTextValue?: unknown;
-  richTextPreview?: string;
-};
+type InteractionSelectionFields = Partial<ModalInputSummary>;
 
 type InteractionSummary = InteractionSelectionFields & {
   interactionType?: "block_action" | "view_submission" | "view_closed";
@@ -72,17 +54,6 @@ type InteractionSummary = InteractionSelectionFields & {
   threadTs?: string;
 };
 
-function truncateInteractionString(
-  value: string,
-  max = SLACK_INTERACTION_STRING_MAX_CHARS,
-): string {
-  const trimmed = value.trim();
-  if (trimmed.length <= max) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, max - 1)}…`;
-}
-
 function sanitizeSlackInteractionPayloadValue(value: unknown, key?: string): unknown {
   if (value === undefined) {
     return undefined;
@@ -94,7 +65,7 @@ function sanitizeSlackInteractionPayloadValue(value: unknown, key?: string): unk
     return REDACTED_INTERACTION_VALUE;
   }
   if (typeof value === "string") {
-    return truncateInteractionString(value);
+    return truncateSlackText(value, SLACK_INTERACTION_STRING_MAX_CHARS);
   }
   if (Array.isArray(value)) {
     const sanitized = value
@@ -571,6 +542,7 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
       const sessionKey = ctx.resolveSlackSystemEventSessionKey({
         channelId: channelId,
         channelType: auth.channelType,
+        senderId: userId,
       });
 
       // Build context key - only include defined values to avoid "unknown" noise

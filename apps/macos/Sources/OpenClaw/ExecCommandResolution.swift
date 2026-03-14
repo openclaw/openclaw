@@ -1,6 +1,6 @@
 import Foundation
 
-struct ExecCommandResolution: Sendable {
+struct ExecCommandResolution {
     let rawExecutable: String
     let resolvedPath: String?
     let executableName: String
@@ -37,8 +37,7 @@ struct ExecCommandResolution: Sendable {
             var resolutions: [ExecCommandResolution] = []
             resolutions.reserveCapacity(segments.count)
             for segment in segments {
-                guard let token = self.parseFirstToken(segment),
-                      let resolution = self.resolveExecutable(rawExecutable: token, cwd: cwd, env: env)
+                guard let resolution = self.resolveShellSegmentExecutable(segment, cwd: cwd, env: env)
                 else {
                     return []
                 }
@@ -88,6 +87,20 @@ struct ExecCommandResolution: Sendable {
             cwd: cwd)
     }
 
+    private static func resolveShellSegmentExecutable(
+        _ segment: String,
+        cwd: String?,
+        env: [String: String]?) -> ExecCommandResolution?
+    {
+        let tokens = self.tokenizeShellWords(segment)
+        guard !tokens.isEmpty else { return nil }
+        let effective = ExecEnvInvocationUnwrapper.unwrapDispatchWrappersForResolution(tokens)
+        guard let raw = effective.first?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return nil
+        }
+        return self.resolveExecutable(rawExecutable: raw, cwd: cwd, env: env)
+    }
+
     private static func parseFirstToken(_ command: String) -> String? {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -100,6 +113,59 @@ struct ExecCommandResolution: Sendable {
             return String(rest)
         }
         return trimmed.split(whereSeparator: { $0.isWhitespace }).first.map(String.init)
+    }
+
+    private static func tokenizeShellWords(_ command: String) -> [String] {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+
+        var tokens: [String] = []
+        var current = ""
+        var inSingle = false
+        var inDouble = false
+        var escaped = false
+
+        func appendCurrent() {
+            guard !current.isEmpty else { return }
+            tokens.append(current)
+            current.removeAll(keepingCapacity: true)
+        }
+
+        for ch in trimmed {
+            if escaped {
+                current.append(ch)
+                escaped = false
+                continue
+            }
+
+            if ch == "\\", !inSingle {
+                escaped = true
+                continue
+            }
+
+            if ch == "'", !inDouble {
+                inSingle.toggle()
+                continue
+            }
+
+            if ch == "\"", !inSingle {
+                inDouble.toggle()
+                continue
+            }
+
+            if ch.isWhitespace, !inSingle, !inDouble {
+                appendCurrent()
+                continue
+            }
+
+            current.append(ch)
+        }
+
+        if escaped {
+            current.append("\\")
+        }
+        appendCurrent()
+        return tokens
     }
 
     private enum ShellTokenContext {
@@ -148,8 +214,14 @@ struct ExecCommandResolution: Sendable {
         while idx < chars.count {
             let ch = chars[idx]
             let next: Character? = idx + 1 < chars.count ? chars[idx + 1] : nil
+            let lookahead = self.nextShellSignificantCharacter(chars: chars, after: idx, inSingle: inSingle)
 
             if escaped {
+                if ch == "\n" {
+                    escaped = false
+                    idx += 1
+                    continue
+                }
                 current.append(ch)
                 escaped = false
                 idx += 1
@@ -157,6 +229,10 @@ struct ExecCommandResolution: Sendable {
             }
 
             if ch == "\\", !inSingle {
+                if next == "\n" {
+                    idx += 2
+                    continue
+                }
                 current.append(ch)
                 escaped = true
                 idx += 1
@@ -177,7 +253,7 @@ struct ExecCommandResolution: Sendable {
                 continue
             }
 
-            if !inSingle, self.shouldFailClosedForShell(ch: ch, next: next, inDouble: inDouble) {
+            if !inSingle, self.shouldFailClosedForShell(ch: ch, next: lookahead, inDouble: inDouble) {
                 // Fail closed on command/process substitution in allowlist mode,
                 // including command substitution inside double-quoted shell strings.
                 return nil
@@ -199,6 +275,25 @@ struct ExecCommandResolution: Sendable {
         if escaped || inSingle || inDouble { return nil }
         guard appendCurrent() else { return nil }
         return segments
+    }
+
+    private static func nextShellSignificantCharacter(
+        chars: [Character],
+        after idx: Int,
+        inSingle: Bool) -> Character?
+    {
+        guard !inSingle else {
+            return idx + 1 < chars.count ? chars[idx + 1] : nil
+        }
+        var cursor = idx + 1
+        while cursor < chars.count {
+            if chars[cursor] == "\\", cursor + 1 < chars.count, chars[cursor + 1] == "\n" {
+                cursor += 2
+                continue
+            }
+            return chars[cursor]
+        }
+        return nil
     }
 
     private static func shouldFailClosedForShell(ch: Character, next: Character?, inDouble: Bool) -> Bool {

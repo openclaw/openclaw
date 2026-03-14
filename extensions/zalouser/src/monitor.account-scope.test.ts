@@ -1,20 +1,11 @@
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/zalouser";
 import { describe, expect, it, vi } from "vitest";
+import "./monitor.send-mocks.js";
 import { __testing } from "./monitor.js";
+import { sendMessageZalouserMock } from "./monitor.send-mocks.js";
 import { setZalouserRuntime } from "./runtime.js";
+import { createZalouserRuntimeEnv } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
-
-const sendMessageZalouserMock = vi.hoisted(() => vi.fn(async () => {}));
-const sendTypingZalouserMock = vi.hoisted(() => vi.fn(async () => {}));
-const sendDeliveredZalouserMock = vi.hoisted(() => vi.fn(async () => {}));
-const sendSeenZalouserMock = vi.hoisted(() => vi.fn(async () => {}));
-
-vi.mock("./send.js", () => ({
-  sendMessageZalouser: sendMessageZalouserMock,
-  sendTypingZalouser: sendTypingZalouserMock,
-  sendDeliveredZalouser: sendDeliveredZalouserMock,
-  sendSeenZalouser: sendSeenZalouserMock,
-}));
 
 describe("zalouser monitor pairing account scoping", () => {
   it("scopes DM pairing-store reads and pairing requests to accountId", async () => {
@@ -90,19 +81,11 @@ describe("zalouser monitor pairing account scoping", () => {
       raw: { source: "test" },
     };
 
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: ((code: number): never => {
-        throw new Error(`exit ${code}`);
-      }) as RuntimeEnv["exit"],
-    };
-
     await __testing.processMessage({
       message,
       account,
       config,
-      runtime,
+      runtime: createZalouserRuntimeEnv(),
     });
 
     expect(readAllowFromStore).toHaveBeenCalledWith(

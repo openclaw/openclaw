@@ -4,7 +4,7 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { recordSessionMetaFromInbound, resolveStorePath } from "../../config/sessions.js";
-import { parseDiscordTarget } from "../../discord/targets.js";
+import { parseDiscordTarget, type DiscordTargetKind } from "../../discord/targets.js";
 import { parseIMessageTarget, normalizeIMessageHandle } from "../../imessage/targets.js";
 import { buildAgentSessionKey, type RoutePeer } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
@@ -239,7 +239,9 @@ async function resolveSlackSession(
 function resolveDiscordSession(
   params: ResolveOutboundSessionRouteParams,
 ): OutboundSessionRoute | null {
-  const parsed = parseDiscordTarget(params.target, { defaultKind: "channel" });
+  const parsed = parseDiscordTarget(params.target, {
+    defaultKind: resolveDiscordOutboundTargetKindHint(params),
+  });
   if (!parsed) {
     return null;
   }
@@ -272,6 +274,27 @@ function resolveDiscordSession(
     to: isDm ? `user:${parsed.id}` : `channel:${parsed.id}`,
     threadId: explicitThreadId ?? undefined,
   };
+}
+
+function resolveDiscordOutboundTargetKindHint(
+  params: ResolveOutboundSessionRouteParams,
+): DiscordTargetKind | undefined {
+  const resolvedKind = params.resolvedTarget?.kind;
+  if (resolvedKind === "user") {
+    return "user";
+  }
+  if (resolvedKind === "group" || resolvedKind === "channel") {
+    return "channel";
+  }
+
+  const target = params.target.trim();
+  if (/^channel:/i.test(target)) {
+    return "channel";
+  }
+  if (/^(user:|discord:|@|<@!?)/i.test(target)) {
+    return "user";
+  }
+  return undefined;
 }
 
 function resolveTelegramSession(
@@ -509,6 +532,21 @@ function resolveMatrixSession(
   };
 }
 
+function buildSimpleBaseSession(params: {
+  route: ResolveOutboundSessionRouteParams;
+  channel: string;
+  peer: RoutePeer;
+}) {
+  const baseSessionKey = buildBaseSessionKey({
+    cfg: params.route.cfg,
+    agentId: params.route.agentId,
+    channel: params.channel,
+    accountId: params.route.accountId,
+    peer: params.peer,
+  });
+  return { baseSessionKey, peer: params.peer };
+}
+
 function resolveMSTeamsSession(
   params: ResolveOutboundSessionRouteParams,
 ): OutboundSessionRoute | null {
@@ -560,7 +598,12 @@ function resolveMattermostSession(
   }
   trimmed = trimmed.replace(/^mattermost:/i, "").trim();
   const lower = trimmed.toLowerCase();
-  const isUser = lower.startsWith("user:") || trimmed.startsWith("@");
+  const resolvedKind = params.resolvedTarget?.kind;
+  const isUser =
+    resolvedKind === "user" ||
+    (resolvedKind !== "channel" &&
+      resolvedKind !== "group" &&
+      (lower.startsWith("user:") || trimmed.startsWith("@")));
   if (trimmed.startsWith("@")) {
     trimmed = trimmed.slice(1).trim();
   }
@@ -568,13 +611,10 @@ function resolveMattermostSession(
   if (!rawId) {
     return null;
   }
-  const peer: RoutePeer = { kind: isUser ? "direct" : "channel", id: rawId };
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
+  const { baseSessionKey, peer } = buildSimpleBaseSession({
+    route: params,
     channel: "mattermost",
-    accountId: params.accountId,
-    peer,
+    peer: { kind: isUser ? "direct" : "channel", id: rawId },
   });
   const threadId = normalizeThreadId(params.replyToId ?? params.threadId);
   const threadKeys = resolveThreadSessionKeys({

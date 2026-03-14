@@ -6,7 +6,6 @@ import { TELEGRAM_COMMAND_NAME_PATTERN } from "../config/telegram-custom-command
 import type { TelegramAccountConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
-import { createNativeCommandTestParams } from "./bot-native-commands.test-helpers.js";
 
 const { listSkillCommandsForAgents } = vi.hoisted(() => ({
   listSkillCommandsForAgents: vi.fn(() => []),
@@ -65,7 +64,7 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   const buildParams = (cfg: OpenClawConfig, accountId = "default") =>
-    createNativeCommandTestParams({
+    ({
       bot: {
         api: {
           setMyCommands: vi.fn().mockResolvedValue(undefined),
@@ -77,7 +76,28 @@ describe("registerTelegramNativeCommands", () => {
       runtime: {} as RuntimeEnv,
       accountId,
       telegramCfg: {} as TelegramAccountConfig,
-    });
+      allowFrom: [],
+      groupAllowFrom: [],
+      replyToMode: "off",
+      textLimit: 4000,
+      useAccessGroups: false,
+      nativeEnabled: true,
+      nativeSkillsEnabled: true,
+      nativeDisabledExplicit: false,
+      resolveGroupPolicy: () =>
+        ({
+          allowlistEnabled: false,
+          allowed: true,
+        }) as ReturnType<
+          Parameters<typeof registerTelegramNativeCommands>[0]["resolveGroupPolicy"]
+        >,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: undefined,
+        topicConfig: undefined,
+      }),
+      shouldSkipUpdate: () => false,
+      opts: { token: "token" },
+    }) satisfies Parameters<typeof registerTelegramNativeCommands>[0];
 
   it("scopes skill commands when account binding exists", () => {
     const cfg: OpenClawConfig = {
@@ -115,7 +135,7 @@ describe("registerTelegramNativeCommands", () => {
     });
   });
 
-  it("truncates Telegram command registration to 100 commands", () => {
+  it("truncates Telegram command registration to 100 commands", async () => {
     const cfg: OpenClawConfig = {
       commands: { native: false },
     };
@@ -141,10 +161,7 @@ describe("registerTelegramNativeCommands", () => {
       nativeSkillsEnabled: false,
     });
 
-    const registeredCommands = setMyCommands.mock.calls[0]?.[0] as Array<{
-      command: string;
-      description: string;
-    }>;
+    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
     expect(registeredCommands).toHaveLength(100);
     expect(registeredCommands).toEqual(customCommands.slice(0, 100));
     expect(runtimeLog).toHaveBeenCalledWith(

@@ -14,6 +14,7 @@ import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-
 import type { OpenClawConfig } from "../../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import type { DiscordAccountConfig } from "../../config/types.js";
+import { formatMention } from "../mentions.js";
 import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordSlug,
@@ -106,6 +107,7 @@ async function authorizeVoiceCommand(
 
   const guildInfo = resolveDiscordGuildEntry({
     guild: interaction.guild ?? undefined,
+    guildId: interaction.guild?.id ?? interaction.rawData.guild_id ?? undefined,
     guildEntries: params.discordConfig.guilds,
   });
 
@@ -139,7 +141,7 @@ async function authorizeVoiceCommand(
     channelConfig?.allowed === false
   ) {
     const channelId = channelOverride?.id ?? channel?.id;
-    const channelLabel = channelId ? `<#${channelId}>` : "This channel";
+    const channelLabel = channelId ? formatMention({ channelId }) : "This channel";
     return {
       ok: false,
       message: `${channelLabel} is not allowlisted for voice commands.`,
@@ -352,7 +354,9 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
         await interaction.reply({ content: "No active voice sessions.", ephemeral: true });
         return;
       }
-      const lines = sessions.map((entry) => `• <#${entry.channelId}> (guild ${entry.guildId})`);
+      const lines = sessions.map(
+        (entry) => `• ${formatMention({ channelId: entry.channelId })} (guild ${entry.guildId})`,
+      );
       await interaction.reply({ content: lines.join("\n"), ephemeral: true });
     }
   }
