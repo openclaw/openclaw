@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { extractInboundSenderLabel, stripInboundMetadata } from "./strip-inbound-meta.js";
+import {
+  extractInboundSenderLabel,
+  stripInboundMetadata,
+  stripLeadingInboundMetadata,
+} from "./strip-inbound-meta.js";
 
 const CONV_BLOCK = `Conversation info (untrusted metadata):
 \`\`\`json
@@ -117,6 +121,117 @@ Real user content`;
 name: test
 Hello from user`;
     expect(stripInboundMetadata(input)).toBe(input);
+  });
+});
+
+describe("stripInboundMetadata – session-recap blocks", () => {
+  it("strips a leading <session-recap> block", () => {
+    const input = `<session-recap>
+Previous conversation context here.
+</session-recap>
+
+Hello, how are you?`;
+    expect(stripInboundMetadata(input)).toBe("Hello, how are you?");
+  });
+
+  it("strips <session_recap> (underscore variant)", () => {
+    const input = `<session_recap>
+Some recap content.
+</session_recap>
+
+What is the weather?`;
+    expect(stripInboundMetadata(input)).toBe("What is the weather?");
+  });
+
+  it("strips session-recap with leading blank lines", () => {
+    const input = `
+<session-recap>
+Recap text.
+</session-recap>
+
+User message`;
+    expect(stripInboundMetadata(input)).toBe("User message");
+  });
+
+  it("strips session-recap followed by metadata blocks", () => {
+    const input = `<session-recap>
+Context from previous session.
+</session-recap>
+
+${CONV_BLOCK}
+
+${SENDER_BLOCK}
+
+Can you help me?`;
+    expect(stripInboundMetadata(input)).toBe("Can you help me?");
+  });
+
+  it("strips session-recap block with no user text after it", () => {
+    const input = `<session-recap>
+Only recap, nothing else.
+</session-recap>`;
+    expect(stripInboundMetadata(input)).toBe("");
+  });
+
+  it("does not strip session-recap that is not on its own line", () => {
+    const text = "Please see <session-recap> for details.";
+    expect(stripInboundMetadata(text)).toBe(text);
+  });
+
+  it("handles case-insensitive session-recap tags", () => {
+    const input = `<Session-Recap>
+Mixed case recap.
+</Session-Recap>
+
+User message`;
+    expect(stripInboundMetadata(input)).toBe("User message");
+  });
+
+  it("strips session-recap with attributes on open tag", () => {
+    const input = `<session-recap type="full">
+Full recap content.
+</session-recap>
+
+Hello!`;
+    expect(stripInboundMetadata(input)).toBe("Hello!");
+  });
+
+  it("handles multiline recap content", () => {
+    const input = `<session-recap>
+Line 1 of recap.
+Line 2 of recap.
+Line 3 of recap.
+</session-recap>
+
+Actual user message`;
+    expect(stripInboundMetadata(input)).toBe("Actual user message");
+  });
+});
+
+describe("stripLeadingInboundMetadata – session-recap blocks", () => {
+  it("strips a leading <session-recap> block", () => {
+    const input = `<session-recap>
+Previous context.
+</session-recap>
+
+Hello there!`;
+    expect(stripLeadingInboundMetadata(input)).toBe("Hello there!");
+  });
+
+  it("strips session-recap followed by metadata blocks", () => {
+    const input = `<session-recap>
+Recap.
+</session-recap>
+
+${CONV_BLOCK}
+
+User message`;
+    expect(stripLeadingInboundMetadata(input)).toBe("User message");
+  });
+
+  it("returns text unchanged when no session-recap or sentinel present", () => {
+    const text = "Just a normal message.";
+    expect(stripLeadingInboundMetadata(text)).toBe(text);
   });
 });
 
