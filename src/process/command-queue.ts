@@ -171,6 +171,9 @@ export function enqueueCommandInLane<T>(
   opts?: {
     warnAfterMs?: number;
     onWait?: (waitMs: number, queuedAhead: number) => void;
+    /** Fires when this specific task is enqueued and won't run immediately
+     * (lane is at capacity or has pending entries). */
+    onQueued?: () => void;
   },
 ): Promise<T> {
   if (queueState.gatewayDraining) {
@@ -180,6 +183,9 @@ export function enqueueCommandInLane<T>(
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
   return new Promise<T>((resolve, reject) => {
+    // Check before pushing: if all slots are occupied or entries are already
+    // queued, this task will have to wait behind them.
+    const willWait = state.activeTaskIds.size >= state.maxConcurrent || state.queue.length > 0;
     state.queue.push({
       task: () => task(),
       resolve: (value) => resolve(value as T),
@@ -189,6 +195,13 @@ export function enqueueCommandInLane<T>(
       onWait: opts?.onWait,
     });
     logLaneEnqueue(cleaned, state.queue.length + state.activeTaskIds.size);
+    if (willWait) {
+      try {
+        opts?.onQueued?.();
+      } catch (err) {
+        diag.error(`lane onQueued callback failed: lane=${cleaned} error="${String(err)}"`);
+      }
+    }
     drainLane(cleaned);
   });
 }
@@ -198,9 +211,24 @@ export function enqueueCommand<T>(
   opts?: {
     warnAfterMs?: number;
     onWait?: (waitMs: number, queuedAhead: number) => void;
+    onQueued?: () => void;
   },
 ): Promise<T> {
   return enqueueCommandInLane(CommandLane.Main, task, opts);
+}
+
+/**
+ * Returns true when a new task enqueued on this lane would have to wait
+ * before executing — either because tasks are already pending in the queue,
+ * or because all concurrency slots are occupied (saturated).
+ */
+export function isLaneBacklogged(lane: string = CommandLane.Main): boolean {
+  const resolved = lane.trim() || CommandLane.Main;
+  const state = queueState.lanes.get(resolved);
+  if (!state) {
+    return false;
+  }
+  return state.queue.length > 0 || state.activeTaskIds.size >= state.maxConcurrent;
 }
 
 export function getQueueSize(lane: string = CommandLane.Main) {

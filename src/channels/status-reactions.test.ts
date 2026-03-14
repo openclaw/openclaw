@@ -222,6 +222,72 @@ describe("createStatusReactionController", () => {
     });
   }
 
+  it("should debounce setWaiting and emit waiting emoji", async () => {
+    const { calls, controller } = createEnabledController();
+
+    void controller.setWaiting();
+
+    // Before debounce period
+    await vi.advanceTimersByTimeAsync(500);
+    expect(calls).toHaveLength(0);
+
+    // After debounce period
+    await vi.advanceTimersByTimeAsync(300);
+    expect(calls).toContainEqual({ method: "set", emoji: DEFAULT_EMOJIS.waiting });
+  });
+
+  it("should transition from setWaiting to setThinking (thinking overrides waiting)", async () => {
+    const { calls, controller } = createEnabledController();
+
+    void controller.setWaiting();
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+
+    // Waiting emoji should be set
+    expect(calls).toContainEqual({ method: "set", emoji: DEFAULT_EMOJIS.waiting });
+    const callsAfterWaiting = calls.length;
+
+    void controller.setThinking();
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+
+    // Thinking emoji should replace waiting
+    const setCalls = calls.slice(callsAfterWaiting).filter((c) => c.method === "set");
+    expect(setCalls).toContainEqual({ method: "set", emoji: DEFAULT_EMOJIS.thinking });
+  });
+
+  it("should not trigger stall timers while in waiting state", async () => {
+    const { calls, controller } = createEnabledController();
+
+    // Simulate real flow: setQueued (arms stall timers) then setWaiting (should clear them).
+    // Use advanceTimersByTimeAsync(0) to flush the immediate enqueue without firing stall timers.
+    void controller.setQueued();
+    await vi.advanceTimersByTimeAsync(0);
+
+    void controller.setWaiting();
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+
+    // Waiting emoji should be set
+    expect(calls).toContainEqual({ method: "set", emoji: DEFAULT_EMOJIS.waiting });
+
+    // Advance past stallSoftMs — stall should NOT fire during intentional queue-wait,
+    // even though setQueued() armed stall timers before setWaiting() cleared them.
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.stallSoftMs + 1000);
+
+    const stallCalls = calls.filter((c) => c.emoji === DEFAULT_EMOJIS.stallSoft);
+    expect(stallCalls).toHaveLength(0);
+  });
+
+  it("should ignore setWaiting after terminal states (done/error)", async () => {
+    const { calls, controller } = createEnabledController();
+
+    await controller.setDone();
+    const callsAfterDone = calls.length;
+
+    void controller.setWaiting();
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs + 100);
+
+    expect(calls.length).toBe(callsAfterDone);
+  });
+
   it("should only fire last state when rapidly changing (debounce)", async () => {
     const { calls, controller } = createEnabledController();
 
@@ -467,6 +533,7 @@ describe("constants", () => {
   it("should export DEFAULT_EMOJIS with all required keys", () => {
     const emojiKeys = [
       "queued",
+      "waiting",
       "thinking",
       "compacting",
       "tool",

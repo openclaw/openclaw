@@ -70,6 +70,8 @@ export type GetReplyOptions = {
   hasRepliedRef?: { value: boolean };
   /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
   timeoutOverrideSeconds?: number;
+  /** Fires when this specific message's task is enqueued and won't run immediately. */
+  onQueued?: () => void;
 };
 
 export type ReplyPayload = {
