@@ -9,7 +9,7 @@ import {
   shouldLogSubsystemToConsole,
 } from "./console.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
-import { getChildLogger, isFileLogLevelEnabled } from "./logger.js";
+import { formatLocalDate, getChildLogger, isFileLogLevelEnabled } from "./logger.js";
 import { loggingState } from "./state.js";
 
 type LogObj = { date?: Date } & Record<string, unknown>;
@@ -307,9 +307,12 @@ function logToFile(
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   let fileLogger: TsLogger<LogObj> | null = null;
+  let fileLoggerDate: string = "";
   const getFileLogger = () => {
-    if (!fileLogger) {
+    const today = formatLocalDate(new Date());
+    if (!fileLogger || fileLoggerDate !== today) {
       fileLogger = getChildLogger({ subsystem });
+      fileLoggerDate = today;
     }
     return fileLogger;
   };
