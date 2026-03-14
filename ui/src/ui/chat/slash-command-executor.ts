@@ -42,11 +42,11 @@ export type SlashCommandResult = {
 function formatModelRef(entry: Pick<ModelCatalogEntry, "id" | "provider">): string {
   const id = String(entry.id ?? "").trim();
   const provider = String(entry.provider ?? "").trim();
-  if (!provider) {
+  if (!provider || id.includes("/")) {
     return id;
   }
   if (!id) {
-    return provider;
+    return "";
   }
   return `${provider}/${id}`;
 }
@@ -160,7 +160,10 @@ async function executeModel(
         client.request<{ models: ModelCatalogEntry[] }>("models.list", {}),
       ]);
       const session = resolveCurrentSession(sessions, sessionKey);
-      const model = session?.model || sessions?.defaults?.model || "default";
+      const rawModel = session?.model || sessions?.defaults?.model;
+      const model = rawModel
+        ? formatModelRef({ provider: session?.modelProvider ?? "", id: rawModel })
+        : "default";
       const available =
         models?.models?.map((entry: ModelCatalogEntry) => formatModelRef(entry)).filter(Boolean) ??
         [];

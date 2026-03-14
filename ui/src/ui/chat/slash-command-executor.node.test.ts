@@ -238,6 +238,7 @@ describe("executeSlashCommand directives", () => {
           defaults: { model: "default-model" },
           sessions: [
             row("agent:main:main", {
+              modelProvider: "openai",
               model: "gpt-4.1-mini",
             }),
           ],
@@ -262,10 +263,41 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "**Current model:** `gpt-4.1-mini`\n**Available:** `openai/gpt-4.1-mini`, `openai/gpt-4.1`",
+      "**Current model:** `openai/gpt-4.1-mini`\n**Available:** `openai/gpt-4.1-mini`, `openai/gpt-4.1`",
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
+  });
+
+  it("filters malformed available entries that are missing a model id", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          defaults: { model: "openai/gpt-4.1-mini" },
+          sessions: [],
+        };
+      }
+      if (method === "models.list") {
+        return {
+          models: [
+            { id: "", provider: "openai" },
+            { id: "gpt-4.1-mini", provider: "openai" },
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "",
+    );
+
+    expect(result.content).toBe(
+      "**Current model:** `openai/gpt-4.1-mini`\n**Available:** `openai/gpt-4.1-mini`",
+    );
   });
 
   it("expands a unique bare /model id to provider/model before patching", async () => {
