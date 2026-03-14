@@ -393,17 +393,17 @@ export async function runPreparedReply(
         beforeAgentRunContext,
       );
       if (beforeAgentRunResult?.skip) {
-        restorePeekedSystemEvents(previewedSystemEvents.reservation);
+        restorePeekedSystemEvents(previewedSystemEvents);
         typing.cleanup();
         return undefined;
       }
     } catch (error) {
-      restorePeekedSystemEvents(previewedSystemEvents.reservation);
+      restorePeekedSystemEvents(previewedSystemEvents);
       throw error;
     }
   }
 
-  commitPeekedSystemEvents(previewedSystemEvents.reservation);
+  commitPeekedSystemEvents(previewedSystemEvents);
   await commitSessionHintEffects({
     abortedLastRun,
     sessionEntry,

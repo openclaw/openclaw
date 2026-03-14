@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  commitPeekedSystemEvents,
   drainFormattedSystemEvents,
   peekFormattedSystemEvents,
+  restorePeekedSystemEvents,
 } from "../auto-reply/reply/session-updates.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
@@ -240,6 +242,32 @@ describe("system events (session routing)", () => {
     ).rejects.toThrow("summary failed");
 
     expect(peekSystemEvents(key)).toEqual(["First event"]);
+  });
+
+  it("restores first-turn main-session summaries when a peeked turn is skipped", async () => {
+    vi.mocked(buildChannelSummary).mockResolvedValueOnce(["Slack (configured)"]);
+
+    const preview = await peekFormattedSystemEvents({
+      cfg,
+      sessionKey: mainKey,
+      isMainSession: true,
+      isNewSession: true,
+    });
+
+    expect(preview.reservation).toBeUndefined();
+    expect(preview.text).toContain("System: Slack (configured)");
+
+    restorePeekedSystemEvents(preview);
+
+    const replayed = await peekFormattedSystemEvents({
+      cfg,
+      sessionKey: mainKey,
+      isMainSession: true,
+      isNewSession: false,
+    });
+
+    expect(replayed.text).toContain("System: Slack (configured)");
+    commitPeekedSystemEvents(replayed);
   });
 });
 

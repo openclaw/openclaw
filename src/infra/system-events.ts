@@ -8,6 +8,11 @@ export type SystemEventReservation = {
   reservationId: string;
   entries: SystemEvent[];
 };
+export type SystemEventSummaryReservation = {
+  sessionKey: string;
+  reservationId: string;
+  lines: string[];
+};
 
 const MAX_EVENTS = 20;
 let nextReservationId = 0;
@@ -20,6 +25,8 @@ type SessionQueue = {
 };
 
 const queues = new Map<string, SessionQueue>();
+const pendingSummaries = new Map<string, string[]>();
+const summaryReservations = new Map<string, Map<string, string[]>>();
 
 type SystemEventOptions = {
   sessionKey: string;
@@ -107,6 +114,40 @@ function maybeDeleteSessionQueue(key: string, entry: SessionQueue) {
   }
 }
 
+function getOrCreateSummaryReservationBucket(sessionKey: string) {
+  const existing = summaryReservations.get(sessionKey);
+  if (existing) {
+    return existing;
+  }
+  const created = new Map<string, string[]>();
+  summaryReservations.set(sessionKey, created);
+  return created;
+}
+
+function maybeDeleteSummaryReservationBucket(sessionKey: string, bucket: Map<string, string[]>) {
+  if (bucket.size === 0) {
+    summaryReservations.delete(sessionKey);
+  }
+}
+
+function createSummaryReservation(
+  sessionKey: string,
+  lines: string[],
+): SystemEventSummaryReservation | undefined {
+  if (lines.length === 0) {
+    return undefined;
+  }
+  const stored = lines.slice();
+  const reservationId = `s${nextReservationId++}`;
+  const bucket = getOrCreateSummaryReservationBucket(sessionKey);
+  bucket.set(reservationId, stored);
+  return {
+    sessionKey,
+    reservationId,
+    lines: stored.slice(),
+  };
+}
+
 export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
   const key = requireSessionKey(sessionKey);
   const entry = queues.get(key);
@@ -140,6 +181,26 @@ export function reserveSystemEventEntries(sessionKey: string): SystemEventReserv
   };
 }
 
+export function reserveSystemEventSummary(
+  sessionKey: string,
+): SystemEventSummaryReservation | undefined {
+  const key = requireSessionKey(sessionKey);
+  const lines = pendingSummaries.get(key);
+  if (!lines || lines.length === 0) {
+    return undefined;
+  }
+  pendingSummaries.delete(key);
+  return createSummaryReservation(key, lines);
+}
+
+export function createSystemEventSummaryReservation(
+  sessionKey: string,
+  lines: string[],
+): SystemEventSummaryReservation | undefined {
+  const key = requireSessionKey(sessionKey);
+  return createSummaryReservation(key, lines);
+}
+
 export function commitSystemEventReservation(
   reservation: SystemEventReservation | undefined,
 ): SystemEvent[] {
@@ -158,6 +219,26 @@ export function commitSystemEventReservation(
   entry.reservations.delete(reservation.reservationId);
   maybeDeleteSessionQueue(key, entry);
   return reserved.map((event) => ({ ...event }));
+}
+
+export function commitSystemEventSummaryReservation(
+  reservation: SystemEventSummaryReservation | undefined,
+): string[] {
+  if (!reservation) {
+    return [];
+  }
+  const key = requireSessionKey(reservation.sessionKey);
+  const bucket = summaryReservations.get(key);
+  if (!bucket) {
+    return [];
+  }
+  const lines = bucket.get(reservation.reservationId);
+  if (!lines) {
+    return [];
+  }
+  bucket.delete(reservation.reservationId);
+  maybeDeleteSummaryReservationBucket(key, bucket);
+  return lines.slice();
 }
 
 export function restoreSystemEventReservation(
@@ -187,6 +268,27 @@ export function restoreSystemEventReservation(
   entry.queue.unshift(...reserved);
   enforceQueuedEventLimit(entry);
   return reserved.map((event) => ({ ...event }));
+}
+
+export function restoreSystemEventSummaryReservation(
+  reservation: SystemEventSummaryReservation | undefined,
+): string[] {
+  if (!reservation) {
+    return [];
+  }
+  const key = requireSessionKey(reservation.sessionKey);
+  const bucket = summaryReservations.get(key);
+  if (!bucket) {
+    return [];
+  }
+  const lines = bucket?.get(reservation.reservationId);
+  if (!lines) {
+    return [];
+  }
+  bucket.delete(reservation.reservationId);
+  maybeDeleteSummaryReservationBucket(key, bucket);
+  pendingSummaries.set(key, lines.slice());
+  return lines.slice();
 }
 
 export function consumeSystemEventEntries(
@@ -240,5 +342,7 @@ export function hasSystemEvents(sessionKey: string) {
 
 export function resetSystemEventsForTest() {
   queues.clear();
+  pendingSummaries.clear();
+  summaryReservations.clear();
   nextReservationId = 0;
 }
