@@ -12,6 +12,8 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("Recover context when needed");
     expect(prompt).toContain("sessions_history");
     expect(prompt).toContain("requester session");
+    expect(prompt).toContain("- **Stay focused**");
+    expect(prompt).not.toContain("1. **Stay focused**");
   });
 
   it("omits requester-session recovery guidance when no requester session is provided", () => {
@@ -22,5 +24,7 @@ describe("buildSubagentSystemPrompt", () => {
 
     expect(prompt).not.toContain("Recover context when needed");
     expect(prompt).not.toContain("sessions_history");
+    expect(prompt).toContain("- **Stay focused**");
+    expect(prompt).not.toContain("1. **Stay focused**");
   });
 });

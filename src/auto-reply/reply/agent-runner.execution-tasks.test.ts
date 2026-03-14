@@ -245,7 +245,32 @@ describe("runReplyAgent execution-task interim retry", () => {
 
     expect(result).toMatchObject({
       isError: true,
-      text: expect.stringContaining("starting the follow-up run failed: gateway unavailable"),
+      text: expect.stringContaining("Reason: gateway unavailable."),
+    });
+  });
+
+  it("redacts internal spawn errors from the user-facing blocker reply", async () => {
+    listSubagentRunsForRequesterMock.mockReset().mockReturnValue([]);
+    runEmbeddedPiAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "on it" }],
+        meta: {},
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "working on it, it'll auto-announce when done" }],
+        meta: {},
+      });
+    spawnSubagentRunMock.mockResolvedValueOnce({
+      status: "error",
+      error: "HTTP 500 at https://example.com/internal/token from C:\\temp\\trace.log",
+    });
+
+    const result = await createRun();
+
+    expect(result).toMatchObject({
+      isError: true,
+      text:
+        "I could not keep the executor running in the background because starting the follow-up run failed. Please retry the task.",
     });
   });
 });

@@ -73,17 +73,46 @@ function payloadsContainStructuredContent(payloads: ReplyPayload[]): boolean {
   );
 }
 
-function hasActiveSubagentRuns(sessionKey: string): boolean {
-  return listSubagentRunsForRequester(sessionKey).some(
-    (entry) => typeof entry.endedAt !== "number",
-  );
+function inspectSubagentRuns(sessionKey: string, runStartedAt: number) {
+  const runs = listSubagentRunsForRequester(sessionKey);
+  return {
+    hasActiveRuns: runs.some((entry) => typeof entry.endedAt !== "number"),
+    hasStartedSinceRun: runs.some((entry) => {
+      const startedAt = typeof entry.startedAt === "number" ? entry.startedAt : entry.createdAt;
+      return typeof startedAt === "number" && startedAt >= runStartedAt;
+    }),
+  };
 }
 
-function hasSubagentsStartedSinceRun(sessionKey: string, runStartedAt: number): boolean {
-  return listSubagentRunsForRequester(sessionKey).some((entry) => {
-    const startedAt = typeof entry.startedAt === "number" ? entry.startedAt : entry.createdAt;
-    return typeof startedAt === "number" && startedAt >= runStartedAt;
-  });
+function sanitizeAutoSpawnFailureReason(error: string): string | undefined {
+  const normalized = error.trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return undefined;
+  }
+  const lower = normalized.toLowerCase();
+  const looksInternal =
+    normalized.length > 120 ||
+    lower.includes("token") ||
+    lower.includes("api key") ||
+    lower.includes("stack") ||
+    lower.includes("trace") ||
+    lower.includes("http://") ||
+    lower.includes("https://") ||
+    normalized.includes("\\") ||
+    normalized.includes("/");
+  if (looksInternal) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function buildAutoSpawnFailureReply(error: string): ReplyPayload {
+  const reason = sanitizeAutoSpawnFailureReason(error);
+  const suffix = reason ? ` Reason: ${reason}.` : "";
+  return {
+    text: `I could not keep the executor running in the background because starting the follow-up run failed.${suffix} Please retry the task.`,
+    isError: true,
+  };
 }
 
 function mergeDirectlySentBlockKeys(
@@ -131,14 +160,6 @@ function buildExecutionHandoffTask(params: {
     "Keep working until you have a concrete result or a clear blocker to report back.",
   ];
   return parts.filter((part): part is string => Boolean(part)).join("\n");
-}
-
-function buildAutoSpawnFailureReply(error: string): ReplyPayload {
-  const reason = error.trim() || "unknown error";
-  return {
-    text: `I could not keep the executor running in the background because starting the follow-up run failed: ${reason}. Please retry the task.`,
-    isError: true,
-  };
 }
 
 function buildAutoSpawnAcceptedReply(): ReplyPayload {
@@ -445,13 +466,14 @@ export async function runReplyAgent(params: {
       const interimPayloads = runResult.payloads ?? [];
       const interimText = pickLastNonEmptyTextFromPayloads(interimPayloads)?.trim() ?? "";
       const hasRenderableInterimError = interimPayloads.some((payload) => payload?.isError === true);
+      const runSnapshot = inspectSubagentRuns(sessionKey, runStartedAt);
       const shouldRetryInterimAck =
         !runResult.meta.error &&
         runResult.didSendViaMessagingTool !== true &&
         !payloadsContainStructuredContent(interimPayloads) &&
         !hasRenderableInterimError &&
-        !hasActiveSubagentRuns(sessionKey) &&
-        !hasSubagentsStartedSinceRun(sessionKey, runStartedAt) &&
+        !runSnapshot.hasActiveRuns &&
+        !runSnapshot.hasStartedSinceRun &&
         isLikelyInterimExecutionMessage(interimText);
 
       if (shouldRetryInterimAck) {
@@ -497,13 +519,14 @@ export async function runReplyAgent(params: {
       const postContinuationPayloads = runResult.payloads ?? [];
       const postContinuationText =
         pickLastNonEmptyTextFromPayloads(postContinuationPayloads)?.trim() ?? "";
+      const postContinuationSnapshot = inspectSubagentRuns(sessionKey, runStartedAt);
       const shouldAutoSpawnBackgroundRun =
         !runResult.meta.error &&
         runResult.didSendViaMessagingTool !== true &&
         !payloadsContainStructuredContent(postContinuationPayloads) &&
         !postContinuationPayloads.some((payload) => payload?.isError === true) &&
-        !hasActiveSubagentRuns(sessionKey) &&
-        !hasSubagentsStartedSinceRun(sessionKey, runStartedAt) &&
+        !postContinuationSnapshot.hasActiveRuns &&
+        !postContinuationSnapshot.hasStartedSinceRun &&
         isLikelyInterimExecutionMessage(postContinuationText);
 
       if (shouldAutoSpawnBackgroundRun) {
