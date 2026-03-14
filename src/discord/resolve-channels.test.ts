@@ -301,40 +301,51 @@ describe("resolveDiscordChannelAllowlist", () => {
     expect(res[0]?.channelId).toBeUndefined();
   });
 
-  it("bare numeric guild id is misrouted as channel id (regression)", async () => {
-    // Demonstrates why provider.ts must prefix guild-only entries with "guild:"
+  it("resolves bare numeric guild id as a guild before channel lookup", async () => {
     // In reality, Discord returns 404 when a guild ID is sent to /channels/<guildId>,
-    // which causes fetchDiscord to throw and the entire resolver to crash.
+    // so bare numeric server IDs must resolve against the guild list first.
     const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
       const url = urlToString(input);
       if (url.endsWith("/users/@me/guilds")) {
         return jsonResponse([{ id: "999", name: "My Server" }]);
       }
-      // Guild ID hitting /channels/ returns 404 — just like real Discord
       if (url.includes("/channels/")) {
-        return new Response(JSON.stringify({ message: "Unknown Channel" }), { status: 404 });
+        throw new Error("guild id was incorrectly routed to /channels/");
       }
       return new Response("not found", { status: 404 });
     });
 
-    // Without the guild: prefix, a bare numeric string hits /channels/999 → 404 → unresolved
     const res = await resolveDiscordChannelAllowlist({
       token: "test",
       entries: ["999"],
       fetcher,
     });
-    expect(res[0]?.resolved).toBe(false);
-    expect(res[0]?.channelId).toBe("999");
-    expect(res[0]?.guildId).toBeUndefined();
 
-    // With the guild: prefix, it correctly resolves as a guild (never hits /channels/)
-    const res2 = await resolveDiscordChannelAllowlist({
+    expect(res[0]?.resolved).toBe(true);
+    expect(res[0]?.guildId).toBe("999");
+    expect(res[0]?.channelId).toBeUndefined();
+  });
+
+  it("falls back to channel lookup for bare numeric ids that are not guild ids", async () => {
+    const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = urlToString(input);
+      if (url.endsWith("/users/@me/guilds")) {
+        return jsonResponse([{ id: "111", name: "Guild One" }]);
+      }
+      if (url.endsWith("/channels/999")) {
+        return jsonResponse({ id: "999", name: "general", guild_id: "111", type: 0 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const res = await resolveDiscordChannelAllowlist({
       token: "test",
-      entries: ["guild:999"],
+      entries: ["999"],
       fetcher,
     });
-    expect(res2[0]?.resolved).toBe(true);
-    expect(res2[0]?.guildId).toBe("999");
-    expect(res2[0]?.channelId).toBeUndefined();
+
+    expect(res[0]?.resolved).toBe(true);
+    expect(res[0]?.guildId).toBe("111");
+    expect(res[0]?.channelId).toBe("999");
   });
 });

@@ -40,6 +40,7 @@ function parseDiscordChannelInput(raw: string): {
   channelId?: string;
   guildId?: string;
   guildOnly?: boolean;
+  bareNumericId?: string;
 } {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -49,13 +50,17 @@ function parseDiscordChannelInput(raw: string): {
   if (mention) {
     return { channelId: mention[1] };
   }
-  const channelPrefix = trimmed.match(/^(?:channel:|discord:)?(\d+)$/i);
+  const channelPrefix = trimmed.match(/^(?:channel:|discord:)(\d+)$/i);
   if (channelPrefix) {
     return { channelId: channelPrefix[1] };
   }
-  const guildPrefix = trimmed.match(/^(?:guild:|server:)?(\d+)$/i);
-  if (guildPrefix && !trimmed.includes("/") && !trimmed.includes("#")) {
+  const guildPrefix = trimmed.match(/^(?:guild:|server:)(\d+)$/i);
+  if (guildPrefix) {
     return { guildId: guildPrefix[1], guildOnly: true };
+  }
+  const bareNumeric = trimmed.match(/^(\d+)$/);
+  if (bareNumeric) {
+    return { bareNumericId: bareNumeric[1] };
   }
   const split = trimmed.includes("/") ? trimmed.split("/") : trimmed.split("#");
   if (split.length >= 2) {
@@ -202,8 +207,22 @@ export async function resolveDiscordChannelAllowlist(params: {
       continue;
     }
 
-    if (parsed.channelId) {
-      const channelId = parsed.channelId;
+    if (parsed.bareNumericId) {
+      const guild = guilds.find((entry) => entry.id === parsed.bareNumericId);
+      if (guild) {
+        results.push({
+          input,
+          resolved: true,
+          guildId: guild.id,
+          guildName: guild.name,
+        });
+        continue;
+      }
+    }
+
+    const lookupChannelId = parsed.channelId ?? parsed.bareNumericId;
+    if (lookupChannelId) {
+      const channelId = lookupChannelId;
       const result = await fetchChannel(token, fetcher, channelId);
       if (result.status === "found") {
         const channel = result.channel;
