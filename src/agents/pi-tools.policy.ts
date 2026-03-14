@@ -1,7 +1,11 @@
 import { getChannelDock } from "../channels/dock.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveChannelGroupToolsPolicy, resolveToolsBySender } from "../config/group-policy.js";
+import {
+  resolveChannelGroupPolicy,
+  resolveChannelGroupToolsPolicy,
+  resolveToolsBySender,
+} from "../config/group-policy.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
@@ -711,6 +715,25 @@ export function resolveGroupToolPolicy(params: {
     }
     return undefined;
   };
+  const preferredGroupCandidate = params.groupId
+    ? {
+        groupId: params.groupId,
+        accountId: params.accountId ?? sessionContext.accountId ?? spawnedContext.accountId,
+        alternateDirectId: undefined,
+      }
+    : sessionContext.groupId
+      ? {
+          groupId: sessionContext.groupId,
+          accountId: params.accountId ?? sessionContext.accountId ?? spawnedContext.accountId,
+          alternateDirectId: sessionContext.alternate?.directId,
+        }
+      : spawnedContext.groupId
+        ? {
+            groupId: spawnedContext.groupId,
+            accountId: params.accountId ?? spawnedContext.accountId ?? sessionContext.accountId,
+            alternateDirectId: spawnedContext.alternate?.directId,
+          }
+        : undefined;
   const preferredScopeKind = params.groupId
     ? "group"
     : sessionContext.directId
@@ -727,7 +750,20 @@ export function resolveGroupToolPolicy(params: {
     return directResolution.policy;
   }
   if (preferredScopeKind === "group") {
-    return resolveFirstGroupPolicy();
+    const groupPolicy = resolveFirstGroupPolicy();
+    if (!preferredGroupCandidate?.alternateDirectId) {
+      return groupPolicy;
+    }
+    const { groupConfig } = resolveChannelGroupPolicy({
+      cfg: config,
+      channel,
+      groupId: preferredGroupCandidate.groupId,
+      accountId: preferredGroupCandidate.accountId,
+    });
+    if (groupConfig) {
+      return groupPolicy;
+    }
+    return directResolution.policy ?? groupPolicy;
   }
   const groupPolicy = resolveFirstGroupPolicy();
   if (groupPolicy) {
