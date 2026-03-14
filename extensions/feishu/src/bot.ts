@@ -306,6 +306,69 @@ function resolveFeishuGroupSession(params: {
   };
 }
 
+function parseInteractiveCardContent(parsed: unknown): string {
+  if (!parsed || typeof parsed !== "object") {
+    return "[Interactive Card]";
+  }
+
+  // Feishu interactive cards exist in multiple schemas:
+  // - Schema 1: { header, elements }
+  // - Schema 2: { header?, body: { elements } }
+  const card = parsed as {
+    header?: { title?: { content?: unknown } };
+    elements?: unknown;
+    body?: { elements?: unknown };
+  };
+
+  const texts: string[] = [];
+
+  const headerTitle = card.header?.title?.content;
+  if (typeof headerTitle === "string" && headerTitle.trim()) {
+    texts.push(headerTitle.trim());
+  }
+
+  const elements = Array.isArray(card.elements)
+    ? card.elements
+    : Array.isArray(card.body?.elements)
+      ? card.body?.elements
+      : null;
+
+  if (elements) {
+    for (const element of elements) {
+      if (!element || typeof element !== "object") continue;
+      const item = element as {
+        tag?: string;
+        content?: unknown;
+        text?: { content?: unknown };
+        // Some element types carry labels in nested "text" objects.
+        title?: { content?: unknown };
+      };
+
+      if (item.tag === "div") {
+        const divText = item.text?.content;
+        if (typeof divText === "string" && divText.trim()) {
+          texts.push(divText.trim());
+        }
+        continue;
+      }
+
+      if (item.tag === "markdown") {
+        if (typeof item.content === "string" && item.content.trim()) {
+          texts.push(item.content.trim());
+        }
+        continue;
+      }
+
+      const maybeTitle = item.title?.content;
+      if (typeof maybeTitle === "string" && maybeTitle.trim()) {
+        texts.push(maybeTitle.trim());
+      }
+    }
+  }
+
+  return texts.join("\n").trim() || "[Interactive Card]";
+}
+
 function parseMessageContent(content: string, messageType: string): string {
   if (messageType === "post") {
     // Extract text content from rich text post
@@ -317,6 +380,10 @@ function parseMessageContent(content: string, messageType: string): string {
     const parsed = JSON.parse(content);
     if (messageType === "text") {
       return parsed.text || "";
+    }
+    if (messageType === "interactive" || messageType === "interactive_card") {
+      // Convert interactive card JSON into readable text.
+      return parseInteractiveCardContent(parsed);
     }
     if (messageType === "share_chat") {
       // Preserve available summary text for merged/forwarded chat messages.
