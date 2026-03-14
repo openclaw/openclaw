@@ -266,6 +266,10 @@ Learn more about session keys at [/concepts/session](/concepts/session).
 - `--require-existing`: fail if the session key/label does not exist.
 - `--reset-session`: reset the session key before first use.
 - `--no-prefix-cwd`: do not prefix prompts with the working directory.
+- `--provenance <mode>`: ACP ingress provenance mode. Controls whether session metadata is attached to prompts forwarded through the bridge. Values:
+  - `off` (default): no provenance metadata is added.
+  - `meta`: attaches structured provenance metadata (origin session ID, source channel, source tool) to each forwarded user message. Useful for downstream audit or routing logic.
+  - `meta+receipt`: like `meta`, plus injects a visible `[Source Receipt]` block into the prompt text with bridge name, origin host, working directory, session ID, and session key.
 - `--verbose, -v`: verbose logging to stderr.
 
 Security note:
