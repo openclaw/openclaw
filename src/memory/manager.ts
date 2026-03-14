@@ -24,6 +24,7 @@ import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import { extractKeywords } from "./query-expansion.js";
 import { SHARED_AGENT_ID } from "./shared-constants.js";
+import { requireNodeSqlite } from "./sqlite.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
@@ -423,14 +424,22 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return agentResults.slice(0, maxResults);
     }
 
-    const sharedResults = await shared.search(query, { maxResults, minScore }).catch(() => []);
+    // Fetch extra candidates so weighting can promote hits that would otherwise be cut off
+    const maxWeightedSharedPaths = Math.max(...this.settings.sharedPaths.map((sp) => sp.weight), 1);
+    const sharedFetchLimit = maxWeightedSharedPaths > 1 ? maxResults * 2 : maxResults;
+    const sharedMinScore =
+      maxWeightedSharedPaths > 1 ? minScore / maxWeightedSharedPaths : minScore;
+    const sharedResults = await shared
+      .search(query, { maxResults: sharedFetchLimit, minScore: sharedMinScore })
+      .catch(() => []);
     if (sharedResults.length === 0) {
       return agentResults.slice(0, maxResults);
     }
 
-    // Apply per-path weights: match each result's path to the shared path entry it belongs to
+    // Resolve shared result paths to absolute so they work from any agent's workspace
+    const sharedWorkspaceDir = shared.status().workspaceDir ?? "";
     const tagged = sharedResults.map((r) => {
-      const absPath = path.isAbsolute(r.path) ? r.path : path.resolve(this.workspaceDir, r.path);
+      const absPath = path.isAbsolute(r.path) ? r.path : path.resolve(sharedWorkspaceDir, r.path);
       let weight = 1.0;
       for (const sp of this.settings.sharedPaths) {
         if (absPath === sp.path || absPath.startsWith(`${sp.path}${path.sep}`)) {
@@ -440,6 +449,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       }
       return {
         ...r,
+        path: absPath,
         score: r.score * weight,
         origin: "shared" as const,
       };
@@ -874,16 +884,35 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
                 paths: this.settings.sharedPaths,
               };
             }
-            // Report configured shared paths even before lazy init
+            // Read counts directly from the shared sqlite so status is accurate before lazy init
+            const counts = this.readSharedStoreCounts();
             return {
               dbPath: this.settings.sharedStorePath,
-              files: 0,
-              chunks: 0,
+              files: counts.files,
+              chunks: counts.chunks,
               paths: this.settings.sharedPaths,
             };
           })()
         : undefined,
     };
+  }
+
+  /** Read file/chunk counts directly from the shared sqlite without initializing the full manager. */
+  private readSharedStoreCounts(): { files: number; chunks: number } {
+    try {
+      const { DatabaseSync } = requireNodeSqlite();
+      const db = new DatabaseSync(this.settings.sharedStorePath, { open: true, readOnly: true });
+      try {
+        const row = db
+          .prepare("SELECT COUNT(DISTINCT path) as files, COUNT(*) as chunks FROM chunks")
+          .get() as { files: number; chunks: number } | undefined;
+        return { files: row?.files ?? 0, chunks: row?.chunks ?? 0 };
+      } finally {
+        db.close();
+      }
+    } catch {
+      return { files: 0, chunks: 0 };
+    }
   }
 
   async probeVectorAvailability(): Promise<boolean> {
