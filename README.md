@@ -495,6 +495,10 @@ by Peter Steinberger and the community.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to submit PRs.
 AI/vibe-coded PRs welcome! 🤖
 
+### Community Resources
+
+- **[Comprehensive Chinese Tutorial](https://github.com/xianyu110/awesome-openclaw-tutorial)** - A detailed 423,000-word tutorial with 15 chapters, 15 appendices, and 70+ practical cases, updated to OpenClaw v2026.3.12. Covers installation, core features, advanced skills, and multi-platform integration. (Thanks to @xianyu110 for this extensive community contribution!)
+
 Special thanks to [Mario Zechner](https://mariozechner.at/) for his support and for
 [pi-mono](https://github.com/badlogic/pi-mono).
 Special thanks to Adam Doppelt for lobster.bot.
