@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
@@ -218,6 +220,98 @@ function sanitizeGoogleThinkingPayload(params: {
   }
 }
 
+const GOOGLE_INLINE_AUDIO_EXTENSIONS = new Set([".ogg", ".opus", ".mp3", ".wav", ".m4a"]);
+const GOOGLE_INLINE_AUDIO_MIME_TYPES: Record<string, string> = {
+  ".ogg": "audio/ogg",
+  ".opus": "audio/ogg",
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".m4a": "audio/mp4",
+};
+const GOOGLE_AUDIO_FILE_REF_REGEX =
+  /(^|\s)@((?:\.\/?|\.\.\/|\/)?[^\s@]+\.(?:ogg|opus|mp3|wav|m4a))(?=\s|$)/gi;
+
+function inlineGoogleAudioFileRefs(payload: unknown): void {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  const contents = (payload as { contents?: unknown }).contents;
+  if (!Array.isArray(contents)) {
+    return;
+  }
+
+  for (const content of contents) {
+    if (!content || typeof content !== "object") {
+      continue;
+    }
+    const parts = (content as { parts?: unknown }).parts;
+    if (!Array.isArray(parts)) {
+      continue;
+    }
+
+    const nextParts: unknown[] = [];
+    let touched = false;
+    for (const part of parts) {
+      if (
+        !part ||
+        typeof part !== "object" ||
+        typeof (part as { text?: unknown }).text !== "string"
+      ) {
+        nextParts.push(part);
+        continue;
+      }
+      const text = (part as { text: string }).text;
+      let lastIndex = 0;
+      let matchFound = false;
+      GOOGLE_AUDIO_FILE_REF_REGEX.lastIndex = 0;
+      for (const match of text.matchAll(GOOGLE_AUDIO_FILE_REF_REGEX)) {
+        const full = match[0];
+        const prefix = match[1] ?? "";
+        const rawPath = match[2];
+        const start = match.index ?? 0;
+        const atIndex = start + prefix.length;
+        const resolvedPath = path.resolve(rawPath);
+        const ext = path.extname(resolvedPath).toLowerCase();
+        if (!GOOGLE_INLINE_AUDIO_EXTENSIONS.has(ext)) {
+          continue;
+        }
+        try {
+          const data = readFileSync(resolvedPath).toString("base64");
+          const mimeType = GOOGLE_INLINE_AUDIO_MIME_TYPES[ext] ?? "application/octet-stream";
+          const before = text.slice(lastIndex, atIndex);
+          if (before) {
+            nextParts.push({ text: before });
+          }
+          nextParts.push({ inlineData: { mimeType, data } });
+          lastIndex = atIndex + full.length - prefix.length;
+          matchFound = true;
+          touched = true;
+        } catch {
+          continue;
+        }
+      }
+      if (!matchFound) {
+        nextParts.push(part);
+        continue;
+      }
+      const tail = text.slice(lastIndex);
+      if (tail) {
+        nextParts.push({ text: tail });
+      }
+    }
+
+    if (touched) {
+      (content as { parts: unknown[] }).parts = nextParts.filter(
+        (candidate) =>
+          !candidate ||
+          typeof candidate !== "object" ||
+          typeof (candidate as { text?: unknown }).text !== "string" ||
+          (candidate as { text: string }).text.length > 0,
+      );
+    }
+  }
+}
+
 function createGoogleThinkingPayloadWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel?: ThinkLevel,
@@ -229,6 +323,7 @@ function createGoogleThinkingPayloadWrapper(
       ...options,
       onPayload: (payload) => {
         if (model.api === "google-generative-ai") {
+          inlineGoogleAudioFileRefs(payload);
           sanitizeGoogleThinkingPayload({
             payload,
             modelId: model.id,
