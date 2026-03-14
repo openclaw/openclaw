@@ -69,7 +69,7 @@ describe("runSubagentAnnounceDispatch", () => {
     ]);
   });
 
-  it("uses direct-first ordering for completion mode", async () => {
+  it("uses direct-first ordering for completion mode and still injects trigger", async () => {
     const queue = vi.fn(async () => "queued" as const);
     const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
 
@@ -80,11 +80,53 @@ describe("runSubagentAnnounceDispatch", () => {
     });
 
     expect(direct).toHaveBeenCalledTimes(1);
-    expect(queue).not.toHaveBeenCalled();
+    expect(queue).toHaveBeenCalledTimes(1);
     expect(result.path).toBe("direct");
     expect(result.phases).toEqual([
       { phase: "direct-primary", delivered: true, path: "direct", error: undefined },
+      { phase: "queue-fallback", delivered: true, path: "queued", error: undefined },
     ]);
+  });
+
+  it("still returns direct success when trigger injection fails", async () => {
+    const queue = vi.fn(async () => "none" as const);
+    const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      queue,
+      direct,
+    });
+
+    expect(direct).toHaveBeenCalledTimes(1);
+    expect(queue).toHaveBeenCalledTimes(1);
+    expect(result.delivered).toBe(true);
+    expect(result.path).toBe("direct");
+    expect(result.phases).toEqual([
+      { phase: "direct-primary", delivered: true, path: "direct", error: undefined },
+      { phase: "queue-fallback", delivered: false, path: "none", error: undefined },
+    ]);
+  });
+
+  it("skips trigger injection when signal is aborted after direct delivery", async () => {
+    const controller = new AbortController();
+    const queue = vi.fn(async () => "queued" as const);
+    const direct = vi.fn(async () => {
+      controller.abort();
+      return { delivered: true, path: "direct" as const };
+    });
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      signal: controller.signal,
+      queue,
+      direct,
+    });
+
+    expect(direct).toHaveBeenCalledTimes(1);
+    expect(queue).not.toHaveBeenCalled();
+    expect(result.delivered).toBe(true);
+    expect(result.path).toBe("direct");
   });
 
   it("falls back to queue when completion direct send fails", async () => {
