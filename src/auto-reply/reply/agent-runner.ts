@@ -10,6 +10,7 @@ import { isLikelyInterimExecutionMessage } from "../../agents/interim-execution.
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
+import { spawnSubagentRun } from "../../agents/subagent-spawn.js";
 import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
@@ -22,6 +23,7 @@ import {
 } from "../../config/sessions.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
@@ -71,17 +73,46 @@ function payloadsContainStructuredContent(payloads: ReplyPayload[]): boolean {
   );
 }
 
-function hasActiveSubagentRuns(sessionKey: string): boolean {
-  return listSubagentRunsForRequester(sessionKey).some(
-    (entry) => typeof entry.endedAt !== "number",
-  );
+function inspectSubagentRuns(sessionKey: string, runStartedAt: number) {
+  const runs = listSubagentRunsForRequester(sessionKey);
+  return {
+    hasActiveRuns: runs.some((entry) => typeof entry.endedAt !== "number"),
+    hasStartedSinceRun: runs.some((entry) => {
+      const startedAt = typeof entry.startedAt === "number" ? entry.startedAt : entry.createdAt;
+      return typeof startedAt === "number" && startedAt >= runStartedAt;
+    }),
+  };
 }
 
-function hasSubagentsStartedSinceRun(sessionKey: string, runStartedAt: number): boolean {
-  return listSubagentRunsForRequester(sessionKey).some((entry) => {
-    const startedAt = typeof entry.startedAt === "number" ? entry.startedAt : entry.createdAt;
-    return typeof startedAt === "number" && startedAt >= runStartedAt;
-  });
+function sanitizeAutoSpawnFailureReason(error: string): string | undefined {
+  const normalized = error.trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return undefined;
+  }
+  const lower = normalized.toLowerCase();
+  const looksInternal =
+    normalized.length > 120 ||
+    lower.includes("token") ||
+    lower.includes("api key") ||
+    lower.includes("stack") ||
+    lower.includes("trace") ||
+    lower.includes("http://") ||
+    lower.includes("https://") ||
+    normalized.includes("\\") ||
+    normalized.includes("/");
+  if (looksInternal) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function buildAutoSpawnFailureReply(error: string): ReplyPayload {
+  const reason = sanitizeAutoSpawnFailureReason(error);
+  const suffix = reason ? ` Reason: ${reason}.` : "";
+  return {
+    text: `I could not keep the executor running in the background because starting the follow-up run failed.${suffix} Please retry the task.`,
+    isError: true,
+  };
 }
 
 function mergeDirectlySentBlockKeys(
@@ -90,6 +121,51 @@ function mergeDirectlySentBlockKeys(
 ): Set<string> | undefined {
   const merged = new Set<string>([...(first ?? []), ...(second ?? [])]);
   return merged.size > 0 ? merged : undefined;
+}
+
+function resolveExecutionHandoffLabel(params: {
+  summaryLine?: string;
+  commandBody: string;
+}): string | undefined {
+  const summary = params.summaryLine?.trim();
+  if (summary) {
+    return summary.slice(0, 120);
+  }
+  const normalized = params.commandBody.trim().replace(/\s+/g, " ");
+  return normalized ? normalized.slice(0, 120) : undefined;
+}
+
+function buildExecutionHandoffTask(params: {
+  requesterSessionKey?: string;
+  summaryLine?: string;
+  commandBody: string;
+  interimReply?: string;
+}): string {
+  const summary = params.summaryLine?.trim();
+  const latestInstruction = params.commandBody.trim().replace(/\s+/g, " ");
+  const interimReply = params.interimReply?.trim().replace(/\s+/g, " ");
+  const parts = [
+    "Recover the current user goal from the requester session and continue executing it in the background.",
+    params.requesterSessionKey
+      ? `Requester session: ${params.requesterSessionKey}. Read it with sessions_history before acting whenever the latest message is ambiguous or just asks to continue.`
+      : "Read the requester session with sessions_history before acting whenever the latest message is ambiguous or just asks to continue.",
+    summary ? `Latest user message: ${summary}` : undefined,
+    latestInstruction && latestInstruction !== summary
+      ? `Current prompt: ${latestInstruction}`
+      : undefined,
+    interimReply
+      ? `The requester session only produced this interim acknowledgement before handoff: ${interimReply}`
+      : undefined,
+    "Use the requester session history to recover the active deliverable, current browser or tool state, and what remains to be done.",
+    "Keep working until you have a concrete result or a clear blocker to report back.",
+  ];
+  return parts.filter((part): part is string => Boolean(part)).join("\n");
+}
+
+function buildAutoSpawnAcceptedReply(): ReplyPayload {
+  return {
+    text: "On it. I started a background run and will report back when it is done.",
+  };
 }
 
 export async function runReplyAgent(params: {
@@ -389,13 +465,15 @@ export async function runReplyAgent(params: {
     if (!isHeartbeat && sessionKey) {
       const interimPayloads = runResult.payloads ?? [];
       const interimText = pickLastNonEmptyTextFromPayloads(interimPayloads)?.trim() ?? "";
+      const hasRenderableInterimError = interimPayloads.some((payload) => payload?.isError === true);
+      const runSnapshot = inspectSubagentRuns(sessionKey, runStartedAt);
       const shouldRetryInterimAck =
         !runResult.meta.error &&
         runResult.didSendViaMessagingTool !== true &&
         !payloadsContainStructuredContent(interimPayloads) &&
-        !interimPayloads.some((payload) => payload?.isError === true) &&
-        !hasActiveSubagentRuns(sessionKey) &&
-        !hasSubagentsStartedSinceRun(sessionKey, runStartedAt) &&
+        !hasRenderableInterimError &&
+        !runSnapshot.hasActiveRuns &&
+        !runSnapshot.hasStartedSinceRun &&
         isLikelyInterimExecutionMessage(interimText);
 
       if (shouldRetryInterimAck) {
@@ -436,6 +514,62 @@ export async function runReplyAgent(params: {
         );
         didLogHeartbeatStrip ||= continuationOutcome.didLogHeartbeatStrip;
         autoCompactionCompleted ||= continuationOutcome.autoCompactionCompleted;
+      }
+
+      const postContinuationPayloads = runResult.payloads ?? [];
+      const postContinuationText =
+        pickLastNonEmptyTextFromPayloads(postContinuationPayloads)?.trim() ?? "";
+      const postContinuationSnapshot = inspectSubagentRuns(sessionKey, runStartedAt);
+      const shouldAutoSpawnBackgroundRun =
+        !runResult.meta.error &&
+        runResult.didSendViaMessagingTool !== true &&
+        !payloadsContainStructuredContent(postContinuationPayloads) &&
+        !postContinuationPayloads.some((payload) => payload?.isError === true) &&
+        !postContinuationSnapshot.hasActiveRuns &&
+        !postContinuationSnapshot.hasStartedSinceRun &&
+        isLikelyInterimExecutionMessage(postContinuationText);
+
+      if (shouldAutoSpawnBackgroundRun) {
+        const handoffTask = buildExecutionHandoffTask({
+          requesterSessionKey: sessionKey,
+          summaryLine: followupRun.summaryLine,
+          commandBody,
+          interimReply: postContinuationText,
+        });
+        const spawnResult = await spawnSubagentRun({
+          task: handoffTask,
+          label: resolveExecutionHandoffLabel({
+            summaryLine: followupRun.summaryLine,
+            commandBody,
+          }),
+          requesterSessionKey: sessionKey,
+          requesterAgentIdOverride: followupRun.run.agentId,
+          requesterOrigin: normalizeDeliveryContext({
+            channel: sessionCtx.Provider?.trim().toLowerCase(),
+            to: sessionCtx.OriginatingTo ?? sessionCtx.To,
+            accountId: sessionCtx.AccountId,
+            threadId: sessionCtx.MessageThreadId ?? undefined,
+          }),
+          requesterGroupId: followupRun.run.groupId,
+          requesterGroupChannel: followupRun.run.groupChannel,
+          requesterGroupSpace: followupRun.run.groupSpace,
+        });
+
+        if (spawnResult.status !== "accepted") {
+          runResult = {
+            ...runResult,
+            payloads: [buildAutoSpawnFailureReply(spawnResult.error)],
+            meta: {
+              ...runResult.meta,
+              error: runResult.meta.error,
+            },
+          };
+        } else {
+          runResult = {
+            ...runResult,
+            payloads: [buildAutoSpawnAcceptedReply()],
+          };
+        }
       }
     }
 

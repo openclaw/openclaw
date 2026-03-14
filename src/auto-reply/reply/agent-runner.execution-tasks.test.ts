@@ -5,6 +5,7 @@ import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
 const listSubagentRunsForRequesterMock = vi.fn();
+const spawnSubagentRunMock = vi.fn();
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: async ({
@@ -31,6 +32,10 @@ vi.mock("../../agents/subagent-registry.js", () => ({
   listSubagentRunsForRequester: (...args: unknown[]) => listSubagentRunsForRequesterMock(...args),
 }));
 
+vi.mock("../../agents/subagent-spawn.js", () => ({
+  spawnSubagentRun: (...args: unknown[]) => spawnSubagentRunMock(...args),
+}));
+
 vi.mock("./queue.js", async () => {
   const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
   return {
@@ -45,9 +50,13 @@ import { runReplyAgent } from "./agent-runner.js";
 beforeEach(() => {
   runEmbeddedPiAgentMock.mockReset();
   listSubagentRunsForRequesterMock.mockReset().mockReturnValue([]);
+  spawnSubagentRunMock.mockReset();
 });
 
-function createRun() {
+function createRun(overrides?: {
+  commandBody?: string;
+  summaryLine?: string;
+}) {
   const typing = createMockTypingController();
   const sessionCtx = {
     Provider: "webchat",
@@ -58,11 +67,12 @@ function createRun() {
   const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
   const followupRun = {
     prompt: "hello",
-    summaryLine: "hello",
+    summaryLine: overrides?.summaryLine ?? "hello",
     enqueuedAt: Date.now(),
     run: {
       sessionId: "session",
       sessionKey: "main",
+      agentId: "main",
       messageProvider: "webchat",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
@@ -84,7 +94,7 @@ function createRun() {
   } as unknown as FollowupRun;
 
   return runReplyAgent({
-    commandBody: "请继续执行这个任务",
+    commandBody: overrides?.commandBody ?? "Please continue executing this task.",
     followupRun,
     queueKey: "main",
     resolvedQueue,
@@ -114,7 +124,7 @@ describe("runReplyAgent execution-task interim retry", () => {
         meta: {},
       })
       .mockResolvedValueOnce({
-        payloads: [{ text: "已经完成，结果如下。" }],
+        payloads: [{ text: "Done. Here is the concrete result." }],
         meta: {},
       });
 
@@ -126,7 +136,7 @@ describe("runReplyAgent execution-task interim retry", () => {
         "Your previous response was only an acknowledgement and did not complete the user's task.",
       ),
     });
-    expect(result).toMatchObject({ text: "已经完成，结果如下。" });
+    expect(result).toMatchObject({ text: "Done. Here is the concrete result." });
   });
 
   it("does not rerun when a subagent run is already active", async () => {
@@ -155,13 +165,112 @@ describe("runReplyAgent execution-task interim retry", () => {
   it("does not rerun when the first turn already returns substantive content", async () => {
     listSubagentRunsForRequesterMock.mockReset().mockReturnValue([]);
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "这是最终结果，不需要后台续跑。" }],
+      payloads: [{ text: "Here is the final result. No background run is needed." }],
       meta: {},
     });
 
     const result = await createRun();
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ text: "这是最终结果，不需要后台续跑。" });
+    expect(result).toMatchObject({
+      text: "Here is the final result. No background run is needed.",
+    });
+  });
+
+  it("auto-spawns a background executor when continuation still only acknowledges", async () => {
+    listSubagentRunsForRequesterMock.mockReset().mockReturnValue([]);
+    runEmbeddedPiAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "on it" }],
+        meta: {},
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "working on it, it'll auto-announce when done" }],
+        meta: {},
+      });
+    spawnSubagentRunMock.mockResolvedValueOnce({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:test",
+      runId: "child-run-1",
+    });
+
+    const result = await createRun({
+      summaryLine: "Review the latest Gemini image and keep iterating until it is usable",
+      commandBody: "Please continue executing this task.",
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    expect(spawnSubagentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: expect.stringContaining(
+          "Recover the current user goal from the requester session and continue executing it in the background.",
+        ),
+        requesterSessionKey: "main",
+        requesterAgentIdOverride: "main",
+        label: "Review the latest Gemini image and keep iterating until it is usable",
+      }),
+    );
+    expect(spawnSubagentRunMock.mock.calls[0]?.[0]).toMatchObject({
+      task: expect.stringContaining(
+        "Requester session: main. Read it with sessions_history before acting whenever the latest message is ambiguous or just asks to continue.",
+      ),
+    });
+    expect(spawnSubagentRunMock.mock.calls[0]?.[0]).toMatchObject({
+      task: expect.stringContaining(
+        "The requester session only produced this interim acknowledgement before handoff: working on it, it'll auto-announce when done",
+      ),
+    });
+    expect(result).toMatchObject({
+      text: "On it. I started a background run and will report back when it is done.",
+    });
+  });
+
+  it("returns a concrete blocker when the background executor cannot start", async () => {
+    listSubagentRunsForRequesterMock.mockReset().mockReturnValue([]);
+    runEmbeddedPiAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "on it" }],
+        meta: {},
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "working on it, it'll auto-announce when done" }],
+        meta: {},
+      });
+    spawnSubagentRunMock.mockResolvedValueOnce({
+      status: "error",
+      error: "gateway unavailable",
+    });
+
+    const result = await createRun();
+
+    expect(result).toMatchObject({
+      isError: true,
+      text: expect.stringContaining("Reason: gateway unavailable."),
+    });
+  });
+
+  it("redacts internal spawn errors from the user-facing blocker reply", async () => {
+    listSubagentRunsForRequesterMock.mockReset().mockReturnValue([]);
+    runEmbeddedPiAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "on it" }],
+        meta: {},
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "working on it, it'll auto-announce when done" }],
+        meta: {},
+      });
+    spawnSubagentRunMock.mockResolvedValueOnce({
+      status: "error",
+      error: "HTTP 500 at https://example.com/internal/token from C:\\temp\\trace.log",
+    });
+
+    const result = await createRun();
+
+    expect(result).toMatchObject({
+      isError: true,
+      text:
+        "I could not keep the executor running in the background because starting the follow-up run failed. Please retry the task.",
+    });
   });
 });
