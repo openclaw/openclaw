@@ -154,6 +154,17 @@ describe("sessions", () => {
     ).toBe("discord:friends-of-openclaw#general");
   });
 
+  it("keeps Feishu unicode group names and appends canonical chat id from session key", () => {
+    expect(
+      buildGroupDisplayName({
+        provider: "feishu",
+        subject: "私-openclaw 进化",
+        id: "ou_speaker_a",
+        key: "agent:main:feishu:group:oc_aa28b4a19f8b78b10167a989682cfe5f:sender:ou_speaker_a",
+      }),
+    ).toBe("feishu:私-openclaw 进化 (oc_aa28b4a19f8b78b10167a989682cfe5f)");
+  });
+
   const resolveSessionKeyCases = [
     {
       name: "keeps explicit provider when provided in group key",

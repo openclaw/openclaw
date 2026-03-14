@@ -20,6 +20,19 @@ function shortenGroupId(value?: string) {
   return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
 }
 
+function extractCanonicalGroupIdFromKey(providerKey: string, key: string): string | undefined {
+  const normalizedProvider = providerKey.trim().toLowerCase();
+  const normalizedKey = key.trim();
+  if (!normalizedProvider || !normalizedKey) {
+    return undefined;
+  }
+
+  const match = normalizedKey.match(
+    new RegExp(String.raw`${normalizedProvider}:(?:group|channel):([^:]+)`, "i"),
+  );
+  return match?.[1]?.trim() || undefined;
+}
+
 export function buildGroupDisplayName(params: {
   provider?: string;
   subject?: string;
@@ -36,8 +49,25 @@ export function buildGroupDisplayName(params: {
     (groupChannel && space
       ? `${space}${groupChannel.startsWith("#") ? "" : "#"}${groupChannel}`
       : groupChannel || subject || space || "") || "";
-  const fallbackId = params.id?.trim() || params.key;
+  const fallbackId =
+    providerKey === "feishu"
+      ? (extractCanonicalGroupIdFromKey(providerKey, params.key) ?? params.id?.trim() ?? params.key)
+      : (params.id?.trim() ?? params.key);
   const rawLabel = detail || fallbackId;
+
+  if (providerKey === "feishu") {
+    if (!rawLabel) {
+      return providerKey;
+    }
+    if (!fallbackId || rawLabel === fallbackId || rawLabel.includes(fallbackId)) {
+      return `${providerKey}:${rawLabel}`;
+    }
+    if (rawLabel.toLowerCase().includes(" id:")) {
+      return `${providerKey}:${rawLabel}`;
+    }
+    return `${providerKey}:${rawLabel} (${fallbackId})`;
+  }
+
   let token = normalizeGroupLabel(rawLabel);
   if (!token) {
     token = normalizeGroupLabel(shortenGroupId(rawLabel));
