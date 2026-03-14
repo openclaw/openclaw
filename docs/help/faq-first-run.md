@@ -578,7 +578,7 @@ and troubleshooting see the main [FAQ](/help/faq).
 
     If the message is specifically:
     `Extra usage is required for long context requests`, the request is trying to use
-    Anthropic's 1M context beta (`context1m: true`). That only works when your
+    Anthropic's 1M context window (`context1m: true`). That only works when your
     credential is eligible for long-context billing (API key billing or the
     OpenClaw Claude-login path with Extra Usage enabled).
 
