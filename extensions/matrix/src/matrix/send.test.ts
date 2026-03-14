@@ -111,11 +111,13 @@ const makeUserTargetClient = (opts?: {
   membersByRoom?: Record<string, string[]>;
   roomStateEvents?: Record<string, Record<string, unknown>>;
   sendMessage?: ReturnType<typeof vi.fn>;
+  uploadContent?: ReturnType<typeof vi.fn>;
 }) => {
   const sendMessage = opts?.sendMessage ?? vi.fn().mockResolvedValue("evt1");
+  const uploadContent = opts?.uploadContent ?? vi.fn().mockResolvedValue("mxc://example/file");
   const client = {
     sendMessage,
-    uploadContent: vi.fn().mockResolvedValue("mxc://example/file"),
+    uploadContent,
     getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
     getAccountData: vi.fn().mockResolvedValue(opts?.directContent ?? {}),
     getJoinedRooms: vi.fn().mockResolvedValue(opts?.joinedRooms ?? []),
@@ -143,7 +145,7 @@ const makeUserTargetClient = (opts?: {
       isDm: vi.fn().mockImplementation(() => false),
     },
   } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
-  return { client, sendMessage };
+  return { client, sendMessage, uploadContent };
 };
 
 beforeAll(async () => {
@@ -354,6 +356,40 @@ describe("sendMessageMatrix media", () => {
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(sendMessage.mock.calls[0]?.[0]).toBe(activeRoom);
+    expect(matrixLogWarnMock).not.toHaveBeenCalled();
+  });
+
+  it("does not self-heal retry pre-send media upload failures", async () => {
+    const userId = "@user:example.org";
+    const staleRoom = "!stale:example.org";
+    const freshRoom = "!fresh:example.org";
+    const uploadContent = vi
+      .fn()
+      .mockRejectedValueOnce(makeMatrixSendError("upload failed", 404, "M_NOT_FOUND"));
+    const { client, sendMessage } = makeUserTargetClient({
+      directContent: {
+        [userId]: [staleRoom, freshRoom],
+      },
+      joinedRooms: [staleRoom, freshRoom],
+      membersByRoom: {
+        [staleRoom]: ["@bot:example.org", userId],
+        [freshRoom]: ["@bot:example.org", userId],
+      },
+      roomStateEvents: {
+        [`${staleRoom}|m.room.member|${userId}`]: { is_direct: true },
+        [`${staleRoom}|m.room.member|@bot:example.org`]: {},
+        [`${freshRoom}|m.room.member|${userId}`]: { is_direct: true },
+        [`${freshRoom}|m.room.member|@bot:example.org`]: {},
+      },
+      uploadContent,
+    });
+
+    await expect(
+      sendMessageMatrix(userId, "caption", { client, mediaUrl: "file:///tmp/photo.png" }),
+    ).rejects.toThrow("upload failed");
+
+    expect(uploadContent).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
     expect(matrixLogWarnMock).not.toHaveBeenCalled();
   });
 

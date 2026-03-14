@@ -75,6 +75,7 @@ function isRetryableDirectRoomSendError(err: unknown): boolean {
 type ResolvedRoomAttemptError = {
   cause: unknown;
   sentAnyContent: boolean;
+  attemptedSend: boolean;
 };
 
 function asResolvedRoomAttemptError(err: unknown): ResolvedRoomAttemptError | null {
@@ -84,36 +85,53 @@ function asResolvedRoomAttemptError(err: unknown): ResolvedRoomAttemptError | nu
   const candidate = err as {
     cause?: unknown;
     sentAnyContent?: unknown;
+    attemptedSend?: unknown;
   };
-  if (typeof candidate.sentAnyContent !== "boolean") {
+  if (
+    typeof candidate.sentAnyContent !== "boolean" ||
+    typeof candidate.attemptedSend !== "boolean"
+  ) {
     return null;
   }
   return {
     cause: candidate.cause,
     sentAnyContent: candidate.sentAnyContent,
+    attemptedSend: candidate.attemptedSend,
   };
 }
 
 async function withResolvedRoomRetry<T>(params: {
   client: MatrixClient;
   to: string;
-  action: (roomId: string, markContentSent: () => void) => Promise<T>;
+  action: (
+    roomId: string,
+    markContentSent: () => void,
+    markRetryableSendAttempt: () => void,
+  ) => Promise<T>;
 }): Promise<T> {
   const { client, to, action } = params;
   const runAction = async (roomId: string): Promise<T> => {
     let sentAnyContent = false;
+    let attemptedSend = false;
     try {
       return await enqueueSend(
         roomId,
         async () =>
-          await action(roomId, () => {
-            sentAnyContent = true;
-          }),
+          await action(
+            roomId,
+            () => {
+              sentAnyContent = true;
+            },
+            () => {
+              attemptedSend = true;
+            },
+          ),
       );
     } catch (err) {
       throw {
         cause: err,
         sentAnyContent,
+        attemptedSend,
       } satisfies ResolvedRoomAttemptError;
     }
   };
@@ -126,6 +144,7 @@ async function withResolvedRoomRetry<T>(params: {
     const firstError = attemptError?.cause ?? err;
     if (
       !isMatrixUserTarget(to) ||
+      attemptError?.attemptedSend !== true ||
       attemptError?.sentAnyContent === true ||
       !isRetryableDirectRoomSendError(firstError)
     ) {
@@ -181,7 +200,7 @@ export async function sendMessageMatrix(
     return await withResolvedRoomRetry({
       client,
       to,
-      action: async (roomId, markContentSent) => {
+      action: async (roomId, markContentSent, markRetryableSendAttempt) => {
         const tableMode = getCore().channel.text.resolveMarkdownTableMode({
           cfg,
           channel: "matrix",
@@ -204,6 +223,7 @@ export async function sendMessageMatrix(
           ? buildThreadRelation(threadId, opts.replyToId)
           : buildReplyRelation(opts.replyToId);
         const sendContent = async (content: MatrixOutboundContent) => {
+          markRetryableSendAttempt();
           const eventId = await client.sendMessage(roomId, content);
           markContentSent();
           return eventId;
@@ -309,12 +329,13 @@ export async function sendPollMatrix(
     return await withResolvedRoomRetry({
       client,
       to,
-      action: async (roomId, markContentSent) => {
+      action: async (roomId, markContentSent, markRetryableSendAttempt) => {
         const pollContent = buildPollStartContent(poll);
         const threadId = normalizeThreadId(opts.threadId);
         const pollPayload = threadId
           ? { ...pollContent, "m.relates_to": buildThreadRelation(threadId) }
           : pollContent;
+        markRetryableSendAttempt();
         const eventId = await client.sendEvent(roomId, M_POLL_START, pollPayload);
         markContentSent();
 
