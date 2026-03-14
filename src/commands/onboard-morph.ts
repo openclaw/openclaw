@@ -9,10 +9,13 @@ export type SetupMorphOptions = {
   secretInputMode?: SecretInputMode;
 };
 
-type CompactionChoice = "basic" | "advanced";
+type MorphFeatureChoice = "basic" | "enhanced";
 
 function getMorphApiKey(config: OpenClawConfig): unknown {
-  return config.agents?.defaults?.compaction?.morphApiKey;
+  return (
+    config.agents?.defaults?.compaction?.morphApiKey ??
+    config.agents?.defaults?.codebaseSearch?.morphApiKey
+  );
 }
 
 function hasMorphConfigured(config: OpenClawConfig): boolean {
@@ -23,7 +26,11 @@ function hasMorphConfigured(config: OpenClawConfig): boolean {
   );
 }
 
-function applyMorphConfig(config: OpenClawConfig, apiKey: string): OpenClawConfig {
+function applyMorphConfig(
+  config: OpenClawConfig,
+  apiKey: string,
+  enhanced: boolean,
+): OpenClawConfig {
   return {
     ...config,
     agents: {
@@ -32,12 +39,12 @@ function applyMorphConfig(config: OpenClawConfig, apiKey: string): OpenClawConfi
         ...config.agents?.defaults,
         compaction: {
           ...config.agents?.defaults?.compaction,
-          provider: "morph" as const,
-          morphApiKey: apiKey,
+          provider: enhanced ? "morph" : undefined,
+          ...(enhanced ? { morphApiKey: apiKey } : {}),
         },
         codebaseSearch: {
           ...config.agents?.defaults?.codebaseSearch,
-          enabled: true,
+          enabled: enhanced,
           morphApiKey: apiKey,
         },
       },
@@ -45,7 +52,7 @@ function applyMorphConfig(config: OpenClawConfig, apiKey: string): OpenClawConfi
   };
 }
 
-function enableMorphProvider(config: OpenClawConfig): OpenClawConfig {
+function enableMorphProvider(config: OpenClawConfig, enhanced: boolean): OpenClawConfig {
   return {
     ...config,
     agents: {
@@ -54,11 +61,11 @@ function enableMorphProvider(config: OpenClawConfig): OpenClawConfig {
         ...config.agents?.defaults,
         compaction: {
           ...config.agents?.defaults?.compaction,
-          provider: "morph" as const,
+          provider: enhanced ? "morph" : undefined,
         },
         codebaseSearch: {
           ...config.agents?.defaults?.codebaseSearch,
-          enabled: true,
+          enabled: enhanced,
         },
       },
     },
@@ -81,16 +88,16 @@ export async function setupMorph(
     }
     const existingKey = normalizeSecretInputString(getMorphApiKey(config));
     if (existingKey) {
-      return applyMorphConfig(config, existingKey);
+      return applyMorphConfig(config, existingKey, true);
     }
     if (envAvailable) {
-      return enableMorphProvider(config);
+      return enableMorphProvider(config, true);
     }
     return config;
   }
 
-  const choice = await prompter.select<CompactionChoice>({
-    message: "Compaction mode",
+  const choice = await prompter.select<MorphFeatureChoice>({
+    message: "Morph features",
     options: [
       {
         value: "basic" as const,
@@ -98,16 +105,16 @@ export async function setupMorph(
         hint: "Agent only remembers a short description of what happened previously",
       },
       {
-        value: "advanced" as const,
-        label: "Enhanced",
-        hint: "Faster compaction + AI-powered codebase search",
+        value: "enhanced" as const,
+        label: "Enhanced (Compaction + WarpGrep)",
+        hint: "Fast compaction + AI-powered codebase search",
       },
     ],
-    initialValue: hasMorphConfigured(config) ? "advanced" : "basic",
+    initialValue: hasMorphConfigured(config) ? "enhanced" : "basic",
   });
 
   if (choice === "basic") {
-    return config;
+    return enableMorphProvider(config, false);
   }
 
   const useSecretRefMode = opts?.secretInputMode === "ref"; // pragma: allowlist secret
@@ -120,12 +127,12 @@ export async function setupMorph(
       ].join("\n"),
       "Morph",
     );
-    return enableMorphProvider(config);
+    return enableMorphProvider(config, true);
   }
 
   await prompter.note(
     [
-      "Advanced compaction requires a Morph API key.",
+      "Morph features require an API key.",
       "Get your key at: https://www.morphllm.com/dashboard/api-keys",
     ].join("\n"),
     "Morph",
@@ -142,21 +149,21 @@ export async function setupMorph(
 
   const key = keyInput?.trim() ?? "";
   if (key) {
-    return applyMorphConfig(config, key);
+    return applyMorphConfig(config, key, true);
   }
 
   const existingKey = normalizeSecretInputString(getMorphApiKey(config));
   if (existingKey) {
-    return applyMorphConfig(config, existingKey);
+    return applyMorphConfig(config, existingKey, true);
   }
 
   if (envAvailable) {
-    return enableMorphProvider(config);
+    return enableMorphProvider(config, true);
   }
 
   await prompter.note(
     [
-      "No API key provided — falling back to basic compaction.",
+      "No API key provided — disabling Morph features.",
       "You can set this up later with: openclaw configure",
     ].join("\n"),
     "Morph",

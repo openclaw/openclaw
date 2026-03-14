@@ -212,6 +212,8 @@ export function buildAgentSystemPrompt(params: {
   promptMode?: PromptMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
+  /** Whether Morph codebase search (WarpGrep) is enabled for this agent. */
+  codebaseSearchEnabled?: boolean;
   runtimeInfo?: {
     agentId?: string;
     host?: string;
@@ -454,6 +456,11 @@ export function buildAgentSystemPrompt(params: {
           'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`) unless the user asks otherwise.',
           "Set `agentId` explicitly unless `acp.defaultAgent` is configured, and do not route ACP harness requests through `subagents`/`agents_list` or local PTY exec flows.",
           'For ACP harness thread spawns, do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path.',
+          ...(params.codebaseSearchEnabled
+            ? [
+                "When spawning Codex or Claude Code via ACP or exec, instruct them to set up the Morph MCP server for WarpGrep codebase search. For Claude Code: `claude mcp add morph-mcp --scope user -e MORPH_API_KEY=$MORPH_API_KEY -- npx -y @morphllm/morphmcp`. For Codex: `codex mcp add morph-mcp --env MORPH_API_KEY=$MORPH_API_KEY -- npx -y @morphllm/morphmcp`. Pass through MORPH_API_KEY from the environment.",
+              ]
+            : []),
         ]
       : []),
     "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",

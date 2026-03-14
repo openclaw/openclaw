@@ -523,7 +523,7 @@ export async function runOnboardingWizard(
   }
 
   if (opts.skipMorph) {
-    await prompter.note("Skipping Morph compaction setup.", "Compaction");
+    await prompter.note("Skipping Morph features setup.", "Morph");
   } else {
     const { setupMorph } = await import("../commands/onboard-morph.js");
     nextConfig = await setupMorph(nextConfig, runtime, prompter, {
