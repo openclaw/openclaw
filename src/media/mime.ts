@@ -2,6 +2,18 @@ import path from "node:path";
 import { fileTypeFromBuffer } from "file-type";
 import { type MediaKind, mediaKindFromMime } from "./constants.js";
 
+// Major brands for audio-only MPEG-4 containers.
+// file-type cannot distinguish audio-only MP4/M4A from video MP4,
+// so we check the ftyp major brand at bytes 8-11.
+const AUDIO_MP4_BRANDS = new Set([
+  "m4a ", // M4A (iTunes audio)
+  "m4b ", // M4B (audiobook)
+  "m4p ", // M4P (protected iTunes audio)
+  "m4r ", // M4R (iPhone ringtone)
+  "f4a ", // F4A (Flash audio)
+  "f4b ", // F4B (Flash audiobook)
+]);
+
 // Map common mimes to preferred file extensions.
 const EXT_BY_MIME: Record<string, string> = {
   "image/heic": ".heic",
@@ -71,6 +83,14 @@ async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
   }
   try {
     const type = await fileTypeFromBuffer(buffer);
+    // file-type returns "video/mp4" for all MPEG-4 containers, including audio-only
+    // M4A files. Check the ftyp major brand to correct audio-only containers.
+    if (type?.mime === "video/mp4" && buffer.length >= 12) {
+      const majorBrand = buffer.toString("ascii", 8, 12).toLowerCase();
+      if (AUDIO_MP4_BRANDS.has(majorBrand)) {
+        return "audio/mp4";
+      }
+    }
     return type?.mime ?? undefined;
   } catch {
     return undefined;
