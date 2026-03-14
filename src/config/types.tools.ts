@@ -522,6 +522,8 @@ export type ToolsConfig = {
       maxRedirects?: number;
       /** Override User-Agent header for fetch requests. */
       userAgent?: string;
+      /** Default headers to include in all fetch requests. */
+      defaultHeaders?: Record<string, string>;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
       firecrawl?: {
