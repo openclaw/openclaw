@@ -65,12 +65,23 @@ export function normalizeMimeType(mime?: string | null): string | undefined {
   return cleaned || undefined;
 }
 
+/** Audio-only MPEG-4 ftyp major brands (ISO BMFF bytes 8-11). */
+const AUDIO_FTYP_BRANDS = new Set(["m4a", "m4b"]);
+
 async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
   if (!buffer) {
     return undefined;
   }
   try {
     const type = await fileTypeFromBuffer(buffer);
+    // file-type returns "video/mp4" for all MPEG-4 containers — correct
+    // audio-only ones (M4A/M4B) by inspecting the ftyp major brand.
+    if (type?.mime === "video/mp4" && buffer.length >= 12) {
+      const brand = buffer.toString("ascii", 8, 12).trimEnd().toLowerCase();
+      if (AUDIO_FTYP_BRANDS.has(brand)) {
+        return "audio/mp4";
+      }
+    }
     return type?.mime ?? undefined;
   } catch {
     return undefined;
