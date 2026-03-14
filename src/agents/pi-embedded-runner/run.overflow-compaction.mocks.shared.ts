@@ -166,6 +166,7 @@ vi.mock("../model-auth.js", () => ({
     source: "test",
   })),
   resolveAuthProfileOrder: vi.fn(() => []),
+  applyLocalNoAuthHeaderOverride: vi.fn((model) => model),
 }));
 
 vi.mock("../models-config.js", () => ({
