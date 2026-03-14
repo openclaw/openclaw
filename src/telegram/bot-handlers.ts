@@ -1206,7 +1206,10 @@ export const registerTelegramHandlers = ({
         const isExplicitApprover =
           isTelegramExecApprovalClientEnabled({ cfg, accountId }) &&
           isTelegramExecApprovalApprover({ cfg, accountId, senderId });
-        if (!isExplicitApprover && !isTelegramExecApprovalTargetRecipient({ cfg, senderId })) {
+        if (
+          !isExplicitApprover &&
+          !isTelegramExecApprovalTargetRecipient({ cfg, senderId, accountId })
+        ) {
           logVerbose(
             `Blocked telegram exec approval callback from ${senderId || "unknown"} (not an approver)`,
           );

@@ -59,6 +59,7 @@ export function isTelegramExecApprovalApprover(params: {
 export function isTelegramExecApprovalTargetRecipient(params: {
   cfg: OpenClawConfig;
   senderId?: string | null;
+  accountId?: string | null;
 }): boolean {
   const senderId = params.senderId?.trim();
   if (!senderId) {
@@ -68,9 +69,13 @@ export function isTelegramExecApprovalTargetRecipient(params: {
   if (!targets || !Array.isArray(targets)) {
     return false;
   }
+  const accountId = params.accountId?.trim() || undefined;
   return targets.some((target) => {
     const channel = normalizeMessageChannel(target.channel) ?? target.channel?.trim().toLowerCase();
     if (channel !== "telegram") {
+      return false;
+    }
+    if (accountId && target.accountId && target.accountId !== accountId) {
       return false;
     }
     const to = target.to?.trim();

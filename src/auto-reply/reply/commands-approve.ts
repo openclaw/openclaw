@@ -106,6 +106,7 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
       !isTelegramExecApprovalTargetRecipient({
         cfg: params.cfg,
         senderId: params.command.senderId,
+        accountId: params.ctx.AccountId,
       })
     ) {
       return {

@@ -143,5 +143,29 @@ describe("telegram exec approvals", () => {
       expect(isTelegramExecApprovalTargetRecipient({ cfg, senderId: "11111" })).toBe(true);
       expect(isTelegramExecApprovalTargetRecipient({ cfg, senderId: "U12345" })).toBe(false);
     });
+
+    it("scopes by accountId in multi-bot deployments", () => {
+      const cfg = buildTargetConfig([
+        { channel: "telegram", to: "12345", accountId: "account-a" },
+        { channel: "telegram", to: "67890", accountId: "account-b" },
+      ]);
+      // Correct account → accepted
+      expect(
+        isTelegramExecApprovalTargetRecipient({ cfg, senderId: "12345", accountId: "account-a" }),
+      ).toBe(true);
+      // Wrong account → rejected
+      expect(
+        isTelegramExecApprovalTargetRecipient({ cfg, senderId: "12345", accountId: "account-b" }),
+      ).toBe(false);
+      // No accountId on callback → matches any (backward compatible)
+      expect(isTelegramExecApprovalTargetRecipient({ cfg, senderId: "12345" })).toBe(true);
+    });
+
+    it("allows unscoped targets regardless of callback accountId", () => {
+      const cfg = buildTargetConfig([{ channel: "telegram", to: "12345" }]);
+      expect(
+        isTelegramExecApprovalTargetRecipient({ cfg, senderId: "12345", accountId: "any-account" }),
+      ).toBe(true);
+    });
   });
 });
