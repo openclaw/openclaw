@@ -521,14 +521,14 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("adds local-media-root hint and sends final fallback once", async () => {
-    const runtime = createRuntimeLogger();
+    const runtimeError = vi.fn();
     const { options } = createDispatcherHarness({
-      runtime,
+      runtime: { log: vi.fn(), error: runtimeError } as never,
       replyToMessageId: "om_parent",
     });
     await options.onError?.(createBlockedLocalMediaError(), { kind: "final" });
 
-    expect(runtime.error).toHaveBeenCalledWith(
+    expect(runtimeError).toHaveBeenCalledWith(
       expect.stringContaining(
         "Hint: Local MEDIA paths must be under allowed OpenClaw media roots.",
       ),
