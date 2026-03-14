@@ -2,6 +2,7 @@ import { upsertAuthProfileWithLock } from "../agents/auth-profiles.js";
 import type { ApiKeyCredential, AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
+  ProviderDiscoveryContext,
   ProviderAuthResult,
   ProviderAuthMethodNonInteractiveContext,
   ProviderNonInteractiveApiKeyResult,
@@ -179,6 +180,28 @@ export async function promptAndConfigureOpenAICompatibleSelfHostedProviderAuth(
 ): Promise<ProviderAuthResult> {
   const result = await promptAndConfigureOpenAICompatibleSelfHostedProvider(params);
   return buildSelfHostedProviderAuthResult(result);
+}
+
+export async function discoverOpenAICompatibleSelfHostedProvider<
+  T extends Record<string, unknown>,
+>(params: {
+  ctx: ProviderDiscoveryContext;
+  providerId: string;
+  buildProvider: (params: { apiKey?: string }) => Promise<T>;
+}): Promise<{ provider: T & { apiKey: string } } | null> {
+  if (params.ctx.config.models?.providers?.[params.providerId]) {
+    return null;
+  }
+  const { apiKey, discoveryApiKey } = params.ctx.resolveProviderApiKey(params.providerId);
+  if (!apiKey) {
+    return null;
+  }
+  return {
+    provider: {
+      ...(await params.buildProvider({ apiKey: discoveryApiKey })),
+      apiKey,
+    },
+  };
 }
 
 function buildMissingNonInteractiveModelIdMessage(params: {
