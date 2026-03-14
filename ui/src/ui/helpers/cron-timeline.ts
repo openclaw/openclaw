@@ -242,7 +242,7 @@ function getTodayRunHours(schedule: CronSchedule): number[] {
     if (intervalMs <= 0) {
       return [];
     }
-    const anchorMs = schedule.anchorMs ?? 0;
+    const anchorMs = schedule.anchorMs ?? Date.now();
 
     // Get today's midnight as epoch ms
     const todayStart = new Date();
@@ -281,7 +281,12 @@ function getTodayRunHours(schedule: CronSchedule): number[] {
 
   const [minField, hourField, domField, monField, dowField] = parts;
 
-  // Determine "today" in the job's timezone (if specified)
+  // Determine "today" in the job's timezone (if specified).
+  // TODO(P1-8): For tz-less cron expressions, we should use the gateway's
+  // configured timezone (not browser local time) as the default. The gateway
+  // timezone is not currently exposed to the UI layer. Once it is (e.g. via
+  // gatewayTimezone in CronStatus or a global config store), use it here
+  // instead of falling back to the browser's local time.
   const today = schedule.tz ? dateInTimezone(schedule.tz) : new Date();
 
   const minutes = parseCronField(minField, 0, 59);

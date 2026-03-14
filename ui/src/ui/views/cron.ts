@@ -527,10 +527,8 @@ function renderTimelineCard(props: CronProps) {
     const host = document.querySelector("openclaw-app");
     if (host && "requestUpdate" in host) {
       (host as unknown as { requestUpdate: () => void }).requestUpdate();
-    } else {
-      // Fallback: full reload if host not found
-      props.onRefresh();
     }
+    // No fallback — avoid triggering a full data reload for a local zoom change.
   };
 
   return html`
