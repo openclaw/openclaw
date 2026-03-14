@@ -4,7 +4,7 @@ import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import type { EmbeddedContextFile } from "../../agents/pi-embedded-helpers.js";
 import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
@@ -34,11 +34,13 @@ export async function resolveCommandsSystemPromptBundle(
     sessionKey: params.sessionKey,
     sessionId: params.sessionEntry?.sessionId,
   });
+  const effectiveAgentId = params.agentId ?? "default";
+  const isSandboxed = resolveSandboxConfigForAgent(params.cfg, effectiveAgentId).mode !== "off";
   const skillsSnapshot = (() => {
     try {
       return buildWorkspaceSkillSnapshot(workspaceDir, {
         config: params.cfg,
-        eligibility: { remote: getRemoteSkillEligibility() },
+        eligibility: { sandboxed: isSandboxed, remote: getRemoteSkillEligibility() },
         snapshotVersion: getSkillsSnapshotVersion(workspaceDir),
       });
     } catch {

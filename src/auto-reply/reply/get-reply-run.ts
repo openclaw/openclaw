@@ -8,6 +8,7 @@ import {
   isEmbeddedPiRunStreaming,
   resolveEmbeddedSessionLane,
 } from "../../agents/pi-embedded.js";
+import { resolveSandboxConfigForAgent } from "../../agents/sandbox.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveGroupSessionKey,
@@ -375,6 +376,7 @@ export async function runPreparedReply(
     workspaceDir,
     cfg,
     skillFilter: opts?.skillFilter,
+    sandboxed: resolveSandboxConfigForAgent(cfg, agentId).mode !== "off",
   });
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
   currentSystemSent = skillResult.systemSent;
