@@ -91,6 +91,9 @@ export function shouldSkipBackendSelfPairing(params: {
   if (!isGatewayBackendClient) {
     return false;
   }
+  if (params.hasBrowserOriginHeader || !params.isLocalClient) {
+    return false;
+  }
   // token/password: sharedAuthOk is set specifically for these in auth-context.ts.
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   // device-token and tailscale are valid backend auth methods, but sharedAuthOk is never
@@ -100,16 +103,14 @@ export function shouldSkipBackendSelfPairing(params: {
   // complete pairing so the gateway can mint and persist a device token.
   const usesAuthOkMethod =
     params.authMethod === "device-token" || params.authMethod === "tailscale";
-  // When auth is disabled entirely (mode="none"), there is no credential to verify. Restrict to
-  // local connections only — remote + no-auth would be a security hole.
+  // When auth is disabled entirely (mode="none"), there is no credential to verify. Restricting
+  // backend self-pairing skip to locally attested clients keeps remote callers from turning a
+  // client-reported gateway-client/backend label into implicit trust.
   const authIsDisabled = params.authMethod === "none";
-  // Remote backend clients (gateway.mode=remote) with any trusted credential are allowed.
-  // Only the auth-disabled path requires isLocalClient.
   return (
-    !params.hasBrowserOriginHeader &&
-    ((params.sharedAuthOk && usesSharedSecretAuth) ||
-      (params.authOk && usesAuthOkMethod) ||
-      (params.isLocalClient && authIsDisabled))
+    (params.sharedAuthOk && usesSharedSecretAuth) ||
+    (params.authOk && usesAuthOkMethod) ||
+    authIsDisabled
   );
 }
 

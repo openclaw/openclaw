@@ -334,7 +334,8 @@ describe("ws connect policy", () => {
       }),
     ).toBe(true);
 
-    // Remote backend client with valid shared-secret auth is now trusted (gateway.mode=remote support).
+    // Remote shared-secret backend clients must still complete pairing; the
+    // client-reported gateway-client/backend label is not enough to skip it.
     expect(
       shouldSkipBackendSelfPairing({
         connectParams: makeConnectParams(
@@ -347,7 +348,7 @@ describe("ws connect policy", () => {
         authOk: true,
         authMethod: "token",
       }),
-    ).toBe(true);
+    ).toBe(false);
 
     expect(
       shouldSkipBackendSelfPairing({
@@ -407,7 +408,8 @@ describe("ws connect policy", () => {
       }),
     ).toBe(true);
 
-    // Remote backend client over Tailscale is also trusted.
+    // Remote Tailscale-authenticated backend clients still need pairing. A
+    // spoofed gateway-client/backend label must not create implicit trust.
     expect(
       shouldSkipBackendSelfPairing({
         connectParams: makeConnectParams(
@@ -420,7 +422,7 @@ describe("ws connect policy", () => {
         authOk: true,
         authMethod: "tailscale",
       }),
-    ).toBe(true);
+    ).toBe(false);
 
     // Tailscale with authOk=false is rejected.
     expect(
@@ -541,7 +543,8 @@ describe("ws connect policy", () => {
       }),
     ).toBe(false);
 
-    // Remote device-token backend client is trusted when authOk=true.
+    // Remote device-token backend clients also keep the pairing check. Device
+    // token auth proves the credential, not the self-declared backend label.
     expect(
       shouldSkipBackendSelfPairing({
         connectParams: makeConnectParams(
@@ -554,7 +557,7 @@ describe("ws connect policy", () => {
         authOk: true,
         authMethod: "device-token",
       }),
-    ).toBe(true);
+    ).toBe(false);
 
     // Remote bootstrap-token backend clients are also still onboarding and must pair.
     expect(
@@ -571,7 +574,8 @@ describe("ws connect policy", () => {
       }),
     ).toBe(false);
 
-    // Remote backend client (gateway.mode=remote) with valid shared-secret auth is trusted.
+    // Duplicate regression guard: remote shared-secret backend clients must not
+    // bypass pairing just by claiming the backend client identity.
     expect(
       shouldSkipBackendSelfPairing({
         connectParams: makeConnectParams(
@@ -584,7 +588,7 @@ describe("ws connect policy", () => {
         authOk: true,
         authMethod: "token",
       }),
-    ).toBe(true);
+    ).toBe(false);
 
     // Remote backend client with browser origin header is still rejected.
     expect(
