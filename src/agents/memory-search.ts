@@ -3,12 +3,12 @@ import path from "node:path";
 import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SecretInput } from "../config/types.secrets.js";
-import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
-import { resolveAgentConfig } from "./agent-scope.js";
 import {
   normalizeMemoryMultimodalSettings,
   type MemoryMultimodalSettings,
 } from "../memory/multimodal.js";
+import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
+import { resolveAgentConfig } from "./agent-scope.js";
 
 export type ResolvedMemorySearchConfig = {
   enabled: boolean;

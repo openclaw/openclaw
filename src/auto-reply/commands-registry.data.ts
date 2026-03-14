@@ -211,6 +211,8 @@ function buildChatCommands(): ChatCommandDefinition[] {
       acceptsArgs: true,
       scope: "text",
       category: "status",
+    }),
+    defineChatCommand({
       key: "btw",
       nativeName: "btw",
       description: "Ask a side question without changing future session context.",
