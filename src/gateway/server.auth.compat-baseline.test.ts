@@ -34,6 +34,27 @@ function expectAuthErrorDetails(params: {
   }
 }
 
+async function expectSharedOperatorScopesCleared(
+  port: number,
+  auth: { token?: string; password?: string },
+) {
+  const ws = await openWs(port);
+  try {
+    const res = await connectReq(ws, {
+      ...auth,
+      scopes: ["operator.admin"],
+      device: null,
+    });
+    expect(res.ok).toBe(true);
+
+    const adminRes = await rpcReq(ws, "set-heartbeats", { enabled: false });
+    expect(adminRes.ok).toBe(false);
+    expect(adminRes.error?.message).toBe("missing scope: operator.admin");
+  } finally {
+    ws.close();
+  }
+}
+
 describe("gateway auth compatibility baseline", () => {
   describe("token mode", () => {
     let server: Awaited<ReturnType<typeof startGatewayServer>>;
@@ -64,21 +85,7 @@ describe("gateway auth compatibility baseline", () => {
     });
 
     test("clears client-declared scopes for shared-token operator connects", async () => {
-      const ws = await openWs(port);
-      try {
-        const res = await connectReq(ws, {
-          token: "secret",
-          scopes: ["operator.admin"],
-          device: null,
-        });
-        expect(res.ok).toBe(true);
-
-        const adminRes = await rpcReq(ws, "set-heartbeats", { enabled: false });
-        expect(adminRes.ok).toBe(false);
-        expect(adminRes.error?.message).toBe("missing scope: operator.admin");
-      } finally {
-        ws.close();
-      }
+      await expectSharedOperatorScopesCleared(port, { token: "secret" });
     });
 
     test("returns stable token-missing details for control ui without token", async () => {
@@ -184,21 +191,7 @@ describe("gateway auth compatibility baseline", () => {
     });
 
     test("clears client-declared scopes for shared-password operator connects", async () => {
-      const ws = await openWs(port);
-      try {
-        const res = await connectReq(ws, {
-          password: "secret",
-          scopes: ["operator.admin"],
-          device: null,
-        });
-        expect(res.ok).toBe(true);
-
-        const adminRes = await rpcReq(ws, "set-heartbeats", { enabled: false });
-        expect(adminRes.ok).toBe(false);
-        expect(adminRes.error?.message).toBe("missing scope: operator.admin");
-      } finally {
-        ws.close();
-      }
+      await expectSharedOperatorScopesCleared(port, { password: "secret" });
     });
   });
 

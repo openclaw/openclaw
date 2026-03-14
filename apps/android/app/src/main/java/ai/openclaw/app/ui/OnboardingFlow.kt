@@ -96,8 +96,9 @@ import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.R
 import ai.openclaw.app.node.DeviceNotificationListenerService
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 
 private enum class OnboardingStep(val index: Int, val label: String) {
   Welcome(1, "Welcome"),
@@ -241,6 +242,13 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   var attemptedConnect by rememberSaveable { mutableStateOf(false) }
 
   val lifecycleOwner = LocalLifecycleOwner.current
+  val qrScannerOptions =
+    remember {
+      GmsBarcodeScannerOptions.Builder()
+        .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+        .build()
+    }
+  val qrScanner = remember(context, qrScannerOptions) { GmsBarcodeScanning.getClient(context, qrScannerOptions) }
 
   val smsAvailable =
     remember(context) {
@@ -460,23 +468,6 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
   }
 
-  val qrScanLauncher =
-    rememberLauncherForActivityResult(ScanContract()) { result ->
-      val contents = result.contents?.trim().orEmpty()
-      if (contents.isEmpty()) {
-        return@rememberLauncherForActivityResult
-      }
-      val scannedSetupCode = resolveScannedSetupCode(contents)
-      if (scannedSetupCode == null) {
-        gatewayError = "QR code did not contain a valid setup code."
-        return@rememberLauncherForActivityResult
-      }
-      setupCode = scannedSetupCode
-      gatewayInputMode = GatewayInputMode.SetupCode
-      gatewayError = null
-      attemptedConnect = false
-    }
-
   if (pendingTrust != null) {
     val prompt = pendingTrust!!
     AlertDialog(
@@ -552,14 +543,28 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
               gatewayError = gatewayError,
               onScanQrClick = {
                 gatewayError = null
-                qrScanLauncher.launch(
-                  ScanOptions().apply {
-                    setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                    setPrompt("Scan OpenClaw onboarding QR")
-                    setBeepEnabled(false)
-                    setOrientationLocked(false)
-                  },
-                )
+                qrScanner.startScan()
+                  .addOnSuccessListener { barcode ->
+                    val contents = barcode.rawValue?.trim().orEmpty()
+                    if (contents.isEmpty()) {
+                      return@addOnSuccessListener
+                    }
+                    val scannedSetupCode = resolveScannedSetupCode(contents)
+                    if (scannedSetupCode == null) {
+                      gatewayError = "QR code did not contain a valid setup code."
+                      return@addOnSuccessListener
+                    }
+                    setupCode = scannedSetupCode
+                    gatewayInputMode = GatewayInputMode.SetupCode
+                    gatewayError = null
+                    attemptedConnect = false
+                  }
+                  .addOnCanceledListener {
+                    // User dismissed the scanner; preserve current form state.
+                  }
+                  .addOnFailureListener {
+                    gatewayError = qrScannerErrorMessage()
+                  }
               },
               onAdvancedOpenChange = { gatewayAdvancedOpen = it },
               onInputModeChange = {
@@ -1783,6 +1788,10 @@ private fun FeatureCard(
 
 private fun isPermissionGranted(context: Context, permission: String): Boolean {
   return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+}
+
+private fun qrScannerErrorMessage(): String {
+  return "Google Code Scanner could not start. Update Google Play services or use the setup code manually."
 }
 
 private fun isNotificationListenerEnabled(context: Context): Boolean {
