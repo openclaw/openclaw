@@ -201,6 +201,54 @@ describe("gateway-status command", () => {
     expect(targets[0]?.summary).toBeTruthy();
   });
 
+  it("treats missing-scope RPC probe failures as degraded but reachable", async () => {
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+    readBestEffortConfig.mockResolvedValueOnce({
+      gateway: {
+        mode: "local",
+        auth: { mode: "token", token: "ltok" },
+      },
+    } as never);
+    probeGateway.mockResolvedValueOnce({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: 51,
+      error: "missing scope: operator.read",
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    await runGatewayStatus(runtime, { timeout: "1000", json: true });
+
+    expect(runtimeErrors).toHaveLength(0);
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      ok?: boolean;
+      degraded?: boolean;
+      warnings?: Array<{ code?: string; targetIds?: string[] }>;
+      targets?: Array<{
+        connect?: {
+          ok?: boolean;
+          rpcOk?: boolean;
+          scopeLimited?: boolean;
+        };
+      }>;
+    };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.degraded).toBe(true);
+    expect(parsed.targets?.[0]?.connect).toMatchObject({
+      ok: true,
+      rpcOk: false,
+      scopeLimited: true,
+    });
+    const scopeLimitedWarning = parsed.warnings?.find(
+      (warning) => warning.code === "probe_scope_limited",
+    );
+    expect(scopeLimitedWarning?.targetIds).toContain("localLoopback");
+  });
+
   it("surfaces unresolved SecretRef auth diagnostics in warnings", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
     await withEnvAsync({ MISSING_GATEWAY_TOKEN: undefined }, async () => {
