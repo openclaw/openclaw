@@ -733,7 +733,7 @@ export function formatAssistantErrorText(
   }
 
   if (
-    /tool_use.*without.*tool_result|tool_result.*without.*tool_use|tool_use.*immediately after/i.test(
+    /tool_use.*without.*tool_result|tool_result.*without.*tool_use|tool_use.*ids?.*tool_result.*immediately after/i.test(
       raw,
     )
   ) {
