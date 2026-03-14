@@ -10,6 +10,15 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import type { WebChannel } from "../utils.js";
 import { jidToE164, resolveUserPath } from "../utils.js";
 
+/** Reject symlinks on credential files (consistent with Telegram/Zalo/IRC). */
+function rejectIfSymlink(filePath: string): boolean {
+  try {
+    return fsSync.lstatSync(filePath).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
 export function resolveDefaultWebAuthDir(): string {
   return path.join(resolveOAuthDir(), "whatsapp", DEFAULT_ACCOUNT_ID);
 }
@@ -26,7 +35,11 @@ export function resolveWebCredsBackupPath(authDir: string): string {
 
 export function hasWebCredsSync(authDir: string): boolean {
   try {
-    const stats = fsSync.statSync(resolveWebCredsPath(authDir));
+    const credsPath = resolveWebCredsPath(authDir);
+    if (rejectIfSymlink(credsPath)) {
+      return false;
+    }
+    const stats = fsSync.statSync(credsPath);
     return stats.isFile() && stats.size > 1;
   } catch {
     return false;
@@ -36,6 +49,13 @@ export function hasWebCredsSync(authDir: string): boolean {
 export function readCredsJsonRaw(filePath: string): string | null {
   try {
     if (!fsSync.existsSync(filePath)) {
+      return null;
+    }
+    if (rejectIfSymlink(filePath)) {
+      getChildLogger({ module: "web-session" }).warn(
+        { filePath },
+        "rejected symlink on WhatsApp credential file",
+      );
       return null;
     }
     const stats = fsSync.statSync(filePath);
@@ -65,6 +85,12 @@ export function maybeRestoreCredsFromBackup(authDir: string): void {
       return;
     }
 
+    // Reject symlinked targets for the restore destination.
+    if (rejectIfSymlink(credsPath)) {
+      logger.warn({ credsPath }, "refused to restore creds: target is a symlink");
+      return;
+    }
+
     // Ensure backup is parseable before restoring.
     JSON.parse(backupRaw);
     fsSync.copyFileSync(backupPath, credsPath);
@@ -89,8 +115,11 @@ export async function webAuthExists(authDir: string = resolveDefaultWebAuthDir()
     return false;
   }
   try {
-    const stats = await fs.stat(credsPath);
-    if (!stats.isFile() || stats.size <= 1) {
+    const lstat = await fs.lstat(credsPath);
+    if (lstat.isSymbolicLink()) {
+      return false;
+    }
+    if (!lstat.isFile() || lstat.size <= 1) {
       return false;
     }
     const raw = await fs.readFile(credsPath, "utf-8");
@@ -153,7 +182,7 @@ export function readWebSelfId(authDir: string = resolveDefaultWebAuthDir()) {
   // Read the cached WhatsApp Web identity (jid + E.164) from disk if present.
   try {
     const credsPath = resolveWebCredsPath(resolveUserPath(authDir));
-    if (!fsSync.existsSync(credsPath)) {
+    if (!fsSync.existsSync(credsPath) || rejectIfSymlink(credsPath)) {
       return { e164: null, jid: null } as const;
     }
     const raw = fsSync.readFileSync(credsPath, "utf-8");
@@ -172,7 +201,11 @@ export function readWebSelfId(authDir: string = resolveDefaultWebAuthDir()) {
  */
 export function getWebAuthAgeMs(authDir: string = resolveDefaultWebAuthDir()): number | null {
   try {
-    const stats = fsSync.statSync(resolveWebCredsPath(resolveUserPath(authDir)));
+    const credsPath = resolveWebCredsPath(resolveUserPath(authDir));
+    if (rejectIfSymlink(credsPath)) {
+      return null;
+    }
+    const stats = fsSync.statSync(credsPath);
     return Date.now() - stats.mtimeMs;
   } catch {
     return null;

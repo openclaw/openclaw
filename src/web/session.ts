@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
+import fsPromises from "node:fs/promises";
 import {
   DisconnectReason,
   fetchLatestBaileysVersion,
@@ -11,7 +12,7 @@ import qrcode from "qrcode-terminal";
 import { formatCliCommand } from "../cli/command-format.js";
 import { danger, success } from "../globals.js";
 import { getChildLogger, toPinoLikeLogger } from "../logging.js";
-import { ensureDir, resolveUserPath } from "../utils.js";
+import { resolveUserPath } from "../utils.js";
 import { VERSION } from "../version.js";
 import {
   maybeRestoreCredsFromBackup,
@@ -100,7 +101,9 @@ export async function createWaSocket(
   );
   const logger = toPinoLikeLogger(baseLogger, verbose ? "info" : "silent");
   const authDir = resolveUserPath(opts.authDir ?? resolveDefaultWebAuthDir());
-  await ensureDir(authDir);
+  await fsPromises.mkdir(authDir, { recursive: true, mode: 0o700 });
+  // chmod to harden directories created by earlier versions (recursive: true won't update existing dirs)
+  await fsPromises.chmod(authDir, 0o700).catch(() => {});
   const sessionLogger = getChildLogger({ module: "web-session" });
   maybeRestoreCredsFromBackup(authDir);
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
