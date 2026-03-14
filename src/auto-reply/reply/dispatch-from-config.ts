@@ -30,6 +30,7 @@ import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
+import { resolveAcpProjectionSettings } from "./acp-stream-settings.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
@@ -338,10 +339,37 @@ export async function dispatchReplyFromConfig(params: {
     }
 
     const shouldSendToolSummaries = ctx.ChatType !== "group" && ctx.CommandSource !== "native";
+    const shouldUseAcpDiscordDraftStream = Boolean(
+      !shouldRouteToOriginating &&
+      currentSurface === "discord" &&
+      params.replyOptions?.onPartialReply &&
+      resolveAcpProjectionSettings(cfg).deliveryMode === "live",
+    );
+    let acpDraftText = "";
+    const acpDraftDispatcher: ReplyDispatcher = shouldUseAcpDiscordDraftStream
+      ? {
+          ...dispatcher,
+          sendBlockReply: (payload) => {
+            const text = payload.text;
+            if (!text?.trim()) {
+              return dispatcher.sendBlockReply(payload);
+            }
+            acpDraftText += text;
+            params.replyOptions
+              ?.onPartialReply?.({ ...payload, text: acpDraftText })
+              ?.catch((err: unknown) => {
+                logVerbose(
+                  `dispatch-from-config: onPartialReply error during ACP draft stream: ${err instanceof Error ? err.message : String(err)}`,
+                );
+              });
+            return true;
+          },
+        }
+      : dispatcher;
     const acpDispatch = await tryDispatchAcpReply({
       ctx,
       cfg,
-      dispatcher,
+      dispatcher: acpDraftDispatcher,
       sessionKey: acpDispatchSessionKey,
       inboundAudio,
       sessionTtsAuto,
@@ -356,6 +384,15 @@ export async function dispatchReplyFromConfig(params: {
       markIdle,
     });
     if (acpDispatch) {
+      if (
+        shouldUseAcpDiscordDraftStream &&
+        !acpDispatch.queuedFinal &&
+        acpDraftText.trim() &&
+        dispatcher.sendFinalReply({ text: acpDraftText })
+      ) {
+        acpDispatch.queuedFinal = true;
+        acpDispatch.counts.final += 1;
+      }
       return acpDispatch;
     }
 
@@ -474,7 +511,7 @@ export async function dispatchReplyFromConfig(params: {
       const acpTailDispatch = await tryDispatchAcpReply({
         ctx,
         cfg,
-        dispatcher,
+        dispatcher: acpDraftDispatcher,
         sessionKey: acpDispatchSessionKey,
         inboundAudio,
         sessionTtsAuto,
@@ -489,6 +526,15 @@ export async function dispatchReplyFromConfig(params: {
         markIdle,
       });
       if (acpTailDispatch) {
+        if (
+          shouldUseAcpDiscordDraftStream &&
+          !acpTailDispatch.queuedFinal &&
+          acpDraftText.trim() &&
+          dispatcher.sendFinalReply({ text: acpDraftText })
+        ) {
+          acpTailDispatch.queuedFinal = true;
+          acpTailDispatch.counts.final += 1;
+        }
         return acpTailDispatch;
       }
     }
