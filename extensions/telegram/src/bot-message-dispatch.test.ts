@@ -2326,13 +2326,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(statusReactionController.setThinking).toHaveBeenCalledTimes(1);
     expect(statusReactionController.setTool).toHaveBeenCalledWith("web_search");
     expect(statusReactionController.setDone).toHaveBeenCalledTimes(1);
-    expect(events).toEqual([
-      "queued",
-      "queued:resolved",
-      "thinking",
-      "tool:web_search",
-      "done",
-    ]);
+    expect(events).toEqual(["queued", "queued:resolved", "thinking", "tool:web_search", "done"]);
   });
 
   it("shows compacting reaction during auto-compaction and resumes thinking", async () => {
