@@ -265,6 +265,12 @@ export async function applyInlineDirectiveOverrides(params: {
     formatModelSwitchEvent,
     agentCfg,
   });
+  if (persisted.hookError) {
+    return {
+      kind: "reply",
+      reply: { text: `Model change blocked: ${persisted.hookError}` },
+    };
+  }
   provider = persisted.provider;
   model = persisted.model;
   contextTokens = persisted.contextTokens;

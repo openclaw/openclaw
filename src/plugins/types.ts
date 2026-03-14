@@ -451,10 +451,19 @@ export type PluginHookBeforeMessageProcessEvent = {
 };
 
 export type PluginHookBeforeMessageProcessResult = {
-  /** Extra text to inject ephemerally into the LLM call (e.g. flashback/resonance). */
+  /** Extra text to inject ephemerally into the LLM call (e.g. flashback/resonance). Not cached. */
   extraSystemContext?: string;
+  /**
+   * Extra text to append to the system prompt (before Runtime section).
+   * Use for stable per-mode behavioral hints that should benefit from KV cache
+   * (e.g. hyperfocus startup override). Unlike extraSystemContext, this is part
+   * of the system prompt and will be cached by the model server.
+   */
+  extraSystemPrompt?: string;
   /** Narrative story content for system prompt injection. */
   narrativeStory?: string;
+  /** Filenames to suppress from workspace contextFiles in this run (e.g. ["SOUL.md", "USER.md"]). */
+  suppressContextFiles?: string[];
 };
 
 // Message context
@@ -601,13 +610,13 @@ export type PluginHookSubagentSpawningEvent = {
 
 export type PluginHookSubagentSpawningResult =
   | {
-    status: "ok";
-    threadBindingReady?: boolean;
-  }
+      status: "ok";
+      threadBindingReady?: boolean;
+    }
   | {
-    status: "error";
-    error: string;
-  };
+      status: "error";
+      error: string;
+    };
 
 // subagent_delivery_target hook
 export type PluginHookSubagentDeliveryTargetEvent = {

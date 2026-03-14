@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import { runBeforeModelChangeHook } from "../../auto-reply/reply/directive-handling.persist.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
@@ -551,6 +552,8 @@ export async function runEmbeddedPiAgent(
         // (e.g. flashback resonance + narrative story) before the run loop starts.
         let narrativeStory: string | undefined;
         let mindResonance: string | undefined;
+        let pluginExtraSystemPrompt: string | undefined;
+        let suppressContextFiles: string[] | undefined;
         if (hookRunner?.hasHooks("before_message_process") && !isProbeSession) {
           try {
             const { isSubagentSessionKey } = await import("../../routing/session-key.js");
@@ -567,6 +570,8 @@ export async function runEmbeddedPiAgent(
             );
             narrativeStory = messageProcessResult?.narrativeStory;
             mindResonance = messageProcessResult?.extraSystemContext;
+            pluginExtraSystemPrompt = messageProcessResult?.extraSystemPrompt;
+            suppressContextFiles = messageProcessResult?.suppressContextFiles;
           } catch (hookErr) {
             log.warn(`before_message_process hook failed: ${String(hookErr)}`);
           }
@@ -696,7 +701,7 @@ export async function runEmbeddedPiAgent(
               onReasoningEnd: params.onReasoningEnd,
               onToolResult: params.onToolResult,
               onAgentEvent: wrappedOnAgentEvent,
-              extraSystemPrompt: undefined,
+              extraSystemPrompt: pluginExtraSystemPrompt || undefined,
               inputProvenance: params.inputProvenance,
               streamParams: params.streamParams,
               ownerDisplay: params.config?.commands?.ownerDisplay ?? "raw",
@@ -704,6 +709,7 @@ export async function runEmbeddedPiAgent(
               enforceFinalTag: params.enforceFinalTag,
               narrativeStory,
               mindResonance: mindResonance || undefined,
+              suppressContextFiles,
             });
 
             const {
@@ -1192,6 +1198,23 @@ export async function runEmbeddedPiAgent(
             log.debug(
               `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
             );
+            // Fire afterResponse shell hook (fire-and-forget) after a successful response.
+            // Skipped on aborts, errors, and probe sessions.
+            if (!aborted && !assistantErrorText && !isProbeSession) {
+              const agentCfg = params.config?.agents?.defaults;
+              const activeModelKey = `${provider}/${modelId}`;
+              const modelCfg = agentCfg?.models?.[activeModelKey];
+              const afterResponseCfg = modelCfg?.afterResponse ?? agentCfg?.afterResponse;
+              if (afterResponseCfg?.command) {
+                void runBeforeModelChangeHook({
+                  hookCfg: afterResponseCfg,
+                  previousProvider: provider,
+                  previousModel: modelId,
+                  nextProvider: provider,
+                  nextModel: modelId,
+                }).catch(() => {});
+              }
+            }
             if (lastProfileId) {
               await markAuthProfileGood({
                 store: authStore,

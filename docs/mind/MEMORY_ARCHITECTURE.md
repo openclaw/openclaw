@@ -15,38 +15,44 @@ MindBot (OpenClaw fork) implements a **Dual-Process Theory of Mind**, separating
 The memory system is divided into two primary loops:
 
 ### A. The Conscious System (Foreground)
-*   **Context Window**: Holds the short-term chat history for immediate response generation.
-*   **Direct Recall Tools**:
-    *   `remember`: Queries the Graphiti knowledge graph for facts and entities.
-    *   `journal_memory_search`: Semantically searches Markdown chunks from `MEMORY.md` and `memory/*.md`.
-    *   `journal_memory_get`: Reads specific memory file content by path.
+
+- **Context Window**: Holds the short-term chat history for immediate response generation.
+- **Direct Recall Tools**:
+  - `remember`: Queries the Graphiti knowledge graph for facts and entities.
+  - `activate_hyperfocus_mode`: Activates hyperfocus mode with an optional goal, injected into the system prompt for the duration of the session.
+  - `deactivate_hyperfocus_mode`: Exits hyperfocus mode; accepts a summary from Mind used as closing message and Graphiti episode content.
 
 **Recall Protocol**:
-When the `mind-memory` plugin is active, the system prompt instructs the agent to check *both* memory systems (`remember` for the knowledge graph, `journal_memory_search` for Markdown files) before answering questions about prior work, decisions, or user preferences. When only the base memory plugin is active, the prompt guides `journal_memory_search` / `journal_memory_get` only.
+When `mind-memory` is active, the system prompt instructs the agent to use `remember` before answering questions about prior work, decisions, or user preferences. Subconscious flashbacks surface additional relevant memories automatically before each turn without requiring an explicit tool call.
 
 ### B. The Subconscious System (Background)
-*   **Memory Resonance**: Before every turn, a 6-phase **Subconscious Resonance Pipeline** surfaces relevant past moments as natural-language flashbacks silently injected into the system prompt. See [Section 5](#5-the-subconscious-resonance-pipeline) for full detail.
-*   **Narrative Consolidation**: A background process distills raw conversation (batched by token count) into a persistent, first-person autobiography (`STORY.md`).
+
+- **Memory Resonance**: Before every turn, a 6-phase **Subconscious Resonance Pipeline** surfaces relevant past moments as natural-language flashbacks silently injected into the system prompt. See [Section 5](#5-the-subconscious-resonance-pipeline) for full detail.
+- **Narrative Consolidation**: A background process distills raw conversation (batched by token count) into a persistent, first-person autobiography (`STORY.md`).
 
 ---
 
 ## 2. Memory Components
 
 ### Graphiti (Episodic & Semantic)
+
 MindBot uses Graphiti (via MCP server) as its primary long-term repository.
-*   **Episodes**: Every turn is stored as a raw chronological event.
-*   **Entities (Nodes)**: People, places, concepts extracted from conversations.
-*   **Facts (Edges)**: Relationships and facts connecting entities.
-*   **Neural Resonance**: Retrieval-Augmented Generation (RAG) using semantic search to find relevant past interactions.
-*   **Heartbeat Isolation**: Messages like `HEARTBEAT_OK` are filtered out before reaching the graph to maintain signal quality.
-*   **Docker-based**: Runs via Docker Compose with FalkorDB backend at `http://localhost:8001`.
+
+- **Episodes**: Every turn is stored as a raw chronological event.
+- **Entities (Nodes)**: People, places, concepts extracted from conversations.
+- **Facts (Edges)**: Relationships and facts connecting entities.
+- **Neural Resonance**: Retrieval-Augmented Generation (RAG) using semantic search to find relevant past interactions.
+- **Heartbeat Isolation**: Messages like `HEARTBEAT_OK` are filtered out before reaching the graph to maintain signal quality.
+- **Docker-based**: Runs via Docker Compose with FalkorDB backend at `http://localhost:8001`.
 
 ### Mind Memory (`STORY.md`)
+
 The core of MindBot's identity is stored in a local Markdown file.
-*   **The Global Story**: A first-person narrative ("I", "My") that evolves with the user.
-*   **Global Scope**: All interactions across channels are consolidated into a single identity (`global-user-memory`).
-*   **Persistence**: Unlike context-window memory, the story is perpetual and survives session resets.
-*   **Injection**: Content is injected into the agent's system prompt every turn, providing historical weight and temporal awareness.
+
+- **The Global Story**: A first-person narrative ("I", "My") that evolves with the user.
+- **Global Scope**: All interactions across channels are consolidated into a single identity (`global-user-memory`).
+- **Persistence**: Unlike context-window memory, the story is perpetual and survives session resets.
+- **Injection**: Content is injected into the agent's system prompt every turn, providing historical weight and temporal awareness.
 
 ---
 
@@ -81,23 +87,26 @@ sequenceDiagram
 
 ### Consolidation Triggers
 
-| Trigger | When | Method |
-|---|---|---|
-| **Global Sync** | Agent startup (before first turn) | `syncGlobalNarrative` — scans last 5 `.jsonl` session files, collects messages after anchor |
-| **Session Sync** | After context window compaction | `syncStoryWithSession` — processes in-memory message array |
+| Trigger              | When                                            | Method                                                                                        |
+| -------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| **Global Sync**      | Agent startup (before first turn)               | `syncGlobalNarrative` — scans last 5 `.jsonl` session files, collects messages after anchor   |
+| **Session Sync**     | After context window compaction                 | `syncStoryWithSession` — processes in-memory message array                                    |
 | **Legacy Bootstrap** | First-time setup with pre-existing memory files | `bootstrapFromLegacyMemory` — concatenates all historical `YYYY-MM-DD.md` files into one pass |
 
 ### The Anchor Timestamp Mechanism
 
 Every successful write to `STORY.md` embeds an invisible HTML comment:
+
 ```html
 <!-- LAST_PROCESSED: 2026-01-28T13:45:00.000Z -->
 ```
+
 On the next consolidation, the service reads this timestamp and **only processes messages newer than it**, preventing any message from being narrativized twice.
 
 ### Chunked Processing Strategy
 
 To avoid exceeding the narrative LLM's context window, messages are grouped into token-limited batches:
+
 1. Estimate tokens per message using `estimateTokens()`
 2. Accumulate messages until the batch would exceed `safeTokenLimit` (default: 50,000 tokens)
 3. Call `updateNarrativeStory` per batch — each call receives the current story and extends it
@@ -109,11 +118,11 @@ Messages matching heartbeat patterns (e.g. `Read HEARTBEAT.md ... reply HEARTBEA
 
 ### Safety & Integrity Mechanisms
 
-*   **File Lock** (`withFileLock`): All STORY.md writes acquire an exclusive file lock (`STORY.md.lock`), preventing concurrent corruption across parallel consolidation calls.
-*   **Anchor Invariant**: `LAST_PROCESSED` is the only mechanism used to determine what is new. It is written atomically with the story content.
-*   **Type Validation**: Response text is validated as `typeof response?.text === "string"` before writing — prevents `[object Object]` corruption.
-*   **Graceful Degradation**: Empty or null LLM responses return the current story unchanged.
-*   **Heartbeat Protection**: Heartbeat messages never enter the narrative or Graphiti.
+- **File Lock** (`withFileLock`): All STORY.md writes acquire an exclusive file lock (`STORY.md.lock`), preventing concurrent corruption across parallel consolidation calls.
+- **Anchor Invariant**: `LAST_PROCESSED` is the only mechanism used to determine what is new. It is written atomically with the story content.
+- **Type Validation**: Response text is validated as `typeof response?.text === "string"` before writing — prevents `[object Object]` corruption.
+- **Graceful Degradation**: Empty or null LLM responses return the current story unchanged.
+- **Heartbeat Protection**: Heartbeat messages never enter the narrative or Graphiti.
 
 ---
 
@@ -128,14 +137,14 @@ Messages matching heartbeat patterns (e.g. `Read HEARTBEAT.md ... reply HEARTBEA
 
 The prompt enforces:
 
-| Rule | Description |
-|---|---|
-| **Voice** | Always first-person (`I`, `Me`, `My`) |
-| **Chapter format** | `### [YYYY-MM-DD HH:MM] Short evocative title` |
+| Rule                      | Description                                                   |
+| ------------------------- | ------------------------------------------------------------- |
+| **Voice**                 | Always first-person (`I`, `Me`, `My`)                         |
+| **Chapter format**        | `### [YYYY-MM-DD HH:MM] Short evocative title`                |
 | **Biographical fidelity** | Preserve concrete facts, people's names, outcomes, milestones |
-| **No duplication** | Never repeat events already in the existing story |
-| **Length limit** | Auto-summarize older chapters if approaching 10,000 words |
-| **No metadata** | Identity/soul file headers are never included in output |
+| **No duplication**        | Never repeat events already in the existing story             |
+| **Length limit**          | Auto-summarize older chapters if approaching 10,000 words     |
+| **No metadata**           | Identity/soul file headers are never included in output       |
 
 ### SubconsciousAgent Factory
 
@@ -143,16 +152,16 @@ The prompt enforces:
 
 Factory function that creates a lightweight LLM client for narrative generation:
 
-*   **Streaming**: Uses `streamSimple` from `@mariozechner/pi-ai` for efficient token streaming.
-*   **Error Detection**: Detects error events emitted by the stream (not thrown as exceptions).
-*   **Automatic Failover**: If primary model fails via Copilot, automatically retries with `gpt-4o`:
-    ```typescript
-    if (result.streamError && isCopilotProvider && result.text.length === 0) {
-      // Failover to gpt-4o
-    }
-    ```
-*   **Audio Format Handling**: Processes mu-law audio chunks (8kHz telephony standard).
-*   **Debug Mode**: Comprehensive logging when `debug: true` is passed.
+- **Streaming**: Uses `streamSimple` from `@mariozechner/pi-ai` for efficient token streaming.
+- **Error Detection**: Detects error events emitted by the stream (not thrown as exceptions).
+- **Automatic Failover**: If primary model fails via Copilot, automatically retries with `gpt-4o`:
+  ```typescript
+  if (result.streamError && isCopilotProvider && result.text.length === 0) {
+    // Failover to gpt-4o
+  }
+  ```
+- **Audio Format Handling**: Processes mu-law audio chunks (8kHz telephony standard).
+- **Debug Mode**: Comprehensive logging when `debug: true` is passed.
 
 ### Model Resolution
 
@@ -165,16 +174,14 @@ Narrative model resolution follows this hierarchy:
 3. **Error handling**: If resolution fails, logs warning and falls back gracefully.
 
 ```typescript
-const narrativeProvider =
-  (mindConfig?.config as any)?.narrative?.provider || provider;
-const narrativeModel =
-  (mindConfig?.config as any)?.narrative?.model || modelId;
+const narrativeProvider = (mindConfig?.config as any)?.narrative?.provider || provider;
+const narrativeModel = (mindConfig?.config as any)?.narrative?.model || modelId;
 ```
 
 The SubconsciousAgent is created at two points in the agent lifecycle:
 
-*   **Global narrative sync**: Before agent run starts (batch consolidation of recent sessions).
-*   **Post-compaction**: After context window compaction (consolidate compacted messages).
+- **Global narrative sync**: Before agent run starts (batch consolidation of recent sessions).
+- **Post-compaction**: After context window compaction (consolidate compacted messages).
 
 ### Integration Points
 
@@ -187,11 +194,12 @@ The SubconsciousAgent is created at two points in the agent lifecycle:
 5. **Post-compaction**: Consolidates compacted messages into story.
 
 **Safety Mechanisms**:
-*   **Metadata Anchors**: `<!-- LAST_PROCESSED: [ISO] -->` tracks narrated progress.
-*   **Heartbeat Protection**: Consolidation skipped for heartbeat turns.
-*   **Audit Log**: `pending-episodes.log` provides reliable, auditable trace.
-*   **Type Validation**: Strict type checking prevents object/string confusion.
-*   **Graceful Degradation**: Empty responses return current story unchanged.
+
+- **Metadata Anchors**: `<!-- LAST_PROCESSED: [ISO] -->` tracks narrated progress.
+- **Heartbeat Protection**: Consolidation skipped for heartbeat turns.
+- **Audit Log**: `pending-episodes.log` provides reliable, auditable trace.
+- **Type Validation**: Strict type checking prevents object/string confusion.
+- **Graceful Degradation**: Empty responses return current story unchanged.
 
 ---
 
@@ -230,6 +238,7 @@ sequenceDiagram
 ### Phase 1 — Seed Extraction
 
 `SubconsciousService.generateSeekerQueries()` and `extractEntities()` use the Subconscious Agent (a lightweight LLM) to analyze the current message + recent history and produce:
+
 - **Named entities**: People, places, projects
 - **Semantic queries**: 2–3 clean search phrases (Telegram IDs and technical metadata are stripped)
 
@@ -255,23 +264,23 @@ private sanitizeQuery(query: string): string {
 
 `getRelativeTimeDescription(date)` in `src/utils/time-format.ts` converts each memory's timestamp into a human-readable sensation:
 
-| Range | Label |
-|---|---|
-| < 30 min | `a moment ago` |
-| 30 min – 2 h | `a little while ago` |
-| 2–6 h | `a few hours ago` |
-| 6–18 h | `earlier today` |
-| 18–30 h | `yesterday` |
-| 2–4 days | `a few days ago` |
-| 4–10 days | `last week` |
-| 10–20 days | `a couple of weeks ago` |
-| 20–45 days | `about a month ago` |
-| 45–90 days | `a couple of months ago` |
-| 3–6 months | `several months ago` |
-| 6–11 months | `almost a year ago` |
-| ~1 year | `about a year ago` |
-| ~1 year+ | `over a year ago` |
-| ~N years | `about N years ago`, `over N years ago`, `almost N+1 years ago` |
+| Range        | Label                                                           |
+| ------------ | --------------------------------------------------------------- |
+| < 30 min     | `a moment ago`                                                  |
+| 30 min – 2 h | `a little while ago`                                            |
+| 2–6 h        | `a few hours ago`                                               |
+| 6–18 h       | `earlier today`                                                 |
+| 18–30 h      | `yesterday`                                                     |
+| 2–4 days     | `a few days ago`                                                |
+| 4–10 days    | `last week`                                                     |
+| 10–20 days   | `a couple of weeks ago`                                         |
+| 20–45 days   | `about a month ago`                                             |
+| 45–90 days   | `a couple of months ago`                                        |
+| 3–6 months   | `several months ago`                                            |
+| 6–11 months  | `almost a year ago`                                             |
+| ~1 year      | `about a year ago`                                              |
+| ~1 year+     | `over a year ago`                                               |
+| ~N years     | `about N years ago`, `over N years ago`, `almost N+1 years ago` |
 
 The relative label is combined with the exact date: `a few days ago — Jan 9`.
 
@@ -305,10 +314,12 @@ The main agent treats these as its own recollections — informing tone and cont
 ---
 
 ## 6. Prompt Injection
+
 During every agent turn, the `STORY.md` content is injected into the System Prompt. This provides the agent with:
-*   **Historical Weight**: Knowledge of how the relationship has evolved over months.
-*   **Temporal Awareness**: Ability to comment on the passage of time.
-*   **Consistent Voice**: Self-reinforcement of its own character arc.
+
+- **Historical Weight**: Knowledge of how the relationship has evolved over months.
+- **Temporal Awareness**: Ability to comment on the passage of time.
+- **Consistent Voice**: Self-reinforcement of its own character arc.
 
 ---
 
@@ -320,15 +331,15 @@ Configure the narrative model in your mindConfig:
 
 ```json5
 {
-  "mindConfig": {
-    "config": {
-      "narrative": {
-        "provider": "anthropic",           // LLM provider for narrative
-        "model": "claude-opus-4-6",        // Model for story generation
-        "autoBootstrapHistory": true       // Load historical episodes on startup
-      }
-    }
-  }
+  mindConfig: {
+    config: {
+      narrative: {
+        provider: "anthropic", // LLM provider for narrative
+        model: "claude-opus-4-6", // Model for story generation
+        autoBootstrapHistory: true, // Load historical episodes on startup
+      },
+    },
+  },
 }
 ```
 
@@ -336,49 +347,19 @@ Configure the narrative model in your mindConfig:
 
 ```json5
 {
-  "plugins": {
-    "entries": {
+  plugins: {
+    entries: {
       "mind-memory": {
-        "enabled": true,
-        "config": {
-          "graphiti": {
-            "baseUrl": "http://localhost:8001",
-            "autoStart": true                // Auto-start Docker containers
-          }
-        }
-      }
-    }
-  }
-}
-```
-
-### Memory Search Configuration
-
-```json5
-{
-  "agents": {
-    "defaults": {
-      "memorySearch": {
-        "provider": "openai",               // or "gemini", "local"
-        "model": "text-embedding-3-small",
-        "query": {
-          "hybrid": {
-            "enabled": true,                // Vector + BM25 keyword search
-            "vectorWeight": 0.7,
-            "textWeight": 0.3,
-            "mmr": {
-              "enabled": true,              // Diversity re-ranking
-              "lambda": 0.7
-            },
-            "temporalDecay": {
-              "enabled": true,              // Recency boost
-              "halfLifeDays": 30
-            }
-          }
-        }
-      }
-    }
-  }
+        enabled: true,
+        config: {
+          graphiti: {
+            baseUrl: "http://localhost:8001",
+            autoStart: true, // Auto-start Docker containers
+          },
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -386,9 +367,9 @@ Configure the narrative model in your mindConfig:
 
 Consolidation triggers are configured in the ConsolidationService:
 
-*   **Default token threshold**: ~5000 tokens in pending-episodes.log.
-*   **Story length limits**: Configurable max length before compression.
-*   **Batch size**: Adjustable based on model context window.
+- **Default token threshold**: ~5000 tokens in pending-episodes.log.
+- **Story length limits**: Configurable max length before compression.
+- **Batch size**: Adjustable based on model context window.
 
 ---
 
@@ -397,25 +378,30 @@ Consolidation triggers are configured in the ConsolidationService:
 ### Common Issues
 
 **1. `[object Object]` in STORY.md**
-*   **Cause**: LLM returning empty object `{}` instead of string.
-*   **Fix**: Strict type checking in ConsolidationService validates `typeof response?.text === "string"`.
+
+- **Cause**: LLM returning empty object `{}` instead of string.
+- **Fix**: Strict type checking in ConsolidationService validates `typeof response?.text === "string"`.
 
 **2. Empty LLM responses**
-*   **Cause**: Model doesn't exist, deprecated, or prompt too large.
-*   **Fix**: Automatic failover to `gpt-4o` via SubconsciousAgent.
+
+- **Cause**: Model doesn't exist, deprecated, or prompt too large.
+- **Fix**: Automatic failover to `gpt-4o` via SubconsciousAgent.
 
 **3. `undefined/undefined` model in logs**
-*   **Cause**: `provider` and `modelId` not resolved from params correctly.
-*   **Check**: Verify local variables from `resolveModel` are used, not `params.provider/model`.
+
+- **Cause**: `provider` and `modelId` not resolved from params correctly.
+- **Check**: Verify local variables from `resolveModel` are used, not `params.provider/model`.
 
 **4. Graphiti connection failure**
-*   **Cause**: Docker containers not running or port conflict.
-*   **Fix**: Run `docker-compose -f extensions/mind-memory/docker-compose.yml up -d` or check port 8001/6379.
+
+- **Cause**: Docker containers not running or port conflict.
+- **Fix**: Run `docker-compose -f extensions/mind-memory/docker-compose.yml up -d` or check port 8001/6379.
 
 **5. RediSearch Syntax Error in Flashback Retrieval**
-*   **Symptom**: `RediSearch: Syntax error at offset N near <number>` in logs during memory resonance.
-*   **Cause**: Raw user input (e.g. Telegram message IDs, punctuation operators) passed directly as a Graphiti search query.
-*   **Fix**: `GraphService.sanitizeQuery()` strips all non-alphanumeric characters before any `searchNodes` / `searchFacts` call. The `SubconsciousService` routes flashbacks through semantic query generation (via the Subconscious Agent) rather than using the raw user prompt as a search query.
+
+- **Symptom**: `RediSearch: Syntax error at offset N near <number>` in logs during memory resonance.
+- **Cause**: Raw user input (e.g. Telegram message IDs, punctuation operators) passed directly as a Graphiti search query.
+- **Fix**: `GraphService.sanitizeQuery()` strips all non-alphanumeric characters before any `searchNodes` / `searchFacts` call. The `SubconsciousService` routes flashbacks through semantic query generation (via the Subconscious Agent) rather than using the raw user prompt as a search query.
 
 ### Logging
 
@@ -426,16 +412,18 @@ const subconsciousAgent = createSubconsciousAgent({
   model: narrativeLLM,
   authStorage,
   modelRegistry,
-  debug: true,  // Enable comprehensive logging
-  autoBootstrapHistory: true
+  debug: true, // Enable comprehensive logging
+  autoBootstrapHistory: true,
 });
 ```
 
 Debug logs include:
-*   Stream open/close events
-*   Payload details (model, API, baseUrl)
-*   Token counts and elapsed time
-*   Error events and failover attempts
+
+- Stream open/close events
+- Payload details (model, API, baseUrl)
+- Token counts and elapsed time
+- Error events and failover attempts
 
 ---
-*Document Version: 2.2.0 - "The Technical Scribe"*
+
+_Document Version: 2.2.0 - "The Technical Scribe"_

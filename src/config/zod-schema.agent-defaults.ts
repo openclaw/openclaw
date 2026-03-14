@@ -17,6 +17,9 @@ export const AgentDefaultsSchema = z
   .object({
     model: AgentModelSchema.optional(),
     imageModel: AgentModelSchema.optional(),
+    auxiliaryModel: z.string().optional(),
+    smallModel: z.string().optional(),
+    intensiveModel: z.string().optional(),
     models: z
       .record(
         z.string(),
@@ -27,6 +30,30 @@ export const AgentDefaultsSchema = z
             params: z.record(z.string(), z.unknown()).optional(),
             /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
             streaming: z.boolean().optional(),
+            /** Shell hook that runs before switching TO this model (also runs at startup if this is the active model). */
+            beforeModelChange: z
+              .object({
+                command: z.string(),
+                timeoutSeconds: z.number().int().positive().optional(),
+              })
+              .strict()
+              .optional(),
+            /** Shell hook that runs before every message turn when this model is active. */
+            beforeMessage: z
+              .object({
+                command: z.string(),
+                timeoutSeconds: z.number().int().positive().optional(),
+              })
+              .strict()
+              .optional(),
+            /** Shell hook fired fire-and-forget after each successful response from this model. */
+            afterResponse: z
+              .object({
+                command: z.string(),
+                timeoutSeconds: z.number().int().positive().optional(),
+              })
+              .strict()
+              .optional(),
           })
           .strict(),
       )
@@ -164,6 +191,22 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    /** Shell command executed before every message turn, for the active model. */
+    beforeMessage: z
+      .object({
+        command: z.string(),
+        timeoutSeconds: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
+    /** Shell hook fired fire-and-forget after each successful response. */
+    afterResponse: z
+      .object({
+        command: z.string(),
+        timeoutSeconds: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

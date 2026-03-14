@@ -10,6 +10,7 @@ import { handleApproveCommand } from "./commands-approve.js";
 import { handleBashCommand } from "./commands-bash.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
+import { handleHyperfocusCommand } from "./commands-hyperfocus.js";
 import {
   handleCommandsListCommand,
   handleContextCommand,
@@ -19,6 +20,10 @@ import {
   handleWhoamiCommand,
 } from "./commands-info.js";
 import { handleModelsCommand } from "./commands-models.js";
+import {
+  handleNarrativeModelCommand,
+  handleGraphitiModelCommand,
+} from "./commands-narrative-graphiti-model.js";
 import { handlePluginCommand } from "./commands-plugin.js";
 import {
   handleAbortTrigger,
@@ -155,8 +160,11 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleConfigCommand,
       handleDebugCommand,
       handleModelsCommand,
+      handleNarrativeModelCommand,
+      handleGraphitiModelCommand,
       handleStopCommand,
       handleCompactCommand,
+      handleHyperfocusCommand,
       handleAbortTrigger,
     ];
   }

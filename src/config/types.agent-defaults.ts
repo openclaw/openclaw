@@ -14,6 +14,33 @@ export type AgentModelEntryConfig = {
   params?: Record<string, unknown>;
   /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
   streaming?: boolean;
+  /**
+   * Shell hook that runs before switching TO this model.
+   * Takes precedence over `agents.defaults.beforeModelChange` if both are set.
+   */
+  beforeModelChange?: {
+    command: string;
+    /** Timeout in seconds (default: 30). */
+    timeoutSeconds?: number;
+  };
+  /**
+   * Shell hook that runs before every message turn when this model is active.
+   * Takes precedence over `agents.defaults.beforeMessage` if both are set.
+   */
+  beforeMessage?: {
+    command: string;
+    /** Timeout in seconds (default: 30). */
+    timeoutSeconds?: number;
+  };
+  /**
+   * Shell hook fired fire-and-forget after each successful response from this model.
+   * Takes precedence over `agents.defaults.afterResponse` if both are set.
+   */
+  afterResponse?: {
+    command: string;
+    /** Timeout in seconds (default: 30). */
+    timeoutSeconds?: number;
+  };
 };
 
 export type AgentModelListConfig = {
@@ -122,8 +149,51 @@ export type AgentDefaultsConfig = {
   model?: AgentModelConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   imageModel?: AgentModelConfig;
+  /**
+   * Auxiliary model for background consolidation tasks (narrative, SUMMARY.md, QUICK.md).
+   * Format: "provider/model". Falls back to the primary model if omitted.
+   */
+  auxiliaryModel?: string;
+  /**
+   * Small/fast model for lightweight tasks (Graphiti query generation, session slug naming).
+   * Format: "provider/model". Falls back to auxiliaryModel, then primary model if omitted.
+   */
+  smallModel?: string;
+  /**
+   * Model to activate automatically when entering intensive/hyperfocus mode.
+   * Format: "provider/model". If omitted, intensive mode does not change the active model.
+   */
+  intensiveModel?: string;
   /** Model catalog with optional aliases (full provider/model keys). */
   models?: Record<string, AgentModelEntryConfig>;
+  /**
+   * Shell command executed before a model change is applied.
+   * Exit 0 = allow, non-zero = reject with stdout/stderr as the error message.
+   * Supports {provider}, {model}, {previousProvider}, {previousModel} placeholders.
+   */
+  beforeModelChange?: {
+    command: string;
+    /** Timeout in seconds (default: 30). */
+    timeoutSeconds?: number;
+  };
+  /**
+   * Shell command executed before every message turn, for the active model.
+   * Per-model `beforeMessage` takes precedence if both are set.
+   */
+  beforeMessage?: {
+    command: string;
+    /** Timeout in seconds (default: 30). */
+    timeoutSeconds?: number;
+  };
+  /**
+   * Shell hook fired fire-and-forget after each successful response.
+   * Per-model `afterResponse` takes precedence if both are set.
+   */
+  afterResponse?: {
+    command: string;
+    /** Timeout in seconds (default: 30). */
+    timeoutSeconds?: number;
+  };
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
   workspace?: string;
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */

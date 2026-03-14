@@ -675,6 +675,10 @@ export function buildAgentSystemPrompt(params: {
     );
   }
 
+  if (params.extraSystemPrompt?.trim()) {
+    lines.push("", params.extraSystemPrompt.trim(), "");
+  }
+
   lines.push(
     "## Runtime",
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),

@@ -48,6 +48,8 @@ export type TelegramCustomCommand = {
   command: string;
   /** Description shown in Telegram command menu. */
   description: string;
+  /** Optional shell command to execute when this command is received. Output is sent back as reply. */
+  shellCommand?: string;
 };
 
 export type TelegramAccountConfig = {

@@ -142,6 +142,39 @@ vLLM, LiteLLM, OAI-proxy, or custom gateways work if they expose an OpenAI-style
 
 Keep `models.mode: "merge"` so hosted models stay available as fallbacks.
 
+## llama.cpp KV Cache Slots
+
+When running llama.cpp directly (not via LM Studio), you can configure KV cache slot management so the server saves and restores context on mode switches — enabling instant context recovery without reprocessing the prompt.
+
+Configure slot IDs per server in the `mind-memory` plugin config:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "mind-memory": {
+        config: {
+          llamacpp: {
+            servers: [
+              {
+                url: "http://192.168.1.250:8080",
+                slots: {
+                  normal: 0, // slot used in normal mode
+                  intensive: 1, // slot used in intensive/hyperfocus mode
+                  subagentBase: 2,
+                },
+              },
+            ],
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Slot operations use the llama.cpp REST API (`POST /slots/{id}` with `{ action, filename }`). All operations are fire-and-forget — they never block the agent or raise errors.
+
 ## Troubleshooting
 
 - Gateway can reach the proxy? `curl http://127.0.0.1:1234/v1/models`.

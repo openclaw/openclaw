@@ -54,10 +54,13 @@ import {
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import {
+  buildAuxModelsKeyboard,
+  buildAuxProviderKeyboard,
   buildModelsKeyboard,
   buildProviderKeyboard,
   calculateTotalPages,
   getModelsPageSize,
+  parseAuxModelCallbackData,
   parseModelCallbackData,
   type ProviderInfo,
 } from "./model-buttons.js";
@@ -1223,6 +1226,101 @@ export const registerTelegramHandlers = ({
             base: callbackMessage,
             from: callback.from,
             text: `/model ${provider}/${model}`,
+          });
+          await processMessage(buildSyntheticContext(ctx, syntheticMessage), [], storeAllowFrom, {
+            forceWasMentioned: true,
+            messageIdOverride: callback.id,
+          });
+          return;
+        }
+
+        return;
+      }
+
+      // Auxiliary model picker callbacks (nm_* for narrative, gm_* for graphiti)
+      const auxModelCallback = parseAuxModelCallbackData(data);
+      if (auxModelCallback) {
+        const { target } = auxModelCallback;
+        const { byProvider, providers } = await buildModelsProviderData(cfg);
+
+        const editAux = async (
+          text: string,
+          buttons: ReturnType<typeof buildAuxProviderKeyboard>,
+        ) => {
+          const keyboard = buildInlineKeyboard(buttons);
+          try {
+            await editCallbackMessage(text, keyboard ? { reply_markup: keyboard } : undefined);
+          } catch (editErr) {
+            const errStr = String(editErr);
+            if (errStr.includes("no text in the message")) {
+              try {
+                await deleteCallbackMessage();
+              } catch {}
+              await replyToCallbackChat(text, keyboard ? { reply_markup: keyboard } : undefined);
+            } else if (!errStr.includes("message is not modified")) {
+              throw editErr;
+            }
+          }
+        };
+
+        const targetLabel = target === "narrative" ? "Narrative model" : "Graphiti/observer model";
+
+        if (auxModelCallback.type === "providers" || auxModelCallback.type === "back") {
+          const providerInfos: ProviderInfo[] = providers.map((p) => ({
+            id: p,
+            count: byProvider.get(p)?.size ?? 0,
+          }));
+          await editAux(
+            `Select provider for ${targetLabel}:`,
+            buildAuxProviderKeyboard(providerInfos, target),
+          );
+          return;
+        }
+
+        if (auxModelCallback.type === "list") {
+          const { provider, page } = auxModelCallback;
+          const modelSet = byProvider.get(provider);
+          if (!modelSet || modelSet.size === 0) {
+            const providerInfos: ProviderInfo[] = providers.map((p) => ({
+              id: p,
+              count: byProvider.get(p)?.size ?? 0,
+            }));
+            await editAux(
+              `Unknown provider: ${provider}\n\nSelect provider for ${targetLabel}:`,
+              buildAuxProviderKeyboard(providerInfos, target),
+            );
+            return;
+          }
+          const models = [...modelSet].toSorted();
+          const pageSize = getModelsPageSize();
+          const totalPages = calculateTotalPages(models.length, pageSize);
+          const safePage = Math.max(1, Math.min(page, totalPages));
+          const currentModel =
+            target === "narrative"
+              ? cfg.agents?.defaults?.auxiliaryModel
+              : cfg.agents?.defaults?.smallModel;
+          const buttons = buildAuxModelsKeyboard(
+            {
+              provider,
+              models,
+              currentModel: currentModel ?? undefined,
+              currentPage: safePage,
+              totalPages,
+              pageSize,
+            },
+            target,
+          );
+          await editAux(`${targetLabel} — ${provider} (${models.length} models)`, buttons);
+          return;
+        }
+
+        if (auxModelCallback.type === "select") {
+          const { provider, model } = auxModelCallback;
+          const command = target === "narrative" ? "narrativemodel" : "graphitimodel";
+          const syntheticMessage = buildSyntheticTextMessage({
+            base: callbackMessage,
+            from: callback.from,
+            text: `/${command} ${provider}/${model}`,
           });
           await processMessage(buildSyntheticContext(ctx, syntheticMessage), [], storeAllowFrom, {
             forceWasMentioned: true,

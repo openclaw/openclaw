@@ -3,6 +3,7 @@ export const TELEGRAM_COMMAND_NAME_PATTERN = /^[a-z0-9_]{1,32}$/;
 export type TelegramCustomCommandInput = {
   command?: string | null;
   description?: string | null;
+  shellCommand?: string | null;
 };
 
 export type TelegramCustomCommandIssue = {
@@ -30,7 +31,7 @@ export function resolveTelegramCustomCommands(params: {
   checkReserved?: boolean;
   checkDuplicates?: boolean;
 }): {
-  commands: Array<{ command: string; description: string }>;
+  commands: Array<{ command: string; description: string; shellCommand?: string }>;
   issues: TelegramCustomCommandIssue[];
 } {
   const entries = Array.isArray(params.commands) ? params.commands : [];
@@ -88,7 +89,8 @@ export function resolveTelegramCustomCommands(params: {
     if (checkDuplicates) {
       seen.add(normalized);
     }
-    resolved.push({ command: normalized, description });
+    const shellCommand = entry?.shellCommand ? String(entry.shellCommand) : undefined;
+    resolved.push({ command: normalized, description, ...(shellCommand ? { shellCommand } : {}) });
   }
 
   return { commands: resolved, issues };

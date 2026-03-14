@@ -74,10 +74,8 @@ The subconscious system operates in the background without requiring explicit to
 The agent can explicitly search memory using these tools:
 
 - **`remember`**: Query the Graphiti knowledge graph for facts and entities from past conversations
-- **`journal_memory_search`**: Semantic search across `MEMORY.md` and `memory/*.md` files
-- **`journal_memory_get`**: Read specific memory file content by path with optional line ranges
 
-These tools allow the agent to actively recall information when needed, complementing the automatic Flashback system.
+This tool allows the agent to actively recall information when needed, complementing the automatic Flashback system.
 
 ### Configuration
 

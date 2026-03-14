@@ -106,6 +106,8 @@ export type RunEmbeddedPiAgentParams = {
   enforceFinalTag?: boolean;
   /** Narrative story context from mind-memory for system prompt injection. */
   narrativeStory?: string;
+  /** Workspace contextFiles to suppress for this run (e.g. ["SOUL.md", "USER.md"]). */
+  suppressContextFiles?: string[];
   /** Callback when history messages are truncated (for mind-memory narrativization). */
   onHistoryTruncated?: (dropped: unknown[]) => Promise<void>;
   /**

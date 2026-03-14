@@ -6,6 +6,29 @@ import { withFileLock, type FileLockOptions } from "../../infra/file-lock.js";
 import { GraphService } from "./GraphService.js";
 import { buildStoryPrompt } from "./story-prompt-builder.js";
 
+/**
+ * Extracts story sections from the last `days` calendar days using the `### [YYYY-MM-DD` header
+ * format written by the narrative consolidator. Falls back to the last 3 sections if none match.
+ */
+function extractRecentStorySections(story: string, days: number): string {
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  // Split on section headers, keeping the delimiter at the start of each chunk.
+  const sections = story.split(/(?=^### \[)/m).filter(Boolean);
+  const datePattern = /^### \[(\d{4}-\d{2}-\d{2})/m;
+  const recent = sections.filter((section) => {
+    const match = section.match(datePattern);
+    if (!match) {
+      return false;
+    }
+    return new Date(match[1]).getTime() >= cutoff;
+  });
+  if (recent.length > 0) {
+    return recent.join("");
+  }
+  // Fallback: last 3 sections so "current focus" is never empty.
+  return sections.slice(-3).join("");
+}
+
 function extractTextFromUnknown(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -473,7 +496,7 @@ ${newStory}
   }
 
   /**
-   * Generates an ultra-compact user profile (QUICK.md) from SOUL.md, USER.md, and STORY.md.
+   * Generates a structured user profile (QUICK.md, ~1000-2000 chars) from SOUL.md, USER.md, and STORY.md.
    * Written to quickPath atomically. Fire-and-forget safe to call without awaiting.
    */
   async generateQuickProfile(
@@ -509,24 +532,25 @@ ${newStory}
         return;
       }
 
-      // Use last 3000 chars of story to stay concise
-      const storyExcerpt = story.length > 3000 ? story.slice(-3000) : story;
+      // Extract recent story sections (last 2 days) using date headers; fall back to last 3 sections.
+      const recentStory = extractRecentStorySections(story, 2);
 
-      const prompt = `You are generating an ultra-compact user profile (QUICK.md) used as fast context for AI memory retrieval.
+      const prompt = `You are generating QUICK.md, a compact user profile used as fast context for AI memory retrieval.
 
-Based on the materials below, write a SINGLE dense paragraph of 500-1000 characters capturing:
-- Who this person is (identity, personality, main traits)
-- Their key relationships and life context
-- Their primary interests, projects, and current focus
+Based on the materials below, write 3 short structured paragraphs (total 1000-2000 characters):
 
-Be factual, specific, and dense. No headers, no lists. Pure prose, single paragraph.
+Paragraph 1 — Identity: Who this person is; personality, core traits, values, tone.
+Paragraph 2 — Life & Relationships: Key relationships, life context, background, emotional landscape.
+Paragraph 3 — Current Focus: Primary projects, interests, goals, and recent activity (derived from the recent story entries below).
 
-${soul ? `=== SOUL.md ===\n${soul}\n\n` : ""}${user ? `=== USER.md ===\n${user}\n\n` : ""}${storyExcerpt ? `=== STORY.md (recent excerpt) ===\n${storyExcerpt}\n\n` : ""}Write the profile (single paragraph, 500-1000 characters):`;
+Be factual, specific, and dense. No headers, no bullet lists. Pure prose, three paragraphs separated by blank lines.
+
+${soul ? `=== SOUL.md ===\n${soul}\n\n` : ""}${user ? `=== USER.md ===\n${user}\n\n` : ""}${recentStory ? `=== STORY.md (recent entries) ===\n${recentStory}\n\n` : ""}Write the profile (3 paragraphs, 1000-2000 characters total):`;
 
       const response = await agent.complete(prompt);
       const rawText = response?.text;
       const text = typeof rawText === "string" ? rawText.trim() : "";
-      if (!text || text.length < 50) {
+      if (!text || text.length < 100) {
         this.log("⚠️ [MIND] QUICK.md generation returned empty/short response, skipping.");
         return;
       }
@@ -546,6 +570,117 @@ ${soul ? `=== SOUL.md ===\n${soul}\n\n` : ""}${user ? `=== USER.md ===\n${user}\
     } catch (e: unknown) {
       process.stderr.write(
         `⚠️ [MIND] QUICK.md generation failed: ${e instanceof Error ? e.message : String(e)}\n`,
+      );
+    }
+  }
+
+  /**
+   * Generates a ~2000-word narrative synthesis (SUMMARY.md) from STORY.md, SOUL.md, USER.md, IDENTITY.md, and MEMORY.md.
+   * Written to summaryPath atomically. Fire-and-forget safe to call without awaiting.
+   * Used in intensive/hyperfocus mode as a compact replacement for the full STORY.md.
+   */
+  async generateSummary(
+    storyPath: string,
+    summaryPath: string,
+    workspaceDir: string,
+    agent: { complete: (prompt: string) => Promise<{ text?: string | null }> },
+  ): Promise<void> {
+    try {
+      // Skip regeneration if SUMMARY.md is already newer than STORY.md
+      const [storyMtime, summaryMtime] = await Promise.all([
+        fs
+          .stat(storyPath)
+          .then((s) => s.mtimeMs)
+          .catch(() => 0),
+        fs
+          .stat(summaryPath)
+          .then((s) => s.mtimeMs)
+          .catch(() => 0),
+      ]);
+      if (summaryMtime > 0 && summaryMtime >= storyMtime) {
+        this.log(`⚡ [MIND] SUMMARY.md is up to date, skipping regeneration`);
+        return;
+      }
+
+      const [soul, identity, user, story, memory] = await Promise.all([
+        fs.readFile(path.join(workspaceDir, "SOUL.md"), "utf-8").catch(() => ""),
+        fs.readFile(path.join(workspaceDir, "IDENTITY.md"), "utf-8").catch(() => ""),
+        fs.readFile(path.join(workspaceDir, "USER.md"), "utf-8").catch(() => ""),
+        fs.readFile(storyPath, "utf-8").catch(() => ""),
+        fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8").catch(() => ""),
+      ]);
+
+      if (!story) {
+        return;
+      }
+
+      // Merge SOUL.md + IDENTITY.md into a single identity source for the summary section.
+      const soulAndIdentity = [soul, identity].filter(Boolean).join("\n\n");
+
+      // Count words in each source to distribute the 2000-word budget proportionally.
+      const countWords = (s: string) => s.split(/\s+/).filter(Boolean).length;
+      const wStory = countWords(story);
+      const wSoul = soulAndIdentity ? countWords(soulAndIdentity) : 0;
+      const wUser = user ? countWords(user) : 0;
+      const wMemory = memory ? countWords(memory) : 0;
+      const wTotal = wStory + wSoul + wUser + wMemory || 1;
+      const BUDGET = 2000;
+      // Extract recent story sections (last 3 days) to give them extra weight in the prompt.
+      const recentStory = extractRecentStorySections(story, 3);
+      // Allocate budget proportionally; sections with no source get 0 words.
+      const budgetStory = Math.max(wStory > 0 ? 50 : 0, Math.round((BUDGET * wStory) / wTotal));
+      const budgetSoul = Math.max(wSoul > 0 ? 50 : 0, Math.round((BUDGET * wSoul) / wTotal));
+      const budgetUser = Math.max(wUser > 0 ? 50 : 0, Math.round((BUDGET * wUser) / wTotal));
+      const budgetMemory = Math.max(wMemory > 0 ? 50 : 0, Math.round((BUDGET * wMemory) / wTotal));
+
+      const sectionInstructions = [
+        soulAndIdentity
+          ? `## Identity & Soul (~${budgetSoul} words)\nSummarize in first person (the agent's voice): core identity, personality, values, tone, limits.\n\n=== SOUL.md + IDENTITY.md ===\n${soulAndIdentity}`
+          : null,
+        `## My Story (~${budgetStory} words)\nSummarize in first person (the agent's voice). Prioritize depth over breadth: give the most words to (a) the most recent entries and (b) the most transcendent or emotionally significant moments regardless of when they happened. Compress mundane or routine older events into a brief arc. Be specific and vivid on the high-weight events.\n\n=== STORY.md (full) ===\n${story}${recentStory !== story ? `\n\n=== STORY.md (recent entries — give these extra detail) ===\n${recentStory}` : ""}`,
+        user
+          ? `## About the User (~${budgetUser} words)\nSummarize USER.md as a concise third-person profile: who they are, how they work, what matters to them.\n\n=== USER.md ===\n${user}`
+          : null,
+        memory
+          ? `## Working Notes (~${budgetMemory} words)\nSummarize MEMORY.md as a concise digest of current working notes, reminders, and in-progress context. Keep it factual and specific.\n\n=== MEMORY.md ===\n${memory}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join("\n\n---\n\n");
+
+      const prompt = `You are generating SUMMARY.md, a compact memory synthesis used during intensive sessions.
+
+Produce exactly the following sections in order, each preceded by its markdown heading. Keep each section within the specified word budget. Use flowing prose within each section (no bullet lists). Be specific and concrete.
+
+${sectionInstructions}
+
+---
+
+Now write the full SUMMARY.md document with the sections above:`;
+
+      const response = await agent.complete(prompt);
+      const rawText = response?.text;
+      const text = typeof rawText === "string" ? rawText.trim() : "";
+      if (!text || text.length < 200) {
+        this.log("⚠️ [MIND] SUMMARY.md generation returned empty/short response, skipping.");
+        return;
+      }
+
+      const lockOptions: FileLockOptions = {
+        retries: { retries: 5, factor: 2, minTimeout: 200, maxTimeout: 5_000, randomize: true },
+        stale: 30_000,
+      };
+
+      await withFileLock(summaryPath, lockOptions, async () => {
+        const tmpPath = `${summaryPath}.tmp`;
+        await fs.writeFile(tmpPath, text, "utf-8");
+        await fs.rename(tmpPath, summaryPath);
+      });
+
+      this.log(`⚡ [MIND] SUMMARY.md updated (${text.length} chars) at ${summaryPath}`);
+    } catch (e: unknown) {
+      process.stderr.write(
+        `⚠️ [MIND] SUMMARY.md generation failed: ${e instanceof Error ? e.message : String(e)}\n`,
       );
     }
   }
@@ -901,6 +1036,12 @@ ${soul ? `=== SOUL.md ===\n${soul}\n\n` : ""}${user ? `=== USER.md ===\n${user}\
         // Story doesn't exist yet
       }
 
+      // Recalculate safeTokenLimit by subtracting prompt overhead (story + identity + fixed instructions)
+      // so chunks never cause the full prompt to exceed the model context window.
+      const overheadChars = (currentStory?.length ?? 0) + (identityContext?.length ?? 0) + 2000; // ~2000 chars for fixed instructions
+      const overheadTokens = Math.ceil(overheadChars / 4);
+      let effectiveTokenLimit = Math.max(4000, safeTokenLimit - overheadTokens);
+
       // 2. Filter New Messages
       const newMessages = messages.filter((m) => {
         let ts = m.timestamp ?? m.created_at ?? 0;
@@ -939,13 +1080,31 @@ ${soul ? `=== SOUL.md ===\n${soul}\n\n` : ""}${user ? `=== USER.md ===\n${user}\
       let currentBatchTokens = 0;
 
       for (const msg of newMessages) {
+        // Extract text the same way updateNarrativeStory does so token estimates are accurate.
+        // msg.content can be an array (tool calls, multimodal) — casting directly to string gives "[object Object]".
+        let msgText = msg.text || "";
+        if (!msgText) {
+          if (Array.isArray(msg.content)) {
+            msgText = (msg.content as unknown[])
+              .map((c) => {
+                if (typeof c === "string") {
+                  return c;
+                }
+                const part = c as { text?: string; content?: string };
+                return part.text ?? part.content ?? "";
+              })
+              .join(" ");
+          } else if (typeof msg.content === "string") {
+            msgText = msg.content;
+          }
+        }
         const msgTokens = estimateTokens({
           role: (msg.role || "assistant") as "user" | "assistant",
-          content: String(msg.text || (msg.content as string) || ""),
+          content: msgText,
           timestamp: 0,
         } as AgentMessage);
 
-        if (currentBatch.length > 0 && currentBatchTokens + msgTokens > safeTokenLimit) {
+        if (currentBatch.length > 0 && currentBatchTokens + msgTokens > effectiveTokenLimit) {
           currentStory = await this.updateNarrativeStory(
             "active-session-batch",
             currentBatch as Array<{ role: string; text: string; timestamp: number | string }>,
@@ -961,6 +1120,10 @@ ${soul ? `=== SOUL.md ===\n${soul}\n\n` : ""}${user ? `=== USER.md ===\n${user}\
           );
           currentBatch = [];
           currentBatchTokens = 0;
+          // Recalculate overhead after story grew from this batch
+          const newOverheadChars =
+            (currentStory?.length ?? 0) + (identityContext?.length ?? 0) + 2000;
+          effectiveTokenLimit = Math.max(4000, safeTokenLimit - Math.ceil(newOverheadChars / 4));
         }
         currentBatch.push(msg);
         currentBatchTokens += msgTokens;

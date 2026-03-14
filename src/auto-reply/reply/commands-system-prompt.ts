@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
@@ -26,6 +27,7 @@ export type CommandsSystemPromptBundle = {
 
 export async function resolveCommandsSystemPromptBundle(
   params: HandleCommandsParams,
+  opts?: { suppressContextFiles?: ReadonlySet<string> | string[]; narrativeStory?: string },
 ): Promise<CommandsSystemPromptBundle> {
   const workspaceDir = params.workspaceDir;
   const { bootstrapFiles, contextFiles: injectedFiles } = await resolveBootstrapContextForRun({
@@ -109,6 +111,17 @@ export async function resolveCommandsSystemPromptBundle(
     : { enabled: false };
   const ttsHint = params.cfg ? buildTtsSystemPromptHint(params.cfg) : undefined;
 
+  const suppressSet = opts?.suppressContextFiles
+    ? new Set(
+        Array.isArray(opts.suppressContextFiles)
+          ? opts.suppressContextFiles
+          : [...opts.suppressContextFiles],
+      )
+    : null;
+  const effectiveContextFiles = suppressSet?.size
+    ? injectedFiles.filter((f) => !suppressSet.has(path.basename(f.path)))
+    : injectedFiles;
+
   const systemPrompt = buildAgentSystemPrompt({
     workspaceDir,
     defaultThinkLevel: params.resolvedThinkLevel,
@@ -122,7 +135,8 @@ export async function resolveCommandsSystemPromptBundle(
     userTimezone,
     userTime,
     userTimeFormat,
-    contextFiles: injectedFiles,
+    contextFiles: effectiveContextFiles,
+    narrativeStory: opts?.narrativeStory,
     skillsPrompt,
     heartbeatPrompt: undefined,
     ttsHint,

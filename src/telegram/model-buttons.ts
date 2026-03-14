@@ -6,6 +6,9 @@
  * - mdl_list_{prov}_{pg}  - show models for provider (page N, 1-indexed)
  * - mdl_sel_{provider/id} - select model
  * - mdl_back              - back to providers list
+ *
+ * Same patterns with prefix "nm_" for narrative model picker,
+ * and "gm_" for graphiti/observer model picker.
  */
 
 export type ButtonRow = Array<{ text: string; callback_data: string }>;
@@ -15,6 +18,9 @@ export type ParsedModelCallback =
   | { type: "list"; provider: string; page: number }
   | { type: "select"; provider: string; model: string }
   | { type: "back" };
+
+/** Which config key a model picker targets. */
+export type ModelPickerTarget = "main" | "narrative" | "graphiti";
 
 export type ProviderInfo = {
   id: string;
@@ -214,4 +220,132 @@ export function getModelsPageSize(): number {
 export function calculateTotalPages(totalModels: number, pageSize?: number): number {
   const size = pageSize ?? MODELS_PAGE_SIZE;
   return size > 0 ? Math.ceil(totalModels / size) : 1;
+}
+
+// ---------------------------------------------------------------------------
+// Auxiliary model pickers (narrative = "nm_", graphiti = "gm_")
+// Same shape as the main model picker but stored in different config keys.
+// ---------------------------------------------------------------------------
+
+const TARGET_PREFIX: Record<Exclude<ModelPickerTarget, "main">, string> = {
+  narrative: "nm",
+  graphiti: "gm",
+};
+
+export type ParsedAuxModelCallback = ParsedModelCallback & {
+  target: Exclude<ModelPickerTarget, "main">;
+};
+
+/**
+ * Parse a narrative ("nm_*") or graphiti ("gm_*") model callback.
+ * Returns null if not a known aux-model pattern.
+ */
+export function parseAuxModelCallbackData(data: string): ParsedAuxModelCallback | null {
+  const trimmed = data.trim();
+  for (const [target, prefix] of Object.entries(TARGET_PREFIX) as [
+    Exclude<ModelPickerTarget, "main">,
+    string,
+  ][]) {
+    if (!trimmed.startsWith(`${prefix}_`)) {
+      continue;
+    }
+    // Reuse the main parser by replacing the prefix
+    const mainStyle = "mdl" + trimmed.slice(prefix.length);
+    const parsed = parseModelCallbackData(mainStyle);
+    if (parsed) {
+      return { ...parsed, target };
+    }
+  }
+  return null;
+}
+
+/**
+ * Build provider keyboard for an aux model picker (narrative or graphiti).
+ */
+export function buildAuxProviderKeyboard(
+  providers: ProviderInfo[],
+  target: Exclude<ModelPickerTarget, "main">,
+): ButtonRow[] {
+  const prefix = TARGET_PREFIX[target];
+  if (providers.length === 0) {
+    return [];
+  }
+
+  const rows: ButtonRow[] = [];
+  let currentRow: ButtonRow = [];
+  for (const provider of providers) {
+    currentRow.push({
+      text: `${provider.id} (${provider.count})`,
+      callback_data: `${prefix}_list_${provider.id}_1`,
+    });
+    if (currentRow.length === 2) {
+      rows.push(currentRow);
+      currentRow = [];
+    }
+  }
+  if (currentRow.length > 0) {
+    rows.push(currentRow);
+  }
+  return rows;
+}
+
+/**
+ * Build model list keyboard for an aux model picker (narrative or graphiti).
+ */
+export function buildAuxModelsKeyboard(
+  params: ModelsKeyboardParams,
+  target: Exclude<ModelPickerTarget, "main">,
+): ButtonRow[] {
+  const prefix = TARGET_PREFIX[target];
+  const { provider, models, currentModel, currentPage, totalPages } = params;
+  const pageSize = params.pageSize ?? MODELS_PAGE_SIZE;
+
+  if (models.length === 0) {
+    return [[{ text: "<< Back", callback_data: `${prefix}_back` }]];
+  }
+
+  const rows: ButtonRow[] = [];
+  const startIndex = (currentPage - 1) * pageSize;
+  const endIndex = Math.min(startIndex + pageSize, models.length);
+  const pageModels = models.slice(startIndex, endIndex);
+
+  const currentModelId = currentModel?.includes("/")
+    ? currentModel.split("/").slice(1).join("/")
+    : currentModel;
+
+  for (const model of pageModels) {
+    const callbackData = `${prefix}_sel_${provider}/${model}`;
+    if (Buffer.byteLength(callbackData, "utf8") > MAX_CALLBACK_DATA_BYTES) {
+      continue;
+    }
+    const isCurrentModel = model === currentModelId;
+    const displayText = truncateModelId(model, 38);
+    rows.push([
+      { text: isCurrentModel ? `${displayText} ✓` : displayText, callback_data: callbackData },
+    ]);
+  }
+
+  if (totalPages > 1) {
+    const paginationRow: ButtonRow = [];
+    if (currentPage > 1) {
+      paginationRow.push({
+        text: "◀ Prev",
+        callback_data: `${prefix}_list_${provider}_${currentPage - 1}`,
+      });
+    }
+    paginationRow.push({
+      text: `${currentPage}/${totalPages}`,
+      callback_data: `${prefix}_list_${provider}_${currentPage}`,
+    });
+    if (currentPage < totalPages) {
+      paginationRow.push({
+        text: "Next ▶",
+        callback_data: `${prefix}_list_${provider}_${currentPage + 1}`,
+      });
+    }
+    rows.push(paginationRow);
+  }
+
+  rows.push([{ text: "<< Back", callback_data: `${prefix}_back` }]);
+  return rows;
 }

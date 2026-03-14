@@ -145,7 +145,7 @@ Available groups:
 - `group:runtime`: `exec`, `bash`, `process`
 - `group:fs`: `read`, `write`, `edit`, `apply_patch`
 - `group:sessions`: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status`
-- `group:memory`: `remember`, `journal_memory_search`, `journal_memory_get`
+- `group:memory`: `remember`
 - `group:web`: `web_search`, `web_fetch`
 - `group:ui`: `browser`, `canvas`
 - `group:automation`: `cron`, `gateway`
@@ -495,13 +495,6 @@ Notes:
 Search the long-term knowledge graph (Graphiti) for facts, entities, and past conversations.
 
 - `query` (required)
-
-### `journal_memory_search` / `journal_memory_get`
-
-Search and read your persistent local diary (`MEMORY.md` and `memory/*.md`).
-
-- `journal_memory_search`: semantic/keyword search
-- `journal_memory_get`: read specific line ranges from a file
 
 ### `agents_list`
 

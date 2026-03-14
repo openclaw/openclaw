@@ -83,6 +83,7 @@ const TelegramCustomCommandSchema = z
   .object({
     command: z.string().transform(normalizeTelegramCommandName),
     description: z.string().transform(normalizeTelegramCommandDescription),
+    shellCommand: z.string().optional(),
   })
   .strict();
 

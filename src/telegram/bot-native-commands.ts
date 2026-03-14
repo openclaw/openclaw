@@ -775,6 +775,53 @@ export const registerTelegramNativeCommands = ({
         });
       }
 
+      // Custom shell commands: execute shellCommand and reply with output
+      for (const customCmd of customCommands) {
+        if (!customCmd.shellCommand) {
+          continue;
+        }
+        const shellCmd = customCmd.shellCommand;
+        bot.command(customCmd.command, async (ctx: TelegramNativeCommandContext) => {
+          const msg = ctx.message;
+          if (!msg || shouldSkipUpdate(ctx)) {
+            return;
+          }
+          const auth = await resolveTelegramCommandAuth({
+            msg,
+            bot,
+            cfg,
+            accountId,
+            telegramCfg,
+            allowFrom,
+            groupAllowFrom,
+            useAccessGroups,
+            resolveGroupPolicy,
+            resolveTelegramGroupConfig,
+            requireAuth: true,
+          });
+          if (!auth) {
+            return;
+          }
+          const { chatId, resolvedThreadId, isGroup } = auth;
+          const threadIdForSend = isGroup ? resolvedThreadId : undefined;
+          const { exec } = await import("node:child_process");
+          const { promisify } = await import("node:util");
+          const execAsync = promisify(exec);
+          try {
+            const { stdout, stderr } = await execAsync(shellCmd, { timeout: 60_000 });
+            const output = (stdout || stderr || "✅ Done.").trim();
+            await bot.api.sendMessage(chatId, output, {
+              message_thread_id: threadIdForSend ?? undefined,
+            });
+          } catch (err: unknown) {
+            const msg2 = err instanceof Error ? err.message : String(err);
+            await bot.api.sendMessage(chatId, `❌ Error: ${msg2}`, {
+              message_thread_id: threadIdForSend ?? undefined,
+            });
+          }
+        });
+      }
+
       // /story command handler
       bot.command("story", async (ctx: TelegramNativeCommandContext) => {
         const msg = ctx.message;

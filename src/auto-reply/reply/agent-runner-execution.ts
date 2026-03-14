@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
-import { isCliProvider } from "../../agents/model-selection.js";
+import { isCliProvider, modelKey } from "../../agents/model-selection.js";
 import {
   isCompactionFailureError,
   isContextOverflowError,
@@ -41,6 +41,7 @@ import {
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
+import { runBeforeModelChangeHook } from "./directive-handling.persist.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -178,6 +179,43 @@ export async function runAgentTurnWithFallback(params: {
         await params.typingSignals.signalTextDelta(text);
         return text;
       };
+      // Run beforeModelChange hook on startup (once per turn, before model fallback).
+      // This mirrors the hook that fires on explicit /model switches — here it fires
+      // unconditionally so the hook runs whenever this agent turn begins (e.g. start-llama-servers.sh).
+      {
+        const run = params.followupRun.run;
+        const agentCfg = run.config.agents?.defaults;
+        const startupModelKey = modelKey(run.provider, run.model);
+        const targetModelCfg = agentCfg?.models?.[startupModelKey];
+        const hookCfg = targetModelCfg?.beforeModelChange ?? agentCfg?.beforeModelChange;
+        if (hookCfg?.command) {
+          await runBeforeModelChangeHook({
+            hookCfg,
+            previousProvider: run.provider,
+            previousModel: run.model,
+            nextProvider: run.provider,
+            nextModel: run.model,
+          });
+        }
+      }
+      // Run beforeMessage hook (once per turn, fires on every message regardless of model switch).
+      {
+        const run = params.followupRun.run;
+        const agentCfg = run.config.agents?.defaults;
+        const startupModelKey = modelKey(run.provider, run.model);
+        const targetModelCfg = agentCfg?.models?.[startupModelKey];
+        const hookCfg = targetModelCfg?.beforeMessage ?? agentCfg?.beforeMessage;
+        if (hookCfg?.command) {
+          await runBeforeModelChangeHook({
+            hookCfg,
+            previousProvider: run.provider,
+            previousModel: run.model,
+            nextProvider: run.provider,
+            nextModel: run.model,
+          });
+        }
+      }
+
       const blockReplyPipeline = params.blockReplyPipeline;
       const onToolResult = params.opts?.onToolResult;
       const fallbackResult = await runWithModelFallback({

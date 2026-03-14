@@ -253,10 +253,7 @@ async function resolveNarrativeModelForCompaction(params: {
   authProfileId?: string;
   mainAuthStorage: { setRuntimeApiKey(provider: string, key: string): void };
 }): Promise<Model<string> | undefined> {
-  const mindMemoryCfg = params.config?.plugins?.entries?.["mind-memory"]?.config as
-    | { narrative?: { model?: unknown } }
-    | undefined;
-  const narrativeModelStr = mindMemoryCfg?.narrative?.model;
+  const narrativeModelStr = params.config?.agents?.defaults?.auxiliaryModel;
   if (typeof narrativeModelStr !== "string" || !narrativeModelStr.trim()) {
     return undefined;
   }

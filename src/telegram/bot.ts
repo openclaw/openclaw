@@ -188,7 +188,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) => {
     const updateId = resolveTelegramUpdateId(ctx);
     const skipCutoff = highestPersistedUpdateId ?? initialUpdateId;
-    if (typeof updateId === "number" && skipCutoff !== null && updateId <= skipCutoff) {
+    if (typeof updateId === "number" && skipCutoff !== null && updateId < skipCutoff) {
       return true;
     }
     const key = buildTelegramUpdateKey(ctx);
@@ -202,6 +202,25 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   bot.use(async (ctx, next) => {
     const updateId = resolveTelegramUpdateId(ctx);
     if (typeof updateId === "number") {
+      // Persist the watermark eagerly BEFORE adding to pendingUpdateIds so
+      // that if the gateway is restarted mid-run (e.g. llama.cpp timeout
+      // while PC wakes from sleep), the same update is not replayed and sent
+      // again on the next start.
+      // Trade-off: a crash before the reply is delivered means the message is
+      // dropped rather than duplicated. For a personal assistant this is
+      // preferable to sending the same response 8+ times.
+      // We bypass maybePersistSafeWatermark() here because calling it after
+      // pendingUpdateIds.add() would compute safe = updateId - 1 (no-op).
+      if (
+        typeof opts.updateOffset?.onUpdateId === "function" &&
+        (highestPersistedUpdateId === null || updateId > highestPersistedUpdateId)
+      ) {
+        highestPersistedUpdateId = updateId;
+        if (highestCompletedUpdateId === null || updateId > highestCompletedUpdateId) {
+          highestCompletedUpdateId = updateId;
+        }
+        void opts.updateOffset.onUpdateId(updateId);
+      }
       pendingUpdateIds.add(updateId);
     }
     try {
@@ -209,9 +228,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     } finally {
       if (typeof updateId === "number") {
         pendingUpdateIds.delete(updateId);
-        if (highestCompletedUpdateId === null || updateId > highestCompletedUpdateId) {
-          highestCompletedUpdateId = updateId;
-        }
         maybePersistSafeWatermark();
       }
     }

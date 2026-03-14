@@ -127,3 +127,4 @@ dist/protocol.schema.json
 
 # Synthing
 **/.stfolder/
+*.code-workspace

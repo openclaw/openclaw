@@ -111,6 +111,39 @@ Model refs in config (for example `agents.defaults.model` and `agents.defaults.m
 - If the model ID itself contains `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
 - If you omit the provider, OpenClaw treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
 
+## Model switching hook (`beforeModelChange`)
+
+A shell hook that runs **before** a `/model` switch is applied. The switch only proceeds if the command exits 0. Useful for any side effect that must happen when the model changes — reloading a local server, swapping credentials, logging, etc.
+
+Can be configured globally (applies to any switch) or per target model (takes precedence over the global setting):
+
+```json5
+{
+  agents: {
+    defaults: {
+      // Global: runs before any model switch
+      beforeModelChange: {
+        command: "echo switching to {provider}/{model}",
+        timeoutSeconds: 30,
+      },
+      models: {
+        // Per-model: runs only when switching TO this model
+        "llamacpp-main/llama3-8b": {
+          beforeModelChange: {
+            command: "ssh user@gateway-host 'systemctl restart llamacpp-llama3'",
+            timeoutSeconds: 30,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Supported placeholders: `{provider}`, `{model}`, `{previousProvider}`, `{previousModel}`.
+
+If the command fails (non-zero exit), the model switch is rejected and the stdout/stderr is shown to the user as the error message.
+
 ## Configuration (minimal)
 
 At minimum, set:

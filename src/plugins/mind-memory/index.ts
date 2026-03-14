@@ -11,7 +11,9 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveModel } from "../../agents/pi-embedded-runner/model.js";
 import type { AuthStorage } from "../../agents/pi-model-discovery.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { LlamaCppCacheService } from "../../infra/LlamaCppCacheService.js";
 import type { OpenClawPluginApi } from "../../plugins/types.js";
 import { ConsolidationService } from "../../services/memory/ConsolidationService.js";
 import { GraphService } from "../../services/memory/GraphService.js";
@@ -21,26 +23,8 @@ import {
   type RecentMessage,
 } from "../../services/memory/SubconsciousService.js";
 import { ensureGraphitiDocker, installDocker } from "./docker.js";
-
-/** Typed shape of the mind-memory plugin config within the global config. */
-type MindMemoryPluginConfig = {
-  debug?: boolean;
-  memoryDir?: string;
-  graphiti?: {
-    enabled?: boolean;
-    autoStart?: boolean;
-    baseUrl?: string;
-    rewriteMemories?: boolean;
-    model?: string;
-    thinking?: string;
-  };
-  narrative?: {
-    enabled?: boolean;
-    autoBootstrapStory?: boolean;
-    model?: string;
-    thinking?: string;
-  };
-};
+import { readModeState, writeModeState } from "./intensive-mode.js";
+import type { LlamaCppServerConfig, MindMemoryPluginConfig } from "./types.js";
 
 // Use the real plugin API type so api.on() is available
 type PluginApi = OpenClawPluginApi;
@@ -61,6 +45,20 @@ export default function register(api: PluginApi) {
   const graphService = new GraphService(graphitiUrl, debug);
   const subconscious = new SubconsciousService(graphService, debug);
   const consolidator = new ConsolidationService(graphService, debug);
+  const llamaCache = new LlamaCppCacheService(debug);
+  // Serializes KV cache slot swaps to prevent races if hyperfocus is toggled
+  // while a concurrent request is in flight.
+  let slotSwapQueue: Promise<void> = Promise.resolve();
+
+  function enqueueSlotSwap(fn: () => Promise<void>): void {
+    slotSwapQueue = slotSwapQueue.then(fn).catch(() => {});
+  }
+
+  /** Resolve the llama.cpp server whose URL matches a provider baseUrl from config. */
+  function resolveLlamaCppServer(providerBaseUrl: string): LlamaCppServerConfig | undefined {
+    const servers = config.llamacpp?.servers ?? [];
+    return servers.find((s) => providerBaseUrl.startsWith(s.url.replace(/\/$/, "")));
+  }
 
   /**
    * Helper to wrap AuthStorage with automatic Copilot token exchange.
@@ -211,8 +209,21 @@ export default function register(api: PluginApi) {
     // Use stable global ID to ensure memory persists across chat sessions
     const sessionId = "global-user-memory";
     try {
-      // Resolve overrides
-      const subconsciousOverride = config.graphiti?.model || config.narrative?.model;
+      // Skip flashbacks in hyperfocus/intensive mode — no resonance during focused work.
+      const modeAgentId = resolveDefaultAgentId(api.config);
+      const modeNarrativeDir = resolveAgentNarrativeDir(api.config, modeAgentId);
+      const modeState = await readModeState(modeNarrativeDir);
+      if (modeState.mode === "intensive") {
+        respond(true, { flashbacks: null });
+        return;
+      }
+
+      // Resolve overrides — read fresh config so /graphitimodel changes apply immediately
+      const freshSnapshot2 = await readConfigFileSnapshot();
+      const freshCfg2 =
+        freshSnapshot2.valid && freshSnapshot2.config ? freshSnapshot2.config : api.config;
+      const agentDefaults = freshCfg2.agents?.defaults;
+      const subconsciousOverride = agentDefaults?.smallModel || agentDefaults?.auxiliaryModel;
       let activeClient = llmClient as LLMClient | null;
 
       if (subconsciousOverride) {
@@ -226,7 +237,7 @@ export default function register(api: PluginApi) {
             provider,
             modelName,
             agentDir,
-            api.config,
+            freshCfg2,
           );
 
           if (model) {
@@ -384,6 +395,235 @@ export default function register(api: PluginApi) {
     },
   });
 
+  // 3b. Hyperfocus mode tools
+  api.registerTool({
+    name: "activate_hyperfocus_mode",
+    label: "activate_hyperfocus_mode",
+    description:
+      "Activates hyperfocus mode. In this mode the system injects a compact " +
+      "narrative summary (SUMMARY.md) instead of the full STORY.md, suppresses peripheral " +
+      "context files (SOUL.md, USER.md, MEMORY.md, IDENTITY.md), and disables Graphiti flashbacks. " +
+      "Use this when starting a complex task that needs maximum context window space. " +
+      "Tip: for best results, activate before starting a new session (/new) so no context-file " +
+      "reads are already in the message history. " +
+      "Optionally provide a 'goal' describing the task — it will be injected into every message " +
+      "of the hyperfocus session so the objective stays visible even after a /new.",
+    parameters: {
+      type: "object",
+      properties: {
+        reason: {
+          type: "string",
+          description: "Optional reason for activating hyperfocus mode (logged for diagnostics).",
+        },
+        goal: {
+          type: "string",
+          description:
+            "Optional task goal for this hyperfocus session (e.g. 'Implement the WebGPU keychain renderer'). " +
+            "Stored in mode.json and re-injected into the system prompt on every message, " +
+            "keeping the objective visible even after /new.",
+        },
+      },
+      required: [],
+    },
+    execute: async (_toolCallId: string, params: { reason?: string; goal?: string }) => {
+      try {
+        const agentId = resolveDefaultAgentId(api.config);
+        const workspaceDir = resolveAgentWorkspaceDir(api.config, agentId);
+        const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
+        await mkdir(narrativeDir, { recursive: true });
+
+        const current = await readModeState(narrativeDir);
+        if (current.mode === "intensive") {
+          return {
+            content: [{ type: "text", text: "Hyperfocus mode is already active." }],
+            details: null,
+          };
+        }
+
+        const storyPath = path.join(narrativeDir, "STORY.md");
+        const summaryPath = path.join(narrativeDir, "SUMMARY.md");
+
+        // SUMMARY.md must exist before activating intensive mode — generate it now if missing.
+        let summaryExists = false;
+        try {
+          await access(summaryPath);
+          summaryExists = true;
+        } catch {
+          /* will generate */
+        }
+
+        if (!summaryExists) {
+          const agents = await resolveNarrativeAgents();
+          if (!agents) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Cannot activate intensive mode: narrative model is not configured.",
+                },
+              ],
+              isError: true,
+              details: null,
+            };
+          }
+          await consolidator.generateSummary(
+            storyPath,
+            summaryPath,
+            workspaceDir,
+            agents.narrativeAgent,
+          );
+          // Verify it was created
+          try {
+            await access(summaryPath);
+          } catch {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Cannot activate intensive mode: SUMMARY.md generation failed (STORY.md may be empty).",
+                },
+              ],
+              isError: true,
+              details: null,
+            };
+          }
+        }
+
+        await writeModeState(narrativeDir, {
+          mode: "intensive",
+          activatedAt: new Date().toISOString(),
+          goal: params.goal?.trim() || undefined,
+        });
+
+        // Serialized KV cache slot swap: save normal slot, restore intensive slot
+        const providerBaseUrl = resolveCurrentProviderBaseUrl();
+        const server = providerBaseUrl ? resolveLlamaCppServer(providerBaseUrl) : undefined;
+        if (server) {
+          const normalSlot = server.slots?.normal ?? 0;
+          const intensiveSlot = server.slots?.intensive ?? 1;
+          enqueueSlotSwap(async () => {
+            await llamaCache.saveSlot(server.url, normalSlot, "cache-normal.bin");
+            await llamaCache.restoreSlot(server.url, intensiveSlot, "cache-intensive.bin");
+          });
+        }
+
+        if (debug) {
+          api.logger.info(
+            `🎯 [MIND] Hyperfocus mode activated. Reason: ${params.reason ?? "unspecified"}. Goal: ${params.goal ?? "unspecified"}`,
+          );
+        }
+        const goalLine = params.goal?.trim() ? ` Goal: ${params.goal.trim()}.` : "";
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Hyperfocus mode activated${!summaryExists ? " (SUMMARY.md generated)" : ""}.${goalLine} Using SUMMARY.md + no flashbacks. Next message will use compact context. For maximum effect, start a new session now with /new.`,
+            },
+          ],
+          details: null,
+        };
+      } catch (e: unknown) {
+        return {
+          content: [
+            { type: "text", text: `Error activating hyperfocus mode: ${(e as Error).message}` },
+          ],
+          isError: true,
+          details: null,
+        };
+      }
+    },
+  });
+
+  api.registerTool({
+    name: "deactivate_hyperfocus_mode",
+    label: "deactivate_hyperfocus_mode",
+    description:
+      "Deactivates hyperfocus mode and returns to normal mode. " +
+      "STORY.md, SOUL.md, USER.md, MEMORY.md, IDENTITY.md and Graphiti flashbacks will be restored. " +
+      "Provide a 'summary' with your own assessment of the session: what was accomplished, what changed, " +
+      "and what remains pending. This summary is shown to the user as the session closing message " +
+      "and stored as a Graphiti memory episode.",
+    parameters: {
+      type: "object",
+      properties: {
+        summary: {
+          type: "string",
+          description:
+            "Your assessment of the hyperfocus session: what was accomplished, what changed, " +
+            "and what remains pending. Shown to the user and stored in long-term memory.",
+        },
+      },
+      required: [],
+    },
+    execute: async (_toolCallId: string, params: { summary?: string }) => {
+      try {
+        const agentId = resolveDefaultAgentId(api.config);
+        const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
+        await mkdir(narrativeDir, { recursive: true });
+
+        const current = await readModeState(narrativeDir);
+        if (current.mode === "normal") {
+          return { content: [{ type: "text", text: "Already in normal mode." }], details: null };
+        }
+
+        await writeModeState(narrativeDir, { mode: "normal" });
+
+        // Serialized KV cache slot swap back
+        const providerBaseUrl = resolveCurrentProviderBaseUrl();
+        const server = providerBaseUrl ? resolveLlamaCppServer(providerBaseUrl) : undefined;
+        if (server) {
+          const normalSlot = server.slots?.normal ?? 0;
+          const intensiveSlot = server.slots?.intensive ?? 1;
+          enqueueSlotSwap(async () => {
+            await llamaCache.saveSlot(server.url, intensiveSlot, "cache-intensive.bin");
+            await llamaCache.restoreSlot(server.url, normalSlot, "cache-normal.bin");
+          });
+        }
+
+        // Fire-and-forget: add a Graphiti episode summarising the hyperfocus session
+        // so the focused work is not lost from long-term memory.
+        // Prefer Mind's own summary; fall back to goal+duration if not provided.
+        if (config.graphiti?.enabled !== false) {
+          const sessionId = "global-user-memory";
+          const durationMs = current.activatedAt
+            ? Date.now() - new Date(current.activatedAt).getTime()
+            : 0;
+          const durationMin = Math.round(durationMs / 60_000);
+          const goalPart = current.goal?.trim() ? ` Goal: ${current.goal.trim()}.` : "";
+          const durationPart = durationMin > 0 ? ` Duration: ${durationMin} minutes.` : "";
+          const episodeText = params.summary?.trim()
+            ? `Hyperfocus session ended.${goalPart}${durationPart} ${params.summary.trim()}`
+            : `Hyperfocus session ended.${goalPart}${durationPart}`;
+          void graphService
+            .addEpisode(sessionId, episodeText, new Date().toISOString())
+            .catch(() => {});
+          if (debug) {
+            api.logger.info(`🔄 [MIND] Hyperfocus episode added to graph: "${episodeText}"`);
+          }
+        }
+
+        if (debug) {
+          api.logger.info(`🔄 [MIND] Hyperfocus mode deactivated, returning to normal.`);
+        }
+        const closingText = params.summary?.trim()
+          ? params.summary.trim()
+          : "Normal mode restored — full context and flashbacks active on next message.";
+        return {
+          content: [{ type: "text", text: closingText }],
+          details: null,
+        };
+      } catch (e: unknown) {
+        return {
+          content: [
+            { type: "text", text: `Error deactivating intensive mode: ${(e as Error).message}` },
+          ],
+          isError: true,
+          details: null,
+        };
+      }
+    },
+  });
+
   // 4. Register before_reset hook to sync the ending session to STORY.md when /new or /reset is called.
   // This is fire-and-forget so it doesn't block the session reset.
   api.on("before_reset", (event, _ctx) => {
@@ -403,12 +643,21 @@ export default function register(api: PluginApi) {
         const debug = !!config.debug;
 
         // Resolve narrative model from config or fallback to main agent model
-        const consolidatorOverride = config.narrative?.model;
-        const [narrativeProvider, narrativeModel] = consolidatorOverride
-          ? consolidatorOverride.includes("/")
-            ? consolidatorOverride.split("/")
-            : ["github-copilot", consolidatorOverride]
-          : ["github-copilot", "gemini-2.0-flash-001"];
+        const consolidatorOverride = api.config.agents?.defaults?.auxiliaryModel;
+        const primaryModelRawReset =
+          typeof api.config.agents?.defaults?.model === "string"
+            ? api.config.agents.defaults.model
+            : api.config.agents?.defaults?.model?.primary;
+        const modelSourceReset = consolidatorOverride ?? primaryModelRawReset;
+        if (!modelSourceReset) {
+          api.logger.warn(
+            "[mind-memory] before_reset: no auxiliaryModel or primary model configured",
+          );
+          return;
+        }
+        const [narrativeProvider, narrativeModel] = modelSourceReset.includes("/")
+          ? modelSourceReset.split("/")
+          : ["github-copilot", modelSourceReset];
 
         const { model, authStorage, modelRegistry, error } = resolveModel(
           narrativeProvider,
@@ -491,6 +740,21 @@ export default function register(api: PluginApi) {
     })();
   });
 
+  /** Returns the baseUrl of the currently configured primary provider, if any. */
+  function resolveCurrentProviderBaseUrl(): string | undefined {
+    const model = api.config.agents?.defaults?.model;
+    const primaryRaw = typeof model === "string" ? model : model?.primary;
+    if (!primaryRaw) {
+      return undefined;
+    }
+    const provider = primaryRaw.includes("/") ? primaryRaw.split("/")[0] : undefined;
+    if (!provider) {
+      return undefined;
+    }
+    const providerCfg = api.config.models?.providers?.[provider];
+    return providerCfg?.baseUrl;
+  }
+
   // Shared helper: resolve narrative LLM client + lighter observer client for query generation.
   // Called fresh each time (auth tokens may rotate between calls).
   const resolveNarrativeAgents = async (): Promise<{
@@ -498,18 +762,34 @@ export default function register(api: PluginApi) {
     observerAgent: LLMClient;
   } | null> => {
     const agentDir = resolveOpenClawAgentDir();
-    const consolidatorOverride = config.narrative?.model;
-    const [narrativeProvider, narrativeModel] = consolidatorOverride
-      ? consolidatorOverride.includes("/")
-        ? consolidatorOverride.split("/")
-        : ["github-copilot", consolidatorOverride]
-      : ["github-copilot", "gemini-2.0-flash-001"];
+    // Read fresh config snapshot so model changes applied via /narrativemodel or
+    // /graphitimodel take effect immediately without a gateway restart.
+    // (agents.* keys are "dynamic reads" in config-reload.ts — no hot-reload action fires.)
+    const freshSnapshot = await readConfigFileSnapshot();
+    const freshCfg =
+      freshSnapshot.valid && freshSnapshot.config ? freshSnapshot.config : api.config;
+
+    const consolidatorOverride = freshCfg.agents?.defaults?.auxiliaryModel;
+    const primaryModelRaw =
+      typeof freshCfg.agents?.defaults?.model === "string"
+        ? freshCfg.agents.defaults.model
+        : freshCfg.agents?.defaults?.model?.primary;
+    const modelSource = consolidatorOverride ?? primaryModelRaw;
+    if (!modelSource) {
+      api.logger.warn(
+        "[mind-memory] could not resolve narrative model: no auxiliaryModel or primary model configured",
+      );
+      return null;
+    }
+    const [narrativeProvider, narrativeModel] = modelSource.includes("/")
+      ? modelSource.split("/")
+      : ["github-copilot", modelSource];
 
     const { model, authStorage, modelRegistry, error } = resolveModel(
       narrativeProvider,
       narrativeModel,
       agentDir,
-      api.config,
+      freshCfg,
     );
 
     if (!model) {
@@ -530,7 +810,7 @@ export default function register(api: PluginApi) {
     });
 
     // Observer: no reasoning for low-latency query generation.
-    const graphitiModelOverride = config.graphiti?.model;
+    const graphitiModelOverride = freshCfg.agents?.defaults?.smallModel;
     let observerAgent: LLMClient = narrativeAgent;
     if (graphitiModelOverride) {
       const [oProvider, oModel] = graphitiModelOverride.includes("/")
@@ -540,7 +820,7 @@ export default function register(api: PluginApi) {
         model: oM,
         authStorage: oAs,
         modelRegistry: oMr,
-      } = resolveModel(oProvider, oModel, agentDir, api.config);
+      } = resolveModel(oProvider, oModel, agentDir, freshCfg);
       if (oM) {
         observerAgent = createSubconsciousAgent({
           model: oM,
@@ -579,6 +859,7 @@ export default function register(api: PluginApi) {
     const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
     const storyPath = path.join(narrativeDir, "STORY.md");
     const quickPath = path.join(narrativeDir, "QUICK.md");
+    const summaryPath = path.join(narrativeDir, "SUMMARY.md");
     const sessionsDir = event.sessionFile ? path.dirname(event.sessionFile) : undefined;
 
     await mkdir(narrativeDir, { recursive: true });
@@ -597,11 +878,49 @@ export default function register(api: PluginApi) {
       }
     }
 
-    // Read STORY.md and QUICK.md for context injection.
-    const [storyContent, quickContext] = await Promise.all([
+    // Read mode state to determine context injection strategy.
+    const modeState = await readModeState(narrativeDir);
+    const isIntensive = modeState.mode === "intensive";
+
+    // Read STORY.md, SUMMARY.md and QUICK.md for context injection.
+    const [storyContent, summaryContent, quickContext] = await Promise.all([
       readFile(storyPath, "utf-8").catch(() => undefined),
+      readFile(summaryPath, "utf-8").catch(() => undefined),
       readFile(quickPath, "utf-8").catch(() => undefined),
     ]);
+
+    // In intensive mode: use SUMMARY (fallback to STORY), suppress peripheral files, skip flashbacks.
+    if (isIntensive) {
+      const agents = await resolveNarrativeAgents();
+      if (agents) {
+        // Fire-and-forget: keep SUMMARY and QUICK up to date
+        void Promise.all([
+          consolidator
+            .generateSummary(storyPath, summaryPath, workspaceDir, agents.narrativeAgent)
+            .catch(() => {}),
+          consolidator
+            .generateQuickProfile(storyPath, quickPath, workspaceDir, agents.narrativeAgent)
+            .catch(() => {}),
+        ]);
+      }
+      // Stable behavioral hints go into extraSystemPrompt (injected into system prompt,
+      // cached by the model server). Dynamic content (flashbacks) would use extraSystemContext.
+      const startupHint =
+        "[Hyperfocus mode] Your identity and user profile are already loaded in the Narrative Story section. " +
+        "Skip the session startup file reads (SOUL.md, USER.md, MEMORY.md) — those files are suppressed in this mode.";
+      const goalLine = modeState.goal?.trim()
+        ? `Current hyperfocus goal: ${modeState.goal.trim()}`
+        : "";
+      const extraPrompt = config.intensive?.extraSystemPrompt;
+      const hyperfocusSystemPrompt = [startupHint, goalLine, extraPrompt]
+        .filter(Boolean)
+        .join("\n");
+      return {
+        narrativeStory: summaryContent ?? storyContent,
+        extraSystemPrompt: hyperfocusSystemPrompt,
+        suppressContextFiles: ["SOUL.md", "USER.md", "MEMORY.md", "IDENTITY.md"],
+      };
+    }
 
     const agents = await resolveNarrativeAgents();
     if (!agents) {
@@ -614,7 +933,7 @@ export default function register(api: PluginApi) {
 
     // Run memory pipeline in parallel:
     // [0] Bootstrap historical episodes into Graphiti (idempotent flag-file check)
-    // [1] Sync global narrative from recent session files (fire-and-forget QUICK.md regen)
+    // [1] Sync global narrative from recent session files (fire-and-forget QUICK.md + SUMMARY regen)
     // [2] Add current prompt as a graph episode
     // [3] Get flashback resonance for injection
     const [, , , flashbackResult] = await Promise.allSettled([
@@ -632,9 +951,14 @@ export default function register(api: PluginApi) {
               event.sessionFile,
             )
             .then(() =>
-              consolidator
-                .generateQuickProfile(storyPath, quickPath, workspaceDir, narrativeAgent)
-                .catch(() => {}),
+              Promise.all([
+                consolidator
+                  .generateQuickProfile(storyPath, quickPath, workspaceDir, narrativeAgent)
+                  .catch(() => {}),
+                consolidator
+                  .generateSummary(storyPath, summaryPath, workspaceDir, narrativeAgent)
+                  .catch(() => {}),
+              ]),
             )
             .catch(() => {})
         : Promise.resolve(),
@@ -677,6 +1001,34 @@ export default function register(api: PluginApi) {
     };
   });
 
+  // 5b. Register before_model_resolve hook: override model when intensive mode is active.
+  // The session's stored model is naturally restored when intensive mode is deactivated —
+  // no need to track "previous model" explicitly.
+  const intensiveModelCfg = api.config.agents?.defaults?.intensiveModel;
+  if (intensiveModelCfg) {
+    const [intensiveProvider, intensiveModelId] = intensiveModelCfg.includes("/")
+      ? (intensiveModelCfg.split("/", 2) as [string, string])
+      : (["github-copilot", intensiveModelCfg] as [string, string]);
+
+    api.on("before_model_resolve", async (_event, ctx) => {
+      try {
+        const agentId = ctx.agentId ?? resolveDefaultAgentId(api.config);
+        const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
+        const modeState = await readModeState(narrativeDir);
+        if (modeState.mode === "intensive") {
+          if (debug) {
+            api.logger.info(
+              `🎯 [MIND] intensive model override: ${intensiveProvider}/${intensiveModelId}`,
+            );
+          }
+          return { providerOverride: intensiveProvider, modelOverride: intensiveModelId };
+        }
+      } catch {
+        // Never block the run
+      }
+    });
+  }
+
   // 6. Register before_compaction hook: sync STORY.md from the pre-compaction message history.
   // Fire-and-forget so it does not block the compaction LLM call.
   api.on("before_compaction", (event, _ctx) => {
@@ -692,6 +1044,18 @@ export default function register(api: PluginApi) {
         const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
         const storyPath = path.join(narrativeDir, "STORY.md");
         const quickPath = path.join(narrativeDir, "QUICK.md");
+        const summaryPath = path.join(narrativeDir, "SUMMARY.md");
+
+        // Skip narrative updates during intensive/hyperfocus mode
+        const modeState = await readModeState(narrativeDir);
+        if (modeState.mode === "intensive") {
+          if (debug) {
+            api.logger.info(
+              `🎯 [MIND] before_compaction: skipping narrative update (intensive mode)`,
+            );
+          }
+          return;
+        }
 
         const agents = await resolveNarrativeAgents();
         if (!agents) {
@@ -739,10 +1103,15 @@ export default function register(api: PluginApi) {
           },
         );
 
-        // Fire-and-forget QUICK.md regeneration after story sync.
-        void consolidator
-          .generateQuickProfile(storyPath, quickPath, workspaceDir, narrativeAgent)
-          .catch(() => {});
+        // Fire-and-forget QUICK.md + SUMMARY.md regeneration after story sync.
+        void Promise.all([
+          consolidator
+            .generateQuickProfile(storyPath, quickPath, workspaceDir, narrativeAgent)
+            .catch(() => {}),
+          consolidator
+            .generateSummary(storyPath, summaryPath, workspaceDir, narrativeAgent)
+            .catch(() => {}),
+        ]);
 
         if (debug) {
           api.logger.info(`✅ [MIND] before_compaction: STORY.md sync complete.`);
@@ -771,6 +1140,18 @@ export default function register(api: PluginApi) {
         const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
         const storyPath = path.join(narrativeDir, "STORY.md");
         const quickPath = path.join(narrativeDir, "QUICK.md");
+        const summaryPath = path.join(narrativeDir, "SUMMARY.md");
+
+        // Skip narrative updates during intensive/hyperfocus mode
+        const modeState = await readModeState(narrativeDir);
+        if (modeState.mode === "intensive") {
+          if (debug) {
+            api.logger.info(
+              `🎯 [MIND] after_compaction: skipping narrative update (intensive mode)`,
+            );
+          }
+          return;
+        }
 
         const agents = await resolveNarrativeAgents();
         if (!agents) {
@@ -803,10 +1184,15 @@ export default function register(api: PluginApi) {
           },
         );
 
-        // Fire-and-forget QUICK.md regeneration after story sync.
-        void consolidator
-          .generateQuickProfile(storyPath, quickPath, workspaceDir, narrativeAgent)
-          .catch(() => {});
+        // Fire-and-forget QUICK.md + SUMMARY.md regeneration after story sync.
+        void Promise.all([
+          consolidator
+            .generateQuickProfile(storyPath, quickPath, workspaceDir, narrativeAgent)
+            .catch(() => {}),
+          consolidator
+            .generateSummary(storyPath, summaryPath, workspaceDir, narrativeAgent)
+            .catch(() => {}),
+        ]);
 
         if (debug) {
           api.logger.info(`✅ [MIND] after_compaction: global narrative sync complete.`);
@@ -819,4 +1205,5 @@ export default function register(api: PluginApi) {
 
   api.logger.info("Mind Memory plugin registered (Mind v1.0 Modular)");
   api.logger.info("  └─ Tool registered: remember (Conscious Access)");
+  api.logger.info("  └─ Tool registered: activate_hyperfocus_mode / deactivate_hyperfocus_mode");
 }
