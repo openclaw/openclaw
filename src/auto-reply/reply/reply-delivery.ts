@@ -137,7 +137,7 @@ export function createBlockReplyDeliveryHandler(params: {
     } else if (params.blockStreamingEnabled) {
       // Send directly when flushing before tool execution (no pipeline but streaming enabled).
       // Track sent key from pre-transform text to avoid duplicate in final payloads.
-      params.directlySentBlockKeys.add(createBlockReplyPayloadKey(blockPayload));
+      params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
       await params.onBlockReply(deliveryPayload);
     }
     // When streaming is disabled entirely, blocks are accumulated in final text instead.

@@ -198,6 +198,10 @@ export async function runAgentTurnWithFallback(params: {
         await params.typingSignals.signalTextDelta(text);
         return text;
       };
+      const applyOutboundTransforms = (text: string): string => {
+        const hookRunner = getGlobalHookRunner();
+        return hookRunner ? hookRunner.runOutboundTransforms(text) : text;
+      };
       const blockReplyPipeline = params.blockReplyPipeline;
       const onToolResult = params.opts?.onToolResult;
       const fallbackResult = await runWithModelFallback({
@@ -357,13 +361,8 @@ export async function runAgentTurnWithFallback(params: {
                 if (!params.opts?.onPartialReply || textForTyping === undefined) {
                   return;
                 }
-                // Apply plugin outbound transforms.
-                const hookRunner = getGlobalHookRunner();
-                const transformedText = hookRunner
-                  ? hookRunner.runOutboundTransforms(textForTyping)
-                  : textForTyping;
                 await params.opts.onPartialReply({
-                  text: transformedText,
+                  text: applyOutboundTransforms(textForTyping),
                   mediaUrls: payload.mediaUrls,
                 });
               },
@@ -375,8 +374,12 @@ export async function runAgentTurnWithFallback(params: {
                 params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
                   ? async (payload) => {
                       await params.typingSignals.signalReasoningDelta();
+                      const transformedText =
+                        typeof payload.text === "string"
+                          ? applyOutboundTransforms(payload.text)
+                          : payload.text;
                       await params.opts?.onReasoningStream?.({
-                        text: payload.text,
+                        text: transformedText,
                         mediaUrls: payload.mediaUrls,
                       });
                     }
