@@ -34,15 +34,15 @@ export type BrowserMcpConfig = {
   /**
    * Enable the Chrome DevTools MCP preset for agent sessions. Default: false.
    * Requires browser.enabled=true.
-   * The preset is skipped when browser.evaluateEnabled=false unless you configure an explicit
-   * mcpServers["chrome-devtools"] override in the ACPX plugin config.
+   * Chrome DevTools MCP access is disabled when browser.evaluateEnabled=false, including
+   * explicit ACPX mcpServers["chrome-devtools"] overrides.
    */
   enabled?: boolean;
   /**
    * Tool exposure mode.
    * - "full": all 29 DevTools MCP tools (input, navigation, debugging, performance, network, emulation).
    * - "slim": 3 essential tools only (navigate, evaluate_script, take_screenshot).
-   *   Preset injection respects browser.evaluateEnabled because slim mode includes evaluate_script.
+   *   Chrome DevTools MCP access respects browser.evaluateEnabled because slim mode includes evaluate_script.
    * Default: "full"
    */
   mode?: "full" | "slim";

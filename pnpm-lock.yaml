@@ -263,6 +263,9 @@ importers:
       acpx:
         specifier: 0.3.0
         version: 0.3.0(zod@4.3.6)
+      chrome-devtools-mcp:
+        specifier: 0.20.0
+        version: 0.20.0
 
   extensions/bluebubbles:
     dependencies:
@@ -4127,6 +4130,11 @@ packages:
   chalk@5.6.2:
     resolution: {integrity: sha512-7NzBL0rN6fMUW+f7A6Io4h40qQlG+xGmtMxfbnH/K7TAtt8JQWVQK+6g0UXKMeVJoyV5EkkNsErQ8pVD3bLHbA==}
     engines: {node: ^12.17.0 || ^14.13 || >=16.0.0}
+
+  chrome-devtools-mcp@0.20.0:
+    resolution: {integrity: sha512-wBnt8901lAXdac3AB7WdONYTAXGW+YqqIVVg7PztxYVNPs3VVgM2UZnZT/ICYPIofKTuRBOkRdEE/VYm90ZgYA==}
+    engines: {node: ^20.19.0 || ^22.12.0 || >=23}
+    hasBin: true
 
   character-entities-html4@2.1.0:
     resolution: {integrity: sha512-1v7fgQRj6hnSwFpq1Eu0ynr/CDEw0rXo2B61qXrLNdHZmPKgb7fqS1a2JwF0rISo9q77jDI8VMEHoApn8qDoZA==}
@@ -11778,6 +11786,8 @@ snapshots:
       supports-color: 7.2.0
 
   chalk@5.6.2: {}
+
+  chrome-devtools-mcp@0.20.0: {}
 
   character-entities-html4@2.1.0: {}
 

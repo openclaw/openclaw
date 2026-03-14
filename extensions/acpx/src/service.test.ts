@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { AcpRuntime, OpenClawPluginServiceContext } from "openclaw/plugin-sdk/acpx";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpRuntimeError } from "../../../src/acp/runtime/errors.js";
@@ -7,7 +8,11 @@ import {
   requireAcpRuntimeBackend,
 } from "../../../src/acp/runtime/registry.js";
 import { ACPX_BUNDLED_BIN, ACPX_PINNED_VERSION, type ResolvedAcpxPluginConfig } from "./config.js";
-import { buildChromeDevToolsMcpPreset, createAcpxRuntimeService } from "./service.js";
+import {
+  buildChromeDevToolsMcpPreset,
+  CHROME_DEVTOOLS_MCP_BIN,
+  createAcpxRuntimeService,
+} from "./service.js";
 
 const { ensureAcpxSpy } = vi.hoisted(() => ({
   ensureAcpxSpy: vi.fn(async () => {}),
@@ -103,9 +108,10 @@ describe("buildChromeDevToolsMcpPreset", () => {
       existingMcpServers: {},
     });
     expect(result).toEqual({
-      command: "npx",
-      args: ["-y", "chrome-devtools-mcp@0.20.0", "--autoConnect", "--experimental-page-id-routing"],
+      command: CHROME_DEVTOOLS_MCP_BIN,
+      args: ["--autoConnect", "--experimental-page-id-routing"],
     });
+    expect(path.isAbsolute(result!.command)).toBe(true);
   });
 
   it("adds --slim flag in slim mode", () => {
@@ -244,8 +250,8 @@ describe("createAcpxRuntimeService", () => {
 
     const passedConfig = getPassedPluginConfig(runtimeFactory);
     expect(passedConfig.mcpServers["chrome-devtools"]).toEqual({
-      command: "npx",
-      args: ["-y", "chrome-devtools-mcp@0.20.0", "--autoConnect", "--experimental-page-id-routing"],
+      command: CHROME_DEVTOOLS_MCP_BIN,
+      args: ["--autoConnect", "--experimental-page-id-routing"],
     });
   });
 
@@ -261,14 +267,8 @@ describe("createAcpxRuntimeService", () => {
 
     const passedConfig = getPassedPluginConfig(runtimeFactory);
     expect(passedConfig.mcpServers["chrome-devtools"]).toEqual({
-      command: "npx",
-      args: [
-        "-y",
-        "chrome-devtools-mcp@0.20.0",
-        "--autoConnect",
-        "--experimental-page-id-routing",
-        "--slim",
-      ],
+      command: CHROME_DEVTOOLS_MCP_BIN,
+      args: ["--autoConnect", "--experimental-page-id-routing", "--slim"],
     });
   });
 
@@ -314,7 +314,7 @@ describe("createAcpxRuntimeService", () => {
     const passedConfig = getPassedPluginConfig(runtimeFactory);
     expect(passedConfig.mcpServers["chrome-devtools"]).toBeUndefined();
     expect(context.logger.info).toHaveBeenCalledWith(
-      "chrome-devtools-mcp preset skipped: browser.evaluateEnabled=false requires an explicit mcpServers override",
+      "chrome-devtools-mcp preset skipped: browser.evaluateEnabled=false disables chrome-devtools access",
     );
   });
 
@@ -336,6 +336,58 @@ describe("createAcpxRuntimeService", () => {
     expect(passedConfig.mcpServers["chrome-devtools"]).toEqual(userDefined);
     expect(context.logger.info).toHaveBeenCalledWith(
       "chrome-devtools-mcp preset skipped: existing mcpServers entry takes precedence",
+    );
+  });
+
+  it("removes explicit chrome-devtools entries when browser.enabled is false", async () => {
+    const { runtime } = createRuntimeStub(true);
+    const runtimeFactory = createRuntimeFactorySpy(runtime);
+    const service = createAcpxRuntimeService({
+      runtimeFactory,
+      pluginConfig: {
+        mcpServers: {
+          "chrome-devtools": { command: "/tmp/chrome-devtools-mcp", args: ["--custom"] },
+          canva: { command: "npx", args: ["canva-mcp"] },
+        },
+      },
+    });
+    const context = createServiceContext({
+      config: { browser: { enabled: false } },
+    });
+
+    await service.start(context);
+
+    const passedConfig = getPassedPluginConfig(runtimeFactory);
+    expect(passedConfig.mcpServers["chrome-devtools"]).toBeUndefined();
+    expect(passedConfig.mcpServers["canva"]).toBeDefined();
+    expect(context.logger.info).toHaveBeenCalledWith(
+      "chrome-devtools MCP server removed: browser.enabled=false disables chrome-devtools access",
+    );
+  });
+
+  it("removes explicit chrome-devtools entries when browser.evaluateEnabled is false", async () => {
+    const { runtime } = createRuntimeStub(true);
+    const runtimeFactory = createRuntimeFactorySpy(runtime);
+    const service = createAcpxRuntimeService({
+      runtimeFactory,
+      pluginConfig: {
+        mcpServers: {
+          "chrome-devtools": { command: "/tmp/chrome-devtools-mcp", args: ["--custom"] },
+          canva: { command: "npx", args: ["canva-mcp"] },
+        },
+      },
+    });
+    const context = createServiceContext({
+      config: { browser: { evaluateEnabled: false } },
+    });
+
+    await service.start(context);
+
+    const passedConfig = getPassedPluginConfig(runtimeFactory);
+    expect(passedConfig.mcpServers["chrome-devtools"]).toBeUndefined();
+    expect(passedConfig.mcpServers["canva"]).toBeDefined();
+    expect(context.logger.info).toHaveBeenCalledWith(
+      "chrome-devtools MCP server removed: browser.evaluateEnabled=false disables chrome-devtools access",
     );
   });
 

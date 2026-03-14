@@ -4,7 +4,8 @@
   "description": "OpenClaw ACP runtime backend via acpx",
   "type": "module",
   "dependencies": {
-    "acpx": "0.3.0"
+    "acpx": "0.3.0",
+    "chrome-devtools-mcp": "0.20.0"
   },
   "openclaw": {
     "extensions": [
