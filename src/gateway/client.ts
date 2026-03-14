@@ -106,6 +106,7 @@ export type GatewayClientOptions = {
   onConnectError?: (err: Error) => void;
   onClose?: (code: number, reason: string) => void;
   onGap?: (info: { expected: number; received: number }) => void;
+  maxReconnectRetries?: number;
 };
 
 export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> = {
@@ -126,6 +127,7 @@ export class GatewayClient {
   private opts: GatewayClientOptions;
   private pending = new Map<string, Pending>();
   private backoffMs = 1000;
+  private reconnectCount = 0;
   private closed = false;
   private lastSeq: number | null = null;
   private connectNonce: string | null = null;
@@ -401,6 +403,7 @@ export class GatewayClient {
           });
         }
         this.backoffMs = 1000;
+        this.reconnectCount = 0;
         this.tickIntervalMs =
           typeof helloOk.policy?.tickIntervalMs === "number"
             ? helloOk.policy.tickIntervalMs
@@ -635,6 +638,20 @@ export class GatewayClient {
 
   private scheduleReconnect() {
     if (this.closed) {
+      return;
+    }
+    const rawMax = this.opts.maxReconnectRetries;
+    const maxRetries =
+      typeof rawMax === "number" && Number.isFinite(rawMax) && rawMax >= 0
+        ? Math.floor(rawMax)
+        : Infinity;
+    if (!Number.isFinite(this.reconnectCount)) {
+      this.reconnectCount = 0;
+    }
+    if (++this.reconnectCount > maxRetries) {
+      const err = new Error(`gateway reconnect limit reached (${maxRetries} attempts)`);
+      this.opts.onConnectError?.(err);
+      this.stop();
       return;
     }
     if (this.tickTimer) {

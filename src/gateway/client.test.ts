@@ -626,3 +626,285 @@ describe("GatewayClient connect auth payload", () => {
     });
   });
 });
+
+describe("GatewayClient reconnect retry cap", () => {
+  beforeEach(() => {
+    wsInstances.length = 0;
+  });
+
+  it("stops reconnecting after maxReconnectRetries is reached", async () => {
+    vi.useFakeTimers();
+    try {
+      const onConnectError = vi.fn();
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+        maxReconnectRetries: 2,
+        onConnectError,
+      });
+
+      client.start();
+      // Close the socket 3 times to exceed the 2-retry cap
+      for (let i = 0; i < 3; i++) {
+        const ws = getLatestWs();
+        ws.emitOpen();
+        ws.emitClose(1006, "connection lost");
+        await vi.advanceTimersByTimeAsync(60_000);
+      }
+
+      expect(onConnectError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("reconnect limit reached"),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats NaN reconnectCount as 0 and still enforces the cap", async () => {
+    vi.useFakeTimers();
+    try {
+      const onConnectError = vi.fn();
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+        maxReconnectRetries: 1,
+        onConnectError,
+      });
+
+      // Force reconnectCount to NaN via the private field
+      (client as unknown as { reconnectCount: number }).reconnectCount = NaN;
+
+      client.start();
+      const ws = getLatestWs();
+      ws.emitOpen();
+      ws.emitClose(1006, "connection lost");
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // After NaN is reset to 0, the first reconnect should succeed (count becomes 1)
+      expect(wsInstances.length).toBeGreaterThan(1);
+
+      // Now the second close should hit the cap (count becomes 2 > 1)
+      const ws2 = getLatestWs();
+      ws2.emitOpen();
+      ws2.emitClose(1006, "connection lost");
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(onConnectError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("reconnect limit reached"),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops immediately when maxReconnectRetries is 0", async () => {
+    vi.useFakeTimers();
+    try {
+      const onConnectError = vi.fn();
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+        maxReconnectRetries: 0,
+        onConnectError,
+      });
+
+      client.start();
+      const ws = getLatestWs();
+      ws.emitOpen();
+      ws.emitClose(1006, "connection lost");
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(onConnectError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("reconnect limit reached"),
+        }),
+      );
+      // No new WebSocket should have been created beyond the initial one
+      expect(wsInstances.length).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resets reconnectCount on successful hello-ok", async () => {
+    vi.useFakeTimers();
+    try {
+      const onConnectError = vi.fn();
+      const onHelloOk = vi.fn();
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+        maxReconnectRetries: 2,
+        onConnectError,
+        onHelloOk,
+      });
+
+      client.start();
+
+      // First close triggers reconnect (reconnectCount = 1)
+      const ws1 = getLatestWs();
+      ws1.emitOpen();
+      ws1.emitClose(1006, "connection lost");
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // Second connection succeeds with hello-ok, resetting reconnectCount
+      const ws2 = getLatestWs();
+      ws2.emitOpen();
+      // Simulate connect challenge
+      ws2.emitMessage(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "nonce-reset" },
+        }),
+      );
+      // Find the connect request id and send a hello-ok response
+      const connectFrame = ws2.sent.find((f) => f.includes('"method":"connect"'));
+      expect(connectFrame).toBeTruthy();
+      const { id: connectId } = JSON.parse(connectFrame!) as { id: string };
+      ws2.emitMessage(JSON.stringify({ type: "res", id: connectId, ok: true, payload: {} }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onHelloOk).toHaveBeenCalled();
+
+      // Now close again — reconnectCount was reset so we get 2 more retries
+      ws2.emitClose(1006, "connection lost");
+      await vi.advanceTimersByTimeAsync(60_000);
+      const ws3 = getLatestWs();
+      ws3.emitOpen();
+      ws3.emitClose(1006, "connection lost");
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // 2 retries used, 3rd close should hit the cap
+      const ws4 = getLatestWs();
+      ws4.emitOpen();
+      ws4.emitClose(1006, "connection lost");
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(onConnectError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("reconnect limit reached"),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("defaults to unbounded retries when maxReconnectRetries is not set", async () => {
+    vi.useFakeTimers();
+    try {
+      const onConnectError = vi.fn();
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+        onConnectError,
+      });
+
+      client.start();
+      // Simulate 20 consecutive failures — should NOT trigger the reconnect cap
+      for (let i = 0; i < 20; i++) {
+        const ws = getLatestWs();
+        ws.emitOpen();
+        ws.emitClose(1006, "connection lost");
+        await vi.advanceTimersByTimeAsync(60_000);
+      }
+
+      // onConnectError may fire for challenge timeouts, but never for reconnect limit
+      const limitCalls = onConnectError.mock.calls.filter((args: unknown[]) =>
+        (args[0] as Error).message.includes("reconnect limit reached"),
+      );
+      expect(limitCalls).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats NaN maxReconnectRetries option as unbounded", async () => {
+    vi.useFakeTimers();
+    try {
+      const onConnectError = vi.fn();
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+        maxReconnectRetries: NaN,
+        onConnectError,
+      });
+
+      client.start();
+      for (let i = 0; i < 15; i++) {
+        const ws = getLatestWs();
+        ws.emitOpen();
+        ws.emitClose(1006, "connection lost");
+        await vi.advanceTimersByTimeAsync(60_000);
+      }
+
+      const limitCalls = onConnectError.mock.calls.filter((args: unknown[]) =>
+        (args[0] as Error).message.includes("reconnect limit reached"),
+      );
+      expect(limitCalls).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats Infinity maxReconnectRetries option as unbounded", async () => {
+    vi.useFakeTimers();
+    try {
+      const onConnectError = vi.fn();
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+        maxReconnectRetries: Infinity,
+        onConnectError,
+      });
+
+      client.start();
+      for (let i = 0; i < 15; i++) {
+        const ws = getLatestWs();
+        ws.emitOpen();
+        ws.emitClose(1006, "connection lost");
+        await vi.advanceTimersByTimeAsync(60_000);
+      }
+
+      const limitCalls = onConnectError.mock.calls.filter((args: unknown[]) =>
+        (args[0] as Error).message.includes("reconnect limit reached"),
+      );
+      expect(limitCalls).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats Infinity reconnectCount as 0 and still enforces the cap", async () => {
+    vi.useFakeTimers();
+    try {
+      const onConnectError = vi.fn();
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+        maxReconnectRetries: 1,
+        onConnectError,
+      });
+
+      (client as unknown as { reconnectCount: number }).reconnectCount = Infinity;
+
+      client.start();
+      const ws = getLatestWs();
+      ws.emitOpen();
+      ws.emitClose(1006, "connection lost");
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // After Infinity is reset to 0, reconnect should proceed
+      expect(wsInstances.length).toBeGreaterThan(1);
+
+      const ws2 = getLatestWs();
+      ws2.emitOpen();
+      ws2.emitClose(1006, "connection lost");
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(onConnectError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("reconnect limit reached"),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
