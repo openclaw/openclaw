@@ -209,7 +209,9 @@ export type DiscordNativeCommandOptionDefinition = {
   type: number;
   required?: boolean;
   autocomplete?: boolean;
-  choices?: Array<{ name: string; value: string }>;
+  choices?: Array<{ name: string; value: string | number }>;
+  channel_types?: number[];
+  options?: DiscordNativeCommandOptionDefinition[];
 };
 
 export type DiscordNativeCommandDeploymentDefinition = {
@@ -242,6 +244,7 @@ export function buildDiscordNativeCommandDeploymentDefinition(params: {
   const options = builtOptions?.map((option) => {
     const optionRecord = option as Record<string, unknown>;
     const rawChoices = optionRecord.choices;
+    const rawChannelTypes = optionRecord.channel_types;
     const choices = Array.isArray(rawChoices)
       ? rawChoices
           .map((choice) => {
@@ -259,12 +262,16 @@ export function buildDiscordNativeCommandDeploymentDefinition(params: {
           })
           .filter((choice): choice is { name: string; value: string | number } => Boolean(choice))
       : undefined;
+    const channelTypes = Array.isArray(rawChannelTypes)
+      ? rawChannelTypes.filter((value): value is number => typeof value === "number")
+      : undefined;
     return {
       name: option.name,
       description: option.description,
       type: option.type,
       required: option.required,
       autocomplete: typeof optionRecord.autocomplete === "function" ? true : undefined,
+      channel_types: channelTypes,
       choices,
     };
   });

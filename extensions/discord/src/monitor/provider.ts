@@ -48,7 +48,10 @@ import { resolveDiscordAccount } from "../accounts.js";
 import { getDiscordGatewayEmitter } from "../monitor.gateway.js";
 import { fetchDiscordApplicationId } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
-import { createDiscordVoiceCommand } from "../voice/command.js";
+import {
+  buildDiscordVoiceCommandDeploymentDefinition,
+  createDiscordVoiceCommand,
+} from "../voice/command.js";
 import {
   createAgentComponentButton,
   createAgentSelectMenu,
@@ -80,6 +83,7 @@ import {
   createDiscordModelPickerFallbackButton,
   createDiscordModelPickerFallbackSelect,
   createDiscordNativeCommand,
+  type DiscordNativeCommandDeploymentDefinition,
 } from "./native-command.js";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
@@ -390,6 +394,7 @@ async function deployDiscordCommandsWithOptionalReconcile(params: {
   accountId: string;
   applicationId: string;
   commandSpecs: NativeCommandSpec[];
+  extraDefinitions?: DiscordNativeCommandDeploymentDefinition[];
 }) {
   if (!params.enabled) {
     return;
@@ -412,6 +417,7 @@ async function deployDiscordCommandsWithOptionalReconcile(params: {
       accountId: params.accountId,
       applicationId: params.applicationId,
       commandSpecs: params.commandSpecs,
+      extraDefinitions: params.extraDefinitions,
     });
   } catch (err) {
     const details = formatDiscordDeployErrorDetails(err);
@@ -857,6 +863,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       accountId: account.accountId,
       applicationId,
       commandSpecs,
+      extraDefinitions: voiceEnabled ? [buildDiscordVoiceCommandDeploymentDefinition()] : [],
     });
     logDiscordStartupPhase({
       runtime,

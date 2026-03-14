@@ -29,7 +29,6 @@ import type {
   DiscordNativeCommandDeploymentDefinition,
   DiscordNativeCommandOptionDefinition,
 } from "../monitor/native-command.js";
-import { applyDiscordNativeCommandDeploymentDefaults } from "../monitor/native-command.js";
 import { resolveDiscordSenderIdentity } from "../monitor/sender-identity.js";
 import { resolveDiscordThreadParentInfo } from "../monitor/threading.js";
 import type { DiscordVoiceManager } from "./manager.js";
@@ -69,7 +68,7 @@ const VOICE_JOIN_OPTION: DiscordNativeCommandOptionDefinition = {
 };
 
 export function buildDiscordVoiceCommandDeploymentDefinition(): DiscordNativeCommandDeploymentDefinition {
-  return applyDiscordNativeCommandDeploymentDefaults({
+  return {
     name: "vc",
     description: "Voice channel controls",
     type: ApplicationCommandType.ChatInput,
@@ -91,7 +90,7 @@ export function buildDiscordVoiceCommandDeploymentDefinition(): DiscordNativeCom
         type: ApplicationCommandOptionType.Subcommand,
       },
     ],
-  });
+  };
 }
 
 async function authorizeVoiceCommand(

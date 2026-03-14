@@ -45,6 +45,7 @@ type DesiredDiscordCommand = {
 };
 
 type DiscordNativeCommandReconcileSummary = {
+  validated: number;
   unchanged: number;
   created: number;
   updated: number;
@@ -93,6 +94,15 @@ function hashDefinition(definition: DiscordNativeCommandDeploymentDefinition): s
     .createHash("sha256")
     .update(JSON.stringify(toSortedObject(definition)))
     .digest("hex");
+}
+
+function summarizeCommandNames(names: string[], maxEntries = 8): string {
+  if (names.length === 0) {
+    return "(none)";
+  }
+  const sample = [...names].sort().slice(0, maxEntries);
+  const remainder = names.length - sample.length;
+  return remainder > 0 ? `${sample.join(", ")} (+${remainder} more)` : sample.join(", ");
 }
 
 function toDesiredCommand(params: {
@@ -232,14 +242,22 @@ export async function reconcileDiscordNativeCommands(params: {
   accountId: string;
   applicationId: string;
   commandSpecs: NativeCommandSpec[];
+  extraDefinitions?: DiscordNativeCommandDeploymentDefinition[];
   env?: NodeJS.ProcessEnv;
 }): Promise<DiscordNativeCommandReconcileResult> {
-  const desiredCommands = params.commandSpecs.map((command) =>
-    toDesiredCommand({
-      cfg: params.cfg,
-      command,
-    }),
-  );
+  const desiredCommands = [
+    ...params.commandSpecs.map((command) =>
+      toDesiredCommand({
+        cfg: params.cfg,
+        command,
+      }),
+    ),
+    ...(params.extraDefinitions ?? []).map((body) => ({
+      name: body.name.trim().toLowerCase(),
+      signatureHash: hashDefinition(body),
+      body,
+    })),
+  ];
   const desiredByName = new Map(desiredCommands.map((command) => [command.name, command]));
   const savedState = await loadState({ accountId: params.accountId, env: params.env });
   const savedByName = new Map(savedState.commands.map((command) => [command.name, command]));
@@ -248,8 +266,12 @@ export async function reconcileDiscordNativeCommands(params: {
     applicationId: params.applicationId,
   });
   const liveByName = new Map(liveCommands.map((command) => [command.name, command]));
+  const unexpectedLiveCommands = liveCommands.filter(
+    (command) => !desiredByName.has(command.name) && !savedByName.has(command.name),
+  );
 
   const summary: DiscordNativeCommandReconcileSummary = {
+    validated: 0,
     unchanged: 0,
     created: 0,
     updated: 0,
@@ -259,13 +281,19 @@ export async function reconcileDiscordNativeCommands(params: {
   const resultingCommands: LiveDiscordCommand[] = [];
 
   params.runtime.log?.(
-    `discord: reconcile loaded saved=${savedState.commands.length} live=${liveCommands.length} desired=${desiredCommands.length}`,
+    `discord: native command reconcile loaded saved=${savedState.commands.length} live=${liveCommands.length} desired=${desiredCommands.length} trackedLive=${liveCommands.length - unexpectedLiveCommands.length} unexpectedLive=${unexpectedLiveCommands.length}`,
   );
+  if (unexpectedLiveCommands.length > 0) {
+    params.runtime.log?.(
+      `discord: native command reconcile leaving unexpected live commands untouched: ${summarizeCommandNames(unexpectedLiveCommands.map((command) => command.name))}`,
+    );
+  }
 
   for (const desired of desiredCommands) {
     const live = liveByName.get(desired.name);
     if (live) {
       if (live.signatureHash === desired.signatureHash) {
+        summary.validated += 1;
         summary.unchanged += 1;
         resultingCommands.push(live);
         continue;
@@ -281,6 +309,7 @@ export async function reconcileDiscordNativeCommands(params: {
         name: desired.name,
         signatureHash: desired.signatureHash,
       };
+      summary.validated += 1;
       summary.updated += 1;
       resultingCommands.push(normalizedUpdated);
       continue;
@@ -327,7 +356,7 @@ export async function reconcileDiscordNativeCommands(params: {
   });
 
   params.runtime.log?.(
-    `discord: reconcile summary unchanged=${summary.unchanged} created=${summary.created} updated=${summary.updated} deleted=${summary.deleted} leftAlone=${summary.leftAlone}`,
+    `discord: native command reconcile summary validated=${summary.validated} unchanged=${summary.unchanged} created=${summary.created} updated=${summary.updated} deleted=${summary.deleted} leftAlone=${summary.leftAlone}`,
   );
 
   return {
