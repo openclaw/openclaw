@@ -33,6 +33,7 @@ export type BrowserSsrFPolicyConfig = {
 export type BrowserMcpConfig = {
   /**
    * Enable the Chrome DevTools MCP preset for agent sessions. Default: false.
+   * Requires browser.enabled=true.
    * The preset is skipped when browser.evaluateEnabled=false unless you configure an explicit
    * mcpServers["chrome-devtools"] override in the ACPX plugin config.
    */

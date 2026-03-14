@@ -92,6 +92,7 @@ export function createAcpxRuntimeService(
         workspaceDir: ctx.workspaceDir,
       });
 
+      const browserEnabled = ctx.config.browser?.enabled !== false;
       const browserMcpEnabled = ctx.config.browser?.mcp?.enabled === true;
       const browserEvaluateEnabled = ctx.config.browser?.evaluateEnabled !== false;
 
@@ -100,7 +101,9 @@ export function createAcpxRuntimeService(
       // Preset injection also respects browser.evaluateEnabled because slim mode exposes evaluate_script.
       const chromePreset = buildChromeDevToolsMcpPreset({
         browserMcp:
-          browserMcpEnabled && browserEvaluateEnabled ? ctx.config.browser?.mcp : undefined,
+          browserEnabled && browserMcpEnabled && browserEvaluateEnabled
+            ? ctx.config.browser?.mcp
+            : undefined,
         existingMcpServers: pluginConfig.mcpServers,
       });
       if (chromePreset) {
@@ -115,6 +118,10 @@ export function createAcpxRuntimeService(
       } else if (browserMcpEnabled && pluginConfig.mcpServers[CHROME_DEVTOOLS_MCP_SERVER_NAME]) {
         ctx.logger.info(
           "chrome-devtools-mcp preset skipped: existing mcpServers entry takes precedence",
+        );
+      } else if (browserMcpEnabled && !browserEnabled) {
+        ctx.logger.info(
+          "chrome-devtools-mcp preset skipped: browser.enabled=false disables browser.mcp preset injection",
         );
       } else if (browserMcpEnabled && !browserEvaluateEnabled) {
         ctx.logger.info(

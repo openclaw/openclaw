@@ -284,6 +284,23 @@ describe("createAcpxRuntimeService", () => {
     expect(passedConfig.mcpServers["chrome-devtools"]).toBeUndefined();
   });
 
+  it("skips the preset when browser.enabled is false", async () => {
+    const { runtime } = createRuntimeStub(true);
+    const runtimeFactory = createRuntimeFactorySpy(runtime);
+    const service = createAcpxRuntimeService({ runtimeFactory });
+    const context = createServiceContext({
+      config: { browser: { enabled: false, mcp: { enabled: true } } },
+    });
+
+    await service.start(context);
+
+    const passedConfig = getPassedPluginConfig(runtimeFactory);
+    expect(passedConfig.mcpServers["chrome-devtools"]).toBeUndefined();
+    expect(context.logger.info).toHaveBeenCalledWith(
+      "chrome-devtools-mcp preset skipped: browser.enabled=false disables browser.mcp preset injection",
+    );
+  });
+
   it("skips the preset when browser.evaluateEnabled is false", async () => {
     const { runtime } = createRuntimeStub(true);
     const runtimeFactory = createRuntimeFactorySpy(runtime);
