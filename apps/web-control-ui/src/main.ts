@@ -27,6 +27,7 @@ import { loadPreferenceMemory, savePreferenceMemory } from "./product/storage";
 type ConnectionState = "idle" | "connecting" | "connected" | "disconnected" | "error";
 
 type ChatMessageKind = "reply" | "status" | "build" | "command";
+type ChatFilter = "all" | "reply" | "ops";
 
 type ChatMessage = {
   role: "user" | "assistant" | "system";
@@ -421,6 +422,27 @@ class WebControlUiApp extends LitElement {
       font-weight: 600;
     }
 
+    .chat-filters {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .chat-filter {
+      height: auto;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(30, 41, 59, 0.9);
+      color: #cbd5e1;
+      border: 1px solid rgba(148, 163, 184, 0.16);
+    }
+
+    .chat-filter.active {
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      color: #fff;
+    }
+
     .chat-actions,
     .memory-actions {
       display: flex;
@@ -467,6 +489,7 @@ class WebControlUiApp extends LitElement {
   @state() chatRunId: string | null = null;
   @state() chatLoading = false;
   @state() chatSending = false;
+  @state() chatFilter: ChatFilter = "all";
   @state() expandedMessages: Record<string, boolean> = {};
   @state() preferenceMemory: PreferenceMemory = defaultPreferenceMemory();
   @state() preferenceDraft: PreferenceMemoryDraft = toDraft(defaultPreferenceMemory());
@@ -772,6 +795,17 @@ class WebControlUiApp extends LitElement {
     return `${message.role}:${message.timestamp}:${index}`;
   }
 
+  private matchesChatFilter(message: ChatMessage) {
+    const kind = message.kind ?? inferMessageKind(message.text, message.role);
+    if (this.chatFilter === "all") {
+      return true;
+    }
+    if (this.chatFilter === "reply") {
+      return kind === "reply";
+    }
+    return kind === "status" || kind === "build" || kind === "command";
+  }
+
   private renderBubble(message: ChatMessage, index: number) {
     const key = this.messageKey(message, index);
     const expanded = this.expandedMessages[key] === true;
@@ -972,10 +1006,28 @@ class WebControlUiApp extends LitElement {
             <section class="panel">
               <h2>Designer Chat</h2>
               <p class="subtitle">发送时会自动把“提示词 + 偏好记忆 + 本轮需求”拼成最终上下文，再交给 OpenClaw 原生能力去推动代码改动。</p>
+              <div class="chat-filters">
+                <button class="chat-filter ${this.chatFilter === "all" ? "active" : ""}" type="button" @click=${() => {
+                  this.chatFilter = "all";
+                }}>全部</button>
+                <button class="chat-filter ${this.chatFilter === "reply" ? "active" : ""}" type="button" @click=${() => {
+                  this.chatFilter = "reply";
+                }}>回复</button>
+                <button class="chat-filter ${this.chatFilter === "ops" ? "active" : ""}" type="button" @click=${() => {
+                  this.chatFilter = "ops";
+                }}>操作日志</button>
+              </div>
               <div class="chat-log">
-                ${this.chatMessages.map((message, index) => this.renderBubble(message, index))}
+                ${this.chatMessages
+                  .filter((message) => this.matchesChatFilter(message))
+                  .map((message, index) => this.renderBubble(message, index))}
                 ${this.chatLoading ? html`<div class="bubble system">加载聊天记录中…</div>` : null}
-                ${this.chatStream
+                ${this.chatStream && this.matchesChatFilter({
+                  role: "assistant",
+                  text: this.chatStream,
+                  timestamp: Date.now(),
+                  kind: inferMessageKind(this.chatStream, "assistant"),
+                })
                   ? this.renderBubble(
                       {
                         role: "assistant",
