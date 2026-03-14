@@ -141,7 +141,14 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
 
   private fun doConnect() {
     val url = config.wsUrl()
-    val request = Request.Builder().url(url).build()
+    val request =
+      try {
+        Request.Builder().url(url).build()
+      } catch (_: IllegalArgumentException) {
+        _connected.value = false
+        _statusText.value = context.getString(R.string.wear_status_failed, "invalid gateway URL")
+        return
+      }
     connectNonceDeferred = CompletableDeferred()
     val epoch = connectionEpoch + 1
     connectionEpoch = epoch
