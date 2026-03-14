@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
+import { isWSLSync } from "../infra/wsl.js";
 import { captureEnv } from "../test-utils/env.js";
 
 const bundledPluginsDirSnapshot = captureEnv(["OPENCLAW_BUNDLED_PLUGINS_DIR"]);
@@ -122,22 +123,21 @@ async function createSafeBinsExecTool(params: {
   return { tmpDir, execTool: execTool as ExecTool };
 }
 
+const skipUnsupportedPlatform = process.platform === "win32" || isWSLSync();
+
 async function withSafeBinsExecTool(
   params: Parameters<typeof createSafeBinsExecTool>[0],
   run: (ctx: Awaited<ReturnType<typeof createSafeBinsExecTool>>) => Promise<void>,
 ) {
-  if (process.platform === "win32") {
-    return;
-  }
   const ctx = await createSafeBinsExecTool(params);
   try {
     await run(ctx);
   } finally {
-    fs.rmSync(ctx.tmpDir, { recursive: true, force: true });
+    fs.rmSync(ctx.tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
   }
 }
 
-describe("createOpenClawCodingTools safeBins", () => {
+describe.skipIf(skipUnsupportedPlatform)("createOpenClawCodingTools safeBins", () => {
   it("threads tools.exec.safeBins into exec allowlist checks", async () => {
     await withSafeBinsExecTool(
       {
