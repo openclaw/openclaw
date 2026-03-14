@@ -63,7 +63,7 @@ function makeCronJob(cronExpr: string, tz = "UTC"): CronJob {
     enabled: true,
     createdAtMs: NOW_MS - 60_000,
     updatedAtMs: NOW_MS - 60_000,
-    schedule: { kind: "cron", cron: cronExpr, tz },
+    schedule: { kind: "cron", expr: cronExpr, tz },
     sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "run" },
