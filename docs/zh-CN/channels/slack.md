@@ -54,7 +54,7 @@ x-i18n:
 
 使用下面的 manifest 以保持权限范围和事件同步。
 
-多账户支持：使用 `channels.slack.accounts` 配置每个账户的令牌和可选的 `name`。参见 [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) 了解共享模式。
+多账户支持：使用 `channels.slack.accounts` 配置每个账户的令牌和可选的 `name`。参见 [`gateway/configuration`](/zh-CN/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) 了解共享模式。
 
 ### OpenClaw 配置（最小）
 
@@ -465,7 +465,7 @@ Slack 仅使用 Socket Mode（无 HTTP webhook 服务器）。提供两个令牌
 - 斜杠命令使用 `agent:<agentId>:slack:slash:<userId>` 会话（前缀可通过 `channels.slack.slashCommand.sessionPrefix` 配置）。
 - 如果 Slack 未提供 `channel_type`，OpenClaw 会从频道 ID 前缀（`D`、`C`、`G`）推断并默认为 `channel` 以保持会话键稳定。
 - 原生命令注册使用 `commands.native`（全局默认 `"auto"` → Slack 关闭），可以使用 `channels.slack.commands.native` 按工作空间覆盖。文本命令需要独立的 `/...` 消息，可以使用 `commands.text: false` 禁用。Slack 斜杠命令在 Slack 应用中管理，不会自动移除。使用 `commands.useAccessGroups: false` 绕过命令的访问组检查。
-- 完整命令列表 + 配置：[斜杠命令](/tools/slash-commands)
+- 完整命令列表 + 配置：[斜杠命令](/zh-CN/tools/slash-commands)
 
 ## 私信安全（配对）
 
@@ -527,5 +527,5 @@ Slack 工具操作可以通过 `channels.slack.actions.*` 进行门控：
 - 表情回应通知遵循 `channels.slack.reactionNotifications`（在 `allowlist` 模式下使用 `reactionAllowlist`）。
 - 默认忽略机器人发送的消息；通过 `channels.slack.allowBots` 或 `channels.slack.channels.<id>.allowBots` 启用。
 - 警告：如果你允许回复其他机器人（`channels.slack.allowBots=true` 或 `channels.slack.channels.<id>.allowBots=true`），请使用 `requireMention`、`channels.slack.channels.<id>.users` 白名单和/或在 `AGENTS.md` 和 `SOUL.md` 中设置明确的防护措施来防止机器人之间的回复循环。
-- 对于 Slack 工具，表情回应移除语义见 [/tools/reactions](/tools/reactions)。
+- 对于 Slack 工具，表情回应移除语义见 [/tools/reactions](/zh-CN/tools/reactions)。
 - 附件在允许且在大小限制内时会下载到媒体存储。

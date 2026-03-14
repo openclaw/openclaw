@@ -17,7 +17,7 @@ x-i18n:
 
 安全更新 OpenClaw 并在 stable/beta/dev 渠道之间切换。
 
-如果你通过 **npm/pnpm** 安装（全局安装，无 git 元数据），更新通过 [更新](/install/updating) 中的包管理器流程进行。
+如果你通过 **npm/pnpm** 安装（全局安装，无 git 元数据），更新通过 [更新](/zh-CN/install/updating) 中的包管理器流程进行。
 
 ## 用法
 
@@ -96,6 +96,6 @@ openclaw update status --timeout 10
 ## 另请参阅
 
 - `openclaw doctor`（在 git 检出上会提供先运行更新的选项）
-- [开发渠道](/install/development-channels)
-- [更新](/install/updating)
-- [CLI 参考](/cli)
+- [开发渠道](/zh-CN/install/development-channels)
+- [更新](/zh-CN/install/updating)
+- [CLI 参考](/zh-CN/cli)

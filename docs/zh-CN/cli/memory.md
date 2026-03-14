@@ -20,8 +20,8 @@ x-i18n:
 
 相关内容：
 
-- 记忆概念：[记忆](/concepts/memory)
-- 插件：[插件](/tools/plugin)
+- 记忆概念：[记忆](/zh-CN/concepts/memory)
+- 插件：[插件](/zh-CN/tools/plugin)
 
 ## 示例
 

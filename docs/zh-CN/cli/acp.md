@@ -150,7 +150,7 @@ openclaw acp --session agent:qa:bug-123
 }
 ```
 
-在 [/concepts/session](/concepts/session) 了解更多关于会话键的信息。
+在 [/concepts/session](/zh-CN/concepts/session) 了解更多关于会话键的信息。
 
 ## 选项
 

@@ -18,8 +18,8 @@ x-i18n:
 
 相关内容：
 
-- 多智能体路由：[多智能体路由](/concepts/multi-agent)
-- 智能体工作区：[智能体工作区](/concepts/agent-workspace)
+- 多智能体路由：[多智能体路由](/zh-CN/concepts/multi-agent)
+- 智能体工作区：[智能体工作区](/zh-CN/concepts/agent-workspace)
 
 ## 示例
 

@@ -137,7 +137,7 @@ macOS 分工：
 目标选择器可选择 **Gateway**（本地审批）或 **Node**。节点必须通告 `system.execApprovals.get/set`（macOS 应用或无头节点主机）。
 如果节点尚未通告执行审批，请直接编辑其本地的 `~/.openclaw/exec-approvals.json`。
 
-CLI：`openclaw approvals` 支持 gateway 或 node 编辑（参见 [Approvals CLI](/cli/approvals)）。
+CLI：`openclaw approvals` 支持 gateway 或 node 编辑（参见 [Approvals CLI](/zh-CN/cli/approvals)）。
 
 ## 审批流程
 
@@ -229,6 +229,6 @@ Gateway 主机执行审批在命令完成时（以及可选地在运行时间超
 
 相关内容：
 
-- [Exec 工具](/tools/exec)
-- [提权模式](/tools/elevated)
-- [Skills](/tools/skills)
+- [Exec 工具](/zh-CN/tools/exec)
+- [提权模式](/zh-CN/tools/elevated)
+- [Skills](/zh-CN/tools/skills)

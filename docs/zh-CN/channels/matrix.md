@@ -36,7 +36,7 @@ openclaw plugins install ./extensions/matrix
 
 如果你在配置/新手引导期间选择 Matrix 并检测到 git 检出，OpenClaw 将自动提供本地安装路径。
 
-详情：[插件](/tools/plugin)
+详情：[插件](/zh-CN/tools/plugin)
 
 ## 设置
 
@@ -192,7 +192,7 @@ E2EE 配置（启用端到端加密）：
 
 ## 配置参考（Matrix）
 
-完整配置：[配置](/gateway/configuration)
+完整配置：[配置](/zh-CN/gateway/configuration)
 
 提供商选项：
 

@@ -20,8 +20,8 @@ x-i18n:
 
 相关内容：
 
-- 执行审批：[执行审批](/tools/exec-approvals)
-- 节点：[节点](/nodes)
+- 执行审批：[执行审批](/zh-CN/tools/exec-approvals)
+- 节点：[节点](/zh-CN/nodes)
 
 ## 常用命令
 

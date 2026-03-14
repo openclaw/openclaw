@@ -35,7 +35,7 @@ x-i18n:
 
 - **最佳用户体验：** 保持 `gateway.bind: "loopback"` 并使用 **Tailscale Serve** 作为控制 UI。
 - **回退方案：** 保持 loopback + 从任何需要访问的机器建立 SSH 隧道。
-- **示例：** [exe.dev](/install/exe-dev)（简易 VM）或 [Hetzner](/install/hetzner)（生产 VPS）。
+- **示例：** [exe.dev](/zh-CN/install/exe-dev)（简易 VM）或 [Hetzner](/zh-CN/install/hetzner)（生产 VPS）。
 
 当你的笔记本电脑经常休眠但你希望智能体始终在线时，这是理想的选择。
 
@@ -46,7 +46,7 @@ x-i18n:
 - 使用 macOS 应用的 **Remote over SSH** 模式（设置 → 通用 → "OpenClaw runs"）。
 - 应用打开并管理隧道，因此 WebChat + 健康检查"直接工作"。
 
-操作手册：[macOS 远程访问](/platforms/mac/remote)。
+操作手册：[macOS 远程访问](/zh-CN/platforms/mac/remote)。
 
 ### 3) 笔记本电脑运行 Gateway 网关，从其他机器远程访问
 
@@ -55,7 +55,7 @@ x-i18n:
 - 从其他机器到笔记本电脑的 SSH 隧道，或
 - Tailscale Serve 控制 UI 并保持 Gateway 网关仅 loopback。
 
-指南：[Tailscale](/gateway/tailscale) 和 [Web 概览](/web)。
+指南：[Tailscale](/zh-CN/gateway/tailscale) 和 [Web 概览](/zh-CN/web)。
 
 ## 命令流（什么在哪里运行）
 
@@ -70,7 +70,7 @@ x-i18n:
 
 说明：
 
-- **节点不运行 Gateway 网关服务。** 除非你有意运行隔离的配置文件，否则每台主机只应运行一个 Gateway 网关（参见[多 Gateway 网关](/gateway/multiple-gateways)）。
+- **节点不运行 Gateway 网关服务。** 除非你有意运行隔离的配置文件，否则每台主机只应运行一个 Gateway 网关（参见[多 Gateway 网关](/zh-CN/gateway/multiple-gateways)）。
 - macOS 应用的"节点模式"只是通过 Gateway WebSocket 的节点客户端。
 
 ## SSH 隧道（CLI + 工具）
@@ -117,7 +117,7 @@ WebChat 不再使用单独的 HTTP 端口。SwiftUI 聊天 UI 直接连接到 Ga
 
 macOS 菜单栏应用可以端到端驱动相同的设置（远程状态检查、WebChat 和语音唤醒转发）。
 
-操作手册：[macOS 远程访问](/platforms/mac/remote)。
+操作手册：[macOS 远程访问](/zh-CN/platforms/mac/remote)。
 
 ## 安全规则（远程/VPN）
 
@@ -130,4 +130,4 @@ macOS 菜单栏应用可以端到端驱动相同的设置（远程状态检查�
 - 当 `gateway.auth.allowTailscale: true` 时，**Tailscale Serve** 可以通过身份标头进行身份验证。如果你想使用令牌/密码，请将其设置为 `false`。
 - 将浏览器控制视为操作员访问：仅限 tailnet + 有意的节点配对。
 
-深入了解：[安全](/gateway/security)。
+深入了解：[安全](/zh-CN/gateway/security)。

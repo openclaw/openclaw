@@ -26,11 +26,11 @@ openclaw channels status --probe
 
 ## 渠道
 
-- Discord：[/channels/discord#troubleshooting](/channels/discord#troubleshooting)
-- Telegram：[/channels/telegram#troubleshooting](/channels/telegram#troubleshooting)
-- WhatsApp：[/channels/whatsapp#troubleshooting-quick](/channels/whatsapp#troubleshooting-quick)
+- Discord：[/channels/discord#troubleshooting](/zh-CN/channels/discord#troubleshooting)
+- Telegram：[/channels/telegram#troubleshooting](/zh-CN/channels/telegram#troubleshooting)
+- WhatsApp：[/channels/whatsapp#troubleshooting-quick](/zh-CN/channels/whatsapp#troubleshooting-quick)
 
 ## Telegram 快速修复
 
-- 日志显示 `HttpError: Network request for 'sendMessage' failed` 或 `sendChatAction` → 检查 IPv6 DNS。如果 `api.telegram.org` 优先解析为 IPv6 而主机缺少 IPv6 出站连接，请强制使用 IPv4 或启用 IPv6。参见 [/channels/telegram#troubleshooting](/channels/telegram#troubleshooting)。
+- 日志显示 `HttpError: Network request for 'sendMessage' failed` 或 `sendChatAction` → 检查 IPv6 DNS。如果 `api.telegram.org` 优先解析为 IPv6 而主机缺少 IPv6 出站连接，请强制使用 IPv4 或启用 IPv6。参见 [/channels/telegram#troubleshooting](/zh-CN/channels/telegram#troubleshooting)。
 - 日志显示 `setMyCommands failed` → 检查到 `api.telegram.org` 的出站 HTTPS 和 DNS 可达性（常见于限制严格的 VPS 或代理环境）。

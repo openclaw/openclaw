@@ -53,7 +53,7 @@ x-i18n:
 - **默认值：**当缺失时，为 `wakeMode` 和 `sessionTarget` 应用安全默认值。
 - **提供商：**Discord/Slack/Signal/iMessage 现在在 CLI/UI 中一致显示。
 
-参见 [Cron 任务](/automation/cron-jobs) 了解规范化的形式和示例。
+参见 [Cron 任务](/zh-CN/automation/cron-jobs) 了解规范化的形式和示例。
 
 ## 验证
 

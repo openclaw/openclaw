@@ -180,7 +180,7 @@ openclaw onboard --auth-choice minimax-portal
 - 编程计划使用量 API：`https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains`（需要编程计划密钥）。
 - 如果需要精确的成本跟踪，请更新 `models.json` 中的定价值。
 - MiniMax 编程计划推荐链接（9 折优惠）：https://platform.minimax.io/subscribe/coding-plan?code=DbXJTRClnb&source=link
-- 参见 [/concepts/model-providers](/concepts/model-providers) 了解提供商规则。
+- 参见 [/concepts/model-providers](/zh-CN/concepts/model-providers) 了解提供商规则。
 - 使用 `openclaw models list` 和 `openclaw models set minimax/MiniMax-M2.1` 切换模型。
 
 ## 故障排除

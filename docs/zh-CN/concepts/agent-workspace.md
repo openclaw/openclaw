@@ -20,7 +20,7 @@ x-i18n:
 这与 `~/.openclaw/` 是分开的，后者存储配置、凭证和会话。
 
 **重要：** 工作区是**默认 cwd**，而不是硬性沙箱。工具会根据工作区解析相对路径，但绝对路径仍然可以访问主机上的其他位置，除非启用了沙箱隔离。如果你需要隔离，请使用
-[`agents.defaults.sandbox`](/gateway/sandboxing)（和/或每智能体沙箱配置）。
+[`agents.defaults.sandbox`](/zh-CN/gateway/sandboxing)（和/或每智能体沙箱配置）。
 当启用沙箱隔离且 `workspaceAccess` 不是 `"rw"` 时，工具在 `~/.openclaw/sandboxes` 下的沙箱工作区内操作，而不是你的主机工作区。
 
 ## 默认位置
@@ -101,7 +101,7 @@ x-i18n:
   - 精选的长期记忆。
   - 仅在主私密会话中加载（不在共享/群组上下文中）。
 
-参见 [记忆](/concepts/memory) 了解工作流程和自动记忆刷新。
+参见 [记忆](/zh-CN/concepts/memory) 了解工作流程和自动记忆刷新。
 
 - `skills/`（可选）
   - 工作区特定的 Skills。
@@ -215,5 +215,5 @@ git push
 ## 高级注意事项
 
 - 多智能体路由可以为每个智能体使用不同的工作区。参见
-  [渠道路由](/channels/channel-routing) 了解路由配置。
+  [渠道路由](/zh-CN/channels/channel-routing) 了解路由配置。
 - 如果启用了 `agents.defaults.sandbox`，非主会话可以在 `agents.defaults.sandbox.workspaceRoot` 下使用每会话沙箱工作区。

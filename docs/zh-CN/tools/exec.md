@@ -104,7 +104,7 @@ openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
 ## Exec 审批（配套应用/节点主机）
 
 沙箱隔离的智能体可以要求在 `exec` 于 Gateway 网关或节点主机上运行前进行逐请求审批。
-参阅 [Exec 审批](/tools/exec-approvals) 了解策略、白名单和 UI 流程。
+参阅 [Exec 审批](/zh-CN/tools/exec-approvals) 了解策略、白名单和 UI 流程。
 
 当需要审批时，exec 工具会立即返回 `status: "approval-pending"` 和审批 id。一旦被批准（或拒绝/超时），Gateway 网关会发出系统事件（`Exec finished` / `Exec denied`）。如果命令在 `tools.exec.approvalRunningNoticeMs` 之后仍在运行，会发出单次 `Exec running` 通知。
 

@@ -80,7 +80,7 @@ x-i18n:
 - `/config show|get|set|unset`（将配置持久化到磁盘，仅所有者；需要 `commands.config: true`）
 - `/debug show|set|unset|reset`（运行时覆盖，仅所有者；需要 `commands.debug: true`）
 - `/usage off|tokens|full|cost`（每响应使用量页脚或本地成本摘要）
-- `/tts off|always|inbound|tagged|status|provider|limit|summary|audio`（控制 TTS；参见 [/tts](/tts)）
+- `/tts off|always|inbound|tagged|status|provider|limit|summary|audio`（控制 TTS；参见 [/tts](/zh-CN/tts)）
   - Discord：原生命令是 `/voice`（Discord 保留了 `/tts`）；文本 `/tts` 仍然有效。
 - `/stop`
 - `/restart`
@@ -101,7 +101,7 @@ x-i18n:
 
 仅文本：
 
-- `/compact [instructions]`（参见 [/concepts/compaction](/concepts/compaction)）
+- `/compact [instructions]`（参见 [/concepts/compaction](/zh-CN/concepts/compaction)）
 - `! <command>`（仅主机；一次一个；对长时间运行的任务使用 `!poll` + `!stop`）
 - `!poll`（检查输出/状态；接受可选的 `sessionId`；`/bash poll` 也可用）
 - `!stop`（停止正在运行的 bash 任务；接受可选的 `sessionId`；`/bash stop` 也可用）
@@ -126,7 +126,7 @@ x-i18n:
   - `/skill <name> [input]` 按名称运行 Skill（当原生命令限制阻止每个 Skill 命令时有用）。
   - 默认情况下，Skill 命令作为普通请求转发给模型。
   - Skills 可以选择声明 `command-dispatch: tool` 将命令直接路由到工具（确定性，无模型）。
-  - 示例：`/prose`（OpenProse 插件）— 参见 [OpenProse](/prose)。
+  - 示例：`/prose`（OpenProse 插件）— 参见 [OpenProse](/zh-CN/prose)。
 - **原生命令参数：** Discord 使用自动完成进行动态选项（以及当你省略必需参数时的按钮菜单）。当命令支持选择且你省略参数时，Telegram 和 Slack 显示按钮菜单。
 
 ## 使用量显示（什么显示在哪里）

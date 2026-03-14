@@ -16,7 +16,7 @@ x-i18n:
 
 ## 快速检查：`openclaw security audit`
 
-另请参阅：[形式化验证（安全模型）](/security/formal-verification/)
+另请参阅：[形式化验证（安全模型）](/zh-CN/security/formal-verification)
 
 定期运行此命令（尤其是在更改配置或暴露网络接口之后）：
 
@@ -152,7 +152,7 @@ OpenClaw 的立场：
 
 ## 命令授权模型
 
-斜杠命令和指令仅对**授权发送者**有效。授权来源于渠道白名单/配对加上 `commands.useAccessGroups`（参见[配置](/gateway/configuration)和[斜杠命令](/tools/slash-commands)）。如果渠道白名单为空或包含 `"*"`，则该渠道的命令实际上是开放的。
+斜杠命令和指令仅对**授权发送者**有效。授权来源于渠道白名单/配对加上 `commands.useAccessGroups`（参见[配置](/zh-CN/gateway/configuration)和[斜杠命令](/zh-CN/tools/slash-commands)）。如果渠道白名单为空或包含 `"*"`，则该渠道的命令实际上是开放的。
 
 `/exec` 是授权操作员的仅会话便捷功能。它**不会**写入配置或更改其他会话。
 
@@ -169,7 +169,7 @@ OpenClaw 的立场：
   - OpenClaw 使用 `npm pack` 然后在该目录中运行 `npm install --omit=dev`（npm 生命周期脚本可以在安装期间执行代码）。
   - 优先使用固定的精确版本（`@scope/pkg@1.2.3`），并在启用之前检查磁盘上解压的代码。
 
-详情：[插件](/tools/plugin)
+详情：[插件](/zh-CN/tools/plugin)
 
 ## 私信访问模型（配对/白名单/开放/禁用）
 
@@ -187,7 +187,7 @@ openclaw pairing list <channel>
 openclaw pairing approve <channel> <code>
 ```
 
-详情 + 磁盘上的文件：[配对](/channels/pairing)
+详情 + 磁盘上的文件：[配对](/zh-CN/channels/pairing)
 
 ## 私信会话隔离（多用户模式）
 
@@ -199,7 +199,7 @@ openclaw pairing approve <channel> <code>
 }
 ```
 
-这可以防止跨用户上下文泄露，同时保持群聊隔离。如果你在同一渠道上运行多个账户，请改用 `per-account-channel-peer`。如果同一个人通过多个渠道联系你，请使用 `session.identityLinks` 将这些私信会话合并为一个规范身份。参见[会话管理](/concepts/session)和[配置](/gateway/configuration)。
+这可以防止跨用户上下文泄露，同时保持群聊隔离。如果你在同一渠道上运行多个账户，请改用 `per-account-channel-peer`。如果同一个人通过多个渠道联系你，请使用 `session.identityLinks` 将这些私信会话合并为一个规范身份。参见[会话管理](/zh-CN/concepts/session)和[配置](/zh-CN/gateway/configuration)。
 
 ## 白名单（私信 + 群组）——术语
 
@@ -214,7 +214,7 @@ OpenClaw 有两个独立的"谁可以触发我？"层：
     - `channels.discord.guilds` / `channels.slack.channels`：单平台白名单 + 提及默认值。
   - **安全说明：** 将 `dmPolicy="open"` 和 `groupPolicy="open"` 视为最后手段的设置。应该很少使用；除非你完全信任房间的每个成员，否则优先使用配对 + 白名单。
 
-详情：[配置](/gateway/configuration)和[群组](/channels/groups)
+详情：[配置](/zh-CN/gateway/configuration)和[群组](/zh-CN/channels/groups)
 
 ## 提示词注入（是什么，为什么重要）
 
@@ -428,11 +428,11 @@ Doctor 可以为你生成一个：`openclaw doctor --generate-gateway-token`。
 - OpenClaw 将信任来自这些 IP 的 `x-forwarded-for`（或 `x-real-ip`）来确定客户端 IP 以进行本地配对检查和 HTTP 认证/本地检查。
 - 确保你的代理**覆盖** `x-forwarded-for` 并阻止对 Gateway 网关端口的直接访问。
 
-参见 [Tailscale](/gateway/tailscale) 和 [Web 概述](/web)。
+参见 [Tailscale](/zh-CN/gateway/tailscale) 和 [Web 概述](/zh-CN/web)。
 
 ### 0.6.1）通过节点主机进行浏览器控制（推荐）
 
-如果你的 Gateway 网关是远程的但浏览器在另一台机器上运行，请在浏览器机器上运行一个**节点主机**，让 Gateway 网关代理浏览器操作（参见[浏览器工具](/tools/browser)）。将节点配对视为管理员访问。
+如果你的 Gateway 网关是远程的但浏览器在另一台机器上运行，请在浏览器机器上运行一个**节点主机**，让 Gateway 网关代理浏览器操作（参见[浏览器工具](/zh-CN/tools/browser)）。将节点配对视为管理员访问。
 
 推荐模式：
 
@@ -475,7 +475,7 @@ Doctor 可以为你生成一个：`openclaw doctor --generate-gateway-token`。
 - 共享诊断信息时，优先使用 `openclaw status --all`（可粘贴，秘密已脱敏）而不是原始日志。
 - 如果你不需要长期保留，清理旧的会话记录和日志文件。
 
-详情：[日志记录](/gateway/logging)
+详情：[日志记录](/zh-CN/gateway/logging)
 
 ### 1）私信：默认配对
 
@@ -550,12 +550,12 @@ Doctor 可以为你生成一个：`openclaw doctor --generate-gateway-token`。
 
 ## 沙箱隔离（推荐）
 
-专用文档：[沙箱隔离](/gateway/sandboxing)
+专用文档：[沙箱隔离](/zh-CN/gateway/sandboxing)
 
 两种互补的方法：
 
-- **在 Docker 中运行完整的 Gateway 网关**（容器边界）：[Docker](/install/docker)
-- **工具沙箱**（`agents.defaults.sandbox`，宿主机 Gateway 网关 + Docker 隔离的工具）：[沙箱隔离](/gateway/sandboxing)
+- **在 Docker 中运行完整的 Gateway 网关**（容器边界）：[Docker](/zh-CN/install/docker)
+- **工具沙箱**（`agents.defaults.sandbox`，宿主机 Gateway 网关 + Docker 隔离的工具）：[沙箱隔离](/zh-CN/gateway/sandboxing)
 
 注意：为了防止跨智能体访问，保持 `agents.defaults.sandbox.scope` 为 `"agent"`（默认）或 `"session"` 以进行更严格的单会话隔离。`scope: "shared"` 使用单个容器/工作区。
 
@@ -565,7 +565,7 @@ Doctor 可以为你生成一个：`openclaw doctor --generate-gateway-token`。
 - `agents.defaults.sandbox.workspaceAccess: "ro"` 在 `/agent` 以只读方式挂载智能体工作区（禁用 `write`/`edit`/`apply_patch`）
 - `agents.defaults.sandbox.workspaceAccess: "rw"` 在 `/workspace` 以读写方式挂载智能体工作区
 
-重要：`tools.elevated` 是在宿主机上运行 exec 的全局基线逃逸舱口。保持 `tools.elevated.allowFrom` 严格，不要为陌生人启用它。你可以通过 `agents.list[].tools.elevated` 进一步限制单智能体的提权。参见[提权模式](/tools/elevated)。
+重要：`tools.elevated` 是在宿主机上运行 exec 的全局基线逃逸舱口。保持 `tools.elevated.allowFrom` 严格，不要为陌生人启用它。你可以通过 `agents.list[].tools.elevated` 进一步限制单智能体的提权。参见[提权模式](/zh-CN/tools/elevated)。
 
 ## 浏览器控制风险
 
@@ -584,7 +584,7 @@ Doctor 可以为你生成一个：`openclaw doctor --generate-gateway-token`。
 
 ## 单智能体访问配置（多智能体）
 
-通过多智能体路由，每个智能体可以有自己的沙箱 + 工具策略：使用这个为每个智能体提供**完全访问**、**只读**或**无访问**权限。参见[多智能体沙箱和工具](/tools/multi-agent-sandbox-tools)了解详情和优先级规则。
+通过多智能体路由，每个智能体可以有自己的沙箱 + 工具策略：使用这个为每个智能体提供**完全访问**、**只读**或**无访问**权限。参见[多智能体沙箱和工具](/zh-CN/tools/multi-agent-sandbox-tools)了解详情和优先级规则。
 
 常见用例：
 

@@ -22,9 +22,9 @@ OpenClaw 使用单一智能体工作区目录（`agents.defaults.workspace`）�
 
 建议：使用 `openclaw setup` 在缺失时创建 `~/.openclaw/openclaw.json` 并初始化工作区文件。
 
-完整工作区布局 + 备份指南：[智能体工作区](/concepts/agent-workspace)
+完整工作区布局 + 备份指南：[智能体工作区](/zh-CN/concepts/agent-workspace)
 
-如果启用了 `agents.defaults.sandbox`，非主会话可以在 `agents.defaults.sandbox.workspaceRoot` 下使用按会话隔离的工作区覆盖此设置（参见 [Gateway 网关配置](/gateway/configuration)）。
+如果启用了 `agents.defaults.sandbox`，非主会话可以在 `agents.defaults.sandbox.workspaceRoot` 下使用按会话隔离的工作区覆盖此设置（参见 [Gateway 网关配置](/zh-CN/gateway/configuration)）。
 
 ## 引导文件（注入）
 
@@ -63,7 +63,7 @@ OpenClaw 从三个位置加载 Skills（名称冲突时工作区优先）：
 - 托管/本地：`~/.openclaw/skills`
 - 工作区：`<workspace>/skills`
 
-Skills 可通过配置/环境变量控制（参见 [Gateway 网关配置](/gateway/configuration) 中的 `skills`）。
+Skills 可通过配置/环境变量控制（参见 [Gateway 网关配置](/zh-CN/gateway/configuration) 中的 `skills`）。
 
 ## pi-mono 集成
 
@@ -86,14 +86,14 @@ OpenClaw 复用 pi-mono 代码库的部分内容（模型/工具），但**会�
 当队列模式为 `steer` 时，入站消息会注入当前运行。
 队列在**每次工具调用后**检查；如果存在排队消息，当前助手消息的剩余工具调用将被跳过（工具结果显示错误"Skipped due to queued user message."），然后在下一个助手响应前注入排队的用户消息。
 
-当队列模式为 `followup` 或 `collect` 时，入站消息会保留到当前轮次结束，然后使用排队的载荷开始新的智能体轮次。参见 [队列](/concepts/queue) 了解模式 + 防抖/上限行为。
+当队列模式为 `followup` 或 `collect` 时，入站消息会保留到当前轮次结束，然后使用排队的载荷开始新的智能体轮次。参见 [队列](/zh-CN/concepts/queue) 了解模式 + 防抖/上限行为。
 
 分块流式传输在助手块完成后立即发送；默认为**关闭**（`agents.defaults.blockStreamingDefault: "off"`）。
 通过 `agents.defaults.blockStreamingBreak` 调整边界（`text_end` 与 `message_end`；默认为 text_end）。
 使用 `agents.defaults.blockStreamingChunk` 控制软块分块（默认 800–1200 字符；优先段落分隔，其次换行；最后是句子）。
 使用 `agents.defaults.blockStreamingCoalesce` 合并流式块以减少单行刷屏（发送前基于空闲的合并）。非 Telegram 渠道需要显式设置 `*.blockStreaming: true` 以启用分块回复。
 工具启动时发出详细工具摘要（无防抖）；Control UI 在可用时通过智能体事件流式传输工具输出。
-更多详情：[流式传输 + 分块](/concepts/streaming)。
+更多详情：[流式传输 + 分块](/zh-CN/concepts/streaming)。
 
 ## 模型引用
 
@@ -112,4 +112,4 @@ OpenClaw 复用 pi-mono 代码库的部分内容（模型/工具），但**会�
 
 ---
 
-_下一篇：[群聊](/channels/group-messages)_ 🦞
+_下一篇：[群聊](/zh-CN/channels/group-messages)_ 🦞

@@ -19,9 +19,9 @@ x-i18n:
 
 相关内容：
 
-- Skills 系统：[Skills](/tools/skills)
-- Skills 配置：[Skills 配置](/tools/skills-config)
-- ClawHub 安装：[ClawHub](/tools/clawhub)
+- Skills 系统：[Skills](/zh-CN/tools/skills)
+- Skills 配置：[Skills 配置](/zh-CN/tools/skills-config)
+- ClawHub 安装：[ClawHub](/zh-CN/tools/clawhub)
 
 ## 命令
 

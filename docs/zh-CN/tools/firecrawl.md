@@ -65,4 +65,4 @@ OpenClaw 对 Firecrawl 请求始终使用 `proxy: "auto"` 加 `storeInCache: tru
 2. Firecrawl（如果已配置）
 3. 基本 HTML 清理（最后回退）
 
-参见 [Web 工具](/tools/web) 了解完整的 Web 工具设置。
+参见 [Web 工具](/zh-CN/tools/web) 了解完整的 Web 工具设置。

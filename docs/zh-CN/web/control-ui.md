@@ -53,7 +53,7 @@ openclaw devices list
 openclaw devices approve <requestId>
 ```
 
-一旦批准，设备会被记住，除非你使用 `openclaw devices revoke --device <id> --role <role>` 撤销它，否则不需要重新批准。参见 [Devices CLI](/cli/devices) 了解 token 轮换和撤销。
+一旦批准，设备会被记住，除非你使用 `openclaw devices revoke --device <id> --role <role>` 撤销它，否则不需要重新批准。参见 [Devices CLI](/zh-CN/cli/devices) 了解 token 轮换和撤销。
 
 **注意：**
 
@@ -141,7 +141,7 @@ openclaw gateway --bind tailnet --token "$(openssl rand -hex 32)"
 
 这会为控制 UI 禁用设备身份 + 配对（即使在 HTTPS 上）。仅在你信任网络时使用。
 
-参见 [Tailscale](/gateway/tailscale) 了解 HTTPS 设置指南。
+参见 [Tailscale](/zh-CN/gateway/tailscale) 了解 HTTPS 设置指南。
 
 ## 构建 UI
 
@@ -188,4 +188,4 @@ http://localhost:5173/?gatewayUrl=wss://<gateway-host>:18789&token=<gateway-toke
 - `token` 存储在 localStorage 中；`password` 仅保留在内存中。
 - 当 Gateway 网关在 TLS 后面时（Tailscale Serve、HTTPS 代理等），使用 `wss://`。
 
-远程访问设置详情：[远程访问](/gateway/remote)。
+远程访问设置详情：[远程访问](/zh-CN/gateway/remote)。

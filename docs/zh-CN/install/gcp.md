@@ -39,7 +39,7 @@ Gateway 网关可以通过以下方式访问：
 
 本指南使用 GCP Compute Engine 上的 Debian。
 Ubuntu 也可以；请相应地映射软件包。
-有关通用 Docker 流程，请参阅 [Docker](/install/docker)。
+有关通用 Docker 流程，请参阅 [Docker](/zh-CN/install/docker)。
 
 ---
 
@@ -505,6 +505,6 @@ gcloud compute instances start openclaw-gateway --zone=us-central1-a
 
 ## 下一步
 
-- 设置消息渠道：[渠道](/channels)
-- 将本地设备配对为节点：[节点](/nodes)
-- 配置 Gateway 网关：[Gateway 网关配置](/gateway/configuration)
+- 设置消息渠道：[渠道](/zh-CN/channels)
+- 将本地设备配对为节点：[节点](/zh-CN/nodes)
+- 配置 Gateway 网关：[Gateway 网关配置](/zh-CN/gateway/configuration)

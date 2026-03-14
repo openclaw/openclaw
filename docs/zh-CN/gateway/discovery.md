@@ -29,12 +29,12 @@ OpenClaw 有两个表面上看起来相似的不同问题：
 - **Gateway 网关 WS（控制平面）**：默认在 `127.0.0.1:18789` 上的 WebSocket 端点；可通过 `gateway.bind` 绑定到 LAN/tailnet。
 - **直连 WS 传输**：面向 LAN/tailnet 的 Gateway 网关 WS 端点（无 SSH）。
 - **SSH 传输（回退）**：通过 SSH 转发 `127.0.0.1:18789` 进行远程控制。
-- **旧版 TCP 桥接（已弃用/移除）**：旧的节点传输（参见 [桥接协议](/gateway/bridge-protocol)）；不再用于发现广播。
+- **旧版 TCP 桥接（已弃用/移除）**：旧的节点传输（参见 [桥接协议](/zh-CN/gateway/bridge-protocol)）；不再用于发现广播。
 
 协议详情：
 
-- [Gateway 网关协议](/gateway/protocol)
-- [桥接协议（旧版）](/gateway/bridge-protocol)
+- [Gateway 网关协议](/zh-CN/gateway/protocol)
+- [桥接协议（旧版）](/zh-CN/gateway/bridge-protocol)
 
 ## 为什么我们同时保留"直连"和 SSH
 
@@ -58,7 +58,7 @@ Bonjour 是尽力而为的，不会跨网络。它仅用于"同一 LAN"的便利
 - **Gateway 网关**通过 Bonjour 广播其 WS 端点。
 - 客户端浏览并显示"选择一个 Gateway 网关"列表，然后存储选定的端点。
 
-故障排除和信标详情：[Bonjour](/gateway/bonjour)。
+故障排除和信标详情：[Bonjour](/zh-CN/gateway/bonjour)。
 
 #### 服务信标详情
 
@@ -95,7 +95,7 @@ Bonjour 是尽力而为的，不会跨网络。它仅用于"同一 LAN"的便利
 
 当没有直连路由（或直连被禁用）时，客户端始终可以通过 SSH 转发本地回环 Gateway 网关端口来连接。
 
-参见 [远程访问](/gateway/remote)。
+参见 [远程访问](/zh-CN/gateway/remote)。
 
 ## 传输选择（客户端策略）
 
@@ -110,7 +110,7 @@ Bonjour 是尽力而为的，不会跨网络。它仅用于"同一 LAN"的便利
 
 Gateway 网关是节点/客户端准入的唯一权威来源。
 
-- 配对请求在 Gateway 网关中创建/批准/拒绝（参见 [Gateway 网关配对](/gateway/pairing)）。
+- 配对请求在 Gateway 网关中创建/批准/拒绝（参见 [Gateway 网关配对](/zh-CN/gateway/pairing)）。
 - Gateway 网关强制执行：
   - 认证（令牌 / 密钥对）
   - 作用域/ACL（Gateway 网关不是每个方法的原始代理）

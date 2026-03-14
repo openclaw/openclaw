@@ -317,7 +317,7 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 
 ## 相关文档
 
-- [Exec 工具](/tools/exec)
-- [执行批准](/tools/exec-approvals)
-- [节点](/nodes)
-- [提升模式](/tools/elevated)
+- [Exec 工具](/zh-CN/tools/exec)
+- [执行批准](/zh-CN/tools/exec-approvals)
+- [节点](/zh-CN/nodes)
+- [提升模式](/zh-CN/tools/elevated)

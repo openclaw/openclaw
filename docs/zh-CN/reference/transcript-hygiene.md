@@ -28,7 +28,7 @@ x-i18n:
 
 如需了解对话记录存储细节，请参阅：
 
-- [/reference/session-management-compaction](/reference/session-management-compaction)
+- [/reference/session-management-compaction](/zh-CN/reference/session-management-compaction)
 
 ---
 

@@ -18,7 +18,7 @@ x-i18n:
 
 Bridge 协议是一个**旧版**节点传输（TCP JSONL）。新的节点客户端应该使用统一的 Gateway 网关 WebSocket 协议。
 
-如果你正在构建操作者或节点客户端，请使用 [Gateway 网关协议](/gateway/protocol)。
+如果你正在构建操作者或节点客户端，请使用 [Gateway 网关协议](/zh-CN/gateway/protocol)。
 
 **注意：** 当前的 OpenClaw 构建不再包含 TCP bridge 监听器；本文档仅作历史参考保留。
 旧版 `bridge.*` 配置键不再是配置模式的一部分。

@@ -352,7 +352,7 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 - 通过真实 Gateway 网关 + 智能体循环的模拟工具调用（`src/gateway/gateway.tool-calling.mock-openai.test.ts`）。
 - 验证会话连接和配置效果的端到端向导流程（`src/gateway/gateway.wizard.e2e.test.ts`）。
 
-对于 Skills 仍然缺少的内容（参见 [Skills](/tools/skills)）：
+对于 Skills 仍然缺少的内容（参见 [Skills](/zh-CN/tools/skills)）：
 
 - **决策：** 当 Skills 在提示中列出时，智能体是否选择正确的 skill（或避免不相关的）？
 - **合规性：** 智能体是否在使用前读取 `SKILL.md` 并遵循所需的步骤/参数？

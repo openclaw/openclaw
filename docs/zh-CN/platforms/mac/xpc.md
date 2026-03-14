@@ -49,7 +49,7 @@ Agent -> Gateway -> Node Service (WS)
 - UI 自动化使用名为 `bridge.sock` 的单独 UNIX 套接字和 PeekabooBridge JSON 协议。
 - 主机优先顺序（客户端侧）：Peekaboo.app → Claude.app → OpenClaw.app → 本地执行。
 - 安全性：桥接主机需要允许的 TeamID；仅 DEBUG 的同 UID 逃逸通道由 `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` 保护（Peekaboo 约定）。
-- 参见：[PeekabooBridge 用法](/platforms/mac/peekaboo)了解详情。
+- 参见：[PeekabooBridge 用法](/zh-CN/platforms/mac/peekaboo)了解详情。
 
 ## 操作流程
 

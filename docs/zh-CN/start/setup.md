@@ -27,7 +27,7 @@ x-i18n:
 
 - Node `>=22`
 - `pnpm`
-- Docker（可选；仅用于容器化设置/e2e — 参阅 [Docker](/install/docker)）
+- Docker（可选；仅用于容器化设置/e2e — 参阅 [Docker](/zh-CN/install/docker)）
 
 ## 个性化策略（让更新不会造成问题）
 
@@ -127,7 +127,7 @@ openclaw health
 - **配对允许列表**：`~/.openclaw/credentials/<channel>-allowFrom.json`
 - **模型认证配置文件**：`~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
 - **旧版 OAuth 导入**：`~/.openclaw/credentials/oauth.json`
-  更多详情：[安全](/gateway/security#credential-storage-map)。
+  更多详情：[安全](/zh-CN/gateway/security#credential-storage-map)。
 
 ## 更新（不破坏你的设置）
 
@@ -142,12 +142,12 @@ Linux 安装使用 systemd **用户**服务。默认情况下，systemd 在注�
 sudo loginctl enable-linger $USER
 ```
 
-对于常驻或多用户服务器，考虑使用**系统**服务而不是用户服务（不需要 lingering）。参阅 [Gateway 网关运行手册](/gateway) 了解 systemd 说明。
+对于常驻或多用户服务器，考虑使用**系统**服务而不是用户服务（不需要 lingering）。参阅 [Gateway 网关运行手册](/zh-CN/gateway) 了解 systemd 说明。
 
 ## 相关文档
 
-- [Gateway 网关运行手册](/gateway)（标志、监督、端口）
-- [Gateway 网关配置](/gateway/configuration)（配置模式 + 示例）
-- [Discord](/channels/discord) 和 [Telegram](/channels/telegram)（回复标签 + replyToMode 设置）
-- [OpenClaw 助手设置](/start/openclaw)
-- [macOS 应用](/platforms/macos)（Gateway 网关生命周期）
+- [Gateway 网关运行手册](/zh-CN/gateway)（标志、监督、端口）
+- [Gateway 网关配置](/zh-CN/gateway/configuration)（配置模式 + 示例）
+- [Discord](/zh-CN/channels/discord) 和 [Telegram](/zh-CN/channels/telegram)（回复标签 + replyToMode 设置）
+- [OpenClaw 助手设置](/zh-CN/start/openclaw)
+- [macOS 应用](/zh-CN/platforms/macos)（Gateway 网关生命周期）

@@ -358,8 +358,8 @@ echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 
 ## 另请参阅
 
-- [Linux 指南](/platforms/linux) — 通用 Linux 设置
-- [DigitalOcean 指南](/platforms/digitalocean) — 云替代方案
-- [Hetzner 指南](/install/hetzner) — Docker 设置
-- [Tailscale](/gateway/tailscale) — 远程访问
-- [节点](/nodes) — 将你的笔记本电脑/手机与 Pi Gateway 网关配对
+- [Linux 指南](/zh-CN/platforms/linux) — 通用 Linux 设置
+- [DigitalOcean 指南](/zh-CN/platforms/digitalocean) — 云替代方案
+- [Hetzner 指南](/zh-CN/install/hetzner) — Docker 设置
+- [Tailscale](/zh-CN/gateway/tailscale) — 远程访问
+- [节点](/zh-CN/nodes) — 将你的笔记本电脑/手机与 Pi Gateway 网关配对

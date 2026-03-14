@@ -30,7 +30,7 @@ OpenClaw 记忆是**智能体工作空间中的纯 Markdown 文件**。这些文
   - 精心整理的长期记忆。
   - **仅在主要的私人会话中加载**（绝不在群组上下文中加载）。
 
-这些文件位于工作空间下（`agents.defaults.workspace`，默认 `~/.openclaw/workspace`）。完整布局参见[智能体工作空间](/concepts/agent-workspace)。
+这些文件位于工作空间下（`agents.defaults.workspace`，默认 `~/.openclaw/workspace`）。完整布局参见[智能体工作空间](/zh-CN/concepts/agent-workspace)。
 
 ## 何时写入记忆
 
@@ -72,7 +72,7 @@ OpenClaw 记忆是**智能体工作空间中的纯 Markdown 文件**。这些文
 - **每个压缩周期刷新一次**（在 `sessions.json` 中跟踪）。
 - **工作空间必须可写**：如果会话以 `workspaceAccess: "ro"` 或 `"none"` 在沙箱中运行，则跳过刷新。
 
-完整的压缩生命周期参见[会话管理 + 压缩](/reference/session-management-compaction)。
+完整的压缩生命周期参见[会话管理 + 压缩](/zh-CN/reference/session-management-compaction)。
 
 ## 向量记忆搜索
 

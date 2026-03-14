@@ -89,10 +89,10 @@ rg "telegram http error" /tmp/openclaw/openclaw-*.log
 tail -f /tmp/openclaw/openclaw-$(date +%F).log | rg "telegram http error"
 ```
 
-对于远程 Gateway 网关，你也可以使用 `openclaw logs --follow`（参见 [/cli/logs](/cli/logs)）。
+对于远程 Gateway 网关，你也可以使用 `openclaw logs --follow`（参见 [/cli/logs](/zh-CN/cli/logs)）。
 
 ## 注意事项
 
 - 如果 `logging.level` 设置为高于 `warn`，这些日志可能会被抑制。默认的 `info` 级别即可。
 - 标志可以安全地保持启用状态；它们只影响特定子系统的日志量。
-- 使用 [/logging](/logging) 更改日志目标、级别和脱敏设置。
+- 使用 [/logging](/zh-CN/logging) 更改日志目标、级别和脱敏设置。

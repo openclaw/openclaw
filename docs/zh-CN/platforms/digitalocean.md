@@ -19,7 +19,7 @@ x-i18n:
 
 以 **$6/月**（或使用预留定价 $4/月）在 DigitalOcean 上运行持久的 OpenClaw Gateway 网关。
 
-如果你想要 $0/月的选项且不介意 ARM + 特定提供商的设置，请参阅 [Oracle Cloud 指南](/platforms/oracle)。
+如果你想要 $0/月的选项且不介意 ARM + 特定提供商的设置，请参阅 [Oracle Cloud 指南](/zh-CN/platforms/oracle)。
 
 ## 成本比较（2026）
 
@@ -34,8 +34,8 @@ x-i18n:
 **选择提供商：**
 
 - DigitalOcean：最简单的用户体验 + 可预测的设置（本指南）
-- Hetzner：性价比高（参见 [Hetzner 指南](/install/hetzner)）
-- Oracle Cloud：可以 $0/月，但更麻烦且仅限 ARM（参见 [Oracle 指南](/platforms/oracle)）
+- Hetzner：性价比高（参见 [Hetzner 指南](/zh-CN/install/hetzner)）
+- Oracle Cloud：可以 $0/月，但更麻烦且仅限 ARM（参见 [Oracle 指南](/zh-CN/platforms/oracle)）
 
 ---
 
@@ -163,7 +163,7 @@ openclaw channels login whatsapp
 # Scan QR code
 ```
 
-参见[渠道](/channels)了解其他提供商。
+参见[渠道](/zh-CN/channels)了解其他提供商。
 
 ---
 
@@ -228,7 +228,7 @@ Oracle Cloud 提供 **Always Free** ARM 实例，比这里任何付费选项都�
 - 注册可能有点麻烦（失败了就重试）
 - ARM 架构 — 大多数东西都能工作，但有些二进制文件需要 ARM 构建
 
-完整设置指南请参阅 [Oracle Cloud](/platforms/oracle)。关于注册技巧和注册流程故障排除，请参阅此[社区指南](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd)。
+完整设置指南请参阅 [Oracle Cloud](/zh-CN/platforms/oracle)。关于注册技巧和注册流程故障排除，请参阅此[社区指南](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd)。
 
 ---
 
@@ -263,7 +263,7 @@ free -h
 
 ## 另请参阅
 
-- [Hetzner 指南](/install/hetzner) — 更便宜、更强大
-- [Docker 安装](/install/docker) — 容器化设置
-- [Tailscale](/gateway/tailscale) — 安全远程访问
-- [配置](/gateway/configuration) — 完整配置参考
+- [Hetzner 指南](/zh-CN/install/hetzner) — 更便宜、更强大
+- [Docker 安装](/zh-CN/install/docker) — 容器化设置
+- [Tailscale](/zh-CN/gateway/tailscale) — 安全远程访问
+- [配置](/zh-CN/gateway/configuration) — 完整配置参考

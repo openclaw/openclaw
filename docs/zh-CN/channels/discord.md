@@ -64,10 +64,10 @@ x-i18n:
 8. 群组私信默认被忽略；通过 `channels.discord.dm.groupEnabled` 启用，并可选择通过 `channels.discord.dm.groupChannels` 进行限制。
 9. 可选服务器规则：设置 `channels.discord.guilds`，以服务器 ID（首选）或 slug 为键，并包含每个频道的规则。
 10. 可选原生命令：`commands.native` 默认为 `"auto"`（Discord/Telegram 开启，Slack 关闭）。使用 `channels.discord.commands.native: true|false|"auto"` 覆盖；`false` 会清除之前注册的命令。文本命令由 `commands.text` 控制，必须作为独立的 `/...` 消息发送。使用 `commands.useAccessGroups: false` 可跳过命令的访问组检查。
-    - 完整命令列表 + 配置：[斜杠命令](/tools/slash-commands)
+    - 完整命令列表 + 配置：[斜杠命令](/zh-CN/tools/slash-commands)
 11. 可选服务器上下文历史：设置 `channels.discord.historyLimit`（默认 20，回退到 `messages.groupChat.historyLimit`）以在回复提及时包含最近 N 条服务器消息作为上下文。设置 `0` 禁用。
 12. 表情反应：智能体可以通过 `discord` 工具触发表情反应（受 `channels.discord.actions.*` 控制）。
-    - 表情反应移除语义：参见 [/tools/reactions](/tools/reactions)。
+    - 表情反应移除语义：参见 [/tools/reactions](/zh-CN/tools/reactions)。
     - `discord` 工具仅在当前渠道是 Discord 时暴露。
 13. 原生命令使用隔离的会话键（`agent:<agentId>:discord:slash:<userId>`）而不是共享的 `main` 会话。
 
@@ -163,7 +163,7 @@ Discord 到处使用数字 ID；OpenClaw 配置优先使用 ID。
 }
 ```
 
-多账户支持：使用 `channels.discord.accounts`，每个账户有自己的令牌和可选的 `name`。参见 [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) 了解通用模式。
+多账户支持：使用 `channels.discord.accounts`，每个账户有自己的令牌和可选的 `name`。参见 [`gateway/configuration`](/zh-CN/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) 了解通用模式。
 
 #### 允许列表 + 频道路由
 
@@ -231,7 +231,7 @@ Discord 到处使用数字 ID；OpenClaw 配置优先使用 ID。
   - 你的配置中有 `channels.discord.execApprovals.enabled: true`。
   - 你的 Discord 用户 ID 在 `channels.discord.execApprovals.approvers` 中列出（UI 仅发送给审批者）。
   - 使用私信提示中的按钮（**Allow once**、**Always allow**、**Deny**）。
-  - 参见[执行审批](/tools/exec-approvals)和[斜杠命令](/tools/slash-commands)了解更广泛的审批和命令流程。
+  - 参见[执行审批](/zh-CN/tools/exec-approvals)和[斜杠命令](/zh-CN/tools/slash-commands)了解更广泛的审批和命令流程。
 
 ## 功能和限制
 
@@ -245,7 +245,7 @@ Discord 到处使用数字 ID；OpenClaw 配置优先使用 ID。
 
 ## 重试策略
 
-出站 Discord API 调用在速率限制（429）时使用 Discord `retry_after`（如果可用）进行重试，采用指数退避和抖动。通过 `channels.discord.retry` 配置。参见[重试策略](/concepts/retry)。
+出站 Discord API 调用在速率限制（429）时使用 Discord `retry_after`（如果可用）进行重试，采用指数退避和抖动。通过 `channels.discord.retry` 配置。参见[重试策略](/zh-CN/concepts/retry)。
 
 ## 配置
 

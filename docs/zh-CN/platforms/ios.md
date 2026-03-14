@@ -65,7 +65,7 @@ Gateway 网关在 `local.` 上广播 `_openclaw-gw._tcp`。iOS 应用会自动�
 ### Tailnet（跨网络）
 
 如果 mDNS 被阻止，使用单播 DNS-SD 区域（选择一个域；示例：`openclaw.internal.`）和 Tailscale 分割 DNS。
-参见 [Bonjour](/gateway/bonjour) 了解 CoreDNS 示例。
+参见 [Bonjour](/zh-CN/gateway/bonjour) 了解 CoreDNS 示例。
 
 ### 手动主机/端口
 
@@ -103,12 +103,12 @@ openclaw nodes invoke --node "iOS Node" --command canvas.snapshot --params '{"ma
 ## 常见错误
 
 - `NODE_BACKGROUND_UNAVAILABLE`：将 iOS 应用带到前台（canvas/相机/屏幕命令需要它）。
-- `A2UI_HOST_NOT_CONFIGURED`：Gateway 网关未广播 canvas 主机 URL；检查 [Gateway 网关配置](/gateway/configuration) 中的 `canvasHost`。
+- `A2UI_HOST_NOT_CONFIGURED`：Gateway 网关未广播 canvas 主机 URL；检查 [Gateway 网关配置](/zh-CN/gateway/configuration) 中的 `canvasHost`。
 - 配对提示从未出现：运行 `openclaw nodes pending` 并手动批准。
 - 重新安装后重连失败：钥匙串配对令牌已被清除；重新配对节点。
 
 ## 相关文档
 
-- [配对](/gateway/pairing)
-- [设备发现](/gateway/discovery)
-- [Bonjour](/gateway/bonjour)
+- [配对](/zh-CN/gateway/pairing)
+- [设备发现](/zh-CN/gateway/discovery)
+- [Bonjour](/zh-CN/gateway/bonjour)

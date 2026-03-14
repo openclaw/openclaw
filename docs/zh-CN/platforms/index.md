@@ -24,25 +24,25 @@ Windows 原生配套应用也在计划中；推荐通过 WSL2 使用 Gateway 网
 
 ## 选择你的操作系统
 
-- macOS：[macOS](/platforms/macos)
-- iOS：[iOS](/platforms/ios)
-- Android：[Android](/platforms/android)
-- Windows：[Windows](/platforms/windows)
-- Linux：[Linux](/platforms/linux)
+- macOS：[macOS](/zh-CN/platforms/macos)
+- iOS：[iOS](/zh-CN/platforms/ios)
+- Android：[Android](/zh-CN/platforms/android)
+- Windows：[Windows](/zh-CN/platforms/windows)
+- Linux：[Linux](/zh-CN/platforms/linux)
 
 ## VPS 和托管
 
-- VPS 中心：[VPS 托管](/vps)
-- Fly.io：[Fly.io](/install/fly)
-- Hetzner（Docker）：[Hetzner](/install/hetzner)
-- GCP（Compute Engine）：[GCP](/install/gcp)
-- exe.dev（VM + HTTPS 代理）：[exe.dev](/install/exe-dev)
+- VPS 中心：[VPS 托管](/zh-CN/vps)
+- Fly.io：[Fly.io](/zh-CN/install/fly)
+- Hetzner（Docker）：[Hetzner](/zh-CN/install/hetzner)
+- GCP（Compute Engine）：[GCP](/zh-CN/install/gcp)
+- exe.dev（VM + HTTPS 代理）：[exe.dev](/zh-CN/install/exe-dev)
 
 ## 常用链接
 
-- 安装指南：[入门指南](/start/getting-started)
-- Gateway 网关运行手册：[Gateway 网关](/gateway)
-- Gateway 网关配置：[配置](/gateway/configuration)
+- 安装指南：[入门指南](/zh-CN/start/getting-started)
+- Gateway 网关运行手册：[Gateway 网关](/zh-CN/gateway)
+- Gateway 网关配置：[配置](/zh-CN/gateway/configuration)
 - 服务状态：`openclaw gateway status`
 
 ## Gateway 网关服务安装（CLI）

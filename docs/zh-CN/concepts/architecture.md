@@ -47,7 +47,7 @@ x-i18n:
 
 协议详情：
 
-- [Gateway 网关协议](/gateway/protocol)
+- [Gateway 网关协议](/zh-CN/gateway/protocol)
 
 ### WebChat
 
@@ -92,7 +92,7 @@ Client                    Gateway
 - **非本地**连接必须签名 `connect.challenge` nonce 并需要明确批准。
 - Gateway 网关认证（`gateway.auth.*`）仍适用于**所有**连接，无论本地还是远程。
 
-详情：[Gateway 网关协议](/gateway/protocol)、[配对](/channels/pairing)、[安全](/gateway/security)。
+详情：[Gateway 网关协议](/zh-CN/gateway/protocol)、[配对](/zh-CN/channels/pairing)、[安全](/zh-CN/gateway/security)。
 
 ## 协议类型和代码生成
 

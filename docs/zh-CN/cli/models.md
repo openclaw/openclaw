@@ -19,8 +19,8 @@ x-i18n:
 
 相关内容：
 
-- 提供商 + 模型：[模型](/providers/models)
-- 提供商认证设置：[快速开始](/start/getting-started)
+- 提供商 + 模型：[模型](/zh-CN/providers/models)
+- 提供商认证设置：[快速开始](/zh-CN/start/getting-started)
 
 ## 常用命令
 

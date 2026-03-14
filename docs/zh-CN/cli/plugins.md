@@ -19,9 +19,9 @@ x-i18n:
 
 相关内容：
 
-- 插件系统：[插件](/tools/plugin)
-- 插件清单 + 模式：[插件清单](/plugins/manifest)
-- 安全加固：[安全](/gateway/security)
+- 插件系统：[插件](/zh-CN/tools/plugin)
+- 插件清单 + 模式：[插件清单](/zh-CN/plugins/manifest)
+- 安全加固：[安全](/zh-CN/gateway/security)
 
 ## 命令
 

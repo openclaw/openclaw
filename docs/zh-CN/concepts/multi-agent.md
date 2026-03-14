@@ -32,11 +32,11 @@ x-i18n:
 
 主智能体凭证**不会**自动共享。切勿在智能体之间重用 `agentDir`（这会导致认证/会话冲突）。如果你想共享凭证，请将 `auth-profiles.json` 复制到另一个智能体的 `agentDir`。
 
-Skills 通过每个工作区的 `skills/` 文件夹实现每智能体独立，共享的 Skills 可从 `~/.openclaw/skills` 获取。参见 [Skills：每智能体 vs 共享](/tools/skills#per-agent-vs-shared-skills)。
+Skills 通过每个工作区的 `skills/` 文件夹实现每智能体独立，共享的 Skills 可从 `~/.openclaw/skills` 获取。参见 [Skills：每智能体 vs 共享](/zh-CN/tools/skills#per-agent-vs-shared-skills)。
 
 Gateway 网关可以托管**一个智能体**（默认）或**多个智能体**并行。
 
-**工作区注意事项：** 每个智能体的工作区是**默认 cwd**，而不是硬性沙箱。相对路径在工作区内解析，但绝对路径可以访问主机的其他位置，除非启用了沙箱隔离。参见 [沙箱隔离](/gateway/sandboxing)。
+**工作区注意事项：** 每个智能体的工作区是**默认 cwd**，而不是硬性沙箱。相对路径在工作区内解析，但绝对路径可以访问主机的其他位置，除非启用了沙箱隔离。参见 [沙箱隔离](/zh-CN/gateway/sandboxing)。
 
 ## 路径（快速映射）
 
@@ -113,7 +113,7 @@ openclaw agents list --bindings
 注意事项：
 
 - 私信访问控制是**每 WhatsApp 账户全局的**（配对/允许列表），而不是每智能体。
-- 对于共享群组，将群组绑定到一个智能体或使用 [广播群组](/channels/broadcast-groups)。
+- 对于共享群组，将群组绑定到一个智能体或使用 [广播群组](/zh-CN/channels/broadcast-groups)。
 
 ## 路由规则（消息如何选择智能体）
 
@@ -369,4 +369,4 @@ openclaw agents list --bindings
 如果你需要每智能体边界，使用 `agents.list[].tools` 拒绝 `exec`。
 对于群组定向，使用 `agents.list[].groupChat.mentionPatterns` 使 @提及清晰地映射到目标智能体。
 
-参见 [多智能体沙箱和工具](/tools/multi-agent-sandbox-tools) 了解详细示例。
+参见 [多智能体沙箱和工具](/zh-CN/tools/multi-agent-sandbox-tools) 了解详细示例。

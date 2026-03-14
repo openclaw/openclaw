@@ -19,8 +19,8 @@ x-i18n:
 
 相关文档：
 
-- 渠道指南：[渠道](/channels/index)
-- Gateway 网关配置：[配置](/gateway/configuration)
+- 渠道指南：[渠道](/zh-CN/channels/index)
+- Gateway 网关配置：[配置](/zh-CN/gateway/configuration)
 
 ## 常用命令
 
