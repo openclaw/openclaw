@@ -30,6 +30,7 @@ Native companion apps for Windows are also planned; the Gateway is recommended v
 - Hetzner (Docker): [Hetzner](/install/hetzner)
 - GCP (Compute Engine): [GCP](/install/gcp)
 - exe.dev (VM + HTTPS proxy): [exe.dev](/install/exe-dev)
+- Oracle Cloud: [Oracle Cloud](/platforms/oracle)
 
 ## Common links
 
@@ -47,7 +48,7 @@ Use one of these (all supported):
 - Configure flow: `openclaw configure` → select **Gateway service**
 - Repair/migrate: `openclaw doctor` (offers to install or fix the service)
 
-The service target depends on OS:
+Depending on your OS, the gateway runs under different service managers and service names/targets (which may include your selected profile). Example:
 
 - macOS: LaunchAgent (`ai.openclaw.gateway` or `ai.openclaw.<profile>`; legacy `com.openclaw.*`)
 - Linux/WSL2: systemd user service (`openclaw-gateway[-<profile>].service`)

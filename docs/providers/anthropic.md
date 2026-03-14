@@ -2,14 +2,14 @@
 summary: "Use Anthropic Claude via API keys or setup-token in OpenClaw"
 read_when:
   - You want to use Anthropic models in OpenClaw
-  - You want setup-token instead of API keys
+  - You want to utilize setup-tokens from your Claude subscription instead of API keys
 title: "Anthropic"
 ---
 
 # Anthropic (Claude)
 
 Anthropic builds the **Claude** model family and provides access via an API.
-In OpenClaw you can authenticate with an API key or a **setup-token**.
+In OpenClaw, you can authenticate with an [API key](#option-a-anthropic-api-key) or a [**setup-token**](#option-b-claude-setup-token).
 
 ## Option A: Anthropic API key
 
@@ -177,9 +177,9 @@ requests.
 This only activates when `params.context1m` is explicitly set to `true` for
 that model.
 
-Requirement: Anthropic must allow long-context usage on that credential
-(typically API key billing, or a subscription account with Extra Usage
-enabled). Otherwise Anthropic returns:
+However, if you want to use the 1M context window, you must allow long-context usage on that credential
+(usually API key billing, or a subscription account with Extra Usage
+enabled). Otherwise, Anthropic returns:
 `HTTP 429: rate_limit_error: Extra usage is required for long context requests`.
 
 Note: Anthropic currently rejects `context-1m-*` beta requests when using
@@ -188,11 +188,11 @@ context1m beta header for OAuth auth and keeps the required OAuth betas.
 
 ## Option B: Claude setup-token
 
-**Best for:** using your Claude subscription.
+**Best for:** utilizing your existing Claude subscription.
 
 ### Where to get a setup-token
 
-Setup-tokens are created by the **Claude Code CLI**, not the Anthropic Console. You can run this on **any machine**:
+Setup-tokens are generated only via the **Claude Code CLI**, and you cannot generate them from the Anthropic Console. [Install the Claude Code CLI if needed](https://code.claude.com/docs/en/overview) on **any machine** (not necessarily the gateway), log in, and then run:
 
 ```bash
 claude setup-token

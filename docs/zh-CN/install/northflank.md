@@ -5,7 +5,7 @@ x-i18n:
   model: claude-opus-4-5
   provider: pi
   source_hash: ad0be8dda41c51d0b6424259316db1b22be5216434f5879f21a5e8c60e0a2ee0
-  source_path: northflank.mdx
+  source_path: northflank.md
   workflow: 15
 ---
 

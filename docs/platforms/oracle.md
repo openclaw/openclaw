@@ -16,17 +16,17 @@ Run a persistent OpenClaw Gateway on Oracle Cloud's **Always Free** ARM tier.
 Oracle’s free tier can be a great fit for OpenClaw (especially if you already have an OCI account), but it comes with tradeoffs:
 
 - ARM architecture (most things work, but some binaries may be x86-only)
-- Capacity and signup can be finicky
+- Capacity is finicky in some regions; upgrading to Pay-to-Go can help when the free tier has no available capacity
 
 ## Cost Comparison (2026)
 
-| Provider     | Plan            | Specs                  | Price/mo | Notes                 |
-| ------------ | --------------- | ---------------------- | -------- | --------------------- |
-| Oracle Cloud | Always Free ARM | up to 4 OCPU, 24GB RAM | $0       | ARM, limited capacity |
-| Hetzner      | CX22            | 2 vCPU, 4GB RAM        | ~ $4     | Cheapest paid option  |
-| DigitalOcean | Basic           | 1 vCPU, 1GB RAM        | $6       | Easy UI, good docs    |
-| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM        | $6       | Many locations        |
-| Linode       | Nanode          | 1 vCPU, 1GB RAM        | $5       | Now part of Akamai    |
+| Provider     | Plan            | Specs                  | Price/mo | Notes                                  |
+| ------------ | --------------- | ---------------------- | -------- | -------------------------------------- |
+| Oracle Cloud | Always Free ARM | up to 4 OCPU, 24GB RAM | $0       | ARM, limited capacity in certain areas |
+| Hetzner      | CX22            | 2 vCPU, 4GB RAM        | ~ $4     | Cheapest paid option                   |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM        | $6       | Easy UI, good docs                     |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM        | $6       | Many locations                         |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM        | $5       | Now part of Akamai                     |
 
 ---
 
@@ -51,17 +51,17 @@ Oracle’s free tier can be a great fit for OpenClaw (especially if you already 
 4. Click **Create**
 5. Note the public IP address
 
-**Tip:** If instance creation fails with "Out of capacity", try a different availability domain or retry later. Free tier capacity is limited.
+**Tip:** If instance creation fails with "Out of capacity", try a different availability domain or retry later. Free tier capacity is limited. If desperate, you can move to Pay-to-Go and request an ARM instance. Note: upgrading to Pay-to-Go is irreversible (you cannot downgrade back to a free-only account), but Always Free resources remain free as long as you stay within their limits.
 
 ## 2) Connect and Update
 
 ```bash
 # Connect via public IP
-ssh ubuntu@YOUR_PUBLIC_IP
+ssh ubuntu@YOUR_PUBLIC_IP # or opc@YOUR_PUBLIC_IP if you chose Oracle Linux
 
 # Update system
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y build-essential
+sudo apt update && sudo apt upgrade -y # or dnf upgrade -y
+sudo apt install -y build-essential # or: sudo dnf groupinstall -y "Development Tools"
 ```
 
 **Note:** `build-essential` is required for ARM compilation of some dependencies.
@@ -73,10 +73,10 @@ sudo apt install -y build-essential
 sudo hostnamectl set-hostname openclaw
 
 # Set password for ubuntu user
-sudo passwd ubuntu
+sudo passwd ubuntu # or opc
 
 # Enable lingering (keeps user services running after logout)
-sudo loginctl enable-linger ubuntu
+sudo loginctl enable-linger ubuntu # or opc
 ```
 
 ## 4) Install Tailscale
@@ -219,7 +219,7 @@ If Tailscale Serve isn't working, use an SSH tunnel:
 
 ```bash
 # From your local machine (via Tailscale)
-ssh -L 18789:127.0.0.1:18789 ubuntu@openclaw
+ssh -L 18789:127.0.0.1:18789 ubuntu@openclaw # or again, opc
 ```
 
 Then open `http://localhost:18789`.
@@ -230,11 +230,12 @@ Then open `http://localhost:18789`.
 
 ### Instance creation fails ("Out of capacity")
 
-Free tier ARM instances are popular. Try:
+Free tier ARM instances are extremely popular. Try:
 
-- Different availability domain
-- Retry during off-peak hours (early morning)
+- Different availability domain/fallback domain
+- Retry during off-peak hours (early morning, late evening)
 - Use the "Always Free" filter when selecting shape
+- Move to Pay-to-Go and request an ARM instance
 
 ### Tailscale won't connect
 

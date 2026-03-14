@@ -5,7 +5,7 @@ x-i18n:
   model: claude-opus-4-5
   provider: pi
   source_hash: 03f0f277145daf6012ce33a9e8447d2eaaf346dfdb0df57a61ebf90b18b67c65
-  source_path: render.mdx
+  source_path: render.md
   workflow: 15
 ---
 
@@ -18,13 +18,7 @@ x-i18n:
 
 ## 使用 Render Blueprint 部署
 
-<a
-  href="https://render.com/deploy?repo=https://github.com/openclaw/openclaw"
-  target="_blank"
-  rel="noreferrer"
->
-  部署到 Render
-</a>
+<a href="https://render.com/deploy?repo=https://github.com/openclaw/openclaw" target="_blank" rel="noreferrer">部署到 Render</a>
 
 点击此链接将会：
 
