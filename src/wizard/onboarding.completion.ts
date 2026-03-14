@@ -7,6 +7,7 @@ import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
 } from "../commands/doctor-completion.js";
+import { cliT } from "../i18n/cli.js";
 import { pathExists } from "../utils.js";
 import type { WizardFlow } from "./onboarding.types.js";
 import type { WizardPrompter } from "./prompts.js";
@@ -34,11 +35,15 @@ async function resolveProfileHint(shell: ShellCompletionStatus["shell"]): Promis
   return "$PROFILE";
 }
 
-function formatReloadHint(shell: ShellCompletionStatus["shell"], profileHint: string): string {
+function formatReloadHint(
+  shell: ShellCompletionStatus["shell"],
+  profileHint: string,
+  t: (key: Parameters<typeof cliT>[0], vars?: Record<string, string | number>) => string,
+): string {
   if (shell === "powershell") {
-    return "Restart your shell (or reload your PowerShell profile).";
+    return t("wizard.shellCompletionReloadPowerShell");
   }
-  return `Restart your shell or run: source ${profileHint}`;
+  return t("wizard.shellCompletionReloadSource", { profileHint });
 }
 
 export async function setupOnboardingShellCompletion(params: {
@@ -53,6 +58,8 @@ export async function setupOnboardingShellCompletion(params: {
     installCompletion,
     ...params.deps,
   };
+  const t = (key: Parameters<typeof cliT>[0], vars?: Record<string, string | number>) =>
+    cliT(key, process.env, vars);
 
   const cliName = deps.resolveCliName();
   const completionStatus = await deps.checkShellCompletionStatus(cliName);
@@ -78,7 +85,10 @@ export async function setupOnboardingShellCompletion(params: {
       params.flow === "quickstart"
         ? true
         : await params.prompter.confirm({
-            message: `Enable ${completionStatus.shell} shell completion for ${cliName}?`,
+            message: t("wizard.shellCompletionEnableQuestion", {
+              shell: completionStatus.shell,
+              cliName,
+            }),
             initialValue: true,
           });
 
@@ -90,8 +100,8 @@ export async function setupOnboardingShellCompletion(params: {
     const cacheGenerated = await deps.ensureCompletionCacheExists(cliName);
     if (!cacheGenerated) {
       await params.prompter.note(
-        `Failed to generate completion cache. Run \`${cliName} completion --install\` later.`,
-        "Shell completion",
+        t("wizard.shellCompletionCacheFailedNote", { cliName }),
+        t("wizard.shellCompletionTitle"),
       );
       return;
     }
@@ -100,9 +110,10 @@ export async function setupOnboardingShellCompletion(params: {
     await deps.installCompletion(completionStatus.shell, true, cliName);
 
     const profileHint = await resolveProfileHint(completionStatus.shell);
+    const reloadHint = formatReloadHint(completionStatus.shell, profileHint, t);
     await params.prompter.note(
-      `Shell completion installed. ${formatReloadHint(completionStatus.shell, profileHint)}`,
-      "Shell completion",
+      t("wizard.shellCompletionInstalledNote", { reloadHint }),
+      t("wizard.shellCompletionTitle"),
     );
   }
   // Case 4: Both profile and cache exist (using cached version) - all good, nothing to do

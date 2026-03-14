@@ -64,6 +64,7 @@ const logConfigUpdated = vi.hoisted(() => vi.fn(() => {}));
 const setupInternalHooks = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 
 const setupChannels = vi.hoisted(() => vi.fn(async (cfg) => cfg));
+const setupSearch = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
@@ -91,6 +92,10 @@ const probeGatewayReachable = vi.hoisted(() => vi.fn(async () => ({ ok: true }))
 
 vi.mock("../commands/onboard-channels.js", () => ({
   setupChannels,
+}));
+
+vi.mock("../commands/onboard-search.js", () => ({
+  setupSearch,
 }));
 
 vi.mock("../commands/onboard-skills.js", () => ({
@@ -217,15 +222,22 @@ function createRuntime(opts?: { throwsOnExit?: boolean }): RuntimeEnv {
 describe("runOnboardingWizard", () => {
   let suiteRoot = "";
   let suiteCase = 0;
+  const previousLocale = process.env.OPENCLAW_LOCALE;
 
   beforeAll(async () => {
     suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-suite-"));
+    process.env.OPENCLAW_LOCALE = "en";
   });
 
   afterAll(async () => {
     await fs.rm(suiteRoot, { recursive: true, force: true });
     suiteRoot = "";
     suiteCase = 0;
+    if (previousLocale === undefined) {
+      delete process.env.OPENCLAW_LOCALE;
+    } else {
+      process.env.OPENCLAW_LOCALE = previousLocale;
+    }
   });
 
   async function makeCaseDir(prefix: string): Promise<string> {
@@ -273,7 +285,56 @@ describe("runOnboardingWizard", () => {
     ).rejects.toThrow("exit:1");
 
     expect(select).not.toHaveBeenCalled();
+    expect(prompter.note).toHaveBeenCalledWith("summary", "Invalid config");
     expect(prompter.outro).toHaveBeenCalled();
+  });
+
+  it("localizes invalid config title", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: false,
+      config: {},
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+
+    const runtime = createRuntime({ throwsOnExit: true });
+    const prompter = buildWizardPrompter({});
+
+    try {
+      await expect(
+        runOnboardingWizard(
+          {
+            acceptRisk: true,
+            flow: "quickstart",
+            authChoice: "skip",
+            installDaemon: false,
+            skipProviders: true,
+            skipSkills: true,
+            skipHealth: true,
+            skipUi: true,
+          },
+          runtime,
+          prompter,
+        ),
+      ).rejects.toThrow("exit:1");
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
+
+    expect(prompter.note).toHaveBeenCalledWith("summary", "配置无效");
   });
 
   it("skips prompts and setup steps when flags are set", async () => {
@@ -305,6 +366,279 @@ describe("runOnboardingWizard", () => {
     expect(setupSkills).not.toHaveBeenCalled();
     expect(healthCommand).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
+  });
+
+  it("persists selected onboarding locale into config", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    delete process.env.OPENCLAW_LOCALE;
+    writeConfigFile.mockClear();
+
+    const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
+      if (params.message === "Language / 语言") {
+        return "zh-CN";
+      }
+      return "quickstart";
+    }) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+    const runtime = createRuntime({ throwsOnExit: true });
+
+    await runOnboardingWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(writeConfigFile).toHaveBeenCalled();
+    const wroteZhLocale = (writeConfigFile.mock.calls as Array<[Record<string, unknown>?]>).some(
+      (call) => (call[0]?.cli as { locale?: string } | undefined)?.locale === "zh-CN",
+    );
+    expect(wroteZhLocale).toBe(true);
+
+    if (previousLocale === undefined) {
+      delete process.env.OPENCLAW_LOCALE;
+    } else {
+      process.env.OPENCLAW_LOCALE = previousLocale;
+    }
+  });
+
+  it("auto-detects zh-CN from LANG without prompting for language", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    const previousLang = process.env.LANG;
+    delete process.env.OPENCLAW_LOCALE;
+    process.env.LANG = "zh_CN.UTF-8";
+    writeConfigFile.mockClear();
+
+    const seenMessages: string[] = [];
+    const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
+      seenMessages.push(params.message);
+      return "quickstart";
+    }) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+    const runtime = createRuntime();
+
+    try {
+      await runOnboardingWizard(
+        {
+          acceptRisk: true,
+          authChoice: "skip",
+          installDaemon: false,
+          skipProviders: true,
+          skipSkills: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        runtime,
+        prompter,
+      );
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+      if (previousLang === undefined) {
+        delete process.env.LANG;
+      } else {
+        process.env.LANG = previousLang;
+      }
+    }
+
+    expect(seenMessages).not.toContain("Language / 语言");
+    const wroteZhLocale = (writeConfigFile.mock.calls as Array<[Record<string, unknown>?]>).some(
+      (call) => (call[0]?.cli as { locale?: string } | undefined)?.locale === "zh-CN",
+    );
+    expect(wroteZhLocale).toBe(true);
+  });
+
+  it("normalizes OPENCLAW_LOCALE and skips language prompt", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    const previousLang = process.env.LANG;
+    process.env.OPENCLAW_LOCALE = "zh_CN.UTF-8";
+    process.env.LANG = "en_US.UTF-8";
+
+    const seenMessages: string[] = [];
+    const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
+      seenMessages.push(params.message);
+      return "quickstart";
+    }) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+    const runtime = createRuntime();
+
+    try {
+      await runOnboardingWizard(
+        {
+          acceptRisk: true,
+          authChoice: "skip",
+          installDaemon: false,
+          skipProviders: true,
+          skipSkills: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        runtime,
+        prompter,
+      );
+      expect(process.env.OPENCLAW_LOCALE).toBe("zh-CN");
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+      if (previousLang === undefined) {
+        delete process.env.LANG;
+      } else {
+        process.env.LANG = previousLang;
+      }
+    }
+
+    expect(seenMessages).not.toContain("Language / 语言");
+    expect(seenMessages).not.toContain("语言 / Language");
+  });
+
+  it("preserves configured locale when config is reset", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    delete process.env.OPENCLAW_LOCALE;
+    writeConfigFile.mockClear();
+
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        cli: {
+          locale: "zh-CN",
+        },
+        agents: {
+          defaults: {
+            workspace: "/tmp/openclaw-workspace",
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+
+    const seenMessages: string[] = [];
+    const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
+      seenMessages.push(params.message);
+      if (params.message === "Config handling" || params.message === "如何处理现有配置") {
+        return "reset";
+      }
+      if (params.message === "Reset scope" || params.message === "重置范围") {
+        return "config";
+      }
+      return "quickstart";
+    }) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+    const runtime = createRuntime({ throwsOnExit: true });
+
+    await runOnboardingWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(seenMessages).not.toContain("Language / 语言");
+    expect(seenMessages).not.toContain("语言 / Language");
+    const wroteZhLocale = (writeConfigFile.mock.calls as Array<[Record<string, unknown>?]>).some(
+      (call) => (call[0]?.cli as { locale?: string } | undefined)?.locale === "zh-CN",
+    );
+    expect(wroteZhLocale).toBe(true);
+
+    if (previousLocale === undefined) {
+      delete process.env.OPENCLAW_LOCALE;
+    } else {
+      process.env.OPENCLAW_LOCALE = previousLocale;
+    }
+  });
+
+  it("persists selected locale even when config is reset", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    delete process.env.OPENCLAW_LOCALE;
+    writeConfigFile.mockClear();
+
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        agents: {
+          defaults: {
+            workspace: "/tmp/openclaw-workspace",
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+
+    const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
+      if (params.message === "Language / 语言") {
+        return "zh-CN";
+      }
+      if (params.message === "Config handling" || params.message === "如何处理现有配置") {
+        return "reset";
+      }
+      if (params.message === "Reset scope" || params.message === "重置范围") {
+        return "config";
+      }
+      return "quickstart";
+    }) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+    const runtime = createRuntime({ throwsOnExit: true });
+
+    await runOnboardingWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    const wroteZhLocale = (writeConfigFile.mock.calls as Array<[Record<string, unknown>?]>).some(
+      (call) => (call[0]?.cli as { locale?: string } | undefined)?.locale === "zh-CN",
+    );
+    expect(wroteZhLocale).toBe(true);
+
+    if (previousLocale === undefined) {
+      delete process.env.OPENCLAW_LOCALE;
+    } else {
+      process.env.OPENCLAW_LOCALE = previousLocale;
+    }
   });
 
   async function runTuiHatchTest(params: {

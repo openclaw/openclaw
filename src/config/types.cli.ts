@@ -1,6 +1,9 @@
 export type CliBannerTaglineMode = "random" | "default" | "off";
 
+export type CliLocale = "en" | "zh-CN";
+
 export type CliConfig = {
+  locale?: CliLocale;
   banner?: {
     /**
      * Controls CLI banner tagline behavior.

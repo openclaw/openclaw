@@ -9,17 +9,36 @@ const mocks = vi.hoisted(() => ({
   getTailnetHostname: vi.fn(),
 }));
 
-vi.mock("../commands/onboard-helpers.js", async (importActual) => {
-  const actual = await importActual<typeof import("../commands/onboard-helpers.js")>();
-  return {
-    ...actual,
-    randomToken: mocks.randomToken,
-  };
-});
+vi.mock("../commands/onboard-helpers.js", () => ({
+  normalizeGatewayTokenInput: (value: unknown) => {
+    const token = typeof value === "string" ? value.trim() : "";
+    return token.length > 0 ? token : undefined;
+  },
+  randomToken: mocks.randomToken,
+  validateGatewayPasswordInput: (_value: unknown) => undefined,
+}));
 
 vi.mock("../infra/tailscale.js", () => ({
   findTailscaleBinary: vi.fn(async () => undefined),
   getTailnetHostname: mocks.getTailnetHostname,
+}));
+
+vi.mock("../commands/auth-choice.apply-helpers.js", () => ({
+  resolveSecretInputModeForEnvSelection: vi.fn(
+    async (params: { explicitMode?: "plaintext" | "ref" }) => params.explicitMode ?? "plaintext",
+  ),
+  promptSecretRefForOnboarding: vi.fn(
+    async (params: { preferredEnvVar?: string; provider?: string }) => ({
+      ref: {
+        source: "env",
+        provider: "default",
+        id: params.preferredEnvVar ?? "OPENCLAW_GATEWAY_PASSWORD",
+      },
+      resolvedValue: params.preferredEnvVar
+        ? (process.env[params.preferredEnvVar] ?? "")
+        : undefined,
+    }),
+  ),
 }));
 
 import { configureGatewayForOnboarding } from "./onboarding.gateway-config.js";
