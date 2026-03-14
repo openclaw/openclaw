@@ -95,7 +95,7 @@ export type GatewayClientOptions = {
   commands?: string[];
   permissions?: Record<string, boolean>;
   pathEnv?: string;
-  deviceIdentity?: DeviceIdentity;
+  deviceIdentity?: DeviceIdentity | null;
   minProtocol?: number;
   maxProtocol?: number;
   tlsFingerprint?: string;
@@ -116,6 +116,8 @@ export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> = {
 export function describeGatewayCloseCode(code: number): string | undefined {
   return GATEWAY_CLOSE_CODE_HINTS[code];
 }
+
+const FORCE_STOP_TERMINATE_GRACE_MS = 250;
 
 export class GatewayClient {
   private ws: WebSocket | null = null;
@@ -138,7 +140,10 @@ export class GatewayClient {
   constructor(opts: GatewayClientOptions) {
     this.opts = {
       ...opts,
-      deviceIdentity: opts.deviceIdentity ?? loadOrCreateDeviceIdentity(),
+      deviceIdentity:
+        opts.deviceIdentity === null
+          ? undefined
+          : (opts.deviceIdentity ?? loadOrCreateDeviceIdentity()),
     };
   }
 
@@ -270,8 +275,17 @@ export class GatewayClient {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
     }
-    this.ws?.close();
+    const ws = this.ws;
     this.ws = null;
+    if (ws) {
+      ws.close();
+      const forceTerminateTimer = setTimeout(() => {
+        try {
+          ws.terminate();
+        } catch {}
+      }, FORCE_STOP_TERMINATE_GRACE_MS);
+      forceTerminateTimer.unref?.();
+    }
     this.flushPendingErrors(new Error("gateway client stopped"));
   }
 

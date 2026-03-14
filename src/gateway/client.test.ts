@@ -23,6 +23,8 @@ class MockWebSocket {
   private closeHandlers: WsEventHandlers["close"][] = [];
   private errorHandlers: WsEventHandlers["error"][] = [];
   readonly sent: string[] = [];
+  closeCalls = 0;
+  terminateCalls = 0;
 
   constructor(_url: string, _options?: unknown) {
     wsInstances.push(this);
@@ -52,7 +54,12 @@ class MockWebSocket {
   }
 
   close(code?: number, reason?: string): void {
+    this.closeCalls += 1;
     this.emitClose(code ?? 1000, reason ?? "");
+  }
+
+  terminate(): void {
+    this.terminateCalls += 1;
   }
 
   send(data: string): void {
@@ -101,6 +108,7 @@ vi.mock("../logger.js", async (importOriginal) => {
 });
 
 const { GatewayClient } = await import("./client.js");
+type GatewayClientInstance = InstanceType<typeof GatewayClient>;
 
 function getLatestWs(): MockWebSocket {
   const ws = wsInstances.at(-1);
@@ -296,6 +304,29 @@ describe("GatewayClient close handling", () => {
     client.stop();
   });
 
+  it("force-terminates a lingering socket after stop", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+      });
+
+      client.start();
+      const ws = getLatestWs();
+
+      client.stop();
+
+      expect(ws.closeCalls).toBe(1);
+      expect(ws.terminateCalls).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(ws.terminateCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not clear persisted device auth when explicit shared token is provided", () => {
     const onClose = vi.fn();
     const identity: DeviceIdentity = {
@@ -344,6 +375,20 @@ describe("GatewayClient connect auth payload", () => {
     return parsed.params?.auth ?? {};
   }
 
+  function connectRequestFrom(ws: MockWebSocket) {
+    const raw = ws.sent.find((frame) => frame.includes('"method":"connect"'));
+    expect(raw).toBeTruthy();
+    return JSON.parse(raw ?? "{}") as {
+      id?: string;
+      params?: {
+        auth?: {
+          token?: string;
+          deviceToken?: string;
+        };
+      };
+    };
+  }
+
   function emitConnectChallenge(ws: MockWebSocket, nonce = "nonce-1") {
     ws.emitMessage(
       JSON.stringify({
@@ -352,6 +397,63 @@ describe("GatewayClient connect auth payload", () => {
         payload: { nonce },
       }),
     );
+  }
+
+  function startClientAndConnect(params: { client: GatewayClientInstance; nonce?: string }) {
+    params.client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws, params.nonce);
+    return { ws, connect: connectRequestFrom(ws) };
+  }
+
+  function emitConnectFailure(
+    ws: MockWebSocket,
+    connectId: string | undefined,
+    details: Record<string, unknown>,
+  ) {
+    ws.emitMessage(
+      JSON.stringify({
+        type: "res",
+        id: connectId,
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "unauthorized",
+          details,
+        },
+      }),
+    );
+  }
+
+  async function expectRetriedConnectAuth(params: {
+    firstWs: MockWebSocket;
+    connectId: string | undefined;
+    failureDetails: Record<string, unknown>;
+  }) {
+    emitConnectFailure(params.firstWs, params.connectId, params.failureDetails);
+    await vi.waitFor(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws, "nonce-2");
+    return connectFrameFrom(ws);
+  }
+
+  async function expectNoReconnectAfterConnectFailure(params: {
+    client: GatewayClientInstance;
+    firstWs: MockWebSocket;
+    connectId: string | undefined;
+    failureDetails: Record<string, unknown>;
+  }) {
+    vi.useFakeTimers();
+    try {
+      emitConnectFailure(params.firstWs, params.connectId, params.failureDetails);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(wsInstances).toHaveLength(1);
+    } finally {
+      params.client.stop();
+      vi.useRealTimers();
+    }
   }
 
   it("uses explicit shared token and does not inject stored device token", () => {
@@ -457,37 +559,16 @@ describe("GatewayClient connect auth payload", () => {
       token: "shared-token",
     });
 
-    client.start();
-    const ws1 = getLatestWs();
-    ws1.emitOpen();
-    emitConnectChallenge(ws1);
-    const firstConnectRaw = ws1.sent.find((frame) => frame.includes('"method":"connect"'));
-    expect(firstConnectRaw).toBeTruthy();
-    const firstConnect = JSON.parse(firstConnectRaw ?? "{}") as {
-      id?: string;
-      params?: { auth?: { token?: string; deviceToken?: string } };
-    };
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
     expect(firstConnect.params?.auth?.token).toBe("shared-token");
     expect(firstConnect.params?.auth?.deviceToken).toBeUndefined();
 
-    ws1.emitMessage(
-      JSON.stringify({
-        type: "res",
-        id: firstConnect.id,
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "unauthorized",
-          details: { code: "AUTH_TOKEN_MISMATCH", canRetryWithDeviceToken: true },
-        },
-      }),
-    );
-
-    await vi.waitFor(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
-    const ws2 = getLatestWs();
-    ws2.emitOpen();
-    emitConnectChallenge(ws2, "nonce-2");
-    expect(connectFrameFrom(ws2)).toMatchObject({
+    const retriedAuth = await expectRetriedConnectAuth({
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: { code: "AUTH_TOKEN_MISMATCH", canRetryWithDeviceToken: true },
+    });
+    expect(retriedAuth).toMatchObject({
       token: "shared-token",
       deviceToken: "stored-device-token",
     });
@@ -501,32 +582,13 @@ describe("GatewayClient connect auth payload", () => {
       token: "shared-token",
     });
 
-    client.start();
-    const ws1 = getLatestWs();
-    ws1.emitOpen();
-    emitConnectChallenge(ws1);
-    const firstConnectRaw = ws1.sent.find((frame) => frame.includes('"method":"connect"'));
-    expect(firstConnectRaw).toBeTruthy();
-    const firstConnect = JSON.parse(firstConnectRaw ?? "{}") as { id?: string };
-
-    ws1.emitMessage(
-      JSON.stringify({
-        type: "res",
-        id: firstConnect.id,
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "unauthorized",
-          details: { code: "AUTH_UNAUTHORIZED", recommendedNextStep: "retry_with_device_token" },
-        },
-      }),
-    );
-
-    await vi.waitFor(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
-    const ws2 = getLatestWs();
-    ws2.emitOpen();
-    emitConnectChallenge(ws2, "nonce-2");
-    expect(connectFrameFrom(ws2)).toMatchObject({
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    const retriedAuth = await expectRetriedConnectAuth({
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: { code: "AUTH_UNAUTHORIZED", recommendedNextStep: "retry_with_device_token" },
+    });
+    expect(retriedAuth).toMatchObject({
       token: "shared-token",
       deviceToken: "stored-device-token",
     });
@@ -534,71 +596,33 @@ describe("GatewayClient connect auth payload", () => {
   });
 
   it("does not auto-reconnect on AUTH_TOKEN_MISSING connect failures", async () => {
-    vi.useFakeTimers();
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-token",
     });
 
-    client.start();
-    const ws1 = getLatestWs();
-    ws1.emitOpen();
-    emitConnectChallenge(ws1);
-    const firstConnectRaw = ws1.sent.find((frame) => frame.includes('"method":"connect"'));
-    expect(firstConnectRaw).toBeTruthy();
-    const firstConnect = JSON.parse(firstConnectRaw ?? "{}") as { id?: string };
-
-    ws1.emitMessage(
-      JSON.stringify({
-        type: "res",
-        id: firstConnect.id,
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "unauthorized",
-          details: { code: "AUTH_TOKEN_MISSING" },
-        },
-      }),
-    );
-
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(wsInstances).toHaveLength(1);
-    client.stop();
-    vi.useRealTimers();
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: { code: "AUTH_TOKEN_MISSING" },
+    });
   });
 
   it("does not auto-reconnect on token mismatch when retry is not trusted", async () => {
-    vi.useFakeTimers();
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
     const client = new GatewayClient({
       url: "wss://gateway.example.com:18789",
       token: "shared-token",
     });
 
-    client.start();
-    const ws1 = getLatestWs();
-    ws1.emitOpen();
-    emitConnectChallenge(ws1);
-    const firstConnectRaw = ws1.sent.find((frame) => frame.includes('"method":"connect"'));
-    expect(firstConnectRaw).toBeTruthy();
-    const firstConnect = JSON.parse(firstConnectRaw ?? "{}") as { id?: string };
-
-    ws1.emitMessage(
-      JSON.stringify({
-        type: "res",
-        id: firstConnect.id,
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "unauthorized",
-          details: { code: "AUTH_TOKEN_MISMATCH", canRetryWithDeviceToken: true },
-        },
-      }),
-    );
-
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(wsInstances).toHaveLength(1);
-    client.stop();
-    vi.useRealTimers();
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: { code: "AUTH_TOKEN_MISMATCH", canRetryWithDeviceToken: true },
+    });
   });
 });
