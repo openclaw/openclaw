@@ -1,7 +1,13 @@
 import { resolveDiscordDirectoryUserId } from "./directory-cache.js";
 
 const MARKDOWN_CODE_SEGMENT_PATTERN = /```[\s\S]*?```|`[^`\n]*`/g;
-const MENTION_CANDIDATE_PATTERN = /(^|[\s([{"'.,;:!?])@([a-z0-9_.-]{2,32}(?:#[0-9]{4})?)/gi;
+const MENTION_CANDIDATE_PATTERN =
+  /(^|[\s([{"'.,;:!?，。！？、：；（）《》「」『』【】])@([\p{L}\p{N}_.-]{2,32}(?:#[0-9]{4})?)/gu;
+// Support East Asian "inline mention" style like "你好@张三" while avoiding URL/email regressions.
+const CJK_ADJACENT_MENTION_CANDIDATE_PATTERN =
+  /(?<=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])@([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{N}_.-]{2,32}(?:#[0-9]{4})?)/gu;
+const URL_SCHEME_TOKEN_PATTERN = /^[a-z][a-z0-9+.-]*:\/\/\S+$/i;
+const URL_TOKEN_TRAILING_PUNCTUATION_PATTERN = /[)\]}>.,;:!?，。！？、：；]+$/u;
 const DISCORD_RESERVED_MENTIONS = new Set(["everyone", "here"]);
 
 function normalizeSnowflake(value: string | number | bigint): string | null {
@@ -42,7 +48,7 @@ function rewritePlainTextMentions(text: string, accountId?: string | null): stri
   if (!text.includes("@")) {
     return text;
   }
-  return text.replace(MENTION_CANDIDATE_PATTERN, (match, prefix, rawHandle) => {
+  const rewriteCandidate = (match: string, rawHandle: string): string => {
     const handle = String(rawHandle ?? "").trim();
     if (!handle) {
       return match;
@@ -58,8 +64,42 @@ function rewritePlainTextMentions(text: string, accountId?: string | null): stri
     if (!userId) {
       return match;
     }
-    return `${String(prefix ?? "")}${formatMention({ userId })}`;
-  });
+    return formatMention({ userId });
+  };
+  const withDelimitedMentions = text.replace(
+    MENTION_CANDIDATE_PATTERN,
+    (match, prefix, rawHandle) => {
+      const rewritten = rewriteCandidate(match, String(rawHandle ?? ""));
+      if (rewritten === match) {
+        return match;
+      }
+      return `${String(prefix ?? "")}${rewritten}`;
+    },
+  );
+  return withDelimitedMentions.replace(
+    CJK_ADJACENT_MENTION_CANDIDATE_PATTERN,
+    (match, rawHandle, offset, sourceText) => {
+      if (isLikelyUrlTokenContext(sourceText, offset)) {
+        return match;
+      }
+      return rewriteCandidate(match, String(rawHandle ?? ""));
+    },
+  );
+}
+
+function isLikelyUrlTokenContext(text: string, atIndex: number): boolean {
+  let tokenStart = atIndex;
+  while (tokenStart > 0 && !/\s/u.test(text[tokenStart - 1] ?? "")) {
+    tokenStart -= 1;
+  }
+  let tokenEnd = atIndex;
+  while (tokenEnd < text.length && !/\s/u.test(text[tokenEnd] ?? "")) {
+    tokenEnd += 1;
+  }
+  const token = text
+    .slice(tokenStart, tokenEnd)
+    .replace(URL_TOKEN_TRAILING_PUNCTUATION_PATTERN, "");
+  return URL_SCHEME_TOKEN_PATTERN.test(token);
 }
 
 export function rewriteDiscordKnownMentions(
