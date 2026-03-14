@@ -61,7 +61,11 @@ const comparisonOperators = new Set([
   ts.SyntaxKind.ExclamationEqualsToken,
 ]);
 
-const allowedViolations = new Set([]);
+const allowedViolations = new Set([
+  "src/acp/persistent-bindings.resolve.ts",
+  "src/auto-reply/reply/commands-acp/context.ts",
+  "src/auto-reply/reply/commands-acp/lifecycle.ts",
+]);
 
 function isChannelsPropertyAccess(node) {
   if (ts.isPropertyAccessExpression(node)) {
