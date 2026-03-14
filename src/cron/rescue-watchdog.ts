@@ -3,6 +3,7 @@ import { isValidProfileName } from "../cli/profile-utils.js";
 import { createConfigIO } from "../config/io.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import type { GatewayService } from "../daemon/service.js";
 import { resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveGatewayProbeAuthSafe } from "../gateway/probe-auth.js";
 import { probeGateway } from "../gateway/probe.js";
@@ -75,6 +76,50 @@ function resolveProbeHostForBindAddress(bindHost: string): string {
     return "::1";
   }
   return bindHost;
+}
+
+function parsePortFromProgramArguments(programArguments: string[] | undefined): number | undefined {
+  if (!programArguments?.length) {
+    return undefined;
+  }
+  for (let i = 0; i < programArguments.length; i += 1) {
+    const arg = programArguments[i]?.trim();
+    if (arg === "--port") {
+      const next = Number.parseInt(programArguments[i + 1] ?? "", 10);
+      if (Number.isFinite(next) && next > 0) {
+        return next;
+      }
+      continue;
+    }
+    if (!arg?.startsWith("--port=")) {
+      continue;
+    }
+    const inline = Number.parseInt(arg.split("=", 2)[1] ?? "", 10);
+    if (Number.isFinite(inline) && inline > 0) {
+      return inline;
+    }
+  }
+  return undefined;
+}
+
+async function resolveManagedGatewayProbePort(params: {
+  cfg: {
+    gateway?: {
+      port?: number;
+    };
+  };
+  env: NodeJS.ProcessEnv;
+  service: GatewayService;
+}): Promise<number> {
+  // Cross-profile watchdog env intentionally strips service identity overrides,
+  // so recover the live managed port from the installed service definition first.
+  const command = await params.service.readCommand(params.env).catch(() => null);
+  const portFromArgs = parsePortFromProgramArguments(command?.programArguments);
+  if (portFromArgs) {
+    return portFromArgs;
+  }
+  const mergedEnv = command?.environment ? { ...params.env, ...command.environment } : params.env;
+  return resolveGatewayPort(params.cfg, mergedEnv);
 }
 
 async function resolveProfileGatewayProbeUrl(
@@ -295,7 +340,6 @@ export async function runRescueWatchdogJob(params: {
       error: `failed to load monitored profile config: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
-  const port = resolveGatewayPort(cfg, env);
   const { auth, warning } = resolveGatewayProbeAuthSafe({
     cfg,
     mode: "local",
@@ -310,6 +354,7 @@ export async function runRescueWatchdogJob(params: {
       error: `gateway service control unavailable: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
+  const port = await resolveManagedGatewayProbePort({ cfg, env, service });
   const actions: string[] = [];
 
   const initialProbe = await probeProfileGateway({ cfg, port, auth });
