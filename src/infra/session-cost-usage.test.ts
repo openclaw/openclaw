@@ -1,31 +1,29 @@
-import fs from "node:fs/promises"
-import os from "node:os"
-import path from "node:path"
-import { describe, expect, it } from "vitest"
-import type { OpenClawConfig } from "../config/config.js"
-import { withEnvAsync } from "../test-utils/env.js"
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   discoverAllSessions,
   loadCostUsageSummary,
   loadSessionCostSummary,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
-} from "./session-cost-usage.js"
+} from "./session-cost-usage.js";
 
 describe("session cost usage", () => {
-  const withStateDir = async <T,>(
-    stateDir: string,
-    fn: () => Promise<T>,
-  ): Promise<T> => await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, fn)
+  const withStateDir = async <T>(stateDir: string, fn: () => Promise<T>): Promise<T> =>
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, fn);
 
   it("aggregates daily totals with log cost and pricing fallback", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-"))
-    const sessionsDir = path.join(root, "agents", "main", "sessions")
-    await fs.mkdir(sessionsDir, { recursive: true })
-    const sessionFile = path.join(sessionsDir, "sess-1.jsonl")
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-1.jsonl");
 
-    const now = new Date()
-    const older = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000)
+    const now = new Date();
+    const older = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
 
     const entries = [
       {
@@ -76,13 +74,13 @@ describe("session cost usage", () => {
           },
         },
       },
-    ]
+    ];
 
     await fs.writeFile(
       sessionFile,
       entries.map((entry) => JSON.stringify(entry)).join("\n"),
       "utf-8",
-    )
+    );
 
     const config = {
       models: {
@@ -102,22 +100,20 @@ describe("session cost usage", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig
+    } as unknown as OpenClawConfig;
 
     await withStateDir(root, async () => {
-      const summary = await loadCostUsageSummary({ days: 30, config })
-      expect(summary.daily.length).toBe(1)
-      expect(summary.totals.totalTokens).toBe(50)
-      expect(summary.totals.totalCost).toBeCloseTo(0.03003, 5)
-    })
-  })
+      const summary = await loadCostUsageSummary({ days: 30, config });
+      expect(summary.daily.length).toBe(1);
+      expect(summary.totals.totalTokens).toBe(50);
+      expect(summary.totals.totalCost).toBeCloseTo(0.03003, 5);
+    });
+  });
 
   it("summarizes a single session file", async () => {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-cost-session-"),
-    )
-    const sessionFile = path.join(root, "session.jsonl")
-    const now = new Date()
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-session-"));
+    const sessionFile = path.join(root, "session.jsonl");
+    const now = new Date();
 
     await fs.writeFile(
       sessionFile,
@@ -137,23 +133,21 @@ describe("session cost usage", () => {
         },
       }),
       "utf-8",
-    )
+    );
 
     const summary = await loadSessionCostSummary({
       sessionFile,
-    })
-    expect(summary?.totalCost).toBeCloseTo(0.03, 5)
-    expect(summary?.totalTokens).toBe(30)
-    expect(summary?.lastActivity).toBeGreaterThan(0)
-  })
+    });
+    expect(summary?.totalCost).toBeCloseTo(0.03, 5);
+    expect(summary?.totalTokens).toBe(30);
+    expect(summary?.lastActivity).toBeGreaterThan(0);
+  });
 
   it("captures message counts, tool usage, and model usage", async () => {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-cost-session-meta-"),
-    )
-    const sessionFile = path.join(root, "session.jsonl")
-    const start = new Date("2026-02-01T10:00:00.000Z")
-    const end = new Date("2026-02-01T10:05:00.000Z")
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-session-meta-"));
+    const sessionFile = path.join(root, "session.jsonl");
+    const start = new Date("2026-02-01T10:00:00.000Z");
+    const end = new Date("2026-02-01T10:05:00.000Z");
 
     const entries = [
       {
@@ -185,15 +179,15 @@ describe("session cost usage", () => {
           },
         },
       },
-    ]
+    ];
 
     await fs.writeFile(
       sessionFile,
       entries.map((entry) => JSON.stringify(entry)).join("\n"),
       "utf-8",
-    )
+    );
 
-    const summary = await loadSessionCostSummary({ sessionFile })
+    const summary = await loadSessionCostSummary({ sessionFile });
     expect(summary?.messageCounts).toEqual({
       total: 2,
       user: 1,
@@ -201,30 +195,28 @@ describe("session cost usage", () => {
       toolCalls: 1,
       toolResults: 1,
       errors: 2,
-    })
-    expect(summary?.toolUsage?.totalCalls).toBe(1)
-    expect(summary?.toolUsage?.uniqueTools).toBe(1)
-    expect(summary?.toolUsage?.tools[0]?.name).toBe("weather")
-    expect(summary?.modelUsage?.[0]?.provider).toBe("openai")
-    expect(summary?.modelUsage?.[0]?.model).toBe("gpt-5.2")
-    expect(summary?.durationMs).toBe(5 * 60 * 1000)
-    expect(summary?.latency?.count).toBe(1)
-    expect(summary?.latency?.avgMs).toBe(5 * 60 * 1000)
-    expect(summary?.latency?.p95Ms).toBe(5 * 60 * 1000)
-    expect(summary?.dailyLatency?.[0]?.date).toBe("2026-02-01")
-    expect(summary?.dailyLatency?.[0]?.count).toBe(1)
-    expect(summary?.dailyModelUsage?.[0]?.date).toBe("2026-02-01")
-    expect(summary?.dailyModelUsage?.[0]?.model).toBe("gpt-5.2")
-  })
+    });
+    expect(summary?.toolUsage?.totalCalls).toBe(1);
+    expect(summary?.toolUsage?.uniqueTools).toBe(1);
+    expect(summary?.toolUsage?.tools[0]?.name).toBe("weather");
+    expect(summary?.modelUsage?.[0]?.provider).toBe("openai");
+    expect(summary?.modelUsage?.[0]?.model).toBe("gpt-5.2");
+    expect(summary?.durationMs).toBe(5 * 60 * 1000);
+    expect(summary?.latency?.count).toBe(1);
+    expect(summary?.latency?.avgMs).toBe(5 * 60 * 1000);
+    expect(summary?.latency?.p95Ms).toBe(5 * 60 * 1000);
+    expect(summary?.dailyLatency?.[0]?.date).toBe("2026-02-01");
+    expect(summary?.dailyLatency?.[0]?.count).toBe(1);
+    expect(summary?.dailyModelUsage?.[0]?.date).toBe("2026-02-01");
+    expect(summary?.dailyModelUsage?.[0]?.model).toBe("gpt-5.2");
+  });
 
   it("includes archived .jsonl.reset.* files in cost summary", async () => {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-cost-archive-"),
-    )
-    const sessionsDir = path.join(root, "agents", "main", "sessions")
-    await fs.mkdir(sessionsDir, { recursive: true })
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-archive-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
 
-    const now = new Date()
+    const now = new Date();
     const entry = {
       type: "message",
       timestamp: now.toISOString(),
@@ -239,18 +231,15 @@ describe("session cost usage", () => {
           cost: { total: 0.05 },
         },
       },
-    }
+    };
 
     // Active session file
-    const activeFile = path.join(sessionsDir, "sess-active.jsonl")
-    await fs.writeFile(activeFile, JSON.stringify(entry), "utf-8")
+    const activeFile = path.join(sessionsDir, "sess-active.jsonl");
+    await fs.writeFile(activeFile, JSON.stringify(entry), "utf-8");
 
     // Archived session file (created by /new or /reset)
-    const archiveFile = path.join(
-      sessionsDir,
-      "sess-old.jsonl.reset.2026-03-14T20-28-29.627Z",
-    )
-    await fs.writeFile(archiveFile, JSON.stringify(entry), "utf-8")
+    const archiveFile = path.join(sessionsDir, "sess-old.jsonl.reset.2026-03-14T20-28-29.627Z");
+    await fs.writeFile(archiveFile, JSON.stringify(entry), "utf-8");
 
     const config = {
       models: {
@@ -265,77 +254,67 @@ describe("session cost usage", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig
+    } as unknown as OpenClawConfig;
 
     await withStateDir(root, async () => {
-      const summary = await loadCostUsageSummary({ days: 30, config })
+      const summary = await loadCostUsageSummary({ days: 30, config });
       // Both files should be included: 20 + 20 = 40 tokens, $0.05 + $0.05 = $0.10
-      expect(summary.totals.totalTokens).toBe(40)
-      expect(summary.totals.totalCost).toBeCloseTo(0.1, 5)
-    })
-  })
+      expect(summary.totals.totalTokens).toBe(40);
+      expect(summary.totals.totalCost).toBeCloseTo(0.1, 5);
+    });
+  });
 
   it("discovers archived sessions and extracts correct session IDs", async () => {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-discover-archive-"),
-    )
-    const sessionsDir = path.join(root, "agents", "main", "sessions")
-    await fs.mkdir(sessionsDir, { recursive: true })
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discover-archive-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
 
-    const activeFile = path.join(sessionsDir, "sess-active.jsonl")
-    await fs.writeFile(activeFile, "", "utf-8")
+    const activeFile = path.join(sessionsDir, "sess-active.jsonl");
+    await fs.writeFile(activeFile, "", "utf-8");
 
-    const archiveFile = path.join(
-      sessionsDir,
-      "sess-old.jsonl.reset.2026-03-14T20-28-29.627Z",
-    )
-    await fs.writeFile(archiveFile, "", "utf-8")
+    const archiveFile = path.join(sessionsDir, "sess-old.jsonl.reset.2026-03-14T20-28-29.627Z");
+    await fs.writeFile(archiveFile, "", "utf-8");
 
-    const now = Date.now()
-    await fs.utimes(activeFile, now / 1000, now / 1000)
-    await fs.utimes(archiveFile, now / 1000, now / 1000)
+    const now = Date.now();
+    await fs.utimes(activeFile, now / 1000, now / 1000);
+    await fs.utimes(archiveFile, now / 1000, now / 1000);
 
     await withStateDir(root, async () => {
       const sessions = await discoverAllSessions({
         startMs: now - 7 * 24 * 60 * 60 * 1000,
-      })
-      expect(sessions.length).toBe(2)
-      const ids = sessions.map((s) => s.sessionId).sort()
-      expect(ids).toEqual(["sess-active", "sess-old"])
-    })
-  })
+      });
+      expect(sessions.length).toBe(2);
+      const ids = sessions.map((s) => s.sessionId).sort();
+      expect(ids).toEqual(["sess-active", "sess-old"]);
+    });
+  });
 
   it("does not exclude sessions with mtime after endMs during discovery", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discover-"))
-    const sessionsDir = path.join(root, "agents", "main", "sessions")
-    await fs.mkdir(sessionsDir, { recursive: true })
-    const sessionFile = path.join(sessionsDir, "sess-late.jsonl")
-    await fs.writeFile(sessionFile, "", "utf-8")
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discover-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-late.jsonl");
+    await fs.writeFile(sessionFile, "", "utf-8");
 
-    const now = Date.now()
-    await fs.utimes(sessionFile, now / 1000, now / 1000)
+    const now = Date.now();
+    await fs.utimes(sessionFile, now / 1000, now / 1000);
 
     await withStateDir(root, async () => {
       const sessions = await discoverAllSessions({
         startMs: now - 7 * 24 * 60 * 60 * 1000,
         endMs: now - 24 * 60 * 60 * 1000,
-      })
-      expect(sessions.length).toBe(1)
-      expect(sessions[0]?.sessionId).toBe("sess-late")
-    })
-  })
+      });
+      expect(sessions.length).toBe(1);
+      expect(sessions[0]?.sessionId).toBe("sess-late");
+    });
+  });
 
   it("resolves non-main absolute sessionFile using explicit agentId for cost summary", async () => {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-cost-agent-"),
-    )
-    const workerSessionsDir = path.join(root, "agents", "worker1", "sessions")
-    await fs.mkdir(workerSessionsDir, { recursive: true })
-    const workerSessionFile = path.join(
-      workerSessionsDir,
-      "sess-worker-1.jsonl",
-    )
-    const now = new Date("2026-02-12T10:00:00.000Z")
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-agent-"));
+    const workerSessionsDir = path.join(root, "agents", "worker1", "sessions");
+    await fs.mkdir(workerSessionsDir, { recursive: true });
+    const workerSessionFile = path.join(workerSessionsDir, "sess-worker-1.jsonl");
+    const now = new Date("2026-02-12T10:00:00.000Z");
 
     await fs.writeFile(
       workerSessionFile,
@@ -355,7 +334,7 @@ describe("session cost usage", () => {
         },
       }),
       "utf-8",
-    )
+    );
 
     await withStateDir(root, async () => {
       const summary = await loadSessionCostSummary({
@@ -366,22 +345,17 @@ describe("session cost usage", () => {
           sessionFile: workerSessionFile,
         },
         agentId: "worker1",
-      })
-      expect(summary?.totalTokens).toBe(18)
-      expect(summary?.totalCost).toBeCloseTo(0.01, 5)
-    })
-  })
+      });
+      expect(summary?.totalTokens).toBe(18);
+      expect(summary?.totalCost).toBeCloseTo(0.01, 5);
+    });
+  });
 
   it("resolves non-main absolute sessionFile using explicit agentId for timeseries", async () => {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-timeseries-agent-"),
-    )
-    const workerSessionsDir = path.join(root, "agents", "worker2", "sessions")
-    await fs.mkdir(workerSessionsDir, { recursive: true })
-    const workerSessionFile = path.join(
-      workerSessionsDir,
-      "sess-worker-2.jsonl",
-    )
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-timeseries-agent-"));
+    const workerSessionsDir = path.join(root, "agents", "worker2", "sessions");
+    await fs.mkdir(workerSessionsDir, { recursive: true });
+    const workerSessionFile = path.join(workerSessionsDir, "sess-worker-2.jsonl");
 
     await fs.writeFile(
       workerSessionFile,
@@ -403,7 +377,7 @@ describe("session cost usage", () => {
         }),
       ].join("\n"),
       "utf-8",
-    )
+    );
 
     await withStateDir(root, async () => {
       const timeseries = await loadSessionUsageTimeSeries({
@@ -414,22 +388,17 @@ describe("session cost usage", () => {
           sessionFile: workerSessionFile,
         },
         agentId: "worker2",
-      })
-      expect(timeseries?.points.length).toBe(1)
-      expect(timeseries?.points[0]?.totalTokens).toBe(8)
-    })
-  })
+      });
+      expect(timeseries?.points.length).toBe(1);
+      expect(timeseries?.points[0]?.totalTokens).toBe(8);
+    });
+  });
 
   it("resolves non-main absolute sessionFile using explicit agentId for logs", async () => {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-logs-agent-"),
-    )
-    const workerSessionsDir = path.join(root, "agents", "worker3", "sessions")
-    await fs.mkdir(workerSessionsDir, { recursive: true })
-    const workerSessionFile = path.join(
-      workerSessionsDir,
-      "sess-worker-3.jsonl",
-    )
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-logs-agent-"));
+    const workerSessionsDir = path.join(root, "agents", "worker3", "sessions");
+    await fs.mkdir(workerSessionsDir, { recursive: true });
+    const workerSessionFile = path.join(workerSessionsDir, "sess-worker-3.jsonl");
 
     await fs.writeFile(
       workerSessionFile,
@@ -444,7 +413,7 @@ describe("session cost usage", () => {
         }),
       ].join("\n"),
       "utf-8",
-    )
+    );
 
     await withStateDir(root, async () => {
       const logs = await loadSessionLogs({
@@ -455,20 +424,18 @@ describe("session cost usage", () => {
           sessionFile: workerSessionFile,
         },
         agentId: "worker3",
-      })
-      expect(logs).toHaveLength(1)
-      expect(logs?.[0]?.content).toContain("hello worker")
-      expect(logs?.[0]?.role).toBe("user")
-    })
-  })
+      });
+      expect(logs).toHaveLength(1);
+      expect(logs?.[0]?.content).toContain("hello worker");
+      expect(logs?.[0]?.role).toBe("user");
+    });
+  });
 
   it("strips inbound and untrusted metadata blocks from session usage logs", async () => {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-logs-sanitize-"),
-    )
-    const sessionsDir = path.join(root, "agents", "main", "sessions")
-    await fs.mkdir(sessionsDir, { recursive: true })
-    const sessionFile = path.join(sessionsDir, "sess-sanitize.jsonl")
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-logs-sanitize-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-sanitize.jsonl");
 
     await fs.writeFile(
       sessionFile,
@@ -498,24 +465,22 @@ example
         }),
       ].join("\n"),
       "utf-8",
-    )
+    );
 
-    const logs = await loadSessionLogs({ sessionFile })
-    expect(logs).toHaveLength(1)
-    expect(logs?.[0]?.role).toBe("user")
-    expect(logs?.[0]?.content).toBe("hello there")
-  })
+    const logs = await loadSessionLogs({ sessionFile });
+    expect(logs).toHaveLength(1);
+    expect(logs?.[0]?.role).toBe("user");
+    expect(logs?.[0]?.content).toBe("hello there");
+  });
 
   it("preserves totals and cumulative values when downsampling timeseries", async () => {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-timeseries-downsample-"),
-    )
-    const sessionsDir = path.join(root, "agents", "main", "sessions")
-    await fs.mkdir(sessionsDir, { recursive: true })
-    const sessionFile = path.join(sessionsDir, "sess-downsample.jsonl")
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-timeseries-downsample-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-downsample.jsonl");
 
     const entries = Array.from({ length: 10 }, (_, i) => {
-      const idx = i + 1
+      const idx = i + 1;
       return {
         type: "message",
         timestamp: new Date(Date.UTC(2026, 1, 12, 10, idx, 0)).toISOString(),
@@ -532,35 +497,32 @@ example
             cost: { total: idx * 0.001 },
           },
         },
-      }
-    })
+      };
+    });
 
     await fs.writeFile(
       sessionFile,
       entries.map((entry) => JSON.stringify(entry)).join("\n"),
       "utf-8",
-    )
+    );
 
     const timeseries = await loadSessionUsageTimeSeries({
       sessionFile,
       maxPoints: 3,
-    })
+    });
 
-    expect(timeseries).toBeTruthy()
-    expect(timeseries?.points.length).toBe(3)
+    expect(timeseries).toBeTruthy();
+    expect(timeseries?.points.length).toBe(3);
 
-    const points = timeseries?.points ?? []
-    const totalTokens = points.reduce(
-      (sum, point) => sum + point.totalTokens,
-      0,
-    )
-    const totalCost = points.reduce((sum, point) => sum + point.cost, 0)
-    const lastPoint = points[points.length - 1]
+    const points = timeseries?.points ?? [];
+    const totalTokens = points.reduce((sum, point) => sum + point.totalTokens, 0);
+    const totalCost = points.reduce((sum, point) => sum + point.cost, 0);
+    const lastPoint = points[points.length - 1];
 
     // Full-series totals: sum(1..10)*3 = 165 tokens, sum(1..10)*0.001 = 0.055 cost.
-    expect(totalTokens).toBe(165)
-    expect(totalCost).toBeCloseTo(0.055, 8)
-    expect(lastPoint?.cumulativeTokens).toBe(165)
-    expect(lastPoint?.cumulativeCost).toBeCloseTo(0.055, 8)
-  })
-})
+    expect(totalTokens).toBe(165);
+    expect(totalCost).toBeCloseTo(0.055, 8);
+    expect(lastPoint?.cumulativeTokens).toBe(165);
+    expect(lastPoint?.cumulativeCost).toBeCloseTo(0.055, 8);
+  });
+});
