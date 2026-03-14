@@ -61,6 +61,16 @@ Other surfaces:
 - **CLI:** `openclaw status --usage` and `openclaw channels list` show
   provider quota windows (not per-response costs).
 
+### Which surface should I use?
+
+- Use `/status` for the current session: model, context usage, and the last reply's tokens.
+- Use `/usage off|tokens|full` when you want per-reply token or cost footers in chat.
+- Use `/usage cost` when you want a local rollup from session logs.
+- Use `openclaw status --usage` when you want a focused CLI snapshot of provider quota windows.
+- Use `openclaw channels list` when you need the same quota snapshot plus broader provider/channel diagnostics.
+
+If you only need provider quota windows in CLI, prefer `openclaw status --usage`.
+
 ## Cost estimation (when shown)
 
 Costs are estimated from your model pricing config:

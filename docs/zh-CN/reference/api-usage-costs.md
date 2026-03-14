@@ -34,6 +34,8 @@ x-i18n:
 
 - `openclaw status --usage` 和 `openclaw channels list` 显示提供商**用量窗口**（配额快照，非每条消息的费用）。
 
+如果你只是想在 CLI 中快速查看配额，优先用 `openclaw status --usage`。如果你还想同时查看更完整的 provider/channel 诊断，再使用 `openclaw channels list`。
+
 详情和示例请参阅 [Token 用量与费用](/reference/token-use)。
 
 ## 密钥的发现方式
