@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 
 - Slack/interactive replies: preserve `channelData.slack.blocks` through live DM delivery and preview-finalized edits so Block Kit button and select directives render instead of falling back to raw text. Thanks @vincentkoc.
 - CI/channel test routing: move the built-in channel suites into `test:channels` and keep them out of `test:extensions`, so extension CI no longer fails after the channel migration while targeted test routing still sends Slack, Signal, and iMessage suites to the right lane. (#46066) Thanks @scoootscooob.
+- Agents/usage tracking: stop forcing `supportsUsageInStreaming: false` on non-native openai-completions endpoints so providers like DashScope, DeepSeek, and other OpenAI-compatible backends report token usage and cost instead of showing all zeros. (#46142)
 
 ## 2026.3.13
 
