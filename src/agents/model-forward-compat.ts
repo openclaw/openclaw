@@ -27,6 +27,8 @@ const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = ["claude-opus-4-5", "claude-opus-4.5"]
 const ANTHROPIC_SONNET_46_MODEL_ID = "claude-sonnet-4-6";
 const ANTHROPIC_SONNET_46_DOT_MODEL_ID = "claude-sonnet-4.6";
 const ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS = ["claude-sonnet-4-5", "claude-sonnet-4.5"] as const;
+// 1M context is GA for claude-*-4-6 models (no beta header required)
+const ANTHROPIC_46_CONTEXT_TOKENS = 1_048_576;
 
 const ZAI_GLM5_MODEL_ID = "glm-5";
 const ZAI_GLM5_TEMPLATE_MODEL_IDS = ["glm-4.7"] as const;
@@ -228,6 +230,7 @@ function resolveAnthropic46ForwardCompatModel(params: {
     trimmedModelId,
     templateIds,
     modelRegistry,
+    patch: { contextWindow: ANTHROPIC_46_CONTEXT_TOKENS },
   });
 }
 
