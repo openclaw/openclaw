@@ -26,6 +26,9 @@ export type RunEmbeddedPiAgentParams = {
   agentId?: string;
   messageChannel?: string;
   messageProvider?: string;
+  /** Original message platform (e.g. "slack", "discord", "telegram") before
+   *  channel resolution. Used by security plugins for trust classification. */
+  sourceProvider?: string;
   agentAccountId?: string;
   /** What initiated this agent run: "user", "heartbeat", "cron", or "memory". */
   trigger?: string;

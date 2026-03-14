@@ -328,6 +328,13 @@ export async function runEmbeddedPiAgent(
         messageProvider: params.messageProvider ?? undefined,
         trigger: params.trigger,
         channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+        // Identity fields for trust-aware hooks (before_model_resolve, before_agent_start)
+        sourceProvider: params.sourceProvider ?? undefined,
+        senderId: params.senderId ?? null,
+        senderName: params.senderName ?? null,
+        senderIsOwner: params.senderIsOwner ?? undefined,
+        groupId: params.groupId ?? null,
+        spawnedBy: params.spawnedBy ?? null,
       };
       if (hookRunner?.hasHooks("before_model_resolve")) {
         try {
@@ -868,6 +875,7 @@ export async function runEmbeddedPiAgent(
             groupChannel: params.groupChannel,
             groupSpace: params.groupSpace,
             spawnedBy: params.spawnedBy,
+            sourceProvider: params.sourceProvider,
             senderId: params.senderId,
             senderName: params.senderName,
             senderUsername: params.senderUsername,
@@ -1078,7 +1086,12 @@ export async function runEmbeddedPiAgent(
                     agentDir,
                     config: params.config,
                     skillsSnapshot: params.skillsSnapshot,
+                    senderId: params.senderId,
+                    senderName: params.senderName,
                     senderIsOwner: params.senderIsOwner,
+                    groupId: params.groupId,
+                    spawnedBy: params.spawnedBy,
+                    sourceProvider: params.sourceProvider,
                     provider,
                     model: modelId,
                     runId: params.runId,

@@ -492,15 +492,33 @@ export async function runPreparedReply(
         // still reflects the active channel that should own tool routing.
         provider: ctx.Provider ?? ctx.Surface ?? sessionCtx.Provider,
       }),
+      // Resolve true origin platform — OriginatingChannel carries the real source
+      // in relayed/cross-channel scenarios (e.g. Provider="webchat" but origin is "telegram").
+      // Extract the platform token only (first segment before ':' if present)
+      // to ensure exact-match checks in security plugins work correctly even
+      // if a full channel key like "telegram:group:123" is ever propagated.
+      sourceProvider:
+        (
+          (
+            ctx.OriginatingChannel ??
+            sessionCtx.OriginatingChannel ??
+            ctx.Provider ??
+            ctx.Surface ??
+            sessionCtx.Provider
+          )
+            ?.trim()
+            .toLowerCase() || ""
+        ).split(":")[0] || undefined,
       agentAccountId: sessionCtx.AccountId,
-      groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
+      groupId: resolveGroupSessionKey(sessionCtx)?.id ?? null,
       groupChannel: sessionCtx.GroupChannel?.trim() ?? sessionCtx.GroupSubject?.trim(),
       groupSpace: sessionCtx.GroupSpace?.trim() ?? undefined,
-      senderId: sessionCtx.SenderId?.trim() || undefined,
-      senderName: sessionCtx.SenderName?.trim() || undefined,
+      senderId: sessionCtx.SenderId?.trim() || null,
+      senderName: sessionCtx.SenderName?.trim() || null,
       senderUsername: sessionCtx.SenderUsername?.trim() || undefined,
       senderE164: sessionCtx.SenderE164?.trim() || undefined,
       senderIsOwner: command.senderIsOwner,
+      spawnedBy: sessionEntry?.spawnedBy ?? null,
       sessionFile,
       workspaceDir,
       config: cfg,
