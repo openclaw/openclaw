@@ -242,11 +242,46 @@ export function buildMinimalServicePath(options: BuildServicePathOptions = {}): 
   return getMinimalServicePathPartsFromEnv({ ...options, env }).join(path.posix.delimiter);
 }
 
+/**
+ * Compute the default Node.js max-old-space-size in MB as 85% of total system RAM.
+ * Exported for testing.
+ */
+export function resolveDefaultNodeMaxOldSpaceMb(totalMemBytes = os.totalmem()): number {
+  return Math.floor((totalMemBytes / 1024 / 1024) * 0.85);
+}
+
+/**
+ * Resolve the NODE_OPTIONS value to set for supervised gateway/node processes.
+ *
+ * Precedence:
+ *   1. If NODE_OPTIONS in env already contains --max-old-space-size, leave it alone.
+ *   2. If configuredMb is provided (from gateway.nodeMaxOldSpaceMb), use it.
+ *   3. Otherwise auto-detect as 85% of total system RAM.
+ *
+ * The value is injected so that child node processes (spawned by the gateway)
+ * also inherit the raised heap limit via NODE_OPTIONS environment propagation.
+ */
+export function resolveNodeOptions(
+  env: Record<string, string | undefined>,
+  configuredMb?: number,
+): string | undefined {
+  const existing = env.NODE_OPTIONS ?? "";
+  if (existing.includes("--max-old-space-size")) {
+    // User has already pinned this; don't override.
+    return existing || undefined;
+  }
+  const mb = configuredMb ?? resolveDefaultNodeMaxOldSpaceMb();
+  const heapFlag = `--max-old-space-size=${mb}`;
+  return existing ? `${existing} ${heapFlag}` : heapFlag;
+}
+
 export function buildServiceEnvironment(params: {
   env: Record<string, string | undefined>;
   port: number;
   launchdLabel?: string;
   platform?: NodeJS.Platform;
+  /** gateway.nodeMaxOldSpaceMb from config, if set by the user. */
+  nodeMaxOldSpaceMb?: number;
 }): Record<string, string | undefined> {
   const { env, port, launchdLabel } = params;
   const platform = params.platform ?? process.platform;
@@ -256,7 +291,7 @@ export function buildServiceEnvironment(params: {
     launchdLabel || (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
   const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
   return {
-    ...buildCommonServiceEnvironment(env, sharedEnv),
+    ...buildCommonServiceEnvironment(env, sharedEnv, params.nodeMaxOldSpaceMb),
     OPENCLAW_PROFILE: profile,
     OPENCLAW_GATEWAY_PORT: String(port),
     OPENCLAW_LAUNCHD_LABEL: resolvedLaunchdLabel,
@@ -271,6 +306,8 @@ export function buildServiceEnvironment(params: {
 export function buildNodeServiceEnvironment(params: {
   env: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
+  /** gateway.nodeMaxOldSpaceMb from config, if set by the user. */
+  nodeMaxOldSpaceMb?: number;
 }): Record<string, string | undefined> {
   const { env } = params;
   const platform = params.platform ?? process.platform;
@@ -278,7 +315,7 @@ export function buildNodeServiceEnvironment(params: {
   const gatewayToken =
     env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim() || undefined;
   return {
-    ...buildCommonServiceEnvironment(env, sharedEnv),
+    ...buildCommonServiceEnvironment(env, sharedEnv, params.nodeMaxOldSpaceMb),
     OPENCLAW_GATEWAY_TOKEN: gatewayToken,
     OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
     OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),
@@ -294,11 +331,13 @@ export function buildNodeServiceEnvironment(params: {
 function buildCommonServiceEnvironment(
   env: Record<string, string | undefined>,
   sharedEnv: SharedServiceEnvironmentFields,
+  nodeMaxOldSpaceMb?: number,
 ): Record<string, string | undefined> {
   const serviceEnv: Record<string, string | undefined> = {
     HOME: env.HOME,
     TMPDIR: sharedEnv.tmpDir,
     ...sharedEnv.proxyEnv,
+    NODE_OPTIONS: resolveNodeOptions(env, nodeMaxOldSpaceMb),
     NODE_EXTRA_CA_CERTS: sharedEnv.nodeCaCerts,
     NODE_USE_SYSTEM_CA: sharedEnv.nodeUseSystemCa,
     OPENCLAW_STATE_DIR: sharedEnv.stateDir,

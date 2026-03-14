@@ -431,4 +431,11 @@ export type GatewayConfig = {
    * Set to 0 to disable. Default: 5.
    */
   channelHealthCheckMinutes?: number;
+  /**
+   * Maximum V8 old-generation heap size for the gateway Node.js process, in MB.
+   * Also propagated to child Node processes via NODE_OPTIONS.
+   * Defaults to 85% of total system RAM at install time when not set.
+   * Set explicitly to override the auto-detected value.
+   */
+  nodeMaxOldSpaceMb?: number;
 };

@@ -8,6 +8,8 @@ import {
   buildServiceEnvironment,
   getMinimalServicePathParts,
   getMinimalServicePathPartsFromEnv,
+  resolveDefaultNodeMaxOldSpaceMb,
+  resolveNodeOptions,
 } from "./service-env.js";
 
 describe("getMinimalServicePathParts - Linux user directories", () => {
@@ -416,6 +418,22 @@ describe("buildNodeServiceEnvironment", () => {
     });
     expect(env.TMPDIR).toBe(os.tmpdir());
   });
+
+  it("injects nodeMaxOldSpaceMb into NODE_OPTIONS for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user" },
+      nodeMaxOldSpaceMb: 4096,
+    });
+    expect(env.NODE_OPTIONS).toBe("--max-old-space-size=4096");
+  });
+
+  it("does not override existing --max-old-space-size in NODE_OPTIONS for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user", NODE_OPTIONS: "--max-old-space-size=2048" },
+      nodeMaxOldSpaceMb: 4096,
+    });
+    expect(env.NODE_OPTIONS).toBe("--max-old-space-size=2048");
+  });
 });
 
 describe("shared Node TLS env defaults", () => {
@@ -492,5 +510,78 @@ describe("resolveGatewayStateDir", () => {
   it("preserves Windows absolute paths without HOME", () => {
     const env = { OPENCLAW_STATE_DIR: "C:\\State\\openclaw" };
     expect(resolveGatewayStateDir(env)).toBe("C:\\State\\openclaw");
+  });
+});
+
+describe("resolveDefaultNodeMaxOldSpaceMb", () => {
+  it("returns 85% of total memory in MB", () => {
+    const fourGbBytes = 4 * 1024 * 1024 * 1024;
+    expect(resolveDefaultNodeMaxOldSpaceMb(fourGbBytes)).toBe(Math.floor(4096 * 0.85));
+  });
+
+  it("rounds down to an integer", () => {
+    // 1 GB + 1 byte: should floor, not round
+    const oddBytes = 1024 * 1024 * 1024 + 1;
+    const result = resolveDefaultNodeMaxOldSpaceMb(oddBytes);
+    expect(Number.isInteger(result)).toBe(true);
+  });
+
+  it("uses os.totalmem() when no argument is given", () => {
+    const result = resolveDefaultNodeMaxOldSpaceMb();
+    expect(result).toBe(Math.floor((os.totalmem() / 1024 / 1024) * 0.85));
+  });
+});
+
+describe("resolveNodeOptions", () => {
+  it("sets --max-old-space-size from configured MB", () => {
+    expect(resolveNodeOptions({}, 4096)).toBe("--max-old-space-size=4096");
+  });
+
+  it("auto-detects heap size when configuredMb is not provided", () => {
+    const result = resolveNodeOptions({});
+    const expected = `--max-old-space-size=${resolveDefaultNodeMaxOldSpaceMb()}`;
+    expect(result).toBe(expected);
+  });
+
+  it("does not override existing --max-old-space-size in NODE_OPTIONS", () => {
+    const env = { NODE_OPTIONS: "--max-old-space-size=2048 --experimental-vm-modules" };
+    expect(resolveNodeOptions(env, 8192)).toBe(env.NODE_OPTIONS);
+  });
+
+  it("appends the heap flag to existing NODE_OPTIONS that have no heap flag", () => {
+    const env = { NODE_OPTIONS: "--experimental-vm-modules" };
+    const result = resolveNodeOptions(env, 4096);
+    expect(result).toBe("--experimental-vm-modules --max-old-space-size=4096");
+  });
+
+  it("returns the heap flag alone when NODE_OPTIONS is empty", () => {
+    expect(resolveNodeOptions({ NODE_OPTIONS: "" }, 8192)).toBe("--max-old-space-size=8192");
+  });
+});
+
+describe("buildServiceEnvironment - NODE_OPTIONS", () => {
+  const baseParams = {
+    env: { HOME: "/Users/test" },
+    port: 18789,
+    platform: "darwin" as NodeJS.Platform,
+  };
+
+  it("includes NODE_OPTIONS with auto-detected heap when nodeMaxOldSpaceMb is not set", () => {
+    const result = buildServiceEnvironment(baseParams);
+    expect(result.NODE_OPTIONS).toMatch(/^--max-old-space-size=\d+$/);
+  });
+
+  it("uses configured nodeMaxOldSpaceMb when provided", () => {
+    const result = buildServiceEnvironment({ ...baseParams, nodeMaxOldSpaceMb: 6144 });
+    expect(result.NODE_OPTIONS).toBe("--max-old-space-size=6144");
+  });
+
+  it("does not override a user-pinned NODE_OPTIONS that already has the heap flag", () => {
+    const result = buildServiceEnvironment({
+      ...baseParams,
+      env: { HOME: "/Users/test", NODE_OPTIONS: "--max-old-space-size=2048" },
+      nodeMaxOldSpaceMb: 8192,
+    });
+    expect(result.NODE_OPTIONS).toBe("--max-old-space-size=2048");
   });
 });

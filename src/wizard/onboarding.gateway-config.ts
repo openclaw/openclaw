@@ -1,3 +1,4 @@
+import os from "node:os";
 import {
   promptSecretRefForOnboarding,
   resolveSecretInputModeForEnvSelection,
@@ -15,6 +16,7 @@ import {
   resolveSecretInputRef,
   type SecretInput,
 } from "../config/types.secrets.js";
+import { resolveDefaultNodeMaxOldSpaceMb } from "../daemon/service-env.js";
 import {
   maybeAddTailnetOriginToControlUiAllowedOrigins,
   TAILSCALE_DOCS_LINES,
@@ -304,6 +306,37 @@ export async function configureGatewayForOnboarding(
     tailscaleMode,
     tailscaleBin,
   });
+
+  // Node.js heap limit — skip in quickstart (auto-detect is always the right default there).
+  if (flow !== "quickstart") {
+    const totalMb = Math.floor(os.totalmem() / 1024 / 1024);
+    const autoMb = resolveDefaultNodeMaxOldSpaceMb();
+    const existingMb = nextConfig.gateway?.nodeMaxOldSpaceMb;
+    const rawInput = await prompter.text({
+      message: "Node.js heap limit (MB)",
+      hint: `Auto-detect: ${autoMb} MB (85% of ${totalMb} MB RAM). Leave blank to use auto-detect.`,
+      initialValue: existingMb !== undefined ? String(existingMb) : "",
+      validate: (value) => {
+        if (!value.trim()) {
+          return undefined;
+        }
+        const n = Number.parseInt(value, 10);
+        if (!Number.isFinite(n) || n < 256) {
+          return "Enter a number ≥ 256, or leave blank for auto-detect";
+        }
+        return undefined;
+      },
+    });
+    const trimmed = typeof rawInput === "string" ? rawInput.trim() : "";
+    const nodeMaxOldSpaceMb = trimmed ? Number.parseInt(trimmed, 10) : undefined;
+    nextConfig = {
+      ...nextConfig,
+      gateway: {
+        ...nextConfig.gateway,
+        nodeMaxOldSpaceMb,
+      },
+    };
+  }
 
   // If this is a new gateway setup (no existing gateway settings), start with a
   // denylist for high-risk node commands. Users can arm these temporarily via
