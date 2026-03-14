@@ -83,6 +83,19 @@ export type StatusReactionsConfig = {
   timing?: StatusReactionsTimingConfig;
 };
 
+export type WaitingTipsConfig = {
+  /** Enable waiting tips — send a bilingual tip while AI thinks (default: false). */
+  enabled?: boolean;
+  /** Minimum wait before showing tip (ms). Avoids flicker on fast responses. Default: 2000. */
+  minWaitMs?: number;
+  /** Delete tip message after AI reply is sent (default: true). */
+  deleteAfterReply?: boolean;
+  /** Display style: "inline" (single message) or "card" (bordered block). Default: "inline". */
+  style?: "inline" | "card";
+  /** Path to directory with custom *.txt tip files (one tip per line). */
+  customTipsPath?: string;
+};
+
 export type MessagesConfig = {
   /** @deprecated Use `whatsapp.messagePrefix` (WhatsApp-only inbound prefix). */
   messagePrefix?: string;
@@ -118,6 +131,8 @@ export type MessagesConfig = {
   removeAckAfterReply?: boolean;
   /** Lifecycle status reactions configuration. */
   statusReactions?: StatusReactionsConfig;
+  /** Waiting tips — send a bilingual learning tip while AI thinks (fills the wait time). */
+  waitingTips?: WaitingTipsConfig;
   /** When true, suppress ⚠️ tool-error warnings from being shown to the user. Default: false. */
   suppressToolErrors?: boolean;
   /** Text-to-speech settings for outbound replies. */

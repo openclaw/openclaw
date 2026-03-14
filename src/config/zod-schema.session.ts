@@ -186,6 +186,16 @@ export const MessagesSchema = z
       })
       .strict()
       .optional(),
+    waitingTips: z
+      .object({
+        enabled: z.boolean().optional(),
+        minWaitMs: z.number().int().min(0).optional(),
+        deleteAfterReply: z.boolean().optional(),
+        style: z.enum(["inline", "card"]).optional(),
+        customTipsPath: z.string().optional(),
+      })
+      .strict()
+      .optional(),
     suppressToolErrors: z.boolean().optional(),
     tts: TtsConfigSchema,
   })

@@ -14,6 +14,7 @@ import { removeAckReactionAfterReply } from "../channels/ack-reactions.js";
 import { logAckFailure, logTypingFailure } from "../channels/logging.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../channels/typing.js";
+import { createWaitingTipController } from "../channels/waiting-tips.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import {
   loadSessionStore,
@@ -514,6 +515,30 @@ export const dispatchTelegramMessage = async ({
     void statusReactionController.setThinking();
   }
 
+  // Waiting tips: send a bilingual tip while AI thinks (deleted after reply)
+  const waitingTipsConfig = cfg.messages?.waitingTips;
+  const waitingTipController = createWaitingTipController<number>({
+    enabled: waitingTipsConfig?.enabled === true,
+    adapter: {
+      sendTip: async (text: string) => {
+        const sent = await bot.api.sendMessage(
+          chatId,
+          text,
+          threadSpec.id != null ? { message_thread_id: threadSpec.id } : {},
+        );
+        return sent.message_id;
+      },
+      deleteTip: async (messageId: number) => {
+        await bot.api.deleteMessage(chatId, messageId);
+      },
+    },
+    config: waitingTipsConfig,
+    onError: (err) => {
+      logVerbose(`telegram: waiting tip error for chat ${chatId}: ${String(err)}`);
+    },
+  });
+  waitingTipController.scheduleShow();
+
   const typingCallbacks = createTypingCallbacks({
     start: sendTyping,
     onStartError: (err) => {
@@ -535,6 +560,9 @@ export const dispatchTelegramMessage = async ({
         ...prefixOptions,
         typingCallbacks,
         deliver: async (payload, info) => {
+          // Cancel waiting tip as soon as real content starts arriving
+          waitingTipController.cancel();
+
           if (info.kind === "final") {
             // Assistant callbacks are fire-and-forget; ensure queued boundary
             // rotations/partials are applied before final delivery mapping.
@@ -665,6 +693,8 @@ export const dispatchTelegramMessage = async ({
           answerLane.stream || reasoningLane.stream
             ? (payload) =>
                 enqueueDraftLaneEvent(async () => {
+                  // Cancel waiting tip on first streaming content
+                  waitingTipController.cancel();
                   await ingestDraftLaneSegments(payload.text);
                 })
             : undefined,
@@ -729,6 +759,9 @@ export const dispatchTelegramMessage = async ({
     dispatchError = err;
     runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
   } finally {
+    // Clean up waiting tip (delete the tip message if it was sent)
+    await waitingTipController.cleanup();
+
     // Upstream assistant callbacks are fire-and-forget; drain queued lane work
     // before stream cleanup so boundary rotations/materialization complete first.
     await draftLaneEventQueue;

@@ -1488,6 +1488,18 @@ export const FIELD_HELP: Record<string, string> = {
     "Override default status reaction emojis. Keys: thinking, compacting, tool, coding, web, done, error, stallSoft, stallHard. Must be valid Telegram reaction emojis.",
   "messages.statusReactions.timing":
     "Override default timing. Keys: debounceMs (700), stallSoftMs (25000), stallHardMs (60000), doneHoldMs (1500), errorHoldMs (2500).",
+  "messages.waitingTips":
+    "Send a bilingual learning tip while the AI is thinking. Fills wait time with useful knowledge (inspired by Claude Code CLI spinner tips). The tip is deleted after the AI reply arrives.",
+  "messages.waitingTips.enabled":
+    "Enable waiting tips. When enabled, a random tip is sent as a temporary message after minWaitMs of waiting. Default: false.",
+  "messages.waitingTips.minWaitMs":
+    "Minimum wait time (ms) before sending a tip. Avoids flicker on fast/streaming responses. Default: 2000.",
+  "messages.waitingTips.deleteAfterReply":
+    "Delete the tip message after the AI reply is sent. Default: true.",
+  "messages.waitingTips.style":
+    'Display style for the tip message. "inline" is a simple message, "card" adds decorative borders. Default: "inline".',
+  "messages.waitingTips.customTipsPath":
+    "Path to a directory containing custom *.txt tip files. One tip per line, lines starting with ## are ignored.",
   "messages.inbound.debounceMs":
     "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
   "channels.telegram.dmPolicy":
