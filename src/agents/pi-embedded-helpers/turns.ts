@@ -33,34 +33,51 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
       content?: AnthropicContentBlock[];
     };
 
-    // Get the next message to check for tool_result blocks
-    const nextMsg = messages[i + 1];
-    const nextMsgRole =
-      nextMsg && typeof nextMsg === "object"
-        ? ((nextMsg as { role?: unknown }).role as string | undefined)
-        : undefined;
-
-    // If next message is not user, keep the assistant message as-is
-    if (nextMsgRole !== "user") {
-      result.push(msg);
-      continue;
-    }
-
-    // Collect tool_use_ids from the next user message's tool_result blocks
-    const nextUserMsg = nextMsg as {
-      content?: AnthropicContentBlock[];
-    };
+    // Scan forward across all consecutive user messages (and skip system
+    // messages) to collect tool_result ids. This handles transcripts where
+    // tool results end up in a later user message or after a system marker.
     const validToolUseIds = new Set<string>();
-    if (Array.isArray(nextUserMsg.content)) {
-      for (const block of nextUserMsg.content) {
-        if (block && block.type === "toolResult" && block.toolUseId) {
-          validToolUseIds.add(block.toolUseId);
+    let foundUser = false;
+    for (let j = i + 1; j < messages.length; j++) {
+      const nextMsg = messages[j];
+      const nextMsgRole =
+        nextMsg && typeof nextMsg === "object"
+          ? ((nextMsg as { role?: unknown }).role as string | undefined)
+          : undefined;
+      // Stop at the next assistant message
+      if (nextMsgRole === "assistant") {
+        break;
+      }
+      // Skip system messages
+      if (nextMsgRole !== "user") {
+        continue;
+      }
+      foundUser = true;
+      const nextUserMsg = nextMsg as { content?: AnthropicContentBlock[] };
+      if (Array.isArray(nextUserMsg.content)) {
+        for (const block of nextUserMsg.content) {
+          if (block && block.type === "toolResult" && block.toolUseId) {
+            validToolUseIds.add(block.toolUseId);
+          }
         }
       }
     }
 
+    // If no user message follows, keep the assistant message as-is
+    if (!foundUser) {
+      result.push(msg);
+      continue;
+    }
+
+    // If assistant content is not an array (legacy string format), it can't
+    // contain tool_use blocks, so keep it unchanged.
+    if (!Array.isArray(assistantMsg.content)) {
+      result.push(msg);
+      continue;
+    }
+
     // Filter out tool_use blocks that don't have matching tool_result
-    const originalContent = Array.isArray(assistantMsg.content) ? assistantMsg.content : [];
+    const originalContent = assistantMsg.content;
     const filteredContent = originalContent.filter((block) => {
       if (!block) {
         return false;
@@ -184,18 +201,112 @@ export function mergeConsecutiveUserTurns(
 }
 
 /**
+ * Strips orphaned tool_result blocks from user messages when the immediately
+ * preceding assistant message does not contain a matching tool_use block.
+ * This fixes the "tool_result blocks found without matching tool_use" error from Anthropic.
+ */
+function stripOrphanedAnthropicToolResults(messages: AgentMessage[]): AgentMessage[] {
+  const result: AgentMessage[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (!msg || typeof msg !== "object") {
+      result.push(msg);
+      continue;
+    }
+
+    const msgRole = (msg as { role?: unknown }).role as string | undefined;
+    if (msgRole !== "user") {
+      result.push(msg);
+      continue;
+    }
+
+    const userMsg = msg as {
+      content?: AnthropicContentBlock[];
+    };
+
+    // Scan backward to the nearest assistant message (skipping system
+    // messages) to collect tool_use ids. This handles transcripts where
+    // a system marker sits between the assistant and user messages.
+    const validToolUseIds = new Set<string>();
+    for (let j = i - 1; j >= 0; j--) {
+      const prevMsg = messages[j];
+      const prevMsgRole =
+        prevMsg && typeof prevMsg === "object"
+          ? ((prevMsg as { role?: unknown }).role as string | undefined)
+          : undefined;
+      // Found the nearest assistant message - collect its tool_use ids
+      if (prevMsgRole === "assistant") {
+        const prevAssistantMsg = prevMsg as {
+          content?: AnthropicContentBlock[];
+        };
+        if (Array.isArray(prevAssistantMsg.content)) {
+          for (const block of prevAssistantMsg.content) {
+            if (block && block.type === "toolUse" && block.id) {
+              validToolUseIds.add(block.id);
+            }
+          }
+        }
+        break;
+      }
+      // Skip system messages, stop at another user message
+      if (prevMsgRole === "user") {
+        break;
+      }
+    }
+
+    // Filter out tool_result blocks that don't have matching tool_use
+    if (!Array.isArray(userMsg.content)) {
+      result.push(msg);
+      continue;
+    }
+    const originalContent = userMsg.content;
+    const filteredContent = originalContent.filter((block) => {
+      if (!block) {
+        return false;
+      }
+      if (block.type !== "toolResult") {
+        return true;
+      }
+      // Keep tool_result if its toolUseId is in the valid set
+      return validToolUseIds.has(block.toolUseId || "");
+    });
+
+    // If all content would be removed, insert a minimal fallback text block
+    if (originalContent.length > 0 && filteredContent.length === 0) {
+      result.push({
+        ...userMsg,
+        content: [{ type: "text", text: "[tool results omitted]" }],
+      } as AgentMessage);
+    } else {
+      result.push({
+        ...userMsg,
+        content: filteredContent,
+      } as AgentMessage);
+    }
+  }
+
+  return result;
+}
+
+/**
  * Validates and fixes conversation turn sequences for Anthropic API.
  * Anthropic requires strict alternating user→assistant pattern.
  * Merges consecutive user messages together.
- * Also strips dangling tool_use blocks that lack corresponding tool_result blocks.
+ * Also strips dangling tool_use blocks that lack corresponding tool_result blocks,
+ * and orphaned tool_result blocks that lack corresponding tool_use blocks.
  */
 export function validateAnthropicTurns(messages: AgentMessage[]): AgentMessage[] {
-  // First, strip dangling tool_use blocks from assistant messages
-  const stripped = stripDanglingAnthropicToolUses(messages);
-
-  return validateTurnsWithConsecutiveMerge({
-    messages: stripped,
+  // Merge consecutive user turns first so tool pairing checks operate on
+  // the post-merge transcript. Without this, a tool_result in a later
+  // consecutive user message would be incorrectly stripped as "orphaned".
+  const merged = validateTurnsWithConsecutiveMerge({
+    messages,
     role: "user",
     merge: mergeConsecutiveUserTurns,
   });
+  // Strip dangling tool_use blocks from assistant messages
+  const strippedToolUses = stripDanglingAnthropicToolUses(merged);
+  // Strip orphaned tool_result blocks from user messages
+  return stripOrphanedAnthropicToolResults(strippedToolUses);
 }
