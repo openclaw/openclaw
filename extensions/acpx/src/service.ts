@@ -225,6 +225,7 @@ export function createAcpxRuntimeService(
               await ensureChromeDevToolsMcp({
                 command: chromeDevToolsServer.command,
                 logger: ctx.logger,
+                allowInstall: pluginConfig.allowPluginLocalInstall,
                 stripProviderAuthEnvVars: pluginConfig.stripProviderAuthEnvVars,
                 spawnOptions: {
                   strictWindowsCmdWrapper: pluginConfig.strictWindowsCmdWrapper,

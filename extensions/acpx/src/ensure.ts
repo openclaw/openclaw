@@ -362,6 +362,7 @@ export async function ensureChromeDevToolsMcp(params: {
   command: string;
   logger?: PluginLogger;
   pluginRoot?: string;
+  allowInstall?: boolean;
   stripProviderAuthEnvVars?: boolean;
   spawnOptions?: SpawnCommandOptions;
 }): Promise<void> {
@@ -371,7 +372,7 @@ export async function ensureChromeDevToolsMcp(params: {
 
   pendingChromeDevToolsEnsure = (async () => {
     const pluginRoot = params.pluginRoot ?? ACPX_PLUGIN_ROOT;
-    const installCommand = buildChromeDevToolsMcpLocalInstallCommand();
+    const allowInstall = params.allowInstall ?? true;
     const precheck = await checkChromeDevToolsMcpCommand({
       command: params.command,
       cwd: pluginRoot,
@@ -380,6 +381,9 @@ export async function ensureChromeDevToolsMcp(params: {
     });
     if (precheck.ok) {
       return;
+    }
+    if (!allowInstall) {
+      throw new Error(precheck.message);
     }
 
     params.logger?.warn(

@@ -421,4 +421,26 @@ describe("acpx ensure", () => {
       `npm install --omit=dev --no-save chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_PINNED_VERSION}`,
     );
   });
+
+  it("skips chrome-devtools-mcp install path when allowInstall=false", async () => {
+    spawnAndCollectMock.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "",
+      code: 0,
+      error: new Error("not found"),
+    });
+    resolveSpawnFailureMock.mockReturnValue("missing-command");
+
+    await expect(
+      ensureChromeDevToolsMcp({
+        command: CHROME_DEVTOOLS_MCP_BUNDLED_BIN,
+        pluginRoot: "/plugin",
+        allowInstall: false,
+      }),
+    ).rejects.toThrow(
+      `chrome-devtools-mcp command not found at ${CHROME_DEVTOOLS_MCP_BUNDLED_BIN}`,
+    );
+
+    expect(spawnAndCollectMock).toHaveBeenCalledTimes(1);
+  });
 });

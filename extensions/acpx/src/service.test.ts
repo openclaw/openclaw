@@ -263,7 +263,31 @@ describe("createAcpxRuntimeService", () => {
       expect(ensureChromeDevToolsMcpSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           command: CHROME_DEVTOOLS_MCP_BIN,
+          allowInstall: true,
           stripProviderAuthEnvVars: true,
+        }),
+      );
+    });
+  });
+
+  it("passes allowPluginLocalInstall through to chrome-devtools ensure", async () => {
+    const { runtime } = createRuntimeStub(true);
+    const runtimeFactory = createRuntimeFactorySpy(runtime);
+    const service = createAcpxRuntimeService({
+      runtimeFactory,
+      pluginConfig: { command: "/tmp/custom-acpx" },
+    });
+    const context = createServiceContext({
+      config: { browser: { mcp: { enabled: true } } },
+    });
+
+    await service.start(context);
+
+    await vi.waitFor(() => {
+      expect(ensureChromeDevToolsMcpSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: CHROME_DEVTOOLS_MCP_BIN,
+          allowInstall: false,
         }),
       );
     });
