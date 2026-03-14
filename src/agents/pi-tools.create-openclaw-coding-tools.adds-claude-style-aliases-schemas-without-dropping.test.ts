@@ -8,6 +8,7 @@ import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { findUnsupportedSchemaKeywords } from "./pi-embedded-runner/google.js";
 import { __testing, createOpenClawCodingTools } from "./pi-tools.js";
+import { CLAUDE_PARAM_GROUPS } from "./pi-tools.params.js";
 import { createOpenClawReadTool, createSandboxedReadTool } from "./pi-tools.read.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
@@ -147,6 +148,34 @@ describe("createOpenClawCodingTools", () => {
       );
       await expect(wrapped.execute("tool-4", {})).rejects.toThrow(
         /Supply correct parameters before retrying\./,
+      );
+    });
+
+    it("allows empty content for write tools so zero-byte files can be created", async () => {
+      const execute = vi.fn(async (_id, args) => args);
+      const tool: AgentTool = {
+        name: "write",
+        label: "write",
+        description: "test",
+        parameters: Type.Object({
+          path: Type.String(),
+          content: Type.String(),
+        }),
+        execute,
+      };
+
+      const wrapped = __testing.wrapToolParamNormalization(tool, CLAUDE_PARAM_GROUPS.write);
+
+      await wrapped.execute("tool-empty", {
+        file_path: ".gitkeep",
+        content: "",
+      });
+
+      expect(execute).toHaveBeenCalledWith(
+        "tool-empty",
+        { path: ".gitkeep", content: "" },
+        undefined,
+        undefined,
       );
     });
   });

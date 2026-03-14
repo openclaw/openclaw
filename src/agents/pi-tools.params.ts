@@ -16,7 +16,7 @@ export const CLAUDE_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path (path or file_path)" }],
   write: [
     { keys: ["path", "file_path"], label: "path (path or file_path)" },
-    { keys: ["content"], label: "content" },
+    { keys: ["content"], label: "content", allowEmpty: true },
   ],
   edit: [
     { keys: ["path", "file_path"], label: "path (path or file_path)" },
