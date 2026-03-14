@@ -80,6 +80,63 @@ describe("fetchCodexUsage", () => {
     ]);
   });
 
+  it("handles numeric credits balance", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        rate_limit: {
+          primary_window: {
+            limit_window_seconds: 10_800,
+            used_percent: 10,
+            reset_at: 1_700_000_000,
+          },
+        },
+        plan_type: "Pro",
+        credits: { balance: 5.75 },
+      }),
+    );
+
+    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
+    expect(result.plan).toBe("Pro ($5.75)");
+  });
+
+  it("handles zero credits balance without hiding the plan", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        rate_limit: {
+          primary_window: {
+            limit_window_seconds: 10_800,
+            used_percent: 0,
+            reset_at: 1_700_000_000,
+          },
+        },
+        plan_type: "Plus",
+        credits: { balance: 0 },
+      }),
+    );
+
+    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
+    expect(result.plan).toBe("Plus ($0.00)");
+  });
+
+  it("handles null credits balance gracefully", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        rate_limit: {
+          primary_window: {
+            limit_window_seconds: 10_800,
+            used_percent: 5,
+            reset_at: 1_700_000_000,
+          },
+        },
+        plan_type: "Free",
+        credits: { balance: null },
+      }),
+    );
+
+    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
+    expect(result.plan).toBe("Free");
+  });
+
   it("labels secondary window as Week when reset cadence clearly exceeds one day", async () => {
     const primaryReset = 1_700_000_000;
     const weeklyLikeSecondaryReset = primaryReset + 5 * 24 * 60 * 60;
