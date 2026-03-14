@@ -29,7 +29,7 @@ vi.mock("openclaw/plugin-sdk/twilio-sms", async () => {
     issuePairingChallenge: vi.fn().mockResolvedValue({ created: true, code: "TESTCODE" }),
     resolveDmGroupAccessWithLists: vi.fn(() => ({
       decision: "allow",
-      reasonCode: "open",
+      reasonCode: "dm_policy_open",
       reason: "open policy",
     })),
     resolveInboundRouteEnvelopeBuilderWithRuntime: vi.fn(() => ({
@@ -108,7 +108,7 @@ describe("processTwilioSmsMessage", () => {
     // Default: open policy, allow all
     mockResolveDmAccess.mockReturnValue({
       decision: "allow",
-      reasonCode: "open",
+      reasonCode: "dm_policy_open",
       reason: "open policy",
       effectiveAllowFrom: [],
       effectiveGroupAllowFrom: [],
@@ -133,7 +133,7 @@ describe("processTwilioSmsMessage", () => {
   it("blocks sender when DM policy denies access", async () => {
     mockResolveDmAccess.mockReturnValue({
       decision: "block",
-      reasonCode: "not_allowed",
+      reasonCode: "dm_policy_not_allowlisted",
       reason: "not in allowlist",
       effectiveAllowFrom: [],
       effectiveGroupAllowFrom: [],
@@ -206,7 +206,7 @@ describe("processTwilioSmsMessage", () => {
 
       mockResolveDmAccess.mockReturnValue({
         decision: "pairing",
-        reasonCode: "pairing_required",
+        reasonCode: "dm_policy_pairing_required",
         reason: "pairing required",
         effectiveAllowFrom: [],
         effectiveGroupAllowFrom: [],
