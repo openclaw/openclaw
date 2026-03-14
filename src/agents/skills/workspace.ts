@@ -190,12 +190,15 @@ function warnEscapedSkillPath(params: {
   candidatePath: string;
   candidateRealPath: string;
 }) {
-  skillsLogger.warn("Skipping skill path that resolves outside its configured root.", {
-    source: params.source,
-    rootDir: params.rootDir,
-    path: params.candidatePath,
-    realPath: params.candidateRealPath,
-  });
+  skillsLogger.warn(
+    `Skipping skill path that resolves outside its configured root (source=${params.source} rootDir=${params.rootDir} path=${params.candidatePath} realPath=${params.candidateRealPath}).`,
+    {
+      source: params.source,
+      rootDir: params.rootDir,
+      path: params.candidatePath,
+      realPath: params.candidateRealPath,
+    },
+  );
 }
 
 function resolveContainedSkillPath(params: {
