@@ -230,10 +230,17 @@ export async function buildSglangProvider(params?: {
 /**
  * Build the Kilocode provider with dynamic model discovery from the gateway
  * API. Falls back to the static catalog on failure.
- * Pass apiKey so org-scoped discovery requests include an Authorization header.
+ *
+ * Pass apiKey (the resolved secret, i.e. discoveryApiKey) so org-scoped
+ * discovery requests include a valid Authorization: Bearer header.
+ * Pass providerConfig to forward organizationId / headers from user config
+ * to resolveKilocodeOrgId, ensuring tenant-configured org IDs are respected.
  */
-export async function buildKilocodeProviderWithDiscovery(apiKey?: string): Promise<ProviderConfig> {
-  const models = await discoverKilocodeModels(apiKey);
+export async function buildKilocodeProviderWithDiscovery(
+  apiKey?: string,
+  providerConfig?: { organizationId?: string; headers?: Record<string, unknown> },
+): Promise<ProviderConfig> {
+  const models = await discoverKilocodeModels(apiKey, providerConfig);
   return {
     baseUrl: KILOCODE_BASE_URL,
     api: "openai-completions",

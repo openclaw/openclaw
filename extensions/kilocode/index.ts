@@ -53,9 +53,13 @@ const kilocodePlugin = {
           if (!apiKey) {
             return null;
           }
+          // Forward providerConfig so organizationId and headers from user
+          // config are respected during org-scoped model discovery (not just
+          // the env var fallback). See: kiloprovider key override support.
+          const providerConfig = ctx.config?.models?.providers?.kilocode;
           return {
             provider: {
-              ...(await buildKilocodeProviderWithDiscovery(discoveryApiKey)),
+              ...(await buildKilocodeProviderWithDiscovery(discoveryApiKey, providerConfig)),
               apiKey,
             },
           };

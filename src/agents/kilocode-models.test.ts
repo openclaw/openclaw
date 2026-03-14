@@ -163,6 +163,59 @@ describe("discoverKilocodeModels: org-scoped URL", () => {
       );
     });
   });
+
+  it("uses org-scoped URL from providerConfig.organizationId (P2 fix)", async () => {
+    // Org ID from provider config should take precedence over env var and be used
+    // to build the org-scoped endpoint URL.
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [makeAutoModel()] }),
+    });
+    await withFetchPathTest(mockFetch, async () => {
+      delete process.env.KILOCODE_ORG_ID;
+      await discoverKilocodeModels(undefined, { organizationId: "config-org-123" });
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.kilo.ai/api/organizations/config-org-123/models",
+        expect.any(Object),
+      );
+    });
+  });
+
+  it("providerConfig.organizationId takes precedence over KILOCODE_ORG_ID env var (P2 fix)", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [makeAutoModel()] }),
+    });
+    await withFetchPathTest(mockFetch, async () => {
+      process.env.KILOCODE_ORG_ID = "env-org-456";
+      await discoverKilocodeModels(undefined, { organizationId: "config-org-123" });
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.kilo.ai/api/organizations/config-org-123/models",
+        expect.any(Object),
+      );
+    });
+  });
+
+  it("sends Authorization Bearer using the provided apiKey for org-scoped requests (P1 fix)", async () => {
+    // When both orgId and apiKey are present, the resolved secret (discoveryApiKey)
+    // must be sent as the Bearer token — not an opaque marker string.
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [makeAutoModel()] }),
+    });
+    await withFetchPathTest(mockFetch, async () => {
+      await discoverKilocodeModels("actual-secret-token", { organizationId: "config-org-123" });
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://api.kilo.ai/api/organizations/config-org-123/models",
+        expect.objectContaining({
+          headers: {
+            Accept: "application/json",
+            Authorization: "Bearer actual-secret-token",
+          },
+        }),
+      );
+    });
+  });
 });
 
 describe("discoverKilocodeModels (fetch path)", () => {

@@ -154,14 +154,20 @@ function buildStaticCatalog(): ModelDefinitionConfig[] {
  * When an org ID is configured the request is routed to the org-scoped endpoint
  * (/api/organizations/{orgId}/models), which requires a Bearer token; the
  * apiKey parameter is included as Authorization: Bearer when provided.
+ *
+ * providerConfig is forwarded to resolveKilocodeOrgId so that organizationId
+ * and headers from user config are respected (not just the env var fallback).
  */
-export async function discoverKilocodeModels(apiKey?: string): Promise<ModelDefinitionConfig[]> {
+export async function discoverKilocodeModels(
+  apiKey?: string,
+  providerConfig?: { organizationId?: string; headers?: Record<string, unknown> },
+): Promise<ModelDefinitionConfig[]> {
   // Skip API discovery in test environment
   if (process.env.NODE_ENV === "test" || process.env.VITEST) {
     return buildStaticCatalog();
   }
 
-  const orgId = resolveKilocodeOrgId();
+  const orgId = resolveKilocodeOrgId(providerConfig);
   const modelsUrl = buildKilocodeModelsUrl(orgId);
 
   const headers: Record<string, string> = { Accept: "application/json" };
