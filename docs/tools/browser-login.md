@@ -23,8 +23,8 @@ OpenClaw controls a **dedicated Chrome profile** (named `openclaw`, orange‑tin
 For agent browser tool calls:
 
 - Default choice: the agent should use its isolated `openclaw` browser.
-- Use the **user browser** only when existing logged-in sessions matter and the user is at the computer to click/approve any attach prompt.
-- If you need to force the choice, use `browserSession="agent"` or `browserSession="user"`.
+- Use `profile="user"` only when existing logged-in sessions matter and the user is at the computer to click/approve any attach prompt.
+- Use `profile="chrome-relay"` only for the Chrome extension / toolbar-button attach flow.
 - If you have multiple user-browser profiles, specify the profile explicitly instead of guessing.
 
 Two easy ways to access it:
