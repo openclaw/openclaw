@@ -3,6 +3,7 @@ import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
 import { kindFromMime } from "../media/mime.js";
 import { resolveOutboundAttachmentFromUrl } from "../media/outbound-attachment.js";
+import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { formatIMessageChatTarget, type IMessageService, parseIMessageTarget } from "./targets.js";
@@ -34,7 +35,6 @@ export type IMessageSendResult = {
   messageId: string;
 };
 
-const LEADING_REPLY_TAG_RE = /^\s*\[\[\s*reply_to\s*:\s*([^\]\n]+)\s*\]\]\s*/i;
 const MAX_REPLY_TO_ID_LENGTH = 256;
 
 function stripUnsafeReplyTagChars(value: string): string {
@@ -62,21 +62,6 @@ function sanitizeReplyToId(rawReplyToId?: string): string | undefined {
     return sanitized.slice(0, MAX_REPLY_TO_ID_LENGTH);
   }
   return sanitized;
-}
-
-function prependReplyTagIfNeeded(message: string, replyToId?: string): string {
-  const resolvedReplyToId = sanitizeReplyToId(replyToId);
-  if (!resolvedReplyToId) {
-    return message;
-  }
-  const replyTag = `[[reply_to:${resolvedReplyToId}]]`;
-  const existingLeadingTag = message.match(LEADING_REPLY_TAG_RE);
-  if (existingLeadingTag) {
-    const remainder = message.slice(existingLeadingTag[0].length).trimStart();
-    return remainder ? `${replyTag} ${remainder}` : replyTag;
-  }
-  const trimmedMessage = message.trimStart();
-  return trimmedMessage ? `${replyTag} ${trimmedMessage}` : replyTag;
 }
 
 function resolveMessageId(result: Record<string, unknown> | null | undefined): string | null {
@@ -147,13 +132,34 @@ export async function sendMessageIMessage(
     });
     message = convertMarkdownTables(message, tableMode);
   }
-  message = prependReplyTagIfNeeded(message, opts.replyToId);
+  // Strip any stray inline directive tags (e.g. [[reply_to:...]], [[audio_as_voice]])
+  // so protocol-level metadata never leaks into the delivered iMessage text.
+  const stripped = stripInlineDirectiveTagsForDisplay(message);
+  if (stripped.changed) {
+    // Replace tags AND their surrounding whitespace with a single space so we
+    // don't need a global /  +/g that would corrupt intentional multi-space
+    // formatting (e.g. code blocks, aligned text).
+    message = message
+      .replace(/\s*\[\[\s*audio_as_voice\s*\]\]\s*/gi, " ")
+      .replace(/\s*\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\]\s*/gi, " ")
+      .trim();
+  }
 
+  // Re-check after stripping: a directive-only message (e.g. "[[reply_to:123]]")
+  // passes the first guard but becomes empty after tag removal.
+  if (!message.trim() && !filePath) {
+    throw new Error("iMessage send requires text or media");
+  }
+
+  const resolvedReplyToId = sanitizeReplyToId(opts.replyToId);
   const params: Record<string, unknown> = {
     text: message,
     service: service || "auto",
     region,
   };
+  if (resolvedReplyToId) {
+    params.reply_to = resolvedReplyToId;
+  }
   if (filePath) {
     params.file = filePath;
   }
