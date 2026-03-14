@@ -8,10 +8,24 @@ import {
   resolveBootstrapTotalMaxChars,
 } from "./pi-embedded-helpers.js";
 import {
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_MEMORY_ALT_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_USER_FILENAME,
   filterBootstrapFilesForSession,
   loadWorkspaceBootstrapFiles,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
+
+/** Files containing private owner information that should not be exposed to non-owner senders. */
+const OWNER_ONLY_BOOTSTRAP_FILES: ReadonlySet<string> = new Set([
+  DEFAULT_USER_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
+  DEFAULT_MEMORY_ALT_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+]);
 
 export type BootstrapContextMode = "full" | "lightweight";
 export type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
@@ -70,6 +84,7 @@ export async function resolveBootstrapFilesForRun(params: {
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
+  senderIsOwner?: boolean;
 }): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
   const rawFiles = params.sessionKey
@@ -84,15 +99,24 @@ export async function resolveBootstrapFilesForRun(params: {
     runKind: params.runKind,
   });
 
+  const stripOwnerFiles = (files: WorkspaceBootstrapFile[]): WorkspaceBootstrapFile[] =>
+    params.senderIsOwner === true
+      ? files
+      : files.filter((file) => !OWNER_ONLY_BOOTSTRAP_FILES.has(file.name));
+
+  const filtered = stripOwnerFiles(bootstrapFiles);
+
   const updated = await applyBootstrapHookOverrides({
-    files: bootstrapFiles,
+    files: filtered,
     workspaceDir: params.workspaceDir,
     config: params.config,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     agentId: params.agentId,
   });
-  return sanitizeBootstrapFiles(updated, params.warn);
+
+  // Re-apply owner-only filter after hooks — a hook could re-introduce private files.
+  return sanitizeBootstrapFiles(stripOwnerFiles(updated), params.warn);
 }
 
 export async function resolveBootstrapContextForRun(params: {
@@ -104,6 +128,7 @@ export async function resolveBootstrapContextForRun(params: {
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
+  senderIsOwner?: boolean;
 }): Promise<{
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
