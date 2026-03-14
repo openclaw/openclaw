@@ -100,6 +100,7 @@ const ERROR_PATTERNS = {
     "invalid request format",
     /tool call id was.*must be/i,
   ],
+  thinkingBlock: [/thinking.*cannot be modified/i],
 } as const;
 
 const BILLING_ERROR_HEAD_RE =
@@ -167,4 +168,8 @@ export function isAuthErrorMessage(raw: string): boolean {
 
 export function isOverloadedErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.overloaded);
+}
+
+export function isThinkingBlockErrorMessage(raw: string): boolean {
+  return matchesErrorPatterns(raw, ERROR_PATTERNS.thinkingBlock);
 }
