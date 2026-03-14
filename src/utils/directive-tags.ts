@@ -17,11 +17,41 @@ type InlineDirectiveParseOptions = {
 const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
 
+/**
+ * Collapse runs of spaces/tabs to a single space and strip whitespace around
+ * newlines, but **preserve fenced code blocks verbatim** so that indented
+ * YAML, code examples, and other whitespace-sensitive content is not mangled
+ * after directive tags are stripped.
+ *
+ * Fenced code blocks (``` ``` ``` or ~~~) are detected by the CommonMark rules:
+ * an opening fence of 3+ identical chars at the start of a line, with a
+ * matching closing fence of the same character type.
+ */
 function normalizeDirectiveWhitespace(text: string): string {
-  return text
-    .replace(/[ \t]+/g, " ")
-    .replace(/[ \t]*\n[ \t]*/g, "\n")
-    .trim();
+  // Regex to match fenced code blocks in their entirety.
+  // Two alternatives for backtick and tilde fences respectively.
+  // The non-greedy [\s\S]*? ensures we match the nearest closing fence.
+  const FENCED_CODE_RE =
+    /^(`{3,})[^\n]*\n[\s\S]*?\n\1[ \t]*$|^(~{3,})[^\n]*\n[\s\S]*?\n\2[ \t]*$/gm;
+
+  const normalizeSection = (s: string): string =>
+    s.replace(/[ \t]+/g, " ").replace(/[ \t]*\n[ \t]*/g, "\n");
+
+  const parts: string[] = [];
+  let last = 0;
+  let match: RegExpExecArray | null;
+  FENCED_CODE_RE.lastIndex = 0;
+  while ((match = FENCED_CODE_RE.exec(text)) !== null) {
+    // Normalize the plain-text section before this code block.
+    parts.push(normalizeSection(text.slice(last, match.index)));
+    // Preserve the fenced code block exactly as written.
+    parts.push(match[0]);
+    last = match.index + match[0].length;
+  }
+  // Normalize any remaining text after the last code block.
+  parts.push(normalizeSection(text.slice(last)));
+
+  return parts.join("").trim();
 }
 
 type StripInlineDirectiveTagsResult = {
