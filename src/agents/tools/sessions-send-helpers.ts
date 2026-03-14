@@ -1,3 +1,4 @@
+import { ANNOUNCE_SKIP_TOKEN, REPLY_SKIP_TOKEN } from "../../auto-reply/tokens.js";
 import {
   getChannelPlugin,
   normalizeChannelId as normalizeAnyChannelId,
@@ -5,8 +6,6 @@ import {
 import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
-const ANNOUNCE_SKIP_TOKEN = "ANNOUNCE_SKIP";
-const REPLY_SKIP_TOKEN = "REPLY_SKIP";
 const DEFAULT_PING_PONG_TURNS = 5;
 const MAX_PING_PONG_TURNS = 5;
 
