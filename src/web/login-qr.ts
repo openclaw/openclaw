@@ -126,11 +126,13 @@ export async function startWebLoginWithQr(
     verbose?: boolean;
     timeoutMs?: number;
     force?: boolean;
+    includeImage?: boolean;
     accountId?: string;
     runtime?: RuntimeEnv;
   } = {},
 ): Promise<{ qrDataUrl?: string; qrAscii?: string; message: string }> {
   const runtime = opts.runtime ?? defaultRuntime;
+  const includeImage = opts.includeImage !== false;
   const cfg = loadConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });
   const existing = activeLogins.get(account.accountId);
@@ -144,11 +146,13 @@ export async function startWebLoginWithQr(
       };
     }
     if (existing.qr) {
-      const base64 = await renderQrPngBase64(existing.qr);
       const qrAscii = await renderQrAscii(existing.qr);
-      existing.qrDataUrl = `data:image/png;base64,${base64}`;
+      if (includeImage) {
+        const base64 = await renderQrPngBase64(existing.qr);
+        existing.qrDataUrl = `data:image/png;base64,${base64}`;
+      }
       return {
-        qrDataUrl: existing.qrDataUrl,
+        qrDataUrl: includeImage ? existing.qrDataUrl : undefined,
         qrAscii,
         message: "QR already active. Scan it in WhatsApp → Linked Devices.",
       };
@@ -239,11 +243,13 @@ export async function startWebLoginWithQr(
     };
   }
 
-  const base64 = await renderQrPngBase64(qr);
   const qrAscii = await renderQrAscii(qr);
-  login.qrDataUrl = `data:image/png;base64,${base64}`;
+  if (includeImage) {
+    const base64 = await renderQrPngBase64(qr);
+    login.qrDataUrl = `data:image/png;base64,${base64}`;
+  }
   return {
-    qrDataUrl: login.qrDataUrl,
+    qrDataUrl: includeImage ? login.qrDataUrl : undefined,
     qrAscii,
     message: "Scan this QR in WhatsApp → Linked Devices.",
   };

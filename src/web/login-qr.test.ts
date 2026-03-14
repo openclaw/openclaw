@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetActiveWebLoginsForTest, startWebLoginWithQr, waitForWebLogin } from "./login-qr.js";
+import { renderQrPngBase64 } from "./qr-image.js";
 import { createWaSocket, logoutWeb, waitForWaConnection } from "./session.js";
 
 vi.mock("qrcode-terminal", () => ({
@@ -48,6 +49,7 @@ vi.mock("./qr-image.js", () => ({
 const createWaSocketMock = vi.mocked(createWaSocket);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
 const logoutWebMock = vi.mocked(logoutWeb);
+const renderQrPngBase64Mock = vi.mocked(renderQrPngBase64);
 
 describe("login-qr", () => {
   beforeEach(() => {
@@ -93,5 +95,13 @@ describe("login-qr", () => {
     expect(result.connected).toBe(true);
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
     expect(logoutWebMock).not.toHaveBeenCalled();
+  });
+
+  it("can return terminal QR without generating a PNG", async () => {
+    const result = await startWebLoginWithQr({ timeoutMs: 5000, includeImage: false });
+
+    expect(result.qrDataUrl).toBeUndefined();
+    expect(result.qrAscii).toBe("ascii-qr");
+    expect(renderQrPngBase64Mock).not.toHaveBeenCalled();
   });
 });
