@@ -1,21 +1,20 @@
 import type {
   ChannelOnboardingAdapter,
   ChannelOnboardingDmPolicy,
-  OpenClawConfig,
-  SecretInput,
-  WizardPrompter,
-} from "openclaw/plugin-sdk/zalo";
+} from "../../../src/channels/plugins/onboarding-types.js";
 import {
   buildSingleChannelSecretPromptState,
-  DEFAULT_ACCOUNT_ID,
-  hasConfiguredSecretInput,
   mergeAllowFromEntries,
-  normalizeAccountId,
   promptSingleChannelSecretInput,
   runSingleChannelSecretStep,
   resolveAccountIdForConfigure,
   setTopLevelChannelDmPolicyWithAllowFrom,
-} from "openclaw/plugin-sdk/zalo";
+} from "../../../src/channels/plugins/onboarding/helpers.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { SecretInput } from "../../../src/config/types.secrets.js";
+import { hasConfiguredSecretInput } from "../../../src/config/types.secrets.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+import type { WizardPrompter } from "../../../src/wizard/prompts.js";
 import { listZaloAccountIds, resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
 
 const channel = "zalo" as const;

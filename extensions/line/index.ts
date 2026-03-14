@@ -1,8 +1,15 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/line";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/line";
-import { registerLineCardCommand } from "./src/card-command.js";
-import { linePlugin } from "./src/channel.js";
+import type { ReplyPayload } from "../../src/auto-reply/types.js";
+import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
+import { createLazyChannelPlugin, loadLazyModuleExport } from "../../src/plugins/lazy-channel.js";
 import { setLineRuntime } from "./src/runtime.js";
+
+const linePlugin = createLazyChannelPlugin({
+  importerUrl: import.meta.url,
+  modulePath: "./src/channel.js",
+  exportName: "linePlugin",
+  pluginId: "line",
+});
 
 const plugin = {
   id: "line",
@@ -12,7 +19,18 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     setLineRuntime(api.runtime);
     api.registerChannel({ plugin: linePlugin });
-    registerLineCardCommand(api);
+    api.registerCommand({
+      name: "card",
+      description: "Send a rich card message (LINE).",
+      acceptsArgs: true,
+      requireAuth: false,
+      handler: async (ctx) =>
+        await loadLazyModuleExport<(commandCtx: typeof ctx) => Promise<ReplyPayload>>({
+          importerUrl: import.meta.url,
+          modulePath: "./src/card-command.js",
+          exportName: "handleLineCardCommand",
+        })(ctx),
+    });
   },
 };
 

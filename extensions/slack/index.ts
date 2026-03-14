@@ -1,7 +1,14 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/slack";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/slack";
-import { slackPlugin } from "./src/channel.js";
+import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
+import { createLazyChannelPlugin } from "../../src/plugins/lazy-channel.js";
 import { setSlackRuntime } from "./src/runtime.js";
+
+const slackPlugin = createLazyChannelPlugin({
+  importerUrl: import.meta.url,
+  modulePath: "./src/channel.js",
+  exportName: "slackPlugin",
+  pluginId: "slack",
+});
 
 const plugin = {
   id: "slack",

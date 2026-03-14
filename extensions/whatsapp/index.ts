@@ -1,7 +1,14 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/whatsapp";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/whatsapp";
-import { whatsappPlugin } from "./src/channel.js";
+import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
+import { createLazyChannelPlugin } from "../../src/plugins/lazy-channel.js";
 import { setWhatsAppRuntime } from "./src/runtime.js";
+
+const whatsappPlugin = createLazyChannelPlugin({
+  importerUrl: import.meta.url,
+  modulePath: "./src/channel.js",
+  exportName: "whatsappPlugin",
+  pluginId: "whatsapp",
+});
 
 const plugin = {
   id: "whatsapp",

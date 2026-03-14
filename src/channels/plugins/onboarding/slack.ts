@@ -1,18 +1,14 @@
-import { inspectSlackAccount } from "../../../../extensions/slack/src/account-inspect.js";
 import {
   listSlackAccountIds,
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
 } from "../../../../extensions/slack/src/accounts.js";
-import { resolveSlackChannelAllowlist } from "../../../../extensions/slack/src/resolve-channels.js";
-import { resolveSlackUserAllowlist } from "../../../../extensions/slack/src/resolve-users.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { hasConfiguredSecretInput } from "../../../config/types.secrets.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
 import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
-import { configureChannelAccessWithAllowlist } from "./channel-access-configure.js";
 import {
   parseMentionOrPrefixedId,
   noteChannelLookupFailure,
@@ -28,6 +24,43 @@ import {
 } from "./helpers.js";
 
 const channel = "slack" as const;
+
+async function inspectSlackOnboardingAccount(params: { cfg: OpenClawConfig; accountId: string }) {
+  const { inspectSlackAccount } =
+    await import("../../../../extensions/slack/src/account-inspect.js");
+  return inspectSlackAccount(params);
+}
+
+async function resolveSlackOnboardingUserAllowlist(params: { token: string; entries: string[] }) {
+  const { resolveSlackUserAllowlist } =
+    await import("../../../../extensions/slack/src/resolve-users.js");
+  return resolveSlackUserAllowlist(params);
+}
+
+async function resolveSlackOnboardingChannelAllowlist(params: {
+  token: string;
+  entries: string[];
+}) {
+  const { resolveSlackChannelAllowlist } =
+    await import("../../../../extensions/slack/src/resolve-channels.js");
+  return resolveSlackChannelAllowlist(params);
+}
+
+async function configureSlackChannelAccessWithAllowlist(params: {
+  cfg: OpenClawConfig;
+  prompter: WizardPrompter;
+  label: string;
+  currentPolicy: "open" | "allowlist";
+  currentEntries: string[];
+  placeholder: string;
+  updatePrompt: boolean;
+  setPolicy: (cfg: OpenClawConfig, policy: "open" | "allowlist") => OpenClawConfig;
+  resolveAllowlist: (params: { cfg: OpenClawConfig; entries: string[] }) => Promise<string[]>;
+  applyAllowlist: (params: { cfg: OpenClawConfig; resolved: string[] }) => OpenClawConfig;
+}) {
+  const { configureChannelAccessWithAllowlist } = await import("./channel-access-configure.js");
+  return configureChannelAccessWithAllowlist(params);
+}
 
 function buildSlackManifest(botName: string) {
   const safeName = botName.trim() || "OpenClaw";
@@ -173,7 +206,7 @@ async function promptSlackAllowFrom(params: {
     parseId,
     invalidWithoutTokenNote: "Slack token missing; use user ids (or mention form) only.",
     resolveEntries: ({ token, entries }) =>
-      resolveSlackUserAllowlist({
+      resolveSlackOnboardingUserAllowlist({
         token,
         entries,
       }),
@@ -199,10 +232,14 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
 export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
   channel,
   getStatus: async ({ cfg }) => {
-    const configured = listSlackAccountIds(cfg).some((accountId) => {
-      const account = inspectSlackAccount({ cfg, accountId });
-      return account.configured;
-    });
+    let configured = false;
+    for (const accountId of listSlackAccountIds(cfg)) {
+      const account = await inspectSlackOnboardingAccount({ cfg, accountId });
+      if (account.configured) {
+        configured = true;
+        break;
+      }
+    }
     return {
       channel,
       configured,
@@ -295,7 +332,7 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
     });
     next = appTokenStep.cfg;
 
-    next = await configureChannelAccessWithAllowlist({
+    next = await configureSlackChannelAccessWithAllowlist({
       cfg: next,
       prompter,
       label: "Slack channels",
@@ -321,7 +358,7 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
         const activeBotToken = accountWithTokens.botToken || resolvedBotTokenForAllowlist || "";
         if (activeBotToken && entries.length > 0) {
           try {
-            const resolved = await resolveSlackChannelAllowlist({
+            const resolved = await resolveSlackOnboardingChannelAllowlist({
               token: activeBotToken,
               entries,
             });

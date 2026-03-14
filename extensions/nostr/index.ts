@@ -1,10 +1,14 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/nostr";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/nostr";
-import { nostrPlugin } from "./src/channel.js";
-import type { NostrProfile } from "./src/config-schema.js";
-import { createNostrProfileHttpHandler } from "./src/nostr-profile-http.js";
-import { setNostrRuntime, getNostrRuntime } from "./src/runtime.js";
-import { resolveNostrAccount } from "./src/types.js";
+import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
+import { createLazyChannelPlugin, loadLazyModuleExport } from "../../src/plugins/lazy-channel.js";
+import { setNostrRuntime } from "./src/runtime.js";
+
+const nostrPlugin = createLazyChannelPlugin({
+  importerUrl: import.meta.url,
+  modulePath: "./src/channel.js",
+  exportName: "nostrPlugin",
+  pluginId: "nostr",
+});
 
 const plugin = {
   id: "nostr",
@@ -14,58 +18,22 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     setNostrRuntime(api.runtime);
     api.registerChannel({ plugin: nostrPlugin });
-
-    // Register HTTP handler for profile management
-    const httpHandler = createNostrProfileHttpHandler({
-      getConfigProfile: (accountId: string) => {
-        const runtime = getNostrRuntime();
-        const cfg = runtime.config.loadConfig();
-        const account = resolveNostrAccount({ cfg, accountId });
-        return account.profile;
-      },
-      updateConfigProfile: async (accountId: string, profile: NostrProfile) => {
-        const runtime = getNostrRuntime();
-        const cfg = runtime.config.loadConfig();
-
-        // Build the config patch for channels.nostr.profile
-        const channels = (cfg.channels ?? {}) as Record<string, unknown>;
-        const nostrConfig = (channels.nostr ?? {}) as Record<string, unknown>;
-
-        const updatedNostrConfig = {
-          ...nostrConfig,
-          profile,
-        };
-
-        const updatedChannels = {
-          ...channels,
-          nostr: updatedNostrConfig,
-        };
-
-        await runtime.config.writeConfigFile({
-          ...cfg,
-          channels: updatedChannels,
-        });
-      },
-      getAccountInfo: (accountId: string) => {
-        const runtime = getNostrRuntime();
-        const cfg = runtime.config.loadConfig();
-        const account = resolveNostrAccount({ cfg, accountId });
-        if (!account.configured || !account.publicKey) {
-          return null;
-        }
-        return {
-          pubkey: account.publicKey,
-          relays: account.relays,
-        };
-      },
-      log: api.logger,
-    });
-
     api.registerHttpRoute({
       path: "/api/channels/nostr",
       auth: "gateway",
       match: "prefix",
-      handler: httpHandler,
+      handler: async (req, res) =>
+        await loadLazyModuleExport<
+          (
+            request: typeof req,
+            response: typeof res,
+            pluginApi: OpenClawPluginApi,
+          ) => Promise<boolean | void>
+        >({
+          importerUrl: import.meta.url,
+          modulePath: "./src/nostr-profile-http-route.js",
+          exportName: "handleNostrProfileHttpRoute",
+        })(req, res, api),
     });
   },
 };

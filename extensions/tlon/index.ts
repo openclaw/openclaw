@@ -2,12 +2,22 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/tlon";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/tlon";
-import { tlonPlugin } from "./src/channel.js";
+import type {
+  AnyAgentTool,
+  OpenClawPluginApi,
+  OpenClawPluginToolContext,
+} from "openclaw/plugin-sdk/tlon";
+import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
+import { createLazyChannelPlugin } from "../../src/plugins/lazy-channel.js";
 import { setTlonRuntime } from "./src/runtime.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const tlonPlugin = createLazyChannelPlugin({
+  importerUrl: import.meta.url,
+  modulePath: "./src/channel.js",
+  exportName: "tlonPlugin",
+  pluginId: "tlon",
+});
 
 // Whitelist of allowed tlon subcommands
 const ALLOWED_TLON_COMMANDS = new Set([
@@ -123,6 +133,59 @@ function runTlonCommand(binary: string, args: string[]): Promise<string> {
   });
 }
 
+function createTlonTool(api: OpenClawPluginApi): AnyAgentTool {
+  const tlonBinary = findTlonBinary();
+  api.logger.info(`[tlon] Registering tlon tool, binary: ${tlonBinary}`);
+  return {
+    name: "tlon",
+    label: "Tlon CLI",
+    description:
+      "Tlon/Urbit API operations: activity, channels, contacts, groups, messages, dms, posts, notebook, settings. " +
+      "Examples: 'activity mentions --limit 10', 'channels groups', 'contacts self', 'groups list'",
+    parameters: {
+      type: "object",
+      properties: {
+        command: {
+          type: "string",
+          description:
+            "The tlon command and arguments. " +
+            "Examples: 'activity mentions --limit 10', 'contacts get ~sampel-palnet', 'groups list'",
+        },
+      },
+      required: ["command"],
+    },
+    async execute(_id: string, params: { command: string }) {
+      try {
+        const args = shellSplit(params.command);
+
+        const subcommand = args[0];
+        if (!ALLOWED_TLON_COMMANDS.has(subcommand)) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Error: Unknown tlon subcommand '${subcommand}'. Allowed: ${[...ALLOWED_TLON_COMMANDS].join(", ")}`,
+              },
+            ],
+            details: { error: true },
+          };
+        }
+
+        const output = await runTlonCommand(tlonBinary, args);
+        return {
+          content: [{ type: "text" as const, text: output }],
+          details: undefined,
+        };
+      } catch (error: any) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+          details: { error: true },
+        };
+      }
+    },
+  };
+}
+
 const plugin = {
   id: "tlon",
   name: "Tlon",
@@ -131,59 +194,7 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     setTlonRuntime(api.runtime);
     api.registerChannel({ plugin: tlonPlugin });
-
-    // Register the tlon tool
-    const tlonBinary = findTlonBinary();
-    api.logger.info(`[tlon] Registering tlon tool, binary: ${tlonBinary}`);
-    api.registerTool({
-      name: "tlon",
-      label: "Tlon CLI",
-      description:
-        "Tlon/Urbit API operations: activity, channels, contacts, groups, messages, dms, posts, notebook, settings. " +
-        "Examples: 'activity mentions --limit 10', 'channels groups', 'contacts self', 'groups list'",
-      parameters: {
-        type: "object",
-        properties: {
-          command: {
-            type: "string",
-            description:
-              "The tlon command and arguments. " +
-              "Examples: 'activity mentions --limit 10', 'contacts get ~sampel-palnet', 'groups list'",
-          },
-        },
-        required: ["command"],
-      },
-      async execute(_id: string, params: { command: string }) {
-        try {
-          const args = shellSplit(params.command);
-
-          // Validate first argument is a whitelisted tlon subcommand
-          const subcommand = args[0];
-          if (!ALLOWED_TLON_COMMANDS.has(subcommand)) {
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text: `Error: Unknown tlon subcommand '${subcommand}'. Allowed: ${[...ALLOWED_TLON_COMMANDS].join(", ")}`,
-                },
-              ],
-              details: { error: true },
-            };
-          }
-
-          const output = await runTlonCommand(tlonBinary, args);
-          return {
-            content: [{ type: "text" as const, text: output }],
-            details: undefined,
-          };
-        } catch (error: any) {
-          return {
-            content: [{ type: "text" as const, text: `Error: ${error.message}` }],
-            details: { error: true },
-          };
-        }
-      },
-    });
+    api.registerTool((_ctx: OpenClawPluginToolContext) => createTlonTool(api));
   },
 };
 

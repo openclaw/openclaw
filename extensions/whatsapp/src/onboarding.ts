@@ -1,5 +1,4 @@
 import path from "node:path";
-import { loginWeb } from "../../../src/channel-web.js";
 import type { ChannelOnboardingAdapter } from "../../../src/channels/plugins/onboarding-types.js";
 import {
   normalizeAllowFromEntries,
@@ -23,6 +22,16 @@ import {
 } from "./accounts.js";
 
 const channel = "whatsapp" as const;
+
+async function loginWhatsAppWeb(
+  verbose: boolean,
+  outputDir: string | undefined,
+  runtime: RuntimeEnv,
+  accountId: string,
+) {
+  const { loginWeb } = await import("./login.js");
+  return await loginWeb(verbose, outputDir, runtime, accountId);
+}
 
 function setWhatsAppDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy): OpenClawConfig {
   return mergeWhatsAppConfig(cfg, { dmPolicy });
@@ -330,7 +339,7 @@ export const whatsappOnboardingAdapter: ChannelOnboardingAdapter = {
     });
     if (wantsLink) {
       try {
-        await loginWeb(false, undefined, runtime, accountId);
+        await loginWhatsAppWeb(false, undefined, runtime, accountId);
       } catch (err) {
         runtime.error(`WhatsApp login failed: ${String(err)}`);
         await prompter.note(`Docs: ${formatDocsLink("/whatsapp", "whatsapp")}`, "WhatsApp help");

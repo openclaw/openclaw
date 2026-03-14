@@ -1,8 +1,15 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/mattermost";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/mattermost";
-import { mattermostPlugin } from "./src/channel.js";
-import { getSlashCommandState, registerSlashCommandRoute } from "./src/mattermost/slash-state.js";
+import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
+import { createLazyChannelPlugin, loadLazyModuleExport } from "../../src/plugins/lazy-channel.js";
+import { resolveSlashCallbackPaths } from "./src/mattermost/slash-callback-paths.js";
 import { setMattermostRuntime } from "./src/runtime.js";
+
+const mattermostPlugin = createLazyChannelPlugin({
+  importerUrl: import.meta.url,
+  modulePath: "./src/channel.js",
+  exportName: "mattermostPlugin",
+  pluginId: "mattermost",
+});
 
 const plugin = {
   id: "mattermost",
@@ -12,11 +19,26 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     setMattermostRuntime(api.runtime);
     api.registerChannel({ plugin: mattermostPlugin });
-
-    // Register the HTTP route for slash command callbacks.
-    // The actual command registration with MM happens in the monitor
-    // after the bot connects and we know the team ID.
-    registerSlashCommandRoute(api);
+    const mmConfig = api.config.channels?.mattermost as Record<string, unknown> | undefined;
+    for (const callbackPath of resolveSlashCallbackPaths(mmConfig)) {
+      api.registerHttpRoute({
+        path: callbackPath,
+        auth: "plugin",
+        handler: async (req, res) =>
+          await loadLazyModuleExport<
+            (
+              request: typeof req,
+              response: typeof res,
+              pluginApi: OpenClawPluginApi,
+            ) => Promise<void>
+          >({
+            importerUrl: import.meta.url,
+            modulePath: "./src/mattermost/slash-state.js",
+            exportName: "handleSlashCommandRoute",
+          })(req, res, api),
+      });
+      api.logger.info?.(`mattermost: registered slash command callback at ${callbackPath}`);
+    }
   },
 };
 

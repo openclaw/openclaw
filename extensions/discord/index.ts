@@ -1,8 +1,14 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/discord";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/discord";
-import { discordPlugin } from "./src/channel.js";
+import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
+import { createLazyChannelPlugin, loadLazyModuleExport } from "../../src/plugins/lazy-channel.js";
 import { setDiscordRuntime } from "./src/runtime.js";
-import { registerDiscordSubagentHooks } from "./src/subagent-hooks.js";
+
+const discordPlugin = createLazyChannelPlugin({
+  importerUrl: import.meta.url,
+  modulePath: "./src/channel.js",
+  exportName: "discordPlugin",
+  pluginId: "discord",
+});
 
 const plugin = {
   id: "discord",
@@ -12,7 +18,11 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     setDiscordRuntime(api.runtime);
     api.registerChannel({ plugin: discordPlugin });
-    registerDiscordSubagentHooks(api);
+    loadLazyModuleExport<(api: OpenClawPluginApi) => void>({
+      importerUrl: import.meta.url,
+      modulePath: "./src/subagent-hooks.js",
+      exportName: "registerDiscordSubagentHooks",
+    })(api);
   },
 };
 

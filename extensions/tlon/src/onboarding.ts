@@ -1,12 +1,10 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/tlon";
-import {
-  formatDocsLink,
-  patchScopedAccountConfig,
-  resolveAccountIdForConfigure,
-  DEFAULT_ACCOUNT_ID,
-  type ChannelOnboardingAdapter,
-  type WizardPrompter,
-} from "openclaw/plugin-sdk/tlon";
+import type { ChannelOnboardingAdapter } from "../../../src/channels/plugins/onboarding-types.js";
+import { resolveAccountIdForConfigure } from "../../../src/channels/plugins/onboarding/helpers.js";
+import { patchScopedAccountConfig } from "../../../src/channels/plugins/setup-helpers.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
+import { formatDocsLink } from "../../../src/terminal/links.js";
+import type { WizardPrompter } from "../../../src/wizard/prompts.js";
 import { buildTlonAccountFields } from "./account-fields.js";
 import type { TlonResolvedAccount } from "./types.js";
 import { listTlonAccountIds, resolveTlonAccount } from "./types.js";

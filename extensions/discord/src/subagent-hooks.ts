@@ -1,10 +1,26 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/discord";
-import {
-  autoBindSpawnedDiscordSubagent,
-  listThreadBindingsBySessionKey,
-  resolveDiscordAccount,
-  unbindThreadBindingsBySessionKey,
-} from "openclaw/plugin-sdk/discord";
+
+type DiscordSubagentDeps = {
+  resolveDiscordAccount: typeof import("./accounts.js").resolveDiscordAccount;
+  autoBindSpawnedDiscordSubagent: typeof import("./monitor/thread-bindings.js").autoBindSpawnedDiscordSubagent;
+  listThreadBindingsBySessionKey: typeof import("./monitor/thread-bindings.js").listThreadBindingsBySessionKey;
+  unbindThreadBindingsBySessionKey: typeof import("./monitor/thread-bindings.js").unbindThreadBindingsBySessionKey;
+};
+
+let discordSubagentDepsPromise: Promise<DiscordSubagentDeps> | null = null;
+
+async function loadDiscordSubagentDeps(): Promise<DiscordSubagentDeps> {
+  discordSubagentDepsPromise ??= Promise.all([
+    import("./accounts.js"),
+    import("./monitor/thread-bindings.js"),
+  ]).then(([accountsModule, threadBindingsModule]) => ({
+    resolveDiscordAccount: accountsModule.resolveDiscordAccount,
+    autoBindSpawnedDiscordSubagent: threadBindingsModule.autoBindSpawnedDiscordSubagent,
+    listThreadBindingsBySessionKey: threadBindingsModule.listThreadBindingsBySessionKey,
+    unbindThreadBindingsBySessionKey: threadBindingsModule.unbindThreadBindingsBySessionKey,
+  }));
+  return await discordSubagentDepsPromise;
+}
 
 function summarizeError(err: unknown): string {
   if (err instanceof Error) {
@@ -17,7 +33,8 @@ function summarizeError(err: unknown): string {
 }
 
 export function registerDiscordSubagentHooks(api: OpenClawPluginApi) {
-  const resolveThreadBindingFlags = (accountId?: string) => {
+  const resolveThreadBindingFlags = async (accountId?: string) => {
+    const { resolveDiscordAccount } = await loadDiscordSubagentDeps();
     const account = resolveDiscordAccount({
       cfg: api.config,
       accountId,
@@ -48,7 +65,7 @@ export function registerDiscordSubagentHooks(api: OpenClawPluginApi) {
       // their own thread/session provisioning without Discord blocking them.
       return;
     }
-    const threadBindingFlags = resolveThreadBindingFlags(event.requester?.accountId);
+    const threadBindingFlags = await resolveThreadBindingFlags(event.requester?.accountId);
     if (!threadBindingFlags.enabled) {
       return {
         status: "error" as const,
@@ -64,6 +81,7 @@ export function registerDiscordSubagentHooks(api: OpenClawPluginApi) {
       };
     }
     try {
+      const { autoBindSpawnedDiscordSubagent } = await loadDiscordSubagentDeps();
       const binding = await autoBindSpawnedDiscordSubagent({
         accountId: event.requester?.accountId,
         channel: event.requester?.channel,
@@ -90,7 +108,8 @@ export function registerDiscordSubagentHooks(api: OpenClawPluginApi) {
     }
   });
 
-  api.on("subagent_ended", (event) => {
+  api.on("subagent_ended", async (event) => {
+    const { unbindThreadBindingsBySessionKey } = await loadDiscordSubagentDeps();
     unbindThreadBindingsBySessionKey({
       targetSessionKey: event.targetSessionKey,
       accountId: event.accountId,
@@ -100,7 +119,7 @@ export function registerDiscordSubagentHooks(api: OpenClawPluginApi) {
     });
   });
 
-  api.on("subagent_delivery_target", (event) => {
+  api.on("subagent_delivery_target", async (event) => {
     if (!event.expectsCompletionMessage) {
       return;
     }
@@ -108,6 +127,7 @@ export function registerDiscordSubagentHooks(api: OpenClawPluginApi) {
     if (requesterChannel !== "discord") {
       return;
     }
+    const { listThreadBindingsBySessionKey } = await loadDiscordSubagentDeps();
     const requesterAccountId = event.requesterOrigin?.accountId?.trim();
     const requesterThreadId =
       event.requesterOrigin?.threadId != null && event.requesterOrigin.threadId !== ""

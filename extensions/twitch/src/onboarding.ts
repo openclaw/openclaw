@@ -2,14 +2,14 @@
  * Twitch onboarding adapter for CLI setup wizard.
  */
 
-import type { OpenClawConfig } from "openclaw/plugin-sdk/twitch";
-import {
-  formatDocsLink,
-  promptChannelAccessConfig,
-  type ChannelOnboardingAdapter,
-  type ChannelOnboardingDmPolicy,
-  type WizardPrompter,
-} from "openclaw/plugin-sdk/twitch";
+import type {
+  ChannelOnboardingAdapter,
+  ChannelOnboardingDmPolicy,
+} from "../../../src/channels/plugins/onboarding-types.js";
+import { promptChannelAccessConfig } from "../../../src/channels/plugins/onboarding/channel-access.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import { formatDocsLink } from "../../../src/terminal/links.js";
+import type { WizardPrompter } from "../../../src/wizard/prompts.js";
 import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
 import type { TwitchAccountConfig, TwitchRole } from "./types.js";
 import { isAccountConfigured } from "./utils/twitch.js";

@@ -11,7 +11,7 @@
   },
   "openclaw": {
     "extensions": [
-      "./index.ts"
+      "./plugin.ts"
     ],
     "channel": {
       "id": "feishu",

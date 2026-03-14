@@ -1,7 +1,14 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/signal";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/signal";
-import { signalPlugin } from "./src/channel.js";
+import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
+import { createLazyChannelPlugin } from "../../src/plugins/lazy-channel.js";
 import { setSignalRuntime } from "./src/runtime.js";
+
+const signalPlugin = createLazyChannelPlugin({
+  importerUrl: import.meta.url,
+  modulePath: "./src/channel.js",
+  exportName: "signalPlugin",
+  pluginId: "signal",
+});
 
 const plugin = {
   id: "signal",
