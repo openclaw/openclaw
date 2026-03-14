@@ -27,6 +27,22 @@ function escapeMarkdownText(text: string): string {
   return text.replace(MARKDOWN_SPECIAL_CHARS, "\\$1");
 }
 
+/**
+ * Escape underscores in URLs within markdown links to prevent Feishu
+ * from interpreting them as italic markers.
+ * E.g., [text](https://example.com/output_20260210.png) becomes
+ *       [text](https://example.com/output\_20260210.png)
+ */
+function escapeUnderscoresInMarkdownLinks(text: string): string {
+  // Match markdown links: [text](url)
+  const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+  return text.replace(linkRegex, (match, linkText, url) => {
+    // Escape underscores in the URL
+    const escapedUrl = url.replace(/_/g, "\\_");
+    return `[${linkText}](${escapedUrl})`;
+  });
+}
+
 function toBoolean(value: unknown): boolean {
   return value === true || value === 1 || value === "true";
 }
@@ -260,7 +276,9 @@ export function parsePostContent(content: string): PostParseResult {
 
     const title = escapeMarkdownText(payload.title.trim());
     const body = paragraphs.join("\n").trim();
-    const textContent = [title, body].filter(Boolean).join("\n\n").trim();
+    const textContent = escapeUnderscoresInMarkdownLinks(
+      [title, body].filter(Boolean).join("\n\n").trim(),
+    );
 
     return {
       textContent: textContent || FALLBACK_POST_TEXT,
