@@ -332,6 +332,8 @@
 }
 
 :root[data-theme-mode="light"] .sidebar {
+  /* Raise muted contrast within the sidebar without changing global light theme tokens. */
+  --muted: var(--muted-strong);
   background: color-mix(in srgb, var(--panel) 98%, white 2%);
 }
 
