@@ -6,6 +6,7 @@ import {
   agentsBindCommand,
   agentsDeleteCommand,
   agentsListCommand,
+  agentsViewSystemPromptCommand,
   agentsSetIdentityCommand,
   agentsUnbindCommand,
 } from "../../commands/agents.js";
@@ -263,6 +264,24 @@ ${formatHelpExamples([
             id: String(id),
             force: Boolean(opts.force),
             json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  agents
+    .command("view-system-prompt [agentId]")
+    .description("Print the assembled system prompt for an agent (no LLM call)")
+    .option("--model <id>", "Model id to show in Runtime line (provider/model format)")
+    .option("--channel <channel>", "Channel to simulate for messaging hints")
+    .action(async (agentId, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentsViewSystemPromptCommand(
+          {
+            agentId: typeof agentId === "string" ? agentId : undefined,
+            model: opts.model as string | undefined,
+            channel: opts.channel as string | undefined,
           },
           defaultRuntime,
         );
