@@ -266,7 +266,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         }),
     });
   }
-  const replyContext = resolveReplyContext(message, resolveDiscordMessageText);
+  const replyContext = await resolveReplyContext(message, resolveDiscordMessageText, client);
   if (forumContextLine) {
     combinedBody = `${combinedBody}\n${forumContextLine}`;
   }
