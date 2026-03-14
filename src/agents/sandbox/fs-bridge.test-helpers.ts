@@ -79,6 +79,36 @@ export function createSandbox(overrides?: Partial<SandboxContext>): SandboxConte
   });
 }
 
+export async function createSeededSandboxFsBridge(
+  stateDir: string,
+  params?: {
+    rootFileName?: string;
+    rootContents?: string;
+    nestedFileName?: string;
+    nestedContents?: string;
+  },
+) {
+  const workspaceDir = path.join(stateDir, "workspace");
+  await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
+  await fs.writeFile(
+    path.join(workspaceDir, params?.rootFileName ?? "from.txt"),
+    params?.rootContents ?? "hello",
+    "utf8",
+  );
+  await fs.writeFile(
+    path.join(workspaceDir, "nested", params?.nestedFileName ?? "file.txt"),
+    params?.nestedContents ?? "bye",
+    "utf8",
+  );
+  const bridge = createSandboxFsBridge({
+    sandbox: createSandbox({
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+    }),
+  });
+  return { workspaceDir, bridge };
+}
+
 export async function withTempDir<T>(
   prefix: string,
   run: (stateDir: string) => Promise<T>,
