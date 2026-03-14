@@ -24,6 +24,7 @@ import {
   listFeishuDirectoryGroupsLive,
 } from "./directory.js";
 import { feishuOnboardingAdapter } from "./onboarding.js";
+import { feishuMessageActions } from "./feishu-actions.js";
 import { feishuOutbound } from "./outbound.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import { probeFeishu } from "./probe.js";
@@ -331,6 +332,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       }),
   },
   outbound: feishuOutbound,
+  actions: feishuMessageActions,
   status: {
     defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, { port: null }),
     buildChannelSummary: ({ snapshot }) =>
