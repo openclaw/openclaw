@@ -523,7 +523,26 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
   const chunks: MarkdownIR[] = [];
   let cursor = 0;
   while (cursor < ir.text.length) {
-    const end = Math.min(ir.text.length, cursor + normalizedLimit);
+    let end = Math.min(ir.text.length, cursor + normalizedLimit);
+    if (end >= ir.text.length) {
+      chunks.push({
+        text: ir.text.slice(cursor),
+        styles: sliceStyleSpans(ir.styles, cursor, ir.text.length),
+        links: sliceLinkSpans(ir.links, cursor, ir.text.length),
+      });
+      break;
+    }
+
+    // Prefer the last whitespace inside the retry window so Telegram HTML
+    // overflow doesn't force mid-word splits, but keep the separator text in
+    // the emitted chunks so recombining chunk.text still matches the source.
+    for (let i = end - 1; i > cursor; i -= 1) {
+      if (/\s/.test(ir.text[i] ?? "")) {
+        end = i + 1;
+        break;
+      }
+    }
+
     chunks.push({
       text: ir.text.slice(cursor, end),
       styles: sliceStyleSpans(ir.styles, cursor, end),
