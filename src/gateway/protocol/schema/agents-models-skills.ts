@@ -70,6 +70,7 @@ export const AgentsUpdateParamsSchema = Type.Object(
     name: Type.Optional(NonEmptyString),
     workspace: Type.Optional(NonEmptyString),
     model: Type.Optional(NonEmptyString),
+    emoji: Type.Optional(Type.String()),
     avatar: Type.Optional(Type.String()),
   },
   { additionalProperties: false },

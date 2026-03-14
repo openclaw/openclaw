@@ -424,6 +424,37 @@ describe("agents.update", () => {
 
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
   });
+
+  it("writes emoji to IDENTITY.md when provided", async () => {
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      emoji: "🦊",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, agentId: "test-agent" }, undefined);
+    expect(mocks.fsAppendFile).toHaveBeenCalledWith(
+      expect.stringContaining("IDENTITY.md"),
+      expect.stringContaining("- Emoji: 🦊"),
+      "utf-8",
+    );
+  });
+
+  it("writes both emoji and avatar to IDENTITY.md when both provided", async () => {
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      emoji: "🤖",
+      avatar: "https://example.com/avatar.png",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, agentId: "test-agent" }, undefined);
+    expect(mocks.fsAppendFile).toHaveBeenCalledWith(
+      expect.stringContaining("IDENTITY.md"),
+      expect.stringMatching(/- Emoji: 🤖[\s\S]*- Avatar:/),
+      "utf-8",
+    );
+  });
 });
 
 describe("agents.delete", () => {

@@ -564,6 +564,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
         : undefined;
 
     const model = resolveOptionalStringParam(params.model);
+    const emoji = resolveOptionalStringParam(params.emoji);
     const avatar = resolveOptionalStringParam(params.avatar);
 
     const nextConfig = applyAgentConfig(cfg, {
@@ -582,11 +583,18 @@ export const agentsHandlers: GatewayRequestHandlers = {
       await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: !skipBootstrap });
     }
 
-    if (avatar) {
+    if (emoji || avatar) {
       const workspace = workspaceDir ?? resolveAgentWorkspaceDir(nextConfig, agentId);
       await fs.mkdir(workspace, { recursive: true });
       const identityPath = path.join(workspace, DEFAULT_IDENTITY_FILENAME);
-      await fs.appendFile(identityPath, `\n- Avatar: ${sanitizeIdentityLine(avatar)}\n`, "utf-8");
+      const lines: string[] = [];
+      if (emoji) {
+        lines.push(`- Emoji: ${sanitizeIdentityLine(emoji)}`);
+      }
+      if (avatar) {
+        lines.push(`- Avatar: ${sanitizeIdentityLine(avatar)}`);
+      }
+      await fs.appendFile(identityPath, `\n${lines.join("\n")}\n`, "utf-8");
     }
 
     respond(true, { ok: true, agentId }, undefined);
