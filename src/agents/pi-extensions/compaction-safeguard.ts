@@ -959,7 +959,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const effectivePreviousSummary = droppedSummary ?? preparation.previousSummary;
 
       let summary = "";
-      let lastSummaryWithoutPreservedTurns = "";
+      let lastHistorySummary = "";
+      let lastSplitTurnSection = "";
       let currentInstructions = structuredInstructions;
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
       let lastSuccessfulSummary: string | null = null;
@@ -985,6 +986,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
 
           summaryWithoutPreservedTurns = historySummary;
+          lastHistorySummary = historySummary;
+          lastSplitTurnSection = "";
           if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
             const prefixSummary = await summarizeInStages({
               messages: turnPrefixMessages,
@@ -1005,6 +1008,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             summaryWithoutPreservedTurns = historySummary.trim()
               ? `${historySummary}\n\n---\n\n${splitTurnSection}`
               : splitTurnSection;
+            lastSplitTurnSection = splitTurnSection;
           }
           summaryWithPreservedTurns = appendSummarySection(
             summaryWithoutPreservedTurns,
@@ -1024,7 +1028,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           throw attemptError;
         }
         lastSuccessfulSummary = summaryWithPreservedTurns;
-        lastSummaryWithoutPreservedTurns = summaryWithoutPreservedTurns;
 
         const canRegenerate =
           messagesToSummarize.length > 0 ||
@@ -1057,12 +1060,19 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           : `${structuredInstructions}\n\n${qualityFeedbackInstruction}`;
       }
 
-      // Cap the main history body first, then append preserved turns, diagnostics,
-      // and workspace rules so they survive truncation. Truncation keeps the prefix
-      // (slice(0, budget)), so sections at the end of the body would be dropped
-      // first—preserved turns, tool failures, and file ops must be in the suffix.
+      // Cap the main history body first, then append split-turn context, preserved
+      // turns, diagnostics, and workspace rules so they survive truncation.
+      // Truncation keeps the prefix (slice(0, budget)), so sections at the end
+      // of the body would be dropped first—split-turn, preserved turns, tool
+      // failures, and file ops must be in the suffix.
       const reservedSuffix = appendSummarySection(
-        appendSummarySection(appendSummarySection("", preservedTurnsSection), toolFailureSection),
+        appendSummarySection(
+          appendSummarySection(
+            appendSummarySection("", lastSplitTurnSection),
+            preservedTurnsSection,
+          ),
+          toolFailureSection,
+        ),
         fileOpsSummary,
       );
       const workspaceContext = await readWorkspaceContextForSummary();
@@ -1073,10 +1083,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         fullReservedSuffix && !/^\s/.test(fullReservedSuffix)
           ? `\n\n${fullReservedSuffix}`
           : fullReservedSuffix;
-      summary = capCompactionSummaryPreservingSuffix(
-        lastSummaryWithoutPreservedTurns,
-        normalizedSuffix,
-      );
+      summary = capCompactionSummaryPreservingSuffix(lastHistorySummary, normalizedSuffix);
 
       return {
         compaction: {
