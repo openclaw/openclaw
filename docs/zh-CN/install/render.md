@@ -23,8 +23,7 @@ href="https://render.com/deploy?repo=https://github.com/openclaw/openclaw"
 target="\_blank"
 rel="noreferrer"
 
-> 部署到 Render
-> </a>
+> 部署到 Render</a>
 
 点击此链接将会：
 
