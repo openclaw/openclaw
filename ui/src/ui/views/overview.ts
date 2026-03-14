@@ -352,7 +352,7 @@ export function renderOverview(props: OverviewProps) {
           <div class="stat">
             <div class="stat-label">${t("common.health")}</div>
             <div class="stat-value ${props.health?.ok ? "ok" : props.health ? "warn" : ""}">
-              ${props.health == null ? t("common.na") : props.health.ok ? t("common.ok") : "Issues"}
+              ${props.health == null ? t("common.na") : props.health.ok ? t("common.ok") : t("common.issues")}
             </div>
           </div>
           <div class="stat">
