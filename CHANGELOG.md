@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Slack/interactive replies: preserve `channelData.slack.blocks` through live DM delivery and preview-finalized edits so Block Kit button and select directives render instead of falling back to raw text. Thanks @vincentkoc.
+- CI/channel test routing: move the built-in channel suites into `test:channels` and keep them out of `test:extensions`, so extension CI no longer fails after the channel migration while targeted test routing still sends Slack, Signal, and iMessage suites to the right lane. (#46066) Thanks @scoootscooob.
 
 ## 2026.3.13
 
@@ -91,6 +92,8 @@ Docs: https://docs.openclaw.ai
 - Telegram/media errors: redact Telegram file URLs before building media fetch errors so failed inbound downloads do not leak bot tokens into logs. Thanks @space08.
 - Agents/failover: normalize abort-wrapped `429 RESOURCE_EXHAUSTED` provider failures before abort short-circuiting so wrapped Google/Vertex rate limits continue across configured fallback models, including the embedded runner prompt-error path. (#39820) Thanks @lupuletic.
 - Mattermost/thread routing: non-inbound reply paths (TUI/WebUI turns, tool-call callbacks, subagent responses) now correctly route to the originating Mattermost thread when `replyToMode: "all"` is active; also prevents stale `origin.threadId` metadata from resurrecting cleared thread routes. (#44283) thanks @teconomix
+- Gateway/websocket pairing bypass for disabled auth: skip device-pairing enforcement when `gateway.auth.mode=none` so Control UI connections behind reverse proxies no longer get stuck on `pairing required` (code 1008) despite auth being explicitly disabled. (#42931)
+- Auth/login lockout recovery: clear stale `auth_permanent` and `billing` disabled state for all profiles matching the target provider when `openclaw models auth login` is invoked, so users locked out by expired or revoked OAuth tokens can recover by re-authenticating instead of waiting for the cooldown timer to expire. (#43057)
 
 ## 2026.3.12
 
