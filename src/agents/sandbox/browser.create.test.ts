@@ -72,6 +72,7 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
       headless: false,
       enableNoVnc,
       allowHostControl: false,
+      shareNetworkNamespace: false,
       autoStart: true,
       autoStartTimeoutMs: 12_000,
     },
@@ -205,5 +206,56 @@ describe("ensureSandboxBrowser create args", () => {
     expect(createArgs).toBeDefined();
     expect(createArgs).toContain("/tmp/workspace:/workspace");
     expect(createArgs).not.toContain("/tmp/workspace:/workspace:ro");
+  });
+
+  it("uses container namespace join when shareNetworkNamespace is true", async () => {
+    const cfg = buildConfig(false);
+    cfg.browser.shareNetworkNamespace = true;
+
+    dockerMocks.readDockerPort.mockImplementation(async (containerName: string, port: number) => {
+      // Ports are read from the sandbox container, not the browser container.
+      if (containerName === "my-sandbox" && port === 9222) {
+        return 49200;
+      }
+      return null;
+    });
+
+    await ensureSandboxBrowser({
+      scopeKey: "session:test",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg,
+      sandboxContainerName: "my-sandbox",
+    });
+
+    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
+    expect(createArgs).toBeDefined();
+    // Network should be container:<sandboxContainerName>
+    expect(createArgs).toContain("container:my-sandbox");
+    // No -p port publishing on the browser container
+    const portFlags = collectDockerFlagValues(createArgs ?? [], "-p");
+    expect(portFlags).toHaveLength(0);
+  });
+
+  it("does not use namespace join when shareNetworkNamespace is false", async () => {
+    const cfg = buildConfig(false);
+    cfg.browser.shareNetworkNamespace = false;
+
+    await ensureSandboxBrowser({
+      scopeKey: "session:test",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg,
+      sandboxContainerName: "my-sandbox",
+    });
+
+    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
+    expect(createArgs).toBeDefined();
+    // Network should be the default browser network, not container:*
+    expect(createArgs).toContain("openclaw-sandbox-browser");
+    expect(createArgs).not.toContain("container:my-sandbox");
+    // Port publishing present
+    const portFlags = collectDockerFlagValues(createArgs ?? [], "-p");
+    expect(portFlags.length).toBeGreaterThan(0);
   });
 });
