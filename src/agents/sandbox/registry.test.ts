@@ -126,8 +126,6 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await fs.rm(SANDBOX_REGISTRY_PATH, { force: true });
   await fs.rm(SANDBOX_BROWSER_REGISTRY_PATH, { force: true });
-  await fs.rm(`${SANDBOX_REGISTRY_PATH}.lock`, { force: true });
-  await fs.rm(`${SANDBOX_BROWSER_REGISTRY_PATH}.lock`, { force: true });
 });
 
 afterAll(async () => {
@@ -253,5 +251,49 @@ describe("registry race safety", () => {
     await expect(updateBrowserRegistry(browserEntry())).rejects.toThrow(
       /Invalid sandbox registry format/,
     );
+  });
+
+  it("handles 100 concurrent container updates without contention errors", async () => {
+    const N = 100;
+    await Promise.all(
+      Array.from({ length: N }, (_, i) =>
+        updateRegistry(
+          containerEntry({ containerName: `container-${i}`, sessionKey: `agent:session-${i}` }),
+        ),
+      ),
+    );
+
+    const registry = await readRegistry();
+    expect(registry.entries).toHaveLength(N);
+    const names = registry.entries
+      .map((e) => e.containerName)
+      .slice()
+      .toSorted();
+    expect(names[0]).toBe("container-0");
+    expect(names[N - 1]).toBe(`container-${N - 1}`);
+  });
+
+  it("handles 100 concurrent browser updates without contention errors", async () => {
+    const N = 100;
+    await Promise.all(
+      Array.from({ length: N }, (_, i) =>
+        updateBrowserRegistry(
+          browserEntry({
+            containerName: `browser-${i}`,
+            sessionKey: `agent:session-${i}`,
+            cdpPort: 9222 + i,
+          }),
+        ),
+      ),
+    );
+
+    const registry = await readBrowserRegistry();
+    expect(registry.entries).toHaveLength(N);
+    const names = registry.entries
+      .map((e) => e.containerName)
+      .slice()
+      .toSorted();
+    expect(names[0]).toBe("browser-0");
+    expect(names[N - 1]).toBe(`browser-${N - 1}`);
   });
 });
