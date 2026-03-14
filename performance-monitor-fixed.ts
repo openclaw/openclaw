@@ -1,34 +1,17 @@
 /**
- * OpenClaw Performance Monitor (Final Production-Ready Version)
+ * OpenClaw Performance Monitor
  * 
- * A comprehensive performance monitoring and profiling tool
+ * Production-ready performance monitoring tool
  * 
- * Features:
- * - CPU and memory usage tracking (Node.js only)
- * - Agent execution time measurement
- * - WebSocket connection metrics
- * - Model response time tracking
- * - Bottleneck detection
- * - Performance alerts with auto-cleanup
- * 
- * @module PerformanceMonitor
  * @version 1.0.4
  * @license MIT
  */
 
-// ===== Type Declarations =====
-
-/**
- * CPU usage information (microseconds)
- */
 interface CpuUsage {
   user: number;
   system: number;
 }
 
-/**
- * Memory usage information (bytes)
- */
 interface MemoryUsage {
   rss: number;
   heapTotal: number;
@@ -91,23 +74,14 @@ export interface PerformanceAlert {
 }
 
 export interface PerformanceMonitorOptions {
-  /** Monitoring interval in milliseconds (default: 5000) */
   interval?: number;
-  /** CPU usage alert threshold (percentage, default: 80) */
   cpuThreshold?: number;
-  /** Memory usage alert threshold (percentage, default: 80) */
   memoryThreshold?: number;
-  /** Latency alert threshold in milliseconds (default: 5000) */
   latencyThreshold?: number;
-  /** Error rate alert threshold (percentage, default: 10) */
   errorRateThreshold?: number;
-  /** Enable debug logging */
   debug?: boolean;
-  /** Maximum number of alerts to keep in history (default: 100) */
   maxAlertsHistory?: number;
 }
-
-// ===== Internal Types =====
 
 interface AgentExecution {
   startTime: number;
@@ -122,8 +96,6 @@ interface ModelRequest {
   success: boolean;
   modelId: string;
 }
-
-// ===== Simple EventEmitter Implementation =====
 
 type EventListener = (...args: any[]) => void;
 
@@ -171,8 +143,6 @@ class SimpleEventEmitter {
   }
 }
 
-// ===== Performance Monitor Implementation =====
-
 export class PerformanceMonitor extends SimpleEventEmitter {
   private options: Required<PerformanceMonitorOptions>;
   private monitoringInterval: ReturnType<typeof setInterval> | null = null;
@@ -199,14 +169,12 @@ export class PerformanceMonitor extends SimpleEventEmitter {
       ...options,
     };
 
-    // Detect environment
     this.isNodeEnv = typeof process !== 'undefined' && 
                      typeof process.version === 'string' &&
                      typeof process.cpuUsage === 'function';
 
     this.metrics = this.initializeMetrics();
     
-    // Initialize CPU usage tracking in Node.js environment
     if (this.isNodeEnv) {
       try {
         this.lastCpuUsage = process.cpuUsage();
@@ -214,65 +182,33 @@ export class PerformanceMonitor extends SimpleEventEmitter {
         this.log('Failed to initialize CPU tracking:', error);
       }
     }
-    
-    this.log('PerformanceMonitor initialized (Node.js:', this.isNodeEnv, ')');
   }
 
-  /**
-   * Start performance monitoring
-   */
   public start(): void {
-    if (this.isRunning) {
-      this.log('Performance monitoring already running');
-      return;
-    }
-
+    if (this.isRunning) return;
     this.isRunning = true;
-    this.log('Starting performance monitoring');
-
     this.monitoringInterval = setInterval(() => {
       this.collectMetrics();
     }, this.options.interval);
   }
 
-  /**
-   * Stop performance monitoring
-   */
   public stop(): void {
-    if (!this.isRunning) {
-      this.log('Performance monitoring not running');
-      return;
-    }
-
+    if (!this.isRunning) return;
     this.isRunning = false;
-    this.log('Stopping performance monitoring');
-
     if (this.monitoringInterval) {
       clearInterval(this.monitoringInterval);
       this.monitoringInterval = null;
     }
   }
 
-  /**
-   * Get current metrics
-   */
   public getMetrics(): PerformanceMetrics {
     return { ...this.metrics };
   }
 
-  /**
-   * Get active alerts
-   */
   public getAlerts(): PerformanceAlert[] {
     return Array.from(this.alerts.values()).sort((a, b) => b.timestamp - a.timestamp);
   }
 
-  /**
-   * Start tracking agent execution
-   * @param agentId - Unique agent identifier (e.g., 'agent-1', 'my-agent-v2')
-   * @param agentName - Human-readable agent name
-   * @returns Execution ID for tracking
-   */
   public startAgentExecution(agentId: string, agentName: string): string {
     const executionId = `${agentId}::${Date.now()}::${this.generateId()}`;
     this.agentExecutions.set(executionId, {
@@ -281,41 +217,18 @@ export class PerformanceMonitor extends SimpleEventEmitter {
       agentId,
       agentName,
     });
-    this.log(`Started agent execution tracking: ${agentName} (${agentId})`);
     return executionId;
   }
 
-  /**
-   * End tracking agent execution
-   * @param executionId - Execution ID from startAgentExecution
-   * @param success - Whether execution succeeded
-   */
   public endAgentExecution(executionId: string, success: boolean = true): void {
     const execution = this.agentExecutions.get(executionId);
-    if (!execution) {
-      this.log(`Execution ID not found: ${executionId}`);
-      return;
-    }
+    if (!execution) return;
 
     const executionTime = Date.now() - execution.startTime;
-    execution.success = success;
-
-    this.updateAgentMetrics(
-      execution.agentId, 
-      execution.agentName, 
-      executionTime, 
-      success
-    );
-
+    this.updateAgentMetrics(execution.agentId, execution.agentName, executionTime, success);
     this.agentExecutions.delete(executionId);
-    this.log(`Ended agent execution: ${executionId}, time: ${executionTime}ms, success: ${success}`);
   }
 
-  /**
-   * Start tracking model request
-   * @param modelId - Model identifier (e.g., 'gpt-4o-mini', 'claude-3-5-sonnet')
-   * @returns Request ID for tracking
-   */
   public startModelRequest(modelId: string): string {
     const requestId = `${modelId}::${Date.now()}::${this.generateId()}`;
     this.modelRequests.set(requestId, {
@@ -323,51 +236,25 @@ export class PerformanceMonitor extends SimpleEventEmitter {
       success: false,
       modelId,
     });
-    this.log(`Started model request tracking: ${modelId}`);
     return requestId;
   }
 
-  /**
-   * End tracking model request
-   * @param requestId - Request ID from startModelRequest
-   * @param success - Whether request succeeded
-   * @param tokens - Number of tokens processed (optional)
-   */
   public endModelRequest(requestId: string, success: boolean = true, tokens?: number): void {
     const request = this.modelRequests.get(requestId);
-    if (!request) {
-      this.log(`Request ID not found: ${requestId}`);
-      return;
-    }
+    if (!request) return;
 
     const responseTime = Date.now() - request.startTime;
-    request.success = success;
-    request.tokens = tokens;
-
     this.updateModelMetrics(request.modelId, responseTime, success, tokens);
-
     this.modelRequests.delete(requestId);
-    this.log(`Ended model request: ${requestId}, time: ${responseTime}ms, success: ${success}, tokens: ${tokens}`);
   }
 
-  /**
-   * Track WebSocket message latency
-   * @param latency - Latency in milliseconds
-   */
   public trackWebSocketLatency(latency: number): void {
     this.websocketLatencies.push(latency);
-    
-    // Keep only last 100 latencies
     if (this.websocketLatencies.length > 100) {
       this.websocketLatencies.shift();
     }
-
-    this.log(`Tracked WebSocket latency: ${latency}ms`);
   }
 
-  /**
-   * Update WebSocket metrics
-   */
   public updateWebSocketMetrics(metrics: Partial<WebSocketMetrics>): void {
     this.metrics.websocketMetrics = {
       ...this.metrics.websocketMetrics,
@@ -375,24 +262,15 @@ export class PerformanceMonitor extends SimpleEventEmitter {
     };
   }
 
-  /**
-   * Resolve an alert
-   * @param alertId - Alert ID to resolve
-   */
   public resolveAlert(alertId: string): void {
     const alert = this.alerts.get(alertId);
     if (alert && !alert.resolved) {
       alert.resolved = true;
       alert.resolvedAt = Date.now();
       this.emit('alertResolved', alert);
-      this.log(`Alert resolved: ${alertId}`);
     }
   }
 
-  /**
-   * Generate performance report
-   * @returns Formatted report string
-   */
   public generateReport(): string {
     const metrics = this.getMetrics();
     const alerts = this.getAlerts();
@@ -413,9 +291,7 @@ export class PerformanceMonitor extends SimpleEventEmitter {
       lines.push(`Heap: ${(metrics.memoryUsage.heapUsed / 1024 / 1024).toFixed(2)} MB / ${(metrics.memoryUsage.heapTotal / 1024 / 1024).toFixed(2)} MB`);
     }
 
-    lines.push('');
-    lines.push('--- Agent Performance ---');
-    
+    lines.push('', '--- Agent Performance ---');
     if (metrics.agentMetrics.length === 0) {
       lines.push('No agent executions recorded');
     } else {
@@ -428,17 +304,13 @@ export class PerformanceMonitor extends SimpleEventEmitter {
       });
     }
 
-    lines.push('');
-    lines.push('--- WebSocket Performance ---');
+    lines.push('', '--- WebSocket Performance ---');
     lines.push(`Active Connections: ${metrics.websocketMetrics.activeConnections}`);
     lines.push(`Messages Sent: ${metrics.websocketMetrics.messagesSent}`);
     lines.push(`Messages Received: ${metrics.websocketMetrics.messagesReceived}`);
     lines.push(`Avg Latency: ${metrics.websocketMetrics.averageLatency.toFixed(2)}ms`);
-    lines.push(`Reconnections: ${metrics.websocketMetrics.reconnectionCount}`);
 
-    lines.push('');
-    lines.push('--- Model Performance ---');
-    
+    lines.push('', '--- Model Performance ---');
     if (metrics.modelMetrics.length === 0) {
       lines.push('No model requests recorded');
     } else {
@@ -446,28 +318,19 @@ export class PerformanceMonitor extends SimpleEventEmitter {
         lines.push(`Model: ${model.modelId}`);
         lines.push(`  Requests: ${model.requestCount}`);
         lines.push(`  Avg Response Time: ${model.averageResponseTime.toFixed(2)}ms`);
-        lines.push(`  Avg Tokens/Second: ${model.averageTokensPerSecond.toFixed(2)}`);
         lines.push(`  Error Rate: ${model.errorRate.toFixed(2)}%`);
       });
     }
 
-    lines.push('');
-    lines.push('--- Alerts ---');
-    lines.push(`Active Alerts: ${activeAlerts.length}`);
-    lines.push(`Total Alerts: ${alerts.length}`);
-    
-    if (activeAlerts.length > 0) {
-      activeAlerts.forEach(alert => {
-        lines.push(`[${alert.severity.toUpperCase()}] ${alert.message} (Value: ${alert.value.toFixed(2)}, Threshold: ${alert.threshold})`);
-      });
-    }
+    lines.push('', '--- Alerts ---');
+    lines.push(`Active: ${activeAlerts.length}, Total: ${alerts.length}`);
+    activeAlerts.forEach(alert => {
+      lines.push(`[${alert.severity.toUpperCase()}] ${alert.message}`);
+    });
 
     return lines.join('\n');
   }
 
-  /**
-   * Export metrics as JSON
-   */
   public exportMetrics(): string {
     return JSON.stringify({
       metrics: this.getMetrics(),
@@ -475,8 +338,6 @@ export class PerformanceMonitor extends SimpleEventEmitter {
       exportedAt: new Date().toISOString(),
     }, null, 2);
   }
-
-  // ===== Private Methods =====
 
   private generateId(): string {
     return Math.random().toString(36).substring(2, 11);
@@ -493,14 +354,13 @@ export class PerformanceMonitor extends SimpleEventEmitter {
       timestamp: Date.now(),
       cpuUsage,
       memoryUsage,
-      agentMetrics: this.getAgentMetricsArray(),
+      agentMetrics: this.metrics.agentMetrics.map(m => ({ ...m })),
       websocketMetrics: this.getWebSocketMetrics(),
-      modelMetrics: this.getModelMetricsArray(),
+      modelMetrics: this.metrics.modelMetrics.map(m => ({ ...m })),
     };
 
     this.checkThresholds(cpuUsage, memoryPercentage);
     this.emit('metrics', this.metrics);
-    this.log('Metrics collected');
   }
 
   private initializeMetrics(): PerformanceMetrics {
@@ -533,49 +393,27 @@ export class PerformanceMonitor extends SimpleEventEmitter {
           arrayBuffers: usage.arrayBuffers || 0,
         };
       } catch (error) {
-        this.log('Failed to get memory usage:', error);
+        // ignore
       }
     }
-    
-    // Fallback for non-Node.js environments
-    return {
-      rss: 0,
-      heapTotal: 0,
-      heapUsed: 0,
-      external: 0,
-      arrayBuffers: 0,
-    };
+    return { rss: 0, heapTotal: 0, heapUsed: 0, external: 0, arrayBuffers: 0 };
   }
 
   private calculateCpuUsage(): number {
-    if (!this.isNodeEnv || !this.lastCpuUsage || !process.cpuUsage) {
-      return 0;
-    }
+    if (!this.isNodeEnv || !this.lastCpuUsage || !process.cpuUsage) return 0;
 
     try {
       const cpuUsage = process.cpuUsage(this.lastCpuUsage);
       const totalTime = cpuUsage.user + cpuUsage.system;
-      const percentage = Math.min(
-        (totalTime / (this.options.interval * 1000)) * 100, 
-        100
-      );
-      
-      // Update baseline for next interval
+      const percentage = Math.min((totalTime / (this.options.interval * 1000)) * 100, 100);
       this.lastCpuUsage = process.cpuUsage();
-      
       return percentage;
     } catch (error) {
-      this.log('Failed to calculate CPU usage:', error);
       return 0;
     }
   }
 
-  private updateAgentMetrics(
-    agentId: string, 
-    agentName: string, 
-    executionTime: number, 
-    success: boolean
-  ): void {
+  private updateAgentMetrics(agentId: string, agentName: string, executionTime: number, success: boolean): void {
     let agentMetric = this.metrics.agentMetrics.find(m => m.agentId === agentId);
     
     if (!agentMetric) {
@@ -599,21 +437,11 @@ export class PerformanceMonitor extends SimpleEventEmitter {
     agentMetric.maxExecutionTime = Math.max(agentMetric.maxExecutionTime, executionTime);
     agentMetric.minExecutionTime = Math.min(agentMetric.minExecutionTime, executionTime);
     
-    if (!success) {
-      agentMetric.errorCount++;
-    }
-    
-    // Calculate success rate as percentage (0-100)
-    agentMetric.successRate = 
-      ((agentMetric.executionCount - agentMetric.errorCount) / agentMetric.executionCount) * 100;
+    if (!success) agentMetric.errorCount++;
+    agentMetric.successRate = ((agentMetric.executionCount - agentMetric.errorCount) / agentMetric.executionCount) * 100;
   }
 
-  private updateModelMetrics(
-    modelId: string, 
-    responseTime: number, 
-    success: boolean, 
-    tokens?: number
-  ): void {
+  private updateModelMetrics(modelId: string, responseTime: number, success: boolean, tokens?: number): void {
     let modelMetric = this.metrics.modelMetrics.find(m => m.modelId === modelId);
     
     if (!modelMetric) {
@@ -637,105 +465,54 @@ export class PerformanceMonitor extends SimpleEventEmitter {
     if (tokens !== undefined && tokens > 0) {
       modelMetric.totalTokens += tokens;
       modelMetric.averageTokensPerRequest = modelMetric.totalTokens / modelMetric.requestCount;
-      
       if (modelMetric.totalResponseTime > 0) {
-        modelMetric.averageTokensPerSecond = 
-          modelMetric.totalTokens / (modelMetric.totalResponseTime / 1000);
+        modelMetric.averageTokensPerSecond = modelMetric.totalTokens / (modelMetric.totalResponseTime / 1000);
       }
     }
 
-    // Calculate error rate as percentage (0-100)
     if (!success) {
-      modelMetric.errorRate = 
-        ((modelMetric.errorRate * (modelMetric.requestCount - 1) / 100) + 1) / modelMetric.requestCount * 100;
+      modelMetric.errorRate = ((modelMetric.errorRate * (modelMetric.requestCount - 1) / 100) + 1) / modelMetric.requestCount * 100;
     } else {
-      modelMetric.errorRate = 
-        (modelMetric.errorRate * (modelMetric.requestCount - 1)) / modelMetric.requestCount;
+      modelMetric.errorRate = (modelMetric.errorRate * (modelMetric.requestCount - 1)) / modelMetric.requestCount;
     }
-  }
-
-  private getAgentMetricsArray(): AgentMetrics[] {
-    return this.metrics.agentMetrics.map(m => ({ ...m }));
   }
 
   private getWebSocketMetrics(): WebSocketMetrics {
     const avgLatency = this.websocketLatencies.length > 0
       ? this.websocketLatencies.reduce((a, b) => a + b, 0) / this.websocketLatencies.length
       : 0;
-
-    return {
-      ...this.metrics.websocketMetrics,
-      averageLatency: avgLatency,
-    };
-  }
-
-  private getModelMetricsArray(): ModelMetrics[] {
-    return this.metrics.modelMetrics.map(m => ({ ...m }));
+    return { ...this.metrics.websocketMetrics, averageLatency: avgLatency };
   }
 
   private checkThresholds(cpuUsage: number, memoryUsage: number): void {
-    // CPU Threshold
     if (cpuUsage > this.options.cpuThreshold) {
-      this.createAlert(
-        'cpu', 
-        'high', 
-        `CPU usage exceeds threshold`, 
-        cpuUsage, 
-        this.options.cpuThreshold
-      );
+      this.createAlert('cpu', 'high', `CPU usage exceeds threshold`, cpuUsage, this.options.cpuThreshold);
     } else {
       this.resolveAlertsByType('cpu');
     }
 
-    // Memory Threshold
     if (memoryUsage > this.options.memoryThreshold) {
-      this.createAlert(
-        'memory', 
-        'high', 
-        `Memory usage exceeds threshold`, 
-        memoryUsage, 
-        this.options.memoryThreshold
-      );
+      this.createAlert('memory', 'high', `Memory usage exceeds threshold`, memoryUsage, this.options.memoryThreshold);
     } else {
       this.resolveAlertsByType('memory');
     }
 
-    // Latency Threshold
     if (this.metrics.websocketMetrics.averageLatency > this.options.latencyThreshold) {
-      this.createAlert(
-        'latency', 
-        'medium', 
-        `WebSocket latency exceeds threshold`, 
-        this.metrics.websocketMetrics.averageLatency, 
-        this.options.latencyThreshold
-      );
+      this.createAlert('latency', 'medium', `WebSocket latency exceeds threshold`, this.metrics.websocketMetrics.averageLatency, this.options.latencyThreshold);
     } else {
       this.resolveAlertsByType('latency');
     }
 
-    // Error Rate Threshold
     for (const model of this.metrics.modelMetrics) {
       if (model.errorRate > this.options.errorRateThreshold) {
-        this.createAlert(
-          'error_rate', 
-          'high', 
-          `Model error rate exceeds threshold: ${model.modelId}`, 
-          model.errorRate, 
-          this.options.errorRateThreshold
-        );
+        this.createAlert('error_rate', 'high', `Model error rate exceeds threshold: ${model.modelId}`, model.errorRate, this.options.errorRateThreshold);
       } else {
         this.resolveAlertsByTypeAndContext('error_rate', model.modelId);
       }
     }
   }
 
-  private createAlert(
-    type: 'cpu' | 'memory' | 'latency' | 'error_rate',
-    severity: 'low' | 'medium' | 'high' | 'critical',
-    message: string,
-    value: number,
-    threshold: number
-  ): void {
+  private createAlert(type: 'cpu' | 'memory' | 'latency' | 'error_rate', severity: 'low' | 'medium' | 'high' | 'critical', message: string, value: number, threshold: number): void {
     const alertId = `${type}-${Date.now()}`;
     const alert: PerformanceAlert = {
       id: alertId,
@@ -748,34 +525,21 @@ export class PerformanceMonitor extends SimpleEventEmitter {
     };
 
     this.alerts.set(alertId, alert);
-    
-    // Enforce maxAlertsHistory limit
     this.enforceAlertsLimit();
-    
     this.emit('alert', alert);
-    this.log(`Alert created: ${message}`);
   }
 
-  /**
-   * Enforce the maxAlertsHistory limit by removing oldest alerts
-   */
   private enforceAlertsLimit(): void {
     const maxAlerts = this.options.maxAlertsHistory;
-    
-    if (this.alerts.size <= maxAlerts) {
-      return;
-    }
+    if (this.alerts.size <= maxAlerts) return;
 
-    // Convert to array and sort by timestamp (oldest first)
     const alertsArray = Array.from(this.alerts.entries())
       .sort((a, b) => a[1].timestamp - b[1].timestamp);
 
-    // Remove oldest alerts, prioritizing resolved ones
     const toRemove: string[] = [];
     let removed = 0;
     const excess = this.alerts.size - maxAlerts;
 
-    // First, remove oldest resolved alerts
     for (const [id, alert] of alertsArray) {
       if (removed >= excess) break;
       if (alert.resolved) {
@@ -784,7 +548,6 @@ export class PerformanceMonitor extends SimpleEventEmitter {
       }
     }
 
-    // If still need to remove more, remove oldest unresolved alerts
     if (removed < excess) {
       for (const [id, alert] of alertsArray) {
         if (removed >= excess) break;
@@ -795,10 +558,8 @@ export class PerformanceMonitor extends SimpleEventEmitter {
       }
     }
 
-    // Remove the alerts
     for (const id of toRemove) {
       this.alerts.delete(id);
-      this.log(`Removed old alert: ${id}`);
     }
   }
 
@@ -825,12 +586,8 @@ export class PerformanceMonitor extends SimpleEventEmitter {
   }
 }
 
-// ===== Factory Function =====
-
 export function createPerformanceMonitor(options?: PerformanceMonitorOptions): PerformanceMonitor {
   return new PerformanceMonitor(options);
 }
-
-// ===== Default Export =====
 
 export default PerformanceMonitor;
