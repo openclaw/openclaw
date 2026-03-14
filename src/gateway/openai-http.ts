@@ -105,6 +105,7 @@ function buildAgentCommandInput(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
+  userMessageExtras?: Record<string, unknown>;
 }) {
   return {
     message: params.prompt.message,
@@ -117,6 +118,7 @@ function buildAgentCommandInput(params: {
     bestEffortDeliver: false as const,
     // HTTP API callers are authenticated operator clients for this gateway context.
     senderIsOwner: true as const,
+    userMessageExtras: params.userMessageExtras,
   };
 }
 
@@ -181,6 +183,38 @@ function extractTextContent(content: unknown): string {
       .join("\n");
   }
   return "";
+}
+
+/**
+ * Extract extra fields from the last user message in an OpenAI-compatible
+ * messages array.  Only own-enumerable keys that are NOT part of the base
+ * OpenAI message shape (`role`, `content`, `name`) are returned.
+ * Returns `undefined` when there are no extras.
+ */
+const USER_MESSAGE_BASE_KEYS = new Set(["role", "content", "name"]);
+
+function extractLastUserMessageExtras(
+  messagesUnknown: unknown,
+): Record<string, unknown> | undefined {
+  const messages = asMessages(messagesUnknown);
+  let lastUser: OpenAiChatMessage | undefined;
+  for (const msg of messages) {
+    if (msg && typeof msg === "object" && typeof msg.role === "string" && msg.role === "user") {
+      lastUser = msg;
+    }
+  }
+  if (!lastUser) {
+    return undefined;
+  }
+  const extras: Record<string, unknown> = {};
+  let hasExtras = false;
+  for (const key of Object.keys(lastUser)) {
+    if (!USER_MESSAGE_BASE_KEYS.has(key)) {
+      extras[key] = (lastUser as Record<string, unknown>)[key];
+      hasExtras = true;
+    }
+  }
+  return hasExtras ? extras : undefined;
 }
 
 function resolveImageUrlPart(part: unknown): string | undefined {
@@ -465,6 +499,7 @@ export async function handleOpenAiHttpRequest(
     return true;
   }
 
+  const userMessageExtras = extractLastUserMessageExtras(payload.messages);
   const runId = `chatcmpl_${randomUUID()}`;
   const deps = createDefaultDeps();
   const commandInput = buildAgentCommandInput({
@@ -476,6 +511,7 @@ export async function handleOpenAiHttpRequest(
     sessionKey,
     runId,
     messageChannel,
+    userMessageExtras,
   });
 
   if (!stream) {
