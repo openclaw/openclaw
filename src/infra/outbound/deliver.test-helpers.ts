@@ -8,7 +8,39 @@ import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/c
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 
-export const deliverMocks = {
+type AsyncUnknownFn<TReturn> = (...args: unknown[]) => Promise<TReturn>;
+type SyncUnknownFn<TReturn> = (...args: unknown[]) => TReturn;
+type DeliverOutboundPayloads = typeof import("./deliver.js").deliverOutboundPayloads;
+type DeliverOutboundResults = Awaited<ReturnType<DeliverOutboundPayloads>>;
+
+export const deliverMocks: {
+  sessions: {
+    appendAssistantMessageToSessionTranscript: AsyncUnknownFn<{
+      ok: true;
+      sessionFile: string;
+    }>;
+  };
+  hooks: {
+    runner: {
+      hasHooks: SyncUnknownFn<boolean>;
+      runMessageSent: AsyncUnknownFn<void>;
+    };
+  };
+  internalHooks: {
+    createInternalHookEvent: (
+      ...args: Parameters<typeof createInternalHookEventPayload>
+    ) => ReturnType<typeof createInternalHookEventPayload>;
+    triggerInternalHook: AsyncUnknownFn<void>;
+  };
+  queue: {
+    enqueueDelivery: AsyncUnknownFn<string>;
+    ackDelivery: AsyncUnknownFn<void>;
+    failDelivery: AsyncUnknownFn<void>;
+  };
+  log: {
+    warn: SyncUnknownFn<void>;
+  };
+} = {
   sessions: {
     appendAssistantMessageToSessionTranscript: async () => ({ ok: true, sessionFile: "x" }),
   },
@@ -33,35 +65,51 @@ export const deliverMocks = {
 };
 
 const _mocks = vi.hoisted(() => ({
-  appendAssistantMessageToSessionTranscript: vi.fn(async () =>
-    deliverMocks.sessions.appendAssistantMessageToSessionTranscript(),
+  appendAssistantMessageToSessionTranscript: vi.fn(
+    async (
+      ...args: Parameters<typeof deliverMocks.sessions.appendAssistantMessageToSessionTranscript>
+    ) => await deliverMocks.sessions.appendAssistantMessageToSessionTranscript(...args),
   ),
 }));
 const _hookMocks = vi.hoisted(() => ({
   runner: {
-    hasHooks: vi.fn(() => deliverMocks.hooks.runner.hasHooks()),
+    hasHooks: vi.fn((...args: Parameters<typeof deliverMocks.hooks.runner.hasHooks>) =>
+      deliverMocks.hooks.runner.hasHooks(...args),
+    ),
     runMessageSent: vi.fn(
-      async (...args: unknown[]) => await deliverMocks.hooks.runner.runMessageSent(...args),
+      async (...args: Parameters<typeof deliverMocks.hooks.runner.runMessageSent>) =>
+        await deliverMocks.hooks.runner.runMessageSent(...args),
     ),
   },
 }));
 const _internalHookMocks = vi.hoisted(() => ({
-  createInternalHookEvent: vi.fn((...args: unknown[]) =>
-    deliverMocks.internalHooks.createInternalHookEvent(...args),
+  createInternalHookEvent: vi.fn(
+    (...args: Parameters<typeof deliverMocks.internalHooks.createInternalHookEvent>) =>
+      deliverMocks.internalHooks.createInternalHookEvent(...args),
   ),
   triggerInternalHook: vi.fn(
-    async (...args: unknown[]) => await deliverMocks.internalHooks.triggerInternalHook(...args),
+    async (...args: Parameters<typeof deliverMocks.internalHooks.triggerInternalHook>) =>
+      await deliverMocks.internalHooks.triggerInternalHook(...args),
   ),
 }));
 const _queueMocks = vi.hoisted(() => ({
   enqueueDelivery: vi.fn(
-    async (...args: unknown[]) => await deliverMocks.queue.enqueueDelivery(...args),
+    async (...args: Parameters<typeof deliverMocks.queue.enqueueDelivery>) =>
+      await deliverMocks.queue.enqueueDelivery(...args),
   ),
-  ackDelivery: vi.fn(async (...args: unknown[]) => await deliverMocks.queue.ackDelivery(...args)),
-  failDelivery: vi.fn(async (...args: unknown[]) => await deliverMocks.queue.failDelivery(...args)),
+  ackDelivery: vi.fn(
+    async (...args: Parameters<typeof deliverMocks.queue.ackDelivery>) =>
+      await deliverMocks.queue.ackDelivery(...args),
+  ),
+  failDelivery: vi.fn(
+    async (...args: Parameters<typeof deliverMocks.queue.failDelivery>) =>
+      await deliverMocks.queue.failDelivery(...args),
+  ),
 }));
 const _logMocks = vi.hoisted(() => ({
-  warn: vi.fn((...args: unknown[]) => deliverMocks.log.warn(...args)),
+  warn: vi.fn((...args: Parameters<typeof deliverMocks.log.warn>) =>
+    deliverMocks.log.warn(...args),
+  ),
 }));
 
 export const mocks = _mocks;
@@ -177,16 +225,12 @@ export function resetDeliverTestMocks(params?: { includeSessionMocks?: boolean }
 }
 
 export async function runChunkedWhatsAppDelivery(params: {
-  deliverOutboundPayloads: (params: {
-    cfg: OpenClawConfig;
-    channel: string;
-    to: string;
-    payloads: Array<{ text: string }>;
-    deps: { sendWhatsApp: ReturnType<typeof vi.fn> };
-    mirror?: unknown;
-  }) => Promise<Array<{ messageId?: string; toJid?: string }>>;
-  mirror?: unknown;
-}) {
+  deliverOutboundPayloads: DeliverOutboundPayloads;
+  mirror?: Parameters<DeliverOutboundPayloads>[0]["mirror"];
+}): Promise<{
+  sendWhatsApp: unknown;
+  results: DeliverOutboundResults;
+}> {
   const sendWhatsApp = vi
     .fn()
     .mockResolvedValueOnce({ messageId: "w1", toJid: "jid" })

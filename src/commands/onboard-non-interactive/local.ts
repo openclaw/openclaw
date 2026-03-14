@@ -149,11 +149,16 @@ export async function runNonInteractiveOnboardingLocal(params: {
       runtime,
       port: gatewayResult.port,
     });
-    daemonInstallStatus = {
-      requested: true,
-      installed: daemonInstall.installed,
-      skippedReason: daemonInstall.skippedReason,
-    };
+    daemonInstallStatus = daemonInstall.installed
+      ? {
+          requested: true,
+          installed: true,
+        }
+      : {
+          requested: true,
+          installed: false,
+          skippedReason: daemonInstall.skippedReason,
+        };
     if (!daemonInstall.installed && !opts.skipHealth) {
       logNonInteractiveOnboardingFailure({
         opts,
