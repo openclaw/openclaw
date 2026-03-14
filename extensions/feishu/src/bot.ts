@@ -452,7 +452,9 @@ function formatSubMessageContent(content: string, contentType: string): string {
 }
 
 function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boolean {
-  if (!botOpenId) return false;
+  // When botOpenId is unknown (e.g. bot-info probe timed out during startup),
+  // assume mentioned so group messages are not silently dropped.
+  if (!botOpenId) return true;
   // Check for @all (@_all in Feishu) — treat as mentioning every bot
   const rawContent = event.message.content ?? "";
   if (rawContent.includes("@_all")) return true;
