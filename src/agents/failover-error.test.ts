@@ -429,6 +429,12 @@ describe("failover-error", () => {
     );
   });
 
+  it("keeps explicit 4xx status classification ahead of server_error markers", () => {
+    const payload = '{"type":"error","error":{"type":"server_error","code":"server_error"}}';
+    expect(resolveFailoverReasonFromError({ status: 401, message: payload })).toBe("auth");
+    expect(resolveFailoverReasonFromError({ status: 402, message: payload })).toBe("billing");
+  });
+
   it("resolveFailoverStatus maps auth_permanent to 403", () => {
     expect(resolveFailoverStatus("auth_permanent")).toBe(403);
   });

@@ -396,7 +396,11 @@ export function classifyFailoverReasonFromHttpStatus(
   status: number | undefined,
   message?: string,
 ): FailoverReason | null {
-  if (message && isStructuredServerErrorMessage(message)) {
+  if (
+    message &&
+    (typeof status !== "number" || !Number.isFinite(status) || status >= 500) &&
+    isStructuredServerErrorMessage(message)
+  ) {
     return "server_error";
   }
   if (typeof status !== "number" || !Number.isFinite(status)) {
