@@ -102,6 +102,8 @@ vi.mock("./client.js", () => ({
   streamSignalEvents: (...args: unknown[]) => streamMock(...args),
   signalCheck: (...args: unknown[]) => signalCheckMock(...args),
   signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
+  detectSignalApiMode: vi.fn().mockResolvedValue("sse"),
+  pollSignalJsonRpc: vi.fn(),
 }));
 
 vi.mock("./daemon.js", async (importOriginal) => {

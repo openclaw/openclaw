@@ -2,7 +2,12 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import type { BackoffPolicy } from "../infra/backoff.js";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { type SignalSseEvent, streamSignalEvents } from "./client.js";
+import {
+  detectSignalApiMode,
+  pollSignalJsonRpc,
+  type SignalSseEvent,
+  streamSignalEvents,
+} from "./client.js";
 
 const DEFAULT_RECONNECT_POLICY: BackoffPolicy = {
   initialMs: 1_000,
@@ -67,6 +72,67 @@ export async function runSignalSseLoop({
       reconnectAttempts += 1;
       const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
       runtime.log?.(`Signal SSE connection lost, reconnecting in ${delayMs / 1000}s...`);
+      try {
+        await sleepWithAbort(delayMs, abortSignal);
+      } catch (sleepErr) {
+        if (abortSignal?.aborted) {
+          return;
+        }
+        throw sleepErr;
+      }
+    }
+  }
+}
+
+type RunSignalReceiveLoopParams = RunSignalSseLoopParams;
+
+/**
+ * Auto-detecting receive loop.  Probes the daemon once at startup: if
+ * /api/v1/events is available (bbernhard REST wrapper) it uses SSE;
+ * otherwise it falls back to the native signal-cli JSON-RPC long-poll.
+ */
+export async function runSignalReceiveLoop(params: RunSignalReceiveLoopParams) {
+  const mode = await detectSignalApiMode(params.baseUrl);
+  params.runtime.log?.(`Signal receive mode: ${mode}`);
+
+  if (mode === "sse") {
+    return runSignalSseLoop(params);
+  }
+  return runSignalJsonRpcPollLoop(params);
+}
+
+async function runSignalJsonRpcPollLoop({
+  baseUrl,
+  account,
+  abortSignal,
+  runtime,
+  onEvent,
+  policy,
+}: RunSignalReceiveLoopParams) {
+  const reconnectPolicy = {
+    ...DEFAULT_RECONNECT_POLICY,
+    ...policy,
+  };
+  let consecutiveErrors = 0;
+
+  while (!abortSignal?.aborted) {
+    try {
+      await pollSignalJsonRpc({
+        baseUrl,
+        account,
+        abortSignal,
+        onEvent,
+        pollTimeoutSec: 10,
+      });
+      consecutiveErrors = 0;
+    } catch (err) {
+      if (abortSignal?.aborted) {
+        return;
+      }
+      consecutiveErrors += 1;
+      runtime.error?.(`Signal JSON-RPC poll error: ${String(err)}`);
+      const delayMs = computeBackoff(reconnectPolicy, consecutiveErrors);
+      runtime.log?.(`Signal JSON-RPC poll failed, retrying in ${delayMs / 1000}s...`);
       try {
         await sleepWithAbort(delayMs, abortSignal);
       } catch (sleepErr) {
