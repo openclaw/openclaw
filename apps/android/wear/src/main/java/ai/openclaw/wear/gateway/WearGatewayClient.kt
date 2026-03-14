@@ -1,8 +1,10 @@
 package ai.openclaw.wear.gateway
 
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
+import ai.openclaw.android.gateway.GatewayClientProfiles
 import ai.openclaw.wear.R
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -189,14 +191,7 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
       put("minProtocol", JsonPrimitive(3))
       put("maxProtocol", JsonPrimitive(3))
       put("role", JsonPrimitive("operator"))
-      put("client", buildJsonObject {
-        put("id", JsonPrimitive(deviceId))
-        put("version", JsonPrimitive("1.0.0"))
-        put("platform", JsonPrimitive("wearos"))
-        put("mode", JsonPrimitive("operator"))
-        put("displayName", JsonPrimitive("${Build.MANUFACTURER} ${Build.MODEL} (Wear OS)"))
-        put("deviceFamily", JsonPrimitive("watch"))
-      })
+      put("client", buildWearGatewayClientInfoJson(deviceId, resolveWearVersionName(context)))
       if (config.token.isNotBlank()) {
         put("auth", buildJsonObject {
           put("token", JsonPrimitive(config.token))
@@ -312,5 +307,39 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
         doConnect()
       }
     }
+  }
+}
+
+internal fun buildWearGatewayClientInfoJson(
+  deviceId: String,
+  versionName: String = "dev",
+): JsonObject {
+  return buildJsonObject {
+    put("id", JsonPrimitive(GatewayClientProfiles.AndroidClientId))
+    put("version", JsonPrimitive(versionName))
+    put("platform", JsonPrimitive(GatewayClientProfiles.WearOsPlatform))
+    put("mode", JsonPrimitive(GatewayClientProfiles.UiMode))
+    put("displayName", JsonPrimitive(GatewayClientProfiles.resolveWearDisplayName()))
+    put("deviceFamily", JsonPrimitive(GatewayClientProfiles.WatchDeviceFamily))
+    put("instanceId", JsonPrimitive(deviceId))
+    GatewayClientProfiles.resolveModelIdentifier()?.let {
+      put("modelIdentifier", JsonPrimitive(it))
+    }
+  }
+}
+
+internal fun resolveWearVersionName(context: Context): String {
+  return GatewayClientProfiles.resolveVersionName(
+    rawVersionName = runCatching { context.packageManager.readPackageVersionName(context.packageName) }.getOrNull(),
+    debug = context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0,
+  )
+}
+
+private fun PackageManager.readPackageVersionName(packageName: String): String? {
+  return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+    getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0)).versionName
+  } else {
+    @Suppress("DEPRECATION")
+    getPackageInfo(packageName, 0).versionName
   }
 }
