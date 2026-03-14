@@ -81,6 +81,29 @@ export function shouldIncludeSkill(params: {
   if (skillConfig?.enabled === false) {
     return false;
   }
+  if (skillConfig?.enabled === true) {
+    if (!isBundledSkillAllowed(entry, allowBundled)) {
+      return false;
+    }
+    // When explicitly enabled, skip only binary availability checks (the binary
+    // may live inside a container), but still enforce OS, env, and config gates.
+    return evaluateRuntimeEligibility({
+      os: entry.metadata?.os,
+      remotePlatforms: eligibility?.remote?.platforms,
+      always: entry.metadata?.always,
+      requires: entry.metadata?.requires,
+      hasBin: () => true,
+      hasRemoteBin: () => true,
+      hasAnyRemoteBin: () => true,
+      hasEnv: (envName) =>
+        Boolean(
+          process.env[envName] ||
+          skillConfig?.env?.[envName] ||
+          (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
+        ),
+      isConfigPathTruthy: (configPath) => isConfigPathTruthy(config, configPath),
+    });
+  }
   if (!isBundledSkillAllowed(entry, allowBundled)) {
     return false;
   }
