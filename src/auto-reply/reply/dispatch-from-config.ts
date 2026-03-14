@@ -32,6 +32,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
+import { deliverInternalHookMessages } from "./internal-hook-replies.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
@@ -183,6 +184,12 @@ export async function dispatchReplyFromConfig(params: {
     ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   const hookContext = deriveInboundMessageHookContext(ctx, { messageId: messageIdForHook });
   const { isGroup, groupId } = hookContext;
+  const originatingChannel = normalizeMessageChannel(ctx.OriginatingChannel);
+  const originatingTo = ctx.OriginatingTo;
+  const providerChannel = normalizeMessageChannel(ctx.Provider);
+  const surfaceChannel = normalizeMessageChannel(ctx.Surface);
+  // Prefer provider channel because surface may carry origin metadata in relayed flows.
+  const currentSurface = providerChannel ?? surfaceChannel;
 
   // Trigger plugin hooks (fire-and-forget)
   if (hookRunner?.hasHooks("message_received")) {
@@ -198,12 +205,27 @@ export async function dispatchReplyFromConfig(params: {
   // Bridge to internal hooks (HOOK.md discovery system) - refs #8807
   if (sessionKey) {
     fireAndForgetHook(
-      triggerInternalHook(
-        createInternalHookEvent("message", "received", sessionKey, {
+      (async () => {
+        const hookEvent = createInternalHookEvent("message", "received", sessionKey, {
           ...toInternalMessageReceivedContext(hookContext),
           timestamp,
-        }),
-      ),
+        });
+        await triggerInternalHook(hookEvent);
+        await deliverInternalHookMessages({
+          event: hookEvent,
+          target: {
+            cfg,
+            channel: originatingChannel ?? currentSurface,
+            to: originatingTo ?? ctx.To ?? ctx.From,
+            sessionKey,
+            accountId: ctx.AccountId,
+            threadId: ctx.MessageThreadId,
+            isGroup,
+            groupId,
+          },
+          source: "dispatch-from-config: message_received",
+        });
+      })(),
       "dispatch-from-config: message_received internal hook failed",
     );
   }
@@ -215,12 +237,6 @@ export async function dispatchReplyFromConfig(params: {
   // flow when the provider handles its own messages.
   //
   // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
-  const originatingChannel = normalizeMessageChannel(ctx.OriginatingChannel);
-  const originatingTo = ctx.OriginatingTo;
-  const providerChannel = normalizeMessageChannel(ctx.Provider);
-  const surfaceChannel = normalizeMessageChannel(ctx.Surface);
-  // Prefer provider channel because surface may carry origin metadata in relayed flows.
-  const currentSurface = providerChannel ?? surfaceChannel;
   const isInternalWebchatTurn =
     currentSurface === INTERNAL_MESSAGE_CHANNEL &&
     (surfaceChannel === INTERNAL_MESSAGE_CHANNEL || !surfaceChannel) &&

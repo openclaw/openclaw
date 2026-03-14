@@ -199,7 +199,7 @@ const myHandler = async (event) => {
 
   // Your custom logic here
 
-  // Optionally send message to user
+  // Optionally send a reply on supported reply-capable surfaces
   event.messages.push("✨ My hook executed!");
 };
 
@@ -216,7 +216,7 @@ Each event includes:
   action: string,              // e.g., 'new', 'reset', 'stop', 'received', 'sent'
   sessionKey: string,          // Session identifier
   timestamp: Date,             // When the event occurred
-  messages: string[],          // Push messages here to send to user
+  messages: string[],          // Push reply messages here for supported reply-capable surfaces
   context: {
     // Command events:
     sessionEntry?: SessionEntry,
@@ -338,6 +338,18 @@ Message events include rich context about the message:
   groupId?: string,
 }
 ```
+
+#### Hook Reply Messages
+
+`event.messages` is not a global "reply anywhere" mechanism.
+
+OpenClaw only drains `event.messages` on reply-capable surfaces where it has a safe routing target:
+
+- `command:new`
+- `command:reset`
+- `message:received`
+
+For lifecycle-only surfaces such as `agent:bootstrap`, `message:preprocessed`, `message:transcribed`, `message:sent`, and gateway/session events, pushed `event.messages` are not automatically delivered to the user.
 
 #### Example: Message Logger Hook
 

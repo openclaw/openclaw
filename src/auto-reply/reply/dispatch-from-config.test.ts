@@ -1788,6 +1788,61 @@ describe("dispatchReplyFromConfig", () => {
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
 
+  it("routes internal message:received hook replies on replyable surfaces", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      SessionKey: "agent:main:main",
+      To: "whatsapp:+2000",
+      From: "whatsapp:+1000",
+      CommandBody: "hello",
+    });
+    internalHookMocks.triggerInternalHook.mockImplementation(async (...args: unknown[]) => {
+      const [event] = args as [{ messages: string[] }];
+      event.messages.push("Hook reply");
+    });
+
+    const replyResolver = async () => ({ text: "agent reply" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    await vi.waitFor(() =>
+      expect(mocks.routeReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: { text: "Hook reply" },
+          channel: "whatsapp",
+          to: "whatsapp:+2000",
+          sessionKey: "agent:main:main",
+        }),
+      ),
+    );
+  });
+
+  it("does not route internal hook replies from non-routable surfaces", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      SessionKey: "agent:main:main",
+      To: "session:abc",
+    });
+    internalHookMocks.triggerInternalHook.mockImplementation(async (...args: unknown[]) => {
+      const [event] = args as [{ messages: string[] }];
+      event.messages.push("Hook reply");
+    });
+
+    const replyResolver = async () => ({ text: "agent reply" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    await vi.waitFor(() => expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+  });
+
   it("skips internal message:received hook when session key is unavailable", async () => {
     setNoAbort();
     const cfg = emptyConfig;

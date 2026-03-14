@@ -167,7 +167,7 @@ export interface InternalHookEvent {
   context: Record<string, unknown>;
   /** Timestamp when the event occurred */
   timestamp: Date;
-  /** Messages to send back to the user (hooks can push to this array) */
+  /** Reply messages for supported reply-capable surfaces (hooks can push to this array) */
   messages: string[];
 }
 

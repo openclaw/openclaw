@@ -40,7 +40,7 @@ import type {
   CommandHandlerResult,
   HandleCommandsParams,
 } from "./commands-types.js";
-import { routeReply } from "./route-reply.js";
+import { deliverInternalHookMessages } from "./internal-hook-replies.js";
 
 let HANDLERS: CommandHandler[] | null = null;
 
@@ -70,27 +70,21 @@ export async function emitResetCommandHooks(params: {
   await triggerInternalHook(hookEvent);
   params.command.resetHookTriggered = true;
 
-  // Send hook messages immediately if present
-  if (hookEvent.messages.length > 0) {
-    // Use OriginatingChannel/To if available, otherwise fall back to command channel/from
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const channel = params.ctx.OriginatingChannel || (params.command.channel as any);
-    // For replies, use 'from' (the sender) not 'to' (which might be the bot itself)
-    const to = params.ctx.OriginatingTo || params.command.from || params.command.to;
-
-    if (channel && to) {
-      const hookReply = { text: hookEvent.messages.join("\n\n") };
-      await routeReply({
-        payload: hookReply,
-        channel: channel,
-        to: to,
-        sessionKey: params.sessionKey,
-        accountId: params.ctx.AccountId,
-        threadId: params.ctx.MessageThreadId,
-        cfg: params.cfg,
-      });
-    }
-  }
+  // /new and /reset are interactive surfaces, so hook replies can be sent immediately.
+  await deliverInternalHookMessages({
+    event: hookEvent,
+    target: {
+      cfg: params.cfg,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      channel: params.ctx.OriginatingChannel || (params.command.channel as any),
+      // Use 'from' for command replies because 'to' may be the bot identity.
+      to: params.ctx.OriginatingTo || params.command.from || params.command.to,
+      sessionKey: params.sessionKey,
+      accountId: params.ctx.AccountId,
+      threadId: params.ctx.MessageThreadId,
+    },
+    source: "emitResetCommandHooks",
+  });
 
   // Fire before_reset plugin hook — extract memories before session history is lost
   const hookRunner = getGlobalHookRunner();
