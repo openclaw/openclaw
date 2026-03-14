@@ -1,0 +1,35 @@
+{
+  "id": "keyword-context",
+  "name": "Keyword Context Injector",
+  "description": "Injects reference documents into agent context when conversation keywords match. Supports TTL-based unloading, token budget caps, and priority sorting. Reduces boot payload by loading docs on-demand instead of at startup.",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mapPath": {
+        "type": "string",
+        "description": "Path to keyword-map.json. Defaults to {workspaceDir}/keyword-map.json."
+      },
+      "docsRoot": {
+        "type": "string",
+        "description": "Root directory for reference documents. Paths in the keyword map are resolved relative to this directory. Defaults to {workspaceDir}."
+      },
+      "maxTotalChars": {
+        "type": "number",
+        "default": 60000,
+        "description": "Maximum total characters of injected context per turn (~15K tokens at 60000 chars)."
+      },
+      "maxConcurrentDocs": {
+        "type": "number",
+        "default": 5,
+        "description": "Maximum number of documents injected simultaneously."
+      },
+      "mapReloadMs": {
+        "type": "number",
+        "default": 60000,
+        "description": "How often to check for keyword map changes (milliseconds)."
+      }
+    }
+  }
+}
