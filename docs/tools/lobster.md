@@ -106,6 +106,7 @@ Use it in a pipeline:
 ```lobster
 openclaw.invoke --tool llm-task --action json --args-json '{
   "prompt": "Given the input email, return intent and draft.",
+  "thinking": "low",
   "input": { "subject": "Hello", "body": "Can you help?" },
   "schema": {
     "type": "object",

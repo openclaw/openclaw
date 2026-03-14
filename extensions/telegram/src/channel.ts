@@ -1,9 +1,9 @@
 import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
 import {
   collectAllowlistProviderGroupPolicyWarnings,
-  buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyRouteAllowlistWarnings,
   createScopedAccountConfigAccessors,
+  createScopedDmSecurityResolver,
   formatAllowFromLowercase,
 } from "openclaw/plugin-sdk/compat";
 import {
@@ -31,6 +31,7 @@ import {
   resolveTelegramAccount,
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
+  sendTelegramPayloadMessages,
   telegramOnboardingAdapter,
   TelegramConfigSchema,
   type ChannelMessageActionAdapter,
@@ -77,6 +78,61 @@ function formatDuplicateTelegramTokenReason(params: {
   );
 }
 
+type TelegramSendFn = ReturnType<
+  typeof getTelegramRuntime
+>["channel"]["telegram"]["sendMessageTelegram"];
+type TelegramSendOptions = NonNullable<Parameters<TelegramSendFn>[2]>;
+
+function buildTelegramSendOptions(params: {
+  cfg: OpenClawConfig;
+  mediaUrl?: string | null;
+  mediaLocalRoots?: readonly string[] | null;
+  accountId?: string | null;
+  replyToId?: string | null;
+  threadId?: string | number | null;
+  silent?: boolean | null;
+}): TelegramSendOptions {
+  return {
+    verbose: false,
+    cfg: params.cfg,
+    ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
+    ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
+    messageThreadId: parseTelegramThreadId(params.threadId),
+    replyToMessageId: parseTelegramReplyToMessageId(params.replyToId),
+    accountId: params.accountId ?? undefined,
+    silent: params.silent ?? undefined,
+  };
+}
+
+async function sendTelegramOutbound(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  text: string;
+  mediaUrl?: string | null;
+  mediaLocalRoots?: readonly string[] | null;
+  accountId?: string | null;
+  deps?: { sendTelegram?: TelegramSendFn };
+  replyToId?: string | null;
+  threadId?: string | number | null;
+  silent?: boolean | null;
+}) {
+  const send =
+    params.deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
+  return await send(
+    params.to,
+    params.text,
+    buildTelegramSendOptions({
+      cfg: params.cfg,
+      mediaUrl: params.mediaUrl,
+      mediaLocalRoots: params.mediaLocalRoots,
+      accountId: params.accountId,
+      replyToId: params.replyToId,
+      threadId: params.threadId,
+      silent: params.silent,
+    }),
+  );
+}
+
 const telegramMessageActions: ChannelMessageActionAdapter = {
   listActions: (ctx) =>
     getTelegramRuntime().channel.telegram.messageActions?.listActions?.(ctx) ?? [],
@@ -90,10 +146,6 @@ const telegramMessageActions: ChannelMessageActionAdapter = {
     return ma.handleAction(ctx);
   },
 };
-
-type TelegramInlineButtons = ReadonlyArray<
-  ReadonlyArray<{ text: string; callback_data: string; style?: "danger" | "success" | "primary" }>
->;
 
 const telegramConfigAccessors = createScopedAccountConfigAccessors({
   resolveAccount: ({ cfg, accountId }) => resolveTelegramAccount({ cfg, accountId }),
@@ -110,6 +162,14 @@ const telegramConfigBase = createScopedChannelConfigBase<ResolvedTelegramAccount
   inspectAccount: (cfg, accountId) => inspectTelegramAccount({ cfg, accountId }),
   defaultAccountId: resolveDefaultTelegramAccountId,
   clearBaseFields: ["botToken", "tokenFile", "name"],
+});
+
+const resolveTelegramDmPolicy = createScopedDmSecurityResolver<ResolvedTelegramAccount>({
+  channelKey: "telegram",
+  resolvePolicy: (account) => account.config.dmPolicy,
+  resolveAllowFrom: (account) => account.config.allowFrom,
+  policyPathSuffix: "dmPolicy",
+  normalizeEntry: (raw) => raw.replace(/^(telegram|tg):/i, ""),
 });
 
 export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProbe> = {
@@ -180,18 +240,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     ...telegramConfigAccessors,
   },
   security: {
-    resolveDmPolicy: ({ cfg, accountId, account }) => {
-      return buildAccountScopedDmSecurityPolicy({
-        cfg,
-        channelKey: "telegram",
-        accountId,
-        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
-        policy: account.config.dmPolicy,
-        allowFrom: account.config.allowFrom ?? [],
-        policyPathSuffix: "dmPolicy",
-        normalizeEntry: (raw) => raw.replace(/^(telegram|tg):/i, ""),
-      });
-    },
+    resolveDmPolicy: resolveTelegramDmPolicy,
     collectWarnings: ({ account, cfg }) => {
       const groupAllowlistConfigured =
         account.config.groups && Object.keys(account.config.groups).length > 0;
@@ -333,61 +382,31 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       silent,
     }) => {
       const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
-      const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
-      const messageThreadId = parseTelegramThreadId(threadId);
-      const telegramData = payload.channelData?.telegram as
-        | { buttons?: TelegramInlineButtons; quoteText?: string }
-        | undefined;
-      const quoteText =
-        typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;
-      const text = payload.text ?? "";
-      const mediaUrls = payload.mediaUrls?.length
-        ? payload.mediaUrls
-        : payload.mediaUrl
-          ? [payload.mediaUrl]
-          : [];
-      const baseOpts = {
-        verbose: false,
-        cfg,
-        mediaLocalRoots,
-        messageThreadId,
-        replyToMessageId,
-        quoteText,
-        accountId: accountId ?? undefined,
-        silent: silent ?? undefined,
-      };
-
-      if (mediaUrls.length === 0) {
-        const result = await send(to, text, {
-          ...baseOpts,
-          buttons: telegramData?.buttons,
-        });
-        return { channel: "telegram", ...result };
-      }
-
-      let finalResult: Awaited<ReturnType<typeof send>> | undefined;
-      for (let i = 0; i < mediaUrls.length; i += 1) {
-        const mediaUrl = mediaUrls[i];
-        const isFirst = i === 0;
-        finalResult = await send(to, isFirst ? text : "", {
-          ...baseOpts,
-          mediaUrl,
-          ...(isFirst ? { buttons: telegramData?.buttons } : {}),
-        });
-      }
-      return { channel: "telegram", ...(finalResult ?? { messageId: "unknown", chatId: to }) };
+      const result = await sendTelegramPayloadMessages({
+        send,
+        to,
+        payload,
+        baseOpts: buildTelegramSendOptions({
+          cfg,
+          mediaLocalRoots,
+          accountId,
+          replyToId,
+          threadId,
+          silent,
+        }),
+      });
+      return { channel: "telegram", ...result };
     },
     sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, silent }) => {
-      const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
-      const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
-      const messageThreadId = parseTelegramThreadId(threadId);
-      const result = await send(to, text, {
-        verbose: false,
+      const result = await sendTelegramOutbound({
         cfg,
-        messageThreadId,
-        replyToMessageId,
-        accountId: accountId ?? undefined,
-        silent: silent ?? undefined,
+        to,
+        text,
+        accountId,
+        deps,
+        replyToId,
+        threadId,
+        silent,
       });
       return { channel: "telegram", ...result };
     },
@@ -403,18 +422,17 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       threadId,
       silent,
     }) => {
-      const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
-      const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
-      const messageThreadId = parseTelegramThreadId(threadId);
-      const result = await send(to, text, {
-        verbose: false,
+      const result = await sendTelegramOutbound({
         cfg,
+        to,
+        text,
         mediaUrl,
         mediaLocalRoots,
-        messageThreadId,
-        replyToMessageId,
-        accountId: accountId ?? undefined,
-        silent: silent ?? undefined,
+        accountId,
+        deps,
+        replyToId,
+        threadId,
+        silent,
       });
       return { channel: "telegram", ...result };
     },
@@ -438,11 +456,11 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     collectStatusIssues: collectTelegramStatusIssues,
     buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
     probeAccount: async ({ account, timeoutMs }) =>
-      getTelegramRuntime().channel.telegram.probeTelegram(
-        account.token,
-        timeoutMs,
-        account.config.proxy,
-      ),
+      getTelegramRuntime().channel.telegram.probeTelegram(account.token, timeoutMs, {
+        accountId: account.accountId,
+        proxyUrl: account.config.proxy,
+        network: account.config.network,
+      }),
     auditAccount: async ({ account, timeoutMs, probe, cfg }) => {
       const groups =
         cfg.channels?.telegram?.accounts?.[account.accountId]?.groups ??
@@ -468,6 +486,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         botId,
         groupIds,
         proxyUrl: account.config.proxy,
+        network: account.config.network,
         timeoutMs,
       });
       return { ...audit, unresolvedGroups, hasWildcardUnmentionedGroups };
@@ -531,11 +550,11 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       const token = (account.token ?? "").trim();
       let telegramBotLabel = "";
       try {
-        const probe = await getTelegramRuntime().channel.telegram.probeTelegram(
-          token,
-          2500,
-          account.config.proxy,
-        );
+        const probe = await getTelegramRuntime().channel.telegram.probeTelegram(token, 2500, {
+          accountId: account.accountId,
+          proxyUrl: account.config.proxy,
+          network: account.config.network,
+        });
         const username = probe.ok ? probe.bot?.username?.trim() : null;
         if (username) {
           telegramBotLabel = ` (@${username})`;

@@ -84,6 +84,19 @@ const createHandleInlineActionsInput = (params: {
   };
 };
 
+async function expectInlineActionSkipped(params: {
+  ctx: ReturnType<typeof buildTestCtx>;
+  typing: TypingController;
+  cleanedBody: string;
+  command?: Partial<HandleInlineActionsInput["command"]>;
+  overrides?: Partial<Omit<HandleInlineActionsInput, "ctx" | "sessionCtx" | "typing" | "command">>;
+}) {
+  const result = await handleInlineActions(createHandleInlineActionsInput(params));
+  expect(result).toEqual({ kind: "reply", reply: undefined });
+  expect(params.typing.cleanup).toHaveBeenCalled();
+  expect(handleCommandsMock).not.toHaveBeenCalled();
+}
+
 describe("handleInlineActions", () => {
   beforeEach(() => {
     handleCommandsMock.mockReset();
@@ -97,18 +110,12 @@ describe("handleInlineActions", () => {
       To: "whatsapp:+123",
       Body: "hi",
     });
-    const result = await handleInlineActions(
-      createHandleInlineActionsInput({
-        ctx,
-        typing,
-        cleanedBody: "hi",
-        command: { to: "whatsapp:+123" },
-      }),
-    );
-
-    expect(result).toEqual({ kind: "reply", reply: undefined });
-    expect(typing.cleanup).toHaveBeenCalled();
-    expect(handleCommandsMock).not.toHaveBeenCalled();
+    await expectInlineActionSkipped({
+      ctx,
+      typing,
+      cleanedBody: "hi",
+      command: { to: "whatsapp:+123" },
+    });
   });
 
   it("forwards agentDir into handleCommands", async () => {
@@ -163,25 +170,19 @@ describe("handleInlineActions", () => {
       MessageSid: "41",
     });
 
-    const result = await handleInlineActions(
-      createHandleInlineActionsInput({
-        ctx,
-        typing,
-        cleanedBody: "old queued message",
-        command: {
-          rawBodyNormalized: "old queued message",
-          commandBodyNormalized: "old queued message",
-        },
-        overrides: {
-          sessionEntry,
-          sessionStore,
-        },
-      }),
-    );
-
-    expect(result).toEqual({ kind: "reply", reply: undefined });
-    expect(typing.cleanup).toHaveBeenCalled();
-    expect(handleCommandsMock).not.toHaveBeenCalled();
+    await expectInlineActionSkipped({
+      ctx,
+      typing,
+      cleanedBody: "old queued message",
+      command: {
+        rawBodyNormalized: "old queued message",
+        commandBodyNormalized: "old queued message",
+      },
+      overrides: {
+        sessionEntry,
+        sessionStore,
+      },
+    });
   });
 
   it("clears /stop cutoff when a newer message arrives", async () => {

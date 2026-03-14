@@ -148,6 +148,15 @@ describe("createStatusReactionController", () => {
     expect(calls).toContainEqual({ method: "set", emoji: DEFAULT_EMOJIS.thinking });
   });
 
+  it("should debounce setCompacting and eventually call adapter", async () => {
+    const { calls, controller } = createEnabledController();
+
+    void controller.setCompacting();
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+
+    expect(calls).toContainEqual({ method: "set", emoji: DEFAULT_EMOJIS.compacting });
+  });
+
   it("should classify tool name and debounce", async () => {
     const { calls, controller } = createEnabledController();
 
@@ -243,6 +252,19 @@ describe("createStatusReactionController", () => {
 
     // Should not add another call
     expect(calls.length).toBe(callsAfterFirst);
+  });
+
+  it("should cancel a pending compacting emoji before resuming thinking", async () => {
+    const { calls, controller } = createEnabledController();
+
+    void controller.setCompacting();
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs - 1);
+    controller.cancelPending();
+    void controller.setThinking();
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+
+    const setEmojis = calls.filter((call) => call.method === "set").map((call) => call.emoji);
+    expect(setEmojis).toEqual([DEFAULT_EMOJIS.thinking]);
   });
 
   it("should call removeReaction when adapter supports it and emoji changes", async () => {
@@ -446,6 +468,7 @@ describe("constants", () => {
     const emojiKeys = [
       "queued",
       "thinking",
+      "compacting",
       "tool",
       "coding",
       "web",

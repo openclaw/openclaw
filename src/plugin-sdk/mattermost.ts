@@ -33,6 +33,7 @@ export {
   buildSingleChannelSecretPromptState,
   promptAccountId,
   promptSingleChannelSecretInput,
+  runSingleChannelSecretStep,
   resolveAccountIdForConfigure,
 } from "../channels/plugins/onboarding/helpers.js";
 export {
@@ -40,6 +41,7 @@ export {
   applySetupAccountConfigPatch,
   migrateBaseNameToDefaultAccount,
 } from "../channels/plugins/setup-helpers.js";
+export { createAccountStatusSink } from "./channel-lifecycle.js";
 export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export type {
@@ -99,5 +101,6 @@ export {
 export { evaluateSenderGroupAccessForPolicy } from "./group-access.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
+export { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export { createScopedPairingAccess } from "./pairing-access.js";

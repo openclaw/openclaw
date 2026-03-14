@@ -7,7 +7,7 @@ import { parsePostContent } from "./post.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
-import type { FeishuSendResult } from "./types.js";
+import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./types.js";
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
 
@@ -43,11 +43,39 @@ function isWithdrawnReplyError(err: unknown): boolean {
 type FeishuCreateMessageClient = {
   im: {
     message: {
+      reply: (opts: {
+        path: { message_id: string };
+        data: { content: string; msg_type: string; reply_in_thread?: true };
+      }) => Promise<{ code?: number; msg?: string; data?: { message_id?: string } }>;
       create: (opts: {
         params: { receive_id_type: "chat_id" | "email" | "open_id" | "union_id" | "user_id" };
         data: { receive_id: string; content: string; msg_type: string };
       }) => Promise<{ code?: number; msg?: string; data?: { message_id?: string } }>;
     };
+  };
+};
+
+type FeishuMessageSender = {
+  id?: string;
+  id_type?: string;
+  sender_type?: string;
+};
+
+type FeishuMessageGetItem = {
+  message_id?: string;
+  chat_id?: string;
+  chat_type?: FeishuChatType;
+  msg_type?: string;
+  body?: { content?: string };
+  sender?: FeishuMessageSender;
+  create_time?: string;
+};
+
+type FeishuGetMessageResponse = {
+  code?: number;
+  msg?: string;
+  data?: FeishuMessageGetItem & {
+    items?: FeishuMessageGetItem[];
   };
 };
 
@@ -74,16 +102,49 @@ async function sendFallbackDirect(
   return toFeishuSendResult(response, params.receiveId);
 }
 
-export type FeishuMessageInfo = {
-  messageId: string;
-  chatId: string;
-  senderId?: string;
-  senderOpenId?: string;
-  senderType?: string;
-  content: string;
-  contentType: string;
-  createTime?: number;
-};
+async function sendReplyOrFallbackDirect(
+  client: FeishuCreateMessageClient,
+  params: {
+    replyToMessageId?: string;
+    replyInThread?: boolean;
+    content: string;
+    msgType: string;
+    directParams: {
+      receiveId: string;
+      receiveIdType: "chat_id" | "email" | "open_id" | "union_id" | "user_id";
+      content: string;
+      msgType: string;
+    };
+    directErrorPrefix: string;
+    replyErrorPrefix: string;
+  },
+): Promise<FeishuSendResult> {
+  if (!params.replyToMessageId) {
+    return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
+  }
+
+  let response: { code?: number; msg?: string; data?: { message_id?: string } };
+  try {
+    response = await client.im.message.reply({
+      path: { message_id: params.replyToMessageId },
+      data: {
+        content: params.content,
+        msg_type: params.msgType,
+        ...(params.replyInThread ? { reply_in_thread: true } : {}),
+      },
+    });
+  } catch (err) {
+    if (!isWithdrawnReplyError(err)) {
+      throw err;
+    }
+    return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
+  }
+  if (shouldFallbackFromReplyTarget(response)) {
+    return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
+  }
+  assertFeishuMessageApiSuccess(response, params.replyErrorPrefix);
+  return toFeishuSendResult(response, params.directParams.receiveId);
+}
 
 function parseInteractiveCardContent(parsed: unknown): string {
   if (!parsed || typeof parsed !== "object") {
@@ -183,34 +244,7 @@ export async function getMessageFeishu(params: {
   try {
     const response = (await client.im.message.get({
       path: { message_id: messageId },
-    })) as {
-      code?: number;
-      msg?: string;
-      data?: {
-        items?: Array<{
-          message_id?: string;
-          chat_id?: string;
-          msg_type?: string;
-          body?: { content?: string };
-          sender?: {
-            id?: string;
-            id_type?: string;
-            sender_type?: string;
-          };
-          create_time?: string;
-        }>;
-        message_id?: string;
-        chat_id?: string;
-        msg_type?: string;
-        body?: { content?: string };
-        sender?: {
-          id?: string;
-          id_type?: string;
-          sender_type?: string;
-        };
-        create_time?: string;
-      };
-    };
+    })) as FeishuGetMessageResponse;
 
     if (response.code !== 0) {
       return null;
@@ -234,6 +268,10 @@ export async function getMessageFeishu(params: {
     return {
       messageId: item.message_id ?? messageId,
       chatId: item.chat_id ?? "",
+      chatType:
+        item.chat_type === "group" || item.chat_type === "private" || item.chat_type === "p2p"
+          ? item.chat_type
+          : undefined,
       senderId: item.sender?.id,
       senderOpenId: item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
       senderType: item.sender?.sender_type,
@@ -301,32 +339,15 @@ export async function sendMessageFeishu(
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
 
   const directParams = { receiveId, receiveIdType, content, msgType };
-
-  if (replyToMessageId) {
-    let response: { code?: number; msg?: string; data?: { message_id?: string } };
-    try {
-      response = await client.im.message.reply({
-        path: { message_id: replyToMessageId },
-        data: {
-          content,
-          msg_type: msgType,
-          ...(replyInThread ? { reply_in_thread: true } : {}),
-        },
-      });
-    } catch (err) {
-      if (!isWithdrawnReplyError(err)) {
-        throw err;
-      }
-      return sendFallbackDirect(client, directParams, "Feishu send failed");
-    }
-    if (shouldFallbackFromReplyTarget(response)) {
-      return sendFallbackDirect(client, directParams, "Feishu send failed");
-    }
-    assertFeishuMessageApiSuccess(response, "Feishu reply failed");
-    return toFeishuSendResult(response, receiveId);
-  }
-
-  return sendFallbackDirect(client, directParams, "Feishu send failed");
+  return sendReplyOrFallbackDirect(client, {
+    replyToMessageId,
+    replyInThread,
+    content,
+    msgType,
+    directParams,
+    directErrorPrefix: "Feishu send failed",
+    replyErrorPrefix: "Feishu reply failed",
+  });
 }
 
 export type SendFeishuCardParams = {
@@ -345,32 +366,15 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
   const content = JSON.stringify(card);
 
   const directParams = { receiveId, receiveIdType, content, msgType: "interactive" };
-
-  if (replyToMessageId) {
-    let response: { code?: number; msg?: string; data?: { message_id?: string } };
-    try {
-      response = await client.im.message.reply({
-        path: { message_id: replyToMessageId },
-        data: {
-          content,
-          msg_type: "interactive",
-          ...(replyInThread ? { reply_in_thread: true } : {}),
-        },
-      });
-    } catch (err) {
-      if (!isWithdrawnReplyError(err)) {
-        throw err;
-      }
-      return sendFallbackDirect(client, directParams, "Feishu card send failed");
-    }
-    if (shouldFallbackFromReplyTarget(response)) {
-      return sendFallbackDirect(client, directParams, "Feishu card send failed");
-    }
-    assertFeishuMessageApiSuccess(response, "Feishu card reply failed");
-    return toFeishuSendResult(response, receiveId);
-  }
-
-  return sendFallbackDirect(client, directParams, "Feishu card send failed");
+  return sendReplyOrFallbackDirect(client, {
+    replyToMessageId,
+    replyInThread,
+    content,
+    msgType: "interactive",
+    directParams,
+    directErrorPrefix: "Feishu card send failed",
+    replyErrorPrefix: "Feishu card reply failed",
+  });
 }
 
 export async function updateCardFeishu(params: {

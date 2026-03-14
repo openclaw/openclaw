@@ -15,7 +15,7 @@ import {
 } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { tryRecordMessage, tryRecordMessagePersistent } from "./dedup.js";
+import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { downloadMessageResourceFeishu } from "./media.js";
@@ -934,8 +934,18 @@ export async function handleFeishuMessage(params: {
   runtime?: RuntimeEnv;
   chatHistories?: Map<string, HistoryEntry[]>;
   accountId?: string;
+  processingClaimHeld?: boolean;
 }): Promise<void> {
-  const { cfg, event, botOpenId, botName, runtime, chatHistories, accountId } = params;
+  const {
+    cfg,
+    event,
+    botOpenId,
+    botName,
+    runtime,
+    chatHistories,
+    accountId,
+    processingClaimHeld = false,
+  } = params;
 
   // Resolve account with merged config
   const account = resolveFeishuAccount({ cfg, accountId });
@@ -944,16 +954,15 @@ export async function handleFeishuMessage(params: {
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
 
-  // Dedup: synchronous memory guard prevents concurrent duplicate dispatch
-  // before the async persistent check completes.
   const messageId = event.message.message_id;
-  const memoryDedupeKey = `${account.accountId}:${messageId}`;
-  if (!tryRecordMessage(memoryDedupeKey)) {
-    log(`feishu: skipping duplicate message ${messageId} (memory dedup)`);
-    return;
-  }
-  // Persistent dedup survives restarts and reconnects.
-  if (!(await tryRecordMessagePersistent(messageId, account.accountId, log))) {
+  if (
+    !(await finalizeFeishuMessageProcessing({
+      messageId,
+      namespace: account.accountId,
+      log,
+      claimHeld: processingClaimHeld,
+    }))
+  ) {
     log(`feishu: skipping duplicate message ${messageId}`);
     return;
   }

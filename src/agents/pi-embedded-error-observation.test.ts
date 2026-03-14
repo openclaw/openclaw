@@ -6,6 +6,9 @@ import {
   sanitizeForConsole,
 } from "./pi-embedded-error-observation.js";
 
+const OBSERVATION_BEARER_TOKEN = "sk-redact-test-token";
+const OBSERVATION_COOKIE_VALUE = "session-cookie-token";
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -29,27 +32,27 @@ describe("buildApiErrorObservationFields", () => {
 
   it("forces token redaction for observation previews", () => {
     const observed = buildApiErrorObservationFields(
-      "Authorization: Bearer sk-abcdefghijklmnopqrstuvwxyz123456",
+      `Authorization: Bearer ${OBSERVATION_BEARER_TOKEN}`,
     );
 
-    expect(observed.rawErrorPreview).not.toContain("sk-abcdefghijklmnopqrstuvwxyz123456");
-    expect(observed.rawErrorPreview).toContain("sk-abc");
+    expect(observed.rawErrorPreview).not.toContain(OBSERVATION_BEARER_TOKEN);
+    expect(observed.rawErrorPreview).toContain(OBSERVATION_BEARER_TOKEN.slice(0, 6));
     expect(observed.rawErrorHash).toMatch(/^sha256:/);
   });
 
   it("redacts observation-only header and cookie formats", () => {
     const observed = buildApiErrorObservationFields(
-      "x-api-key: sk-abcdefghijklmnopqrstuvwxyz123456 Cookie: session=abcdefghijklmnopqrstuvwxyz123456",
+      `x-api-key: ${OBSERVATION_BEARER_TOKEN} Cookie: session=${OBSERVATION_COOKIE_VALUE}`,
     );
 
-    expect(observed.rawErrorPreview).not.toContain("abcdefghijklmnopqrstuvwxyz123456");
+    expect(observed.rawErrorPreview).not.toContain(OBSERVATION_COOKIE_VALUE);
     expect(observed.rawErrorPreview).toContain("x-api-key: ***");
     expect(observed.rawErrorPreview).toContain("Cookie: session=");
   });
 
   it("does not let cookie redaction consume unrelated fields on the same line", () => {
     const observed = buildApiErrorObservationFields(
-      "Cookie: session=abcdefghijklmnopqrstuvwxyz123456 status=503 request_id=req_cookie",
+      `Cookie: session=${OBSERVATION_COOKIE_VALUE} status=503 request_id=req_cookie`,
     );
 
     expect(observed.rawErrorPreview).toContain("Cookie: session=");

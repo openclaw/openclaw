@@ -46,11 +46,11 @@ import {
   validateAgentParams,
   validateAgentWaitParams,
 } from "../protocol/index.js";
+import { performGatewaySessionReset } from "../session-reset-service.js";
 import {
   canonicalizeSpawnedByForAgent,
   loadSessionEntry,
-  pruneLegacyStoreKeys,
-  resolveGatewaySessionStoreTarget,
+  migrateAndPruneGatewaySessionStoreKey,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
@@ -62,7 +62,6 @@ import {
   waitForTerminalGatewayDedupe,
 } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
-import { sessionsHandlers } from "./sessions.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
@@ -72,101 +71,26 @@ function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["cl
   return scopes.includes(ADMIN_SCOPE);
 }
 
-function isGatewayErrorShape(value: unknown): value is { code: string; message: string } {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as { code?: unknown; message?: unknown };
-  return typeof candidate.code === "string" && typeof candidate.message === "string";
-}
-
 async function runSessionResetFromAgent(params: {
   key: string;
   reason: "new" | "reset";
-  idempotencyKey: string;
-  context: GatewayRequestHandlerOptions["context"];
-  client: GatewayRequestHandlerOptions["client"];
-  isWebchatConnect: GatewayRequestHandlerOptions["isWebchatConnect"];
 }): Promise<
   | { ok: true; key: string; sessionId?: string }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
-  return await new Promise((resolve) => {
-    let settled = false;
-    const settle = (
-      result:
-        | { ok: true; key: string; sessionId?: string }
-        | { ok: false; error: ReturnType<typeof errorShape> },
-    ) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      resolve(result);
-    };
-
-    const respond: GatewayRequestHandlerOptions["respond"] = (ok, payload, error) => {
-      if (!ok) {
-        settle({
-          ok: false,
-          error: isGatewayErrorShape(error)
-            ? error
-            : errorShape(ErrorCodes.UNAVAILABLE, String(error ?? "sessions.reset failed")),
-        });
-        return;
-      }
-      const payloadObj = payload as
-        | {
-            key?: unknown;
-            entry?: {
-              sessionId?: unknown;
-            };
-          }
-        | undefined;
-      const key = typeof payloadObj?.key === "string" ? payloadObj.key : params.key;
-      const sessionId =
-        payloadObj?.entry && typeof payloadObj.entry.sessionId === "string"
-          ? payloadObj.entry.sessionId
-          : undefined;
-      settle({ ok: true, key, sessionId });
-    };
-
-    const resetResult = sessionsHandlers["sessions.reset"]({
-      req: {
-        type: "req",
-        id: `${params.idempotencyKey}:reset`,
-        method: "sessions.reset",
-      },
-      params: {
-        key: params.key,
-        reason: params.reason,
-      },
-      context: params.context,
-      client: params.client,
-      isWebchatConnect: params.isWebchatConnect,
-      respond,
-    });
-
-    void (async () => {
-      try {
-        await resetResult;
-        if (!settled) {
-          settle({
-            ok: false,
-            error: errorShape(
-              ErrorCodes.UNAVAILABLE,
-              "sessions.reset completed without returning a response",
-            ),
-          });
-        }
-      } catch (err: unknown) {
-        settle({
-          ok: false,
-          error: errorShape(ErrorCodes.UNAVAILABLE, String(err)),
-        });
-      }
-    })();
+  const result = await performGatewaySessionReset({
+    key: params.key,
+    reason: params.reason,
+    commandSource: "gateway:agent",
   });
+  if (!result.ok) {
+    return result;
+  }
+  return {
+    ok: true,
+    key: result.key,
+    sessionId: result.entry.sessionId,
+  };
 }
 
 function dispatchAgentRunFromGateway(params: {
@@ -265,24 +189,20 @@ export const agentHandlers: GatewayRequestHandlers = {
       timeout?: number;
       bestEffortDeliver?: boolean;
       label?: string;
-      spawnedBy?: string;
       inputProvenance?: InputProvenance;
-      workspaceDir?: string;
     };
     const senderIsOwner = resolveSenderIsOwnerFromClient(client);
     const cfg = loadConfig();
     const idem = request.idempotencyKey;
     const normalizedSpawned = normalizeSpawnedRunMetadata({
-      spawnedBy: request.spawnedBy,
       groupId: request.groupId,
       groupChannel: request.groupChannel,
       groupSpace: request.groupSpace,
-      workspaceDir: request.workspaceDir,
     });
     let resolvedGroupId: string | undefined = normalizedSpawned.groupId;
     let resolvedGroupChannel: string | undefined = normalizedSpawned.groupChannel;
     let resolvedGroupSpace: string | undefined = normalizedSpawned.groupSpace;
-    let spawnedByValue = normalizedSpawned.spawnedBy;
+    let spawnedByValue: string | undefined;
     const inputProvenance = normalizeInputProvenance(request.inputProvenance);
     const cached = context.dedupe.get(`agent:${idem}`);
     if (cached) {
@@ -399,10 +319,6 @@ export const agentHandlers: GatewayRequestHandlers = {
       const resetResult = await runSessionResetFromAgent({
         key: requestedSessionKey,
         reason: resetReason,
-        idempotencyKey: idem,
-        context,
-        client,
-        isWebchatConnect,
       });
       if (!resetResult.ok) {
         respond(false, undefined, resetResult.error);
@@ -438,11 +354,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       const sessionId = entry?.sessionId ?? randomUUID();
       const labelValue = request.label?.trim() || entry?.label;
       const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
-      spawnedByValue = canonicalizeSpawnedByForAgent(
-        cfg,
-        sessionAgent,
-        spawnedByValue || entry?.spawnedBy,
-      );
+      spawnedByValue = canonicalizeSpawnedByForAgent(cfg, sessionAgent, entry?.spawnedBy);
       let inheritedGroup:
         | { groupId?: string; groupChannel?: string; groupSpace?: string }
         | undefined;
@@ -466,6 +378,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         sessionId,
         updatedAt: now,
         thinkingLevel: entry?.thinkingLevel,
+        fastMode: entry?.fastMode,
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,
         systemSent: entry?.systemSent,
@@ -479,6 +392,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         providerOverride: entry?.providerOverride,
         label: labelValue,
         spawnedBy: spawnedByValue,
+        spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
         spawnDepth: entry?.spawnDepth,
         channel: entry?.channel ?? request.channel?.trim(),
         groupId: resolvedGroupId ?? entry?.groupId,
@@ -510,18 +424,13 @@ export const agentHandlers: GatewayRequestHandlers = {
       const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
       if (storePath) {
         const persisted = await updateSessionStore(storePath, (store) => {
-          const target = resolveGatewaySessionStoreTarget({
+          const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
             cfg,
             key: requestedSessionKey,
             store,
           });
-          pruneLegacyStoreKeys({
-            store,
-            canonicalKey: target.canonicalKey,
-            candidates: target.storeKeys,
-          });
-          const merged = mergeSessionEntry(store[canonicalSessionKey], nextEntryPatch);
-          store[canonicalSessionKey] = merged;
+          const merged = mergeSessionEntry(store[primaryKey], nextEntryPatch);
+          store[primaryKey] = merged;
           return merged;
         });
         sessionEntry = persisted;
@@ -707,7 +616,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         // Internal-only: allow workspace override for spawned subagent runs.
         workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({
           spawnedBy: spawnedByValue,
-          workspaceDir: request.workspaceDir,
+          workspaceDir: sessionEntry?.spawnedWorkspaceDir,
         }),
         senderIsOwner,
       },

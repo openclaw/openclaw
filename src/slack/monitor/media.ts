@@ -3,6 +3,7 @@ import { normalizeHostname } from "../../infra/net/hostname.js";
 import type { FetchLike } from "../../media/fetch.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
+import { resolveRequestUrl } from "../../plugin-sdk/request-url.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
 
 function isSlackHostname(hostname: string): boolean {
@@ -37,23 +38,13 @@ function assertSlackFileUrl(rawUrl: string): URL {
   return parsed;
 }
 
-function resolveRequestUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  if ("url" in input && typeof input.url === "string") {
-    return input.url;
-  }
-  throw new Error("Unsupported fetch input: expected string, URL, or Request");
-}
-
 function createSlackMediaFetch(token: string): FetchLike {
   let includeAuth = true;
   return async (input, init) => {
     const url = resolveRequestUrl(input);
+    if (!url) {
+      throw new Error("Unsupported fetch input: expected string, URL, or Request");
+    }
     const { headers: initHeaders, redirect: _redirect, ...rest } = init ?? {};
     const headers = new Headers(initHeaders);
 

@@ -13,10 +13,10 @@ import { ButtonStyle, Routes } from "discord-api-types/v10";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
-import { buildGatewayConnectionDetails } from "../../gateway/call.js";
 import { GatewayClient } from "../../gateway/client.js";
-import { resolveGatewayConnectionAuth } from "../../gateway/connection-auth.js";
+import { createOperatorApprovalsGatewayClient } from "../../gateway/operator-approvals-client.js";
 import type { EventFrame } from "../../gateway/protocol/index.js";
+import { resolveExecApprovalCommandDisplay } from "../../infra/exec-approval-command-display.js";
 import { getExecApprovalApproverDmNoticeText } from "../../infra/exec-approval-reply.js";
 import type {
   ExecApprovalDecision,
@@ -27,11 +27,7 @@ import { logDebug, logError } from "../../logger.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { compileSafeRegex, testRegexWithBoundedInput } from "../../security/safe-regex.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-  normalizeMessageChannel,
-} from "../../utils/message-channel.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { createDiscordClient, stripUndefinedFields } from "../send.shared.js";
 import { DiscordUiContainer } from "../ui.js";
 
@@ -110,6 +106,7 @@ type ExecApprovalContainerParams = {
   title: string;
   description?: string;
   commandPreview: string;
+  commandSecondaryPreview?: string | null;
   metadataLines?: string[];
   actionRow?: Row<Button>;
   footer?: string;
@@ -126,6 +123,11 @@ class ExecApprovalContainer extends DiscordUiContainer {
     }
     components.push(new Separator({ divider: true, spacing: "small" }));
     components.push(new TextDisplay(`### Command\n\`\`\`\n${params.commandPreview}\n\`\`\``));
+    if (params.commandSecondaryPreview) {
+      components.push(
+        new TextDisplay(`### Shell Preview\n\`\`\`\n${params.commandSecondaryPreview}\n\`\`\``),
+      );
+    }
     if (params.metadataLines?.length) {
       components.push(new TextDisplay(params.metadataLines.join("\n")));
     }
@@ -240,14 +242,40 @@ function formatCommandPreview(commandText: string, maxChars: number): string {
   return commandRaw.replace(/`/g, "\u200b`");
 }
 
+function formatOptionalCommandPreview(
+  commandText: string | null | undefined,
+  maxChars: number,
+): string | null {
+  if (!commandText) {
+    return null;
+  }
+  return formatCommandPreview(commandText, maxChars);
+}
+
+function resolveExecApprovalPreviews(
+  request: ExecApprovalRequest["request"],
+  maxChars: number,
+  secondaryMaxChars: number,
+): { commandPreview: string; commandSecondaryPreview: string | null } {
+  const { commandText, commandPreview: secondaryPreview } =
+    resolveExecApprovalCommandDisplay(request);
+  return {
+    commandPreview: formatCommandPreview(commandText, maxChars),
+    commandSecondaryPreview: formatOptionalCommandPreview(secondaryPreview, secondaryMaxChars),
+  };
+}
+
 function createExecApprovalRequestContainer(params: {
   request: ExecApprovalRequest;
   cfg: OpenClawConfig;
   accountId: string;
   actionRow?: Row<Button>;
 }): ExecApprovalContainer {
-  const commandText = params.request.request.command;
-  const commandPreview = formatCommandPreview(commandText, 1000);
+  const { commandPreview, commandSecondaryPreview } = resolveExecApprovalPreviews(
+    params.request.request,
+    1000,
+    500,
+  );
   const expiresAtSeconds = Math.max(0, Math.floor(params.request.expiresAtMs / 1000));
 
   return new ExecApprovalContainer({
@@ -256,6 +284,7 @@ function createExecApprovalRequestContainer(params: {
     title: "Exec Approval Required",
     description: "A command needs your approval.",
     commandPreview,
+    commandSecondaryPreview,
     metadataLines: buildExecApprovalMetadataLines(params.request),
     actionRow: params.actionRow,
     footer: `Expires <t:${expiresAtSeconds}:R> · ID: ${params.request.id}`,
@@ -270,8 +299,11 @@ function createResolvedContainer(params: {
   cfg: OpenClawConfig;
   accountId: string;
 }): ExecApprovalContainer {
-  const commandText = params.request.request.command;
-  const commandPreview = formatCommandPreview(commandText, 500);
+  const { commandPreview, commandSecondaryPreview } = resolveExecApprovalPreviews(
+    params.request.request,
+    500,
+    300,
+  );
 
   const decisionLabel =
     params.decision === "allow-once"
@@ -293,6 +325,7 @@ function createResolvedContainer(params: {
     title: `Exec Approval: ${decisionLabel}`,
     description: params.resolvedBy ? `Resolved by ${params.resolvedBy}` : "Resolved",
     commandPreview,
+    commandSecondaryPreview,
     footer: `ID: ${params.request.id}`,
     accentColor,
   });
@@ -303,8 +336,11 @@ function createExpiredContainer(params: {
   cfg: OpenClawConfig;
   accountId: string;
 }): ExecApprovalContainer {
-  const commandText = params.request.request.command;
-  const commandPreview = formatCommandPreview(commandText, 500);
+  const { commandPreview, commandSecondaryPreview } = resolveExecApprovalPreviews(
+    params.request.request,
+    500,
+    300,
+  );
 
   return new ExecApprovalContainer({
     cfg: params.cfg,
@@ -312,6 +348,7 @@ function createExpiredContainer(params: {
     title: "Exec Approval: Expired",
     description: "This approval request has expired.",
     commandPreview,
+    commandSecondaryPreview,
     footer: `ID: ${params.request.id}`,
     accentColor: "#99AAB5",
   });
@@ -408,31 +445,10 @@ export class DiscordExecApprovalHandler {
 
     logDebug("discord exec approvals: starting handler");
 
-    const { url: gatewayUrl, urlSource } = buildGatewayConnectionDetails({
+    this.gatewayClient = await createOperatorApprovalsGatewayClient({
       config: this.opts.cfg,
-      url: this.opts.gatewayUrl,
-    });
-    const gatewayUrlOverrideSource =
-      urlSource === "cli --url"
-        ? "cli"
-        : urlSource === "env OPENCLAW_GATEWAY_URL"
-          ? "env"
-          : undefined;
-    const auth = await resolveGatewayConnectionAuth({
-      config: this.opts.cfg,
-      env: process.env,
-      urlOverride: gatewayUrlOverrideSource ? gatewayUrl : undefined,
-      urlOverrideSource: gatewayUrlOverrideSource,
-    });
-
-    this.gatewayClient = new GatewayClient({
-      url: gatewayUrl,
-      token: auth.token,
-      password: auth.password,
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      gatewayUrl: this.opts.gatewayUrl,
       clientDisplayName: "Discord Exec Approvals",
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
-      scopes: ["operator.approvals"],
       onEvent: (evt) => this.handleGatewayEvent(evt),
       onHelloOk: () => {
         logDebug("discord exec approvals: connected to gateway");

@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
+import type { PluginRuntime } from "../../plugins/runtime/types.js";
+import type { GatewayRequestContext, GatewayRequestOptions } from "../server-methods/types.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
 import { createTestRegistry } from "./__tests__/test-utils.js";
 import {
@@ -7,6 +9,22 @@ import {
   isRegisteredPluginHttpRoutePath,
   shouldEnforceGatewayAuthForPluginPath,
 } from "./plugins-http.js";
+
+const loadOpenClawPlugins = vi.hoisted(() => vi.fn());
+type HandleGatewayRequestOptions = GatewayRequestOptions & {
+  extraHandlers?: Record<string, unknown>;
+};
+const handleGatewayRequest = vi.hoisted(() =>
+  vi.fn(async (_opts: HandleGatewayRequestOptions) => {}),
+);
+
+vi.mock("../../plugins/loader.js", () => ({
+  loadOpenClawPlugins,
+}));
+
+vi.mock("../server-methods.js", () => ({
+  handleGatewayRequest,
+}));
 
 type PluginHandlerLog = Parameters<typeof createGatewayPluginRequestHandler>[0]["log"];
 
@@ -39,7 +57,127 @@ function buildRepeatedEncodedSlash(depth: number): string {
   return encodedSlash;
 }
 
+function createSubagentRuntimeRegistry() {
+  return createTestRegistry();
+}
+
+async function createSubagentRuntime(): Promise<PluginRuntime["subagent"]> {
+  const serverPlugins = await import("../server-plugins.js");
+  loadOpenClawPlugins.mockReturnValue(createSubagentRuntimeRegistry());
+  serverPlugins.loadGatewayPlugins({
+    cfg: {},
+    workspaceDir: "/tmp",
+    log: {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    },
+    coreGatewayHandlers: {},
+    baseMethods: [],
+  });
+  serverPlugins.setFallbackGatewayContext({} as GatewayRequestContext);
+  const call = loadOpenClawPlugins.mock.calls.at(-1)?.[0] as
+    | { runtimeOptions?: { subagent?: PluginRuntime["subagent"] } }
+    | undefined;
+  if (!call?.runtimeOptions?.subagent) {
+    throw new Error("Expected subagent runtime from loadGatewayPlugins");
+  }
+  return call.runtimeOptions.subagent;
+}
+
+function createSecurePluginRouteHandler(params: {
+  exactPluginHandler: () => boolean | Promise<boolean>;
+  prefixGatewayHandler: () => boolean | Promise<boolean>;
+}) {
+  return createGatewayPluginRequestHandler({
+    registry: createTestRegistry({
+      httpRoutes: [
+        createRoute({
+          path: "/plugin/secure/report",
+          match: "exact",
+          auth: "plugin",
+          handler: params.exactPluginHandler,
+        }),
+        createRoute({
+          path: "/plugin/secure",
+          match: "prefix",
+          auth: "gateway",
+          handler: params.prefixGatewayHandler,
+        }),
+      ],
+    }),
+    log: createPluginLog(),
+  });
+}
+
+async function invokeSecureGatewayRoute(params: { gatewayAuthSatisfied: boolean }) {
+  const exactPluginHandler = vi.fn(async () => false);
+  const prefixGatewayHandler = vi.fn(async () => true);
+  const handler = createSecurePluginRouteHandler({
+    exactPluginHandler,
+    prefixGatewayHandler,
+  });
+  const { res } = makeMockHttpResponse();
+  const handled = await handler(
+    { url: "/plugin/secure/report" } as IncomingMessage,
+    res,
+    undefined,
+    { gatewayAuthSatisfied: params.gatewayAuthSatisfied },
+  );
+  return { handled, exactPluginHandler, prefixGatewayHandler };
+}
+
 describe("createGatewayPluginRequestHandler", () => {
+  it("caps unauthenticated plugin routes to non-admin subagent scopes", async () => {
+    loadOpenClawPlugins.mockReset();
+    handleGatewayRequest.mockReset();
+    handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
+      const scopes = opts.client?.connect.scopes ?? [];
+      if (opts.req.method === "sessions.delete" && !scopes.includes("operator.admin")) {
+        opts.respond(false, undefined, {
+          code: "invalid_request",
+          message: "missing scope: operator.admin",
+        });
+        return;
+      }
+      opts.respond(true, {});
+    });
+
+    const subagent = await createSubagentRuntime();
+    const log = createPluginLog();
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/hook",
+            auth: "plugin",
+            handler: async (_req, _res) => {
+              await subagent.deleteSession({ sessionKey: "agent:main:subagent:child" });
+              return true;
+            },
+          }),
+        ],
+      }),
+      log,
+    });
+
+    const { res, setHeader, end } = makeMockHttpResponse();
+    const handled = await handler({ url: "/hook" } as IncomingMessage, res, undefined, {
+      gatewayAuthSatisfied: false,
+    });
+
+    expect(handled).toBe(true);
+    expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
+    expect(handleGatewayRequest.mock.calls[0]?.[0]?.client?.connect.scopes).toEqual([
+      "operator.write",
+    ]);
+    expect(res.statusCode).toBe(500);
+    expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
+    expect(end).toHaveBeenCalledWith("Internal Server Error");
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("missing scope: operator.admin"));
+  });
+
   it("returns false when no routes are registered", async () => {
     const log = createPluginLog();
     const handler = createGatewayPluginRequestHandler({
@@ -111,74 +249,18 @@ describe("createGatewayPluginRequestHandler", () => {
   });
 
   it("fails closed when a matched gateway route reaches dispatch without auth", async () => {
-    const exactPluginHandler = vi.fn(async () => false);
-    const prefixGatewayHandler = vi.fn(async () => true);
-    const handler = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
-        httpRoutes: [
-          createRoute({
-            path: "/plugin/secure/report",
-            match: "exact",
-            auth: "plugin",
-            handler: exactPluginHandler,
-          }),
-          createRoute({
-            path: "/plugin/secure",
-            match: "prefix",
-            auth: "gateway",
-            handler: prefixGatewayHandler,
-          }),
-        ],
-      }),
-      log: createPluginLog(),
+    const { handled, exactPluginHandler, prefixGatewayHandler } = await invokeSecureGatewayRoute({
+      gatewayAuthSatisfied: false,
     });
-
-    const { res } = makeMockHttpResponse();
-    const handled = await handler(
-      { url: "/plugin/secure/report" } as IncomingMessage,
-      res,
-      undefined,
-      {
-        gatewayAuthSatisfied: false,
-      },
-    );
     expect(handled).toBe(false);
     expect(exactPluginHandler).not.toHaveBeenCalled();
     expect(prefixGatewayHandler).not.toHaveBeenCalled();
   });
 
   it("allows gateway route fallthrough only after gateway auth succeeds", async () => {
-    const exactPluginHandler = vi.fn(async () => false);
-    const prefixGatewayHandler = vi.fn(async () => true);
-    const handler = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
-        httpRoutes: [
-          createRoute({
-            path: "/plugin/secure/report",
-            match: "exact",
-            auth: "plugin",
-            handler: exactPluginHandler,
-          }),
-          createRoute({
-            path: "/plugin/secure",
-            match: "prefix",
-            auth: "gateway",
-            handler: prefixGatewayHandler,
-          }),
-        ],
-      }),
-      log: createPluginLog(),
+    const { handled, exactPluginHandler, prefixGatewayHandler } = await invokeSecureGatewayRoute({
+      gatewayAuthSatisfied: true,
     });
-
-    const { res } = makeMockHttpResponse();
-    const handled = await handler(
-      { url: "/plugin/secure/report" } as IncomingMessage,
-      res,
-      undefined,
-      {
-        gatewayAuthSatisfied: true,
-      },
-    );
     expect(handled).toBe(true);
     expect(exactPluginHandler).toHaveBeenCalledTimes(1);
     expect(prefixGatewayHandler).toHaveBeenCalledTimes(1);

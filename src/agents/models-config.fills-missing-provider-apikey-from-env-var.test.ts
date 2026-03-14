@@ -60,13 +60,31 @@ function createMergeConfigProvider() {
   };
 }
 
-async function runCustomProviderMergeTest(params: {
-  seedProvider: {
-    baseUrl: string;
-    apiKey: string;
-    api: string;
-    models: Array<{ id: string; name: string; input: string[]; api?: string }>;
+type MergeSeedProvider = {
+  baseUrl: string;
+  apiKey: string;
+  api: string;
+  models: Array<{ id: string; name: string; input: string[]; api?: string }>;
+};
+
+type MergeConfigApiKeyRef = {
+  source: "env";
+  provider: "default";
+  id: string;
+};
+
+function createAgentSeedProvider(overrides: Partial<MergeSeedProvider> = {}): MergeSeedProvider {
+  return {
+    baseUrl: "https://agent.example/v1",
+    apiKey: "AGENT_KEY", // pragma: allowlist secret
+    api: "openai-responses",
+    models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
+    ...overrides,
   };
+}
+
+async function runCustomProviderMergeTest(params: {
+  seedProvider: MergeSeedProvider;
   existingProviderKey?: string;
   configProviderKey?: string;
 }) {
@@ -84,6 +102,56 @@ async function runCustomProviderMergeTest(params: {
   return readGeneratedModelsJson<{
     providers: Record<string, { apiKey?: string; baseUrl?: string }>;
   }>();
+}
+
+async function expectCustomProviderMergeResult(params: {
+  seedProvider?: MergeSeedProvider;
+  existingProviderKey?: string;
+  configProviderKey?: string;
+  expectedApiKey: string;
+  expectedBaseUrl: string;
+}) {
+  await withTempHome(async () => {
+    const parsed = await runCustomProviderMergeTest({
+      seedProvider: params.seedProvider ?? createAgentSeedProvider(),
+      existingProviderKey: params.existingProviderKey,
+      configProviderKey: params.configProviderKey,
+    });
+    expect(parsed.providers.custom?.apiKey).toBe(params.expectedApiKey);
+    expect(parsed.providers.custom?.baseUrl).toBe(params.expectedBaseUrl);
+  });
+}
+
+async function expectCustomProviderApiKeyRewrite(params: {
+  existingApiKey: string;
+  configuredApiKey: string | MergeConfigApiKeyRef;
+  expectedApiKey: string;
+}) {
+  await withTempHome(async () => {
+    await writeAgentModelsJson({
+      providers: {
+        custom: createAgentSeedProvider({ apiKey: params.existingApiKey }),
+      },
+    });
+
+    await ensureOpenClawModelsJson({
+      models: {
+        mode: "merge",
+        providers: {
+          custom: {
+            ...createMergeConfigProvider(),
+            apiKey: params.configuredApiKey,
+          },
+        },
+      },
+    });
+
+    const parsed = await readGeneratedModelsJson<{
+      providers: Record<string, { apiKey?: string; baseUrl?: string }>;
+    }>();
+    expect(parsed.providers.custom?.apiKey).toBe(params.expectedApiKey);
+    expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
+  });
 }
 
 function createMoonshotConfig(overrides: {
@@ -111,6 +179,92 @@ function createMoonshotConfig(overrides: {
       },
     },
   };
+}
+
+function createOpenAiConfigWithResolvedApiKey(mergeMode = false): OpenClawConfig {
+  return {
+    models: {
+      ...(mergeMode ? { mode: "merge" as const } : {}),
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          apiKey: "sk-plaintext-should-not-appear", // pragma: allowlist secret; simulates resolved ${OPENAI_API_KEY}
+          api: "openai-completions",
+          models: [
+            {
+              id: "gpt-4.1",
+              name: "GPT-4.1",
+              input: ["text"],
+              reasoning: false,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 128000,
+              maxTokens: 16384,
+            },
+          ],
+        },
+      },
+    },
+  };
+}
+
+async function expectOpenAiEnvMarkerApiKey(options?: { seedMergedProvider?: boolean }) {
+  await withEnvVar("OPENAI_API_KEY", "sk-plaintext-should-not-appear", async () => {
+    await withTempHome(async () => {
+      if (options?.seedMergedProvider) {
+        await writeAgentModelsJson({
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: "STALE_AGENT_KEY", // pragma: allowlist secret
+              api: "openai-completions",
+              models: [{ id: "gpt-4.1", name: "GPT-4.1", input: ["text"] }],
+            },
+          },
+        });
+      }
+
+      await ensureOpenClawModelsJson(
+        createOpenAiConfigWithResolvedApiKey(options?.seedMergedProvider),
+      );
+      const result = await readGeneratedModelsJson<{
+        providers: Record<string, { apiKey?: string }>;
+      }>();
+      expect(result.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+    });
+  });
+}
+
+async function expectMoonshotTokenLimits(params: {
+  contextWindow: number;
+  maxTokens: number;
+  expectedContextWindow: number;
+  expectedMaxTokens: number;
+}) {
+  await withTempHome(async () => {
+    await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-test", async () => {
+      await ensureOpenClawModelsJson(
+        createMoonshotConfig({
+          contextWindow: params.contextWindow,
+          maxTokens: params.maxTokens,
+        }),
+      );
+      const parsed = await readGeneratedModelsJson<{
+        providers: Record<
+          string,
+          {
+            models?: Array<{
+              id: string;
+              contextWindow?: number;
+              maxTokens?: number;
+            }>;
+          }
+        >;
+      }>();
+      const kimi = parsed.providers.moonshot?.models?.find((model) => model.id === "kimi-k2.5");
+      expect(kimi?.contextWindow).toBe(params.expectedContextWindow);
+      expect(kimi?.maxTokens).toBe(params.expectedMaxTokens);
+    });
+  });
 }
 
 describe("models-config", () => {
@@ -215,49 +369,26 @@ describe("models-config", () => {
   });
 
   it("preserves non-empty agent apiKey but lets explicit config baseUrl win in merge mode", async () => {
-    await withTempHome(async () => {
-      const parsed = await runCustomProviderMergeTest({
-        seedProvider: {
-          baseUrl: "https://agent.example/v1",
-          apiKey: "AGENT_KEY", // pragma: allowlist secret
-          api: "openai-responses",
-          models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
-        },
-      });
-      expect(parsed.providers.custom?.apiKey).toBe("AGENT_KEY");
-      expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
+    await expectCustomProviderMergeResult({
+      expectedApiKey: "AGENT_KEY",
+      expectedBaseUrl: "https://config.example/v1",
     });
   });
 
   it("lets explicit config baseUrl win in merge mode when the config provider key is normalized", async () => {
-    await withTempHome(async () => {
-      const parsed = await runCustomProviderMergeTest({
-        seedProvider: {
-          baseUrl: "https://agent.example/v1",
-          apiKey: "AGENT_KEY", // pragma: allowlist secret
-          api: "openai-responses",
-          models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
-        },
-        existingProviderKey: "custom",
-        configProviderKey: " custom ",
-      });
-      expect(parsed.providers.custom?.apiKey).toBe("AGENT_KEY");
-      expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
+    await expectCustomProviderMergeResult({
+      existingProviderKey: "custom",
+      configProviderKey: " custom ",
+      expectedApiKey: "AGENT_KEY",
+      expectedBaseUrl: "https://config.example/v1",
     });
   });
 
   it("replaces stale merged baseUrl when the provider api changes", async () => {
-    await withTempHome(async () => {
-      const parsed = await runCustomProviderMergeTest({
-        seedProvider: {
-          baseUrl: "https://agent.example/v1",
-          apiKey: "AGENT_KEY", // pragma: allowlist secret
-          api: "openai-completions",
-          models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
-        },
-      });
-      expect(parsed.providers.custom?.apiKey).toBe("AGENT_KEY");
-      expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
+    await expectCustomProviderMergeResult({
+      seedProvider: createAgentSeedProvider({ api: "openai-completions" }),
+      expectedApiKey: "AGENT_KEY",
+      expectedBaseUrl: "https://config.example/v1",
     });
   });
 
@@ -284,34 +415,14 @@ describe("models-config", () => {
   });
 
   it("replaces stale merged apiKey when provider is SecretRef-managed in current config", async () => {
-    await withTempHome(async () => {
-      await writeAgentModelsJson({
-        providers: {
-          custom: {
-            baseUrl: "https://agent.example/v1",
-            apiKey: "STALE_AGENT_KEY", // pragma: allowlist secret
-            api: "openai-responses",
-            models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
-          },
-        },
-      });
-      await ensureOpenClawModelsJson({
-        models: {
-          mode: "merge",
-          providers: {
-            custom: {
-              ...createMergeConfigProvider(),
-              apiKey: { source: "env", provider: "default", id: "CUSTOM_PROVIDER_API_KEY" }, // pragma: allowlist secret
-            },
-          },
-        },
-      });
-
-      const parsed = await readGeneratedModelsJson<{
-        providers: Record<string, { apiKey?: string; baseUrl?: string }>;
-      }>();
-      expect(parsed.providers.custom?.apiKey).toBe("CUSTOM_PROVIDER_API_KEY"); // pragma: allowlist secret
-      expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
+    await expectCustomProviderApiKeyRewrite({
+      existingApiKey: "STALE_AGENT_KEY", // pragma: allowlist secret
+      configuredApiKey: {
+        source: "env",
+        provider: "default",
+        id: "CUSTOM_PROVIDER_API_KEY", // pragma: allowlist secret
+      },
+      expectedApiKey: "CUSTOM_PROVIDER_API_KEY", // pragma: allowlist secret
     });
   });
 
@@ -363,34 +474,10 @@ describe("models-config", () => {
   });
 
   it("replaces stale non-env marker when provider transitions back to plaintext config", async () => {
-    await withTempHome(async () => {
-      await writeAgentModelsJson({
-        providers: {
-          custom: {
-            baseUrl: "https://agent.example/v1",
-            apiKey: NON_ENV_SECRETREF_MARKER,
-            api: "openai-responses",
-            models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
-          },
-        },
-      });
-
-      await ensureOpenClawModelsJson({
-        models: {
-          mode: "merge",
-          providers: {
-            custom: {
-              ...createMergeConfigProvider(),
-              apiKey: "ALLCAPS_SAMPLE", // pragma: allowlist secret
-            },
-          },
-        },
-      });
-
-      const parsed = await readGeneratedModelsJson<{
-        providers: Record<string, { apiKey?: string }>;
-      }>();
-      expect(parsed.providers.custom?.apiKey).toBe("ALLCAPS_SAMPLE");
+    await expectCustomProviderApiKeyRewrite({
+      existingApiKey: NON_ENV_SECRETREF_MARKER,
+      configuredApiKey: "ALLCAPS_SAMPLE", // pragma: allowlist secret
+      expectedApiKey: "ALLCAPS_SAMPLE", // pragma: allowlist secret
     });
   });
 
@@ -444,86 +531,28 @@ describe("models-config", () => {
   });
 
   it("does not persist resolved env var value as plaintext in models.json", async () => {
-    await withEnvVar("OPENAI_API_KEY", "sk-plaintext-should-not-appear", async () => {
-      await withTempHome(async () => {
-        const cfg: OpenClawConfig = {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                apiKey: "sk-plaintext-should-not-appear", // pragma: allowlist secret; already resolved by loadConfig
-                api: "openai-completions",
-                models: [
-                  {
-                    id: "gpt-4.1",
-                    name: "GPT-4.1",
-                    input: ["text"],
-                    reasoning: false,
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 128000,
-                    maxTokens: 16384,
-                  },
-                ],
-              },
-            },
-          },
-        };
-        await ensureOpenClawModelsJson(cfg);
-        const result = await readGeneratedModelsJson<{
-          providers: Record<string, { apiKey?: string }>;
-        }>();
-        expect(result.providers.openai?.apiKey).toBe("OPENAI_API_KEY");
-      });
-    });
+    await expectOpenAiEnvMarkerApiKey();
+  });
+
+  it("replaces stale merged apiKey when config key normalizes to a known env marker", async () => {
+    await expectOpenAiEnvMarkerApiKey({ seedMergedProvider: true });
   });
 
   it("preserves explicit larger token limits when they exceed implicit catalog defaults", async () => {
-    await withTempHome(async () => {
-      await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-test", async () => {
-        const cfg = createMoonshotConfig({ contextWindow: 350000, maxTokens: 16384 });
-
-        await ensureOpenClawModelsJson(cfg);
-        const parsed = await readGeneratedModelsJson<{
-          providers: Record<
-            string,
-            {
-              models?: Array<{
-                id: string;
-                contextWindow?: number;
-                maxTokens?: number;
-              }>;
-            }
-          >;
-        }>();
-        const kimi = parsed.providers.moonshot?.models?.find((model) => model.id === "kimi-k2.5");
-        expect(kimi?.contextWindow).toBe(350000);
-        expect(kimi?.maxTokens).toBe(16384);
-      });
+    await expectMoonshotTokenLimits({
+      contextWindow: 350000,
+      maxTokens: 16384,
+      expectedContextWindow: 350000,
+      expectedMaxTokens: 16384,
     });
   });
 
   it("falls back to implicit token limits when explicit values are invalid", async () => {
-    await withTempHome(async () => {
-      await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-test", async () => {
-        const cfg = createMoonshotConfig({ contextWindow: 0, maxTokens: -1 });
-
-        await ensureOpenClawModelsJson(cfg);
-        const parsed = await readGeneratedModelsJson<{
-          providers: Record<
-            string,
-            {
-              models?: Array<{
-                id: string;
-                contextWindow?: number;
-                maxTokens?: number;
-              }>;
-            }
-          >;
-        }>();
-        const kimi = parsed.providers.moonshot?.models?.find((model) => model.id === "kimi-k2.5");
-        expect(kimi?.contextWindow).toBe(256000);
-        expect(kimi?.maxTokens).toBe(8192);
-      });
+    await expectMoonshotTokenLimits({
+      contextWindow: 0,
+      maxTokens: -1,
+      expectedContextWindow: 256000,
+      expectedMaxTokens: 8192,
     });
   });
 });

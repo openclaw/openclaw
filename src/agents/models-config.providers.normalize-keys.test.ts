@@ -4,7 +4,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
-import { normalizeProviders } from "./models-config.providers.js";
+import {
+  enforceSourceManagedProviderSecrets,
+  normalizeProviders,
+} from "./models-config.providers.js";
 
 describe("normalizeProviders", () => {
   it("trims provider keys so image models remain discoverable for custom providers", async () => {
@@ -78,6 +81,7 @@ describe("normalizeProviders", () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     const original = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = "sk-test-secret-value-12345"; // pragma: allowlist secret
+    const secretRefManagedProviders = new Set<string>();
     try {
       const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
         openai: {
@@ -97,8 +101,9 @@ describe("normalizeProviders", () => {
           ],
         },
       };
-      const normalized = normalizeProviders({ providers, agentDir });
+      const normalized = normalizeProviders({ providers, agentDir, secretRefManagedProviders });
       expect(normalized?.openai?.apiKey).toBe("OPENAI_API_KEY");
+      expect(secretRefManagedProviders.has("openai")).toBe(true);
     } finally {
       if (original === undefined) {
         delete process.env.OPENAI_API_KEY;
@@ -133,5 +138,39 @@ describe("normalizeProviders", () => {
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
+  });
+
+  it("ignores non-object provider entries during source-managed enforcement", () => {
+    const providers = {
+      openai: null,
+      moonshot: {
+        baseUrl: "https://api.moonshot.ai/v1",
+        api: "openai-completions",
+        apiKey: "sk-runtime-moonshot", // pragma: allowlist secret
+        models: [],
+      },
+    } as unknown as NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
+
+    const sourceProviders: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        api: "openai-completions",
+        apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
+        models: [],
+      },
+      moonshot: {
+        baseUrl: "https://api.moonshot.ai/v1",
+        api: "openai-completions",
+        apiKey: { source: "env", provider: "default", id: "MOONSHOT_API_KEY" }, // pragma: allowlist secret
+        models: [],
+      },
+    };
+
+    const enforced = enforceSourceManagedProviderSecrets({
+      providers,
+      sourceProviders,
+    });
+    expect((enforced as Record<string, unknown>).openai).toBeNull();
+    expect(enforced?.moonshot?.apiKey).toBe("MOONSHOT_API_KEY"); // pragma: allowlist secret
   });
 });

@@ -65,6 +65,7 @@ import {
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramConversationRoute } from "./conversation-route.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
+import type { TelegramTransport } from "./fetch.js";
 import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
@@ -94,6 +95,7 @@ export type RegisterTelegramHandlerParams = {
   bot: Bot;
   mediaMaxBytes: number;
   opts: TelegramBotOptions;
+  telegramTransport?: TelegramTransport;
   runtime: RuntimeEnv;
   telegramCfg: TelegramAccountConfig;
   allowFrom?: Array<string | number>;

@@ -9,7 +9,12 @@ export {
   readStringParam,
 } from "../agents/tools/common.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
-export { resolveAllowlistMatchByCandidates } from "../channels/allowlist-match.js";
+export {
+  compileAllowlist,
+  resolveCompiledAllowlistMatch,
+  resolveAllowlistCandidates,
+  resolveAllowlistMatchByCandidates,
+} from "../channels/allowlist-match.js";
 export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve-utils.js";
 export { resolveControlCommandGate } from "../channels/command-gating.js";
 export type { NormalizedLocation } from "../channels/location.js";

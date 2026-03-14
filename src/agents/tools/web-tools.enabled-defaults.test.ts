@@ -113,11 +113,13 @@ function installPerplexitySearchApiFetch(results?: Array<Record<string, unknown>
   });
 }
 
-function installPerplexityChatFetch() {
-  return installMockFetch({
-    choices: [{ message: { content: "ok" } }],
-    citations: ["https://example.com"],
-  });
+function installPerplexityChatFetch(payload?: Record<string, unknown>) {
+  return installMockFetch(
+    payload ?? {
+      choices: [{ message: { content: "ok" } }],
+      citations: ["https://example.com"],
+    },
+  );
 }
 
 function createProviderSuccessPayload(
@@ -165,6 +167,39 @@ describe("web tools defaults", () => {
   it("enables web_search by default", () => {
     const tool = createWebSearchTool({ config: {}, sandboxed: false });
     expect(tool?.name).toBe("web_search");
+  });
+
+  it("prefers runtime-selected web_search provider over local provider config", async () => {
+    const mockFetch = installMockFetch(createProviderSuccessPayload("gemini"));
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+              apiKey: "brave-config-test", // pragma: allowlist secret
+              gemini: {
+                apiKey: "gemini-config-test", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+      runtimeWebSearch: {
+        providerConfigured: "brave",
+        providerSource: "auto-detect",
+        selectedProvider: "gemini",
+        selectedProviderKeySource: "secretRef",
+        diagnostics: [],
+      },
+    });
+
+    const result = await tool?.execute?.("call-runtime-provider", { query: "runtime override" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(String(mockFetch.mock.calls[0]?.[0])).toContain("generativelanguage.googleapis.com");
+    expect((result?.details as { provider?: string } | undefined)?.provider).toBe("gemini");
   });
 });
 
@@ -476,6 +511,42 @@ describe("web_search perplexity OpenRouter compatibility", () => {
     expect(body.search_recency_filter).toBe("week");
   });
 
+  it("falls back to message annotations when top-level citations are missing", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-v1-test"); // pragma: allowlist secret
+    const mockFetch = installPerplexityChatFetch({
+      choices: [
+        {
+          message: {
+            content: "ok",
+            annotations: [
+              {
+                type: "url_citation",
+                url_citation: { url: "https://example.com/a" },
+              },
+              {
+                type: "url_citation",
+                url_citation: { url: "https://example.com/b" },
+              },
+              {
+                type: "url_citation",
+                url_citation: { url: "https://example.com/a" },
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const tool = createPerplexitySearchTool();
+    const result = await tool?.execute?.("call-1", { query: "test" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(result?.details).toMatchObject({
+      provider: "perplexity",
+      citations: ["https://example.com/a", "https://example.com/b"],
+      content: expect.stringContaining("ok"),
+    });
+  });
+
   it("fails loud for Search API-only filters on the compatibility path", async () => {
     vi.stubEnv("OPENROUTER_API_KEY", "sk-or-v1-test"); // pragma: allowlist secret
     const mockFetch = installPerplexityChatFetch();
@@ -489,20 +560,56 @@ describe("web_search perplexity OpenRouter compatibility", () => {
     expect(result?.details).toMatchObject({ error: "unsupported_domain_filter" });
   });
 
-  it("hides Search API-only schema params on the compatibility path", () => {
+  it("keeps Search API schema params visible before runtime auth routing", () => {
     vi.stubEnv("OPENROUTER_API_KEY", "sk-or-v1-test"); // pragma: allowlist secret
     const tool = createPerplexitySearchTool();
     const properties = (tool?.parameters as { properties?: Record<string, unknown> } | undefined)
       ?.properties;
 
     expect(properties?.freshness).toBeDefined();
-    expect(properties?.country).toBeUndefined();
-    expect(properties?.language).toBeUndefined();
-    expect(properties?.date_after).toBeUndefined();
-    expect(properties?.date_before).toBeUndefined();
-    expect(properties?.domain_filter).toBeUndefined();
-    expect(properties?.max_tokens).toBeUndefined();
-    expect(properties?.max_tokens_per_page).toBeUndefined();
+    expect(properties?.country).toBeDefined();
+    expect(properties?.language).toBeDefined();
+    expect(properties?.date_after).toBeDefined();
+    expect(properties?.date_before).toBeDefined();
+    expect(properties?.domain_filter).toBeDefined();
+    expect(properties?.max_tokens).toBeDefined();
+    expect(properties?.max_tokens_per_page).toBeDefined();
+    expect(
+      (
+        properties?.country as
+          | {
+              description?: string;
+            }
+          | undefined
+      )?.description,
+    ).toContain("Native Perplexity Search API only.");
+    expect(
+      (
+        properties?.language as
+          | {
+              description?: string;
+            }
+          | undefined
+      )?.description,
+    ).toContain("Native Perplexity Search API only.");
+    expect(
+      (
+        properties?.date_after as
+          | {
+              description?: string;
+            }
+          | undefined
+      )?.description,
+    ).toContain("Native Perplexity Search API only.");
+    expect(
+      (
+        properties?.date_before as
+          | {
+              description?: string;
+            }
+          | undefined
+      )?.description,
+    ).toContain("Native Perplexity Search API only.");
   });
 
   it("keeps structured schema params on the native Search API path", () => {
@@ -519,6 +626,61 @@ describe("web_search perplexity OpenRouter compatibility", () => {
     expect(properties?.domain_filter).toBeDefined();
     expect(properties?.max_tokens).toBeDefined();
     expect(properties?.max_tokens_per_page).toBeDefined();
+  });
+});
+
+describe("web_search Perplexity lazy resolution", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+  });
+
+  it("does not read Perplexity credentials while creating non-Perplexity tools", () => {
+    const perplexityConfig: Record<string, unknown> = {};
+    Object.defineProperty(perplexityConfig, "apiKey", {
+      enumerable: true,
+      get() {
+        throw new Error("perplexity-apiKey-getter-called");
+      },
+    });
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "gemini",
+              gemini: { apiKey: "gemini-config-test" }, // pragma: allowlist secret
+              perplexity: perplexityConfig as { apiKey?: string; baseUrl?: string; model?: string },
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+
+    expect(tool?.name).toBe("web_search");
+  });
+
+  it("defers Perplexity credential reads until execute", async () => {
+    const perplexityConfig: Record<string, unknown> = {};
+    Object.defineProperty(perplexityConfig, "apiKey", {
+      enumerable: true,
+      get() {
+        throw new Error("perplexity-apiKey-getter-called");
+      },
+    });
+
+    const tool = createPerplexitySearchTool(
+      perplexityConfig as { apiKey?: string; baseUrl?: string; model?: string },
+    );
+
+    expect(tool?.name).toBe("web_search");
+    await expect(tool?.execute?.("call-1", { query: "test" })).rejects.toThrow(
+      /perplexity-apiKey-getter-called/,
+    );
   });
 });
 

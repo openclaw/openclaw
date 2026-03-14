@@ -180,13 +180,17 @@ vi.mock("../pairing/pairing-store.js", () => ({
     slackTestState.upsertPairingRequestMock(...args),
 }));
 
-vi.mock("../config/sessions.js", () => ({
-  resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
-  updateLastRoute: (...args: unknown[]) => slackTestState.updateLastRouteMock(...args),
-  resolveSessionKey: vi.fn(),
-  readSessionUpdatedAt: vi.fn(() => undefined),
-  recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock("../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions.js")>();
+  return {
+    ...actual,
+    resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
+    updateLastRoute: (...args: unknown[]) => slackTestState.updateLastRouteMock(...args),
+    resolveSessionKey: vi.fn(),
+    readSessionUpdatedAt: vi.fn(() => undefined),
+    recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 vi.mock("@slack/bolt", () => {
   const handlers = new Map<string, SlackHandler>();

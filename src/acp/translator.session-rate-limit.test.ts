@@ -52,7 +52,7 @@ function createSetSessionModeRequest(sessionId: string, modeId: string): SetSess
 function createSetSessionConfigOptionRequest(
   sessionId: string,
   configId: string,
-  value: string,
+  value: string | boolean,
 ): SetSessionConfigOptionRequest {
   return {
     sessionId,
@@ -644,6 +644,126 @@ describe("acp setSessionConfigOption bridge behavior", () => {
 
     sessionStore.clearAllSessionsForTest();
   });
+
+  it("updates fast mode ACP config options through gateway session patches", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const sessionUpdate = connection.__sessionUpdateMock;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          ts: Date.now(),
+          path: "/tmp/sessions.json",
+          count: 1,
+          defaults: {
+            modelProvider: null,
+            model: null,
+            contextTokens: null,
+          },
+          sessions: [
+            {
+              key: "fast-session",
+              kind: "direct",
+              updatedAt: Date.now(),
+              thinkingLevel: "minimal",
+              modelProvider: "openai",
+              model: "gpt-5.4",
+              fastMode: true,
+            },
+          ],
+        };
+      }
+      if (method === "sessions.patch") {
+        expect(params).toEqual({
+          key: "fast-session",
+          fastMode: true,
+        });
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+
+    await agent.loadSession(createLoadSessionRequest("fast-session"));
+    sessionUpdate.mockClear();
+
+    const result = await agent.setSessionConfigOption(
+      createSetSessionConfigOptionRequest("fast-session", "fast_mode", "on"),
+    );
+
+    expect(result.configOptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "fast_mode",
+          currentValue: "on",
+        }),
+      ]),
+    );
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "fast-session",
+      update: {
+        sessionUpdate: "config_option_update",
+        configOptions: expect.arrayContaining([
+          expect.objectContaining({
+            id: "fast_mode",
+            currentValue: "on",
+          }),
+        ]),
+      },
+    });
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("rejects non-string ACP config option values", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          ts: Date.now(),
+          path: "/tmp/sessions.json",
+          count: 1,
+          defaults: {
+            modelProvider: null,
+            model: null,
+            contextTokens: null,
+          },
+          sessions: [
+            {
+              key: "bool-config-session",
+              kind: "direct",
+              updatedAt: Date.now(),
+              thinkingLevel: "minimal",
+              modelProvider: "openai",
+              model: "gpt-5.4",
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+
+    await agent.loadSession(createLoadSessionRequest("bool-config-session"));
+
+    await expect(
+      agent.setSessionConfigOption(
+        createSetSessionConfigOptionRequest("bool-config-session", "thought_level", false),
+      ),
+    ).rejects.toThrow(
+      'ACP bridge does not support non-string session config option values for "thought_level".',
+    );
+    expect(request).not.toHaveBeenCalledWith(
+      "sessions.patch",
+      expect.objectContaining({ key: "bool-config-session" }),
+    );
+
+    sessionStore.clearAllSessionsForTest();
+  });
 });
 
 describe("acp tool streaming bridge behavior", () => {
@@ -898,5 +1018,146 @@ describe("acp prompt size hardening", () => {
       sessionId: "prompt-limit-prefix",
       text: "a".repeat(2 * 1024 * 1024),
     });
+  });
+});
+
+describe("acp final chat snapshots", () => {
+  async function createSnapshotHarness() {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const sessionUpdate = connection.__sessionUpdateMock;
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return new Promise(() => {});
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+    await agent.loadSession(createLoadSessionRequest("snapshot-session"));
+    sessionUpdate.mockClear();
+    const promptPromise = agent.prompt(createPromptRequest("snapshot-session", "hello"));
+    const runId = sessionStore.getSession("snapshot-session")?.activeRunId;
+    if (!runId) {
+      throw new Error("Expected ACP prompt run to be active");
+    }
+    return { agent, sessionUpdate, promptPromise, runId, sessionStore };
+  }
+
+  it("emits final snapshot text before resolving end_turn", async () => {
+    const { agent, sessionUpdate, promptPromise, runId, sessionStore } =
+      await createSnapshotHarness();
+
+    await agent.handleGatewayEvent({
+      event: "chat",
+      payload: {
+        sessionKey: "snapshot-session",
+        runId,
+        state: "final",
+        stopReason: "end_turn",
+        message: {
+          content: [{ type: "text", text: "FINAL TEXT SHOULD BE EMITTED" }],
+        },
+      },
+    } as unknown as EventFrame);
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "snapshot-session",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "FINAL TEXT SHOULD BE EMITTED" },
+      },
+    });
+    expect(sessionStore.getSession("snapshot-session")?.activeRunId).toBeNull();
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("does not duplicate text when final repeats the last delta snapshot", async () => {
+    const { agent, sessionUpdate, promptPromise, runId, sessionStore } =
+      await createSnapshotHarness();
+
+    await agent.handleGatewayEvent({
+      event: "chat",
+      payload: {
+        sessionKey: "snapshot-session",
+        runId,
+        state: "delta",
+        message: {
+          content: [{ type: "text", text: "Hello world" }],
+        },
+      },
+    } as unknown as EventFrame);
+
+    await agent.handleGatewayEvent({
+      event: "chat",
+      payload: {
+        sessionKey: "snapshot-session",
+        runId,
+        state: "final",
+        stopReason: "end_turn",
+        message: {
+          content: [{ type: "text", text: "Hello world" }],
+        },
+      },
+    } as unknown as EventFrame);
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+    const chunks = sessionUpdate.mock.calls.filter(
+      (call: unknown[]) =>
+        (call[0] as Record<string, unknown>)?.update &&
+        (call[0] as Record<string, Record<string, unknown>>).update?.sessionUpdate ===
+          "agent_message_chunk",
+    );
+    expect(chunks).toHaveLength(1);
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("emits only the missing tail when the final snapshot extends prior deltas", async () => {
+    const { agent, sessionUpdate, promptPromise, runId, sessionStore } =
+      await createSnapshotHarness();
+
+    await agent.handleGatewayEvent({
+      event: "chat",
+      payload: {
+        sessionKey: "snapshot-session",
+        runId,
+        state: "delta",
+        message: {
+          content: [{ type: "text", text: "Hello" }],
+        },
+      },
+    } as unknown as EventFrame);
+
+    await agent.handleGatewayEvent({
+      event: "chat",
+      payload: {
+        sessionKey: "snapshot-session",
+        runId,
+        state: "final",
+        stopReason: "max_tokens",
+        message: {
+          content: [{ type: "text", text: "Hello world" }],
+        },
+      },
+    } as unknown as EventFrame);
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "max_tokens" });
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "snapshot-session",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Hello" },
+      },
+    });
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "snapshot-session",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: " world" },
+      },
+    });
+    sessionStore.clearAllSessionsForTest();
   });
 });
