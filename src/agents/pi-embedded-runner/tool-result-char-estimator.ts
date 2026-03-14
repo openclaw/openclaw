@@ -145,6 +145,9 @@ export function estimateMessageCharsCached(
   msg: AgentMessage,
   cache: MessageCharEstimateCache,
 ): number {
+  if (msg == null || typeof msg !== "object") {
+    return 0;
+  }
   const hit = cache.get(msg);
   if (hit !== undefined) {
     return hit;
@@ -158,7 +161,9 @@ export function estimateContextChars(
   messages: AgentMessage[],
   cache: MessageCharEstimateCache,
 ): number {
-  return messages.reduce((sum, msg) => sum + estimateMessageCharsCached(msg, cache), 0);
+  return messages
+    .filter((m): m is AgentMessage => m != null)
+    .reduce((sum, msg) => sum + estimateMessageCharsCached(msg, cache), 0);
 }
 
 export function invalidateMessageCharsCacheEntry(
