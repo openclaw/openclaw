@@ -1,5 +1,5 @@
 import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -387,14 +387,26 @@ export async function dispatchCronDelivery(
       delivery,
     });
     try {
-      const payloadsForDelivery =
+      const rawPayloads =
         deliveryPayloads.length > 0
           ? deliveryPayloads
           : synthesizedText
             ? [{ text: synthesizedText }]
             : [];
+      // Suppress NO_REPLY sentinel so it never leaks to external channels.
+      const payloadsForDelivery = rawPayloads.filter(
+        (p) => !isSilentReplyText(p.text, SILENT_REPLY_TOKEN),
+      );
       if (payloadsForDelivery.length === 0) {
-        return null;
+        deliveryAttempted = true;
+        delivered = true;
+        return params.withRunSession({
+          status: "ok",
+          summary,
+          outputText,
+          delivered: true,
+          ...params.telemetry,
+        });
       }
       if (params.isAborted()) {
         return params.withRunSession({
