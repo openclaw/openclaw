@@ -2,6 +2,7 @@ import path from "node:path";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { SessionStoreAdapter } from "../config/sessions/adapter.js";
 import { registerContextEngine } from "../context-engine/registry.js";
 import type {
   GatewayRequestHandler,
@@ -43,6 +44,12 @@ import type {
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
 } from "./types.js";
+
+let pluginSessionStoreAdapter: SessionStoreAdapter | null = null;
+
+export function getPluginSessionStoreAdapter(): SessionStoreAdapter | null {
+  return pluginSessionStoreAdapter;
+}
 
 export type PluginToolRegistration = {
   pluginId: string;
@@ -167,6 +174,7 @@ const constrainLegacyPromptInjectionHook = (
 };
 
 export function createEmptyPluginRegistry(): PluginRegistry {
+  pluginSessionStoreAdapter = null;
   return {
     plugins: [],
     tools: [],
@@ -184,6 +192,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
 }
 
 export function createPluginRegistry(registryParams: PluginRegistryParams) {
+  pluginSessionStoreAdapter = null;
   const registry = createEmptyPluginRegistry();
   const coreGatewayMethods = new Set(Object.keys(registryParams.coreGatewayHandlers ?? {}));
 
@@ -602,6 +611,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerService: (service) => registerService(record, service),
       registerCommand: (command) => registerCommand(record, command),
       registerContextEngine: (id, factory) => registerContextEngine(id, factory),
+      registerSessionStoreAdapter: (adapter) => {
+        if (pluginSessionStoreAdapter) {
+          pushDiagnostic({
+            level: "warn",
+            pluginId: record.id,
+            source: record.source,
+            message: "session store adapter already registered; overriding previous adapter",
+          });
+        }
+        pluginSessionStoreAdapter = adapter;
+      },
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) =>
         registerTypedHook(record, hookName, handler, opts, params.hookPolicy),

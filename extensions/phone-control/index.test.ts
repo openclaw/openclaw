@@ -41,6 +41,7 @@ function createApi(params: {
     registerProvider() {},
     registerContextEngine() {},
     registerCommand: params.registerCommand,
+    registerSessionStoreAdapter() {},
     resolvePath(input: string) {
       return input;
     },
