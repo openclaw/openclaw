@@ -4,6 +4,7 @@ import type {
   HangupCallInput,
   InitiateCallInput,
   InitiateCallResult,
+  AnswerCallInput,
   PlayTtsInput,
   ProviderName,
   WebhookParseOptions,
@@ -51,6 +52,12 @@ export interface VoiceCallProvider {
    * Hang up an active call.
    */
   hangupCall(input: HangupCallInput): Promise<void>;
+
+  /**
+   * Answer an inbound call if the provider requires explicit acceptance.
+   * Providers that auto-answer (e.g., Twilio) can leave this unimplemented.
+   */
+  answerCall?(input: AnswerCallInput): Promise<void>;
 
   /**
    * Play TTS audio to the caller.
