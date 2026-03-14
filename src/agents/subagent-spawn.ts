@@ -153,6 +153,25 @@ async function cleanupProvisionalSession(
   }
 }
 
+async function cleanupFailedSpawnBeforeAgentStart(params: {
+  childSessionKey: string;
+  attachmentAbsDir?: string;
+  emitLifecycleHooks?: boolean;
+  deleteTranscript?: boolean;
+}): Promise<void> {
+  if (params.attachmentAbsDir) {
+    try {
+      await fs.rm(params.attachmentAbsDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup only.
+    }
+  }
+  await cleanupProvisionalSession(params.childSessionKey, {
+    emitLifecycleHooks: params.emitLifecycleHooks,
+    deleteTranscript: params.deleteTranscript,
+  });
+}
+
 function resolveSpawnMode(params: {
   requestedMode?: SpawnSubagentMode;
   threadRequested: boolean;
@@ -557,14 +576,39 @@ export async function spawnSubagentDirect(
     ...toolSpawnMetadata,
     workspaceDir: resolveSpawnedWorkspaceInheritance({
       config: cfg,
-      requesterSessionKey: requesterInternalKey,
-      explicitWorkspaceDir: toolSpawnMetadata.workspaceDir,
+      targetAgentId,
+      // For cross-agent spawns, ignore the caller's inherited workspace;
+      // let targetAgentId resolve the correct workspace instead.
+      explicitWorkspaceDir:
+        targetAgentId !== requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir,
     }),
   });
+  const spawnLineagePatchError = await patchChildSession({
+    spawnedBy: spawnedByKey,
+    ...(spawnedMetadata.workspaceDir ? { spawnedWorkspaceDir: spawnedMetadata.workspaceDir } : {}),
+  });
+  if (spawnLineagePatchError) {
+    await cleanupFailedSpawnBeforeAgentStart({
+      childSessionKey,
+      attachmentAbsDir,
+      emitLifecycleHooks: threadBindingReady,
+      deleteTranscript: true,
+    });
+    return {
+      status: "error",
+      error: spawnLineagePatchError,
+      childSessionKey,
+    };
+  }
 
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
   try {
+    const {
+      spawnedBy: _spawnedBy,
+      workspaceDir: _workspaceDir,
+      ...publicSpawnedMetadata
+    } = spawnedMetadata;
     const response = await callGateway<{ runId: string }>({
       method: "agent",
       params: {
@@ -581,7 +625,7 @@ export async function spawnSubagentDirect(
         thinking: thinkingOverride,
         timeout: runTimeoutSeconds,
         label: label || undefined,
-        ...spawnedMetadata,
+        ...publicSpawnedMetadata,
       },
       timeoutMs: 10_000,
     });

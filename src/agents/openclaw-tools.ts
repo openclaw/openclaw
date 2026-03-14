@@ -21,6 +21,7 @@ import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
+import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
@@ -77,6 +78,8 @@ export function createOpenClawTools(
      * subagents inherit the real workspace path instead of the sandbox copy.
      */
     spawnWorkspaceDir?: string;
+    /** Callback invoked when sessions_yield tool is called. */
+    onYield?: (message: string) => Promise<void> | void;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
@@ -84,15 +87,16 @@ export function createOpenClawTools(
     options?.spawnWorkspaceDir ?? options?.workspaceDir,
   );
   const runtimeWebTools = getActiveRuntimeWebToolsMetadata();
+  const sandbox =
+    options?.sandboxRoot && options?.sandboxFsBridge
+      ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
+      : undefined;
   const imageTool = options?.agentDir?.trim()
     ? createImageTool({
         config: options?.config,
         agentDir: options.agentDir,
         workspaceDir,
-        sandbox:
-          options?.sandboxRoot && options?.sandboxFsBridge
-            ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
-            : undefined,
+        sandbox,
         fsPolicy: options?.fsPolicy,
         modelHasVision: options?.modelHasVision,
       })
@@ -102,10 +106,7 @@ export function createOpenClawTools(
         config: options?.config,
         agentDir: options.agentDir,
         workspaceDir,
-        sandbox:
-          options?.sandboxRoot && options?.sandboxFsBridge
-            ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
-            : undefined,
+        sandbox,
         fsPolicy: options?.fsPolicy,
       })
     : null;
@@ -171,15 +172,22 @@ export function createOpenClawTools(
     createSessionsListTool({
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,
+      config: options?.config,
     }),
     createSessionsHistoryTool({
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,
+      config: options?.config,
     }),
     createSessionsSendTool({
       agentSessionKey: options?.agentSessionKey,
       agentChannel: options?.agentChannel,
       sandboxed: options?.sandboxed,
+      config: options?.config,
+    }),
+    createSessionsYieldTool({
+      sessionId: options?.sessionId,
+      onYield: options?.onYield,
     }),
     createSessionsSpawnTool({
       agentSessionKey: options?.agentSessionKey,
@@ -200,6 +208,7 @@ export function createOpenClawTools(
     createSessionStatusTool({
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
+      sandboxed: options?.sandboxed,
     }),
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),

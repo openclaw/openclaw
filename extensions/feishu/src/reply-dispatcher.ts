@@ -202,6 +202,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       } catch (error) {
         params.runtime.error?.(`feishu: streaming start failed: ${String(error)}`);
         streaming = null;
+        streamingStartPromise = null; // allow retry on next deliver
       }
     })();
   };
@@ -222,6 +223,41 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     streamingStartPromise = null;
     streamText = "";
     lastPartial = "";
+  };
+
+  const sendChunkedTextReply = async (params: {
+    text: string;
+    useCard: boolean;
+    infoKind?: string;
+  }) => {
+    let first = true;
+    const chunkSource = params.useCard
+      ? params.text
+      : core.channel.text.convertMarkdownTables(params.text, tableMode);
+    for (const chunk of core.channel.text.chunkTextWithMode(
+      chunkSource,
+      textChunkLimit,
+      chunkMode,
+    )) {
+      const message = {
+        cfg,
+        to: chatId,
+        text: chunk,
+        replyToMessageId: sendReplyToMessageId,
+        replyInThread: effectiveReplyInThread,
+        mentions: first ? mentionTargets : undefined,
+        accountId,
+      };
+      if (params.useCard) {
+        await sendMarkdownCardFeishu(message);
+      } else {
+        await sendMessageFeishu(message);
+      }
+      first = false;
+    }
+    if (params.infoKind === "final") {
+      deliveredFinalTexts.add(params.text);
+    }
   };
 
   const { dispatcher, replyOptions, markDispatchIdle } =
@@ -303,48 +339,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             return;
           }
 
-          let first = true;
           if (useCard) {
-            for (const chunk of core.channel.text.chunkTextWithMode(
-              text,
-              textChunkLimit,
-              chunkMode,
-            )) {
-              await sendMarkdownCardFeishu({
-                cfg,
-                to: chatId,
-                text: chunk,
-                replyToMessageId: sendReplyToMessageId,
-                replyInThread: effectiveReplyInThread,
-                mentions: first ? mentionTargets : undefined,
-                accountId,
-              });
-              first = false;
-            }
-            if (info?.kind === "final") {
-              deliveredFinalTexts.add(text);
-            }
+            await sendChunkedTextReply({ text, useCard: true, infoKind: info?.kind });
           } else {
-            const converted = core.channel.text.convertMarkdownTables(text, tableMode);
-            for (const chunk of core.channel.text.chunkTextWithMode(
-              converted,
-              textChunkLimit,
-              chunkMode,
-            )) {
-              await sendMessageFeishu({
-                cfg,
-                to: chatId,
-                text: chunk,
-                replyToMessageId: sendReplyToMessageId,
-                replyInThread: effectiveReplyInThread,
-                mentions: first ? mentionTargets : undefined,
-                accountId,
-              });
-              first = false;
-            }
-            if (info?.kind === "final") {
-              deliveredFinalTexts.add(text);
-            }
+            await sendChunkedTextReply({ text, useCard: false, infoKind: info?.kind });
           }
         }
 

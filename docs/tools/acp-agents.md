@@ -421,6 +421,8 @@ Some controls depend on backend capabilities. If a backend does not support a co
 | `/acp doctor`        | Backend health, capabilities, actionable fixes.           | `/acp doctor`                                                  |
 | `/acp install`       | Print deterministic install and enable steps.             | `/acp install`                                                 |
 
+`/acp sessions` reads the store for the current bound or requester session. Commands that accept `session-key`, `session-id`, or `session-label` tokens resolve targets through gateway session discovery, including custom per-agent `session.store` roots.
+
 ## Runtime options mapping
 
 `/acp` has convenience commands and a generic setter.

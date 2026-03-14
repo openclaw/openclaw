@@ -1,14 +1,15 @@
 export type { OpenClawConfig } from "../config/config.js";
-export type { InspectedSlackAccount } from "../slack/account-inspect.js";
-export type { ResolvedSlackAccount } from "../slack/accounts.js";
+export type { InspectedSlackAccount } from "../../extensions/slack/src/account-inspect.js";
+export type { ResolvedSlackAccount } from "../../extensions/slack/src/accounts.js";
 export * from "./channel-plugin-common.js";
 export {
   listSlackAccountIds,
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
   resolveSlackReplyToMode,
-} from "../slack/accounts.js";
-export { inspectSlackAccount } from "../slack/account-inspect.js";
+} from "../../extensions/slack/src/accounts.js";
+export { isSlackInteractiveRepliesEnabled } from "../../extensions/slack/src/interactive-replies.js";
+export { inspectSlackAccount } from "../../extensions/slack/src/account-inspect.js";
 export {
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
@@ -22,8 +23,11 @@ export {
   looksLikeSlackTargetId,
   normalizeSlackMessagingTarget,
 } from "../channels/plugins/normalize/slack.js";
-export { extractSlackToolSend, listSlackMessageActions } from "../slack/message-actions.js";
-export { buildSlackThreadingToolContext } from "../slack/threading-tool-context.js";
+export {
+  extractSlackToolSend,
+  listSlackMessageActions,
+} from "../../extensions/slack/src/message-actions.js";
+export { buildSlackThreadingToolContext } from "../../extensions/slack/src/threading-tool-context.js";
 export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";
 
 export {

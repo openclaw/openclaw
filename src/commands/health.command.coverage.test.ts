@@ -19,7 +19,7 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
 }));
 
-vi.mock("../web/auth-store.js", () => ({
+vi.mock("../../extensions/whatsapp/src/auth-store.js", () => ({
   webAuthExists: vi.fn(async () => true),
   getWebAuthAgeMs: vi.fn(() => 0),
   logWebSelfId: (...args: unknown[]) => logWebSelfIdMock(...args),

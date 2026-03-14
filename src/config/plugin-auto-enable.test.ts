@@ -1,7 +1,58 @@
-import { describe, expect, it } from "vitest";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
+import {
+  clearPluginManifestRegistryCache,
+  type PluginManifestRegistry,
+} from "../plugins/manifest-registry.js";
 import { validateConfigObject } from "./config.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
+
+const tempDirs: string[] = [];
+
+function chmodSafeDir(dir: string) {
+  if (process.platform === "win32") {
+    return;
+  }
+  fs.chmodSync(dir, 0o755);
+}
+
+function mkdtempSafe(prefix: string) {
+  const dir = fs.mkdtempSync(prefix);
+  chmodSafeDir(dir);
+  return dir;
+}
+
+function mkdirSafe(dir: string) {
+  fs.mkdirSync(dir, { recursive: true });
+  chmodSafeDir(dir);
+}
+
+function makeTempDir() {
+  const dir = mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-auto-enable-"));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function writePluginManifestFixture(params: { rootDir: string; id: string; channels: string[] }) {
+  mkdirSafe(params.rootDir);
+  fs.writeFileSync(
+    path.join(params.rootDir, "openclaw.plugin.json"),
+    JSON.stringify(
+      {
+        id: params.id,
+        channels: params.channels,
+        configSchema: { type: "object" },
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  fs.writeFileSync(path.join(params.rootDir, "index.ts"), "export default {}", "utf-8");
+}
 
 /** Helper to build a minimal PluginManifestRegistry for testing. */
 function makeRegistry(plugins: Array<{ id: string; channels: string[] }>): PluginManifestRegistry {
@@ -65,6 +116,14 @@ function applyWithBluebubblesImessageConfig(extra?: {
     env: {},
   });
 }
+
+afterEach(() => {
+  clearPluginDiscoveryCache();
+  clearPluginManifestRegistryCache();
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 describe("applyPluginAutoEnable", () => {
   it("auto-enables built-in channels and appends to existing allowlist", () => {
@@ -156,6 +215,80 @@ describe("applyPluginAutoEnable", () => {
 
     expect(result.config.channels?.irc?.enabled).toBe(true);
     expect(result.changes.join("\n")).toContain("IRC configured, enabled automatically.");
+  });
+
+  it("uses the provided env when loading plugin manifests automatically", () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "apn-channel");
+    writePluginManifestFixture({
+      rootDir: pluginDir,
+      id: "apn-channel",
+      channels: ["apn"],
+    });
+
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: { apn: { someKey: "value" } },
+      },
+      env: {
+        ...process.env,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_STATE_DIR: stateDir,
+        CLAWDBOT_STATE_DIR: undefined,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+      },
+    });
+
+    expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.apn).toBeUndefined();
+  });
+
+  it("uses env-scoped catalog metadata for preferOver auto-enable decisions", () => {
+    const stateDir = makeTempDir();
+    const catalogPath = path.join(stateDir, "plugins", "catalog.json");
+    mkdirSafe(path.dirname(catalogPath));
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/env-secondary",
+            openclaw: {
+              channel: {
+                id: "env-secondary",
+                label: "Env Secondary",
+                selectionLabel: "Env Secondary",
+                docsPath: "/channels/env-secondary",
+                blurb: "Env secondary entry",
+                preferOver: ["env-primary"],
+              },
+              install: {
+                npmSpec: "@openclaw/env-secondary",
+              },
+            },
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: {
+          "env-primary": { enabled: true },
+          "env-secondary": { enabled: true },
+        },
+      },
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        CLAWDBOT_STATE_DIR: undefined,
+      },
+      manifestRegistry: makeRegistry([]),
+    });
+
+    expect(result.config.plugins?.entries?.["env-secondary"]?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.["env-primary"]?.enabled).toBeUndefined();
   });
 
   it("auto-enables provider auth plugins when profiles exist", () => {
@@ -310,6 +443,30 @@ describe("applyPluginAutoEnable", () => {
 
       expect(result.config.channels?.imessage?.enabled).toBe(true);
       expect(result.changes.join("\n")).toContain("iMessage configured, enabled automatically.");
+    });
+
+    it("uses the provided env when loading installed plugin manifests", () => {
+      const stateDir = makeTempDir();
+      const pluginDir = path.join(stateDir, "extensions", "apn-channel");
+      writePluginManifestFixture({
+        rootDir: pluginDir,
+        id: "apn-channel",
+        channels: ["apn"],
+      });
+
+      const result = applyPluginAutoEnable({
+        config: makeApnChannelConfig(),
+        env: {
+          ...process.env,
+          OPENCLAW_HOME: undefined,
+          OPENCLAW_STATE_DIR: stateDir,
+          CLAWDBOT_STATE_DIR: undefined,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+        },
+      });
+
+      expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.apn).toBeUndefined();
     });
   });
 });
