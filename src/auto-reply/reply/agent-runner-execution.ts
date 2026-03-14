@@ -646,6 +646,14 @@ export async function runAgentTurnWithFallback(params: {
     };
   }
 
+  // Fallback: context-engine-owned compaction (ownsCompaction: true) may
+  // increment agentMeta.compactionCount without emitting a streamed
+  // "compaction" event.  Treat a non-zero count as evidence that
+  // auto-compaction completed so the session-level counter is persisted.
+  if (!autoCompactionCompleted && (runResult?.meta?.agentMeta?.compactionCount ?? 0) > 0) {
+    autoCompactionCompleted = true;
+  }
+
   return {
     kind: "success",
     runId,
