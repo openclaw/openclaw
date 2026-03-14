@@ -311,40 +311,52 @@ export function registerNodesStatusCommands(nodes: Command) {
           const now = Date.now();
           const hasFilters = connectedOnly || sinceMs !== undefined;
           const pendingRows = hasFilters ? [] : pending;
-          const connectedById = hasFilters
-            ? new Map(
-                parseNodeList(await callGatewayCli("node.list", opts, {})).map((node) => [
-                  node.nodeId,
-                  node,
-                ]),
-              )
-            : null;
-          const filteredPaired = paired.filter((node) => {
-            if (connectedOnly) {
-              const live = connectedById?.get(node.nodeId);
-              if (!live?.connected) {
+          // Always fetch live node list to get current connection status
+          const liveNodes = parseNodeList(await callGatewayCli("node.list", opts, {}));
+          const connectedById = new Map(liveNodes.map((node) => [node.nodeId, node]));
+          // Build a map of paired nodes from pairing data, merging with live data
+          const pairedById = new Map(paired.map((node) => [node.nodeId, node]));
+          // Combine: show all live nodes that are paired, or all paired nodes from pairing data
+          const allPairedNodeIds = new Set([
+            ...liveNodes.filter((n) => n.paired).map((n) => n.nodeId),
+            ...paired.map((n) => n.nodeId),
+          ]);
+          const filteredPaired = Array.from(allPairedNodeIds)
+            .map((nodeId) => {
+              const pairingData = pairedById.get(nodeId);
+              const liveData = connectedById.get(nodeId);
+              return {
+                nodeId,
+                displayName: liveData?.displayName ?? pairingData?.displayName,
+                remoteIp: liveData?.remoteIp ?? pairingData?.remoteIp,
+                lastConnectedAtMs:
+                  typeof pairingData?.lastConnectedAtMs === "number"
+                    ? pairingData.lastConnectedAtMs
+                    : typeof liveData?.connectedAtMs === "number"
+                      ? liveData.connectedAtMs
+                      : undefined,
+                connected: liveData?.connected ?? false,
+              };
+            })
+            .filter((node) => {
+              if (connectedOnly && !node.connected) {
                 return false;
               }
-            }
-            if (sinceMs !== undefined) {
-              const live = connectedById?.get(node.nodeId);
-              const lastConnectedAtMs =
-                typeof node.lastConnectedAtMs === "number"
-                  ? node.lastConnectedAtMs
-                  : typeof live?.connectedAtMs === "number"
-                    ? live.connectedAtMs
-                    : undefined;
-              if (typeof lastConnectedAtMs !== "number") {
-                return false;
+              if (sinceMs !== undefined) {
+                if (typeof node.lastConnectedAtMs !== "number") {
+                  return false;
+                }
+                if (now - node.lastConnectedAtMs > sinceMs) {
+                  return false;
+                }
               }
-              if (now - lastConnectedAtMs > sinceMs) {
-                return false;
-              }
-            }
-            return true;
-          });
+              return true;
+            });
+          const totalPairedCount = allPairedNodeIds.size;
           const filteredLabel =
-            hasFilters && filteredPaired.length !== paired.length ? ` (of ${paired.length})` : "";
+            hasFilters && filteredPaired.length !== totalPairedCount
+              ? ` (of ${totalPairedCount})`
+              : "";
           defaultRuntime.log(
             `Pending: ${pendingRows.length} · Paired: ${filteredPaired.length}${filteredLabel}`,
           );
@@ -370,20 +382,13 @@ export function registerNodesStatusCommands(nodes: Command) {
 
           if (filteredPaired.length > 0) {
             const pairedRows = filteredPaired.map((n) => {
-              const live = connectedById?.get(n.nodeId);
-              const lastConnectedAtMs =
-                typeof n.lastConnectedAtMs === "number"
-                  ? n.lastConnectedAtMs
-                  : typeof live?.connectedAtMs === "number"
-                    ? live.connectedAtMs
-                    : undefined;
               return {
                 Node: n.displayName?.trim() ? n.displayName.trim() : n.nodeId,
                 Id: n.nodeId,
                 IP: n.remoteIp ?? "",
                 LastConnect:
-                  typeof lastConnectedAtMs === "number"
-                    ? formatTimeAgo(Math.max(0, now - lastConnectedAtMs))
+                  typeof n.lastConnectedAtMs === "number"
+                    ? formatTimeAgo(Math.max(0, now - n.lastConnectedAtMs))
                     : muted("unknown"),
               };
             });
