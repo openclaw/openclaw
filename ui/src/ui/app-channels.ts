@@ -1,4 +1,5 @@
 import type { OpenClawApp } from "./app.ts";
+import { trackEvent } from "./analytics.ts";
 import {
   loadChannels,
   logoutWhatsApp,
@@ -26,6 +27,7 @@ export async function handleWhatsAppLogout(host: OpenClawApp) {
 
 export async function handleChannelConfigSave(host: OpenClawApp) {
   await saveConfig(host);
+  trackEvent("channel_config_saved");
   await loadConfig(host);
   await loadChannels(host, true);
 }

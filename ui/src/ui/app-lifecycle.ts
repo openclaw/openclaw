@@ -1,4 +1,5 @@
 import { connectGateway } from "./app-gateway.ts";
+import { trackEvent, setTag } from "./analytics.ts";
 import {
   startLogsPolling,
   startNodesPolling,
@@ -56,6 +57,7 @@ export function handleConnected(host: LifecycleHost) {
       return;
     }
     connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
+    trackEvent("gateway_connected");
   });
   startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
   if (host.tab === "logs") {
@@ -71,6 +73,7 @@ export function handleFirstUpdated(host: LifecycleHost) {
 }
 
 export function handleDisconnected(host: LifecycleHost) {
+  trackEvent("gateway_disconnected");
   host.connectGeneration += 1;
   window.removeEventListener("popstate", host.popStateHandler);
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
