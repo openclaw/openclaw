@@ -22,13 +22,19 @@ import { AgentManifestSchema, type AgentManifest } from "./zod-schema.agent-mani
 // ── Bundled agents directory ─────────────────────────────────────────────────
 
 const AGENTS_DIR = join(import.meta.dirname, "..", "..", "agents");
+/** Directories that are not agent folders. */
+const EXCLUDED_DIRS = new Set(["personas", "_archive"]);
+
+function isAgentDir(name: string): boolean {
+  return !EXCLUDED_DIRS.has(name) && !name.startsWith(".");
+}
 
 async function loadAllBundledAgents(): Promise<
   { id: string; manifest: AgentManifest; dir: string }[]
 > {
   const entries = await readdir(AGENTS_DIR, { withFileTypes: true });
   const agents: { id: string; manifest: AgentManifest; dir: string }[] = [];
-  for (const entry of entries.filter((e) => e.isDirectory())) {
+  for (const entry of entries.filter((e) => e.isDirectory() && isAgentDir(e.name))) {
     const dir = join(AGENTS_DIR, entry.name);
     const result = await loadAgentFromDir(dir);
     if (result.manifest) {
@@ -43,7 +49,7 @@ async function loadAllBundledAgents(): Promise<
 describe("Bundled agent schema validation", () => {
   test("all bundled agents pass schema validation (unified or legacy)", async () => {
     const entries = await readdir(AGENTS_DIR, { withFileTypes: true });
-    const dirs = entries.filter((e) => e.isDirectory());
+    const dirs = entries.filter((e) => e.isDirectory() && isAgentDir(e.name));
 
     for (const entry of dirs) {
       const dir = join(AGENTS_DIR, entry.name);
@@ -55,9 +61,8 @@ describe("Bundled agent schema validation", () => {
     // Count agents vs bundles separately for clarity
     const agents = await loadAllBundledAgents();
     const agentCount = agents.filter((a) => !a.manifest.is_bundle).length;
-    const bundleCount = agents.filter((a) => a.manifest.is_bundle).length;
-    expect(agentCount).toBeGreaterThanOrEqual(13);
-    expect(bundleCount).toBeGreaterThanOrEqual(1);
+    // 4 core agents (operator1, neo, morpheus, trinity) in unified format
+    expect(agentCount).toBeGreaterThanOrEqual(4);
   });
 
   test("all required fields present on every agent", async () => {
@@ -96,7 +101,7 @@ describe("Bundled AGENT.md format validation", () => {
 
   test("all agents load with consistent format (unified or legacy)", async () => {
     const entries = await readdir(AGENTS_DIR, { withFileTypes: true });
-    for (const entry of entries.filter((e) => e.isDirectory())) {
+    for (const entry of entries.filter((e) => e.isDirectory() && isAgentDir(e.name))) {
       const dir = join(AGENTS_DIR, entry.name);
       const result = await loadAgentFromDir(dir);
       expect(result.errors, `${entry.name}: ${result.errors.join(", ")}`).toHaveLength(0);
@@ -128,26 +133,19 @@ describe("Tier hierarchy validation", () => {
     }
   });
 
-  test("specialists are tier 3 with correct parent", async () => {
+  test("all core agents have persona field set", async () => {
     const agents = await loadAllBundledAgents();
-    const expectedParents: Record<string, string> = {
-      tank: "neo",
-      dozer: "neo",
-      mouse: "neo",
-      oracle: "trinity",
-      seraph: "trinity",
-      zee: "trinity",
-      niobe: "morpheus",
-      switch: "morpheus",
-      rex: "morpheus",
+    const expectedPersonas: Record<string, string> = {
+      operator1: "coo",
+      neo: "cto",
+      morpheus: "cmo",
+      trinity: "cfo",
     };
-
-    for (const [id, expectedParent] of Object.entries(expectedParents)) {
+    for (const [id, expectedPersona] of Object.entries(expectedPersonas)) {
       const agent = agents.find((a) => a.id === id);
       expect(agent, `${id} not found`).toBeDefined();
-      expect(agent!.manifest.tier, `${id} should be tier 3`).toBe(3);
-      expect(agent!.manifest.requires, `${id} should require ${expectedParent}`).toBe(
-        expectedParent,
+      expect(agent!.manifest.persona, `${id} should have persona=${expectedPersona}`).toBe(
+        expectedPersona,
       );
     }
   });
@@ -164,70 +162,13 @@ describe("Tier hierarchy validation", () => {
 // ── Dependency helper tests ──────────────────────────────────────────────────
 
 describe("findDependents", () => {
-  test("neo has specialist dependents", async () => {
+  test("core agents have no dependents (specialists archived)", async () => {
     const agents = await loadAllBundledAgents();
     const manifests = agents.map((a) => a.manifest);
-    const deps = findDependents("neo", manifests);
-    const depIds = deps.map((d) => d.id).toSorted();
-    // Original 3 + new engineering specialists
-    expect(depIds).toContain("dozer");
-    expect(depIds).toContain("mouse");
-    expect(depIds).toContain("tank");
-    expect(depIds).toContain("spark");
-    expect(depIds).toContain("cipher");
-    expect(depIds).toContain("relay");
-    expect(depIds).toContain("ghost");
-    expect(depIds).toContain("binary");
-    expect(depIds).toContain("kernel");
-    expect(depIds).toContain("prism");
-    expect(depIds).toHaveLength(10);
-  });
-
-  test("trinity has specialist dependents", async () => {
-    const agents = await loadAllBundledAgents();
-    const manifests = agents.map((a) => a.manifest);
-    const deps = findDependents("trinity", manifests);
-    const depIds = deps.map((d) => d.id).toSorted();
-    // Original 3 + new finance specialists
-    expect(depIds).toContain("oracle");
-    expect(depIds).toContain("seraph");
-    expect(depIds).toContain("zee");
-    expect(depIds).toContain("ledger");
-    expect(depIds).toContain("vault");
-    expect(depIds).toContain("shield");
-    expect(depIds).toContain("trace");
-    expect(depIds).toContain("quota");
-    expect(depIds).toContain("merit");
-    expect(depIds).toContain("beacon");
-    expect(depIds).toHaveLength(10);
-  });
-
-  test("morpheus has specialist dependents", async () => {
-    const agents = await loadAllBundledAgents();
-    const manifests = agents.map((a) => a.manifest);
-    const deps = findDependents("morpheus", manifests);
-    const depIds = deps.map((d) => d.id).toSorted();
-    // Original 3 + new marketing specialists
-    expect(depIds).toContain("niobe");
-    expect(depIds).toContain("rex");
-    expect(depIds).toContain("switch");
-    expect(depIds).toContain("ink");
-    expect(depIds).toContain("vibe");
-    expect(depIds).toContain("lens");
-    expect(depIds).toContain("echo");
-    expect(depIds).toContain("nova");
-    expect(depIds).toContain("pulse");
-    expect(depIds).toContain("blaze");
-    expect(depIds).toHaveLength(10);
-  });
-
-  test("tier 3 agents have no dependents", async () => {
-    const agents = await loadAllBundledAgents();
-    const manifests = agents.map((a) => a.manifest);
-    const tier3 = agents.filter((a) => a.manifest.tier === 3);
-    for (const agent of tier3) {
+    for (const agent of agents) {
       const deps = findDependents(agent.id, manifests);
-      expect(deps, `${agent.id} should have no dependents`).toHaveLength(0);
+      // With only 4 core agents active, no tier 3 agents exist
+      expect(deps).toHaveLength(0);
     }
   });
 });
@@ -240,19 +181,10 @@ describe("canInstall", () => {
     expect(result.ok).toBe(true);
   });
 
-  test("tier 3 agent fails without parent", async () => {
+  test("tier 1 agent (operator1) can install independently", async () => {
     const agents = await loadAllBundledAgents();
-    const tank = agents.find((a) => a.id === "tank")!;
-    const result = canInstall(tank.manifest, []);
-    expect(result.ok).toBe(false);
-    expect(result.missingDep).toBe("neo");
-  });
-
-  test("tier 3 agent succeeds with parent installed", async () => {
-    const agents = await loadAllBundledAgents();
-    const neo = agents.find((a) => a.id === "neo")!;
-    const tank = agents.find((a) => a.id === "tank")!;
-    const result = canInstall(tank.manifest, [neo.manifest]);
+    const op1 = agents.find((a) => a.id === "operator1")!;
+    const result = canInstall(op1.manifest, []);
     expect(result.ok).toBe(true);
   });
 });
@@ -262,7 +194,7 @@ describe("canInstall", () => {
 describe("loadAgentFromDir", () => {
   test("loads all bundled agents without errors", async () => {
     const entries = await readdir(AGENTS_DIR, { withFileTypes: true });
-    for (const entry of entries.filter((e) => e.isDirectory())) {
+    for (const entry of entries.filter((e) => e.isDirectory() && isAgentDir(e.name))) {
       const dir = join(AGENTS_DIR, entry.name);
       const result = await loadAgentFromDir(dir);
       expect(result.errors, `${entry.name} load errors: ${result.errors.join(", ")}`).toHaveLength(

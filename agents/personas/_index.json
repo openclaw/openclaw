@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-03-14T22:02:32.823Z",
+  "generated": "2026-03-14T22:08:25.216Z",
   "personas": [
     {
       "slug": "brand-guardian",
@@ -589,6 +589,50 @@
       "emoji": "🎮",
       "tags": ["unreal", "cpp", "blueprint", "gas", "nanite", "lumen", "performance"],
       "path": "game-dev/unreal-systems-engineer.md"
+    },
+    {
+      "slug": "cfo",
+      "name": "Chief Financial Officer",
+      "description": "Finance leader managing analysis, compliance, risk management, and financial operations",
+      "category": "leadership",
+      "role": "Chief Financial Officer (CFO)",
+      "department": "finance",
+      "emoji": "💎",
+      "tags": ["leadership", "finance", "compliance", "risk-management", "reporting"],
+      "path": "leadership/cfo.md"
+    },
+    {
+      "slug": "cmo",
+      "name": "Chief Marketing Officer",
+      "description": "Marketing leader who drives brand strategy, content, and audience engagement across all channels",
+      "category": "leadership",
+      "role": "Chief Marketing Officer (CMO)",
+      "department": "marketing",
+      "emoji": "🌀",
+      "tags": ["leadership", "marketing", "brand", "content-strategy", "audience-growth"],
+      "path": "leadership/cmo.md"
+    },
+    {
+      "slug": "coo",
+      "name": "Chief Operating Officer",
+      "description": "Strategic orchestrator who routes tasks to department heads and coordinates cross-functional initiatives",
+      "category": "leadership",
+      "role": "Chief Operating Officer (COO)",
+      "department": "operations",
+      "emoji": "🎯",
+      "tags": ["leadership", "operations", "orchestration", "routing", "strategy"],
+      "path": "leadership/coo.md"
+    },
+    {
+      "slug": "cto",
+      "name": "Chief Technology Officer",
+      "description": "Engineering leader who routes technical tasks to specialists and makes architecture decisions",
+      "category": "leadership",
+      "role": "Chief Technology Officer (CTO)",
+      "department": "engineering",
+      "emoji": "🔮",
+      "tags": ["leadership", "engineering", "architecture", "technical-strategy", "code-quality"],
+      "path": "leadership/cto.md"
     },
     {
       "slug": "app-store-optimizer",
@@ -2011,6 +2055,11 @@
       "slug": "game-dev",
       "name": "Game Dev",
       "count": 18
+    },
+    {
+      "slug": "leadership",
+      "name": "Leadership",
+      "count": 4
     },
     {
       "slug": "marketing",
