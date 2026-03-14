@@ -697,9 +697,9 @@ export abstract class MemoryManagerSyncOps {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
-    // FTS-only mode: skip embedding sync (no provider)
-    if (!this.provider) {
-      log.debug("Skipping memory file sync in FTS-only mode (no embedding provider)");
+    // No provider and no FTS: nothing we can index.
+    if (!this.provider && !(this.fts.enabled && this.fts.available)) {
+      log.debug("Skipping memory file sync (no embedding provider and FTS unavailable)");
       return;
     }
 
@@ -733,11 +733,19 @@ export abstract class MemoryManagerSyncOps {
       });
     }
 
+    // Bulk-load existing file hashes to avoid per-file queries (N+1 → 1).
+    const existingRecords = new Map<string, string>();
+    if (!params.needsFullReindex) {
+      const rows = this.db
+        .prepare(`SELECT path, hash FROM files WHERE source = ?`)
+        .all("memory") as Array<{ path: string; hash: string }>;
+      for (const row of rows) {
+        existingRecords.set(row.path, row.hash);
+      }
+    }
+
     const tasks = fileEntries.map((entry) => async () => {
-      const record = this.db
-        .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
-        .get(entry.path, "memory") as { hash: string } | undefined;
-      if (!params.needsFullReindex && record?.hash === entry.hash) {
+      if (!params.needsFullReindex && existingRecords.get(entry.path) === entry.hash) {
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
@@ -758,27 +766,28 @@ export abstract class MemoryManagerSyncOps {
     });
     await runWithConcurrency(tasks, this.getIndexConcurrency());
 
-    const staleRows = this.db
+    // Fresh query for stale paths after indexing (consistent with syncSessionFiles).
+    const indexedRows = this.db
       .prepare(`SELECT path FROM files WHERE source = ?`)
       .all("memory") as Array<{ path: string }>;
-    for (const stale of staleRows) {
-      if (activePaths.has(stale.path)) {
+    for (const { path: stalePath } of indexedRows) {
+      if (activePaths.has(stalePath)) {
         continue;
       }
-      this.db.prepare(`DELETE FROM files WHERE path = ? AND source = ?`).run(stale.path, "memory");
+      this.db.prepare(`DELETE FROM files WHERE path = ? AND source = ?`).run(stalePath, "memory");
       try {
         this.db
           .prepare(
             `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
           )
-          .run(stale.path, "memory");
+          .run(stalePath, "memory");
       } catch {}
-      this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(stale.path, "memory");
+      this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(stalePath, "memory");
       if (this.fts.enabled && this.fts.available) {
         try {
           this.db
-            .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-            .run(stale.path, "memory", this.provider.model);
+            .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
+            .run(stalePath, "memory");
         } catch {}
       }
     }
@@ -789,9 +798,9 @@ export abstract class MemoryManagerSyncOps {
     targetSessionFiles?: string[];
     progress?: MemorySyncProgressState;
   }) {
-    // FTS-only mode: skip embedding sync (no provider)
-    if (!this.provider) {
-      log.debug("Skipping session file sync in FTS-only mode (no embedding provider)");
+    // No provider and no FTS: nothing we can index.
+    if (!this.provider && !(this.fts.enabled && this.fts.available)) {
+      log.debug("Skipping session file sync (no embedding provider and FTS unavailable)");
       return;
     }
 
@@ -823,6 +832,19 @@ export abstract class MemoryManagerSyncOps {
       });
     }
 
+    // Bulk-load existing session file hashes to avoid per-file queries (N+1 → 1).
+    // Skip bulk preload for targeted syncs (small file sets) where per-file lookup is cheaper.
+    const usePerFileLookup = !params.needsFullReindex && targetSessionFiles !== null;
+    const existingRecords = new Map<string, string>();
+    if (!params.needsFullReindex && !usePerFileLookup) {
+      const rows = this.db
+        .prepare(`SELECT path, hash FROM files WHERE source = ?`)
+        .all("sessions") as Array<{ path: string; hash: string }>;
+      for (const row of rows) {
+        existingRecords.set(row.path, row.hash);
+      }
+    }
+
     const tasks = files.map((absPath) => async () => {
       if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
         if (params.progress) {
@@ -845,10 +867,14 @@ export abstract class MemoryManagerSyncOps {
         }
         return;
       }
-      const record = this.db
-        .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
-        .get(entry.path, "sessions") as { hash: string } | undefined;
-      if (!params.needsFullReindex && record?.hash === entry.hash) {
+      const existingHash = usePerFileLookup
+        ? (
+            this.db
+              .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
+              .get(entry.path, "sessions") as { hash: string } | undefined
+          )?.hash
+        : existingRecords.get(entry.path);
+      if (!params.needsFullReindex && existingHash === entry.hash) {
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
@@ -877,6 +903,7 @@ export abstract class MemoryManagerSyncOps {
       return;
     }
 
+    // Bulk-load stale paths to avoid per-file queries during cleanup.
     const staleRows = this.db
       .prepare(`SELECT path FROM files WHERE source = ?`)
       .all("sessions") as Array<{ path: string }>;
@@ -900,8 +927,8 @@ export abstract class MemoryManagerSyncOps {
       if (this.fts.enabled && this.fts.available) {
         try {
           this.db
-            .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-            .run(stale.path, "sessions", this.provider.model);
+            .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
+            .run(stale.path, "sessions");
         } catch {}
       }
     }

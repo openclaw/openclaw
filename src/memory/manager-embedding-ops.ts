@@ -767,11 +767,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           .run(pathname, source);
       } catch {}
     }
-    if (this.fts.enabled && this.fts.available && this.provider) {
+    if (this.fts.enabled && this.fts.available) {
       try {
+        // Delete all FTS rows for this path+source regardless of model so that
+        // stale entries from a previous provider or FTS-only mode are cleaned up.
         this.db
-          .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-          .run(pathname, source, this.provider.model);
+          .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
+          .run(pathname, source);
       } catch {}
     }
     this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(pathname, source);
@@ -804,12 +806,60 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     entry: MemoryFileEntry | SessionFileEntry,
     options: { source: MemorySource; content?: string },
   ) {
-    // FTS-only mode: skip indexing if no provider
+    // FTS-only mode: index text chunks for keyword search without embeddings.
     if (!this.provider) {
-      log.debug("Skipping embedding indexing in FTS-only mode", {
-        path: entry.path,
-        source: options.source,
-      });
+      if (!(this.fts.enabled && this.fts.available)) {
+        return;
+      }
+      // Skip multimodal files — they need an embedding provider.
+      if ("kind" in entry && entry.kind === "multimodal") {
+        return;
+      }
+      const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
+      const chunks = chunkMarkdown(content, this.settings.chunking).filter(
+        (chunk) => chunk.text.trim().length > 0,
+      );
+      if (options.source === "sessions" && "lineMap" in entry) {
+        remapChunkLines(chunks, entry.lineMap);
+      }
+      const model = "fts-only";
+      const now = Date.now();
+      this.clearIndexedFileData(entry.path, options.source);
+      for (const chunk of chunks) {
+        const id = hashText(
+          `${options.source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
+        );
+        this.db
+          .prepare(
+            `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               hash=excluded.hash,
+               model=excluded.model,
+               text=excluded.text,
+               embedding=excluded.embedding,
+               updated_at=excluded.updated_at`,
+          )
+          .run(
+            id,
+            entry.path,
+            options.source,
+            chunk.startLine,
+            chunk.endLine,
+            chunk.hash,
+            model,
+            chunk.text,
+            "[]",
+            now,
+          );
+        this.db
+          .prepare(
+            `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
+              ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(chunk.text, id, entry.path, options.source, model, chunk.startLine, chunk.endLine);
+      }
+      this.upsertFileRecord(entry, options.source);
       return;
     }
 
