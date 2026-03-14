@@ -184,7 +184,7 @@ function parseInteractiveCardContent(parsed: unknown): string {
   return texts.join("\n").trim() || "[Interactive Card]";
 }
 
-function parseQuotedMessageContent(rawContent: string, msgType: string): string {
+function parseFeishuMessageContent(rawContent: string, msgType: string): string {
   if (!rawContent) {
     return "";
   }
@@ -225,6 +225,30 @@ function parseQuotedMessageContent(rawContent: string, msgType: string): string 
   return `[${msgType || "unknown"} message]`;
 }
 
+function parseFeishuMessageItem(
+  item: FeishuMessageGetItem,
+  fallbackMessageId?: string,
+): FeishuMessageInfo {
+  const msgType = item.msg_type ?? "text";
+  const rawContent = item.body?.content ?? "";
+
+  return {
+    messageId: item.message_id ?? fallbackMessageId ?? "",
+    chatId: item.chat_id ?? "",
+    chatType:
+      item.chat_type === "group" || item.chat_type === "private" || item.chat_type === "p2p"
+        ? item.chat_type
+        : undefined,
+    senderId: item.sender?.id,
+    senderOpenId: item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
+    senderType: item.sender?.sender_type,
+    content: parseFeishuMessageContent(rawContent, msgType),
+    contentType: msgType,
+    createTime: item.create_time ? parseInt(String(item.create_time), 10) : undefined,
+    threadId: item.thread_id || undefined,
+  };
+}
+
 /**
  * Get a message by its ID.
  * Useful for fetching quoted/replied message content.
@@ -262,25 +286,7 @@ export async function getMessageFeishu(params: {
       return null;
     }
 
-    const msgType = item.msg_type ?? "text";
-    const rawContent = item.body?.content ?? "";
-    const content = parseQuotedMessageContent(rawContent, msgType);
-
-    return {
-      messageId: item.message_id ?? messageId,
-      chatId: item.chat_id ?? "",
-      chatType:
-        item.chat_type === "group" || item.chat_type === "private" || item.chat_type === "p2p"
-          ? item.chat_type
-          : undefined,
-      senderId: item.sender?.id,
-      senderOpenId: item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
-      senderType: item.sender?.sender_type,
-      content,
-      contentType: msgType,
-      createTime: item.create_time ? parseInt(String(item.create_time), 10) : undefined,
-      threadId: item.thread_id || undefined,
-    };
+    return parseFeishuMessageItem(item, messageId);
   } catch {
     return null;
   }
@@ -330,19 +336,13 @@ export async function listFeishuThreadMessages(params: {
     code?: number;
     msg?: string;
     data?: {
-      items?: Array<{
-        message_id?: string;
-        root_id?: string;
-        parent_id?: string;
-        msg_type?: string;
-        body?: { content?: string };
-        sender?: {
-          id: string;
-          id_type: string;
-          sender_type: string;
-        };
-        create_time?: string;
-      }>;
+      items?: Array<
+        {
+          message_id?: string;
+          root_id?: string;
+          parent_id?: string;
+        } & FeishuMessageGetItem
+      >;
     };
   };
 
@@ -359,31 +359,15 @@ export async function listFeishuThreadMessages(params: {
     if (currentMessageId && item.message_id === currentMessageId) continue;
     if (rootMessageId && item.message_id === rootMessageId) continue;
 
-    let content = item.body?.content ?? "";
-    try {
-      const parsed = JSON.parse(content);
-      if (item.msg_type === "text" && parsed.text) {
-        content = parsed.text;
-      } else if (item.msg_type === "post") {
-        content = parsePostContent(content).textContent;
-      } else if (item.msg_type === "interactive") {
-        content = parseInteractiveCardContent(parsed);
-      } else {
-        // For unsupported types (image, file, share, system, etc.) use a
-        // concise placeholder instead of leaking raw JSON into the prompt.
-        content = `[${item.msg_type ?? "unknown"} message]`;
-      }
-    } catch {
-      // Keep raw content if parsing fails
-    }
+    const parsed = parseFeishuMessageItem(item);
 
     results.push({
-      messageId: item.message_id ?? "",
-      senderId: item.sender?.id,
-      senderType: item.sender?.sender_type,
-      content,
-      contentType: item.msg_type ?? "text",
-      createTime: item.create_time ? parseInt(item.create_time, 10) : undefined,
+      messageId: parsed.messageId,
+      senderId: parsed.senderId,
+      senderType: parsed.senderType,
+      content: parsed.content,
+      contentType: parsed.contentType,
+      createTime: parsed.createTime,
     });
 
     if (results.length >= limit) break;

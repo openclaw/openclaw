@@ -15,9 +15,12 @@ const {
   mockCreateFeishuReplyDispatcher,
   mockSendMessageFeishu,
   mockGetMessageFeishu,
+  mockListFeishuThreadMessages,
   mockDownloadMessageResourceFeishu,
   mockCreateFeishuClient,
   mockResolveAgentRoute,
+  mockReadSessionUpdatedAt,
+  mockResolveStorePath,
 } = vi.hoisted(() => ({
   mockCreateFeishuReplyDispatcher: vi.fn(() => ({
     dispatcher: vi.fn(),
@@ -26,6 +29,7 @@ const {
   })),
   mockSendMessageFeishu: vi.fn().mockResolvedValue({ messageId: "pairing-msg", chatId: "oc-dm" }),
   mockGetMessageFeishu: vi.fn().mockResolvedValue(null),
+  mockListFeishuThreadMessages: vi.fn().mockResolvedValue([]),
   mockDownloadMessageResourceFeishu: vi.fn().mockResolvedValue({
     buffer: Buffer.from("video"),
     contentType: "video/mp4",
@@ -40,6 +44,8 @@ const {
     mainSessionKey: "agent:main:main",
     matchedBy: "default",
   })),
+  mockReadSessionUpdatedAt: vi.fn(),
+  mockResolveStorePath: vi.fn(() => "/tmp/feishu-sessions.json"),
 }));
 
 vi.mock("./reply-dispatcher.js", () => ({
@@ -49,6 +55,7 @@ vi.mock("./reply-dispatcher.js", () => ({
 vi.mock("./send.js", () => ({
   sendMessageFeishu: mockSendMessageFeishu,
   getMessageFeishu: mockGetMessageFeishu,
+  listFeishuThreadMessages: mockListFeishuThreadMessages,
 }));
 
 vi.mock("./media.js", () => ({
@@ -57,6 +64,11 @@ vi.mock("./media.js", () => ({
 
 vi.mock("./client.js", () => ({
   createFeishuClient: mockCreateFeishuClient,
+}));
+
+vi.mock("../../../src/config/sessions.js", () => ({
+  readSessionUpdatedAt: mockReadSessionUpdatedAt,
+  resolveStorePath: mockResolveStorePath,
 }));
 
 function createRuntimeEnv(): RuntimeEnv {
@@ -140,6 +152,8 @@ describe("handleFeishuMessage command authorization", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockShouldComputeCommandAuthorized.mockReset().mockReturnValue(true);
+    mockReadSessionUpdatedAt.mockReturnValue(undefined);
+    mockResolveStorePath.mockReturnValue("/tmp/feishu-sessions.json");
     mockResolveAgentRoute.mockReturnValue({
       agentId: "main",
       channel: "feishu",
@@ -1705,6 +1719,123 @@ describe("handleFeishuMessage command authorization", () => {
       expect.objectContaining({
         replyInThread: true,
         threadReply: true,
+      }),
+    );
+  });
+
+  it("bootstraps topic thread context only for a new thread session", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockGetMessageFeishu.mockResolvedValue({
+      messageId: "om_topic_root",
+      chatId: "oc-group",
+      content: "root starter",
+      contentType: "text",
+      threadId: "omt_topic_1",
+    });
+    mockListFeishuThreadMessages.mockResolvedValue([
+      {
+        messageId: "om_bot_reply",
+        senderId: "app_1",
+        senderType: "app",
+        content: "assistant reply",
+        contentType: "text",
+        createTime: 1710000000000,
+      },
+      {
+        messageId: "om_follow_up",
+        senderId: "ou-topic-user",
+        senderType: "user",
+        content: "follow-up question",
+        contentType: "text",
+        createTime: 1710000001000,
+      },
+    ]);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_topic",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-user" } },
+      message: {
+        message_id: "om_topic_followup_existing_session",
+        root_id: "om_topic_root",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "current turn" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockReadSessionUpdatedAt).toHaveBeenCalledWith({
+      storePath: "/tmp/feishu-sessions.json",
+      sessionKey: "agent:main:feishu:dm:ou-attacker",
+    });
+    expect(mockListFeishuThreadMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootMessageId: "om_topic_root",
+      }),
+    );
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ThreadStarterBody: "root starter",
+        ThreadHistoryBody: "assistant reply\n\nfollow-up question",
+        ThreadLabel: "Feishu thread in oc-group",
+        MessageThreadId: "om_topic_root",
+      }),
+    );
+  });
+
+  it("skips topic thread bootstrap when the thread session already exists", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockReadSessionUpdatedAt.mockReturnValue(1710000000000);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_topic",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-user" } },
+      message: {
+        message_id: "om_topic_followup",
+        root_id: "om_topic_root",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "current turn" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockGetMessageFeishu).not.toHaveBeenCalled();
+    expect(mockListFeishuThreadMessages).not.toHaveBeenCalled();
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ThreadStarterBody: undefined,
+        ThreadHistoryBody: undefined,
+        ThreadLabel: "Feishu thread in oc-group",
+        MessageThreadId: "om_topic_root",
       }),
     );
   });
