@@ -159,6 +159,18 @@ describe("resolveConfigDir", () => {
     const env = { OPENCLAW_HOME: "/srv/app" } as NodeJS.ProcessEnv;
     expect(resolveConfigDir(env)).toBe(path.resolve("/srv/app/.openclaw"));
   });
+
+  it("prefers existing nested config dir for backward compat (#45765)", () => {
+    const tmpDir = path.join(os.tmpdir(), `openclaw-test-config-${Date.now()}`);
+    const nestedDir = path.join(tmpDir, ".openclaw", ".openclaw");
+    fs.mkdirSync(nestedDir, { recursive: true });
+    try {
+      const env = { OPENCLAW_HOME: path.join(tmpDir, ".openclaw") } as NodeJS.ProcessEnv;
+      expect(resolveConfigDir(env)).toBe(path.join(tmpDir, ".openclaw", ".openclaw"));
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("resolveHomeDir", () => {
