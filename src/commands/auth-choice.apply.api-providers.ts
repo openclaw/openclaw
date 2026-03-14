@@ -245,9 +245,15 @@ export async function applyAuthChoiceApiProviders(
         setZaiApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
     });
 
-    // zai-api-key: auto-detect endpoint + choose a working default model.
     let modelIdOverride: string | undefined;
-    if (!endpoint) {
+    if (endpoint) {
+      const detected = await detectZaiEndpoint({ apiKey, endpoint });
+      if (detected) {
+        modelIdOverride = detected.modelId;
+        await params.prompter.note(detected.note, "Z.AI endpoint");
+      }
+    } else {
+      // zai-api-key: auto-detect endpoint + choose a working default model.
       const detected = await detectZaiEndpoint({ apiKey });
       if (detected) {
         endpoint = detected.endpoint;
