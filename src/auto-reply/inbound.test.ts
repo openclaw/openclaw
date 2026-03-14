@@ -729,7 +729,7 @@ describe("flushAllInboundDebouncers", () => {
     clearInboundDebouncerRegistry();
   });
 
-  it("flushes all registered debouncers immediately", async () => {
+  it("flushes all pending inbound debounce buffers immediately", async () => {
     vi.useFakeTimers();
     const callsA: Array<string[]> = [];
     const callsB: Array<string[]> = [];
@@ -762,6 +762,36 @@ describe("flushAllInboundDebouncers", () => {
     expect(flushed).toBe(2);
     expect(callsA).toEqual([["msg-1", "msg-2"]]);
     expect(callsB).toEqual([["msg-3"]]);
+
+    vi.useRealTimers();
+  });
+
+  it("counts pending buffers instead of registered debouncers", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const activeDebouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 5000,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 5000,
+      buildKey: (item) => item.key,
+      onFlush: async () => {},
+    });
+
+    await activeDebouncer.enqueue({ key: "session-1", id: "msg-1" });
+    await activeDebouncer.enqueue({ key: "session-2", id: "msg-2" });
+
+    const flushed = await flushAllInboundDebouncers();
+    expect(flushed).toBe(2);
+    expect(calls).toHaveLength(2);
+    expect(calls).toContainEqual(["msg-1"]);
+    expect(calls).toContainEqual(["msg-2"]);
 
     vi.useRealTimers();
   });

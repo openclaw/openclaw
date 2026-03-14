@@ -5,9 +5,12 @@ import { resolveGlobalMap } from "../shared/global-singleton.js";
 /**
  * Global registry of all active inbound debouncers so they can be flushed
  * collectively during gateway restart (SIGUSR1). Each debouncer registers
- * itself on creation and deregisters when flushAll is called.
+ * itself on creation and deregisters after the next global flush sweep.
  */
-type DebouncerFlushHandle = { flushAll: () => Promise<void> };
+type DebouncerFlushHandle = {
+  getPendingBufferCount: () => number;
+  flushAll: () => Promise<void>;
+};
 const INBOUND_DEBOUNCERS_KEY = Symbol.for("openclaw.inboundDebouncers");
 const INBOUND_DEBOUNCERS = resolveGlobalMap<symbol, DebouncerFlushHandle>(INBOUND_DEBOUNCERS_KEY);
 
@@ -21,24 +24,28 @@ export function clearInboundDebouncerRegistry(): void {
 /**
  * Flush all registered inbound debouncers immediately. Called during SIGUSR1
  * restart to push buffered messages into the session before reinitializing.
+ * Returns the number of pending debounce buffers that existed when the flush
+ * started so restart logic can skip followup draining when there was no work.
  */
 export async function flushAllInboundDebouncers(): Promise<number> {
   const entries = [...INBOUND_DEBOUNCERS.entries()];
   if (entries.length === 0) {
     return 0;
   }
-  let flushedCount = 0;
+  const pendingBufferCount = entries.reduce(
+    (count, [, handle]) => count + handle.getPendingBufferCount(),
+    0,
+  );
   await Promise.all(
     entries.map(async ([key, handle]) => {
       try {
         await handle.flushAll();
-        flushedCount += 1;
       } finally {
         INBOUND_DEBOUNCERS.delete(key);
       }
     }),
   );
-  return flushedCount;
+  return pendingBufferCount;
 }
 
 const resolveMs = (value: unknown): number | undefined => {
@@ -281,7 +288,10 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
 
   // Register in global registry for SIGUSR1 flush.
   const registryKey = Symbol();
-  INBOUND_DEBOUNCERS.set(registryKey, { flushAll });
+  INBOUND_DEBOUNCERS.set(registryKey, {
+    getPendingBufferCount: () => buffers.size,
+    flushAll,
+  });
 
   return { enqueue, flushKey, flushAll };
 }

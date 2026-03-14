@@ -17,13 +17,9 @@ export async function waitForFollowupQueueDrain(
   const getPendingCount = (): number => {
     let total = 0;
     for (const queue of FOLLOWUP_QUEUES.values()) {
-      total += queue.items.length;
-      if (queue.draining) {
-        // Count draining queues as having at least 1 pending item so we keep
-        // waiting for the drain loop to finish even if items.length hits 0
-        // momentarily between shifts.
-        total = Math.max(total, 1);
-      }
+      // Add 1 for the in-flight item owned by an active drain loop.
+      const queuePending = queue.items.length + (queue.draining ? 1 : 0);
+      total += queuePending;
     }
     return total;
   };

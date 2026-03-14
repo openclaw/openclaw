@@ -400,13 +400,53 @@ describe("runGatewayLoop", () => {
       expect(flushAllInboundDebouncers).toHaveBeenCalledTimes(1);
       expect(waitForFollowupQueueDrain).toHaveBeenCalledWith(5_000);
       expect(markGatewayDraining).toHaveBeenCalledTimes(1);
+      expect(flushAllInboundDebouncers.mock.invocationCallOrder[0]).toBeLessThan(
+        waitForFollowupQueueDrain.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(waitForFollowupQueueDrain.mock.invocationCallOrder[0]).toBeLessThan(
+        markGatewayDraining.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
 
       // Verify logging
-      expect(gatewayLog.info).toHaveBeenCalledWith("flushed 2 inbound debouncer(s) before restart");
+      expect(gatewayLog.info).toHaveBeenCalledWith(
+        "flushed 2 pending inbound debounce buffer(s) before restart",
+      );
       expect(gatewayLog.info).toHaveBeenCalledWith("followup queues drained after debounce flush");
 
       sigterm();
       await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("extends the restart force-exit timer to include followup queue drain time", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      flushAllInboundDebouncers.mockResolvedValueOnce(1);
+      waitForFollowupQueueDrain.mockResolvedValueOnce({
+        drained: true,
+        remaining: 0,
+      });
+
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      try {
+        const { exited } = await createSignaledLoopHarness();
+        const sigusr1 = captureSignal("SIGUSR1");
+        const sigterm = captureSignal("SIGTERM");
+
+        sigusr1();
+
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => setImmediate(resolve));
+
+        const forceExitCall = setTimeoutSpy.mock.calls.find((call) => call[1] === 100_000);
+        expect(forceExitCall).toBeDefined();
+
+        sigterm();
+        await expect(exited).resolves.toBe(0);
+      } finally {
+        setTimeoutSpy.mockRestore();
+      }
     });
   });
 
