@@ -12,6 +12,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import {
   buildAssistantMessage as buildStreamAssistantMessage,
+  buildAssistantMessageWithZeroUsage,
   buildStreamErrorAssistantMessage,
   buildUsageWithNoCost,
 } from "./stream-message-shared.js";
@@ -496,12 +497,28 @@ export function createOllamaStreamFn(
 
         const reader = response.body.getReader();
         let accumulatedContent = "";
+        let emittedStart = false;
         const accumulatedToolCalls: OllamaToolCall[] = [];
         let finalResponse: OllamaChatResponse | undefined;
 
         for await (const chunk of parseNdjsonStream(reader)) {
           if (chunk.message?.content) {
             accumulatedContent += chunk.message.content;
+            const partial = buildAssistantMessageWithZeroUsage({
+              model,
+              content: [{ type: "text", text: accumulatedContent }],
+              stopReason: "stop",
+            });
+            if (!emittedStart) {
+              emittedStart = true;
+              stream.push({ type: "start", partial });
+            }
+            stream.push({
+              type: "text_delta",
+              contentIndex: 0,
+              delta: chunk.message.content,
+              partial,
+            });
           }
 
           // Ollama sends tool_calls in intermediate (done:false) chunks,
