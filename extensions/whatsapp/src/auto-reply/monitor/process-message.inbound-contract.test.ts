@@ -308,6 +308,21 @@ describe("web processMessage inbound contract", () => {
     expect(replyOptions?.disableBlockStreaming).toBe(true);
   });
 
+  it("passes sendComposing through as the reply typing callback", async () => {
+    const sendComposing = vi.fn(async () => undefined);
+    const args = createWhatsAppDirectStreamingArgs();
+    args.msg = {
+      ...args.msg,
+      sendComposing,
+    };
+
+    await processMessage(args);
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const dispatcherOptions = (capturedDispatchParams as any)?.dispatcherOptions;
+    expect(dispatcherOptions?.onReplyStart).toBe(sendComposing);
+  });
+
   it("updates main last route for DM when session key matches main session key", async () => {
     const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
     updateLastRouteMock.mockClear();

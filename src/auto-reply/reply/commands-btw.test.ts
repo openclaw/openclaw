@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
+import { createMockTypingController } from "./test-helpers.js";
 
 const runBtwSideQuestionMock = vi.fn();
 
@@ -82,6 +83,22 @@ describe("handleBtwCommand", () => {
       shouldContinue: false,
       reply: { text: "snapshot answer", btw: { question: "what changed?" } },
     });
+  });
+
+  it("starts the typing keepalive while the side question runs", async () => {
+    const params = buildParams("/btw what changed?");
+    const typing = createMockTypingController();
+    params.typing = typing;
+    params.agentDir = "/tmp/agent";
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    };
+    runBtwSideQuestionMock.mockResolvedValue({ text: "snapshot answer" });
+
+    await handleBtwCommand(params, true);
+
+    expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
   });
 
   it("delegates to the side-question runner", async () => {
