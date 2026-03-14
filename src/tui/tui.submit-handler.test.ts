@@ -53,6 +53,44 @@ describe("createEditorSubmitHandler", () => {
     expect(handleCommand).not.toHaveBeenCalled();
     expect(handleBangLine).not.toHaveBeenCalled();
   });
+
+  it("blocks chat messages while a run is active", () => {
+    const { editor, sendMessage, onSubmitBlocked, onSubmit } = createSubmitHarness({
+      isRunActive: () => true,
+    });
+
+    onSubmit("hello");
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(onSubmitBlocked).toHaveBeenCalledTimes(1);
+    // Editor text should NOT be cleared — user keeps their typed input.
+    expect(editor.setText).not.toHaveBeenCalled();
+    expect(editor.addToHistory).not.toHaveBeenCalled();
+  });
+
+  it("allows slash-commands even while a run is active", () => {
+    const { handleCommand, sendMessage, onSubmitBlocked, onSubmit } = createSubmitHarness({
+      isRunActive: () => true,
+    });
+
+    onSubmit("/abort");
+
+    expect(handleCommand).toHaveBeenCalledWith("/abort");
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(onSubmitBlocked).not.toHaveBeenCalled();
+  });
+
+  it("allows bang-lines even while a run is active", () => {
+    const { handleBangLine, sendMessage, onSubmitBlocked, onSubmit } = createSubmitHarness({
+      isRunActive: () => true,
+    });
+
+    onSubmit("!ls -la");
+
+    expect(handleBangLine).toHaveBeenCalledWith("!ls -la");
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(onSubmitBlocked).not.toHaveBeenCalled();
+  });
 });
 
 describe("createSubmitBurstCoalescer", () => {
