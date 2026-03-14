@@ -442,4 +442,87 @@ example
     expect(lastPoint?.cumulativeTokens).toBe(165);
     expect(lastPoint?.cumulativeCost).toBeCloseTo(0.055, 8);
   });
+
+  it("includes reset archive transcripts in usage summary", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reset-usage-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const now = new Date();
+    const activeEntry = {
+      type: "message",
+      timestamp: now.toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.2",
+        usage: { input: 10, output: 20, totalTokens: 30, cost: { total: 0.03 } },
+      },
+    };
+    const resetEntry = {
+      type: "message",
+      timestamp: now.toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.2",
+        usage: { input: 100, output: 200, totalTokens: 300, cost: { total: 0.3 } },
+      },
+    };
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-1.jsonl"),
+      JSON.stringify(activeEntry),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-1.jsonl.reset.2026-03-01T00-00-00.000Z"),
+      JSON.stringify(resetEntry),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30 });
+      // Both active (30) and reset archive (300) tokens should be counted
+      expect(summary.totals.totalTokens).toBe(330);
+      expect(summary.totals.totalCost).toBeCloseTo(0.33, 5);
+    });
+  });
+
+  it("discovers reset archive sessions and deduplicates by session ID", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reset-discover-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const userMsg = {
+      type: "message",
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "hello from active" },
+    };
+    const resetMsg = {
+      type: "message",
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "hello from archive" },
+    };
+
+    // Active file + one reset archive for the same session
+    await fs.writeFile(path.join(sessionsDir, "sess-dup.jsonl"), JSON.stringify(userMsg), "utf-8");
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-dup.jsonl.reset.2026-01-01T00-00-00.000Z"),
+      JSON.stringify(resetMsg),
+      "utf-8",
+    );
+    // Reset-only session (no active file)
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-archived.jsonl.reset.2026-02-01T00-00-00.000Z"),
+      JSON.stringify(resetMsg),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const sessions = await discoverAllSessions({});
+      const ids = sessions.map((s) => s.sessionId).toSorted();
+      expect(ids).toEqual(["sess-archived", "sess-dup"]);
+    });
+  });
 });

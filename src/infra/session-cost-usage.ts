@@ -287,6 +287,21 @@ async function scanUsageFile(params: {
   });
 }
 
+const JSONL_RESET_RE = /\.jsonl(?:\.reset\..+)?$/;
+
+/** Returns true for `.jsonl` and `.jsonl.reset.<timestamp>` filenames. */
+function isTranscriptFile(name: string): boolean {
+  return JSONL_RESET_RE.test(name);
+}
+
+/** Extracts the session ID from a transcript filename. */
+function extractSessionId(name: string): string {
+  // Greedy match captures the longest possible ID, handling edge cases
+  // where the session ID itself might contain ".jsonl".
+  const match = name.match(/^(.+)\.jsonl(?:\.reset\..+)?$/);
+  return match ? match[1] : name;
+}
+
 export async function loadCostUsageSummary(params?: {
   startMs?: number;
   endMs?: number;
@@ -318,7 +333,7 @@ export async function loadCostUsageSummary(params?: {
   const files = (
     await Promise.all(
       entries
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+        .filter((entry) => entry.isFile() && isTranscriptFile(entry.name))
         .map(async (entry) => {
           const filePath = path.join(sessionsDir, entry.name);
           const stats = await fs.promises.stat(filePath).catch(() => null);
@@ -390,10 +405,10 @@ export async function discoverAllSessions(params?: {
   const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
   const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
 
-  const discovered: DiscoveredSession[] = [];
+  const discoveredMap = new Map<string, DiscoveredSession>();
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+    if (!entry.isFile() || !isTranscriptFile(entry.name)) {
       continue;
     }
 
@@ -409,51 +424,77 @@ export async function discoverAllSessions(params?: {
     }
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
 
-    // Extract session ID from filename (remove .jsonl)
-    const sessionId = entry.name.slice(0, -6);
+    // Extract session ID from filename (remove .jsonl or .jsonl.reset.<timestamp>)
+    const sessionId = extractSessionId(entry.name);
 
-    // Try to read first user message for label extraction
-    let firstUserMessage: string | undefined;
-    try {
-      for await (const parsed of readJsonlRecords(filePath)) {
-        try {
-          const message = parsed.message as Record<string, unknown> | undefined;
-          if (message?.role === "user") {
-            const content = message.content;
-            if (typeof content === "string") {
-              firstUserMessage = content.slice(0, 100);
-            } else if (Array.isArray(content)) {
-              for (const block of content) {
-                if (
-                  typeof block === "object" &&
-                  block &&
-                  (block as Record<string, unknown>).type === "text"
-                ) {
-                  const text = (block as Record<string, unknown>).text;
-                  if (typeof text === "string") {
-                    firstUserMessage = text.slice(0, 100);
-                  }
-                  break;
-                }
-              }
-            }
-            break; // Found first user message
-          }
-        } catch {
-          // Skip malformed lines
-        }
+    const existing = discoveredMap.get(sessionId);
+    // Prefer the active .jsonl file over reset archives; among reset archives, prefer the most recent
+    const isActive = entry.name.endsWith(".jsonl");
+    const existingIsActive = existing?.sessionFile.endsWith(".jsonl") ?? false;
+    if (existing && existingIsActive && !isActive) {
+      // Keep the active file, but update mtime if this archive is newer
+      if (stats.mtimeMs > existing.mtime) {
+        discoveredMap.set(sessionId, { ...existing, mtime: stats.mtimeMs });
       }
-    } catch {
-      // Ignore read errors
+      continue;
     }
 
-    discovered.push({
+    if (existing && !existingIsActive && !isActive && stats.mtimeMs <= existing.mtime) {
+      // Both are archives; keep the one with the later mtime
+      continue;
+    }
+
+    // Try to read first user message for label extraction
+    // Only read if this is a new session or we're replacing the file reference
+    let firstUserMessage: string | undefined;
+    if (!existing || isActive || !existingIsActive) {
+      try {
+        for await (const parsed of readJsonlRecords(filePath)) {
+          try {
+            const message = parsed.message as Record<string, unknown> | undefined;
+            if (message?.role === "user") {
+              const content = message.content;
+              if (typeof content === "string") {
+                firstUserMessage = content.slice(0, 100);
+              } else if (Array.isArray(content)) {
+                for (const block of content) {
+                  if (
+                    typeof block === "object" &&
+                    block &&
+                    (block as Record<string, unknown>).type === "text"
+                  ) {
+                    const text = (block as Record<string, unknown>).text;
+                    if (typeof text === "string") {
+                      firstUserMessage = text.slice(0, 100);
+                    }
+                    break;
+                  }
+                }
+              }
+              break; // Found first user message
+            }
+          } catch {
+            // Skip malformed lines
+          }
+        }
+      } catch {
+        // Ignore read errors
+      }
+    }
+
+    const mtime = existing ? Math.max(existing.mtime, stats.mtimeMs) : stats.mtimeMs;
+    discoveredMap.set(sessionId, {
       sessionId,
       sessionFile: filePath,
-      mtime: stats.mtimeMs,
-      firstUserMessage,
+      mtime,
+      // Note: firstUserMessage is sourced from the representative file (active or
+      // most-recent archive). For sessions with multiple archives it may not be the
+      // chronological first message.
+      firstUserMessage: firstUserMessage ?? existing?.firstUserMessage,
     });
   }
+
+  const discovered = [...discoveredMap.values()];
 
   // Sort by mtime descending (most recent first)
   return discovered.toSorted((a, b) => b.mtime - a.mtime);
