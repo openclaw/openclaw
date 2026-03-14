@@ -18,10 +18,23 @@ const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
 
 function normalizeDirectiveWhitespace(text: string): string {
-  return text
-    .replace(/[ \t]+/g, " ")
-    .replace(/[ \t]*\n[ \t]*/g, "\n")
-    .trim();
+  // Split on fenced code blocks (must start at beginning of a line).
+  // Matched code blocks land at odd indices in the resulting array.
+  const parts = text.split(/((?:^|\n)```[\s\S]*?\n```(?:\n|$)|(?:^|\n)~~~[\s\S]*?\n~~~(?:\n|$))/g);
+
+  return parts
+    .map((part, i) => {
+      if (i % 2 === 1) {
+        // Code block — preserve as-is
+        return part;
+      }
+      return part
+        .replace(/[ \t]+/g, " ")
+        .replace(/[ \t]*\n[ \t]*/g, "\n")
+        .trim();
+    })
+    .filter(Boolean)
+    .join("\n");
 }
 
 type StripInlineDirectiveTagsResult = {
