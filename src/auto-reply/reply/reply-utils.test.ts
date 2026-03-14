@@ -388,6 +388,23 @@ describe("normalizeReplyPayload", () => {
     ).toBe(true);
   });
 
+  it("flags structured route marker text paired with array values in tool JSON", () => {
+    expect(
+      hasSuspiciousReplyLeakage(
+        [
+          "assistant to=functions.exec commentary to=functions.exec",
+          "{",
+          '"command":"ls",',
+          '"paths": [',
+          '"a",',
+          '"b"',
+          "]",
+          "}",
+        ].join("\n"),
+      ),
+    ).toBe(true);
+  });
+
   it("flags standalone route-marker leakage without tool JSON", () => {
     expect(hasSuspiciousReplyLeakage("assistant to=functions.exec")).toBe(true);
     expect(

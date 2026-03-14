@@ -45,6 +45,15 @@ function isStructuredToolJsonLine(line: string): boolean {
   return trimmed.startsWith("{") && trimmed.endsWith("}") && TOOL_JSON_KEY_RE.test(trimmed);
 }
 
+function isJsonValueLine(line: string): boolean {
+  const trimmed = line.trim();
+  return (
+    /^"(?:\\.|[^"])*",?$/.test(trimmed) ||
+    /^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?,?$/.test(trimmed) ||
+    /^(?:true|false|null),?$/.test(trimmed)
+  );
+}
+
 function isJsonBlockLine(line: string): boolean {
   const trimmed = line.trim();
   return (
@@ -54,7 +63,8 @@ function isJsonBlockLine(line: string): boolean {
     trimmed === "]" ||
     trimmed === "}," ||
     trimmed === "]," ||
-    /^"(?:\\.|[^"])+"\s*:/.test(trimmed)
+    /^"(?:\\.|[^"])+"\s*:/.test(trimmed) ||
+    isJsonValueLine(trimmed)
   );
 }
 
@@ -97,6 +107,7 @@ export function hasSuspiciousReplyLeakage(
   if (!STRUCTURED_ROUTE_MARKER_LINE_RE.test(firstLine)) {
     return false;
   }
+
   let routeMarkerLineCount = 0;
   while (
     routeMarkerLineCount < lines.length &&
@@ -104,6 +115,7 @@ export function hasSuspiciousReplyLeakage(
   ) {
     routeMarkerLineCount += 1;
   }
+
   if (routeMarkerLineCount === lines.length) {
     return true;
   }
