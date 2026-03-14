@@ -3,9 +3,9 @@ import { resolveBrowserConfig, resolveProfile } from "../config.js";
 import { resolveSnapshotPlan } from "./agent.snapshot.plan.js";
 
 describe("resolveSnapshotPlan", () => {
-  it("defaults chrome extension relay snapshots to aria when format is omitted", () => {
+  it("defaults chrome-relay snapshots to aria when format is omitted", () => {
     const resolved = resolveBrowserConfig({});
-    const profile = resolveProfile(resolved, "chrome");
+    const profile = resolveProfile(resolved, "chrome-relay");
     expect(profile).toBeTruthy();
 
     const plan = resolveSnapshotPlan({

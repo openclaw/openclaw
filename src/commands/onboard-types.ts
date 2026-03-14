@@ -2,15 +2,13 @@ import type { ChannelId } from "../channels/plugins/types.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 export type OnboardMode = "local" | "remote";
-export type AuthChoice =
+export type BuiltInAuthChoice =
   // Legacy alias for `setup-token` (kept for backwards CLI compatibility).
   | "oauth"
   | "setup-token"
   | "claude-cli"
   | "token"
   | "chutes"
-  | "vllm"
-  | "ollama"
   | "openai-codex"
   | "openai-api-key"
   | "openrouter-api-key"
@@ -53,12 +51,12 @@ export type AuthChoice =
   | "modelstudio-api-key"
   | "custom-api-key"
   | "skip";
-export type AuthChoiceGroupId =
+export type AuthChoice = BuiltInAuthChoice | (string & {});
+
+export type BuiltInAuthChoiceGroupId =
   | "openai"
   | "anthropic"
   | "chutes"
-  | "vllm"
-  | "ollama"
   | "google"
   | "copilot"
   | "openrouter"
@@ -83,6 +81,7 @@ export type AuthChoiceGroupId =
   | "volcengine"
   | "byteplus"
   | "custom";
+export type AuthChoiceGroupId = BuiltInAuthChoiceGroupId | (string & {});
 export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
 export type GatewayBind = "loopback" | "lan" | "auto" | "custom" | "tailnet";

@@ -162,6 +162,39 @@ function resolveTextChunk(params: {
   };
 }
 
+function createTextDeltaEvent(params: {
+  content: string | null | undefined;
+  stream: "output" | "thought";
+  tag?: AcpSessionUpdateTag;
+}): AcpRuntimeEvent | null {
+  if (params.content == null || params.content.length === 0) {
+    return null;
+  }
+  return {
+    type: "text_delta",
+    text: params.content,
+    stream: params.stream,
+    ...(params.tag ? { tag: params.tag } : {}),
+  };
+}
+
+function createToolCallEvent(params: {
+  payload: Record<string, unknown>;
+  tag: AcpSessionUpdateTag;
+}): AcpRuntimeEvent {
+  const title = asTrimmedString(params.payload.title) || "tool call";
+  const status = asTrimmedString(params.payload.status);
+  const toolCallId = asOptionalString(params.payload.toolCallId);
+  return {
+    type: "tool_call",
+    text: status ? `${title} (${status})` : title,
+    tag: params.tag,
+    ...(toolCallId ? { toolCallId } : {}),
+    ...(status ? { status } : {}),
+    title,
+  };
+}
+
 export function parsePromptEventLine(line: string): AcpRuntimeEvent | null {
   const trimmed = line.trim();
   if (!trimmed) {
@@ -187,57 +220,28 @@ export function parsePromptEventLine(line: string): AcpRuntimeEvent | null {
   const tag = structured.tag;
 
   switch (type) {
-    case "text": {
-      const content = asString(payload.content);
-      if (content == null || content.length === 0) {
-        return null;
-      }
-      return {
-        type: "text_delta",
-        text: content,
+    case "text":
+      return createTextDeltaEvent({
+        content: asString(payload.content),
         stream: "output",
-        ...(tag ? { tag } : {}),
-      };
-    }
-    case "thought": {
-      const content = asString(payload.content);
-      if (content == null || content.length === 0) {
-        return null;
-      }
-      return {
-        type: "text_delta",
-        text: content,
+        tag,
+      });
+    case "thought":
+      return createTextDeltaEvent({
+        content: asString(payload.content),
         stream: "thought",
-        ...(tag ? { tag } : {}),
-      };
-    }
-    case "tool_call": {
-      const title = asTrimmedString(payload.title) || "tool call";
-      const status = asTrimmedString(payload.status);
-      const toolCallId = asOptionalString(payload.toolCallId);
-      return {
-        type: "tool_call",
-        text: status ? `${title} (${status})` : title,
+        tag,
+      });
+    case "tool_call":
+      return createToolCallEvent({
+        payload,
         tag: (tag ?? "tool_call") as AcpSessionUpdateTag,
-        ...(toolCallId ? { toolCallId } : {}),
-        ...(status ? { status } : {}),
-        title,
-      };
-    }
-    case "tool_call_update": {
-      const title = asTrimmedString(payload.title) || "tool call";
-      const status = asTrimmedString(payload.status);
-      const toolCallId = asOptionalString(payload.toolCallId);
-      const text = status ? `${title} (${status})` : title;
-      return {
-        type: "tool_call",
-        text,
+      });
+    case "tool_call_update":
+      return createToolCallEvent({
+        payload,
         tag: (tag ?? "tool_call_update") as AcpSessionUpdateTag,
-        ...(toolCallId ? { toolCallId } : {}),
-        ...(status ? { status } : {}),
-        title,
-      };
-    }
+      });
     case "agent_message_chunk":
       return resolveTextChunk({
         payload,

@@ -6,6 +6,13 @@ import {
   listDirectoryUserEntriesFromAllowFrom,
 } from "./directory-config-helpers.js";
 
+function expectUserDirectoryEntries(entries: unknown) {
+  expect(entries).toEqual([
+    { kind: "user", id: "alice" },
+    { kind: "user", id: "carla" },
+  ]);
+}
+
 describe("listDirectoryUserEntriesFromAllowFrom", () => {
   it("normalizes, deduplicates, filters, and limits user ids", () => {
     const entries = listDirectoryUserEntriesFromAllowFrom({
@@ -15,10 +22,7 @@ describe("listDirectoryUserEntriesFromAllowFrom", () => {
       limit: 2,
     });
 
-    expect(entries).toEqual([
-      { kind: "user", id: "alice" },
-      { kind: "user", id: "carla" },
-    ]);
+    expectUserDirectoryEntries(entries);
   });
 });
 
@@ -54,10 +58,7 @@ describe("listDirectoryUserEntriesFromAllowFromAndMapKeys", () => {
       limit: 2,
     });
 
-    expect(entries).toEqual([
-      { kind: "user", id: "alice" },
-      { kind: "user", id: "carla" },
-    ]);
+    expectUserDirectoryEntries(entries);
   });
 });
 

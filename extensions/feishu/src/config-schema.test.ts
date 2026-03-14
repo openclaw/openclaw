@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { FeishuConfigSchema, FeishuGroupSchema } from "./config-schema.js";
 
+function expectSchemaIssue(
+  result: ReturnType<typeof FeishuConfigSchema.safeParse>,
+  issuePath: string,
+) {
+  expect(result.success).toBe(false);
+  if (!result.success) {
+    expect(result.error.issues.some((issue) => issue.path.join(".") === issuePath)).toBe(true);
+  }
+}
+
 describe("FeishuConfigSchema webhook validation", () => {
   it("applies top-level defaults", () => {
     const result = FeishuConfigSchema.parse({});
@@ -39,12 +49,7 @@ describe("FeishuConfigSchema webhook validation", () => {
       appSecret: "secret_top", // pragma: allowlist secret
     });
 
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(
-        result.error.issues.some((issue) => issue.path.join(".") === "verificationToken"),
-      ).toBe(true);
-    }
+    expectSchemaIssue(result, "verificationToken");
   });
 
   it("rejects top-level webhook mode without encryptKey", () => {
@@ -55,10 +60,7 @@ describe("FeishuConfigSchema webhook validation", () => {
       appSecret: "secret_top", // pragma: allowlist secret
     });
 
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues.some((issue) => issue.path.join(".") === "encryptKey")).toBe(true);
-    }
+    expectSchemaIssue(result, "encryptKey");
   });
 
   it("accepts top-level webhook mode with verificationToken and encryptKey", () => {
@@ -84,14 +86,7 @@ describe("FeishuConfigSchema webhook validation", () => {
       },
     });
 
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(
-        result.error.issues.some(
-          (issue) => issue.path.join(".") === "accounts.main.verificationToken",
-        ),
-      ).toBe(true);
-    }
+    expectSchemaIssue(result, "accounts.main.verificationToken");
   });
 
   it("rejects account webhook mode without encryptKey", () => {
@@ -106,12 +101,7 @@ describe("FeishuConfigSchema webhook validation", () => {
       },
     });
 
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(
-        result.error.issues.some((issue) => issue.path.join(".") === "accounts.main.encryptKey"),
-      ).toBe(true);
-    }
+    expectSchemaIssue(result, "accounts.main.encryptKey");
   });
 
   it("accepts account webhook mode inheriting top-level verificationToken and encryptKey", () => {

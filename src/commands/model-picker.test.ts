@@ -21,12 +21,10 @@ const ensureAuthProfileStore = vi.hoisted(() =>
 );
 const listProfilesForProvider = vi.hoisted(() => vi.fn(() => []));
 const upsertAuthProfile = vi.hoisted(() => vi.fn());
-const upsertAuthProfileWithLock = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore,
   listProfilesForProvider,
   upsertAuthProfile,
-  upsertAuthProfileWithLock,
 }));
 
 const resolveEnvApiKey = vi.hoisted(() => vi.fn(() => undefined));
@@ -34,6 +32,25 @@ const hasUsableCustomProviderApiKey = vi.hoisted(() => vi.fn(() => false));
 vi.mock("../agents/model-auth.js", () => ({
   resolveEnvApiKey,
   hasUsableCustomProviderApiKey,
+}));
+
+const resolveProviderModelPickerEntries = vi.hoisted(() => vi.fn(() => []));
+const resolveProviderPluginChoice = vi.hoisted(() => vi.fn());
+const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../plugins/provider-wizard.js", () => ({
+  resolveProviderModelPickerEntries,
+  resolveProviderPluginChoice,
+  runProviderModelSelectedHook,
+}));
+
+const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
+vi.mock("../plugins/providers.js", () => ({
+  resolvePluginProviders,
+}));
+
+const runProviderPluginAuthMethod = vi.hoisted(() => vi.fn());
+vi.mock("./auth-choice.apply.plugin-provider.js", () => ({
+  runProviderPluginAuthMethod,
 }));
 
 const OPENROUTER_CATALOG = [
@@ -69,17 +86,40 @@ describe("promptDefaultModel", () => {
         name: "Claude Sonnet 4.5",
       },
     ]);
+    resolveProviderModelPickerEntries.mockReturnValue([
+      { value: "vllm", label: "vLLM (custom)", hint: "Enter vLLM URL + API key + model" },
+    ] as never);
+    resolvePluginProviders.mockReturnValue([{ id: "vllm" }] as never);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider: { id: "vllm", label: "vLLM", auth: [] },
+      method: { id: "custom", label: "vLLM", kind: "custom" },
+    });
+    runProviderPluginAuthMethod.mockResolvedValue({
+      config: {
+        models: {
+          providers: {
+            vllm: {
+              baseUrl: "http://127.0.0.1:8000/v1",
+              api: "openai-completions",
+              apiKey: "VLLM_API_KEY",
+              models: [
+                {
+                  id: "meta-llama/Meta-Llama-3-8B-Instruct",
+                  name: "meta-llama/Meta-Llama-3-8B-Instruct",
+                },
+              ],
+            },
+          },
+        },
+      },
+      defaultModel: "vllm/meta-llama/Meta-Llama-3-8B-Instruct",
+    });
 
     const select = vi.fn(async (params) => {
-      const vllm = params.options.find((opt: { value: string }) => opt.value === "__vllm__");
+      const vllm = params.options.find((opt: { value: string }) => opt.value === "vllm");
       return (vllm?.value ?? "") as never;
     });
-    const text = vi
-      .fn()
-      .mockResolvedValueOnce("http://127.0.0.1:8000/v1")
-      .mockResolvedValueOnce("sk-vllm-test")
-      .mockResolvedValueOnce("meta-llama/Meta-Llama-3-8B-Instruct");
-    const prompter = makePrompter({ select, text: text as never });
+    const prompter = makePrompter({ select });
     const config = { agents: { defaults: {} } } as OpenClawConfig;
 
     const result = await promptDefaultModel({
@@ -87,17 +127,13 @@ describe("promptDefaultModel", () => {
       prompter,
       allowKeep: false,
       includeManual: false,
-      includeVllm: true,
+      includeProviderPluginSetups: true,
       ignoreAllowlist: true,
       agentDir: "/tmp/openclaw-agent",
+      runtime: {} as never,
     });
 
-    expect(upsertAuthProfileWithLock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        profileId: "vllm:default",
-        credential: expect.objectContaining({ provider: "vllm" }),
-      }),
-    );
+    expect(runProviderPluginAuthMethod).toHaveBeenCalledOnce();
     expect(result.model).toBe("vllm/meta-llama/Meta-Llama-3-8B-Instruct");
     expect(result.config?.models?.providers?.vllm).toMatchObject({
       baseUrl: "http://127.0.0.1:8000/v1",

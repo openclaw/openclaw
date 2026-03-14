@@ -25,8 +25,11 @@ export type NormalizedPluginsConfig = {
 
 export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "device-pair",
+  "ollama",
   "phone-control",
+  "sglang",
   "talk-voice",
+  "vllm",
 ]);
 
 const normalizeList = (value: unknown): string[] => {
