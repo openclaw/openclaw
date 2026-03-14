@@ -24,6 +24,17 @@ describe("isMainModule", () => {
     ).toBe(true);
   });
 
+  it("resolves relative pm_exec_path values against cwd", () => {
+    expect(
+      isMainModule({
+        currentFile: "/repo/dist/index.js",
+        argv: ["node", "/pm2/lib/ProcessContainerFork.js"],
+        cwd: "/repo",
+        env: { pm_exec_path: "./dist/index.js", pm_id: "0" },
+      }),
+    ).toBe(true);
+  });
+
   it("returns true for configured wrapper-to-entry pairs", () => {
     expect(
       isMainModule({
@@ -76,5 +87,16 @@ describe("isMainModule", () => {
         env: {},
       }),
     ).toBe(true);
+  });
+
+  it("returns false when no entrypoint candidate exists", () => {
+    expect(
+      isMainModule({
+        currentFile: "/repo/dist/index.js",
+        argv: ["node"],
+        cwd: "/repo",
+        env: {},
+      }),
+    ).toBe(false);
   });
 });
