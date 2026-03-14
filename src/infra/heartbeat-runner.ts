@@ -66,7 +66,7 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { getOp1SettingsByScope, setOp1Setting } from "./state-db/settings-sqlite.js";
+import { getOp1Setting, getOp1SettingsByScope, setOp1Setting } from "./state-db/settings-sqlite.js";
 import { peekSystemEventEntries } from "./system-events.js";
 
 export type HeartbeatDeps = OutboundSendDeps &
@@ -784,10 +784,13 @@ export async function runHeartbeatOnce(opts: {
   /** Record heartbeat check timestamps in SQLite (server-side, not agent-managed). */
   const recordHeartbeatCheckTimestamps = () => {
     try {
-      const now = new Date().toISOString();
+      const nowIso = new Date().toISOString();
+      const nowMs = Date.now();
       // QMD keepalive runs every heartbeat per HEARTBEAT.md
-      setOp1Setting("heartbeat", "qmd_keepalive", now);
-      setOp1Setting("heartbeat", "last_run", now);
+      setOp1Setting("heartbeat", "qmd_keepalive", nowIso);
+      setOp1Setting("heartbeat", "last_run", nowIso);
+      // Per-agent epoch-ms timestamp used by the scheduler to survive gateway restarts.
+      setOp1Setting("heartbeat", `last_run_ms:${agentId}`, nowMs);
     } catch {
       // Non-critical — don't fail the heartbeat over state tracking
     }
@@ -1045,6 +1048,29 @@ export async function runHeartbeatOnce(opts: {
   }
 }
 
+// Short delay for the first heartbeat after a fresh gateway start (no prior run history).
+const STARTUP_DELAY_MS = 10_000; // 10 seconds
+
+/**
+ * Next epoch-aligned clock boundary after `from`.
+ * For a 30-minute interval this gives :00 and :30 of every hour (UTC-aligned,
+ * which also lands on :00/:30 for UTC+N:00 and UTC+N:30 zones like IST).
+ */
+function nextClockBoundary(from: number, intervalMs: number): number {
+  return Math.ceil((from + 1) / intervalMs) * intervalMs;
+}
+
+/** Read persisted last-run epoch-ms for an agent from SQLite (survives gateway restarts). */
+function loadPersistedLastRunMs(agentId: string): number | undefined {
+  try {
+    const entry = getOp1Setting("heartbeat", `last_run_ms:${agentId}`);
+    const val = entry?.value;
+    return typeof val === "number" && Number.isFinite(val) ? val : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function startHeartbeatRunner(opts: {
   cfg?: OpenClawConfig;
   runtime?: RuntimeEnv;
@@ -1062,19 +1088,32 @@ export function startHeartbeatRunner(opts: {
   };
   let initialized = false;
 
-  const resolveNextDue = (now: number, intervalMs: number, prevState?: HeartbeatAgentState) => {
+  const resolveNextDue = (
+    now: number,
+    intervalMs: number,
+    prevState?: HeartbeatAgentState,
+    dbLastRunMs?: number,
+  ) => {
     if (typeof prevState?.lastRunMs === "number") {
-      return prevState.lastRunMs + intervalMs;
+      return nextClockBoundary(prevState.lastRunMs, intervalMs);
     }
     if (prevState && prevState.intervalMs === intervalMs && prevState.nextDueMs > now) {
       return prevState.nextDueMs;
     }
-    return now + intervalMs;
+    // Use persisted last-run time (survives gateway restarts) to schedule correctly.
+    if (typeof dbLastRunMs === "number") {
+      const nextFromDb = nextClockBoundary(dbLastRunMs, intervalMs);
+      // If already overdue, fire shortly after startup rather than immediately
+      // to give the gateway time to finish initialising.
+      return nextFromDb <= now ? now + STARTUP_DELAY_MS : nextFromDb;
+    }
+    // No history at all — fire shortly after startup instead of waiting the full interval.
+    return now + STARTUP_DELAY_MS;
   };
 
   const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number) => {
     agent.lastRunMs = now;
-    agent.nextDueMs = now + agent.intervalMs;
+    agent.nextDueMs = nextClockBoundary(now, agent.intervalMs);
   };
 
   const scheduleNext = () => {
@@ -1122,12 +1161,13 @@ export function startHeartbeatRunner(opts: {
       }
       intervals.push(intervalMs);
       const prevState = prevAgents.get(agent.agentId);
-      const nextDueMs = resolveNextDue(now, intervalMs, prevState);
+      const dbLastRunMs = prevState ? undefined : loadPersistedLastRunMs(agent.agentId);
+      const nextDueMs = resolveNextDue(now, intervalMs, prevState, dbLastRunMs);
       nextAgents.set(agent.agentId, {
         agentId: agent.agentId,
         heartbeat: agent.heartbeat,
         intervalMs,
-        lastRunMs: prevState?.lastRunMs,
+        lastRunMs: prevState?.lastRunMs ?? dbLastRunMs,
         nextDueMs,
       });
     }

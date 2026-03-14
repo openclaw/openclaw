@@ -12,17 +12,32 @@ const TASK_LIST_RE = /^[-*]\s+\[([ xX])\]\s+(.+)$/gm;
 /**
  * Extract markdown task list items (`- [ ]` / `- [x]`) from text.
  * Returns the steps and the text with task list lines removed.
+ *
+ * Deduplicates by step text, keeping the last (most recent) done state.
+ * This handles streaming agents that re-emit the full plan as steps complete.
  */
 export function extractPlanSteps(text: string): { steps: PlanStep[]; rest: string } {
+  TASK_LIST_RE.lastIndex = 0; // reset global regex state before use
   const steps: PlanStep[] = [];
+  const seen = new Map<string, number>(); // step text -> index in steps[]
   let match: RegExpExecArray | null;
   while ((match = TASK_LIST_RE.exec(text)) !== null) {
-    steps.push({ text: match[2].trim(), done: match[1] !== " " });
+    const stepText = match[2].trim();
+    const done = match[1] !== " ";
+    const existingIdx = seen.get(stepText);
+    if (existingIdx !== undefined) {
+      // Update to the latest done state (agent re-emitted the plan with progress)
+      steps[existingIdx].done = done;
+    } else {
+      seen.set(stepText, steps.length);
+      steps.push({ text: stepText, done });
+    }
   }
   if (steps.length === 0) {
     return { steps: [], rest: text };
   }
   // Remove task list lines from the text so they don't render twice
+  TASK_LIST_RE.lastIndex = 0;
   const rest = text
     .replace(TASK_LIST_RE, "")
     .replace(/\n{3,}/g, "\n\n")

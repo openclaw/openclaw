@@ -41,8 +41,15 @@ describe("startGatewayMemoryBackend", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it("initializes qmd backend for each configured agent", async () => {
-    const cfg = createQmdConfig({ list: [{ id: "ops", default: true }, { id: "main" }] });
+  it("initializes qmd only for agents with active heartbeat", async () => {
+    // Both agents have explicit heartbeat intervals — both should be warmed up.
+    const cfg = createQmdConfig({
+      list: [
+        { id: "ops", default: true, heartbeat: { every: "30m" } },
+        { id: "main", heartbeat: { every: "15m" } },
+        { id: "idle" }, // no heartbeat — skipped
+      ],
+    });
     const log = createGatewayLogMock();
     getMemorySearchManagerMock.mockResolvedValue({ manager: { search: vi.fn() } });
 
@@ -62,8 +69,28 @@ describe("startGatewayMemoryBackend", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
+  it("skips agents without an active heartbeat interval", async () => {
+    // Only the default agent gets heartbeat when no explicit heartbeat config exists.
+    const cfg = createQmdConfig({
+      list: [{ id: "main", default: true }, { id: "neo" }, { id: "morpheus" }],
+    });
+    const log = createGatewayLogMock();
+    getMemorySearchManagerMock.mockResolvedValue({ manager: { search: vi.fn() } });
+
+    await startGatewayMemoryBackend({ cfg, log });
+
+    // Only the default agent "main" is heartbeat-enabled; the others lazy-init.
+    expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1);
+    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
+  });
+
   it("logs a warning when qmd manager init fails and continues with other agents", async () => {
-    const cfg = createQmdConfig({ list: [{ id: "main", default: true }, { id: "ops" }] });
+    const cfg = createQmdConfig({
+      list: [
+        { id: "main", default: true, heartbeat: { every: "30m" } },
+        { id: "ops", heartbeat: { every: "30m" } },
+      ],
+    });
     const log = createGatewayLogMock();
     getMemorySearchManagerMock
       .mockResolvedValueOnce({ manager: null, error: "qmd missing" })
@@ -83,8 +110,8 @@ describe("startGatewayMemoryBackend", () => {
     const cfg = createQmdConfig({
       defaults: { memorySearch: { enabled: true } },
       list: [
-        { id: "main", default: true },
-        { id: "ops", memorySearch: { enabled: false } },
+        { id: "main", default: true, heartbeat: { every: "30m" } },
+        { id: "ops", heartbeat: { every: "30m" }, memorySearch: { enabled: false } },
       ],
     });
     const log = createGatewayLogMock();
