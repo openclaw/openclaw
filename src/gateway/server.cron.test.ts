@@ -375,6 +375,69 @@ describe("gateway server cron", () => {
       expect(merged?.delivery?.channel).toBe("telegram");
       expect(merged?.delivery?.to).toBe("19098680");
 
+      const threadIdRes = await rpcReq(ws, "cron.add", {
+        name: "thread id roundtrip",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "-1003700845925",
+          threadId: 15,
+        },
+      });
+      expect(threadIdRes.ok).toBe(true);
+      const threadIdAdded = threadIdRes.payload as
+        | {
+            id?: unknown;
+            delivery?: { threadId?: unknown; mode?: unknown; channel?: unknown; to?: unknown };
+          }
+        | undefined;
+      const threadIdJobId = typeof threadIdAdded?.id === "string" ? threadIdAdded.id : "";
+      expect(threadIdJobId.length > 0).toBe(true);
+      expect(threadIdAdded?.delivery?.mode).toBe("announce");
+      expect(threadIdAdded?.delivery?.channel).toBe("telegram");
+      expect(threadIdAdded?.delivery?.to).toBe("-1003700845925");
+      expect(threadIdAdded?.delivery?.threadId).toBe(15);
+
+      const threadIdUpdateRes = await rpcReq(ws, "cron.update", {
+        id: threadIdJobId,
+        patch: {
+          delivery: { threadId: "16" },
+        },
+      });
+      expect(threadIdUpdateRes.ok).toBe(true);
+      const threadIdUpdated = threadIdUpdateRes.payload as
+        | {
+            delivery?: { mode?: unknown; channel?: unknown; to?: unknown; threadId?: unknown };
+          }
+        | undefined;
+      expect(threadIdUpdated?.delivery?.mode).toBe("announce");
+      expect(threadIdUpdated?.delivery?.channel).toBe("telegram");
+      expect(threadIdUpdated?.delivery?.to).toBe("-1003700845925");
+      expect(threadIdUpdated?.delivery?.threadId).toBe("16");
+
+      const threadIdListRes = await rpcReq(ws, "cron.list", {
+        includeDisabled: true,
+        query: "thread id roundtrip",
+      });
+      expect(threadIdListRes.ok).toBe(true);
+      const threadIdJobs = (threadIdListRes.payload as { jobs?: unknown } | null)?.jobs;
+      expect(Array.isArray(threadIdJobs)).toBe(true);
+      const threadIdListed = (
+        threadIdJobs as Array<{
+          id?: unknown;
+          delivery?: { threadId?: unknown; mode?: unknown; channel?: unknown; to?: unknown };
+        }>
+      ).find((job) => job.id === threadIdJobId);
+      expect(threadIdListed?.delivery?.mode).toBe("announce");
+      expect(threadIdListed?.delivery?.channel).toBe("telegram");
+      expect(threadIdListed?.delivery?.to).toBe("-1003700845925");
+      expect(threadIdListed?.delivery?.threadId).toBe("16");
+
       const modelOnlyPatchRes = await rpcReq(ws, "cron.update", {
         id: mergeJobId,
         patch: {

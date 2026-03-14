@@ -12,7 +12,7 @@ import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
 describe("runCronIsolatedAgentTurn forum topic delivery", () => {
   beforeEach(() => {
-    setupIsolatedAgentTurnMocks();
+    setupIsolatedAgentTurnMocks({ fast: true });
   });
 
   it("routes forum-topic telegram targets through the correct delivery path", async () => {
@@ -58,6 +58,30 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
       expectDirectTelegramDelivery(deps, {
         chatId: "123",
         text: "plain message",
+      });
+
+      vi.clearAllMocks();
+      mockAgentPayloads([{ text: "explicit thread message" }]);
+
+      const explicitThreadRes = await runTelegramAnnounceTurn({
+        home,
+        storePath,
+        deps,
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123",
+          threadId: "15",
+        },
+      });
+
+      expect(explicitThreadRes.status).toBe("ok");
+      expect(explicitThreadRes.delivered).toBe(true);
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expectDirectTelegramDelivery(deps, {
+        chatId: "123",
+        text: "explicit thread message",
+        messageThreadId: 15,
       });
     });
   });

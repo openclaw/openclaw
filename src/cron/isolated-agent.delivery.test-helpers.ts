@@ -54,6 +54,7 @@ export async function runTelegramAnnounceTurn(params: {
     mode: "announce";
     channel: string;
     to?: string;
+    threadId?: string | number;
     bestEffort?: boolean;
   };
   deliveryContract?: "cron-owned" | "shared";

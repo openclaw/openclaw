@@ -167,6 +167,26 @@ describe("applyJobPatch", () => {
     expect(job.delivery?.accountId).toBeUndefined();
   });
 
+  it("merges delivery.threadId from patch and preserves existing", () => {
+    const job = createIsolatedAgentTurnJob("job-thread", {
+      mode: "announce",
+      channel: "telegram",
+      to: "-100123",
+    });
+
+    applyJobPatch(job, { delivery: { mode: "announce", threadId: " 15 " } });
+    expect(job.delivery?.threadId).toBe("15");
+    expect(job.delivery?.mode).toBe("announce");
+    expect(job.delivery?.to).toBe("-100123");
+
+    applyJobPatch(job, { delivery: { mode: "announce", to: "-100999" } });
+    expect(job.delivery?.threadId).toBe("15");
+    expect(job.delivery?.to).toBe("-100999");
+
+    applyJobPatch(job, { delivery: { mode: "announce", threadId: "" } });
+    expect(job.delivery?.threadId).toBeUndefined();
+  });
+
   it("persists agentTurn payload.lightContext updates when editing existing jobs", () => {
     const job = createIsolatedAgentTurnJob("job-light-context", {
       mode: "announce",

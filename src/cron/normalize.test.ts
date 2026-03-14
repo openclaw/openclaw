@@ -248,6 +248,21 @@ describe("normalizeCronJobCreate", () => {
     expect(delivery.accountId).toBe("coordinator");
   });
 
+  it("normalizes delivery threadId and strips blanks", () => {
+    const normalized = normalizeIsolatedAgentTurnCreateJob({
+      name: "delivery thread",
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "-1003816714067",
+        threadId: " 15 ",
+      },
+    });
+
+    const delivery = normalized.delivery as Record<string, unknown>;
+    expect(delivery.threadId).toBe("15");
+  });
+
   it("strips empty accountId from delivery", () => {
     const normalized = normalizeIsolatedAgentTurnCreateJob({
       name: "empty account",

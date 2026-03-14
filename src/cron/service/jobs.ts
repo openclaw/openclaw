@@ -780,6 +780,13 @@ function normalizeOptionalTrimmedString(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function normalizeOptionalThreadId(value: unknown): string | number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return normalizeOptionalTrimmedString(value);
+}
+
 function mergeCronDelivery(
   existing: CronDelivery | undefined,
   patch: CronDeliveryPatch,
@@ -788,6 +795,7 @@ function mergeCronDelivery(
     mode: existing?.mode ?? "none",
     channel: existing?.channel,
     to: existing?.to,
+    threadId: existing?.threadId,
     accountId: existing?.accountId,
     bestEffort: existing?.bestEffort,
     failureDestination: existing?.failureDestination,
@@ -801,6 +809,9 @@ function mergeCronDelivery(
   }
   if ("to" in patch) {
     next.to = normalizeOptionalTrimmedString(patch.to);
+  }
+  if ("threadId" in patch) {
+    next.threadId = normalizeOptionalThreadId(patch.threadId);
   }
   if ("accountId" in patch) {
     next.accountId = normalizeOptionalTrimmedString(patch.accountId);

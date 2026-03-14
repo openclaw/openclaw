@@ -84,6 +84,24 @@ describe("resolveCronDeliveryPlan", () => {
     expect(plan.to).toBe("123");
     expect(plan.accountId).toBe("bot-a");
   });
+
+  it("threads delivery.threadId when explicitly configured", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "-1003700845925",
+          threadId: " 15 ",
+        },
+      }),
+    );
+    expect(plan.mode).toBe("announce");
+    expect(plan.requested).toBe(true);
+    expect(plan.channel).toBe("telegram");
+    expect(plan.to).toBe("-1003700845925");
+    expect(plan.threadId).toBe("15");
+  });
 });
 
 describe("resolveFailureDestination", () => {
@@ -146,6 +164,33 @@ describe("resolveFailureDestination", () => {
       undefined,
     );
     expect(plan).toBeNull();
+  });
+
+  it("keeps failure destinations for topic-routed announce jobs", () => {
+    const plan = resolveFailureDestination(
+      makeJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "-1003700845925",
+          threadId: "15",
+          accountId: "bot-a",
+          failureDestination: {
+            mode: "announce",
+            channel: "telegram",
+            to: "-1003700845925",
+            accountId: "bot-a",
+          },
+        },
+      }),
+      undefined,
+    );
+    expect(plan).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "-1003700845925",
+      accountId: "bot-a",
+    });
   });
 
   it("returns null when webhook failure destination matches the primary webhook target", () => {
