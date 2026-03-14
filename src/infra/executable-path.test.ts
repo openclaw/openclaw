@@ -47,4 +47,31 @@ describe("executable path helpers", () => {
     expect(resolveExecutablePath("runner", { env: { PATH: binDir } })).toBe(pathTool);
     expect(resolveExecutablePath("missing", { env: { PATH: binDir } })).toBeUndefined();
   });
+
+  it("resolves absolute, home-relative, and Path-cased env executables", async () => {
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-exec-path-"));
+    const homeDir = path.join(base, "home");
+    const binDir = path.join(base, "bin");
+    await fs.mkdir(homeDir, { recursive: true });
+    await fs.mkdir(binDir, { recursive: true });
+
+    const homeTool = path.join(homeDir, "home-tool");
+    const absoluteTool = path.join(base, "absolute-tool");
+    const pathTool = path.join(binDir, "runner");
+    await fs.writeFile(homeTool, "#!/bin/sh\nexit 0\n", "utf8");
+    await fs.writeFile(absoluteTool, "#!/bin/sh\nexit 0\n", "utf8");
+    await fs.writeFile(pathTool, "#!/bin/sh\nexit 0\n", "utf8");
+    await fs.chmod(homeTool, 0o755);
+    await fs.chmod(absoluteTool, 0o755);
+    await fs.chmod(pathTool, 0o755);
+
+    expect(resolveExecutablePath(absoluteTool)).toBe(absoluteTool);
+    expect(
+      path.normalize(resolveExecutablePath("~/home-tool", { env: { HOME: homeDir } }) ?? ""),
+    ).toBe(path.normalize(homeTool));
+    expect(path.normalize(resolveExecutablePath("runner", { env: { Path: binDir } }) ?? "")).toBe(
+      path.normalize(pathTool),
+    );
+    expect(resolveExecutablePath("~/missing-tool", { env: { HOME: homeDir } })).toBeUndefined();
+  });
 });

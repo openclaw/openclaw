@@ -18,7 +18,12 @@ const readLastGatewayErrorLine = vi.fn(async (_env?: NodeJS.ProcessEnv) => null)
 const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
 const serviceIsLoaded = vi.fn(async (_opts?: unknown) => true);
 const serviceReadRuntime = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }));
-const serviceReadCommand = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({
+const serviceReadCommand = vi.fn<
+  (env?: NodeJS.ProcessEnv) => Promise<{
+    programArguments: string[];
+    environment?: Record<string, string>;
+  }>
+>(async (_env?: NodeJS.ProcessEnv) => ({
   programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
   environment: {
     OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",

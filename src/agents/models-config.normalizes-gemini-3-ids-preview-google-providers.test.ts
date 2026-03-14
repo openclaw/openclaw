@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { installModelsConfigTestHooks, withModelsTempHome } from "./models-config.e2e-harness.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 
-function createGoogleModelsConfig(
-  models: NonNullable<OpenClawConfig["models"]>["providers"]["google"]["models"],
-): OpenClawConfig {
+function createGoogleModelsConfig(models: ModelDefinitionConfig[]): OpenClawConfig {
   return {
     models: {
       providers: {

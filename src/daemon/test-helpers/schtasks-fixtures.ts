@@ -2,11 +2,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
+import type { PortUsage } from "../../infra/ports-types.js";
+import type { killProcessTree as killProcessTreeImpl } from "../../process/kill-tree.js";
+import type { MockFn } from "../../test-utils/vitest-mock-fn.js";
+import { resolveTaskScriptPath } from "../schtasks.js";
 
 export const schtasksResponses: Array<{ code: number; stdout: string; stderr: string }> = [];
 export const schtasksCalls: string[][] = [];
-export const inspectPortUsage = vi.fn();
-export const killProcessTree = vi.fn();
+
+export const inspectPortUsage: MockFn<(port: number) => Promise<PortUsage>> = vi.fn();
+export const killProcessTree: MockFn<typeof killProcessTreeImpl> = vi.fn();
 
 export async function withWindowsEnv(
   prefix: string,
@@ -31,4 +36,22 @@ export function resetSchtasksBaseMocks() {
   schtasksCalls.length = 0;
   inspectPortUsage.mockReset();
   killProcessTree.mockReset();
+}
+
+export async function writeGatewayScript(
+  env: Record<string, string>,
+  port = Number(env.OPENCLAW_GATEWAY_PORT || "18789"),
+) {
+  const scriptPath = resolveTaskScriptPath(env);
+  await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+  await fs.writeFile(
+    scriptPath,
+    [
+      "@echo off",
+      `set "OPENCLAW_GATEWAY_PORT=${port}"`,
+      `"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port ${port}`,
+      "",
+    ].join("\r\n"),
+    "utf8",
+  );
 }

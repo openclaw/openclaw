@@ -27,6 +27,7 @@ describe("shared/frontmatter", () => {
     expect(parseFrontmatterBool("true", false)).toBe(true);
     expect(parseFrontmatterBool("false", true)).toBe(false);
     expect(parseFrontmatterBool(undefined, true)).toBe(true);
+    expect(parseFrontmatterBool("maybe", false)).toBe(false);
   });
 
   test("resolveOpenClawManifestBlock reads current manifest keys and custom metadata fields", () => {
@@ -53,6 +54,8 @@ describe("shared/frontmatter", () => {
     expect(
       resolveOpenClawManifestBlock({ frontmatter: { metadata: "not-json5" } }),
     ).toBeUndefined();
+    expect(resolveOpenClawManifestBlock({ frontmatter: { metadata: "123" } })).toBeUndefined();
+    expect(resolveOpenClawManifestBlock({ frontmatter: { metadata: "[]" } })).toBeUndefined();
     expect(
       resolveOpenClawManifestBlock({ frontmatter: { metadata: "{ nope: { a: 1 } }" } }),
     ).toBeUndefined();
@@ -105,11 +108,52 @@ describe("shared/frontmatter", () => {
       bins: ["git", "git"],
     });
     expect(parseOpenClawManifestInstallBase({ kind: "bad" }, ["brew"])).toBeUndefined();
-    expect(applyOpenClawManifestInstallCommonFields({ extra: true }, parsed!)).toEqual({
+    expect(
+      applyOpenClawManifestInstallCommonFields<{
+        extra: boolean;
+        id?: string;
+        label?: string;
+        bins?: string[];
+      }>({ extra: true }, parsed!),
+    ).toEqual({
       extra: true,
       id: "brew.git",
       label: "Git",
       bins: ["git", "git"],
+    });
+  });
+
+  it("prefers explicit kind, ignores invalid common fields, and leaves missing ones untouched", () => {
+    const parsed = parseOpenClawManifestInstallBase(
+      {
+        kind: " npm ",
+        type: "brew",
+        id: 42,
+        label: null,
+        bins: [" ", ""],
+      },
+      ["brew", "npm"],
+    );
+
+    expect(parsed).toEqual({
+      raw: {
+        kind: " npm ",
+        type: "brew",
+        id: 42,
+        label: null,
+        bins: [" ", ""],
+      },
+      kind: "npm",
+    });
+    expect(
+      applyOpenClawManifestInstallCommonFields(
+        { id: "keep", label: "Keep", bins: ["bun"] },
+        parsed!,
+      ),
+    ).toEqual({
+      id: "keep",
+      label: "Keep",
+      bins: ["bun"],
     });
   });
 
