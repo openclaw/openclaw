@@ -139,6 +139,26 @@ describe("resolveConfigDir", () => {
 
     expect(resolveConfigDir(env)).toBe(path.resolve("/tmp/openclaw-home", "state"));
   });
+
+  it("does not append .openclaw when OPENCLAW_HOME ends with .openclaw (#45765)", () => {
+    const env = { OPENCLAW_HOME: "/home/user/.openclaw" } as NodeJS.ProcessEnv;
+    expect(resolveConfigDir(env)).toBe(path.resolve("/home/user/.openclaw"));
+  });
+
+  it("does not append .openclaw when OPENCLAW_HOME ends with .clawdbot (#45765)", () => {
+    const env = { OPENCLAW_HOME: "/home/user/.clawdbot" } as NodeJS.ProcessEnv;
+    expect(resolveConfigDir(env)).toBe(path.resolve("/home/user/.clawdbot"));
+  });
+
+  it("handles tilde expansion when OPENCLAW_HOME=~/.openclaw (#45765)", () => {
+    const env = { OPENCLAW_HOME: "~/.openclaw", HOME: "/home/user" } as NodeJS.ProcessEnv;
+    expect(resolveConfigDir(env)).toBe(path.resolve("/home/user/.openclaw"));
+  });
+
+  it("still appends .openclaw when OPENCLAW_HOME is not a state dir basename", () => {
+    const env = { OPENCLAW_HOME: "/srv/app" } as NodeJS.ProcessEnv;
+    expect(resolveConfigDir(env)).toBe(path.resolve("/srv/app/.openclaw"));
+  });
 });
 
 describe("resolveHomeDir", () => {
