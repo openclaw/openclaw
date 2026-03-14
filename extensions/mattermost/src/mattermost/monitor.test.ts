@@ -155,6 +155,28 @@ describe("resolveMattermostReplyRootId", () => {
   it("falls back to undefined when neither reply target is available", () => {
     expect(resolveMattermostReplyRootId({})).toBeUndefined();
   });
+
+  it("prefers threadRootId when reply_to_current targets a threaded reply (#30977)", () => {
+    // Scenario: user replies in an existing thread (post C, root_id=A),
+    // [[reply_to_current]] resolves replyToId to C's id.  Mattermost rejects
+    // C as root_id because it is not the actual thread root.  threadRootId (A)
+    // must take priority so the API receives the real root post id.
+    expect(
+      resolveMattermostReplyRootId({
+        threadRootId: "root-post-A",
+        replyToId: "threaded-reply-C",
+      }),
+    ).toBe("root-post-A");
+  });
+
+  it("ignores whitespace-only threadRootId and falls back to replyToId", () => {
+    expect(
+      resolveMattermostReplyRootId({
+        threadRootId: "  ",
+        replyToId: "fallback-post",
+      }),
+    ).toBe("fallback-post");
+  });
 });
 
 describe("resolveMattermostEffectiveReplyToId", () => {
