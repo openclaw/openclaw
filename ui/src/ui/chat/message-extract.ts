@@ -5,14 +5,41 @@ import { stripThinkingTags } from "../format.ts";
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
+/**
+ * Strip security notices and external-content boundary markers that are
+ * injected into tool results by the agent framework (wrapExternalContent).
+ * These are AI-facing context and must never surface in user-visible UI.
+ */
+const EXTERNAL_CONTENT_BLOCK_RE =
+  /SECURITY NOTICE: The following content is from an EXTERNAL, UNTRUSTED source[\s\S]*?<<<END_EXTERNAL_UNTRUSTED_CONTENT[^>]*>>>\s*/g;
+const EXTERNAL_CONTENT_MARKERS_RE = /<<<(?:END_)?EXTERNAL_UNTRUSTED_CONTENT[^>]*>>>/g;
+const SECURITY_NOTICE_PREFIX_RE =
+  /SECURITY NOTICE: The following content is from an EXTERNAL, UNTRUSTED source[^\n]*(?:\n- [^\n]+)*/g;
+
+function stripExternalContentMarkers(text: string): string {
+  if (!text.includes("EXTERNAL_UNTRUSTED_CONTENT") && !text.includes("SECURITY NOTICE:")) {
+    return text;
+  }
+  // Try to strip the entire wrapped block (security notice + markers + content inside).
+  let result = text.replace(EXTERNAL_CONTENT_BLOCK_RE, "");
+  // Strip any remaining markers.
+  result = result.replace(EXTERNAL_CONTENT_MARKERS_RE, "");
+  // Strip standalone security notice prefix (in case it appears without markers).
+  result = result.replace(SECURITY_NOTICE_PREFIX_RE, "");
+  return result.trim();
+}
+
 function processMessageText(text: string, role: string): string {
   const shouldStripInboundMetadata = role.toLowerCase() === "user";
+  let processed: string;
   if (role === "assistant") {
-    return stripThinkingTags(text);
+    processed = stripThinkingTags(text);
+  } else {
+    processed = shouldStripInboundMetadata
+      ? stripInboundMetadata(stripEnvelope(text))
+      : stripEnvelope(text);
   }
-  return shouldStripInboundMetadata
-    ? stripInboundMetadata(stripEnvelope(text))
-    : stripEnvelope(text);
+  return stripExternalContentMarkers(processed);
 }
 
 export function extractText(message: unknown): string | null {
@@ -22,7 +49,7 @@ export function extractText(message: unknown): string | null {
   if (!raw) {
     return null;
   }
-  return processMessageText(raw, role);
+  return processMessageText(raw, role) || null;
 }
 
 export function extractTextCached(message: unknown): string | null {
