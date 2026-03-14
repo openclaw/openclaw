@@ -10,7 +10,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "searxng";
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -61,6 +61,14 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
     envKeys: ["PERPLEXITY_API_KEY"],
     placeholder: "pplx-...",
     signupUrl: "https://www.perplexity.ai/settings/api",
+  },
+  {
+    value: "searxng",
+    label: "SearXNG (self-hosted)",
+    hint: "Self-hosted metasearch · no API key required",
+    envKeys: ["SEARXNG_BASE_URL"],
+    placeholder: "http://localhost:8888",
+    signupUrl: "https://docs.searxng.org/",
   },
 ] as const;
 
@@ -241,6 +249,11 @@ export async function setupSearch(
 
   if (choice === "__skip__") {
     return config;
+  }
+
+  // SearXNG does not require an API key — just set the provider.
+  if (choice === "searxng") {
+    return applyProviderOnly(config, choice);
   }
 
   const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === choice)!;

@@ -1,9 +1,10 @@
 ---
-summary: "Web search + fetch tools (Brave, Gemini, Grok, Kimi, and Perplexity providers)"
+summary: "Web search + fetch tools (Brave, Gemini, Grok, Kimi, Perplexity, and SearXNG providers)"
 read_when:
   - You want to enable web_search or web_fetch
   - You need provider API key setup
   - You want to use Gemini with Google Search grounding
+  - You want to use SearXNG (self-hosted, no API key)
 title: "Web Tools"
 ---
 
@@ -11,7 +12,7 @@ title: "Web Tools"
 
 OpenClaw ships two lightweight web tools:
 
-- `web_search` — Search the web using Brave Search API, Gemini with Google Search grounding, Grok, Kimi, or Perplexity Search API.
+- `web_search` — Search the web using Brave Search API, Gemini with Google Search grounding, Grok, Kimi, Perplexity Search API, or SearXNG (self-hosted).
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -20,6 +21,10 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 ## How it works
 
 - `web_search` calls your configured provider and returns results.
+  - **Brave** (default): returns structured results (title, URL, snippet).
+  - **Perplexity**: returns AI-synthesized answers with citations from real-time web search.
+  - **Gemini**: returns AI-synthesized answers grounded in Google Search with citations.
+  - **SearXNG**: self-hosted meta search engine, aggregates results from multiple search engines (no API key required).
 - Results are cached by query for 15 minutes (configurable).
 - `web_fetch` does a plain HTTP GET and extracts readable content
   (HTML → markdown/text). It does **not** execute JavaScript.
@@ -36,6 +41,7 @@ See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexit
 | **Grok**                  | AI-synthesized answers + citations | —                                            | Uses xAI web-grounded responses                                                | `XAI_API_KEY`                               |
 | **Kimi**                  | AI-synthesized answers + citations | —                                            | Uses Moonshot web search                                                       | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
 | **Perplexity Search API** | Structured results with snippets   | `country`, `language`, time, `domain_filter` | Supports content extraction controls; OpenRouter uses Sonar compatibility path | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
+| **SearXNG**               | Structured results with snippets   | `language`                                   | Self-hosted metasearch; no API key required                                    | None (just `baseUrl`)                       |
 
 ### Auto-detection
 
@@ -225,6 +231,33 @@ For a gateway install, put it in `~/.openclaw/.env`.
 - The default model (`gemini-2.5-flash`) is fast and cost-effective.
   Any Gemini model that supports grounding can be used.
 
+## Using SearXNG (self-hosted)
+
+[SearXNG](https://github.com/searxng/searxng) is a metasearch engine that
+aggregates results from multiple search engines. No API key is required -- just
+a running instance. See [SearXNG setup](/searxng) for Docker instructions and
+troubleshooting.
+
+### Config example
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "searxng",
+        searxng: {
+          baseUrl: "http://localhost:8888",
+        },
+      },
+    },
+  },
+}
+```
+
+**Environment alternative:** set `SEARXNG_BASE_URL` in the Gateway environment
+instead of config. For a gateway install, put it in `~/.openclaw/.env`.
+
 ## web_search
 
 Search the web using your configured provider.
@@ -238,6 +271,7 @@ Search the web using your configured provider.
   - **Grok**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`
   - **Kimi**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `tools.web.search.kimi.apiKey`
   - **Perplexity**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey`
+  - **SearXNG**: No API key required — just set `tools.web.search.searxng.baseUrl` or `SEARXNG_BASE_URL`
 - All provider key fields above support SecretRef objects.
 
 ### Config
