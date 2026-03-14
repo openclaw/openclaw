@@ -369,6 +369,19 @@ export async function runReplyAgent(params: {
     });
 
     if (runOutcome.kind === "final") {
+      if (isDiagnosticsEnabled(cfg)) {
+        const firstText =
+          typeof runOutcome.payload.text === "string" ? runOutcome.payload.text.trim() : undefined;
+        emitDiagnosticEvent({
+          type: "outbound.sent",
+          sessionKey,
+          sessionId: followupRun.run.sessionId,
+          channel: replyToChannel,
+          payloadCount: 1,
+          hasMedia: Boolean(runOutcome.payload.mediaUrl || runOutcome.payload.mediaUrls?.length),
+          contentPreview: firstText ? firstText.slice(0, 240) : undefined,
+        });
+      }
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
@@ -698,6 +711,20 @@ export async function runReplyAgent(params: {
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+    }
+
+    if (isDiagnosticsEnabled(cfg) && finalPayloads.length > 0) {
+      const firstText = finalPayloads.find((payload) => typeof payload.text === "string")?.text?.trim();
+      emitDiagnosticEvent({
+        type: "outbound.sent",
+        sessionKey,
+        sessionId: followupRun.run.sessionId,
+        channel: replyToChannel,
+        runId,
+        payloadCount: finalPayloads.length,
+        hasMedia: finalPayloads.some((payload) => Boolean(payload.mediaUrl || payload.mediaUrls?.length)),
+        contentPreview: firstText ? firstText.slice(0, 240) : undefined,
+      });
     }
 
     return finalizeWithFollowup(

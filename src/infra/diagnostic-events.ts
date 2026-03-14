@@ -147,6 +147,17 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   pairedToolName?: string;
 };
 
+export type DiagnosticOutboundEvent = DiagnosticBaseEvent & {
+  type: "outbound.sent";
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+  runId?: string;
+  payloadCount: number;
+  hasMedia?: boolean;
+  contentPreview?: string;
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
@@ -160,7 +171,8 @@ export type DiagnosticEventPayload =
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
   | DiagnosticHeartbeatEvent
-  | DiagnosticToolLoopEvent;
+  | DiagnosticToolLoopEvent
+  | DiagnosticOutboundEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload

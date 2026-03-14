@@ -191,6 +191,15 @@ export type DiagnosticsOtelConfig = {
   sampleRate?: number;
   /** Metric export interval (ms). */
   flushIntervalMs?: number;
+  /** Trace enrichment controls for Langfuse-grade trees. */
+  enrichment?: {
+    /** Master toggle for trace-tree enrichment spans/attributes. */
+    enabled?: boolean;
+    /** Emit full tree spans (turn -> model -> tool -> outbound). */
+    fullTraceTree?: boolean;
+    /** Include redacted text snippets in outbound spans. */
+    includeContent?: boolean;
+  };
 };
 
 export type DiagnosticsCacheTraceConfig = {
