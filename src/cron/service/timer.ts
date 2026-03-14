@@ -479,7 +479,7 @@ export function applyJobResult(
  * Enqueue a chained job (onSuccessJobId / onFailureJobId) in the cron lane.
  * Guards against self-loops and missing job IDs.
  */
-function triggerChainedJob(
+export function triggerChainedJob(
   state: CronServiceState,
   sourceJobId: string,
   targetJobId: string,

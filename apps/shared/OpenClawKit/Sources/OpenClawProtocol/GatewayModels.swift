@@ -2626,6 +2626,8 @@ public struct CronJob: Codable, Sendable {
     public let payload: AnyCodable
     public let delivery: AnyCodable?
     public let failurealert: AnyCodable?
+    public let onsuccessjobid: String?
+    public let onfailurejobid: String?
     public let state: [String: AnyCodable]
 
     public init(
@@ -2644,6 +2646,8 @@ public struct CronJob: Codable, Sendable {
         payload: AnyCodable,
         delivery: AnyCodable?,
         failurealert: AnyCodable?,
+        onsuccessjobid: String?,
+        onfailurejobid: String?,
         state: [String: AnyCodable])
     {
         self.id = id
@@ -2661,6 +2665,8 @@ public struct CronJob: Codable, Sendable {
         self.payload = payload
         self.delivery = delivery
         self.failurealert = failurealert
+        self.onsuccessjobid = onsuccessjobid
+        self.onfailurejobid = onfailurejobid
         self.state = state
     }
 
@@ -2680,6 +2686,8 @@ public struct CronJob: Codable, Sendable {
         case payload
         case delivery
         case failurealert = "failureAlert"
+        case onsuccessjobid = "onSuccessJobId"
+        case onfailurejobid = "onFailureJobId"
         case state
     }
 }
@@ -2731,6 +2739,8 @@ public struct CronAddParams: Codable, Sendable {
     public let description: String?
     public let enabled: Bool?
     public let deleteafterrun: Bool?
+    public let onsuccessjobid: AnyCodable?
+    public let onfailurejobid: AnyCodable?
     public let schedule: AnyCodable
     public let sessiontarget: AnyCodable
     public let wakemode: AnyCodable
@@ -2745,6 +2755,8 @@ public struct CronAddParams: Codable, Sendable {
         description: String?,
         enabled: Bool?,
         deleteafterrun: Bool?,
+        onsuccessjobid: AnyCodable?,
+        onfailurejobid: AnyCodable?,
         schedule: AnyCodable,
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
@@ -2758,6 +2770,8 @@ public struct CronAddParams: Codable, Sendable {
         self.description = description
         self.enabled = enabled
         self.deleteafterrun = deleteafterrun
+        self.onsuccessjobid = onsuccessjobid
+        self.onfailurejobid = onfailurejobid
         self.schedule = schedule
         self.sessiontarget = sessiontarget
         self.wakemode = wakemode
@@ -2773,6 +2787,8 @@ public struct CronAddParams: Codable, Sendable {
         case description
         case enabled
         case deleteafterrun = "deleteAfterRun"
+        case onsuccessjobid = "onSuccessJobId"
+        case onfailurejobid = "onFailureJobId"
         case schedule
         case sessiontarget = "sessionTarget"
         case wakemode = "wakeMode"

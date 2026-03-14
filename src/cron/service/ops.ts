@@ -22,6 +22,7 @@ import {
   executeJobCoreWithTimeout,
   runMissedJobs,
   stopTimer,
+  triggerChainedJob,
   wake,
 } from "./timer.js";
 
@@ -507,6 +508,14 @@ async function finishPreparedManualRun(
       provider: coreResult.provider,
       usage: coreResult.usage,
     });
+
+    if (!shouldDelete) {
+      if (coreResult.status === "ok" && job.onSuccessJobId) {
+        triggerChainedJob(state, job.id, job.onSuccessJobId);
+      } else if (coreResult.status === "error" && job.onFailureJobId) {
+        triggerChainedJob(state, job.id, job.onFailureJobId);
+      }
+    }
 
     if (shouldDelete && state.store) {
       state.store.jobs = state.store.jobs.filter((entry) => entry.id !== job.id);
