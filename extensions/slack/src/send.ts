@@ -12,7 +12,7 @@ import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../../../src/infra/net/fetch-guard.js";
-import { loadWebMedia } from "../../../src/web/media.js";
+import { loadWebMedia } from "../../whatsapp/src/media.js";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";

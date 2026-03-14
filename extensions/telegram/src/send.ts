@@ -19,7 +19,7 @@ import type { MediaKind } from "../../../src/media/constants.js";
 import { buildOutboundMediaLoadOptions } from "../../../src/media/load-options.js";
 import { isGifMedia, kindFromMime } from "../../../src/media/mime.js";
 import { normalizePollInput, type PollInput } from "../../../src/polls.js";
-import { loadWebMedia } from "../../../src/web/media.js";
+import { loadWebMedia } from "../../whatsapp/src/media.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { buildTelegramThreadParams, buildTypingThreadParams } from "./bot/helpers.js";
@@ -71,6 +71,8 @@ type TelegramSendOpts = {
   messageThreadId?: number;
   /** Inline keyboard buttons (reply markup). */
   buttons?: TelegramInlineButtons;
+  /** Send image as document to avoid Telegram compression. Defaults to false. */
+  forceDocument?: boolean;
 };
 
 type TelegramSendResult = {
@@ -763,6 +765,7 @@ export async function sendMessageTelegram(
       buildOutboundMediaLoadOptions({
         maxBytes: mediaMaxBytes,
         mediaLocalRoots: opts.mediaLocalRoots,
+        optimizeImages: opts.forceDocument ? false : undefined,
       }),
     );
     const kind = kindFromMime(media.contentType ?? undefined);
@@ -815,7 +818,7 @@ export async function sendMessageTelegram(
       );
 
     const mediaSender = (() => {
-      if (isGif) {
+      if (isGif && !opts.forceDocument) {
         return {
           label: "animation",
           sender: (effectiveParams: Record<string, unknown> | undefined) =>
@@ -826,7 +829,7 @@ export async function sendMessageTelegram(
             ) as Promise<TelegramMessageLike>,
         };
       }
-      if (kind === "image") {
+      if (kind === "image" && !opts.forceDocument) {
         return {
           label: "photo",
           sender: (effectiveParams: Record<string, unknown> | undefined) =>
@@ -893,7 +896,11 @@ export async function sendMessageTelegram(
           api.sendDocument(
             chatId,
             file,
-            effectiveParams as Parameters<typeof api.sendDocument>[2],
+            // Only force Telegram to keep the uploaded media type when callers explicitly
+            // opt into document delivery for image/GIF uploads.
+            (opts.forceDocument
+              ? { ...effectiveParams, disable_content_type_detection: true }
+              : effectiveParams) as Parameters<typeof api.sendDocument>[2],
           ) as Promise<TelegramMessageLike>,
       };
     })();

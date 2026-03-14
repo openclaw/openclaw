@@ -43,9 +43,15 @@ type CommandHandlerContext = {
   formatSessionKey: (key: string) => string;
   applySessionInfoFromPatch: (result: SessionsPatchResult) => void;
   noteLocalRunId: (runId: string) => void;
+  noteLocalBtwRunId?: (runId: string) => void;
   forgetLocalRunId?: (runId: string) => void;
+  forgetLocalBtwRunId?: (runId: string) => void;
   requestExit: () => void;
 };
+
+function isBtwCommand(text: string): boolean {
+  return /^\/btw(?::|\s|$)/i.test(text.trim());
+}
 
 export function createCommandHandlers(context: CommandHandlerContext) {
   const {
@@ -66,7 +72,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     formatSessionKey,
     applySessionInfoFromPatch,
     noteLocalRunId,
+    noteLocalBtwRunId,
     forgetLocalRunId,
+    forgetLocalBtwRunId,
     requestExit,
   } = context;
 
@@ -501,13 +509,17 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       tui.requestRender();
       return;
     }
+    const isBtw = isBtwCommand(text);
+    const runId = randomUUID();
     try {
-      chatLog.addUser(text);
-      tui.requestRender();
-      const runId = randomUUID();
-      noteLocalRunId(runId);
-      state.activeChatRunId = runId;
-      setActivityStatus("sending");
+      if (!isBtw) {
+        chatLog.addUser(text);
+        noteLocalRunId(runId);
+        state.activeChatRunId = runId;
+        setActivityStatus("sending");
+      } else {
+        noteLocalBtwRunId?.(runId);
+      }
       tui.requestRender();
       await client.sendChat({
         sessionKey: state.currentSessionKey,
@@ -517,15 +529,24 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         timeoutMs: opts.timeoutMs,
         runId,
       });
-      setActivityStatus("waiting");
-      tui.requestRender();
+      if (!isBtw) {
+        setActivityStatus("waiting");
+        tui.requestRender();
+      }
     } catch (err) {
-      if (state.activeChatRunId) {
+      if (isBtw) {
+        forgetLocalBtwRunId?.(runId);
+      }
+      if (!isBtw && state.activeChatRunId) {
         forgetLocalRunId?.(state.activeChatRunId);
       }
-      state.activeChatRunId = null;
-      chatLog.addSystem(`send failed: ${String(err)}`);
-      setActivityStatus("error");
+      if (!isBtw) {
+        state.activeChatRunId = null;
+      }
+      chatLog.addSystem(`${isBtw ? "btw failed" : "send failed"}: ${String(err)}`);
+      if (!isBtw) {
+        setActivityStatus("error");
+      }
       tui.requestRender();
     }
   };

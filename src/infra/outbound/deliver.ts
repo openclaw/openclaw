@@ -1,4 +1,9 @@
 import {
+  markdownToSignalTextChunks,
+  type SignalTextStyleRange,
+} from "../../../extensions/signal/src/format.js";
+import { sendMessageSignal } from "../../../extensions/signal/src/send.js";
+import {
   chunkByParagraph,
   chunkMarkdownTextWithMode,
   resolveChunkMode,
@@ -28,8 +33,6 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
-import { sendMessageSignal } from "../../signal/send.js";
 import { throwIfAborted } from "./abort.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
@@ -143,6 +146,7 @@ type ChannelHandlerParams = {
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
+  forceDocument?: boolean;
   silent?: boolean;
   mediaLocalRoots?: readonly string[];
 };
@@ -223,6 +227,7 @@ function createChannelOutboundContextBase(
     threadId: params.threadId,
     identity: params.identity,
     gifPlayback: params.gifPlayback,
+    forceDocument: params.forceDocument,
     deps: params.deps,
     silent: params.silent,
     mediaLocalRoots: params.mediaLocalRoots,
@@ -242,6 +247,7 @@ type DeliverOutboundPayloadsCoreParams = {
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
+  forceDocument?: boolean;
   abortSignal?: AbortSignal;
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
@@ -486,6 +492,7 @@ export async function deliverOutboundPayloads(
         replyToId: params.replyToId,
         bestEffort: params.bestEffort,
         gifPlayback: params.gifPlayback,
+        forceDocument: params.forceDocument,
         silent: params.silent,
         mirror: params.mirror,
       }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
@@ -554,6 +561,7 @@ async function deliverOutboundPayloadsCore(
     threadId: params.threadId,
     identity: params.identity,
     gifPlayback: params.gifPlayback,
+    forceDocument: params.forceDocument,
     silent: params.silent,
     mediaLocalRoots,
   });
