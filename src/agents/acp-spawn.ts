@@ -49,7 +49,12 @@ import {
 } from "./acp-spawn-parent-stream.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
-import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
+import { registerSubagentRun } from "./subagent-registry.js";
+import {
+  resolveDisplaySessionKey,
+  resolveInternalSessionKey,
+  resolveMainSessionAlias,
+} from "./tools/sessions-helpers.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
 
@@ -727,6 +732,29 @@ export async function spawnAcpDirect(
       childSessionKey: sessionKey,
     };
   }
+
+  // Register ACP run in the subagent registry so lifecycle events (including
+  // subagent_ended) are emitted when the ACP session completes or exits.
+  // Without this, ACP sessions are invisible to the registry and their
+  // completion is never propagated back to the requester.
+  const { mainKey, alias } = resolveMainSessionAlias(cfg);
+  const requesterDisplayKey = resolveDisplaySessionKey({
+    key: requesterInternalKey,
+    alias,
+    mainKey,
+  });
+  registerSubagentRun({
+    runId: childRunId,
+    childSessionKey: sessionKey,
+    controllerSessionKey: requesterInternalKey,
+    requesterSessionKey: requesterInternalKey,
+    requesterOrigin,
+    requesterDisplayKey,
+    task: params.task,
+    cleanup: "keep",
+    label: params.label || undefined,
+    spawnMode,
+  });
 
   if (effectiveStreamToParent && parentSessionKey) {
     if (parentRelay && childRunId !== childIdem) {
