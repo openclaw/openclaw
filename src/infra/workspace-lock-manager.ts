@@ -100,9 +100,8 @@ function isTimestampExpired(isoTimestamp: string | undefined): boolean {
   return Number.isFinite(ts) && Date.now() >= ts;
 }
 
-async function readPayload(lockPath: string): Promise<LockPayload | null> {
+function parseLockPayload(raw: string): LockPayload | null {
   try {
-    const raw = await fs.readFile(lockPath, "utf8");
     const parsed = JSON.parse(raw) as Partial<LockPayload>;
     if (
       typeof parsed.token !== "string" ||
@@ -122,6 +121,24 @@ async function readPayload(lockPath: string): Promise<LockPayload | null> {
       targetPath: parsed.targetPath,
       kind: parsed.kind,
     };
+  } catch {
+    return null;
+  }
+}
+
+async function readPayload(lockPath: string): Promise<LockPayload | null> {
+  try {
+    const raw = await fs.readFile(lockPath, "utf8");
+    return parseLockPayload(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function readPayloadFromHandle(handle: fs.FileHandle): Promise<LockPayload | null> {
+  try {
+    const raw = await handle.readFile({ encoding: "utf8" });
+    return parseLockPayload(raw);
   } catch {
     return null;
   }
@@ -156,20 +173,20 @@ async function refreshLock(mapKey: string, token: string): Promise<void> {
     return;
   }
 
-  const payload = await readPayload(held.lockPath);
-  if (!payload || payload.token !== held.token || payload.token !== token) {
-    return;
-  }
-
-  const now = Date.now();
-  const nextPayload: LockPayload = {
-    ...payload,
-    expiresAt: new Date(now + held.ttlMs).toISOString(),
-  };
-
   let handle: fs.FileHandle | undefined;
   try {
     handle = await fs.open(held.lockPath, "r+");
+    const payload = await readPayloadFromHandle(handle);
+    if (!payload || payload.token !== held.token || payload.token !== token) {
+      return;
+    }
+
+    const now = Date.now();
+    const nextPayload: LockPayload = {
+      ...payload,
+      expiresAt: new Date(now + held.ttlMs).toISOString(),
+    };
+
     await handle.truncate(0);
     await handle.writeFile(JSON.stringify(nextPayload), "utf8");
   } catch {
@@ -186,11 +203,27 @@ async function releaseLock(mapKey: string, token: string): Promise<void> {
   }
 
   HELD_WORKSPACE_LOCKS.delete(mapKey);
-  const payload = await readPayload(held.lockPath);
-  if (!payload || payload.token !== held.token || payload.token !== token) {
-    return;
+
+  let handle: fs.FileHandle | undefined;
+  try {
+    handle = await fs.open(held.lockPath, "r");
+    const payload = await readPayloadFromHandle(handle);
+    if (!payload || payload.token !== held.token || payload.token !== token) {
+      return;
+    }
+
+    // Re-check the path identity after opening to reduce release-vs-reclaim races.
+    const [openedStat, pathStat] = await Promise.all([handle.stat(), fs.lstat(held.lockPath)]);
+    if (openedStat.ino !== pathStat.ino || openedStat.dev !== pathStat.dev) {
+      return;
+    }
+
+    await fs.rm(held.lockPath, { force: true }).catch(() => undefined);
+  } catch {
+    // Best-effort cleanup only.
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
-  await fs.rm(held.lockPath, { force: true }).catch(() => undefined);
 }
 
 export async function acquireWorkspaceLock(

@@ -347,7 +347,7 @@ describe("wrapToolMutationLock", () => {
       await fs.symlink(realDir, aliasDir, "dir");
 
       const firstPath = path.join(realDir, "Missing.TXT");
-      const secondPath = path.join(aliasDir, "missing.txt");
+      const secondPath = path.join(aliasDir, "Missing.TXT");
 
       const gate = deferred();
       const events: string[] = [];

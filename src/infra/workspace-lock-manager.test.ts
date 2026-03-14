@@ -570,4 +570,41 @@ describe("workspace lock manager", () => {
 
     await second.release();
   });
+
+  it("does not let stale handle callbacks refresh a newer lock owner", async () => {
+    const dir = await makeCaseDir();
+    const target = path.join(dir, "stale-refresh.txt");
+
+    const first = await acquireWorkspaceLock(target, {
+      kind: "file",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 5_000,
+    });
+    const staleRefresh = first.refresh;
+
+    await first.release();
+
+    const second = await acquireWorkspaceLock(target, {
+      kind: "file",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 25,
+    });
+    const before = JSON.parse(await fs.readFile(second.lockPath, "utf8")) as {
+      token: string;
+      expiresAt: string;
+    };
+
+    await staleRefresh();
+
+    const after = JSON.parse(await fs.readFile(second.lockPath, "utf8")) as {
+      token: string;
+      expiresAt: string;
+    };
+    expect(after.token).toBe(before.token);
+    expect(after.expiresAt).toBe(before.expiresAt);
+
+    await second.release();
+  });
 });
