@@ -80,9 +80,11 @@ function hasRestrictedBrowserSsrFPolicy(
     ssrfPolicy.dangerouslyAllowPrivateNetwork === true ||
     ssrfPolicy.allowPrivateNetwork === true ||
     !hasExplicitPrivateNetworkSetting;
-  const hasHostnameAllowlist =
-    ssrfPolicy.hostnameAllowlist?.some((pattern) => pattern.trim() !== "") ?? false;
-  return !allowsPrivateNetwork || hasHostnameAllowlist;
+  const hasHostnameRestrictions =
+    ssrfPolicy.allowedHostnames?.some((pattern) => pattern.trim() !== "") ||
+    ssrfPolicy.hostnameAllowlist?.some((pattern) => pattern.trim() !== "") ||
+    false;
+  return !allowsPrivateNetwork || hasHostnameRestrictions;
 }
 
 function removeChromeDevToolsServer(
