@@ -1010,6 +1010,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum PDF file size in megabytes for the PDF tool (default: 10).",
   "agents.defaults.pdfMaxPages":
     "Maximum number of PDF pages to process for the PDF tool (default: 20).",
+  "agents.defaults.pdfExtractionMode":
+    'Optional default extraction mode for the PDF tool: "local", "ocr", or "auto". When set, this opts out of native PDF mode and forces extraction for matching calls.',
   "agents.defaults.imageMaxDimensionPx":
     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
   "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",

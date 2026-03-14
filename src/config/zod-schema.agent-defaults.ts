@@ -21,6 +21,9 @@ export const AgentDefaultsSchema = z
     pdfModel: AgentModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
+    pdfExtractionMode: z
+      .union([z.literal("local"), z.literal("ocr"), z.literal("auto")])
+      .optional(),
     models: z
       .record(
         z.string(),

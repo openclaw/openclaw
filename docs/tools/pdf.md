@@ -33,6 +33,7 @@ If no usable model can be resolved, the `pdf` tool is not exposed.
 - `pdfs` (`string[]`): multiple PDF paths or URLs, up to 10 total
 - `prompt` (`string`): analysis prompt, default `Analyze this PDF document.`
 - `pages` (`string`): page filter like `1-5` or `1,3,7-9`
+- `extractionMode` (`"local" | "ocr" | "auto"`): optional extraction override
 - `model` (`string`): optional model override (`provider/model`)
 - `maxBytesMb` (`number`): per-PDF size cap in MB
 
@@ -65,15 +66,19 @@ The tool sends raw PDF bytes directly to provider APIs.
 Native mode limits:
 
 - `pages` is not supported. If set, the tool returns an error.
+- Explicit `extractionMode` opts out of native PDF mode and uses extraction instead.
 
 ### Extraction fallback mode
 
-Fallback mode is used for non-native providers.
+Fallback mode is used for non-native providers and for any call with explicit `extractionMode`.
 
 Flow:
 
 1. Extract text from selected pages (up to `agents.defaults.pdfMaxPages`, default `20`).
-2. If extracted text length is below `200` chars, render selected pages to PNG images and include them.
+2. Behavior then depends on `extractionMode`:
+   - unset or `"local"`: if text is weak, render selected pages to PNG images and include them
+   - `"ocr"`: call Mistral OCR and use OCR text as the extraction result
+   - `"auto"`: if local text is weak, try Mistral OCR first, then fall back to PNG images if OCR is unavailable or fails
 3. Send extracted content plus prompt to the selected model.
 
 Fallback details:
@@ -81,6 +86,7 @@ Fallback details:
 - Page image extraction uses a pixel budget of `4,000,000`.
 - If the target model does not support image input and there is no extractable text, the tool errors.
 - Extraction fallback requires `pdfjs-dist` (and `@napi-rs/canvas` for image rendering).
+- `extractionMode: "ocr"` and `"auto"` use Mistral OCR and send PDF bytes to Mistral when OCR runs.
 
 ## Config
 
@@ -94,10 +100,20 @@ Fallback details:
       },
       pdfMaxBytesMb: 10,
       pdfMaxPages: 20,
+      pdfExtractionMode: "local",
     },
   },
 }
 ```
+
+`pdfExtractionMode` behavior:
+
+- unset: preserve current tool behavior, including native PDF mode for Anthropic/Google
+- `"local"`: force extraction mode without OCR
+- `"ocr"`: force Mistral OCR extraction
+- `"auto"`: force extraction mode and try OCR only when local text is weak
+
+Setting `agents.defaults.pdfExtractionMode` globally opts matching `pdf` calls out of native PDF mode.
 
 See [Configuration Reference](/gateway/configuration-reference) for full field details.
 
@@ -109,6 +125,8 @@ Common `details` fields:
 
 - `model`: resolved model ref (`provider/model`)
 - `native`: `true` for native provider mode, `false` for fallback
+- `extractionMode`: present when an explicit extraction mode is active
+- `ocrProvider`: present when OCR runs (`"mistral"`)
 - `attempts`: fallback attempts that failed before success
 
 Path fields:
@@ -123,6 +141,7 @@ Path fields:
 - Too many PDFs: returns structured error in `details.error = "too_many_pdfs"`
 - Unsupported reference scheme: returns `details.error = "unsupported_pdf_reference"`
 - Native mode with `pages`: throws clear `pages is not supported with native PDF providers` error
+- Explicit `extractionMode: "ocr"` without Mistral auth: throws a clear OCR auth error
 
 ## Examples
 

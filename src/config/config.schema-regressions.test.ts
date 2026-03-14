@@ -116,7 +116,7 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts pdf default model and limits", () => {
+  it("accepts pdf default model, limits, and extraction mode", () => {
     const res = validateConfigObject({
       agents: {
         defaults: {
@@ -126,6 +126,7 @@ describe("config schema regressions", () => {
           },
           pdfMaxBytesMb: 12,
           pdfMaxPages: 25,
+          pdfExtractionMode: "auto",
         },
       },
     });
@@ -140,13 +141,20 @@ describe("config schema regressions", () => {
           pdfModel: { primary: "openai/gpt-5-mini" },
           pdfMaxBytesMb: 0,
           pdfMaxPages: 0,
+          pdfExtractionMode: "bogus",
         },
       },
     });
 
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((issue) => issue.path.includes("agents.defaults.pdfMax"))).toBe(true);
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path.includes("agents.defaults.pdfMax") ||
+            issue.path === "agents.defaults.pdfExtractionMode",
+        ),
+      ).toBe(true);
     }
   });
 

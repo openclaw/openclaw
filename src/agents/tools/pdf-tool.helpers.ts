@@ -7,6 +7,8 @@ import {
 import { extractAssistantText } from "../pi-embedded-utils.js";
 
 export type PdfModelConfig = { primary?: string; fallbacks?: string[] };
+export const PDF_EXTRACTION_MODES = ["local", "ocr", "auto"] as const;
+export type PdfExtractionMode = (typeof PDF_EXTRACTION_MODES)[number];
 
 /**
  * Providers known to support native PDF document input.
@@ -92,6 +94,19 @@ export function coercePdfModelConfig(cfg?: OpenClawConfig): PdfModelConfig {
     modelConfig.fallbacks = fallbacks;
   }
   return modelConfig;
+}
+
+export function coercePdfExtractionMode(value: unknown): PdfExtractionMode | undefined {
+  if (value === "local" || value === "ocr" || value === "auto") {
+    return value;
+  }
+  return undefined;
+}
+
+export function coerceConfiguredPdfExtractionMode(
+  cfg?: OpenClawConfig,
+): PdfExtractionMode | undefined {
+  return coercePdfExtractionMode(cfg?.agents?.defaults?.pdfExtractionMode);
 }
 
 export function resolvePdfToolMaxTokens(
