@@ -20,8 +20,8 @@ vi.mock("../send.js", () => ({
   sendReadReceiptSignal: sendReadReceiptMock,
 }));
 
-vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../auto-reply/dispatch.js")>();
+vi.mock("../../../../src/auto-reply/dispatch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/auto-reply/dispatch.js")>();
   return {
     ...actual,
     dispatchInboundMessage: dispatchInboundMessageMock,
@@ -30,7 +30,7 @@ vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../pairing/pairing-store.js", () => ({
+vi.mock("../../../../src/pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
   upsertChannelPairingRequest: vi.fn(),
 }));
