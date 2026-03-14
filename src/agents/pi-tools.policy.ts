@@ -596,7 +596,10 @@ export function resolveGroupToolPolicy(params: {
   );
   const seenDirectCandidates = new Set<string>();
   const resolveBestDirectPolicy = () => {
-    let best: { policy?: SandboxToolPolicy; rank: number } = { rank: 0 };
+    let best: { policy?: SandboxToolPolicy; rank: number; specificity: number } = {
+      rank: 0,
+      specificity: 0,
+    };
     if (params.groupId) {
       return best;
     }
@@ -617,8 +620,16 @@ export function resolveGroupToolPolicy(params: {
         senderUsername: params.senderUsername,
         senderE164: params.senderE164,
       });
-      if (resolved.rank > best.rank) {
-        best = { policy: pickSandboxToolPolicy(resolved.policy), rank: resolved.rank };
+      const specificity = candidate.accountId ? 1 : 0;
+      if (
+        resolved.rank > best.rank ||
+        (resolved.rank === best.rank && specificity > best.specificity)
+      ) {
+        best = {
+          policy: pickSandboxToolPolicy(resolved.policy),
+          rank: resolved.rank,
+          specificity,
+        };
       }
     }
     return best;
