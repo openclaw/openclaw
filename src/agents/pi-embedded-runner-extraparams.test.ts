@@ -412,6 +412,80 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]).not.toHaveProperty("reasoning_effort");
   });
 
+  it("normalizes reasoning_effort to 'default' for Groq (#32638)", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = { reasoning_effort: "high" };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "groq", "qwen/qwen3-32b", undefined, "high");
+
+    const model = {
+      api: "openai-completions",
+      provider: "groq",
+      id: "qwen/qwen3-32b",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.reasoning_effort).toBe("default");
+    expect(payloads[0]).not.toHaveProperty("reasoning");
+  });
+
+  it("preserves reasoning_effort 'none' for Groq (#32638)", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = { reasoning_effort: "none" };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "groq", "qwen/qwen3-32b", undefined, "high");
+
+    const model = {
+      api: "openai-completions",
+      provider: "groq",
+      id: "qwen/qwen3-32b",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.reasoning_effort).toBe("none");
+  });
+
+  it("sets reasoning_effort to 'none' when thinkingLevel is off for Groq (#32638)", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = { reasoning_effort: "medium" };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "groq", "qwen/qwen3-32b", undefined, "off");
+
+    const model = {
+      api: "openai-completions",
+      provider: "groq",
+      id: "qwen/qwen3-32b",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.reasoning_effort).toBe("none");
+    expect(payloads[0]).not.toHaveProperty("reasoning");
+  });
+
   it("injects parallel_tool_calls for openai-completions payloads when configured", () => {
     const payload = runParallelToolCallsPayloadMutationCase({
       applyProvider: "nvidia-nim",

@@ -123,6 +123,55 @@ export function isProxyReasoningUnsupported(modelId: string): boolean {
   return modelId.toLowerCase().startsWith("x-ai/");
 }
 
+/**
+ * Normalize `reasoning_effort` for Groq's API.
+ *
+ * Groq only accepts `"none"` or `"default"` for the top-level
+ * `reasoning_effort` field.  Any other value (e.g. "low", "medium", "high")
+ * causes an HTTP 400.  This helper clamps the value accordingly and also
+ * strips the nested `reasoning.effort` object that the generic proxy
+ * normalizer would inject.
+ *
+ * @see https://github.com/openclaw/openclaw/issues/32638
+ */
+function normalizeGroqReasoningPayload(payload: unknown, thinkingLevel?: ThinkLevel): void {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+
+  const payloadObj = payload as Record<string, unknown>;
+
+  // Remove nested reasoning.effort — Groq uses top-level reasoning_effort only.
+  delete payloadObj.reasoning;
+
+  if (!thinkingLevel || thinkingLevel === "off") {
+    // When thinking is off, send "none" so reasoning is explicitly disabled.
+    payloadObj.reasoning_effort = "none";
+    return;
+  }
+
+  // Any non-"none" value must be sent as "default" for Groq.
+  const current = payloadObj.reasoning_effort;
+  payloadObj.reasoning_effort = current === "none" ? "none" : "default";
+}
+
+export function createGroqWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingLevel?: ThinkLevel,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const onPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        normalizeGroqReasoningPayload(payload, thinkingLevel);
+        return onPayload?.(payload, model);
+      },
+    });
+  };
+}
+
 export function createKilocodeWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel?: ThinkLevel,

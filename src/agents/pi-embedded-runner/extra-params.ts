@@ -31,6 +31,7 @@ import {
   resolveOpenAIServiceTier,
 } from "./openai-stream-wrappers.js";
 import {
+  createGroqWrapper,
   createKilocodeWrapper,
   createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
@@ -420,6 +421,14 @@ export function applyExtraParamsToAgent(
     const kilocodeThinkingLevel =
       modelId === "kilo/auto" || isProxyReasoningUnsupported(modelId) ? undefined : thinkingLevel;
     agent.streamFn = createKilocodeWrapper(agent.streamFn, kilocodeThinkingLevel);
+  }
+
+  if (provider === "groq") {
+    log.debug(`applying Groq reasoning_effort normalization for ${provider}/${modelId}`);
+    // Groq only accepts "none" or "default" for reasoning_effort.
+    // Other values like "low", "medium", "high" cause HTTP 400 errors.
+    // See: openclaw/openclaw#32638
+    agent.streamFn = createGroqWrapper(agent.streamFn, thinkingLevel);
   }
 
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
