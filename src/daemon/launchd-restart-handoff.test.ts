@@ -59,12 +59,17 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     const [, args] = spawnMock.mock.calls[0] as [string, string[]];
     expect(args[1]).toContain('while kill -0 "$wait_pid" >/dev/null 2>&1; do');
     expect(args[1]).toContain('if launchctl print "$service_target" >/dev/null 2>&1; then');
-    expect(args[1]).toContain('print_retry_count=$((print_retry_count - 1))');
+    expect(args[1]).toContain("print_retry_count=$((print_retry_count - 1))");
     expect(args[1]).toContain("sleep 0.2");
     expect(args[1]).toContain('launchctl enable "$service_target" >/dev/null 2>&1 || true');
-    expect(args[1]).toContain('launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1');
+    expect(args[1]).toContain(
+      'if launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1; then',
+    );
     expect(args[1]).toContain(
       'launchctl start "$service_target" >/dev/null 2>&1 || launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true',
+    );
+    expect(args[1]).toContain(
+      'else\n  launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true\nfi',
     );
     expect(unrefMock).toHaveBeenCalledTimes(1);
   });

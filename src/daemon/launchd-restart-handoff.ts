@@ -108,7 +108,7 @@ launchctl enable "$service_target" >/dev/null 2>&1 || true
 if launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1; then
   launchctl start "$service_target" >/dev/null 2>&1 || launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
 else
-  launchctl start "$service_target" >/dev/null 2>&1 || launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
+  launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
 fi
 `;
 }
