@@ -30,6 +30,9 @@ export function normalizeFeishuTarget(raw: string): string | null {
 
   const withoutProvider = stripProviderPrefix(trimmed);
   const lowered = withoutProvider.toLowerCase();
+  if (lowered.startsWith("chat_id:")) {
+    return withoutProvider.slice("chat_id:".length).trim() || null;
+  }
   if (lowered.startsWith("chat:")) {
     return withoutProvider.slice("chat:".length).trim() || null;
   }
@@ -47,6 +50,9 @@ export function normalizeFeishuTarget(raw: string): string | null {
   }
   if (lowered.startsWith("open_id:")) {
     return withoutProvider.slice("open_id:".length).trim() || null;
+  }
+  if (lowered.startsWith("user_id:")) {
+    return withoutProvider.slice("user_id:".length).trim() || null;
   }
 
   return withoutProvider;
@@ -67,11 +73,15 @@ export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "user_
   const trimmed = id.trim();
   const lowered = trimmed.toLowerCase();
   if (
+    lowered.startsWith("chat_id:") ||
     lowered.startsWith("chat:") ||
     lowered.startsWith("group:") ||
     lowered.startsWith("channel:")
   ) {
     return "chat_id";
+  }
+  if (lowered.startsWith("user_id:")) {
+    return "user_id";
   }
   if (lowered.startsWith("open_id:")) {
     return "open_id";
@@ -94,7 +104,7 @@ export function looksLikeFeishuId(raw: string): boolean {
   if (!trimmed) {
     return false;
   }
-  if (/^(chat|group|channel|user|dm|open_id):/i.test(trimmed)) {
+  if (/^(chat_id|chat|group|channel|user|dm|open_id|user_id):/i.test(trimmed)) {
     return true;
   }
   if (trimmed.startsWith(CHAT_ID_PREFIX)) {
