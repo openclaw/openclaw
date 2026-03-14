@@ -424,6 +424,7 @@ export async function runRescueWatchdogJob(params: {
       typeof remainingJobBudgetMs === "number"
         ? Math.min(DOCTOR_REPAIR_TIMEOUT_MS, remainingJobBudgetMs)
         : DOCTOR_REPAIR_TIMEOUT_MS,
+    baseEnv: {},
     env,
     signal: params.abortSignal,
   });
