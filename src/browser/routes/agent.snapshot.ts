@@ -16,6 +16,7 @@ import {
   assertBrowserNavigationResultAllowed,
 } from "../navigation-guard.js";
 import { withBrowserNavigationPolicy } from "../navigation-guard.js";
+import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import {
   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
@@ -225,7 +226,7 @@ export function registerBrowserAgentSnapshotRoutes(
       ctx,
       targetId,
       run: async ({ profileCtx, tab, cdpUrl }) => {
-        if (profileCtx.profile.driver === "existing-session") {
+        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
           await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
           const result = await navigateChromeMcpPage({
@@ -263,7 +264,7 @@ export function registerBrowserAgentSnapshotRoutes(
     if (!profileCtx) {
       return;
     }
-    if (profileCtx.profile.driver === "existing-session") {
+    if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
       return jsonError(
         res,
         501,
@@ -311,7 +312,7 @@ export function registerBrowserAgentSnapshotRoutes(
       ctx,
       targetId,
       run: async ({ profileCtx, tab, cdpUrl }) => {
-        if (profileCtx.profile.driver === "existing-session") {
+        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           if (element) {
             return jsonError(
               res,
@@ -395,7 +396,7 @@ export function registerBrowserAgentSnapshotRoutes(
       if ((plan.labels || plan.mode === "efficient") && plan.format === "aria") {
         return jsonError(res, 400, "labels/mode=efficient require format=ai");
       }
-      if (profileCtx.profile.driver === "existing-session") {
+      if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
         if (plan.selectorValue || plan.frameSelectorValue) {
           return jsonError(
             res,

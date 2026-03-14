@@ -26,7 +26,7 @@ export type CreateProfileParams = {
   name: string;
   color?: string;
   cdpUrl?: string;
-  driver?: "openclaw" | "extension";
+  driver?: "openclaw" | "extension" | "existing-session";
 };
 
 export type CreateProfileResult = {
@@ -78,7 +78,12 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
   const createProfile = async (params: CreateProfileParams): Promise<CreateProfileResult> => {
     const name = params.name.trim();
     const rawCdpUrl = params.cdpUrl?.trim() || undefined;
-    const driver = params.driver === "extension" ? "extension" : undefined;
+    const driver =
+      params.driver === "extension"
+        ? "extension"
+        : params.driver === "existing-session"
+          ? "existing-session"
+          : undefined;
 
     if (!isValidProfileName(name)) {
       throw new BrowserValidationError(
@@ -122,6 +127,11 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
           );
         }
       }
+      if (driver === "existing-session") {
+        throw new BrowserValidationError(
+          "driver=existing-session does not accept cdpUrl; it attaches via the Chrome MCP auto-connect flow",
+        );
+      }
       profileConfig = {
         cdpUrl: parsed.normalized,
         ...(driver ? { driver } : {}),
@@ -131,17 +141,26 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       if (driver === "extension") {
         throw new BrowserValidationError("driver=extension requires an explicit loopback cdpUrl");
       }
-      const usedPorts = getUsedPorts(resolvedProfiles);
-      const range = cdpPortRange(state.resolved);
-      const cdpPort = allocateCdpPort(usedPorts, range);
-      if (cdpPort === null) {
-        throw new BrowserResourceExhaustedError("no available CDP ports in range");
+      if (driver === "existing-session") {
+        // existing-session uses Chrome MCP auto-connect; no CDP port needed
+        profileConfig = {
+          driver,
+          attachOnly: true,
+          color: profileColor,
+        };
+      } else {
+        const usedPorts = getUsedPorts(resolvedProfiles);
+        const range = cdpPortRange(state.resolved);
+        const cdpPort = allocateCdpPort(usedPorts, range);
+        if (cdpPort === null) {
+          throw new BrowserResourceExhaustedError("no available CDP ports in range");
+        }
+        profileConfig = {
+          cdpPort,
+          ...(driver ? { driver } : {}),
+          color: profileColor,
+        };
       }
-      profileConfig = {
-        cdpPort,
-        ...(driver ? { driver } : {}),
-        color: profileColor,
-      };
     }
 
     const nextConfig: OpenClawConfig = {
@@ -198,7 +217,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     let deleted = false;
     const resolved = resolveProfile(state.resolved, name);
 
-    if (resolved?.cdpIsLoopback) {
+    if (resolved?.cdpIsLoopback && resolved.driver === "openclaw") {
       try {
         await ctx.forProfile(name).stopRunningBrowser();
       } catch {
