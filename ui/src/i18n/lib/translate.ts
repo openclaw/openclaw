@@ -59,6 +59,7 @@ class I18nManager {
     const initialLocale = this.resolveInitialLocale();
     if (initialLocale === DEFAULT_LOCALE) {
       this.locale = DEFAULT_LOCALE;
+      this.notify();
       return;
     }
     // Use the normal locale setter so startup locale loading follows the same
