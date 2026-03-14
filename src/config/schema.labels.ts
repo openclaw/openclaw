@@ -49,6 +49,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "diagnostics.otel.logs": "OpenTelemetry Logs Enabled",
   "diagnostics.otel.sampleRate": "OpenTelemetry Trace Sample Rate",
   "diagnostics.otel.flushIntervalMs": "OpenTelemetry Flush Interval (ms)",
+  "diagnostics.otel.includeContent": "Include Message Content in OTEL Spans",
   "diagnostics.cacheTrace.enabled": "Cache Trace Enabled",
   "diagnostics.cacheTrace.filePath": "Cache Trace File Path",
   "diagnostics.cacheTrace.includeMessages": "Cache Trace Include Messages",

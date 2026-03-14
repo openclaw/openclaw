@@ -69,11 +69,39 @@ function redactOtelAttributes(attributes: Record<string, string | number | boole
   return redactedAttributes;
 }
 
+/**
+ * Extract a user identifier from a session key.
+ * e.g. "agent:main:telegram:direct:8111140199" → "telegram:8111140199"
+ *      "agent:main:cron:heartbeat"             → "cron"
+ *      "agent:mc-gateway:main"                 → "mc-gateway"
+ */
+function extractUserFromSessionKey(sessionKey?: string): string | undefined {
+  if (!sessionKey) return undefined;
+  const parts = sessionKey.split(":");
+  // agent:AGENT_ID:CHANNEL:TYPE:CHAT_ID or agent:AGENT_ID:LABEL
+  if (parts.length >= 4 && parts[2]) {
+    const channel = parts[2];
+    const chatId = parts[parts.length - 1];
+    // If last segment looks like a numeric chat ID, use channel:chatId
+    if (/^\d+$/.test(chatId)) {
+      return `${channel}:${chatId}`;
+    }
+    return channel;
+  }
+  if (parts.length >= 2) {
+    return parts[1]; // agent ID
+  }
+  return undefined;
+}
+
 export function createDiagnosticsOtelService(): OpenClawPluginService {
   let sdk: NodeSDK | null = null;
   let logProvider: LoggerProvider | null = null;
   let stopLogTransport: (() => void) | null = null;
   let unsubscribe: (() => void) | null = null;
+  // Stuck-trace dedup: track last emission per session to avoid spam
+  const stuckTraceCooldowns = new Map<string, number>();
+  const STUCK_TRACE_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes between stuck traces per session
 
   return {
     id: "diagnostics-otel",
@@ -437,7 +465,31 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.tokens.cache_read": usage.cacheRead ?? 0,
           "openclaw.tokens.cache_write": usage.cacheWrite ?? 0,
           "openclaw.tokens.total": usage.total ?? 0,
+          // OpenTelemetry GenAI semantic conventions (recognized by Langfuse)
+          "gen_ai.request.model": evt.model ?? "unknown",
+          "gen_ai.system": evt.provider ?? "unknown",
+          "gen_ai.usage.input_tokens": usage.input ?? 0,
+          "gen_ai.usage.output_tokens": usage.output ?? 0,
         };
+        if (evt.sessionKey) {
+          spanAttrs["langfuse.session.id"] = evt.sessionKey;
+          const userId = extractUserFromSessionKey(evt.sessionKey);
+          if (userId) {
+            spanAttrs["langfuse.user.id"] = userId;
+          }
+        }
+        if (evt.costUsd) {
+          spanAttrs["gen_ai.usage.cost"] = evt.costUsd;
+        }
+        // Langfuse observation type: generation for LLM calls
+        spanAttrs["langfuse.observation.type"] = "generation";
+        // Input/output for Langfuse evaluators (when populated by gateway core)
+        if (evt.inputText) {
+          spanAttrs["langfuse.observation.input"] = evt.inputText;
+        }
+        if (evt.outputText) {
+          spanAttrs["langfuse.observation.output"] = evt.outputText;
+        }
 
         const span = spanWithDuration("openclaw.model.usage", spanAttrs, evt.durationMs);
         span.end();
@@ -519,6 +571,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       ) => {
         if (evt.sessionKey) {
           spanAttrs["openclaw.sessionKey"] = evt.sessionKey;
+          spanAttrs["langfuse.session.id"] = evt.sessionKey;
+          const userId = extractUserFromSessionKey(evt.sessionKey);
+          if (userId) {
+            spanAttrs["langfuse.user.id"] = userId;
+          }
         }
         if (evt.sessionId) {
           spanAttrs["openclaw.sessionId"] = evt.sessionId;
@@ -550,6 +607,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (evt.reason) {
           spanAttrs["openclaw.reason"] = redactSensitiveText(evt.reason);
         }
+        spanAttrs["langfuse.observation.type"] = "span";
         const span = spanWithDuration("openclaw.message.processed", spanAttrs, evt.durationMs);
         if (evt.outcome === "error" && evt.error) {
           span.setStatus({ code: SpanStatusCode.ERROR, message: redactSensitiveText(evt.error) });
@@ -596,6 +654,20 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
         if (!tracesEnabled) {
           return;
+        }
+        // Dedup: only emit one stuck trace per session per cooldown period
+        const stuckKey = evt.sessionId ?? evt.sessionKey ?? "unknown";
+        const now = Date.now();
+        const lastEmitted = stuckTraceCooldowns.get(stuckKey);
+        if (lastEmitted && now - lastEmitted < STUCK_TRACE_COOLDOWN_MS) {
+          return; // Skip — already emitted recently for this session
+        }
+        stuckTraceCooldowns.set(stuckKey, now);
+        // Cleanup old entries to prevent unbounded growth
+        if (stuckTraceCooldowns.size > 100) {
+          for (const [key, ts] of stuckTraceCooldowns) {
+            if (now - ts > STUCK_TRACE_COOLDOWN_MS * 2) stuckTraceCooldowns.delete(key);
+          }
         }
         const spanAttrs: Record<string, string | number> = { ...attrs };
         addSessionIdentityAttrs(spanAttrs, evt);
