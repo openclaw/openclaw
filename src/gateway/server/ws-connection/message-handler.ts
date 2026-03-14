@@ -83,6 +83,7 @@ import {
   evaluateMissingDeviceIdentity,
   isTrustedProxyControlUiOperatorAuth,
   resolveControlUiAuthPolicy,
+  resolveInternalBackendClientAttestation,
   shouldSkipBackendSelfPairing,
   shouldSkipControlUiPairing,
 } from "./connect-policy.js";
@@ -891,6 +892,13 @@ export function attachGatewayWsMessageHandler(params: {
         const deviceToken = device
           ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
           : null;
+        const attestedInternalBackendClient = resolveInternalBackendClientAttestation({
+          connectParams,
+          hasBrowserOriginHeader,
+          initialIsInternalBackendClient: isInternalBackendClient,
+          authMethod,
+          deviceTokenIssued: deviceToken !== null,
+        });
 
         if (role === "node") {
           const cfg = loadConfig();
@@ -995,7 +1003,7 @@ export function attachGatewayWsMessageHandler(params: {
           canvasHostUrl,
           canvasCapability,
           canvasCapabilityExpiresAtMs,
-          isInternalBackendClient,
+          isInternalBackendClient: attestedInternalBackendClient,
         };
         setSocketMaxPayload(socket, MAX_PAYLOAD_BYTES);
         setClient(nextClient);

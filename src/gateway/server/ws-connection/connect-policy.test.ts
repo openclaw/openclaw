@@ -5,6 +5,7 @@ import {
   evaluateMissingDeviceIdentity,
   isTrustedProxyControlUiOperatorAuth,
   resolveControlUiAuthPolicy,
+  resolveInternalBackendClientAttestation,
   shouldSkipBackendSelfPairing,
   shouldSkipControlUiPairing,
 } from "./connect-policy.js";
@@ -640,6 +641,58 @@ describe("ws connect policy", () => {
         sharedAuthOk: false,
         authOk: false,
         authMethod: "none",
+      }),
+    ).toBe(false);
+  });
+
+  test("promotes bootstrap-paired backend clients to internal attestation", () => {
+    const backendConnect: ConnectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+        version: "1.0.0",
+        platform: "node",
+      },
+      minProtocol: 1,
+      maxProtocol: 1,
+    };
+
+    expect(
+      resolveInternalBackendClientAttestation({
+        connectParams: backendConnect,
+        hasBrowserOriginHeader: false,
+        initialIsInternalBackendClient: false,
+        authMethod: "bootstrap-token",
+        deviceTokenIssued: true,
+      }),
+    ).toBe(true);
+
+    expect(
+      resolveInternalBackendClientAttestation({
+        connectParams: backendConnect,
+        hasBrowserOriginHeader: true,
+        initialIsInternalBackendClient: false,
+        authMethod: "bootstrap-token",
+        deviceTokenIssued: true,
+      }),
+    ).toBe(false);
+
+    expect(
+      resolveInternalBackendClientAttestation({
+        connectParams: {
+          client: {
+            id: "desktop",
+            mode: GATEWAY_CLIENT_MODES.TEST,
+            version: "1.0.0",
+            platform: "node",
+          },
+          minProtocol: 1,
+          maxProtocol: 1,
+        },
+        hasBrowserOriginHeader: false,
+        initialIsInternalBackendClient: false,
+        authMethod: "bootstrap-token",
+        deviceTokenIssued: true,
       }),
     ).toBe(false);
   });

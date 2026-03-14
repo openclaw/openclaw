@@ -113,6 +113,25 @@ export function shouldSkipBackendSelfPairing(params: {
   );
 }
 
+export function resolveInternalBackendClientAttestation(params: {
+  connectParams: ConnectParams;
+  hasBrowserOriginHeader: boolean;
+  initialIsInternalBackendClient: boolean;
+  authMethod: GatewayAuthResult["method"];
+  deviceTokenIssued: boolean;
+}): boolean {
+  if (params.initialIsInternalBackendClient) {
+    return true;
+  }
+  const isGatewayBackendClient =
+    params.connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
+    params.connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND;
+  if (!isGatewayBackendClient || params.hasBrowserOriginHeader) {
+    return false;
+  }
+  return params.authMethod === "bootstrap-token" && params.deviceTokenIssued;
+}
+
 export type MissingDeviceIdentityDecision =
   | { kind: "allow" }
   | { kind: "reject-control-ui-insecure-auth" }
