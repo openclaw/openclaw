@@ -19,6 +19,7 @@ vi.mock("../logging/diagnostic.js", () => ({
 
 import {
   clearCommandLane,
+  CommandLaneAbortedError,
   CommandLaneClearedError,
   enqueueCommand,
   enqueueCommandInLane,
@@ -372,5 +373,92 @@ describe("command queue", () => {
       release();
       commandQueueA.resetAllLanes();
     }
+  });
+});
+
+describe("abort-aware queue entries", () => {
+  const lane = "abort-test";
+
+  beforeEach(() => {
+    resetAllLanes();
+    setCommandLaneConcurrency(lane, 1);
+  });
+
+  it("rejects immediately if signal is already aborted", async () => {
+    const ac = new AbortController();
+    ac.abort("pre-aborted");
+    await expect(
+      enqueueCommandInLane(lane, async () => "should-not-run", { signal: ac.signal }),
+    ).rejects.toBeInstanceOf(CommandLaneAbortedError);
+  });
+
+  it("removes queued entry and rejects when signal fires before dequeue", async () => {
+    const ac = new AbortController();
+    // Block the lane with a long-running task so the second entry stays queued.
+    const deferred = createDeferred();
+    const first = enqueueCommandInLane(lane, async () => {
+      await deferred.promise;
+      return "first";
+    });
+    // Second entry queued behind the first, with abort signal.
+    const second = enqueueCommandInLane(lane, async () => "should-not-run", {
+      signal: ac.signal,
+    });
+
+    // Abort while still queued.
+    ac.abort("timed-out");
+
+    // The second entry should reject with CommandLaneAbortedError.
+    await expect(second).rejects.toBeInstanceOf(CommandLaneAbortedError);
+
+    // The first entry should still complete normally.
+    deferred.resolve();
+    await expect(first).resolves.toBe("first");
+  });
+
+  it("does not remove an already-active task when signal fires after dequeue", async () => {
+    const ac = new AbortController();
+    const deferred = createDeferred();
+    // Single task that starts running immediately (lane concurrency = 1, no queue).
+    const task = enqueueCommandInLane(
+      lane,
+      async () => {
+        await deferred.promise;
+        return "completed";
+      },
+      { signal: ac.signal },
+    );
+
+    // Wait a tick so the task is dequeued and running.
+    await Promise.resolve();
+
+    // Abort after task is already active — should NOT reject the running task.
+    ac.abort("late-abort");
+
+    deferred.resolve();
+    await expect(task).resolves.toBe("completed");
+  });
+
+  it("aborted entry does not execute when the lane later drains", async () => {
+    const ac = new AbortController();
+    const taskFn = vi.fn(async () => "ran");
+    const deferred = createDeferred();
+
+    const first = enqueueCommandInLane(lane, async () => {
+      await deferred.promise;
+      return "first";
+    });
+    const second = enqueueCommandInLane(lane, taskFn, { signal: ac.signal });
+
+    // Abort the second entry while it's queued.
+    ac.abort();
+    await expect(second).rejects.toBeInstanceOf(CommandLaneAbortedError);
+
+    // Now let the first task finish and the lane drain.
+    deferred.resolve();
+    await expect(first).resolves.toBe("first");
+
+    // The aborted task should never have been called.
+    expect(taskFn).not.toHaveBeenCalled();
   });
 });

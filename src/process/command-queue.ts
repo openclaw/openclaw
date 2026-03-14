@@ -165,29 +165,80 @@ export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
   drainLane(cleaned);
 }
 
+/**
+ * Dedicated error type thrown when a queued command is aborted via an
+ * `AbortSignal` before it was dequeued for execution.
+ */
+export class CommandLaneAbortedError extends Error {
+  constructor(lane?: string, reason?: unknown) {
+    super(
+      lane
+        ? `Command lane "${lane}" entry aborted before execution`
+        : "Command lane entry aborted before execution",
+    );
+    this.name = "CommandLaneAbortedError";
+    if (reason !== undefined) {
+      this.cause = reason;
+    }
+  }
+}
+
 export function enqueueCommandInLane<T>(
   lane: string,
   task: () => Promise<T>,
   opts?: {
     warnAfterMs?: number;
     onWait?: (waitMs: number, queuedAhead: number) => void;
+    signal?: AbortSignal;
   },
 ): Promise<T> {
   if (queueState.gatewayDraining) {
     return Promise.reject(new GatewayDrainingError());
   }
+  const signal = opts?.signal;
+  if (signal?.aborted) {
+    return Promise.reject(new CommandLaneAbortedError(lane, signal.reason));
+  }
   const cleaned = lane.trim() || CommandLane.Main;
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
   return new Promise<T>((resolve, reject) => {
-    state.queue.push({
+    const entry: QueueEntry = {
       task: () => task(),
       resolve: (value) => resolve(value as T),
       reject,
       enqueuedAt: Date.now(),
       warnAfterMs,
       onWait: opts?.onWait,
-    });
+    };
+    state.queue.push(entry);
+
+    // If the caller provides an AbortSignal, listen for abort and remove
+    // the entry from the queue if it hasn't been dequeued yet.
+    if (signal) {
+      const onAbort = () => {
+        const idx = state.queue.indexOf(entry);
+        if (idx !== -1) {
+          state.queue.splice(idx, 1);
+          reject(new CommandLaneAbortedError(cleaned, signal.reason));
+        }
+        // If idx === -1, the entry was already dequeued and is either running
+        // or completed — do nothing (the task itself should check the signal).
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      // Clean up the listener when the promise settles to avoid leaks.
+      const originalResolve = entry.resolve;
+      const originalReject = entry.reject;
+      entry.resolve = (value) => {
+        signal.removeEventListener("abort", onAbort);
+        originalResolve(value);
+      };
+      entry.reject = (reason) => {
+        signal.removeEventListener("abort", onAbort);
+        originalReject(reason);
+      };
+    }
+
     logLaneEnqueue(cleaned, state.queue.length + state.activeTaskIds.size);
     drainLane(cleaned);
   });
