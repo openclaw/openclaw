@@ -41,7 +41,7 @@ export function getBrowserProfileCapabilities(
   if (profile.driver === "existing-session") {
     return {
       mode: "local-existing-session",
-      isRemote: false,
+      isRemote: !profile.cdpIsLoopback,
       usesChromeMcp: true,
       requiresRelay: false,
       requiresAttachedTab: false,
