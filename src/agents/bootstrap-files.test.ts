@@ -25,6 +25,27 @@ function registerExtraBootstrapFileHook() {
   });
 }
 
+function registerOwnerFileReintroductionHook() {
+  registerInternalHook("agent:bootstrap", (event) => {
+    const context = event.context as AgentBootstrapHookContext;
+    context.bootstrapFiles = [
+      ...context.bootstrapFiles,
+      {
+        name: "USER.md",
+        path: path.join(context.workspaceDir, "USER.md"),
+        content: "private user info",
+        missing: false,
+      } as unknown as WorkspaceBootstrapFile,
+      {
+        name: "MEMORY.md",
+        path: path.join(context.workspaceDir, "MEMORY.md"),
+        content: "private memory",
+        missing: false,
+      } as unknown as WorkspaceBootstrapFile,
+    ];
+  });
+}
+
 function registerMalformedBootstrapFileHook() {
   registerInternalHook("agent:bootstrap", (event) => {
     const context = event.context as AgentBootstrapHookContext;
@@ -63,6 +84,23 @@ describe("resolveBootstrapFilesForRun", () => {
     const files = await resolveBootstrapFilesForRun({ workspaceDir });
 
     expect(files.some((file) => file.path === path.join(workspaceDir, "EXTRA.md"))).toBe(true);
+  });
+
+  it("strips owner-only files re-added by hooks for non-owner senders", async () => {
+    registerOwnerFileReintroductionHook();
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "agents config", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      senderIsOwner: false,
+    });
+
+    const fileNames = files.map((f) => f.name);
+    expect(fileNames).not.toContain("USER.md");
+    expect(fileNames).not.toContain("MEMORY.md");
+    expect(fileNames).toContain("AGENTS.md");
   });
 
   it("drops malformed hook files with missing/invalid paths", async () => {
@@ -125,5 +163,53 @@ describe("resolveBootstrapContextForRun", () => {
     });
 
     expect(files).toEqual([]);
+  });
+
+  it("excludes owner-only files when senderIsOwner is false", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "private user info", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), "identity info", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "agents config", "utf8");
+
+    const result = await resolveBootstrapContextForRun({
+      workspaceDir,
+      senderIsOwner: false,
+    });
+
+    const fileNames = result.bootstrapFiles.map((f) => f.name);
+    expect(fileNames).not.toContain("USER.md");
+    expect(fileNames).not.toContain("MEMORY.md");
+    expect(fileNames).not.toContain("SOUL.md");
+    expect(fileNames).not.toContain("IDENTITY.md");
+    expect(fileNames).toContain("AGENTS.md");
+  });
+
+  it("includes all files when senderIsOwner is true", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "private user info", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "agents config", "utf8");
+
+    const result = await resolveBootstrapContextForRun({
+      workspaceDir,
+      senderIsOwner: true,
+    });
+
+    const fileNames = result.bootstrapFiles.map((f) => f.name);
+    expect(fileNames).toContain("USER.md");
+    expect(fileNames).toContain("SOUL.md");
+    expect(fileNames).toContain("AGENTS.md");
+  });
+
+  it("includes all files when senderIsOwner is undefined (backwards compat)", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "private user info", "utf8");
+
+    const result = await resolveBootstrapContextForRun({ workspaceDir });
+
+    const fileNames = result.bootstrapFiles.map((f) => f.name);
+    expect(fileNames).toContain("USER.md");
   });
 });

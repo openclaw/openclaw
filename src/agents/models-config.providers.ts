@@ -8,11 +8,11 @@ import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
-import { normalizeGoogleModelId } from "./model-id-normalization.js";
 import {
   buildCloudflareAiGatewayModelDefinition,
   resolveCloudflareAiGatewayBaseUrl,
 } from "./cloudflare-ai-gateway.js";
+import { normalizeGoogleModelId } from "./model-id-normalization.js";
 import {
   buildHuggingfaceProvider,
   buildKilocodeProviderWithDiscovery,

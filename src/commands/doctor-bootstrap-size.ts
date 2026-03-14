@@ -37,6 +37,7 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
   const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
     workspaceDir,
     config: cfg,
+    senderIsOwner: true,
   });
   const stats = buildBootstrapInjectionStats({
     bootstrapFiles,
