@@ -1,17 +1,17 @@
 import type { z } from "zod";
 
 type RequireOpenAllowFromFn = (params: {
-  policy: unknown;
-  allowFrom: unknown;
+  policy?: string;
+  allowFrom?: Array<string | number>;
   ctx: z.RefinementCtx;
-  path: string[];
+  path: Array<string | number>;
   message: string;
 }) => void;
 
 export function requireChannelOpenAllowFrom(params: {
   channel: string;
-  policy: unknown;
-  allowFrom: unknown;
+  policy?: string;
+  allowFrom?: Array<string | number>;
   ctx: z.RefinementCtx;
   requireOpenAllowFrom: RequireOpenAllowFromFn;
 }) {

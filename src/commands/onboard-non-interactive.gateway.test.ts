@@ -5,6 +5,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
 import { createThrowingRuntime, readJsonFile } from "./onboard-non-interactive.test-helpers.js";
+import type { installGatewayDaemonNonInteractive } from "./onboard-non-interactive/local/daemon-install.js";
 
 const gatewayClientCalls: Array<{
   url?: string;
@@ -14,8 +15,9 @@ const gatewayClientCalls: Array<{
   onClose?: (code: number, reason: string) => void;
 }> = [];
 const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
+type InstallGatewayDaemonResult = Awaited<ReturnType<typeof installGatewayDaemonNonInteractive>>;
 const installGatewayDaemonNonInteractiveMock = vi.hoisted(() =>
-  vi.fn(async () => ({ installed: true as const })),
+  vi.fn(async (): Promise<InstallGatewayDaemonResult> => ({ installed: true })),
 );
 const gatewayServiceMock = vi.hoisted(() => ({
   label: "LaunchAgent",

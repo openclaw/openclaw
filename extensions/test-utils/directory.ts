@@ -1,3 +1,5 @@
+import type { ChannelDirectoryAdapter } from "../../src/channels/plugins/types.js";
+
 export function createDirectoryTestRuntime() {
   return {
     log: () => {},
@@ -8,15 +10,7 @@ export function createDirectoryTestRuntime() {
   };
 }
 
-export function expectDirectorySurface(
-  directory:
-    | {
-        listPeers?: unknown;
-        listGroups?: unknown;
-      }
-    | null
-    | undefined,
-) {
+export function expectDirectorySurface(directory: ChannelDirectoryAdapter | null | undefined) {
   if (!directory) {
     throw new Error("expected directory");
   }
@@ -27,7 +21,7 @@ export function expectDirectorySurface(
     throw new Error("expected listGroups");
   }
   return directory as {
-    listPeers: NonNullable<typeof directory.listPeers>;
-    listGroups: NonNullable<typeof directory.listGroups>;
+    listPeers: NonNullable<ChannelDirectoryAdapter["listPeers"]>;
+    listGroups: NonNullable<ChannelDirectoryAdapter["listGroups"]>;
   };
 }
