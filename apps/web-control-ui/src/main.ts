@@ -827,6 +827,19 @@ class WebControlUiApp extends LitElement {
     return token ? `http://localhost:4173/#token=${token}` : "http://localhost:4173/#token=<gateway-token>";
   }
 
+  private filteredSessionRows() {
+    const query = this.sessionSearch.trim().toLowerCase();
+    if (!query) {
+      return this.sessionRows;
+    }
+    return this.sessionRows.filter((session) => {
+      const haystack = [session.key, session.label ?? "", session.kind ?? "", session.model ?? ""]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }
+
   private formatSessionTime(updatedAt?: number | null) {
     if (!updatedAt) {
       return "-";
@@ -1114,8 +1127,18 @@ class WebControlUiApp extends LitElement {
                   <button class="secondary" type="button" @click=${() => this.loadSessionsList()} ?disabled=${this.sessionsLoading}>${this.sessionsLoading ? "刷新中..." : "刷新会话列表"}</button>
                 </div>
                 ${this.sessionsError ? html`<p style="margin-bottom:12px;color:#fca5a5;">${this.sessionsError}</p>` : null}
+                <div class="memory-item" style="margin-bottom: 12px;">
+                  <span class="label">搜索会话</span>
+                  <input
+                    .value=${this.sessionSearch}
+                    @input=${(event: InputEvent) => {
+                      this.sessionSearch = (event.target as HTMLInputElement).value;
+                    }}
+                    placeholder="按 key / label / kind / model 过滤"
+                  />
+                </div>
                 <div class="session-browser">
-                  ${this.sessionRows.map(
+                  ${this.filteredSessionRows().map(
                     (session) => html`
                       <button
                         type="button"
