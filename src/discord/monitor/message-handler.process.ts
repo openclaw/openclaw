@@ -500,7 +500,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     if (chunks.length !== 1) {
       return undefined;
     }
-    const previewText = stripLeadingEmptyLines(chunks[0]);
+    const previewText = stripLeadingEmptyLines(chunks[0]).trimEnd();
     if (!previewText.trim()) {
       return undefined;
     }
@@ -522,7 +522,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     // Strip reasoning/thinking tags that may leak through the stream.
     const cleaned = stripLeadingEmptyLines(
       stripReasoningTagsFromText(text, { mode: "strict", trim: "none" }),
-    );
+    ).trimEnd();
     // Skip pure-reasoning messages (e.g. "Reasoning:\n…") that contain no answer text.
     if (!cleaned.trim() || cleaned.startsWith("Reasoning:\n")) {
       return;
