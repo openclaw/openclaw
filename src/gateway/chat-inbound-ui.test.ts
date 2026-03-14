@@ -33,6 +33,7 @@ describe("chat.inbound UI event handler", () => {
     const host = createMockHost();
     expect(() =>
       handleGatewayEvent(host, {
+        type: "event",
         event: "chat.inbound",
         payload: {
           sessionKey: "agent:main:telegram:1234",
@@ -49,6 +50,7 @@ describe("chat.inbound UI event handler", () => {
       .request;
 
     handleGatewayEvent(host, {
+      type: "event",
       event: "chat.inbound",
       payload: {
         sessionKey: "agent:main:telegram:1234",
@@ -67,6 +69,7 @@ describe("chat.inbound UI event handler", () => {
       .request;
 
     handleGatewayEvent(host, {
+      type: "event",
       event: "chat.inbound",
       payload: {
         sessionKey: "agent:main:telegram:1234",
@@ -82,6 +85,7 @@ describe("chat.inbound UI event handler", () => {
   it("should debounce multiple rapid chat.inbound events", () => {
     const host = createMockHost();
     const evt = {
+      type: "event" as const,
       event: "chat.inbound",
       payload: {
         sessionKey: "agent:main:telegram:1234",
