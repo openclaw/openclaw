@@ -798,6 +798,28 @@ export async function runCapability(params: {
   if (shouldLogVerbose()) {
     logVerbose(`Media understanding ${formatDecisionSummary(decision)}`);
   }
+  if (capability === "image" && outputs.length === 0 && selected.length > 0) {
+    const allAttempts = attachmentDecisions.flatMap((a) => a.attempts);
+    const failedAttempts = allAttempts.filter(
+      (a) => a.outcome !== "skipped" && a.outcome !== "success",
+    );
+    if (failedAttempts.length > 0) {
+      const reasons = failedAttempts
+        .map((a) =>
+          a.type === "provider"
+            ? `${a.provider}/${a.model ?? "?"}: ${a.outcome}`
+            : `cli: ${a.outcome}`,
+        )
+        .join(", ");
+      console.warn(
+        `[media-understanding] image understanding failed for ${selected.length} attachment(s) — image(s) will not reach the model. Tried: ${reasons}`,
+      );
+    } else if (allAttempts.length === 0) {
+      console.warn(
+        `[media-understanding] no image understanding providers resolved — image(s) will not reach the model unless the primary model supports vision natively`,
+      );
+    }
+  }
   return {
     outputs,
     decision,
