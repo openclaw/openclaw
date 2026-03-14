@@ -296,9 +296,28 @@ export async function processMessage(params: {
         )
       : undefined;
 
+  // In DMs, prefix BodyForAgent with the sender name so the LLM can distinguish
+  // who said what.  Groups already have sender attribution via formatInboundEnvelope.
+  // For outbound (fromMe) messages, msg.from is the *contact's* address, not the
+  // owner's — use selfE164 instead.  Sanitize the name to prevent bracket/newline
+  // injection from user-controlled pushName values.
+  const dmSenderPrefix =
+    params.msg.chatType !== "group"
+      ? (() => {
+          const rawName = params.msg.fromMe
+            ? params.msg.senderName || params.msg.selfE164 || "Me"
+            : params.msg.senderName || params.msg.from || "Unknown";
+          const safeName =
+            rawName
+              .replace(/[[\]\r\n]/g, "")
+              .replace(/\s+/g, " ")
+              .trim() || "Unknown";
+          return `[${safeName}]: `;
+        })()
+      : "";
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
-    BodyForAgent: params.msg.body,
+    BodyForAgent: `${dmSenderPrefix}${params.msg.body}`,
     InboundHistory: inboundHistory,
     RawBody: params.msg.body,
     CommandBody: params.msg.body,
