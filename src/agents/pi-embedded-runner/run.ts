@@ -628,7 +628,7 @@ export async function runEmbeddedPiAgent(
         } else {
           authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
         }
-        lastProfileId = apiKeyInfo.profileId;
+        lastProfileId = resolvedProfileId;
       };
 
       const advanceAuthProfile = async (): Promise<boolean> => {
@@ -1566,6 +1566,7 @@ export async function runEmbeddedPiAgent(
           }
           return {
             payloads: payloads.length ? payloads : undefined,
+            finalAuthProfileId: lastProfileId,
             meta: {
               durationMs: Date.now() - started,
               agentMeta,

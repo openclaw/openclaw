@@ -7,6 +7,7 @@ import * as cliRunnerModule from "../agents/cli-runner.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
+import type { EmbeddedPiRunResult } from "../agents/pi-embedded-runner/types.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import * as commandSecretGatewayModule from "../cli/command-secret-gateway.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -686,6 +687,61 @@ describe("agentCommand", () => {
       expect(entry?.fallbackNoticeSelectedModel).toBeUndefined();
       expect(entry?.fallbackNoticeActiveModel).toBeUndefined();
       expect(entry?.fallbackNoticeReason).toBeUndefined();
+    });
+  });
+
+  it("persists final rotated auth profile after a successful run", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:main": {
+          sessionId: "sess-rotated-profile",
+          updatedAt: Date.now(),
+          authProfileOverride: "openai-codex:default",
+          authProfileOverrideSource: "auto",
+          modelProvider: "openai-codex",
+          model: "gpt-5.4",
+        },
+      });
+      mockConfig(home, store, {
+        model: { primary: "openai-codex/gpt-5.4" },
+        auth: {
+          profiles: {
+            "openai-codex:default": { provider: "openai-codex", type: "oauth", access: "a" },
+            "openai-codex:account2": { provider: "openai-codex", type: "oauth", access: "b" },
+          },
+          order: {
+            "openai-codex": ["openai-codex:default", "openai-codex:account2"],
+          },
+        },
+      });
+
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce({
+        payloads: [{ text: "ok" }],
+        finalAuthProfileId: "openai-codex:account2",
+        meta: {
+          durationMs: 10,
+          aborted: false,
+          agentMeta: {
+            provider: "openai-codex",
+            model: "gpt-5.4",
+            sessionId: "sess-rotated-profile",
+          },
+        },
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [],
+        successfulCronAdds: 0,
+      } as unknown as EmbeddedPiRunResult);
+
+      await runAgentWithSessionKey("agent:main:main");
+
+      const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<string, unknown>;
+      const entry = saved["agent:main:main"];
+      expect(entry?.authProfileOverride).toBe("openai-codex:account2");
+      expect(entry?.authProfileOverrideSource).toBe("auto");
+      expect(entry?.authProfileOverrideCompactionCount).toBeUndefined();
     });
   });
 
