@@ -12,6 +12,7 @@ import {
   mergeAllowFromEntries,
   normalizeAccountId,
   promptSingleChannelSecretInput,
+  runSingleChannelSecretStep,
   resolveAccountIdForConfigure,
   setTopLevelChannelDmPolicyWithAllowFrom,
 } from "openclaw/plugin-sdk/zalo";
@@ -255,80 +256,66 @@ export const zaloOnboardingAdapter: ChannelOnboardingAdapter = {
     const hasConfigToken = Boolean(
       hasConfiguredSecretInput(resolvedAccount.config.botToken) || resolvedAccount.config.tokenFile,
     );
-    const tokenPromptState = buildSingleChannelSecretPromptState({
-      accountConfigured,
-      hasConfigToken,
-      allowEnv,
-      envValue: process.env.ZALO_BOT_TOKEN,
-    });
-
-    let token: SecretInput | null = null;
-    if (!accountConfigured) {
-      await noteZaloTokenHelp(prompter);
-    }
-    const tokenResult = await promptSingleChannelSecretInput({
+    const tokenStep = await runSingleChannelSecretStep({
       cfg: next,
       prompter,
       providerHint: "zalo",
       credentialLabel: "bot token",
-      accountConfigured: tokenPromptState.accountConfigured,
-      canUseEnv: tokenPromptState.canUseEnv,
-      hasConfigToken: tokenPromptState.hasConfigToken,
+      accountConfigured,
+      hasConfigToken,
+      allowEnv,
+      envValue: process.env.ZALO_BOT_TOKEN,
       envPrompt: "ZALO_BOT_TOKEN detected. Use env var?",
       keepPrompt: "Zalo token already configured. Keep it?",
       inputPrompt: "Enter Zalo bot token",
       preferredEnvVar: "ZALO_BOT_TOKEN",
-    });
-    if (tokenResult.action === "set") {
-      token = tokenResult.value;
-    }
-    if (tokenResult.action === "use-env" && zaloAccountId === DEFAULT_ACCOUNT_ID) {
-      next = {
-        ...next,
-        channels: {
-          ...next.channels,
-          zalo: {
-            ...next.channels?.zalo,
-            enabled: true,
-          },
-        },
-      } as OpenClawConfig;
-    }
-
-    if (token) {
-      if (zaloAccountId === DEFAULT_ACCOUNT_ID) {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            zalo: {
-              ...next.channels?.zalo,
-              enabled: true,
-              botToken: token,
-            },
-          },
-        } as OpenClawConfig;
-      } else {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            zalo: {
-              ...next.channels?.zalo,
-              enabled: true,
-              accounts: {
-                ...next.channels?.zalo?.accounts,
-                [zaloAccountId]: {
-                  ...next.channels?.zalo?.accounts?.[zaloAccountId],
+      onMissingConfigured: async () => await noteZaloTokenHelp(prompter),
+      applyUseEnv: async (cfg) =>
+        zaloAccountId === DEFAULT_ACCOUNT_ID
+          ? ({
+              ...cfg,
+              channels: {
+                ...cfg.channels,
+                zalo: {
+                  ...cfg.channels?.zalo,
                   enabled: true,
-                  botToken: token,
                 },
               },
-            },
-          },
-        } as OpenClawConfig;
-      }
-    }
+            } as OpenClawConfig)
+          : cfg,
+      applySet: async (cfg, value) =>
+        zaloAccountId === DEFAULT_ACCOUNT_ID
+          ? ({
+              ...cfg,
+              channels: {
+                ...cfg.channels,
+                zalo: {
+                  ...cfg.channels?.zalo,
+                  enabled: true,
+                  botToken: value,
+                },
+              },
+            } as OpenClawConfig)
+          : ({
+              ...cfg,
+              channels: {
+                ...cfg.channels,
+                zalo: {
+                  ...cfg.channels?.zalo,
+                  enabled: true,
+                  accounts: {
+                    ...cfg.channels?.zalo?.accounts,
+                    [zaloAccountId]: {
+                      ...cfg.channels?.zalo?.accounts?.[zaloAccountId],
+                      enabled: true,
+                      botToken: value,
+                    },
+                  },
+                },
+              },
+            } as OpenClawConfig),
+    });
+    next = tokenStep.cfg;
 
     const wantsWebhook = await prompter.confirm({
       message: "Use webhook mode for Zalo?",

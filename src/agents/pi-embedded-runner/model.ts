@@ -8,6 +8,10 @@ import { buildModelAliasLines } from "../model-alias-lines.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { resolveForwardCompatModel } from "../model-forward-compat.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
+import {
+  buildSuppressedBuiltInModelError,
+  shouldSuppressBuiltInModel,
+} from "../model-suppression.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 
@@ -81,20 +85,30 @@ function applyConfiguredProviderOverrides(params: {
   const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
     stripSecretRefMarkers: true,
   });
-  const providerHeaders = sanitizeModelHeaders(providerConfig.headers);
-  const configuredHeaders = sanitizeModelHeaders(configuredModel?.headers);
+  const providerHeaders = sanitizeModelHeaders(providerConfig.headers, {
+    stripSecretRefMarkers: true,
+  });
+  const configuredHeaders = sanitizeModelHeaders(configuredModel?.headers, {
+    stripSecretRefMarkers: true,
+  });
   if (!configuredModel && !providerConfig.baseUrl && !providerConfig.api && !providerHeaders) {
     return {
       ...discoveredModel,
       headers: discoveredHeaders,
     };
   }
+  const resolvedInput = configuredModel?.input ?? discoveredModel.input;
+  const normalizedInput =
+    Array.isArray(resolvedInput) && resolvedInput.length > 0
+      ? resolvedInput.filter((item) => item === "text" || item === "image")
+      : (["text"] as Array<"text" | "image">);
+
   return {
     ...discoveredModel,
     api: configuredModel?.api ?? providerConfig.api ?? discoveredModel.api,
     baseUrl: providerConfig.baseUrl ?? discoveredModel.baseUrl,
     reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
-    input: configuredModel?.input ?? discoveredModel.input,
+    input: normalizedInput,
     cost: configuredModel?.cost ?? discoveredModel.cost,
     contextWindow: configuredModel?.contextWindow ?? discoveredModel.contextWindow,
     maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
@@ -118,14 +132,18 @@ export function buildInlineProviderModels(
     if (!trimmed) {
       return [];
     }
-    const providerHeaders = sanitizeModelHeaders(entry?.headers);
+    const providerHeaders = sanitizeModelHeaders(entry?.headers, {
+      stripSecretRefMarkers: true,
+    });
     return (entry?.models ?? []).map((model) => ({
       ...model,
       provider: trimmed,
       baseUrl: entry?.baseUrl,
       api: model.api ?? entry?.api,
       headers: (() => {
-        const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers);
+        const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
+          stripSecretRefMarkers: true,
+        });
         if (!providerHeaders && !modelHeaders) {
           return undefined;
         }
@@ -145,6 +163,9 @@ export function resolveModelWithRegistry(params: {
   cfg?: OpenClawConfig;
 }): Model<Api> | undefined {
   const { provider, modelId, modelRegistry, cfg } = params;
+  if (shouldSuppressBuiltInModel({ provider, id: modelId })) {
+    return undefined;
+  }
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
 
@@ -205,8 +226,12 @@ export function resolveModelWithRegistry(params: {
   }
 
   const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
-  const providerHeaders = sanitizeModelHeaders(providerConfig?.headers);
-  const modelHeaders = sanitizeModelHeaders(configuredModel?.headers);
+  const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
+    stripSecretRefMarkers: true,
+  });
+  const modelHeaders = sanitizeModelHeaders(configuredModel?.headers, {
+    stripSecretRefMarkers: true,
+  });
   if (providerConfig || modelId.startsWith("mock-")) {
     return normalizeResolvedModel({
       provider,
@@ -285,6 +310,10 @@ const LOCAL_PROVIDER_HINTS: Record<string, string> = {
 };
 
 function buildUnknownModelError(provider: string, modelId: string): string {
+  const suppressed = buildSuppressedBuiltInModelError({ provider, id: modelId });
+  if (suppressed) {
+    return suppressed;
+  }
   const base = `Unknown model: ${provider}/${modelId}`;
   const hint = LOCAL_PROVIDER_HINTS[provider.toLowerCase()];
   return hint ? `${base}. ${hint}` : base;

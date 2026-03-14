@@ -230,6 +230,21 @@ describe("getApiKeyForModel", () => {
     });
   });
 
+  it("resolves Model Studio API key from env", async () => {
+    await withEnvAsync(
+      { [envVar("MODELSTUDIO", "API", "KEY")]: "modelstudio-test-key" },
+      async () => {
+        // pragma: allowlist secret
+        const resolved = await resolveApiKeyForProvider({
+          provider: "modelstudio",
+          store: { version: 1, profiles: {} },
+        });
+        expect(resolved.apiKey).toBe("modelstudio-test-key");
+        expect(resolved.source).toContain("MODELSTUDIO_API_KEY");
+      },
+    );
+  });
+
   it("resolves synthetic local auth key for configured ollama provider without apiKey", async () => {
     await withEnvAsync({ OLLAMA_API_KEY: undefined }, async () => {
       const resolved = await resolveApiKeyForProvider({
@@ -394,6 +409,20 @@ describe("getApiKeyForModel", () => {
         const resolved = resolveEnvApiKey("huggingface");
         expect(resolved?.apiKey).toBe("hf_abc123");
         expect(resolved?.source).toContain("HF_TOKEN");
+      },
+    );
+  });
+
+  it("resolveEnvApiKey('opencode-go') falls back to OPENCODE_ZEN_API_KEY", async () => {
+    await withEnvAsync(
+      {
+        OPENCODE_API_KEY: undefined,
+        OPENCODE_ZEN_API_KEY: "sk-opencode-zen-fallback", // pragma: allowlist secret
+      },
+      async () => {
+        const resolved = resolveEnvApiKey("opencode-go");
+        expect(resolved?.apiKey).toBe("sk-opencode-zen-fallback");
+        expect(resolved?.source).toContain("OPENCODE_ZEN_API_KEY");
       },
     );
   });

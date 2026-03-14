@@ -14,15 +14,14 @@ import type { WizardPrompter } from "../../../wizard/prompts.js";
 import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
 import { configureChannelAccessWithAllowlist } from "./channel-access-configure.js";
 import {
-  buildSingleChannelSecretPromptState,
   parseMentionOrPrefixedId,
   noteChannelLookupFailure,
   noteChannelLookupSummary,
   patchChannelConfigForAccount,
   promptLegacyChannelAllowFrom,
-  promptSingleChannelSecretInput,
   resolveAccountIdForConfigure,
   resolveOnboardingAccountId,
+  runSingleChannelSecretStep,
   setAccountGroupPolicyForChannel,
   setLegacyChannelDmPolicyWithAllowFrom,
   setOnboardingChannelEnabled,
@@ -235,18 +234,6 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
     const accountConfigured =
       Boolean(resolvedAccount.botToken && resolvedAccount.appToken) || hasConfigTokens;
     const allowEnv = slackAccountId === DEFAULT_ACCOUNT_ID;
-    const botPromptState = buildSingleChannelSecretPromptState({
-      accountConfigured: Boolean(resolvedAccount.botToken) || hasConfiguredBotToken,
-      hasConfigToken: hasConfiguredBotToken,
-      allowEnv,
-      envValue: process.env.SLACK_BOT_TOKEN,
-    });
-    const appPromptState = buildSingleChannelSecretPromptState({
-      accountConfigured: Boolean(resolvedAccount.appToken) || hasConfiguredAppToken,
-      hasConfigToken: hasConfiguredAppToken,
-      allowEnv,
-      envValue: process.env.SLACK_APP_TOKEN,
-    });
     let resolvedBotTokenForAllowlist = resolvedAccount.botToken;
     const slackBotName = String(
       await prompter.text({
@@ -257,54 +244,56 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
     if (!accountConfigured) {
       await noteSlackTokenHelp(prompter, slackBotName);
     }
-    const botTokenResult = await promptSingleChannelSecretInput({
+    const botTokenStep = await runSingleChannelSecretStep({
       cfg: next,
       prompter,
       providerHint: "slack-bot",
       credentialLabel: "Slack bot token",
       secretInputMode: options?.secretInputMode,
-      accountConfigured: botPromptState.accountConfigured,
-      canUseEnv: botPromptState.canUseEnv,
-      hasConfigToken: botPromptState.hasConfigToken,
+      accountConfigured: Boolean(resolvedAccount.botToken) || hasConfiguredBotToken,
+      hasConfigToken: hasConfiguredBotToken,
+      allowEnv,
+      envValue: process.env.SLACK_BOT_TOKEN,
       envPrompt: "SLACK_BOT_TOKEN detected. Use env var?",
       keepPrompt: "Slack bot token already configured. Keep it?",
       inputPrompt: "Enter Slack bot token (xoxb-...)",
       preferredEnvVar: allowEnv ? "SLACK_BOT_TOKEN" : undefined,
+      applySet: async (cfg, value) =>
+        patchChannelConfigForAccount({
+          cfg,
+          channel: "slack",
+          accountId: slackAccountId,
+          patch: { botToken: value },
+        }),
     });
-    if (botTokenResult.action === "use-env") {
-      resolvedBotTokenForAllowlist = process.env.SLACK_BOT_TOKEN?.trim() || undefined;
-    } else if (botTokenResult.action === "set") {
-      next = patchChannelConfigForAccount({
-        cfg: next,
-        channel: "slack",
-        accountId: slackAccountId,
-        patch: { botToken: botTokenResult.value },
-      });
-      resolvedBotTokenForAllowlist = botTokenResult.resolvedValue;
+    next = botTokenStep.cfg;
+    if (botTokenStep.resolvedValue) {
+      resolvedBotTokenForAllowlist = botTokenStep.resolvedValue;
     }
 
-    const appTokenResult = await promptSingleChannelSecretInput({
+    const appTokenStep = await runSingleChannelSecretStep({
       cfg: next,
       prompter,
       providerHint: "slack-app",
       credentialLabel: "Slack app token",
       secretInputMode: options?.secretInputMode,
-      accountConfigured: appPromptState.accountConfigured,
-      canUseEnv: appPromptState.canUseEnv,
-      hasConfigToken: appPromptState.hasConfigToken,
+      accountConfigured: Boolean(resolvedAccount.appToken) || hasConfiguredAppToken,
+      hasConfigToken: hasConfiguredAppToken,
+      allowEnv,
+      envValue: process.env.SLACK_APP_TOKEN,
       envPrompt: "SLACK_APP_TOKEN detected. Use env var?",
       keepPrompt: "Slack app token already configured. Keep it?",
       inputPrompt: "Enter Slack app token (xapp-...)",
       preferredEnvVar: allowEnv ? "SLACK_APP_TOKEN" : undefined,
+      applySet: async (cfg, value) =>
+        patchChannelConfigForAccount({
+          cfg,
+          channel: "slack",
+          accountId: slackAccountId,
+          patch: { appToken: value },
+        }),
     });
-    if (appTokenResult.action === "set") {
-      next = patchChannelConfigForAccount({
-        cfg: next,
-        channel: "slack",
-        accountId: slackAccountId,
-        patch: { appToken: appTokenResult.value },
-      });
-    }
+    next = appTokenStep.cfg;
 
     next = await configureChannelAccessWithAllowlist({
       cfg: next,

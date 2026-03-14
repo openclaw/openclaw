@@ -136,7 +136,8 @@ flowchart TD
     Common log signatures:
 
     - `device identity required` → HTTP/non-secure context cannot complete device auth.
-    - `unauthorized` / reconnect loop → wrong token/password or auth mode mismatch.
+    - `AUTH_TOKEN_MISMATCH` with retry hints (`canRetryWithDeviceToken=true`) → one trusted device-token retry may occur automatically.
+    - repeated `unauthorized` after that retry → wrong token/password, auth mode mismatch, or stale paired device token.
     - `gateway connect failed:` → UI is targeting the wrong URL/port or unreachable gateway.
 
     Deep pages:

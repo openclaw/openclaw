@@ -220,6 +220,16 @@ function runPackDry(): PackResult[] {
   return JSON.parse(raw) as PackResult[];
 }
 
+export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
+  return [...paths]
+    .filter(
+      (path) =>
+        forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
+        /(^|\/)node_modules\//.test(path),
+    )
+    .toSorted();
+}
+
 function checkPluginVersions() {
   const rootPackagePath = resolve("package.json");
   const rootPackage = JSON.parse(readFileSync(rootPackagePath, "utf8")) as PackageJson;
@@ -424,9 +434,7 @@ function main() {
       return paths.has(group) ? [] : [group];
     })
     .toSorted();
-  const forbidden = [...paths].filter((path) =>
-    forbiddenPrefixes.some((prefix) => path.startsWith(prefix)),
-  );
+  const forbidden = collectForbiddenPackPaths(paths);
 
   if (missing.length > 0 || forbidden.length > 0) {
     if (missing.length > 0) {

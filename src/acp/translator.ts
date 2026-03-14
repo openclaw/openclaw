@@ -53,6 +53,7 @@ import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
 // Maximum allowed prompt size (2MB) to prevent DoS via memory exhaustion (CWE-400, GHSA-cxpw-2g23-2vgw)
 const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
 const ACP_THOUGHT_LEVEL_CONFIG_ID = "thought_level";
+const ACP_FAST_MODE_CONFIG_ID = "fast_mode";
 const ACP_VERBOSE_LEVEL_CONFIG_ID = "verbose_level";
 const ACP_REASONING_LEVEL_CONFIG_ID = "reasoning_level";
 const ACP_RESPONSE_USAGE_CONFIG_ID = "response_usage";
@@ -88,6 +89,7 @@ type GatewaySessionPresentationRow = Pick<
   | "derivedTitle"
   | "updatedAt"
   | "thinkingLevel"
+  | "fastMode"
   | "modelProvider"
   | "model"
   | "verboseLevel"
@@ -208,6 +210,13 @@ function buildSessionPresentation(params: {
         "Controls how much deliberate reasoning OpenClaw requests from the Gateway model.",
       currentValue: currentModeId,
       values: availableLevelIds,
+    }),
+    buildSelectConfigOption({
+      id: ACP_FAST_MODE_CONFIG_ID,
+      name: "Fast mode",
+      description: "Controls whether OpenAI sessions use the Gateway fast-mode profile.",
+      currentValue: row.fastMode ? "on" : "off",
+      values: ["off", "on"],
     }),
     buildSelectConfigOption({
       id: ACP_VERBOSE_LEVEL_CONFIG_ID,
@@ -633,14 +642,25 @@ export class AcpGatewayAgent implements Agent {
     if (!session) {
       return;
     }
+    // Capture runId before cancelActiveRun clears session.activeRunId.
+    const activeRunId = session.activeRunId;
+
     this.sessionStore.cancelActiveRun(params.sessionId);
+    const pending = this.pendingPrompts.get(params.sessionId);
+    const scopedRunId = activeRunId ?? pending?.idempotencyKey;
+    if (!scopedRunId) {
+      return;
+    }
+
     try {
-      await this.gateway.request("chat.abort", { sessionKey: session.sessionKey });
+      await this.gateway.request("chat.abort", {
+        sessionKey: session.sessionKey,
+        runId: scopedRunId,
+      });
     } catch (err) {
       this.log(`cancel error: ${String(err)}`);
     }
 
-    const pending = this.pendingPrompts.get(params.sessionId);
     if (pending) {
       this.pendingPrompts.delete(params.sessionId);
       pending.resolve({ stopReason: "cancelled" });
@@ -672,6 +692,7 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
     const stream = payload.stream as string | undefined;
+    const runId = payload.runId as string | undefined;
     const data = payload.data as Record<string, unknown> | undefined;
     const sessionKey = payload.sessionKey as string | undefined;
     if (!stream || !data || !sessionKey) {
@@ -688,7 +709,7 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
 
-    const pending = this.findPendingBySessionKey(sessionKey);
+    const pending = this.findPendingBySessionKey(sessionKey, runId);
     if (!pending) {
       return;
     }
@@ -774,17 +795,20 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
 
-    const pending = this.findPendingBySessionKey(sessionKey);
+    const pending = this.findPendingBySessionKey(sessionKey, runId);
     if (!pending) {
       return;
     }
-    if (runId && pending.idempotencyKey !== runId) {
-      return;
-    }
 
-    if (state === "delta" && messageData) {
+    const shouldHandleMessageSnapshot = messageData && (state === "delta" || state === "final");
+    if (shouldHandleMessageSnapshot) {
+      // Gateway chat events can carry the latest full assistant snapshot on both
+      // incremental updates and the terminal final event. Process the snapshot
+      // first so ACP clients never drop the last visible assistant text.
       await this.handleDeltaEvent(pending.sessionId, messageData);
-      return;
+      if (state === "delta") {
+        return;
+      }
     }
 
     if (state === "final") {
@@ -853,11 +877,15 @@ export class AcpGatewayAgent implements Agent {
     pending.resolve({ stopReason });
   }
 
-  private findPendingBySessionKey(sessionKey: string): PendingPrompt | undefined {
+  private findPendingBySessionKey(sessionKey: string, runId?: string): PendingPrompt | undefined {
     for (const pending of this.pendingPrompts.values()) {
-      if (pending.sessionKey === sessionKey) {
-        return pending;
+      if (pending.sessionKey !== sessionKey) {
+        continue;
       }
+      if (runId && pending.idempotencyKey !== runId) {
+        continue;
+      }
+      return pending;
     }
     return undefined;
   }
@@ -912,6 +940,7 @@ export class AcpGatewayAgent implements Agent {
       thinkingLevel: session.thinkingLevel,
       modelProvider: session.modelProvider,
       model: session.model,
+      fastMode: session.fastMode,
       verboseLevel: session.verboseLevel,
       reasoningLevel: session.reasoningLevel,
       responseUsage: session.responseUsage,
@@ -924,16 +953,26 @@ export class AcpGatewayAgent implements Agent {
 
   private resolveSessionConfigPatch(
     configId: string,
-    value: string,
+    value: string | boolean,
   ): {
     overrides: Partial<GatewaySessionPresentationRow>;
-    patch: Record<string, string>;
+    patch: Record<string, string | boolean>;
   } {
+    if (typeof value !== "string") {
+      throw new Error(
+        `ACP bridge does not support non-string session config option values for "${configId}".`,
+      );
+    }
     switch (configId) {
       case ACP_THOUGHT_LEVEL_CONFIG_ID:
         return {
           patch: { thinkingLevel: value },
           overrides: { thinkingLevel: value },
+        };
+      case ACP_FAST_MODE_CONFIG_ID:
+        return {
+          patch: { fastMode: value === "on" },
+          overrides: { fastMode: value === "on" },
         };
       case ACP_VERBOSE_LEVEL_CONFIG_ID:
         return {

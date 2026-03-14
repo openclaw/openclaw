@@ -9,6 +9,13 @@ enum UIStrings {
     static let welcomeTitle = "Welcome to OpenClaw"
 }
 
+enum RemoteOnboardingProbeState: Equatable {
+    case idle
+    case checking
+    case ok(RemoteGatewayProbeSuccess)
+    case failed(String)
+}
+
 @MainActor
 final class OnboardingController {
     static let shared = OnboardingController()
@@ -72,6 +79,9 @@ struct OnboardingView: View {
     @State var didAutoKickoff = false
     @State var showAdvancedConnection = false
     @State var preferredGatewayID: String?
+    @State var remoteProbeState: RemoteOnboardingProbeState = .idle
+    @State var remoteAuthIssue: RemoteGatewayAuthIssue?
+    @State var suppressRemoteProbeReset = false
     @State var gatewayDiscovery: GatewayDiscoveryModel
     @State var onboardingChatModel: OpenClawChatViewModel
     @State var onboardingSkillsModel = SkillsSettingsModel()

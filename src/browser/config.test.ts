@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { resolveBrowserConfig, resolveProfile, shouldStartLocalBrowserServer } from "./config.js";
+import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 
 describe("browser config", () => {
   it("defaults to enabled with loopback defaults and lobster-orange color", () => {
@@ -276,6 +277,47 @@ describe("browser config", () => {
       },
     });
     expect(resolved.ssrfPolicy).toEqual({});
+  });
+
+  it("resolves existing-session profiles without cdpPort or cdpUrl", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        "chrome-live": {
+          driver: "existing-session",
+          attachOnly: true,
+          color: "#00AA00",
+        },
+      },
+    });
+    const profile = resolveProfile(resolved, "chrome-live");
+    expect(profile).not.toBeNull();
+    expect(profile?.driver).toBe("existing-session");
+    expect(profile?.attachOnly).toBe(true);
+    expect(profile?.cdpPort).toBe(0);
+    expect(profile?.cdpUrl).toBe("");
+    expect(profile?.cdpIsLoopback).toBe(true);
+    expect(profile?.color).toBe("#00AA00");
+  });
+
+  it("sets usesChromeMcp only for existing-session profiles", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        "chrome-live": { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+        work: { cdpPort: 18801, color: "#0066CC" },
+      },
+    });
+
+    const existingSession = resolveProfile(resolved, "chrome-live")!;
+    expect(getBrowserProfileCapabilities(existingSession).usesChromeMcp).toBe(true);
+
+    const managed = resolveProfile(resolved, "openclaw")!;
+    expect(getBrowserProfileCapabilities(managed).usesChromeMcp).toBe(false);
+
+    const extension = resolveProfile(resolved, "chrome")!;
+    expect(getBrowserProfileCapabilities(extension).usesChromeMcp).toBe(false);
+
+    const work = resolveProfile(resolved, "work")!;
+    expect(getBrowserProfileCapabilities(work).usesChromeMcp).toBe(false);
   });
 
   describe("default profile preference", () => {

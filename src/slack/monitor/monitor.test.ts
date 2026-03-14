@@ -81,6 +81,32 @@ describe("resolveSlackChannelConfig", () => {
     });
     expect(res).toMatchObject({ allowed: true, requireMention: false });
   });
+
+  it("blocks channel-name route matches by default", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channelName: "ops-room",
+      channels: { "ops-room": { allow: true, requireMention: false } },
+      defaultRequireMention: true,
+    });
+    expect(res).toMatchObject({ allowed: false, requireMention: true });
+  });
+
+  it("allows channel-name route matches when dangerous name matching is enabled", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channelName: "ops-room",
+      channels: { "ops-room": { allow: true, requireMention: false } },
+      defaultRequireMention: true,
+      allowNameMatching: true,
+    });
+    expect(res).toMatchObject({
+      allowed: true,
+      requireMention: false,
+      matchKey: "ops-room",
+      matchSource: "direct",
+    });
+  });
 });
 
 const baseParams = () => ({

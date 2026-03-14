@@ -46,7 +46,7 @@ export type ResolvedBrowserProfile = {
   cdpHost: string;
   cdpIsLoopback: boolean;
   color: string;
-  driver: "openclaw" | "extension";
+  driver: "openclaw" | "extension" | "existing-session";
   attachOnly: boolean;
 };
 
@@ -335,7 +335,26 @@ export function resolveProfile(
   let cdpHost = resolved.cdpHost;
   let cdpPort = profile.cdpPort ?? 0;
   let cdpUrl = "";
-  const driver = profile.driver === "extension" ? "extension" : "openclaw";
+  const driver =
+    profile.driver === "extension"
+      ? "extension"
+      : profile.driver === "existing-session"
+        ? "existing-session"
+        : "openclaw";
+
+  if (driver === "existing-session") {
+    // existing-session uses Chrome MCP auto-connect; no CDP port/URL needed
+    return {
+      name: profileName,
+      cdpPort: 0,
+      cdpUrl: "",
+      cdpHost: "",
+      cdpIsLoopback: true,
+      color: profile.color,
+      driver,
+      attachOnly: true,
+    };
+  }
 
   if (rawProfileUrl) {
     const parsed = parseHttpUrl(rawProfileUrl, `browser.profiles.${profileName}.cdpUrl`);

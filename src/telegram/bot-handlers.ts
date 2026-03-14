@@ -1,5 +1,6 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -20,6 +21,7 @@ import {
   loadSessionStore,
   resolveSessionStoreEntry,
   resolveStorePath,
+  updateSessionStore,
 } from "../config/sessions.js";
 import type { DmPolicy } from "../config/types.base.js";
 import type {
@@ -33,6 +35,7 @@ import { MediaFetchError } from "../media/fetch.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
+import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   isSenderAllowed,
@@ -123,7 +126,7 @@ export const registerTelegramHandlers = ({
   accountId,
   bot,
   opts,
-  telegramFetchImpl,
+  telegramTransport,
   runtime,
   mediaMaxBytes,
   telegramCfg,
@@ -300,6 +303,7 @@ export const registerTelegramHandlers = ({
   }): {
     agentId: string;
     sessionEntry: ReturnType<typeof loadSessionStore>[string] | undefined;
+    sessionKey: string;
     model?: string;
   } => {
     const resolvedThreadId =
@@ -339,6 +343,7 @@ export const registerTelegramHandlers = ({
       return {
         agentId: route.agentId,
         sessionEntry: entry,
+        sessionKey,
         model: storedOverride.provider
           ? `${storedOverride.provider}/${storedOverride.model}`
           : storedOverride.model,
@@ -350,6 +355,7 @@ export const registerTelegramHandlers = ({
       return {
         agentId: route.agentId,
         sessionEntry: entry,
+        sessionKey,
         model: `${provider}/${model}`,
       };
     }
@@ -357,6 +363,7 @@ export const registerTelegramHandlers = ({
     return {
       agentId: route.agentId,
       sessionEntry: entry,
+      sessionKey,
       model: typeof modelCfg === "string" ? modelCfg : modelCfg?.primary,
     };
   };
@@ -372,7 +379,7 @@ export const registerTelegramHandlers = ({
       for (const { ctx } of entry.messages) {
         let media;
         try {
-          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramFetchImpl);
+          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramTransport);
         } catch (mediaErr) {
           if (!isRecoverableMediaGroupError(mediaErr)) {
             throw mediaErr;
@@ -476,7 +483,7 @@ export const registerTelegramHandlers = ({
         },
         mediaMaxBytes,
         opts.token,
-        telegramFetchImpl,
+        telegramTransport,
       );
       if (!media) {
         return [];
@@ -987,7 +994,7 @@ export const registerTelegramHandlers = ({
 
     let media: Awaited<ReturnType<typeof resolveMedia>> = null;
     try {
-      media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramFetchImpl);
+      media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramTransport);
     } catch (mediaErr) {
       if (isMediaSizeLimitError(mediaErr)) {
         if (sendOversizeWarning) {
@@ -1374,16 +1381,56 @@ export const registerTelegramHandlers = ({
             );
             return;
           }
-          // Process model selection as a synthetic message with /model command
-          const syntheticMessage = buildSyntheticTextMessage({
-            base: callbackMessage,
-            from: callback.from,
-            text: `/model ${selection.provider}/${selection.model}`,
-          });
-          await processMessage(buildSyntheticContext(ctx, syntheticMessage), [], storeAllowFrom, {
-            forceWasMentioned: true,
-            messageIdOverride: callback.id,
-          });
+
+          const modelSet = byProvider.get(selection.provider);
+          if (!modelSet?.has(selection.model)) {
+            await editMessageWithButtons(
+              `❌ Model "${selection.provider}/${selection.model}" is not allowed.`,
+              [],
+            );
+            return;
+          }
+
+          // Directly set model override in session
+          try {
+            // Get session store path
+            const storePath = resolveStorePath(cfg.session?.store, {
+              agentId: sessionState.agentId,
+            });
+
+            const resolvedDefault = resolveDefaultModelForAgent({
+              cfg,
+              agentId: sessionState.agentId,
+            });
+            const isDefaultSelection =
+              selection.provider === resolvedDefault.provider &&
+              selection.model === resolvedDefault.model;
+
+            await updateSessionStore(storePath, (store) => {
+              const sessionKey = sessionState.sessionKey;
+              const entry = store[sessionKey] ?? {};
+              store[sessionKey] = entry;
+              applyModelOverrideToSessionEntry({
+                entry,
+                selection: {
+                  provider: selection.provider,
+                  model: selection.model,
+                  isDefault: isDefaultSelection,
+                },
+              });
+            });
+
+            // Update message to show success with visual feedback
+            const actionText = isDefaultSelection
+              ? "reset to default"
+              : `changed to **${selection.provider}/${selection.model}**`;
+            await editMessageWithButtons(
+              `✅ Model ${actionText}\n\nThis model will be used for your next message.`,
+              [], // Empty buttons = remove inline keyboard
+            );
+          } catch (err) {
+            await editMessageWithButtons(`❌ Failed to change model: ${String(err)}`, []);
+          }
           return;
         }
 
