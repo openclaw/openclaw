@@ -67,13 +67,14 @@ export function expandHomePrefix(
   if (!input.startsWith("~")) {
     return input;
   }
+  const explicitHome = normalize(opts?.home);
   const home =
-    normalize(opts?.home) ??
+    (explicitHome ? path.resolve(explicitHome) : undefined) ??
     resolveEffectiveHomeDir(opts?.env ?? process.env, opts?.homedir ?? os.homedir);
   if (!home) {
     return input;
   }
-  return input.replace(/^~(?=$|[\\/])/, home);
+  return path.normalize(input.replace(/^~(?=$|[\\/])/, home));
 }
 
 export function resolveHomeRelativePath(

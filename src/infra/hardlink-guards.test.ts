@@ -52,13 +52,16 @@ describe("assertNoHardlinkedFinalPath", () => {
       const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(root);
 
       try {
+        const linkedDisplayPath = path.join("~", "linked.txt");
         await expect(
           assertNoHardlinkedFinalPath({
             filePath: linked,
             root,
             boundaryLabel: "workspace",
           }),
-        ).rejects.toThrow("Hardlinked path is not allowed under workspace (~): ~/linked.txt");
+        ).rejects.toThrow(
+          `Hardlinked path is not allowed under workspace (~): ${linkedDisplayPath}`,
+        );
       } finally {
         homedirSpy.mockRestore();
       }

@@ -137,8 +137,10 @@ describe("run-node script", () => {
 
   it("returns the build exit code when the compiler step fails", async () => {
     await withTempDir(async (tmp) => {
-      const spawn = (cmd: string) => {
-        if (cmd === "pnpm") {
+      const spawn = (cmd: string, args: string[]) => {
+        const isBuildStep =
+          cmd === "pnpm" || (cmd === "cmd.exe" && args.includes("pnpm") && args.includes("tsdown"));
+        if (isBuildStep) {
           return createExitedProcess(23);
         }
         return createExitedProcess(0);

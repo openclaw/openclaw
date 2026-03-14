@@ -98,7 +98,7 @@ describe("expandHomePrefix", () => {
       opts: {
         env: { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv,
       },
-      expected: `${path.resolve("/srv/openclaw-home")}/x`,
+      expected: path.join(path.resolve("/srv/openclaw-home"), "x"),
     },
     {
       name: "expands exact ~ using explicit home",

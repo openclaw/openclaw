@@ -13,14 +13,24 @@ import {
 } from "./test-helpers/schtasks-fixtures.js";
 const childUnref = vi.hoisted(() => vi.fn());
 const spawn = vi.hoisted(() => vi.fn(() => ({ unref: childUnref })));
+const spawnSync = vi.hoisted(() => vi.fn(() => ({ status: 0 })));
+const findVerifiedGatewayListenerPidsOnPortSync = vi.hoisted(() =>
+  vi.fn<(port: number) => number[]>(() => []),
+);
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
     ...actual,
     spawn,
+    spawnSync,
   };
 });
+
+vi.mock("../infra/gateway-processes.js", () => ({
+  findVerifiedGatewayListenerPidsOnPortSync: (port: number) =>
+    findVerifiedGatewayListenerPidsOnPortSync(port),
+}));
 
 const {
   installScheduledTask,
@@ -84,12 +94,27 @@ function addStartupFallbackMissingResponses(
 beforeEach(() => {
   resetSchtasksBaseMocks();
   spawn.mockClear();
+  spawnSync.mockClear();
   childUnref.mockClear();
+  findVerifiedGatewayListenerPidsOnPortSync.mockReset();
+  findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+function expectGatewayTermination(pid: number) {
+  if (process.platform === "win32") {
+    expect(spawnSync).toHaveBeenCalledWith(
+      expect.stringMatching(/taskkill\.exe$/i),
+      ["/T", "/PID", String(pid)],
+      expect.objectContaining({ stdio: "ignore", timeout: 5_000, windowsHide: true }),
+    );
+    return;
+  }
+  expect(killProcessTree).toHaveBeenCalledWith(pid, { graceMs: 300 });
+}
 
 describe("Windows startup fallback", () => {
   it("falls back to a Startup-folder launcher when schtasks create is denied", async () => {
@@ -192,7 +217,7 @@ describe("Windows startup fallback", () => {
       await expect(restartScheduledTask({ env, stdout })).resolves.toEqual({
         outcome: "completed",
       });
-      expect(killProcessTree).toHaveBeenCalledWith(5151, { graceMs: 300 });
+      expectGatewayTermination(5151);
       expectStartupFallbackSpawn(env);
     });
   });
@@ -227,7 +252,7 @@ describe("Windows startup fallback", () => {
       delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
       await stopScheduledTask({ env: envWithoutPort, stdout });
 
-      expect(killProcessTree).toHaveBeenCalledWith(5151, { graceMs: 300 });
+      expectGatewayTermination(5151);
     });
   });
 });

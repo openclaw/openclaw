@@ -5,15 +5,17 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
+
+vi.unmock("node:fs");
+vi.unmock("node:fs/promises");
+vi.unmock("node:module");
+vi.unmock("./hook-runner-global.js");
+vi.unmock("./hooks.js");
+vi.unmock("./loader.js");
+vi.unmock("jiti");
+
 async function importFreshPluginTestModules() {
   vi.resetModules();
-  vi.unmock("node:fs");
-  vi.unmock("node:fs/promises");
-  vi.unmock("node:module");
-  vi.unmock("./hook-runner-global.js");
-  vi.unmock("./hooks.js");
-  vi.unmock("./loader.js");
-  vi.unmock("jiti");
   const [loader, hookRunnerGlobal, hooks] = await Promise.all([
     import("./loader.js"),
     import("./hook-runner-global.js"),
