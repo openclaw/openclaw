@@ -311,7 +311,10 @@ export function createAnthropicToolPayloadCompatibilityWrapper(
             );
           }
         }
-        return originalOnPayload?.(payload, model);
+        return (originalOnPayload as ((p: unknown, m?: unknown) => void) | undefined)?.(
+          payload,
+          model,
+        );
       },
     });
   };

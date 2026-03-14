@@ -13,7 +13,7 @@ type StreamPayload = {
 
 function runOpenRouterPayload(payload: StreamPayload, modelId: string) {
   const baseStreamFn: StreamFn = (model, _context, options) => {
-    options?.onPayload?.(payload, model);
+    (options?.onPayload as ((p: unknown, m?: unknown) => void) | undefined)?.(payload, model);
     return createAssistantMessageEventStream();
   };
   const agent = { streamFn: baseStreamFn };
