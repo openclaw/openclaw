@@ -937,7 +937,6 @@ function broadcastSideResult(params: {
     ...params.payload,
     seq,
   });
-  params.context.agentRunSeq.delete(params.payload.runId);
 }
 
 function broadcastChatError(params: {
@@ -1389,6 +1388,11 @@ export const chatHandlers: GatewayRequestHandlers = {
                   isError: btwReply.isError,
                   ts: Date.now(),
                 },
+              });
+              broadcastChatFinal({
+                context,
+                runId: clientRunId,
+                sessionKey: rawSessionKey,
               });
             } else {
               const combinedReply = finalReplies

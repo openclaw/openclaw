@@ -514,6 +514,15 @@ describe("gateway server chat", () => {
           o.payload?.runId === "idem-btw-1",
         8000,
       );
+      const finalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-btw-1",
+        8000,
+      );
 
       const res = await rpcReq(ws, "chat.send", {
         sessionKey: "main",
@@ -523,12 +532,18 @@ describe("gateway server chat", () => {
 
       expect(res.ok).toBe(true);
       const sideResult = await sideResultPromise;
+      const finalEvent = await finalPromise;
       expect(sideResult.payload).toMatchObject({
         kind: "btw",
         runId: "idem-btw-1",
         sessionKey: "main",
         question: "what is 17 * 19?",
         text: "323",
+      });
+      expect(finalEvent.payload).toMatchObject({
+        runId: "idem-btw-1",
+        sessionKey: "main",
+        state: "final",
       });
 
       const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {

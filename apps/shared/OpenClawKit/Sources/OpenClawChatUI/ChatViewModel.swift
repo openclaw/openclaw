@@ -232,7 +232,9 @@ public final class OpenClawChatViewModel {
             let payload = try await self.transport.requestHistory(sessionKey: self.sessionKey)
             self.messages = Self.reconcileMessageIDs(
                 previous: self.messages,
-                incoming: Self.decodeMessages(payload.messages ?? []))
+                incoming: Self.decodeHistoryMessages(
+                    messages: payload.messages ?? [],
+                    sideResults: payload.sideResults ?? []))
             self.sessionId = payload.sessionId
             if !self.prefersExplicitThinkingLevel,
                let level = Self.normalizedThinkingLevel(payload.thinkingLevel)
@@ -255,6 +257,43 @@ public final class OpenClawChatViewModel {
                 .map { Self.stripInboundMetadata(from: $0) }
         }
         return Self.dedupeMessages(decoded)
+    }
+
+    private static func decodeHistoryMessages(
+        messages rawMessages: [AnyCodable],
+        sideResults: [OpenClawChatSideResult]) -> [OpenClawChatMessage]
+    {
+        let decodedMessages = Self.decodeMessages(rawMessages)
+        let decodedSideResults = sideResults.compactMap(Self.decodeSideResultMessage)
+        return Self.dedupeMessages(decodedMessages + decodedSideResults)
+    }
+
+    private static func decodeSideResultMessage(_ sideResult: OpenClawChatSideResult) -> OpenClawChatMessage? {
+        let text = (sideResult.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        let question = (sideResult.question ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = question.isEmpty ? "BTW" : "BTW: \(question)"
+        let body = "\(label)\n\n\(text)"
+        return OpenClawChatMessage(
+            role: "assistant",
+            content: [
+                OpenClawChatMessageContent(
+                    type: "text",
+                    text: body,
+                    thinking: nil,
+                    thinkingSignature: nil,
+                    mimeType: nil,
+                    fileName: nil,
+                    content: nil,
+                    id: nil,
+                    name: nil,
+                    arguments: nil),
+            ],
+            timestamp: sideResult.ts,
+            toolCallId: nil,
+            toolName: nil,
+            usage: nil,
+            stopReason: nil)
     }
 
     private static func stripInboundMetadata(from message: OpenClawChatMessage) -> OpenClawChatMessage {
@@ -921,7 +960,9 @@ public final class OpenClawChatViewModel {
             let payload = try await self.transport.requestHistory(sessionKey: self.sessionKey)
             self.messages = Self.reconcileMessageIDs(
                 previous: self.messages,
-                incoming: Self.decodeMessages(payload.messages ?? []))
+                incoming: Self.decodeHistoryMessages(
+                    messages: payload.messages ?? [],
+                    sideResults: payload.sideResults ?? []))
             self.sessionId = payload.sessionId
             if !self.prefersExplicitThinkingLevel,
                let level = Self.normalizedThinkingLevel(payload.thinkingLevel)

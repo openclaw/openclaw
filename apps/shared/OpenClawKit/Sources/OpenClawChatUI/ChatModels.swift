@@ -232,7 +232,30 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
     public let sessionKey: String
     public let sessionId: String?
     public let messages: [AnyCodable]?
+    public let sideResults: [OpenClawChatSideResult]?
     public let thinkingLevel: String?
+
+    public init(
+        sessionKey: String,
+        sessionId: String?,
+        messages: [AnyCodable]?,
+        sideResults: [OpenClawChatSideResult]? = nil,
+        thinkingLevel: String?)
+    {
+        self.sessionKey = sessionKey
+        self.sessionId = sessionId
+        self.messages = messages
+        self.sideResults = sideResults
+        self.thinkingLevel = thinkingLevel
+    }
+}
+
+public struct OpenClawChatSideResult: Codable, Sendable {
+    public let kind: String?
+    public let question: String?
+    public let text: String?
+    public let ts: Double?
+    public let isError: Bool?
 }
 
 public struct OpenClawSessionPreviewItem: Codable, Hashable, Sendable {

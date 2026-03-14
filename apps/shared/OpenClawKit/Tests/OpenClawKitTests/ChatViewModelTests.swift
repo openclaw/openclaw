@@ -14,12 +14,14 @@ private func chatTextMessage(role: String, text: String, timestamp: Double) -> A
 private func historyPayload(
     sessionKey: String = "main",
     sessionId: String? = "sess-main",
-    messages: [AnyCodable] = []) -> OpenClawChatHistoryPayload
+    messages: [AnyCodable] = [],
+    sideResults: [OpenClawChatSideResult] = []) -> OpenClawChatHistoryPayload
 {
     OpenClawChatHistoryPayload(
         sessionKey: sessionKey,
         sessionId: sessionId,
         messages: messages,
+        sideResults: sideResults,
         thinkingLevel: "off")
 }
 
@@ -1226,7 +1228,7 @@ extension TestChatTransportState {
         #expect(await MainActor.run { callbackState.values } == ["medium"])
     }
 
-    @Test func serverProvidedThinkingLevelsOutsideMenuArePreservedForSend() async throws {
+@Test func serverProvidedThinkingLevelsOutsideMenuArePreservedForSend() async throws {
         let history = OpenClawChatHistoryPayload(
             sessionKey: "main",
             sessionId: "sess-main",
@@ -1242,6 +1244,28 @@ extension TestChatTransportState {
         try await waitUntil("send uses preserved thinking level") {
             await transport.sentThinkingLevels() == ["xhigh"]
         }
+    }
+
+    @Test func mergesBTWSideResultsIntoHistoryRefresh() async throws {
+        let history = historyPayload(
+            messages: [chatTextMessage(role: "user", text: "main task", timestamp: 1000)],
+            sideResults: [
+                OpenClawChatSideResult(
+                    kind: "btw",
+                    question: "what is 17 * 19?",
+                    text: "323",
+                    ts: 2000,
+                    isError: false),
+            ])
+
+        let (_, vm) = await makeViewModel(historyResponses: [history])
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        let messages = await MainActor.run { vm.messages }
+        #expect(messages.count == 2)
+        #expect(messages.last?.role == "assistant")
+        #expect(messages.last?.content.first?.text == "BTW: what is 17 * 19?\n\n323")
     }
 
     @Test func staleThinkingPatchCompletionReappliesLatestSelection() async throws {

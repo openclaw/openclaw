@@ -455,8 +455,9 @@ class ChatController(
     val sid = root["sessionId"].asStringOrNull()
     val thinkingLevel = root["thinkingLevel"].asStringOrNull()
     val array = root["messages"].asArrayOrNull() ?: JsonArray(emptyList())
+    val sideResults = root["sideResults"].asArrayOrNull() ?: JsonArray(emptyList())
 
-    val messages =
+    val messages = (
       array.mapNotNull { item ->
         val obj = item.asObjectOrNull() ?: return@mapNotNull null
         val role = obj["role"].asStringOrNull() ?: return@mapNotNull null
@@ -468,9 +469,24 @@ class ChatController(
           content = content,
           timestampMs = ts,
         )
-      }
+      } + sideResults.mapNotNull(::parseSideResultMessage)
+    ).sortedBy { it.timestampMs ?: Long.MAX_VALUE }
 
     return ChatHistory(sessionKey = sessionKey, sessionId = sid, thinkingLevel = thinkingLevel, messages = messages)
+  }
+
+  private fun parseSideResultMessage(el: JsonElement): ChatMessage? {
+    val obj = el.asObjectOrNull() ?: return null
+    val text = obj["text"].asStringOrNull()?.trim().orEmpty()
+    if (text.isEmpty()) return null
+    val question = obj["question"].asStringOrNull()?.trim().orEmpty()
+    val label = if (question.isEmpty()) "BTW" else "BTW: $question"
+    return ChatMessage(
+      id = UUID.randomUUID().toString(),
+      role = "assistant",
+      content = listOf(ChatMessageContent(type = "text", text = "$label\n\n$text")),
+      timestampMs = obj["ts"].asLongOrNull(),
+    )
   }
 
   private fun parseMessageContent(el: JsonElement): ChatMessageContent? {
