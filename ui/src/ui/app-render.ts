@@ -1121,6 +1121,83 @@ export function renderApp(state: AppViewState) {
                     updateConfigFormValue(state, ["agents", "list", index, "skills"], []);
                   },
                   onModelChange: (agentId, modelId) => {
+                    const formDefaultId =
+                      (getCurrentConfigValue() as { agents?: { defaultId?: string } } | null)
+                        ?.agents?.defaultId ?? state.agentsList?.defaultId;
+                    const isDefaultAgent = Boolean(formDefaultId && agentId === formDefaultId);
+
+                    if (isDefaultAgent) {
+                      const defaultsPath = ["agents", "defaults", "model"];
+                      if (!modelId) {
+                        removeConfigFormValue(state, defaultsPath);
+                        const overrideIdx = findAgentIndex(agentId);
+                        if (overrideIdx >= 0) {
+                          removeConfigFormValue(state, ["agents", "list", overrideIdx, "model"]);
+                        }
+                        return;
+                      }
+                      const currentConfig = getCurrentConfigValue() as {
+                        agents?: { defaults?: { model?: unknown } };
+                      } | null;
+                      const existing = currentConfig?.agents?.defaults?.model;
+                      if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+                        const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
+                        const next = {
+                          primary: modelId,
+                          ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
+                        };
+                        updateConfigFormValue(state, defaultsPath, next);
+                      } else {
+                        updateConfigFormValue(state, defaultsPath, modelId);
+                      }
+                      // Clear any per-agent model override so the defaults value takes effect.
+                      // Migrate per-agent fallbacks into defaults before deleting the override.
+                      const overrideIndex = findAgentIndex(agentId);
+                      if (overrideIndex >= 0) {
+                        const list = (
+                          getCurrentConfigValue() as { agents?: { list?: unknown[] } } | null
+                        )?.agents?.list;
+                        const overrideEntry = list?.[overrideIndex] as
+                          | { model?: unknown }
+                          | undefined;
+                        const overrideModel = overrideEntry?.model;
+                        if (
+                          overrideModel &&
+                          typeof overrideModel === "object" &&
+                          !Array.isArray(overrideModel)
+                        ) {
+                          const overrideFallbacks = (overrideModel as { fallbacks?: unknown })
+                            .fallbacks;
+                          if (Array.isArray(overrideFallbacks) && overrideFallbacks.length > 0) {
+                            // Re-read the current defaults value (may have just been updated above)
+                            const currentDefaults = (
+                              getCurrentConfigValue() as {
+                                agents?: { defaults?: { model?: unknown } };
+                              } | null
+                            )?.agents?.defaults?.model;
+                            if (
+                              currentDefaults &&
+                              typeof currentDefaults === "object" &&
+                              !Array.isArray(currentDefaults)
+                            ) {
+                              const merged = {
+                                ...currentDefaults,
+                                fallbacks: overrideFallbacks,
+                              };
+                              updateConfigFormValue(state, defaultsPath, merged);
+                            } else if (typeof currentDefaults === "string") {
+                              updateConfigFormValue(state, defaultsPath, {
+                                primary: currentDefaults,
+                                fallbacks: overrideFallbacks,
+                              });
+                            }
+                          }
+                        }
+                        removeConfigFormValue(state, ["agents", "list", overrideIndex, "model"]);
+                      }
+                      return;
+                    }
+
                     const index = modelId ? ensureAgentIndex(agentId) : findAgentIndex(agentId);
                     if (index < 0) {
                       return;
