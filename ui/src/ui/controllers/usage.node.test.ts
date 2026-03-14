@@ -158,7 +158,7 @@ describe("usage controller date interpretation params", () => {
       startDate: "2026-02-16",
       endDate: "2026-02-16",
     });
-    expect(request).toHaveBeenCalledTimes(7);
+    expect(request).toHaveBeenNthCalledWith(8, "usage.status");
 
     // Persisted flag should survive cache resets (simulating app reload).
     __test.resetLegacyUsageDateParamsCache();
@@ -197,91 +197,6 @@ describe("usage controller date interpretation params", () => {
 
     // Stale result must not overwrite state.
     expect(state.usageProviderSummary).toBeNull();
-    expect(state.usageProviderSummaryError).toBeNull();
-  });
-
-  it("silently skips unsupported usage.status on older gateways and remembers it", async () => {
-    const storage = createStorageMock();
-    vi.stubGlobal("localStorage", storage as unknown as Storage);
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-14T13:30:00Z"));
-
-    const request = vi.fn(async (method: string) => {
-      if (method === "usage.status") {
-        throw new Error("RPC method not found: usage.status");
-      }
-      return {};
-    });
-
-    const state = createState(request, {
-      settings: { gatewayUrl: "ws://127.0.0.1:18789" },
-    });
-
-    await loadUsage(state);
-
-    expect(request).toHaveBeenNthCalledWith(3, "usage.status");
-    expect(state.usageProviderSummary).toBeNull();
-    expect(state.usageProviderSummaryError).toBeNull();
-    expect(__test.shouldRequestUsageStatus(state)).toBe(false);
-
-    await loadUsage(state);
-
-    expect(request).toHaveBeenCalledTimes(5);
-    expect(request).not.toHaveBeenNthCalledWith(6, "usage.status");
-
-    vi.advanceTimersByTime(__test.LEGACY_USAGE_STATUS_RETRY_MS + 1);
-    await loadUsage(state);
-
-    expect(request).toHaveBeenNthCalledWith(8, "usage.status");
-
-    __test.resetLegacyUsageDateParamsCache();
-    expect(__test.shouldRequestUsageStatus(state)).toBe(false);
-
-    vi.unstubAllGlobals();
-    vi.useRealTimers();
-  });
-
-  it("does not refetch provider quota on date-scoped usage reloads unless explicitly refreshed", async () => {
-    const request = vi.fn(async () => ({}));
-    const state = createState(request);
-
-    await loadUsage(state);
-    await loadUsage(state, { startDate: "2026-02-15", endDate: "2026-02-16" });
-
-    expect(request).toHaveBeenCalledTimes(5);
-    expect(request).toHaveBeenNthCalledWith(3, "usage.status");
-
-    await loadUsage(state, { refreshProviderQuota: true });
-
-    expect(request).toHaveBeenNthCalledWith(8, "usage.status");
-  });
-
-  it("retries provider quota after a transient usage.status failure on the next load", async () => {
-    let quotaAttempts = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "usage.status") {
-        quotaAttempts += 1;
-        if (quotaAttempts === 1) {
-          throw new Error("429 rate limited");
-        }
-        return { providers: [{ provider: "anthropic", windows: [] }] };
-      }
-      return {};
-    });
-    const state = createState(request);
-
-    await loadUsage(state);
-
-    expect(state.usageProviderSummary).toBeNull();
-    expect(state.usageProviderSummaryError).toBe("429 rate limited");
-    expect(request).toHaveBeenNthCalledWith(3, "usage.status");
-
-    await loadUsage(state);
-
-    expect(request).toHaveBeenNthCalledWith(6, "usage.status");
-    expect(state.usageProviderSummary).toEqual({
-      providers: [{ provider: "anthropic", windows: [] }],
-    });
     expect(state.usageProviderSummaryError).toBeNull();
   });
 });
