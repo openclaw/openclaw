@@ -8,6 +8,11 @@ type PassiveChannelStatusSnapshot = {
   lastProbeAt?: number | null;
 };
 
+type TrafficStatusSnapshot = {
+  lastInboundAt?: number | null;
+  lastOutboundAt?: number | null;
+};
+
 export function buildPassiveChannelStatusSummary<TExtra extends object>(
   snapshot: PassiveChannelStatusSnapshot,
   extra?: TExtra,
@@ -30,5 +35,14 @@ export function buildPassiveProbedChannelStatusSummary<TExtra extends object>(
     ...buildPassiveChannelStatusSummary(snapshot, extra),
     probe: snapshot.probe,
     lastProbeAt: snapshot.lastProbeAt ?? null,
+  };
+}
+
+export function buildTrafficStatusSummary<TSnapshot extends TrafficStatusSnapshot>(
+  snapshot?: TSnapshot | null,
+) {
+  return {
+    lastInboundAt: snapshot?.lastInboundAt ?? null,
+    lastOutboundAt: snapshot?.lastOutboundAt ?? null,
   };
 }
