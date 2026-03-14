@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **OpenClawDreams** — A reflection engine that gives your agent an encrypted dream cycle. Captures daily conversations, synthesizes them through web + Moltbook context, generates surreal dream narratives at night, and surfaces a "Waking Realization" each morning. Notifies operator with "I had a dream..." on supported channels.
+  npm: `openclawdreams`
+  repo: `https://github.com/RogueCtrl/OpenClawDreams`
+  install: `openclaw plugins install openclawdreams`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
