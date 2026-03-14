@@ -203,6 +203,9 @@ If you’re supervised:
 
 Runbook + exact service labels: [Gateway runbook](/gateway)
 
+If the service manager is healthy but you need an extra operator-managed
+"unhealthy but still running" recovery layer on macOS, see [Gateway on macOS](/platforms/mac/bundled-gateway#optional-add-a-system-level-recovery-watchdog).
+
 ## Rollback / pinning (when something breaks)
 
 ### Pin (global install)
