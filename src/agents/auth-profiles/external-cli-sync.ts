@@ -4,7 +4,6 @@ import {
   readMiniMaxCliCredentialsCached,
 } from "../cli-credentials.js";
 import {
-  CODEX_CLI_PROFILE_ID,
   EXTERNAL_CLI_NEAR_EXPIRY_MS,
   EXTERNAL_CLI_SYNC_TTL_MS,
   QWEN_CLI_PROFILE_ID,
@@ -12,6 +11,8 @@ import {
   log,
 } from "./constants.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
+
+const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
 
 function shallowEqualOAuthCredentials(a: OAuthCredential | undefined, b: OAuthCredential): boolean {
   if (!a) {
@@ -140,7 +141,7 @@ export function syncExternalCliCredentials(store: AuthProfileStore): boolean {
   if (
     syncExternalCliCredentialsForProvider(
       store,
-      CODEX_CLI_PROFILE_ID,
+      OPENAI_CODEX_DEFAULT_PROFILE_ID,
       "openai-codex",
       () => readCodexCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
       now,

@@ -16,8 +16,10 @@ vi.mock("./cli-credentials.js", () => ({
 const { syncExternalCliCredentials } = await import("./auth-profiles/external-cli-sync.js");
 const { CODEX_CLI_PROFILE_ID } = await import("./auth-profiles/constants.js");
 
+const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
+
 describe("syncExternalCliCredentials", () => {
-  it("syncs Codex CLI credentials into the compatibility auth profile", () => {
+  it("syncs Codex CLI credentials into the supported default auth profile", () => {
     const expires = Date.now() + 60_000;
     mocks.readCodexCliCredentialsCached.mockReturnValue({
       type: "oauth",
@@ -39,7 +41,7 @@ describe("syncExternalCliCredentials", () => {
     expect(mocks.readCodexCliCredentialsCached).toHaveBeenCalledWith(
       expect.objectContaining({ ttlMs: expect.any(Number) }),
     );
-    expect(store.profiles[CODEX_CLI_PROFILE_ID]).toMatchObject({
+    expect(store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toMatchObject({
       type: "oauth",
       provider: "openai-codex",
       access: "access-token",
@@ -47,5 +49,6 @@ describe("syncExternalCliCredentials", () => {
       expires,
       accountId: "acct_123",
     });
+    expect(store.profiles[CODEX_CLI_PROFILE_ID]).toBeUndefined();
   });
 });
