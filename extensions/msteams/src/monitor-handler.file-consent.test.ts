@@ -38,9 +38,12 @@ const runtimeStub: PluginRuntime = {
   },
 } as unknown as PluginRuntime;
 
-function createDeps(): MSTeamsMessageHandlerDeps {
+function createDeps() {
+  const proactiveSendActivity = vi.fn(async () => ({ id: "proactive-activity-id" }));
   const adapter: MSTeamsAdapter = {
-    continueConversation: async () => {},
+    continueConversation: async (_appId, _ref, logic) => {
+      await logic({ sendActivity: proactiveSendActivity });
+    },
     process: async () => {},
   };
   const conversationStore: MSTeamsConversationStore = {
@@ -55,7 +58,7 @@ function createDeps(): MSTeamsMessageHandlerDeps {
     getPoll: async () => null,
     recordVote: async () => null,
   };
-  return {
+  const deps: MSTeamsMessageHandlerDeps = {
     cfg: {} as OpenClawConfig,
     runtime: {
       error: vi.fn(),
@@ -75,6 +78,7 @@ function createDeps(): MSTeamsMessageHandlerDeps {
       debug: vi.fn(),
     },
   };
+  return { deps, proactiveSendActivity };
 }
 
 function createActivityHandler(): MSTeamsActivityHandler {
@@ -134,13 +138,14 @@ function createConsentInvokeHarness(params: {
     contentType: "text/plain",
     conversationId: params.pendingConversationId ?? "19:victim@thread.v2",
   });
-  const handler = registerMSTeamsHandlers(createActivityHandler(), createDeps());
+  const { deps, proactiveSendActivity } = createDeps();
+  const handler = registerMSTeamsHandlers(createActivityHandler(), deps);
   const { context, sendActivity } = createInvokeContext({
     conversationId: params.invokeConversationId,
     uploadId,
     action: params.action,
   });
-  return { uploadId, handler, context, sendActivity };
+  return { uploadId, handler, context, sendActivity, proactiveSendActivity };
 }
 
 describe("msteams file consent invoke authz", () => {
@@ -177,21 +182,23 @@ describe("msteams file consent invoke authz", () => {
   });
 
   it("rejects cross-conversation accept invoke and keeps pending upload", async () => {
-    const { uploadId, handler, context, sendActivity } = createConsentInvokeHarness({
-      invokeConversationId: "19:attacker@thread.v2",
-      action: "accept",
-    });
+    const { uploadId, handler, context, sendActivity, proactiveSendActivity } =
+      createConsentInvokeHarness({
+        invokeConversationId: "19:attacker@thread.v2",
+        action: "accept",
+      });
 
     await handler.run?.(context);
 
-    // invokeResponse should be sent immediately
+    // invokeResponse should be sent immediately via the turn context
     expect(sendActivity).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "invokeResponse",
       }),
     );
 
-    expect(sendActivity).toHaveBeenCalledWith(
+    // Expired message sent via proactive messaging (turn context is revoked)
+    expect(proactiveSendActivity).toHaveBeenCalledWith(
       "The file upload request has expired. Please try sending the file again.",
     );
 
@@ -200,14 +207,15 @@ describe("msteams file consent invoke authz", () => {
   });
 
   it("ignores cross-conversation decline invoke and keeps pending upload", async () => {
-    const { uploadId, handler, context, sendActivity } = createConsentInvokeHarness({
-      invokeConversationId: "19:attacker@thread.v2",
-      action: "decline",
-    });
+    const { uploadId, handler, context, sendActivity, proactiveSendActivity } =
+      createConsentInvokeHarness({
+        invokeConversationId: "19:attacker@thread.v2",
+        action: "decline",
+      });
 
     await handler.run?.(context);
 
-    // invokeResponse should be sent immediately
+    // invokeResponse should be sent immediately via the turn context
     expect(sendActivity).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "invokeResponse",
@@ -216,6 +224,9 @@ describe("msteams file consent invoke authz", () => {
 
     expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
     expect(getPendingUpload(uploadId)).toBeDefined();
+    // Only the invoke response should be sent via the turn context
     expect(sendActivity).toHaveBeenCalledTimes(1);
+    // No proactive messages for decline
+    expect(proactiveSendActivity).not.toHaveBeenCalled();
   });
 });
