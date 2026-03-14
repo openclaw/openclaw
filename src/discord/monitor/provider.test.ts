@@ -26,6 +26,7 @@ function baseDiscordAccountConfig() {
 }
 
 const {
+  clientHandleDeployRequestMock,
   clientFetchUserMock,
   clientGetPluginMock,
   clientConstructorOptionsMock,
@@ -49,6 +50,7 @@ const {
 } = vi.hoisted(() => {
   const createdBindingManagers: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
   return {
+    clientHandleDeployRequestMock: vi.fn(async () => undefined),
     clientConstructorOptionsMock: vi.fn(),
     createDiscordAutoPresenceControllerMock: vi.fn(() => ({
       enabled: false,
@@ -131,6 +133,20 @@ function getFirstDiscordMessageHandlerParams<T extends object>() {
 
 vi.mock("@buape/carbon", () => {
   class ReadyListener {}
+  class RateLimitError extends Error {
+    status = 429;
+    discordCode?: number;
+    retryAfter: number;
+    scope: string | null;
+    bucket: string | null;
+    constructor(response: Response, body: { message: string; retry_after: number; code?: number }) {
+      super(body.message);
+      this.discordCode = body.code;
+      this.retryAfter = body.retry_after;
+      this.scope = response.headers.get("X-RateLimit-Scope");
+      this.bucket = response.headers.get("X-RateLimit-Bucket");
+    }
+  }
   class Client {
     listeners: unknown[];
     rest: { put: ReturnType<typeof vi.fn> };
@@ -142,7 +158,7 @@ vi.mock("@buape/carbon", () => {
       clientConstructorOptionsMock(options);
     }
     async handleDeployRequest() {
-      return undefined;
+      return await clientHandleDeployRequestMock();
     }
     async fetchUser(target: string) {
       return await clientFetchUserMock(target);
@@ -151,7 +167,7 @@ vi.mock("@buape/carbon", () => {
       return clientGetPluginMock(name);
     }
   }
-  return { Client, ReadyListener };
+  return { Client, RateLimitError, ReadyListener };
 });
 
 vi.mock("@buape/carbon/gateway", () => ({
@@ -373,6 +389,7 @@ describe("monitorDiscordProvider", () => {
   };
 
   beforeEach(() => {
+    clientHandleDeployRequestMock.mockClear().mockResolvedValue(undefined);
     clientConstructorOptionsMock.mockClear();
     createDiscordAutoPresenceControllerMock.mockClear().mockImplementation(() => ({
       enabled: false,
@@ -755,6 +772,40 @@ describe("monitorDiscordProvider", () => {
     expect(getPluginCommandSpecsMock).toHaveBeenCalledWith("discord");
     expect(commandNames).toContain("cmd");
     expect(commandNames).toContain("cron_jobs");
+  });
+
+  it("continues startup when Discord daily slash-command create quota is exhausted", async () => {
+    const { RateLimitError } = await import("@buape/carbon");
+    const { monitorDiscordProvider } = await import("./provider.js");
+    const runtime = baseRuntime();
+    clientHandleDeployRequestMock.mockRejectedValueOnce(
+      new RateLimitError(
+        new Response(null, {
+          status: 429,
+          headers: {
+            "X-RateLimit-Scope": "shared",
+            "X-RateLimit-Bucket": "bucket-1",
+          },
+        }),
+        {
+          message: "Max number of daily application command creates has been reached (200)",
+          retry_after: 193.632,
+          code: 30034,
+        },
+      ),
+    );
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime,
+    });
+
+    expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
+    expect(clientFetchUserMock).toHaveBeenCalledWith("@me");
+    expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("daily application command create limit reached"),
+    );
   });
 
   it("reports connected status on startup and shutdown", async () => {
