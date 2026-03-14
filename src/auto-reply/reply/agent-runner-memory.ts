@@ -37,6 +37,7 @@ import {
   resolveMemoryFlushPromptForRun,
   resolveMemoryFlushSettings,
   shouldRunMemoryFlush,
+  computeContextHash,
 } from "./memory-flush.js";
 import type { FollowupRun } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
@@ -447,6 +448,45 @@ export async function runMemoryFlushIfNeeded(params: {
     return entry ?? params.sessionEntry;
   }
 
+  // --- Content hash dedup (state-based) ---
+  // Read the tail of the session transcript and compute a lightweight hash.
+  // If the hash matches the last flush, the context hasn't materially changed
+  // and flushing again would produce duplicate memory entries (#30115).
+  const sessionFilePath = await resolveSessionFilePathForFlush(
+    params.followupRun.run.sessionId,
+    entry ?? params.sessionEntry,
+    params.storePath,
+    // Derive agentId from sessionKey so non-default agents resolve
+    // transcripts from the correct sessions directory (#34222).
+    params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined,
+  );
+  let contextHashBeforeFlush: string | undefined;
+  if (sessionFilePath) {
+    try {
+      const tailMessages = await readTranscriptTailMessages(sessionFilePath, 10);
+      // If no messages were extracted (e.g. >64KB single-line record), skip
+      // dedup rather than hashing an empty array to a stable value (#34222).
+      if (tailMessages.length === 0) {
+        logVerbose(
+          `memoryFlush dedup skipped (no tail messages extracted): sessionKey=${params.sessionKey}`,
+        );
+      }
+      contextHashBeforeFlush =
+        tailMessages.length > 0 ? computeContextHash(tailMessages) : undefined;
+      const previousHash = entry?.memoryFlushContextHash;
+      if (previousHash && contextHashBeforeFlush === previousHash) {
+        logVerbose(
+          `memoryFlush skipped (context hash unchanged): sessionKey=${params.sessionKey} hash=${contextHashBeforeFlush}`,
+        );
+        return entry ?? params.sessionEntry;
+      }
+    } catch (err) {
+      // If we can't read the transcript (file may not exist yet in new-session
+      // flows), fall through and allow the flush.
+      logVerbose(`memoryFlush hash check failed, proceeding with flush: ${String(err)}`);
+    }
+  }
+
   logVerbose(
     `memoryFlush triggered: sessionKey=${params.sessionKey} tokenCount=${tokenCountForFlush ?? "undefined"} threshold=${flushThreshold}`,
   );
@@ -508,7 +548,11 @@ export async function runMemoryFlushIfNeeded(params: {
           onAgentEvent: (evt) => {
             if (evt.stream === "compaction") {
               const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-              if (phase === "end") {
+              // Mirror the subscriber logic in handleAutoCompactionEnd: a compaction
+              // is considered complete when it produced a result and was not aborted,
+              // even when willRetry=true (overflow recovery — the compaction itself
+              // succeeded and context was trimmed). (#34222)
+              if (phase === "end" && evt.data?.hasResult && !evt.data?.wasAborted) {
                 memoryCompactionCompleted = true;
               }
             }
@@ -537,12 +581,29 @@ export async function runMemoryFlushIfNeeded(params: {
     }
     if (params.storePath && params.sessionKey) {
       try {
+        // Re-hash the transcript AFTER the flush so the stored hash matches
+        // what the next pre-flush check will compute (the transcript now
+        // includes the flush turn's messages). (#34222)
+        let contextHashAfterFlush = contextHashBeforeFlush;
+        if (sessionFilePath) {
+          try {
+            const postFlushMessages = await readTranscriptTailMessages(sessionFilePath, 10);
+            if (postFlushMessages.length > 0) {
+              contextHashAfterFlush = computeContextHash(postFlushMessages);
+            }
+          } catch {
+            // Best-effort: fall back to pre-flush hash if re-read fails.
+          }
+        }
         const updatedEntry = await updateSessionStoreEntry({
           storePath: params.storePath,
           sessionKey: params.sessionKey,
           update: async () => ({
             memoryFlushAt: Date.now(),
             memoryFlushCompactionCount,
+            ...(contextHashAfterFlush != null
+              ? { memoryFlushContextHash: contextHashAfterFlush }
+              : {}),
           }),
         });
         if (updatedEntry) {
@@ -557,4 +618,80 @@ export async function runMemoryFlushIfNeeded(params: {
   }
 
   return activeSessionEntry;
+}
+
+/**
+ * Resolve the session transcript file path for flush hash computation.
+ */
+async function resolveSessionFilePathForFlush(
+  sessionId: string | undefined,
+  entry: SessionEntry | undefined,
+  storePath: string | undefined,
+  agentId?: string,
+): Promise<string | undefined> {
+  if (!sessionId) {
+    return undefined;
+  }
+  // Always normalize through resolveSessionFilePath to handle stale absolute
+  // paths and relative entries consistently (mirrors resolveSessionLogPath).
+  const pathOpts = resolveSessionFilePathOptions({ storePath, agentId });
+  const transcriptPath = (
+    entry as (SessionEntry & { transcriptPath?: string }) | undefined
+  )?.transcriptPath?.trim();
+  const sessionFile = entry?.sessionFile?.trim() || transcriptPath;
+  try {
+    // Return the normalized path even if the file does not exist yet.
+    // In reset/new-session flows the transcript is created by the flush run
+    // itself; callers handle non-existent files via their own try-catch (#34222).
+    return resolveSessionFilePath(sessionId, sessionFile ? { sessionFile } : entry, pathOpts);
+  } catch {
+    // resolveSessionFilePath threw — normalization failed, skip dedup rather
+    // than reading from an unnormalized (potentially stale) path.
+  }
+  return undefined;
+}
+
+/**
+ * Read the last N messages (with role + content) from a session transcript JSONL file.
+ * Only returns entries that have a `message` field with a `role`.
+ */
+async function readTranscriptTailMessages(
+  filePath: string,
+  maxMessages: number,
+): Promise<Array<{ role?: string; content?: unknown }>> {
+  // Only read the tail of the file to avoid loading multi-MB transcripts (#15145).
+  const TAIL_BYTES = 64 * 1024; // 64KB — same budget as readSessionLogSnapshot
+  const handle = await fs.promises.open(filePath, "r");
+  try {
+    const stat = await handle.stat();
+    const start = Math.max(0, stat.size - TAIL_BYTES);
+    const readLen = Math.min(stat.size, TAIL_BYTES);
+    const buf = Buffer.alloc(readLen);
+    await handle.read(buf, 0, readLen, start);
+    const tail = buf.toString("utf-8");
+    // If we started mid-file, drop the first (likely partial) line.
+    // Guard against indexOf returning -1 (no newline found = entire chunk is one partial line).
+    const nlIdx = tail.indexOf("\n");
+    const trimmed = start > 0 ? (nlIdx >= 0 ? tail.slice(nlIdx + 1) : "") : tail;
+    const lines = trimmed.split(/\r?\n/);
+    const messages: Array<{ role?: string; content?: unknown }> = [];
+    // Read from the end for efficiency — we only need the tail.
+    for (let i = lines.length - 1; i >= 0 && messages.length < maxMessages; i--) {
+      const line = lines[i].trim();
+      if (!line) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed?.message?.role) {
+          messages.unshift({ role: parsed.message.role, content: parsed.message.content });
+        }
+      } catch {
+        // skip malformed lines
+      }
+    }
+    return messages;
+  } finally {
+    await handle.close();
+  }
 }

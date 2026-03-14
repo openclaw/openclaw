@@ -716,7 +716,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
         params.onAgentEvent?.({
           stream: "compaction",
-          data: { phase: "end", willRetry: false },
+          data: { phase: "end", willRetry: false, hasResult: true, wasAborted: false },
         });
         return { payloads: [{ text: "final" }], meta: {} };
       });

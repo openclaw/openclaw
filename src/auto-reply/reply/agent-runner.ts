@@ -285,6 +285,9 @@ export async function runReplyAgent(params: {
       fallbackNoticeSelectedModel: undefined,
       fallbackNoticeActiveModel: undefined,
       fallbackNoticeReason: undefined,
+      // Clear memory flush dedup state so the new session is not skipped
+      // by a stale hash inherited from the previous session (#34222).
+      memoryFlushContextHash: undefined,
     };
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
     const nextSessionFile = resolveSessionTranscriptPath(
