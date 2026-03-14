@@ -43,7 +43,7 @@ import {
 import {
   type OutboundSendDeps,
   resolveOutboundSendDep,
-} from "../../../src/infra/outbound/send-deps.js";
+} from "openclaw/plugin-sdk/compat";
 import { getTelegramRuntime } from "./runtime.js";
 
 type TelegramSendFn = ReturnType<

@@ -37,7 +37,7 @@ import {
   type ChannelPlugin,
   type ResolvedDiscordAccount,
 } from "openclaw/plugin-sdk/discord";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/compat";
 import { getDiscordRuntime } from "./runtime.js";
 
 type DiscordSendFn = ReturnType<

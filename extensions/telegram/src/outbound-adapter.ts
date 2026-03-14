@@ -7,7 +7,7 @@ import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
-} from "../../../src/infra/outbound/send-deps.js";
+} from "openclaw/plugin-sdk/compat";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { markdownToTelegramHtmlChunks } from "./format.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";

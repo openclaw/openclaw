@@ -30,7 +30,7 @@ import {
   type ChannelPlugin,
   type ResolvedSignalAccount,
 } from "openclaw/plugin-sdk/signal";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/compat";
 import { getSignalRuntime } from "./runtime.js";
 
 const signalMessageActions: ChannelMessageActionAdapter = {
