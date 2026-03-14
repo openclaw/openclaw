@@ -666,6 +666,27 @@ describe("send", () => {
       expect(body.partIndex).toBe(0);
     });
 
+    it("forwards caller timeoutMs to lazy-refresh instead of hardcoded default", async () => {
+      privateApiStatusMock.mockReturnValueOnce(null).mockReturnValueOnce(true);
+      fetchServerInfoMock.mockResolvedValueOnce({ private_api: true, server_version: "1.0.0" });
+
+      mockResolvedHandleTarget();
+      mockSendResponse({ data: { guid: "msg-uuid-custom-timeout" } });
+
+      await sendMessageBlueBubbles("+15551234567", "Threaded reply", {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+        replyToMessageGuid: "reply-guid-timeout",
+        timeoutMs: 30000,
+      });
+
+      expect(fetchServerInfoMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          timeoutMs: 30000,
+        }),
+      );
+    });
+
     it("degrades to plain send when lazy-refresh fails to restore Private API", async () => {
       // If fetchBlueBubblesServerInfo returns null (server unreachable),
       // privateApiStatus stays null and the reply should degrade gracefully.

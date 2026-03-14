@@ -426,7 +426,7 @@ export async function sendMessageBlueBubbles(
       baseUrl,
       password,
       accountId: account.accountId,
-      timeoutMs: 5000,
+      timeoutMs: opts.timeoutMs ?? 5000,
     });
     if (serverInfo) {
       privateApiStatus = getCachedBlueBubblesPrivateApiStatus(account.accountId);
