@@ -105,6 +105,53 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("schedules every listed agent when heartbeat is configured in defaults only", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { every: "30m" } },
+          list: [{ id: "main" }, { id: "ops" }],
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    expect(runSpy.mock.calls.map((call) => call[0]?.agentId)).toEqual(["main", "ops"]);
+
+    runner.stop();
+  });
+
+  it("keeps scheduling the default agent when heartbeat relies on implicit defaults", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          list: [{ id: "main" }, { id: "ops" }],
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main", reason: "interval" }),
+    );
+
+    runner.stop();
+  });
+
   it("continues scheduling after runOnce throws an unhandled error", async () => {
     useFakeHeartbeatTime();
 
