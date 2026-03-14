@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **OpenClaw DingTalk** — DingTalk Stream channel plugin for OpenClaw with direct chat, mention-gated group chat, and session-webhook replies.
+  npm: `@zqsds/dingtalk`
+  repo: `https://github.com/zqsds/openclaw-dingtalk`
+  install: `openclaw plugins install @zqsds/dingtalk`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
