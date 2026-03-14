@@ -48,6 +48,7 @@ import {
   MEDIA_GROUP_TIMEOUT_MS,
   type MediaGroupEntry,
   type TelegramUpdateKeyContext,
+  resolveTelegramUpdateId,
 } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.js";
 import {
@@ -135,6 +136,8 @@ export const registerTelegramHandlers = ({
   resolveGroupPolicy,
   resolveTelegramGroupConfig,
   shouldSkipUpdate,
+  holdDeferredUpdateId,
+  releaseDeferredUpdateId,
   processMessage,
   logger,
 }: RegisterTelegramHandlerParams) => {
@@ -403,6 +406,15 @@ export const registerTelegramHandlers = ({
       await processMessage(primaryEntry.ctx, allMedia, storeAllowFrom, undefined, replyMedia);
     } catch (err) {
       runtime.error?.(danger(`media group handler failed: ${String(err)}`));
+    } finally {
+      const updateIds = new Set(
+        entry.messages
+          .map((message) => message.updateId)
+          .filter((updateId): updateId is number => typeof updateId === "number"),
+      );
+      for (const updateId of updateIds) {
+        releaseDeferredUpdateId?.(updateId);
+      }
     }
   };
 
@@ -879,6 +891,7 @@ export const registerTelegramHandlers = ({
     chatId: number;
     resolvedThreadId?: number;
     dmThreadId?: number;
+    deferredUpdateId?: number;
     storeAllowFrom: string[];
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
@@ -889,6 +902,7 @@ export const registerTelegramHandlers = ({
       chatId,
       resolvedThreadId,
       dmThreadId,
+      deferredUpdateId,
       storeAllowFrom,
       sendOversizeWarning,
       oversizeLogMessage,
@@ -961,10 +975,16 @@ export const registerTelegramHandlers = ({
     // Media group handling - buffer multi-image messages
     const mediaGroupId = msg.media_group_id;
     if (mediaGroupId) {
+      // buildSyntheticContext(...) drops the raw update envelope, so media-group offset
+      // tracking must use the original update_id captured before we normalized the ctx.
+      const updateId = deferredUpdateId;
+      if (typeof updateId === "number") {
+        holdDeferredUpdateId?.(updateId);
+      }
       const existing = mediaGroupBuffer.get(mediaGroupId);
       if (existing) {
         clearTimeout(existing.timer);
-        existing.messages.push({ msg, ctx });
+        existing.messages.push({ msg, ctx, updateId });
         existing.timer = setTimeout(async () => {
           mediaGroupBuffer.delete(mediaGroupId);
           mediaGroupProcessing = mediaGroupProcessing
@@ -976,7 +996,7 @@ export const registerTelegramHandlers = ({
         }, mediaGroupTimeoutMs);
       } else {
         const entry: MediaGroupEntry = {
-          messages: [{ msg, ctx }],
+          messages: [{ msg, ctx, updateId }],
           timer: setTimeout(async () => {
             mediaGroupBuffer.delete(mediaGroupId);
             mediaGroupProcessing = mediaGroupProcessing
@@ -1593,6 +1613,7 @@ export const registerTelegramHandlers = ({
         chatId: event.chatId,
         resolvedThreadId,
         dmThreadId,
+        deferredUpdateId: resolveTelegramUpdateId(event.ctxForDedupe),
         storeAllowFrom,
         sendOversizeWarning: event.sendOversizeWarning,
         oversizeLogMessage: event.oversizeLogMessage,

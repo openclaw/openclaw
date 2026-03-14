@@ -570,6 +570,131 @@ describe("createTelegramBot", () => {
       persistedAfterDrain.length > 0 ? Math.max(...persistedAfterDrain) : -Infinity;
     expect(maxPersistedAfterDrain).toBe(102);
   });
+  it("waits for buffered media groups before persisting their update offsets", async () => {
+    sequentializeSpy.mockImplementationOnce(
+      () => async (_ctx: unknown, next: () => Promise<void>) => {
+        await next();
+      },
+    );
+
+    const onUpdateId = vi.fn();
+    const deferredFlushTimings = {
+      ...TELEGRAM_TEST_TIMINGS,
+      mediaGroupFlushMs: 1_000,
+    } as const;
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: {
+            "-100777111222": {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      createTelegramBot({
+        token: "tok",
+        updateOffset: {
+          lastUpdateId: 100,
+          onUpdateId,
+        },
+        testTimings: deferredFlushTimings,
+      });
+
+      type Middleware = (
+        ctx: Record<string, unknown>,
+        next: () => Promise<void>,
+      ) => Promise<void> | void;
+
+      const middlewares = middlewareUseSpy.mock.calls
+        .map((call) => call[0])
+        .filter((fn): fn is Middleware => typeof fn === "function");
+      const handler = getOnHandler("channel_post") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      const runUpdate = async (ctx: Record<string, unknown>) => {
+        let idx = -1;
+        const dispatch = async (i: number): Promise<void> => {
+          if (i <= idx) {
+            throw new Error("middleware dispatch called multiple times");
+          }
+          idx = i;
+          const fn = middlewares[i];
+          if (!fn) {
+            await handler(ctx);
+            return;
+          }
+          await fn(ctx, async () => dispatch(i + 1));
+        };
+        await dispatch(0);
+      };
+
+      const makeChannelPostCtx = (updateId: number, messageId: number, fileId: string) => {
+        const post = {
+          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
+          message_id: messageId,
+          ...(messageId === 201 ? { caption: "offset album" } : {}),
+          date: 1736380800 + (messageId - 201),
+          media_group_id: "offset-album-1",
+          photo: [{ file_id: fileId }],
+        };
+        return {
+          update: { update_id: updateId, channel_post: post },
+          channelPost: post,
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({ file_path: `photos/${fileId}.jpg` }),
+        };
+      };
+
+      await Promise.all([
+        runUpdate(makeChannelPostCtx(111, 201, "p1")),
+        runUpdate(makeChannelPostCtx(112, 202, "p2")),
+      ]);
+
+      const persistedBeforeFlush = onUpdateId.mock.calls.map((call) => Number(call[0]));
+      const maxPersistedBeforeFlush =
+        persistedBeforeFlush.length > 0 ? Math.max(...persistedBeforeFlush) : -Infinity;
+      expect(maxPersistedBeforeFlush).toBeLessThan(111);
+
+      const flushTimerCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call) => call[1] === deferredFlushTimings.mediaGroupFlushMs,
+      );
+      const flushTimer =
+        flushTimerCallIndex >= 0
+          ? (setTimeoutSpy.mock.calls[flushTimerCallIndex]?.[0] as (() => unknown) | undefined)
+          : undefined;
+      if (flushTimerCallIndex >= 0) {
+        clearTimeout(
+          setTimeoutSpy.mock.results[flushTimerCallIndex]?.value as ReturnType<typeof setTimeout>,
+        );
+      }
+      expect(flushTimer).toBeTypeOf("function");
+      await flushTimer?.();
+
+      const persistedAfterFlush = onUpdateId.mock.calls.map((call) => Number(call[0]));
+      const maxPersistedAfterFlush =
+        persistedAfterFlush.length > 0 ? Math.max(...persistedAfterFlush) : -Infinity;
+      expect(maxPersistedAfterFlush).toBe(112);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      fetchSpy.mockRestore();
+    }
+  });
   it("allows distinct callback_query ids without update_id", async () => {
     loadConfig.mockReturnValue({
       channels: {

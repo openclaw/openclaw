@@ -106,6 +106,8 @@ export type RegisterTelegramHandlerParams = {
     messageThreadId?: number,
   ) => { groupConfig?: TelegramGroupConfig; topicConfig?: TelegramTopicConfig };
   shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
+  holdDeferredUpdateId?: (updateId: number) => void;
+  releaseDeferredUpdateId?: (updateId: number) => void;
   processMessage: (
     ctx: TelegramContext,
     allMedia: TelegramMediaRef[],
