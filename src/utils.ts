@@ -295,6 +295,16 @@ export function resolveConfigDir(
   const explicitHome = env.OPENCLAW_HOME?.trim();
   const resolvedHome = resolveRequiredHomeDir(env, homedir);
   if (explicitHome && ALL_STATE_DIRNAMES.has(path.basename(resolvedHome))) {
+    // Backward compat: if a nested config dir already exists from the old
+    // buggy behavior, prefer it so we don't orphan existing config data.
+    const nestedConfig = path.join(resolvedHome, ".openclaw");
+    try {
+      if (fs.existsSync(nestedConfig)) {
+        return nestedConfig;
+      }
+    } catch {
+      // best-effort
+    }
     return resolvedHome;
   }
   const newDir = path.join(resolvedHome, ".openclaw");
