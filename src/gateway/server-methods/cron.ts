@@ -111,6 +111,12 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (jobCreate.schedule?.kind === "every" && jobCreate.schedule.everyMs < 30 * 60 * 1000) {
+      context.logGateway.warn(
+        { schedule: jobCreate.schedule, name: jobCreate.name },
+        "cron: high-frequency schedule (<30m) may cause session accumulation and silently exhaust agent context",
+      );
+    }
     const job = await context.cron.add(jobCreate);
     context.logGateway.info("cron: job created", { jobId: job.id, schedule: jobCreate.schedule });
     respond(true, job, undefined);

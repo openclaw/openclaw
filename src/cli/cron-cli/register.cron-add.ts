@@ -130,6 +130,11 @@ export function registerCronAddCommand(cron: Command) {
               if (!everyMs) {
                 throw new Error("Invalid --every; use e.g. 10m, 1h, 1d");
               }
+              if (everyMs < 30 * 60 * 1000) {
+                defaultRuntime.error(
+                  "Warning: High-frequency cron (< 30m) may cause session accumulation and silently exhaust the agent context window. Consider using heartbeat or longer intervals.",
+                );
+              }
               return { kind: "every" as const, everyMs };
             }
             const staggerMs = parseCronStaggerMs({ staggerRaw, useExact });
