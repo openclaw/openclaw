@@ -1,3 +1,4 @@
+import { spawn } from "child_process";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
@@ -175,6 +176,39 @@ describe("recordTokenUsage", () => {
 
     const records = JSON.parse(await fs.readFile(usageFile, "utf-8"));
     expect(records).toHaveLength(N);
+  });
+
+  it("reclaims stale lock left by a crashed process", async () => {
+    // Spawn a subprocess that exits immediately, then use its (now-dead) PID
+    // to simulate a lock file left behind after an abnormal exit.
+    const deadPid = await new Promise<number>((resolve, reject) => {
+      const child = spawn(process.execPath, ["-e", "process.exit(0)"]);
+      const pid = child.pid!;
+      child.on("exit", () => resolve(pid));
+      child.on("error", reject);
+    });
+
+    const memoryDir = path.join(tmpDir, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    const lockPath = path.join(memoryDir, "token-usage.json.lock");
+    await fs.writeFile(lockPath, String(deadPid));
+
+    // recordTokenUsage must detect the stale lock, reclaim it, and succeed.
+    await recordTokenUsage({
+      workspaceDir: tmpDir,
+      label: "llm_output",
+      usage: { input: 100, output: 50, total: 150 },
+    });
+
+    const records = JSON.parse(await fs.readFile(usageFile, "utf-8"));
+    expect(records).toHaveLength(1);
+    expect(records[0].tokensUsed).toBe(150);
+    // Lock file must be cleaned up by the winner.
+    const lockExists = await fs
+      .access(lockPath)
+      .then(() => true)
+      .catch(() => false);
+    expect(lockExists).toBe(false);
   });
 
   it("serialises concurrent writes — no record is lost", async () => {
