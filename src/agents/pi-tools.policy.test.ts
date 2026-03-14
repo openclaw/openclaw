@@ -271,4 +271,38 @@ describe("resolveEffectiveToolPolicy", () => {
     const result = resolveEffectiveToolPolicy({ config: cfg, agentId: "coder" });
     expect(result.profileAlsoAllow).toEqual(["read", "write", "edit"]);
   });
+
+  it("does not implicitly expose fs tools when profile is minimal", () => {
+    const cfg = {
+      tools: {
+        profile: "minimal",
+        fs: { workspaceOnly: true },
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+    expect(result.profileAlsoAllow).toBeUndefined();
+  });
+
+  it("does not implicitly expose exec/process tools when profile is minimal", () => {
+    const cfg = {
+      tools: {
+        profile: "minimal",
+        exec: { host: "sandbox" },
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+    expect(result.profileAlsoAllow).toBeUndefined();
+  });
+
+  it("does not implicitly expose any tools when profile is minimal with both fs and exec", () => {
+    const cfg = {
+      tools: {
+        profile: "minimal",
+        fs: { workspaceOnly: false },
+        exec: { host: "sandbox" },
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+    expect(result.profileAlsoAllow).toBeUndefined();
+  });
 });
