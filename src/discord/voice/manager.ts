@@ -21,6 +21,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
+import { updateSessionStore } from "../../config/sessions/store.js";
 import type { DiscordAccountConfig, TtsConfig } from "../../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -34,6 +35,10 @@ import {
 } from "../../media-understanding/runner.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import {
+  applyModelOverrideToSessionEntry,
+  type ModelOverrideSelection,
+} from "../../sessions/model-overrides.js";
 import { parseTtsDirectives } from "../../tts/tts-core.js";
 import { resolveTtsConfig, textToSpeech, type ResolvedTtsConfig } from "../../tts/tts.js";
 import { formatMention } from "../mentions.js";
@@ -53,6 +58,52 @@ const DECRYPT_FAILURE_WINDOW_MS = 30_000;
 const DECRYPT_FAILURE_RECONNECT_THRESHOLD = 3;
 const DECRYPT_FAILURE_PATTERN = /DecryptionFailed\(/;
 const SPEAKER_CONTEXT_CACHE_TTL_MS = 60_000;
+
+// Voice model escalation trigger patterns.
+// Each tier maps a set of phrases (matched case-insensitively against the transcript)
+// to a model override. "reset" clears any override, reverting to the agent's default model.
+type EscalationTier = {
+  patterns: RegExp[];
+  selection: ModelOverrideSelection | "reset";
+  label: string;
+};
+
+const ESCALATION_TIERS: EscalationTier[] = [
+  {
+    label: "deep",
+    patterns: [
+      /\bgo deep\b/i,
+      /\bthink (?:deeper|harder|carefully)\b/i,
+      /\bdeep mode\b/i,
+      /\buse (?:sonnet|opus|cloud)\b/i,
+    ],
+    selection: { provider: "anthropic", model: "claude-sonnet-4-6" },
+  },
+  {
+    label: "medium",
+    patterns: [/\bthink about (?:that|this|it)\b/i, /\bmedium mode\b/i, /\buse haiku\b/i],
+    selection: { provider: "anthropic", model: "claude-haiku-4-5" },
+  },
+  {
+    label: "fast",
+    patterns: [/\bgo fast\b/i, /\bquick mode\b/i, /\bfast mode\b/i, /\buse local\b/i],
+    selection: "reset",
+  },
+];
+
+function detectEscalationTrigger(
+  transcript: string,
+): { tier: EscalationTier; matched: string } | null {
+  for (const tier of ESCALATION_TIERS) {
+    for (const pattern of tier.patterns) {
+      const match = pattern.exec(transcript);
+      if (match) {
+        return { tier, matched: match[0] };
+      }
+    }
+  }
+  return null;
+}
 
 const logger = createSubsystemLogger("discord/voice");
 
@@ -638,6 +689,9 @@ export class DiscordVoiceManager {
       `transcription ok (${transcript.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
     );
 
+    // Check for voice-triggered model escalation/de-escalation.
+    await this.handleEscalationTrigger(entry, transcript);
+
     const speaker = await this.resolveSpeakerContext(entry.guildId, userId);
     const prompt = speaker.label ? `${speaker.label}: ${transcript}` : transcript;
 
@@ -715,6 +769,38 @@ export class DiscordVoiceManager {
       );
       logVoiceVerbose(`playback done: guild ${entry.guildId} channel ${entry.channelId}`);
     });
+  }
+
+  private async handleEscalationTrigger(
+    entry: VoiceSessionEntry,
+    transcript: string,
+  ): Promise<void> {
+    const trigger = detectEscalationTrigger(transcript);
+    if (!trigger) {
+      return;
+    }
+    const { tier, matched } = trigger;
+    const storePath = resolveAgentDir(this.params.cfg, entry.route.agentId);
+    try {
+      await updateSessionStore(storePath, (store) => {
+        const sessionEntry = store[entry.route.sessionKey];
+        if (!sessionEntry) {
+          return;
+        }
+        const selection: ModelOverrideSelection =
+          tier.selection === "reset"
+            ? { provider: "", model: "", isDefault: true }
+            : tier.selection;
+        const { updated } = applyModelOverrideToSessionEntry({ entry: sessionEntry, selection });
+        if (updated) {
+          logger.info(
+            `discord voice: escalation "${tier.label}" triggered by "${matched}" for session ${entry.route.sessionKey}`,
+          );
+        }
+      });
+    } catch (err) {
+      logger.warn(`discord voice: escalation override failed: ${formatErrorMessage(err)}`);
+    }
   }
 
   private handleReceiveError(entry: VoiceSessionEntry, err: unknown) {
