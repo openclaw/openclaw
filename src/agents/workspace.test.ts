@@ -11,6 +11,7 @@ import {
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
+  DEFAULT_WORKING_FILENAME,
   ensureAgentWorkspace,
   filterBootstrapFilesForSession,
   loadWorkspaceBootstrapFiles,
@@ -189,6 +190,29 @@ describe("loadWorkspaceBootstrapFiles", () => {
 
     const files = await loadWorkspaceBootstrapFiles(tempDir);
     expect(getMemoryEntries(files)).toHaveLength(0);
+  });
+
+  it("includes WORKING.md when present", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: "WORKING.md",
+      content: "# Active task\nDoing stuff",
+    });
+
+    const files = await loadWorkspaceBootstrapFiles(tempDir);
+    const working = files.find((f) => f.name === DEFAULT_WORKING_FILENAME);
+    expect(working).toBeDefined();
+    expect(working?.missing).toBe(false);
+    expect(working?.content).toBe("# Active task\nDoing stuff");
+  });
+
+  it("omits WORKING.md when not present", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    const files = await loadWorkspaceBootstrapFiles(tempDir);
+    const working = files.find((f) => f.name === DEFAULT_WORKING_FILENAME);
+    expect(working).toBeUndefined();
   });
 
   it("treats hardlinked bootstrap aliases as missing", async () => {

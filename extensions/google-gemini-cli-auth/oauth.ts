@@ -74,12 +74,17 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
 
   try {
     const geminiPath = findInPath("gemini");
-    if (!geminiPath) {
+    let geminiCliDirs: string[];
+    if (geminiPath) {
+      const resolvedPath = realpathSync(geminiPath);
+      geminiCliDirs = resolveGeminiCliDirs(geminiPath, resolvedPath);
+    } else if (process.platform === "win32" && process.env.APPDATA) {
+      // Fallback: on Windows the npm global bin may not be in PATH, but
+      // globally-installed packages are still under %APPDATA%\npm\node_modules.
+      geminiCliDirs = [join(process.env.APPDATA, "npm", "node_modules", "@google", "gemini-cli")];
+    } else {
       return null;
     }
-
-    const resolvedPath = realpathSync(geminiPath);
-    const geminiCliDirs = resolveGeminiCliDirs(geminiPath, resolvedPath);
 
     let content: string | null = null;
     for (const geminiCliDir of geminiCliDirs) {
@@ -145,6 +150,12 @@ function resolveGeminiCliDirs(geminiPath: string, resolvedPath: string): string[
     join(dirname(binDir), "node_modules", "@google", "gemini-cli"),
     join(dirname(binDir), "lib", "node_modules", "@google", "gemini-cli"),
   ];
+
+  // On Windows, npm global packages live under %APPDATA%\npm\node_modules
+  // regardless of where the bin shim is located.
+  if (process.platform === "win32" && process.env.APPDATA) {
+    candidates.push(join(process.env.APPDATA, "npm", "node_modules", "@google", "gemini-cli"));
+  }
 
   const deduped: string[] = [];
   const seen = new Set<string>();
