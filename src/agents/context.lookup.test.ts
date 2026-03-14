@@ -90,6 +90,20 @@ describe("lookupContextTokens", () => {
     }
   });
 
+  it("skips eager warmup for gateway probe", async () => {
+    const loadConfigMock = vi.fn(() => ({ models: {} }));
+    mockContextModuleDeps(loadConfigMock);
+
+    const argvSnapshot = process.argv;
+    process.argv = ["node", "openclaw", "gateway", "probe", "--timeout", "3000", "--json"];
+    try {
+      await import("./context.js");
+      expect(loadConfigMock).not.toHaveBeenCalled();
+    } finally {
+      process.argv = argvSnapshot;
+    }
+  });
+
   it("retries config loading after backoff when an initial load fails", async () => {
     vi.useFakeTimers();
     const loadConfigMock = vi
