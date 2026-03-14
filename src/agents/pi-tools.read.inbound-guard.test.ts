@@ -35,12 +35,17 @@ describe("isInboundMediaPath", () => {
     expect(isInboundMediaPath("media-inbound/file.txt")).toBe(false);
   });
 
-  it("does not misclassify workspace source files nested under media/inbound", () => {
-    // Regression: paths like src/media/inbound/parser.ts must not be treated as
-    // untrusted inbound media — media/inbound must be at the workspace root level.
+  it("does not misclassify relative paths with media/inbound not at root", () => {
+    // Relative paths: media/inbound must be the first path segment to be
+    // classified as inbound.  Paths like src/media/inbound/parser.ts start
+    // with a different segment and are therefore not inbound.
     expect(isInboundMediaPath("src/media/inbound/parser.ts")).toBe(false);
-    expect(isInboundMediaPath("/workspace/src/media/inbound/parser.ts")).toBe(false);
     expect(isInboundMediaPath("packages/core/media/inbound/file.txt")).toBe(false);
+    // Absolute paths: any depth is accepted because the function cannot
+    // determine the workspace root from the path string alone.  An absolute
+    // path that contains /media/inbound/ as a path component is treated as
+    // inbound regardless of how many segments precede it.
+    expect(isInboundMediaPath("/workspace/src/media/inbound/parser.ts")).toBe(true);
   });
 
   it("correctly classifies non-canonical path forms (double-slashes, dot segments)", () => {
@@ -50,6 +55,18 @@ describe("isInboundMediaPath", () => {
     expect(isInboundMediaPath("/workspace//media/inbound/file.txt")).toBe(true);
     expect(isInboundMediaPath("./media/inbound/file.txt")).toBe(true);
     expect(isInboundMediaPath("/workspace/./media/inbound/file.txt")).toBe(true);
+  });
+
+  it("returns true for multi-segment absolute host paths (regression #11207 P1)", () => {
+    // Regression: absolute paths with more than one segment before media/inbound
+    // (e.g. /Users/alice/openclaw/media/inbound/file.txt) were not matched by the
+    // previous single-segment regex and would bypass the inbound guard.
+    expect(isInboundMediaPath("/Users/alice/openclaw/media/inbound/file.txt")).toBe(true);
+    expect(isInboundMediaPath("/Users/alice/openclaw/media/inbound/subdir/file.txt")).toBe(true);
+    expect(isInboundMediaPath("C:/Users/alice/openclaw/media/inbound/file.txt")).toBe(true);
+    expect(isInboundMediaPath("C:\\Users\\alice\\openclaw\\media\\inbound\\file.txt")).toBe(true);
+    // Exact directory match (no trailing slash)
+    expect(isInboundMediaPath("/Users/alice/openclaw/media/inbound")).toBe(false);
   });
 });
 
