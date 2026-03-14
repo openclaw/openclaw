@@ -685,18 +685,28 @@ function resolveSessionScopedOptionLabel(
   row?: SessionsListResult["sessions"][number],
   rest?: string,
 ) {
-  const base = rest?.trim() || key;
-  if (!row) {
-    return base;
-  }
+  // Priority: label > displayName > scoped suffix > key
+  const label =
+    typeof row?.label === "string" && row.label.trim().length > 0 ? row.label.trim() : null;
+  const displayName =
+    typeof row?.displayName === "string" && row.displayName.trim().length > 0
+      ? row.displayName.trim()
+      : null;
 
-  const label = row.label?.trim() || "";
-  const displayName = row.displayName?.trim() || "";
-  if ((label && label !== key) || (displayName && displayName !== key)) {
-    return resolveSessionDisplayName(key, row);
+  // Use label if available
+  if (label) {
+    return `${key} · ${label}`;
   }
-
-  return base;
+  // Fall back to displayName
+  if (displayName && displayName !== key) {
+    return `${key} · ${displayName}`;
+  }
+  // Fall back to scoped suffix from parsed session key
+  if (rest && rest.trim().length > 0) {
+    return `${key} · ${rest.trim()}`;
+  }
+  // Default to key
+  return key;
 }
 
 type ThemeOption = { id: ThemeName; label: string; icon: string };
