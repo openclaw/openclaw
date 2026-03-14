@@ -7,12 +7,14 @@ import { getUpdateAvailable } from "../../infra/update-startup.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveGatewayAuth } from "../auth.js";
 import type { Snapshot } from "../protocol/index.js";
+import type { ChannelRuntimeSnapshot } from "../server-channels.js";
 
 let presenceVersion = 1;
 let healthVersion = 1;
 let healthCache: HealthSummary | null = null;
 let healthRefresh: Promise<HealthSummary> | null = null;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
+let healthRuntimeSnapshotProvider: (() => ChannelRuntimeSnapshot) | null = null;
 
 export function buildGatewaySnapshot(): Snapshot {
   const cfg = loadConfig();
@@ -67,10 +69,20 @@ export function setBroadcastHealthUpdate(fn: ((snap: HealthSummary) => void) | n
   broadcastHealthUpdate = fn;
 }
 
+export function setHealthRuntimeSnapshotProvider(
+  fn: (() => ChannelRuntimeSnapshot) | null,
+) {
+  healthRuntimeSnapshotProvider = fn;
+}
+
 export async function refreshGatewayHealthSnapshot(opts?: { probe?: boolean }) {
   if (!healthRefresh) {
     healthRefresh = (async () => {
-      const snap = await getHealthSnapshot({ probe: opts?.probe });
+      const runtimeSnapshot = healthRuntimeSnapshotProvider?.();
+      const snap = await getHealthSnapshot({
+        probe: opts?.probe,
+        runtimeSnapshot,
+      });
       healthCache = snap;
       healthVersion += 1;
       if (broadcastHealthUpdate) {
