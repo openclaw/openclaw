@@ -911,6 +911,42 @@ describe("createInboundDebouncer flushAll", () => {
 
     vi.useRealTimers();
   });
+
+  it("stops sweeping when the global flush deadline is reached", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+    let now = 0;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+
+    let debouncer: ReturnType<typeof createInboundDebouncer<{ key: string; id: string }>>;
+    debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 5000,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+        if (items[0]?.id === "1") {
+          await debouncer.enqueue({ key: "b", id: "2" });
+          now = 20;
+        }
+      },
+    });
+
+    try {
+      await debouncer.enqueue({ key: "a", id: "1" });
+
+      const flushed = await debouncer.flushAll({ deadlineMs: 10 });
+      expect(flushed).toBe(1);
+      expect(calls).toEqual([["1"]]);
+
+      now = 0;
+      const flushedLater = await debouncer.flushAll({ deadlineMs: 10 });
+      expect(flushedLater).toBe(1);
+      expect(calls).toEqual([["1"], ["2"]]);
+    } finally {
+      nowSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("initSessionState BodyStripped", () => {

@@ -57,7 +57,8 @@ const gatewayLog = {
 };
 
 vi.mock("../../auto-reply/inbound-debounce.js", () => ({
-  flushAllInboundDebouncers: () => flushAllInboundDebouncers(),
+  flushAllInboundDebouncers: (options?: { timeoutMs?: number }) =>
+    flushAllInboundDebouncers(options),
 }));
 
 vi.mock("../../auto-reply/reply/queue/drain-all.js", () => ({
@@ -396,6 +397,7 @@ describe("runGatewayLoop", () => {
 
       expect(markGatewayDraining).toHaveBeenCalledTimes(1);
       expect(flushAllInboundDebouncers).toHaveBeenCalledTimes(1);
+      expect(flushAllInboundDebouncers).toHaveBeenCalledWith({ timeoutMs: 10_000 });
       expect(waitForFollowupQueueDrain).toHaveBeenCalledWith(5_000);
       expect(markGatewayDraining.mock.invocationCallOrder[0]).toBeLessThan(
         flushAllInboundDebouncers.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
@@ -442,7 +444,7 @@ describe("runGatewayLoop", () => {
           .map((call) => call[1])
           .filter((delay): delay is number => typeof delay === "number" && delay >= 95_000);
         expect(forceExitCalls).toContain(95_000);
-        expect(forceExitCalls.some((delay) => delay > 95_000 && delay <= 100_000)).toBe(true);
+        expect(forceExitCalls).toContain(100_000);
 
         sigterm();
         await expect(exited).resolves.toBe(0);
@@ -470,12 +472,13 @@ describe("runGatewayLoop", () => {
         await new Promise<void>((resolve) => setImmediate(resolve));
 
         expect(flushAllInboundDebouncers).toHaveBeenCalledTimes(1);
+        expect(flushAllInboundDebouncers).toHaveBeenCalledWith({ timeoutMs: 10_000 });
         expect(waitForFollowupQueueDrain).not.toHaveBeenCalled();
         expect(markGatewayDraining).toHaveBeenCalledTimes(1);
         const forceExitCalls = setTimeoutSpy.mock.calls
           .map((call) => call[1])
           .filter((delay): delay is number => typeof delay === "number" && delay >= 95_000);
-        expect(forceExitCalls).toEqual([95_000]);
+        expect(forceExitCalls).toEqual([95_000, 95_000]);
 
         sigterm();
         await expect(exited).resolves.toBe(0);
@@ -510,6 +513,42 @@ describe("runGatewayLoop", () => {
 
       sigterm();
       await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("re-arms the restart watchdog after a slow debounce flush", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      let now = 1000;
+      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+      flushAllInboundDebouncers.mockImplementationOnce(async () => {
+        now += 20_000;
+        return 0;
+      });
+
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      try {
+        const { exited } = await createSignaledLoopHarness();
+        const sigusr1 = captureSignal("SIGUSR1");
+        const sigterm = captureSignal("SIGTERM");
+
+        sigusr1();
+
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => setImmediate(resolve));
+
+        const forceExitCalls = setTimeoutSpy.mock.calls
+          .map((call) => call[1])
+          .filter((delay): delay is number => typeof delay === "number" && delay >= 95_000);
+        expect(forceExitCalls).toEqual([95_000, 95_000]);
+
+        sigterm();
+        await expect(exited).resolves.toBe(0);
+      } finally {
+        nowSpy.mockRestore();
+        setTimeoutSpy.mockRestore();
+      }
     });
   });
 

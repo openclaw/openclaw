@@ -127,6 +127,7 @@ export async function runGatewayLoop(params: {
 
   const DRAIN_TIMEOUT_MS = 90_000;
   const FOLLOWUP_DRAIN_TIMEOUT_MS = 5_000;
+  const INBOUND_DEBOUNCE_FLUSH_TIMEOUT_MS = 10_000;
   const SUPERVISOR_STOP_TIMEOUT_MS = 30_000;
   const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
   const resolveRestartDrainTimeoutMs = () => {
@@ -150,9 +151,8 @@ export async function runGatewayLoop(params: {
     const restartDrainTimeoutMs = isRestart ? resolveRestartDrainTimeoutMs() : 0;
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
 
-    const signalStartMs = Date.now();
     const baseForceExitDeadlineMs =
-      signalStartMs + SHUTDOWN_TIMEOUT_MS + (isRestart ? restartDrainTimeoutMs : 0);
+      Date.now() + SHUTDOWN_TIMEOUT_MS + (isRestart ? restartDrainTimeoutMs : 0);
     let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
     const armForceExitTimer = (deadlineMs: number) => {
       if (forceExitTimer) {
@@ -183,21 +183,31 @@ export async function runGatewayLoop(params: {
         if (isRestart) {
           // Reject new command-queue work before any awaited restart drain
           // step so late arrivals fail explicitly instead of being stranded
-          // behind a one-shot debounce flush.
+          // behind a one-shot debounce flush. This does not block followup
+          // queue enqueues, so flushed inbound work can still drain normally.
           markGatewayDraining();
 
           // Flush inbound debounce buffers first. This pushes any messages
           // waiting in per-channel debounce timers (e.g. the 2500ms collect
           // window) into the followup queues immediately, preventing silent
           // message loss when the server reinitializes.
-          const flushedBuffers = await flushAllInboundDebouncers();
+          const flushedBuffers = await flushAllInboundDebouncers({
+            timeoutMs: INBOUND_DEBOUNCE_FLUSH_TIMEOUT_MS,
+          });
+          // Start the restart watchdog budget after the pre-shutdown debounce
+          // flush so slow flush handlers do not steal time from active drain.
+          armForceExitTimer(
+            Date.now() +
+              SHUTDOWN_TIMEOUT_MS +
+              DRAIN_TIMEOUT_MS +
+              (flushedBuffers > 0 ? FOLLOWUP_DRAIN_TIMEOUT_MS : 0),
+          );
           if (flushedBuffers > 0) {
             gatewayLog.info(
               `flushed ${flushedBuffers} pending inbound debounce buffer(s) before restart`,
             );
             // Give the followup queue drain loops a short window to process
             // the newly flushed items before the server is torn down.
-            armForceExitTimer(baseForceExitDeadlineMs + FOLLOWUP_DRAIN_TIMEOUT_MS);
             const followupResult = await waitForFollowupQueueDrain(FOLLOWUP_DRAIN_TIMEOUT_MS);
             if (followupResult.drained) {
               gatewayLog.info("followup queues drained after debounce flush");
