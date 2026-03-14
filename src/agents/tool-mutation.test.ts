@@ -65,6 +65,53 @@ describe("tool mutation helpers", () => {
     ).toBe(false);
   });
 
+  it("excludes attachment path from message tool fingerprint so retries match (#37430)", () => {
+    // First call: send with file from /tmp (will fail)
+    const firstAttempt = buildToolActionFingerprint("message", {
+      action: "send",
+      to: "telegram:413",
+      filePath: "/tmp/report.pdf",
+    });
+    // Retry: same target, file copied to workspace
+    const retry = buildToolActionFingerprint("message", {
+      action: "send",
+      to: "telegram:413",
+      filePath: "/home/user/.openclaw/workspace/report.pdf",
+    });
+    expect(firstAttempt).toBeDefined();
+    expect(retry).toBeDefined();
+    expect(firstAttempt).toBe(retry);
+    // Both should match on target, not file path
+    expect(firstAttempt).toContain("to=telegram:413");
+    expect(firstAttempt).not.toContain("filepath=");
+    expect(firstAttempt).not.toContain("path=");
+  });
+
+  it("retains path in fingerprint for file-mutating tools", () => {
+    const fp = buildToolActionFingerprint("write", { path: "/tmp/demo.txt" });
+    expect(fp).toContain("path=/tmp/demo.txt");
+  });
+
+  it("clears lastToolError when message retry with different path succeeds (#37430)", () => {
+    const failedRef = {
+      toolName: "message",
+      actionFingerprint: buildToolActionFingerprint("message", {
+        action: "send",
+        to: "telegram:413",
+        filePath: "/tmp/report.pdf",
+      }),
+    };
+    const retryRef = {
+      toolName: "message",
+      actionFingerprint: buildToolActionFingerprint("message", {
+        action: "send",
+        to: "telegram:413",
+        filePath: "/home/user/workspace/report.pdf",
+      }),
+    };
+    expect(isSameToolMutationAction(failedRef, retryRef)).toBe(true);
+  });
+
   it("keeps legacy name-only mutating heuristics for payload fallback", () => {
     expect(isLikelyMutatingToolName("sessions_send")).toBe(true);
     expect(isLikelyMutatingToolName("browser_actions")).toBe(true);
