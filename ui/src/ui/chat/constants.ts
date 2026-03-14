@@ -3,7 +3,7 @@
  */
 
 /** Character threshold for showing tool output inline vs collapsed */
-export const TOOL_INLINE_THRESHOLD = 80;
+export const TOOL_INLINE_THRESHOLD = 600;
 
 /** Maximum lines to show in collapsed preview */
 export const PREVIEW_MAX_LINES = 2;
