@@ -668,16 +668,24 @@ function resolveSessionScopedOptionLabel(
   key: string,
   row?: SessionsListResult["sessions"][number],
   rest?: string,
-) {
+): string {
+  // 优先使用 label，然后是 displayName，最后才用 rest/key
+  const label = typeof row?.label === "string" ? row.label.trim() : "";
+  const displayName =
+    typeof row?.displayName === "string" && row.displayName.trim().length > 0
+      ? row.displayName.trim()
+      : null;
+
+  // 如果有有效的 label 且不是 key 本身，直接返回 label
+  if (label && label !== key) {
+    return label;
+  }
+
   const base = rest?.trim() || key;
   if (!row) {
     return base;
   }
-  const displayName =
-    typeof row.displayName === "string" && row.displayName.trim().length > 0
-      ? row.displayName.trim()
-      : null;
-  const label = typeof row.label === "string" ? row.label.trim() : "";
+
   const showDisplayName = Boolean(
     displayName && displayName !== key && displayName !== label && displayName !== base,
   );
