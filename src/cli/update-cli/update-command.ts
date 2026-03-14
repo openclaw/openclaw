@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { confirm, isCancel } from "@clack/prompts";
 import {
@@ -450,6 +451,85 @@ async function runGitUpdate(params: {
     steps,
     durationMs: Date.now() - params.startedAt,
   };
+}
+
+/**
+ * Reinstall dependencies for extension plugins after a core update.
+ * Each extension with a `package.json` gets `npm install --production` to ensure
+ * its node_modules are intact after the package manager overwrites the install tree.
+ * Refs #28370.
+ */
+async function reinstallExtensionDeps(params: {
+  root: string;
+  json: boolean;
+  timeoutMs: number | undefined;
+}): Promise<void> {
+  const extensionsDir = path.join(params.root, "extensions");
+  let entries: fs.Dirent[];
+  try {
+    entries = await fs.promises.readdir(extensionsDir, { withFileTypes: true });
+  } catch {
+    return; // No extensions directory — nothing to do.
+  }
+
+  const extDirs = entries
+    .filter((e) => e.isDirectory())
+    .map((e) => path.join(extensionsDir, e.name));
+
+  let installed = 0;
+  let failed = 0;
+  for (const extDir of extDirs) {
+    const pkgPath = path.join(extDir, "package.json");
+    if (!(await pathExists(pkgPath))) {
+      continue;
+    }
+    // Skip dirs without actual dependencies.
+    try {
+      const raw = await fs.promises.readFile(pkgPath, "utf8");
+      const pkg = JSON.parse(raw) as Record<string, unknown>;
+      const deps = pkg.dependencies as Record<string, unknown> | undefined;
+      if (!deps || Object.keys(deps).length === 0) {
+        continue;
+      }
+    } catch {
+      continue;
+    }
+
+    try {
+      const res = await runCommandWithTimeout(
+        ["npm", "install", "--production", "--no-audit", "--no-package-lock"],
+        {
+          cwd: extDir,
+          timeoutMs: params.timeoutMs ?? 120_000,
+        },
+      );
+      if (res.code === 0) {
+        installed++;
+      } else {
+        failed++;
+        if (!params.json) {
+          defaultRuntime.log(
+            theme.warn(`Extension ${path.basename(extDir)}: npm install failed (exit ${res.code})`),
+          );
+        }
+      }
+    } catch (err) {
+      failed++;
+      if (!params.json) {
+        defaultRuntime.log(
+          theme.warn(`Extension ${path.basename(extDir)}: npm install failed (${String(err)})`),
+        );
+      }
+    }
+  }
+
+  if (!params.json && (installed > 0 || failed > 0)) {
+    const parts = [`${installed} installed`];
+    if (failed > 0) {
+      parts.push(`${failed} failed`);
+    }
+    defaultRuntime.log(theme.muted(`Extension dependencies: ${parts.join(", ")}.`));
+  }
 }
 
 async function updatePluginsAfterCoreUpdate(params: {
@@ -950,6 +1030,12 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     channel,
     configSnapshot,
     opts,
+  });
+
+  await reinstallExtensionDeps({
+    root: result.root ?? root,
+    json: Boolean(opts.json),
+    timeoutMs,
   });
 
   await tryWriteCompletionCache(root, Boolean(opts.json));
