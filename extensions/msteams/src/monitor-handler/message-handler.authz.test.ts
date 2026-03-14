@@ -152,4 +152,51 @@ describe("msteams monitor handler authz", () => {
 
     expect(conversationStore.upsert).not.toHaveBeenCalled();
   });
+
+  it("persists conversation reference for first-DM pairing requests", async () => {
+    const { conversationStore, deps } = createDeps({
+      channels: {
+        msteams: {
+          dmPolicy: "pairing",
+          allowFrom: [],
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler({
+      activity: {
+        id: "msg-1",
+        type: "message",
+        text: "hello",
+        from: {
+          id: "new-user-id",
+          aadObjectId: "new-user-aad",
+          name: "New User",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "dm:new-user-id",
+          conversationType: "personal",
+        },
+        channelData: {},
+        serviceUrl: "https://smba.trafficmanager.net/teams/",
+        attachments: [],
+      },
+      sendActivity: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof handler>[0]);
+
+    // Even though the DM is dropped (pairing mode, user not allowlisted),
+    // the conversation reference should be persisted so --notify works.
+    expect(conversationStore.upsert).toHaveBeenCalledWith(
+      "dm:new-user-id",
+      expect.objectContaining({
+        user: expect.objectContaining({ id: "new-user-id" }),
+        conversation: expect.objectContaining({ id: "dm:new-user-id" }),
+      }),
+    );
+  });
 });
