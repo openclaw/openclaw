@@ -104,6 +104,15 @@ const hoisted = vi.hoisted(() => {
         imessage: {},
         msteams: {},
       },
+      channelAccounts: {
+        whatsapp: {},
+        telegram: {},
+        discord: {},
+        slack: {},
+        signal: {},
+        imessage: {},
+        msteams: {},
+      },
     })),
     startChannels: vi.fn(async () => {}),
     startChannel: vi.fn(async () => {}),
@@ -128,6 +137,8 @@ const hoisted = vi.hoisted(() => {
     },
   );
 
+  const evictDiscordPersistentState = vi.fn();
+
   return {
     CronService: CronServiceMock,
     cronInstances,
@@ -144,6 +155,7 @@ const hoisted = vi.hoisted(() => {
     reloaderStop,
     getOnHotReload: () => onHotReload,
     getOnRestart: () => onRestart,
+    evictDiscordPersistentState,
   };
 });
 
@@ -170,6 +182,12 @@ vi.mock("./server-channels.js", () => ({
 
 vi.mock("./config-reload.js", () => ({
   startGatewayConfigReloader: hoisted.startGatewayConfigReloader,
+}));
+
+vi.mock("../../extensions/discord/src/monitor/provider.lifecycle.js", () => ({
+  evictPersistentState: hoisted.evictDiscordPersistentState,
+  markStable: vi.fn(),
+  requestCleanRestart: vi.fn(),
 }));
 
 installGatewayTestHooks({ scope: "suite" });
@@ -868,6 +886,66 @@ process.stdin.on("end", () => {
       ws.close();
       await server.close();
     }
+  });
+
+  it("evicts persistent state for discord accounts removed during hot reload", async () => {
+    await writeEnvRefConfig();
+    process.env.OPENAI_API_KEY = "sk-test"; // pragma: allowlist secret
+
+    await withGatewayServer(async () => {
+      const onHotReload = hoisted.getOnHotReload();
+      expect(onHotReload).toBeTypeOf("function");
+
+      // Simulate two discord accounts active before reload.
+      hoisted.providerManager.getRuntimeSnapshot.mockReturnValueOnce({
+        providers: {},
+        providerAccounts: {},
+        channels: {},
+        channelAccounts: {
+          discord: {
+            acct1: {} as never,
+            acct2: {} as never,
+          },
+        },
+      });
+
+      hoisted.evictDiscordPersistentState.mockClear();
+
+      // Hot reload that removes discord entirely from config.
+      const nextConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              models: [],
+            },
+          },
+        },
+        // no channels.discord
+      };
+
+      await onHotReload?.(
+        {
+          changedPaths: ["channels.discord.token"],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["channels.discord.token"],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartBrowserControl: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartChannels: new Set(["discord"]),
+          noopPaths: [],
+        },
+        nextConfig,
+      );
+
+      // Both removed accounts must be evicted.
+      expect(hoisted.evictDiscordPersistentState).toHaveBeenCalledWith("acct1");
+      expect(hoisted.evictDiscordPersistentState).toHaveBeenCalledWith("acct2");
+    });
   });
 });
 

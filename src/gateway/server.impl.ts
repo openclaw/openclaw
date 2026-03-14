@@ -1,4 +1,13 @@
 import path from "node:path";
+import {
+  listConfiguredDiscordAccountIds,
+  listDiscordAccountIds,
+} from "../../extensions/discord/src/accounts.js";
+import {
+  evictPersistentState as evictDiscordPersistentState,
+  markStable as markDiscordStable,
+  requestCleanRestart as requestDiscordCleanRestart,
+} from "../../extensions/discord/src/monitor/provider.lifecycle.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
@@ -21,12 +30,6 @@ import {
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
-import { listConfiguredDiscordAccountIds, listDiscordAccountIds } from "../discord/accounts.js";
-import {
-  evictPersistentState as evictDiscordPersistentState,
-  markStable as markDiscordStable,
-  requestCleanRestart as requestDiscordCleanRestart,
-} from "../discord/monitor/provider.lifecycle.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
@@ -1043,17 +1046,18 @@ export async function startGatewayServer(
           readSnapshot: readConfigFileSnapshot,
           onHotReload: async (plan, nextConfig) => {
             const previousSnapshot = getActiveSecretsRuntimeSnapshot();
+            // Snapshot discord account IDs BEFORE activating the new config so we
+            // capture the pre-reload (currently-running) set.  getRuntimeSnapshot()
+            // derives account IDs from loadConfig(), which already reflects the new
+            // config after activateRuntimeSecrets() — so calling it after activation
+            // would miss any accounts being removed, preventing their eviction.
+            const prevDiscordAccountIds = plan.restartChannels.has("discord")
+              ? Object.keys(getRuntimeSnapshot().channelAccounts["discord"] ?? {})
+              : [];
             const prepared = await activateRuntimeSecrets(nextConfig, {
               reason: "reload",
               activate: true,
             });
-            // Snapshot discord account IDs before the reload so we can evict
-            // persistent state for any accounts that are removed from config.
-            // Use the runtime snapshot (not cfgAtStart) to capture the currently
-            // running set, which may have already changed since startup.
-            const prevDiscordAccountIds = plan.restartChannels.has("discord")
-              ? Object.keys(getRuntimeSnapshot().channelAccounts["discord"] ?? {})
-              : [];
             try {
               await applyHotReload(plan, prepared.config);
             } catch (err) {
