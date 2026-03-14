@@ -189,6 +189,53 @@ describe("extractGeminiCliCredentials", () => {
     expectFakeCliCredentials(result);
   });
 
+  it("falls back to APPDATA npm global path on Windows when gemini is not in PATH", async () => {
+    const originalPlatform = process.platform;
+    const originalAppdata = process.env.APPDATA;
+    try {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      process.env.APPDATA = join(rootDir, "fake", "AppData", "Roaming");
+      process.env.PATH = "/nonexistent";
+
+      const appdataOauth2Path = join(
+        process.env.APPDATA,
+        "npm",
+        "node_modules",
+        "@google",
+        "gemini-cli",
+        "node_modules",
+        "@google",
+        "gemini-cli-core",
+        "dist",
+        "src",
+        "code_assist",
+        "oauth2.js",
+      );
+
+      mockExistsSync.mockImplementation((p: string) => {
+        const normalized = normalizePath(p);
+        if (normalized === normalizePath(appdataOauth2Path)) {
+          return true;
+        }
+        return false;
+      });
+      mockReadFileSync.mockReturnValue(FAKE_OAUTH2_CONTENT);
+
+      const { extractGeminiCliCredentials, clearCredentialsCache } = await import("./oauth.js");
+      clearCredentialsCache();
+      const result = extractGeminiCliCredentials();
+
+      expectFakeCliCredentials(result);
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+      if (originalAppdata !== undefined) {
+        process.env.APPDATA = originalAppdata;
+      } else {
+        delete process.env.APPDATA;
+      }
+    }
+  });
+
   it("returns null when oauth2.js cannot be found", async () => {
     installGeminiLayout({ oauth2Exists: false, readdir: [] });
 
