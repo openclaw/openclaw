@@ -1,22 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor, getDefaultAutoSelectFamily } = vi.hoisted(
-  () => ({
-    agentCtor: vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {
-      this.options = options;
-    }),
-    envHttpProxyAgentCtor: vi.fn(function MockEnvHttpProxyAgent(
-      this: { options: unknown },
-      options: unknown,
-    ) {
-      this.options = options;
-    }),
-    proxyAgentCtor: vi.fn(function MockProxyAgent(this: { options: unknown }, options: unknown) {
-      this.options = options;
-    }),
-    getDefaultAutoSelectFamily: vi.fn(() => true),
+const {
+  agentCtor,
+  envHttpProxyAgentCtor,
+  proxyAgentCtor,
+  getDefaultAutoSelectFamily,
+  getDefaultAutoSelectFamilyAttemptTimeout,
+} = vi.hoisted(() => ({
+  agentCtor: vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {
+    this.options = options;
   }),
-);
+  envHttpProxyAgentCtor: vi.fn(function MockEnvHttpProxyAgent(
+    this: { options: unknown },
+    options: unknown,
+  ) {
+    this.options = options;
+  }),
+  proxyAgentCtor: vi.fn(function MockProxyAgent(this: { options: unknown }, options: unknown) {
+    this.options = options;
+  }),
+  getDefaultAutoSelectFamily: vi.fn(() => true),
+  getDefaultAutoSelectFamilyAttemptTimeout: vi.fn(() => undefined),
+}));
 
 vi.mock("undici", () => ({
   Agent: agentCtor,
@@ -26,6 +31,7 @@ vi.mock("undici", () => ({
 
 vi.mock("node:net", () => ({
   getDefaultAutoSelectFamily,
+  getDefaultAutoSelectFamilyAttemptTimeout,
 }));
 
 import { createPinnedDispatcher, type PinnedHostname } from "./ssrf.js";
@@ -38,9 +44,10 @@ describe("createPinnedDispatcher", () => {
   describe("when process-level autoSelectFamily is enabled (Node 22+ default)", () => {
     beforeEach(() => {
       getDefaultAutoSelectFamily.mockReturnValue(true);
+      getDefaultAutoSelectFamilyAttemptTimeout.mockReturnValue(undefined);
     });
 
-    it("sets attempt timeout for Happy Eyeballs without overriding autoSelectFamily", () => {
+    it("sets default attempt timeout when process-level timeout is not configured", () => {
       const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
       const pinned: PinnedHostname = {
         hostname: "api.telegram.org",
@@ -59,6 +66,26 @@ describe("createPinnedDispatcher", () => {
       });
     });
 
+    it("respects process-level attempt timeout when configured", () => {
+      const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
+      const pinned: PinnedHostname = {
+        hostname: "api.telegram.org",
+        addresses: ["149.154.167.220"],
+        lookup,
+      };
+
+      getDefaultAutoSelectFamilyAttemptTimeout.mockReturnValue(500);
+
+      createPinnedDispatcher(pinned);
+
+      expect(agentCtor).toHaveBeenCalledWith({
+        connect: {
+          autoSelectFamilyAttemptTimeout: 500,
+          lookup,
+        },
+      });
+    });
+
     it("preserves caller transport hints while overriding lookup", () => {
       const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
       const previousLookup = vi.fn();
@@ -71,14 +98,14 @@ describe("createPinnedDispatcher", () => {
       createPinnedDispatcher(pinned, {
         mode: "direct",
         connect: {
-          autoSelectFamilyAttemptTimeout: 500,
+          autoSelectFamilyAttemptTimeout: 600,
           lookup: previousLookup,
         },
       });
 
       expect(agentCtor).toHaveBeenCalledWith({
         connect: {
-          autoSelectFamilyAttemptTimeout: 500,
+          autoSelectFamilyAttemptTimeout: 600,
           lookup,
         },
       });
@@ -142,6 +169,7 @@ describe("createPinnedDispatcher", () => {
   describe("when process-level autoSelectFamily is disabled", () => {
     beforeEach(() => {
       getDefaultAutoSelectFamily.mockReturnValue(false);
+      getDefaultAutoSelectFamilyAttemptTimeout.mockReturnValue(undefined);
     });
 
     it("respects process-level setting and does not set attempt timeout", () => {
@@ -190,6 +218,9 @@ describe("createPinnedDispatcher", () => {
   describe("when getDefaultAutoSelectFamily is not available (older Node.js)", () => {
     beforeEach(() => {
       getDefaultAutoSelectFamily.mockImplementation(() => {
+        throw new Error("Not available");
+      });
+      getDefaultAutoSelectFamilyAttemptTimeout.mockImplementation(() => {
         throw new Error("Not available");
       });
     });

@@ -357,13 +357,35 @@ function resolveProcessAutoSelectFamily(): boolean | undefined {
   }
 }
 
+function resolveProcessAutoSelectFamilyAttemptTimeout(): number | undefined {
+  if (typeof net.getDefaultAutoSelectFamilyAttemptTimeout !== "function") {
+    return undefined;
+  }
+  try {
+    return net.getDefaultAutoSelectFamilyAttemptTimeout();
+  } catch {
+    return undefined;
+  }
+}
+
 function withPinnedLookup(
   lookup: PinnedHostname["lookup"],
   connect?: Record<string, unknown>,
 ): Record<string, unknown> {
   const processAutoSelectFamily = resolveProcessAutoSelectFamily();
+  const processAttemptTimeout = resolveProcessAutoSelectFamilyAttemptTimeout();
+
+  // Only apply defaults when process-level autoSelectFamily is enabled.
+  // Respect both autoSelectFamily and autoSelectFamilyAttemptTimeout from:
+  // - Node.js defaults (true on Node 22+, 250ms default timeout)
+  // - CLI flags: --no-network-family-autoselection, --network-family-autoselection-attempt-timeout
+  // - API calls: net.setDefaultAutoSelectFamily(), net.setDefaultAutoSelectFamilyAttemptTimeout()
   const defaultConnect: Record<string, unknown> =
-    processAutoSelectFamily === true ? { autoSelectFamilyAttemptTimeout: 300 } : {};
+    processAutoSelectFamily === true
+      ? {
+          autoSelectFamilyAttemptTimeout: processAttemptTimeout ?? 300,
+        }
+      : {};
 
   const mergedConnect = connect ? { ...defaultConnect, ...connect } : defaultConnect;
   return { ...mergedConnect, lookup };
