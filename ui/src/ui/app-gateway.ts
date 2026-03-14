@@ -242,9 +242,7 @@ export function connectGateway(host: GatewayHost) {
           return;
         }
         host.lastError =
-          shutdownHost.pendingShutdownMessage && !reason
-            ? shutdownHost.pendingShutdownMessage
-            : `disconnected (${code}): ${reason || "no reason"}`;
+          shutdownHost.pendingShutdownMessage ?? `disconnected (${code}): ${reason || "no reason"}`;
       } else {
         host.lastError = shutdownHost.pendingShutdownMessage ?? null;
         host.lastErrorCode = null;
