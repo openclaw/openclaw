@@ -46,4 +46,13 @@ describe("target error helpers", () => {
       'Unknown target "general" for Discord.',
     );
   });
+
+  it("trims non-blank hints before formatting them", () => {
+    expect(missingTargetMessage("Slack", "  Use channel:C123  ")).toBe(
+      "Delivering to Slack requires target Use channel:C123",
+    );
+    expect(unknownTargetMessage("Discord", "general", "  Use channel:123  ")).toBe(
+      'Unknown target "general" for Discord. Hint: Use channel:123',
+    );
+  });
 });
