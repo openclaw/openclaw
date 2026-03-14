@@ -3,10 +3,10 @@
  * Call this BEFORE inboundDebouncer.enqueue() in event-handler.ts.
  */
 
-import { resolveAckReaction } from "../../agents/identity.js";
-import { shouldAckReaction } from "../../channels/ack-reactions.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { logVerbose } from "../../globals.js";
+import { resolveAckReaction } from "../../../../src/agents/identity.js";
+import { shouldAckReaction } from "../../../../src/channels/ack-reactions.js";
+import type { OpenClawConfig } from "../../../../src/config/config.js";
+import { logVerbose } from "../../../../src/globals.js";
 import { resolveSignalReactionLevel } from "../reaction-level.js";
 import { sendReactionSignal } from "../send-reactions.js";
 
