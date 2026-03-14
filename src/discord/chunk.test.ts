@@ -73,61 +73,65 @@ describe("chunkDiscordText", () => {
     expect(chunks.join("")).toBe(text);
   });
 
-  it("keeps reasoning italics balanced across chunks", () => {
-    const body = Array.from({ length: 25 }, (_, i) => `${i + 1}. line`).join("\n");
-    const text = `Reasoning:\n_${body}_`;
+  it("converts reasoning italics to blockquotes across chunks", () => {
+    const body = Array.from({ length: 25 }, (_, i) => `_${i + 1}. line_`).join("\n");
+    const text = `Reasoning:\n${body}`;
 
     const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
     expect(chunks.length).toBeGreaterThan(1);
 
-    for (const chunk of chunks) {
-      // Each chunk should have balanced italics markers (even count).
-      const count = (chunk.match(/_/g) || []).length;
-      expect(count % 2).toBe(0);
-    }
+    // First chunk should have a bold blockquoted header
+    expect(chunks[0]).toContain("> **Reasoning:**");
+    // Reasoning lines should use blockquote prefix, not italics
+    expect(chunks[0]).toContain("> 1. line");
+    expect(chunks[0]).not.toContain("_1. line");
 
-    // Ensure italics reopen on subsequent chunks
-    expect(chunks[0]).toContain("_1. line");
-    // Second chunk should reopen italics at the start
-    expect(chunks[1].trimStart().startsWith("_")).toBe(true);
+    for (const chunk of chunks) {
+      // No italic markers should remain in reasoning chunks
+      const lines = chunk.split("\n");
+      for (const line of lines) {
+        expect(line).toMatch(/^>|^$/);
+      }
+    }
   });
 
-  it("keeps reasoning italics balanced when chunks split by char limit", () => {
+  it("converts reasoning italics to blockquotes when chunks split by char limit", () => {
     const longLine = "This is a very long reasoning line that forces char splits.";
-    const body = Array.from({ length: 5 }, () => longLine).join("\n");
-    const text = `Reasoning:\n_${body}_`;
+    const body = Array.from({ length: 5 }, () => `_${longLine}_`).join("\n");
+    const text = `Reasoning:\n${body}`;
 
     const chunks = chunkDiscordText(text, { maxChars: 80, maxLines: 50 });
     expect(chunks.length).toBeGreaterThan(1);
 
+    // No italic markers should remain
     for (const chunk of chunks) {
-      const underscoreCount = (chunk.match(/_/g) || []).length;
-      expect(underscoreCount % 2).toBe(0);
+      expect(chunk).not.toMatch(/(?<![*])_/);
     }
   });
 
-  it("reopens italics while preserving leading whitespace on following chunk", () => {
+  it("preserves indentation in blockquoted reasoning", () => {
     const body = [
-      "1. line",
-      "2. line",
-      "3. line",
-      "4. line",
-      "5. line",
-      "6. line",
-      "7. line",
-      "8. line",
-      "9. line",
-      "10. line",
-      "  11. indented line",
-      "12. line",
+      "_1. line_",
+      "_2. line_",
+      "_3. line_",
+      "_4. line_",
+      "_5. line_",
+      "_6. line_",
+      "_7. line_",
+      "_8. line_",
+      "_9. line_",
+      "_10. line_",
+      "_  11. indented line_",
+      "_12. line_",
     ].join("\n");
-    const text = `Reasoning:\n_${body}_`;
+    const text = `Reasoning:\n${body}`;
 
     const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
     expect(chunks.length).toBeGreaterThan(1);
 
+    // All chunks should use blockquote format
     const second = chunks[1];
-    expect(second.startsWith("_")).toBe(true);
-    expect(second).toContain("  11. indented line");
+    expect(second.startsWith(">")).toBe(true);
+    expect(second).toContain(">   11. indented line");
   });
 });
