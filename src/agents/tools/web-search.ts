@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -22,7 +23,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "mistral", "perplexity"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -43,6 +44,10 @@ const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",
   function: { name: "$web_search" },
 } as const;
+const DEFAULT_MISTRAL_MODEL = "mistral-medium-latest";
+const MISTRAL_API_BASE_URL = "https://api.mistral.ai/v1";
+const MISTRAL_WEB_SEARCH_TOOL = { type: "web_search" } as const;
+const AGENT_CREATION_PROMISES = new Map<string, Promise<string>>();
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
@@ -275,7 +280,7 @@ function createWebSearchSchema(params: {
     });
   }
 
-  // grok, gemini, kimi, etc.
+  // grok, gemini, kimi, mistral, etc.
   return Type.Object({
     ...querySchema,
     ...filterSchema,
@@ -331,6 +336,12 @@ type KimiConfig = {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+};
+
+type MistralConfig = {
+  apiKey?: string;
+  model?: string;
+  agentId?: string;
 };
 
 type GrokSearchResponse = {
@@ -389,6 +400,22 @@ type KimiSearchResponse = {
     title?: string;
     url?: string;
     content?: string;
+  }>;
+};
+
+type MistralSearchResponse = {
+  outputs: Array<{
+    type: "tool.execution" | "message.output";
+    created_at?: string;
+    completed_at?: string;
+    content?:
+      | string
+      | Array<{
+          type?: "text" | "tool_reference" | undefined;
+          text?: string;
+          title?: string; // citations (refs)
+          url?: string; // citations (refs)
+        }>;
   }>;
 };
 
@@ -593,6 +620,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "mistral") {
+    return {
+      error: "missing_mistral_api_key",
+      message:
+        "web_search (mistral) needs an API key. Set MISTRAL_API_KEY in the Gateway environment, or configure tools.web.search.mistral.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_perplexity_api_key",
     message:
@@ -620,6 +655,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "perplexity") {
     return "perplexity";
+  }
+  if (raw === "mistral") {
+    return "mistral";
   }
 
   // Auto-detect provider from available API keys (alphabetical order)
@@ -654,6 +692,14 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
         'web_search: no provider configured, auto-detected "kimi" from available API keys',
       );
       return "kimi";
+    }
+    // Mistral
+    const mistralConfig = resolveMistralConfig(search);
+    if (resolveMistralApiKey(mistralConfig)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "mistral" from available API keys',
+      );
+      return "mistral";
     }
     // Perplexity
     const perplexityConfig = resolvePerplexityConfig(search);
@@ -913,6 +959,40 @@ function resolveGeminiModel(gemini?: GeminiConfig): string {
   const fromConfig =
     gemini && "model" in gemini && typeof gemini.model === "string" ? gemini.model.trim() : "";
   return fromConfig || DEFAULT_GEMINI_MODEL;
+}
+
+function resolveMistralConfig(search?: WebSearchConfig): MistralConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const mistral = "mistral" in search ? search.mistral : undefined;
+  if (!mistral || typeof mistral !== "object") {
+    return {};
+  }
+  return mistral as MistralConfig;
+}
+
+function resolveMistralApiKey(mistral?: MistralConfig): string | undefined {
+  const fromConfig = normalizeApiKey(mistral?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv = normalizeApiKey(process.env.MISTRAL_API_KEY);
+  return fromEnv || undefined;
+}
+
+function resolveMistralModel(mistral?: MistralConfig): string {
+  const fromConfig =
+    mistral && "model" in mistral && typeof mistral.model === "string" ? mistral.model.trim() : "";
+  return fromConfig || DEFAULT_MISTRAL_MODEL;
+}
+
+function resolveMistralAgentId(mistral?: MistralConfig): string | undefined {
+  const fromConfig =
+    mistral && "agentId" in mistral && typeof mistral.agentId === "string"
+      ? mistral.agentId.trim()
+      : "";
+  return fromConfig || undefined;
 }
 
 async function withTrustedWebSearchEndpoint<T>(
@@ -1577,6 +1657,115 @@ async function runBraveLlmContextSearch(params: {
   );
 }
 
+async function runMistralSearch(params: {
+  query: string;
+  apiKey: string;
+  model: string;
+  agentId?: string;
+  timeoutSeconds: number;
+}): Promise<{ content: string; citations: Array<{ url: string; title: string }> }> {
+  let agent_id = params.agentId;
+  if (!agent_id) {
+    const hash = createHash("md5").update(params.apiKey).digest("hex");
+    const dynamicCacheKey = `mistral_agent_${hash}_${params.model}`; // prevents invalid/unauthroized reuse across different user contexts
+    const cachedAgent = readCache(SEARCH_CACHE, dynamicCacheKey);
+    // Check if active agentId is already cached
+    if (cachedAgent?.cached) {
+      agent_id = cachedAgent.value.id as string;
+    } else {
+      // Check if agent creation promise is already underway (concurrent web-search calls -> no duplicates)
+      let inFlightPromise = AGENT_CREATION_PROMISES.get(dynamicCacheKey);
+      if (!inFlightPromise) {
+        // Create + cache new agent for web-searching tool (create and register promise)
+        inFlightPromise = (async () => {
+          const agentRes = await withTrustedWebSearchEndpoint(
+            {
+              url: `${MISTRAL_API_BASE_URL}/agents`,
+              timeoutSeconds: params.timeoutSeconds,
+              init: {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${params.apiKey}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  model: params.model,
+                  description:
+                    "Agent able to search information over the web, such as news, weather, sport results...",
+                  name: "Websearch Agent",
+                  instructions:
+                    "You have the ability to perform web searches with `web_search` to find up-to-date information.",
+                  tools: [MISTRAL_WEB_SEARCH_TOOL],
+                }),
+              },
+            },
+            async (res) => {
+              if (!res.ok) {
+                return await throwWebSearchApiError(res, "Mistral agent creation");
+              }
+              const data = (await res.json()) as { id?: string };
+              return data.id || undefined; // Extract agent id
+            },
+          );
+          if (!agentRes) {
+            throw new Error("Mistral agent creation succeeded but returned no agent id");
+          }
+          writeCache(SEARCH_CACHE, dynamicCacheKey, { id: agentRes }, 3600000); // TTL: 1 hour
+          return agentRes;
+        })();
+        AGENT_CREATION_PROMISES.set(dynamicCacheKey, inFlightPromise); // register promise so concurrent calls can use same agentId promise (no duplication)
+      }
+      try {
+        agent_id = await inFlightPromise; // wait for existing / new promise to resolve (returns API-fetched agent id)
+      } finally {
+        AGENT_CREATION_PROMISES.delete(dynamicCacheKey); // cleanup memory map once promise is resolved/finished (success or failure)
+      }
+    }
+  }
+
+  return await withTrustedWebSearchEndpoint(
+    {
+      url: `${MISTRAL_API_BASE_URL}/conversations`,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+        },
+        body: JSON.stringify({
+          agent_id,
+          inputs: params.query,
+          stream: false,
+        }),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        return await throwWebSearchApiError(res, "Mistral conversation");
+      }
+
+      const data = (await res.json()) as MistralSearchResponse;
+
+      const rawContent = data.outputs.filter((o) => o.type === "message.output")[0]?.content ?? [];
+      const messageOutputContentChunks = Array.isArray(rawContent)
+        ? rawContent
+        : [{ type: "text" as const, text: rawContent }]; // string content means endpoint refused web-search tool (normal conversation)
+
+      const content =
+        messageOutputContentChunks
+          .filter((chunk) => chunk.type === "text")
+          .map((chunk) => chunk.text)
+          .join(" ") || "No response";
+      const citations = messageOutputContentChunks
+        .filter((chunk) => chunk.type === "tool_reference")
+        .map((chunk) => ({ title: chunk.title!, url: chunk.url ?? "" }));
+
+      return { content, citations };
+    },
+  );
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
@@ -1602,6 +1791,8 @@ async function runWebSearch(params: {
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
+  mistralModel?: string;
+  mistralAgentId?: string;
   braveMode?: "web" | "llm-context";
 }): Promise<Record<string, unknown>> {
   const effectiveBraveMode = params.braveMode ?? "web";
@@ -1614,7 +1805,9 @@ async function runWebSearch(params: {
           ? (params.geminiModel ?? DEFAULT_GEMINI_MODEL)
           : params.provider === "kimi"
             ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
-            : "";
+            : params.provider === "mistral"
+              ? `${params.mistralModel ?? DEFAULT_MISTRAL_MODEL}:${params.mistralAgentId ?? ""}`
+              : "";
   const cacheKey = normalizeCacheKey(
     params.provider === "brave" && effectiveBraveMode === "llm-context"
       ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}`
@@ -1769,6 +1962,33 @@ async function runWebSearch(params: {
     return payload;
   }
 
+  if (params.provider === "mistral") {
+    const { content, citations } = await runMistralSearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      model: params.mistralModel ?? DEFAULT_MISTRAL_MODEL,
+      agentId: params.mistralAgentId,
+      timeoutSeconds: params.timeoutSeconds,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      model: params.mistralModel ?? DEFAULT_MISTRAL_MODEL,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      content: wrapWebContent(content),
+      citations: citations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   if (params.provider !== "brave") {
     throw new Error("Unsupported web search provider.");
   }
@@ -1909,6 +2129,7 @@ export function createWebSearchTool(options?: {
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const mistralConfig = resolveMistralConfig(search);
   const braveConfig = resolveBraveConfig(search);
   const braveMode = resolveBraveMode(braveConfig);
 
@@ -1923,9 +2144,11 @@ export function createWebSearchTool(options?: {
           ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
           : provider === "gemini"
             ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : braveMode === "llm-context"
-              ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
-              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+            : provider === "mistral"
+              ? "Search the web using Mistral. Returns AI-synthesized answers with citations from native web_search."
+              : braveMode === "llm-context"
+                ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
+                : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1949,7 +2172,9 @@ export function createWebSearchTool(options?: {
               ? resolveKimiApiKey(kimiConfig)
               : provider === "gemini"
                 ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+                : provider === "mistral"
+                  ? resolveMistralApiKey(mistralConfig)
+                  : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -2185,6 +2410,8 @@ export function createWebSearchTool(options?: {
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
+        mistralModel: resolveMistralModel(mistralConfig),
+        mistralAgentId: resolveMistralAgentId(mistralConfig),
         braveMode,
       });
       return jsonResult(result);
@@ -2217,6 +2444,9 @@ export const __testing = {
   resolveKimiBaseUrl,
   extractKimiCitations,
   resolveRedirectUrl: resolveCitationRedirectUrl,
+  resolveMistralModel,
+  resolveMistralApiKey,
+  resolveMistralAgentId,
   resolveBraveMode,
   mapBraveLlmContextResults,
 } as const;

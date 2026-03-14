@@ -10,7 +10,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "mistral" | "perplexity";
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -55,6 +55,14 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
     signupUrl: "https://platform.moonshot.cn/",
   },
   {
+    value: "mistral",
+    label: "Mistral",
+    hint: "Mistral web search",
+    envKeys: ["MISTRAL_API_KEY"],
+    placeholder: "mistral-...",
+    signupUrl: "https://console.mistral.ai/",
+  },
+  {
     value: "perplexity",
     label: "Perplexity Search",
     hint: "Structured results · domain/country/language/time filters",
@@ -79,6 +87,8 @@ function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown 
       return search?.grok?.apiKey;
     case "kimi":
       return search?.kimi?.apiKey;
+    case "mistral":
+      return search?.mistral?.apiKey;
     case "perplexity":
       return search?.perplexity?.apiKey;
   }
@@ -140,6 +150,9 @@ export function applySearchKey(
       break;
     case "kimi":
       search.kimi = { ...search.kimi, apiKey: key };
+      break;
+    case "mistral":
+      search.mistral = { ...search.mistral, apiKey: key };
       break;
     case "perplexity":
       search.perplexity = { ...search.perplexity, apiKey: key };
