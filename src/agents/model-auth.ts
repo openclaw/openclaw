@@ -453,7 +453,9 @@ export function resolveModelAuthMode(
 
   const authOverride = resolveProviderAuthOverride(cfg, resolved);
   if (authOverride === "aws-sdk") {
-    return "aws-sdk";
+    // Bearer token takes precedence over the aws-sdk override so the
+    // reported mode matches what resolveApiKeyForProvider actually returns.
+    return resolveBedrockBearerToken() ? "api-key" : "aws-sdk";
   }
 
   const authStore = store ?? ensureAuthProfileStore();
