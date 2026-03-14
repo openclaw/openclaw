@@ -79,14 +79,12 @@ async function createApiHarness(options?: RegistryImportOptions) {
   if (options?.sessionUtilsImportError) {
     vi.doMock("../gateway/session-utils.js", async (importOriginal) => {
       const actual = await importOriginal<typeof import("../gateway/session-utils.js")>();
-      return new Proxy(actual, {
-        get(target, prop, receiver) {
-          if (prop === "resolveGatewaySessionStoreTarget") {
-            throw options.sessionUtilsImportError;
-          }
-          return Reflect.get(target, prop, receiver);
+      return {
+        ...actual,
+        resolveGatewaySessionStoreTarget: () => {
+          throw options.sessionUtilsImportError;
         },
-      });
+      };
     });
   }
 
