@@ -1,29 +1,11 @@
-type TestLogger = {
-  info: () => void;
-  warn: () => void;
-  error: () => void;
-  debug?: () => void;
-};
+import type { OpenClawPluginApi } from "../../src/plugins/types.js";
 
-type TestPluginApiDefaults = {
-  logger: TestLogger;
-  registerTool: () => void;
-  registerHook: () => void;
-  registerHttpRoute: () => void;
-  registerChannel: () => void;
-  registerGatewayMethod: () => void;
-  registerCli: () => void;
-  registerService: () => void;
-  registerProvider: () => void;
-  registerCommand: () => void;
-  registerContextEngine: () => void;
-  resolvePath: (input: string) => string;
-  on: () => void;
-};
+type TestPluginApiInput = Partial<OpenClawPluginApi> &
+  Pick<OpenClawPluginApi, "id" | "name" | "source" | "config" | "runtime">;
 
-export function createTestPluginApi<T extends object>(api: T): T & TestPluginApiDefaults {
+export function createTestPluginApi(api: TestPluginApiInput): OpenClawPluginApi {
   return {
-    logger: { info() {}, warn() {}, error() {} },
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
     registerTool() {},
     registerHook() {},
     registerHttpRoute() {},

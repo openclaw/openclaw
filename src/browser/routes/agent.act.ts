@@ -11,6 +11,7 @@ import {
 } from "../chrome-mcp.js";
 import type { BrowserActRequest, BrowserFormField } from "../client-actions-core.js";
 import { normalizeBrowserFormField } from "../form-fields.js";
+import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { matchBrowserUrlPattern } from "../url-pattern.js";
 import { registerBrowserAgentActDownloadRoutes } from "./agent.act.download.js";
@@ -477,7 +478,7 @@ export function registerBrowserAgentActRoutes(
       targetId,
       run: async ({ profileCtx, cdpUrl, tab }) => {
         const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
-        const isExistingSession = profileCtx.profile.driver === "existing-session";
+        const isExistingSession = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
         const profileName = profileCtx.profile.name;
 
         switch (kind) {
@@ -1110,7 +1111,7 @@ export function registerBrowserAgentActRoutes(
       ctx,
       targetId,
       run: async ({ profileCtx, cdpUrl, tab }) => {
-        if (profileCtx.profile.driver === "existing-session") {
+        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           return jsonError(
             res,
             501,
@@ -1147,7 +1148,7 @@ export function registerBrowserAgentActRoutes(
       ctx,
       targetId,
       run: async ({ profileCtx, cdpUrl, tab }) => {
-        if (profileCtx.profile.driver === "existing-session") {
+        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           await evaluateChromeMcpScript({
             profileName: profileCtx.profile.name,
             targetId: tab.targetId,
