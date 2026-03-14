@@ -66,6 +66,10 @@ export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
     // This fixes issues like Discord IDs (numeric-looking strings) being coerced to numbers
     const hasStringVariant = variants.some((v) => schemaType(v) === "string");
     if (typeof value === "string" && hasStringVariant) {
+      // Empty string should still be converted to undefined (clear field behavior)
+      if (value.trim() === "") {
+        return undefined;
+      }
       // For string values when string is a valid variant, try other coercions first
       // but only if they succeed unambiguously
       for (const variant of variants) {
