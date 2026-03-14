@@ -20,7 +20,7 @@ This repository is an independently maintained fork of [OpenClaw](https://github
 
 Since CiwardClaw is built on top of OpenClaw, the core installation and usage remain the same. For installation instructions, official documentation, and general OpenClaw features, please refer to the upstream repository:
 
-👉 **[OpenClaw Official README](https://github.com/openclaw/openclaw/blob/main/README.md)**  
+👉 **[OpenClaw Official README](README_UPSTREAM.md)**  
 👉 **[OpenClaw Official Documentation](https://docs.openclaw.ai)**
 
 [🌐 中文版说明 (README_zh.md)](README_zh.md)

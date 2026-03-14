@@ -20,7 +20,7 @@
 
 由于 CiwardClaw 是在 OpenClaw 的基础上构建的，其核心的安装和使用方式保持不变。有关安装指南、官方文档以及 OpenClaw 的通用功能，请参阅上游的原始仓库：
 
-👉 **[OpenClaw 官方 README](https://github.com/openclaw/openclaw/blob/main/README.md)**  
+👉 **[OpenClaw 官方 README](README_UPSTREAM.md)**  
 👉 **[OpenClaw 官方文档](https://docs.openclaw.ai)**
 
 [🌐 English Version (README.md)](README.md)
