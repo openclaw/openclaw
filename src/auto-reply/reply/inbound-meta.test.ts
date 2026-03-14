@@ -194,9 +194,10 @@ describe("buildInboundUserContextPrefix", () => {
     expect(conversationInfo["sender"]).toBe("Tyler");
   });
 
-  it("includes sender metadata block for direct chats", () => {
+  it("includes sender metadata block for direct external-channel chats", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
+      OriginatingChannel: "whatsapp",
       SenderName: "Tyler",
       SenderId: "+15551234567",
     } as TemplateContext);
@@ -204,6 +205,17 @@ describe("buildInboundUserContextPrefix", () => {
     const senderInfo = parseSenderInfoPayload(text);
     expect(senderInfo["label"]).toBe("Tyler (+15551234567)");
     expect(senderInfo["id"]).toBe("+15551234567");
+  });
+
+  it("omits sender metadata block for direct webchat chats", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      Surface: "webchat",
+      Provider: "webchat",
+      SenderId: "openclaw-control-ui",
+    } as TemplateContext);
+
+    expect(text).not.toContain("Sender (untrusted metadata):");
   });
 
   it("includes formatted timestamp in conversation info when provided", () => {
