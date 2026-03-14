@@ -309,6 +309,7 @@ type BraveLlmContextResponse = {
 
 type BraveConfig = {
   mode?: string;
+  baseUrl?: string;
 };
 
 type PerplexityConfig = {
@@ -1603,18 +1604,21 @@ async function runWebSearch(params: {
   kimiBaseUrl?: string;
   kimiModel?: string;
   braveMode?: "web" | "llm-context";
+  braveBaseUrl?: string;
 }): Promise<Record<string, unknown>> {
   const effectiveBraveMode = params.braveMode ?? "web";
   const providerSpecificKey =
-    params.provider === "perplexity"
-      ? `${params.perplexityTransport ?? "search_api"}:${params.perplexityBaseUrl ?? PERPLEXITY_DIRECT_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}`
-      : params.provider === "grok"
-        ? `${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`
-        : params.provider === "gemini"
-          ? (params.geminiModel ?? DEFAULT_GEMINI_MODEL)
-          : params.provider === "kimi"
-            ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
-            : "";
+    params.provider === "brave"
+      ? (params.braveBaseUrl?.trim() ?? "")
+      : params.provider === "perplexity"
+        ? `${params.perplexityTransport ?? "search_api"}:${params.perplexityBaseUrl ?? PERPLEXITY_DIRECT_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}`
+        : params.provider === "grok"
+          ? `${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`
+          : params.provider === "gemini"
+            ? (params.geminiModel ?? DEFAULT_GEMINI_MODEL)
+            : params.provider === "kimi"
+              ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
+              : "";
   const cacheKey = normalizeCacheKey(
     params.provider === "brave" && effectiveBraveMode === "llm-context"
       ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}`
@@ -1809,7 +1813,8 @@ async function runWebSearch(params: {
     return payload;
   }
 
-  const url = new URL(BRAVE_SEARCH_ENDPOINT);
+  const braveEndpoint = (params.braveBaseUrl?.trim() || BRAVE_SEARCH_ENDPOINT).replace(/\/$/, "");
+  const url = new URL(braveEndpoint);
   url.searchParams.set("q", params.query);
   url.searchParams.set("count", String(params.count));
   if (params.country) {
@@ -2186,6 +2191,7 @@ export function createWebSearchTool(options?: {
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
         braveMode,
+        braveBaseUrl: braveConfig.baseUrl?.trim() || undefined,
       });
       return jsonResult(result);
     },

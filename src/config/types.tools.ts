@@ -471,6 +471,8 @@ export type ToolsConfig = {
       brave?: {
         /** Brave Search mode: "web" (standard results) or "llm-context" (pre-extracted page content). Default: "web". */
         mode?: "web" | "llm-context";
+        /** Base URL override for Brave Search API (optional; useful for proxies or custom endpoints). */
+        baseUrl?: string;
       };
       /** Gemini-specific configuration (used when provider="gemini"). */
       gemini?: {
