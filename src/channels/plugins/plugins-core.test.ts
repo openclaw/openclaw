@@ -410,33 +410,43 @@ describe("resolveChannelConfigWrites", () => {
 });
 
 describe("authorizeConfigWrite", () => {
-  it("blocks when a target account disables writes", () => {
-    const cfg = makeSlackConfigWritesCfg("work");
+  function expectConfigWriteBlocked(params: {
+    disabledAccountId: string;
+    reason: "target-disabled" | "origin-disabled";
+    blockedScope: "target" | "origin";
+  }) {
     expect(
       authorizeConfigWrite({
-        cfg,
+        cfg: makeSlackConfigWritesCfg(params.disabledAccountId),
         origin: { channelId: "slack", accountId: "default" },
         target: resolveExplicitConfigWriteTarget({ channelId: "slack", accountId: "work" }),
       }),
     ).toEqual({
       allowed: false,
+      reason: params.reason,
+      blockedScope: {
+        kind: params.blockedScope,
+        scope: {
+          channelId: "slack",
+          accountId: params.blockedScope === "target" ? "work" : "default",
+        },
+      },
+    });
+  }
+
+  it("blocks when a target account disables writes", () => {
+    expectConfigWriteBlocked({
+      disabledAccountId: "work",
       reason: "target-disabled",
-      blockedScope: { kind: "target", scope: { channelId: "slack", accountId: "work" } },
+      blockedScope: "target",
     });
   });
 
   it("blocks when the origin account disables writes", () => {
-    const cfg = makeSlackConfigWritesCfg("default");
-    expect(
-      authorizeConfigWrite({
-        cfg,
-        origin: { channelId: "slack", accountId: "default" },
-        target: resolveExplicitConfigWriteTarget({ channelId: "slack", accountId: "work" }),
-      }),
-    ).toEqual({
-      allowed: false,
+    expectConfigWriteBlocked({
+      disabledAccountId: "default",
       reason: "origin-disabled",
-      blockedScope: { kind: "origin", scope: { channelId: "slack", accountId: "default" } },
+      blockedScope: "origin",
     });
   });
 
