@@ -806,6 +806,57 @@ describe("Cron issue regressions", () => {
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
   });
 
+  it("retries OpenAI-compatible server_error payloads when retryOn only includes server_error", async () => {
+    const store = makeStorePath();
+    const scheduledAt = Date.parse("2026-03-14T00:00:00.000Z");
+    const serverErrorPayload =
+      'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "oneshot-server-error-only",
+      name: "reminder",
+      scheduledAt,
+      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+      payload: { kind: "agentTurn", message: "remind me" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "error", error: serverErrorPayload })
+      .mockResolvedValueOnce({ status: "ok", summary: "done" });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+      cronConfig: {
+        retry: { maxAttempts: 1, backoffMs: [1000], retryOn: ["server_error"] },
+      },
+    });
+
+    await onTimer(state);
+    const jobAfterRetry = state.store?.jobs.find((j) => j.id === "oneshot-server-error-only");
+    expect(jobAfterRetry).toBeDefined();
+    expect(jobAfterRetry!.enabled).toBe(true);
+    expect(jobAfterRetry!.state.lastStatus).toBe("error");
+    expect(jobAfterRetry!.state.lastErrorReason).toBe("server_error");
+    expect(jobAfterRetry!.state.nextRunAtMs).toBeGreaterThan(scheduledAt);
+
+    now = (jobAfterRetry!.state.nextRunAtMs ?? now) + 1;
+    await onTimer(state);
+
+    const finishedJob = state.store?.jobs.find((j) => j.id === "oneshot-server-error-only");
+    expect(finishedJob).toBeDefined();
+    expect(finishedJob!.state.lastStatus).toBe("ok");
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+  });
+
   it("#38822: one-shot job retries Bedrock too-many-tokens-per-day errors", async () => {
     const store = makeStorePath();
     const scheduledAt = Date.parse("2026-03-08T10:00:00.000Z");

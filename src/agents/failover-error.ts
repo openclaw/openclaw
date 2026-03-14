@@ -47,6 +47,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
   switch (reason) {
     case "billing":
       return 402;
+    case "server_error":
+      return 500;
     case "rate_limit":
       return 429;
     case "overloaded":

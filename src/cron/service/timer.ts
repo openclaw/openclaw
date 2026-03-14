@@ -145,6 +145,10 @@ function isTransientCronError(error: string | undefined, retryOn?: CronRetryOn[]
     return false;
   }
   const keys = retryOn?.length ? retryOn : (Object.keys(TRANSIENT_PATTERNS) as CronRetryOn[]);
+  const classified = resolveFailoverReasonFromError(error);
+  if (classified && keys.includes(classified as CronRetryOn)) {
+    return true;
+  }
   return keys.some((k) => TRANSIENT_PATTERNS[k]?.test(error));
 }
 
