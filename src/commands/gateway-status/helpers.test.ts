@@ -67,6 +67,37 @@ describe("extractConfigSummary", () => {
 });
 
 describe("resolveAuthForTarget", () => {
+  function createConfigRemoteTarget() {
+    return {
+      id: "configRemote",
+      kind: "configRemote" as const,
+      url: "wss://remote.example:18789",
+      active: true,
+    };
+  }
+
+  function createRemoteGatewayTargetConfig(params?: { mode?: "none" | "password" | "token" }) {
+    return {
+      secrets: {
+        providers: {
+          default: { source: "env" as const },
+        },
+      },
+      gateway: {
+        ...(params?.mode
+          ? {
+              auth: {
+                mode: params.mode,
+              },
+            }
+          : {}),
+        remote: {
+          token: { source: "env" as const, provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
+        },
+      },
+    };
+  }
+
   it("resolves local auth token SecretRef before probing local targets", async () => {
     await withEnvAsync(
       {
@@ -109,24 +140,8 @@ describe("resolveAuthForTarget", () => {
       },
       async () => {
         const auth = await resolveAuthForTarget(
-          {
-            secrets: {
-              providers: {
-                default: { source: "env" },
-              },
-            },
-            gateway: {
-              remote: {
-                token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
-              },
-            },
-          },
-          {
-            id: "configRemote",
-            kind: "configRemote",
-            url: "wss://remote.example:18789",
-            active: true,
-          },
+          createRemoteGatewayTargetConfig(),
+          createConfigRemoteTarget(),
           {},
         );
 
@@ -142,27 +157,8 @@ describe("resolveAuthForTarget", () => {
       },
       async () => {
         const auth = await resolveAuthForTarget(
-          {
-            secrets: {
-              providers: {
-                default: { source: "env" },
-              },
-            },
-            gateway: {
-              auth: {
-                mode: "none",
-              },
-              remote: {
-                token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
-              },
-            },
-          },
-          {
-            id: "configRemote",
-            kind: "configRemote",
-            url: "wss://remote.example:18789",
-            active: true,
-          },
+          createRemoteGatewayTargetConfig({ mode: "none" }),
+          createConfigRemoteTarget(),
           {},
         );
 
