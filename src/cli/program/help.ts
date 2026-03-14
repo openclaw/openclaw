@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { resolveCommitHash } from "../../infra/git-commit.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { isRich, theme } from "../../terminal/theme.js";
 import { escapeRegExp } from "../../utils.js";
@@ -109,7 +110,10 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     hasFlag(process.argv, "--version") ||
     hasRootVersionAlias(process.argv)
   ) {
-    console.log(ctx.programVersion);
+    const commit = resolveCommitHash({ moduleUrl: import.meta.url });
+    console.log(
+      commit ? `OpenClaw ${ctx.programVersion} (${commit})` : `OpenClaw ${ctx.programVersion}`,
+    );
     process.exit(0);
   }
 

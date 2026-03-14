@@ -192,8 +192,8 @@ describe("applyAuthChoice", () => {
   it("prompts and writes provider API key for common providers", async () => {
     const scenarios: Array<{
       authChoice:
-        | "minimax-api"
-        | "minimax-api-key-cn"
+        | "minimax-global-api"
+        | "minimax-cn-api"
         | "synthetic-api-key"
         | "huggingface-api-key";
       promptContains: string;
@@ -204,17 +204,17 @@ describe("applyAuthChoice", () => {
       expectedModelPrefix?: string;
     }> = [
       {
-        authChoice: "minimax-api" as const,
+        authChoice: "minimax-global-api" as const,
         promptContains: "Enter MiniMax API key",
-        profileId: "minimax:default",
+        profileId: "minimax:global",
         provider: "minimax",
         token: "sk-minimax-test",
       },
       {
-        authChoice: "minimax-api-key-cn" as const,
-        promptContains: "Enter MiniMax China API key",
-        profileId: "minimax-cn:default",
-        provider: "minimax-cn",
+        authChoice: "minimax-cn-api" as const,
+        promptContains: "Enter MiniMax CN API key",
+        profileId: "minimax:cn",
+        provider: "minimax",
         token: "sk-minimax-test",
         expectedBaseUrl: MINIMAX_CN_API_BASE_URL,
       },
@@ -285,7 +285,7 @@ describe("applyAuthChoice", () => {
       expectedBaseUrl: string;
       expectedModel?: string;
       shouldPromptForEndpoint: boolean;
-      shouldAssertDetectCall?: boolean;
+      expectedDetectCall?: { apiKey: string; endpoint?: "coding-global" | "coding-cn" };
     }> = [
       {
         authChoice: "zai-api-key",
@@ -298,8 +298,16 @@ describe("applyAuthChoice", () => {
       {
         authChoice: "zai-coding-global",
         token: "zai-test-key",
+        detectResult: {
+          endpoint: "coding-global",
+          modelId: "glm-4.7",
+          baseUrl: ZAI_CODING_GLOBAL_BASE_URL,
+          note: "Detected coding-global endpoint with GLM-4.7 fallback",
+        },
         expectedBaseUrl: ZAI_CODING_GLOBAL_BASE_URL,
+        expectedModel: "zai/glm-4.7",
         shouldPromptForEndpoint: false,
+        expectedDetectCall: { apiKey: "zai-test-key", endpoint: "coding-global" },
       },
       {
         authChoice: "zai-api-key",
@@ -313,7 +321,7 @@ describe("applyAuthChoice", () => {
         expectedBaseUrl: ZAI_CODING_GLOBAL_BASE_URL,
         expectedModel: "zai/glm-4.5",
         shouldPromptForEndpoint: false,
-        shouldAssertDetectCall: true,
+        expectedDetectCall: { apiKey: "zai-detected-key" },
       },
     ];
     for (const scenario of scenarios) {
@@ -344,8 +352,8 @@ describe("applyAuthChoice", () => {
         setDefaultModel: true,
       });
 
-      if (scenario.shouldAssertDetectCall) {
-        expect(detectZaiEndpoint).toHaveBeenCalledWith({ apiKey: scenario.token });
+      if (scenario.expectedDetectCall) {
+        expect(detectZaiEndpoint).toHaveBeenCalledWith(scenario.expectedDetectCall);
       }
       if (scenario.shouldPromptForEndpoint) {
         expect(select).toHaveBeenCalledWith(
@@ -498,6 +506,15 @@ describe("applyAuthChoice", () => {
       profileId: "opencode:default",
       provider: "opencode",
       modelPrefix: "opencode/",
+      extraProfiles: ["opencode-go:default"],
+    },
+    {
+      authChoice: "opencode-go",
+      tokenProvider: "opencode-go",
+      profileId: "opencode-go:default",
+      provider: "opencode-go",
+      modelPrefix: "opencode-go/",
+      extraProfiles: ["opencode:default"],
     },
     {
       authChoice: "together-api-key",
@@ -522,7 +539,7 @@ describe("applyAuthChoice", () => {
     },
   ] as const)(
     "uses opts token for $authChoice without prompting",
-    async ({ authChoice, tokenProvider, profileId, provider, modelPrefix }) => {
+    async ({ authChoice, tokenProvider, profileId, provider, modelPrefix, extraProfiles }) => {
       await setupTempState();
 
       const text = vi.fn();
@@ -554,6 +571,9 @@ describe("applyAuthChoice", () => {
         ),
       ).toBe(true);
       expect((await readAuthProfile(profileId))?.key).toBe(token);
+      for (const extraProfile of extraProfiles ?? []) {
+        expect((await readAuthProfile(extraProfile))?.key).toBe(token);
+      }
     },
   );
 
@@ -805,14 +825,15 @@ describe("applyAuthChoice", () => {
 
   it("keeps existing default model for explicit provider keys when setDefaultModel=false", async () => {
     const scenarios: Array<{
-      authChoice: "xai-api-key" | "opencode-zen";
+      authChoice: "xai-api-key" | "opencode-zen" | "opencode-go";
       token: string;
       promptMessage: string;
       existingPrimary: string;
       expectedOverride: string;
       profileId?: string;
       profileProvider?: string;
-      expectProviderConfigUndefined?: "opencode-zen";
+      extraProfileId?: string;
+      expectProviderConfigUndefined?: "opencode" | "opencode-go" | "opencode-zen";
       agentId?: string;
     }> = [
       {
@@ -828,10 +849,24 @@ describe("applyAuthChoice", () => {
       {
         authChoice: "opencode-zen",
         token: "sk-opencode-zen-test",
-        promptMessage: "Enter OpenCode Zen API key",
+        promptMessage: "Enter OpenCode API key",
         existingPrimary: "anthropic/claude-opus-4-5",
         expectedOverride: "opencode/claude-opus-4-6",
-        expectProviderConfigUndefined: "opencode-zen",
+        profileId: "opencode:default",
+        profileProvider: "opencode",
+        extraProfileId: "opencode-go:default",
+        expectProviderConfigUndefined: "opencode",
+      },
+      {
+        authChoice: "opencode-go",
+        token: "sk-opencode-go-test",
+        promptMessage: "Enter OpenCode API key",
+        existingPrimary: "anthropic/claude-opus-4-5",
+        expectedOverride: "opencode-go/kimi-k2.5",
+        profileId: "opencode-go:default",
+        profileProvider: "opencode-go",
+        extraProfileId: "opencode:default",
+        expectProviderConfigUndefined: "opencode-go",
       },
     ];
     for (const scenario of scenarios) {
@@ -862,6 +897,9 @@ describe("applyAuthChoice", () => {
           mode: "api_key",
         });
         expect((await readAuthProfile(scenario.profileId))?.key).toBe(scenario.token);
+      }
+      if (scenario.extraProfileId) {
+        expect((await readAuthProfile(scenario.extraProfileId))?.key).toBe(scenario.token);
       }
       if (scenario.expectProviderConfigUndefined) {
         expect(
@@ -1197,7 +1235,7 @@ describe("applyAuthChoice", () => {
 
   it("writes portal OAuth credentials for plugin providers", async () => {
     const scenarios: Array<{
-      authChoice: "qwen-portal" | "minimax-portal";
+      authChoice: "qwen-portal" | "minimax-global-oauth";
       label: string;
       authId: string;
       authLabel: string;
@@ -1222,7 +1260,7 @@ describe("applyAuthChoice", () => {
         apiKey: "qwen-oauth", // pragma: allowlist secret
       },
       {
-        authChoice: "minimax-portal",
+        authChoice: "minimax-global-oauth",
         label: "MiniMax",
         authId: "oauth",
         authLabel: "MiniMax OAuth (Global)",
@@ -1232,7 +1270,6 @@ describe("applyAuthChoice", () => {
         api: "anthropic-messages",
         defaultModel: "minimax-portal/MiniMax-M2.5",
         apiKey: "minimax-oauth", // pragma: allowlist secret
-        selectValue: "oauth",
       },
     ];
     for (const scenario of scenarios) {
@@ -1320,10 +1357,11 @@ describe("resolvePreferredProviderForAuthChoice", () => {
       { authChoice: "github-copilot" as const, expectedProvider: "github-copilot" },
       { authChoice: "qwen-portal" as const, expectedProvider: "qwen-portal" },
       { authChoice: "mistral-api-key" as const, expectedProvider: "mistral" },
+      { authChoice: "ollama" as const, expectedProvider: "ollama" },
       { authChoice: "unknown" as AuthChoice, expectedProvider: undefined },
     ] as const;
     for (const scenario of scenarios) {
-      expect(resolvePreferredProviderForAuthChoice(scenario.authChoice)).toBe(
+      expect(resolvePreferredProviderForAuthChoice({ choice: scenario.authChoice })).toBe(
         scenario.expectedProvider,
       );
     }

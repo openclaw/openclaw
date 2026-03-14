@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import { buildKimiCodingProvider, resolveImplicitProviders } from "./models-config.providers.js";
+import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
+import { buildKimiCodingProvider } from "./models-config.providers.js";
 
 describe("kimi-coding implicit provider (#22409)", () => {
   it("should include kimi-coding when KIMI_API_KEY is configured", async () => {
@@ -12,7 +13,7 @@ describe("kimi-coding implicit provider (#22409)", () => {
     process.env.KIMI_API_KEY = "test-key"; // pragma: allowlist secret
 
     try {
-      const providers = await resolveImplicitProviders({ agentDir });
+      const providers = await resolveImplicitProvidersForTest({ agentDir });
       expect(providers?.["kimi-coding"]).toBeDefined();
       expect(providers?.["kimi-coding"]?.api).toBe("anthropic-messages");
       expect(providers?.["kimi-coding"]?.baseUrl).toBe("https://api.kimi.com/coding/");
@@ -25,6 +26,7 @@ describe("kimi-coding implicit provider (#22409)", () => {
     const provider = buildKimiCodingProvider();
     expect(provider.api).toBe("anthropic-messages");
     expect(provider.baseUrl).toBe("https://api.kimi.com/coding/");
+    expect(provider.headers).toEqual({ "User-Agent": "claude-code/0.1.0" });
     expect(provider.models).toBeDefined();
     expect(provider.models.length).toBeGreaterThan(0);
     expect(provider.models[0].id).toBe("k2p5");
@@ -36,8 +38,59 @@ describe("kimi-coding implicit provider (#22409)", () => {
     delete process.env.KIMI_API_KEY;
 
     try {
-      const providers = await resolveImplicitProviders({ agentDir });
+      const providers = await resolveImplicitProvidersForTest({ agentDir });
       expect(providers?.["kimi-coding"]).toBeUndefined();
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+
+  it("uses explicit kimi-coding baseUrl when provided", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const envSnapshot = captureEnv(["KIMI_API_KEY"]);
+    process.env.KIMI_API_KEY = "test-key";
+
+    try {
+      const providers = await resolveImplicitProvidersForTest({
+        agentDir,
+        explicitProviders: {
+          "kimi-coding": {
+            baseUrl: "https://kimi.example.test/coding/",
+            api: "anthropic-messages",
+            models: buildKimiCodingProvider().models,
+          },
+        },
+      });
+      expect(providers?.["kimi-coding"]?.baseUrl).toBe("https://kimi.example.test/coding/");
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+
+  it("merges explicit kimi-coding headers on top of the built-in user agent", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const envSnapshot = captureEnv(["KIMI_API_KEY"]);
+    process.env.KIMI_API_KEY = "test-key";
+
+    try {
+      const providers = await resolveImplicitProvidersForTest({
+        agentDir,
+        explicitProviders: {
+          "kimi-coding": {
+            baseUrl: "https://api.kimi.com/coding/",
+            api: "anthropic-messages",
+            headers: {
+              "User-Agent": "custom-kimi-client/1.0",
+              "X-Kimi-Tenant": "tenant-a",
+            },
+            models: buildKimiCodingProvider().models,
+          },
+        },
+      });
+      expect(providers?.["kimi-coding"]?.headers).toEqual({
+        "User-Agent": "custom-kimi-client/1.0",
+        "X-Kimi-Tenant": "tenant-a",
+      });
     } finally {
       envSnapshot.restore();
     }

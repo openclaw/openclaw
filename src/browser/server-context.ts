@@ -2,7 +2,9 @@ import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveProfile } from "./config.js";
+import { BrowserProfileNotFoundError, toBrowserErrorResponse } from "./errors.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
+import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import {
   refreshResolvedBrowserConfigFromDisk,
   resolveBrowserProfileWithHotReload,
@@ -57,7 +59,7 @@ function createProfileContext(
     const current = state();
     let profileState = current.profiles.get(profile.name);
     if (!profileState) {
-      profileState = { profile, running: null, lastTargetId: null };
+      profileState = { profile, running: null, lastTargetId: null, reconcile: null };
       current.profiles.set(profile.name, profileState);
     }
     return profileState;
@@ -136,7 +138,9 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
 
     if (!profile) {
       const available = Object.keys(current.resolved.profiles).join(", ");
-      throw new Error(`Profile "${name}" not found. Available profiles: ${available || "(none)"}`);
+      throw new BrowserProfileNotFoundError(
+        `Profile "${name}" not found. Available profiles: ${available || "(none)"}`,
+      );
     }
     return createProfileContext(opts, profile);
   };
@@ -150,21 +154,32 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     });
     const result: ProfileStatus[] = [];
 
-    for (const name of Object.keys(current.resolved.profiles)) {
+    for (const name of listKnownProfileNames(current)) {
       const profileState = current.profiles.get(name);
-      const profile = resolveProfile(current.resolved, name);
+      const profile = resolveProfile(current.resolved, name) ?? profileState?.profile;
       if (!profile) {
         continue;
       }
+      const capabilities = getBrowserProfileCapabilities(profile);
 
       let tabCount = 0;
       let running = false;
+      const profileCtx = createProfileContext(opts, profile);
 
-      if (profileState?.running) {
+      if (capabilities.usesChromeMcp) {
+        try {
+          running = await profileCtx.isReachable(300);
+          if (running) {
+            const tabs = await profileCtx.listTabs();
+            tabCount = tabs.filter((t) => t.type === "page").length;
+          }
+        } catch {
+          // Chrome MCP not available
+        }
+      } else if (profileState?.running) {
         running = true;
         try {
-          const ctx = createProfileContext(opts, profile);
-          const tabs = await ctx.listTabs();
+          const tabs = await profileCtx.listTabs();
           tabCount = tabs.filter((t) => t.type === "page").length;
         } catch {
           // Browser might not be responsive
@@ -175,8 +190,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
           const reachable = await isChromeReachable(profile.cdpUrl, 200);
           if (reachable) {
             running = true;
-            const ctx = createProfileContext(opts, profile);
-            const tabs = await ctx.listTabs().catch(() => []);
+            const tabs = await profileCtx.listTabs().catch(() => []);
             tabCount = tabs.filter((t) => t.type === "page").length;
           }
         } catch {
@@ -186,13 +200,17 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
 
       result.push({
         name,
-        cdpPort: profile.cdpPort,
-        cdpUrl: profile.cdpUrl,
+        transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
+        cdpPort: capabilities.usesChromeMcp ? null : profile.cdpPort,
+        cdpUrl: capabilities.usesChromeMcp ? null : profile.cdpUrl,
         color: profile.color,
+        driver: profile.driver,
         running,
         tabCount,
         isDefault: name === current.resolved.defaultProfile,
         isRemote: !profile.cdpIsLoopback,
+        missingFromConfig: !(name in current.resolved.profiles) || undefined,
+        reconcileReason: profileState?.reconcile?.reason ?? null,
       });
     }
 
@@ -203,21 +221,15 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
   const getDefaultContext = () => forProfile();
 
   const mapTabError = (err: unknown) => {
+    const browserMapped = toBrowserErrorResponse(err);
+    if (browserMapped) {
+      return browserMapped;
+    }
     if (err instanceof SsrFBlockedError) {
       return { status: 400, message: err.message };
     }
     if (err instanceof InvalidBrowserNavigationUrlError) {
       return { status: 400, message: err.message };
-    }
-    const msg = String(err);
-    if (msg.includes("ambiguous target id prefix")) {
-      return { status: 409, message: "ambiguous target id prefix" };
-    }
-    if (msg.includes("tab not found")) {
-      return { status: 404, message: msg };
-    }
-    if (msg.includes("not found")) {
-      return { status: 404, message: msg };
     }
     return null;
   };

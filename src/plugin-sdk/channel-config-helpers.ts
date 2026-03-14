@@ -1,10 +1,15 @@
+import { resolveIMessageAccount } from "../../extensions/imessage/src/accounts.js";
+import { resolveWhatsAppAccount } from "../../extensions/whatsapp/src/accounts.js";
+import {
+  deleteAccountFromConfigSection,
+  setAccountEnabledInConfigSection,
+} from "../channels/plugins/config-helpers.js";
+import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 import { normalizeWhatsAppAllowFromEntries } from "../channels/plugins/normalize/whatsapp.js";
 import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveIMessageAccount } from "../imessage/accounts.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
-import { resolveWhatsAppAccount } from "../web/accounts.js";
 
 export function mapAllowFromEntries(
   allowFrom: Array<string | number> | null | undefined,
@@ -53,6 +58,90 @@ export function createScopedAccountConfigAccessors<ResolvedAccount>(params: {
         params.resolveDefaultTo?.(params.resolveAccount({ cfg, accountId })),
       ),
   };
+}
+
+export function createScopedChannelConfigBase<
+  ResolvedAccount,
+  Config extends OpenClawConfig = OpenClawConfig,
+>(params: {
+  sectionKey: string;
+  listAccountIds: (cfg: Config) => string[];
+  resolveAccount: (cfg: Config, accountId?: string | null) => ResolvedAccount;
+  defaultAccountId: (cfg: Config) => string;
+  inspectAccount?: (cfg: Config, accountId?: string | null) => unknown;
+  clearBaseFields: string[];
+  allowTopLevel?: boolean;
+}): Pick<
+  ChannelConfigAdapter<ResolvedAccount>,
+  | "listAccountIds"
+  | "resolveAccount"
+  | "inspectAccount"
+  | "defaultAccountId"
+  | "setAccountEnabled"
+  | "deleteAccount"
+> {
+  return {
+    listAccountIds: (cfg) => params.listAccountIds(cfg as Config),
+    resolveAccount: (cfg, accountId) => params.resolveAccount(cfg as Config, accountId),
+    inspectAccount: params.inspectAccount
+      ? (cfg, accountId) => params.inspectAccount?.(cfg as Config, accountId)
+      : undefined,
+    defaultAccountId: (cfg) => params.defaultAccountId(cfg as Config),
+    setAccountEnabled: ({ cfg, accountId, enabled }) =>
+      setAccountEnabledInConfigSection({
+        cfg: cfg as Config,
+        sectionKey: params.sectionKey,
+        accountId,
+        enabled,
+        allowTopLevel: params.allowTopLevel ?? true,
+      }),
+    deleteAccount: ({ cfg, accountId }) =>
+      deleteAccountFromConfigSection({
+        cfg: cfg as Config,
+        sectionKey: params.sectionKey,
+        accountId,
+        clearBaseFields: params.clearBaseFields,
+      }),
+  };
+}
+
+export function createScopedDmSecurityResolver<
+  ResolvedAccount extends { accountId?: string | null },
+>(params: {
+  channelKey: string;
+  resolvePolicy: (account: ResolvedAccount) => string | null | undefined;
+  resolveAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
+  resolveFallbackAccountId?: (account: ResolvedAccount) => string | null | undefined;
+  defaultPolicy?: string;
+  allowFromPathSuffix?: string;
+  policyPathSuffix?: string;
+  approveChannelId?: string;
+  approveHint?: string;
+  normalizeEntry?: (raw: string) => string;
+}) {
+  return ({
+    cfg,
+    accountId,
+    account,
+  }: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    account: ResolvedAccount;
+  }) =>
+    buildAccountScopedDmSecurityPolicy({
+      cfg,
+      channelKey: params.channelKey,
+      accountId,
+      fallbackAccountId: params.resolveFallbackAccountId?.(account) ?? account.accountId,
+      policy: params.resolvePolicy(account),
+      allowFrom: params.resolveAllowFrom(account) ?? [],
+      defaultPolicy: params.defaultPolicy,
+      allowFromPathSuffix: params.allowFromPathSuffix,
+      policyPathSuffix: params.policyPathSuffix,
+      approveChannelId: params.approveChannelId,
+      approveHint: params.approveHint,
+      normalizeEntry: params.normalizeEntry,
+    });
 }
 
 export function resolveWhatsAppConfigAllowFrom(params: {

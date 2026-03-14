@@ -79,6 +79,7 @@ export type GatewaySessionList = {
     Pick<
       SessionInfo,
       | "thinkingLevel"
+      | "fastMode"
       | "verboseLevel"
       | "reasoningLevel"
       | "model"
@@ -92,6 +93,7 @@ export type GatewaySessionList = {
       key: string;
       sessionId?: string;
       updatedAt?: number | null;
+      fastMode?: boolean;
       sendPolicy?: string;
       responseUsage?: ResponseUsageMode;
       label?: string;

@@ -1,3 +1,4 @@
+import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
 import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenProviderGroupPolicyWarnings,
@@ -13,7 +14,6 @@ import {
   collectDiscordAuditChannelIds,
   collectDiscordStatusIssues,
   DEFAULT_ACCOUNT_ID,
-  deleteAccountFromConfigSection,
   discordOnboardingAdapter,
   DiscordConfigSchema,
   getChatChannelMeta,
@@ -33,12 +33,16 @@ import {
   resolveDefaultDiscordAccountId,
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
-  setAccountEnabledInConfigSection,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
   type ResolvedDiscordAccount,
 } from "openclaw/plugin-sdk/discord";
+import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { getDiscordRuntime } from "./runtime.js";
+
+type DiscordSendFn = ReturnType<
+  typeof getDiscordRuntime
+>["channel"]["discord"]["sendMessageDiscord"];
 
 const meta = getChatChannelMeta("discord");
 
@@ -61,6 +65,15 @@ const discordConfigAccessors = createScopedAccountConfigAccessors({
   resolveAllowFrom: (account: ResolvedDiscordAccount) => account.config.dm?.allowFrom,
   formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
   resolveDefaultTo: (account: ResolvedDiscordAccount) => account.config.defaultTo,
+});
+
+const discordConfigBase = createScopedChannelConfigBase({
+  sectionKey: "discord",
+  listAccountIds: listDiscordAccountIds,
+  resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),
+  inspectAccount: (cfg, accountId) => inspectDiscordAccount({ cfg, accountId }),
+  defaultAccountId: resolveDefaultDiscordAccountId,
+  clearBaseFields: ["token", "name"],
 });
 
 export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
@@ -93,25 +106,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   reload: { configPrefixes: ["channels.discord"] },
   configSchema: buildChannelConfigSchema(DiscordConfigSchema),
   config: {
-    listAccountIds: (cfg) => listDiscordAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),
-    inspectAccount: (cfg, accountId) => inspectDiscordAccount({ cfg, accountId }),
-    defaultAccountId: (cfg) => resolveDefaultDiscordAccountId(cfg),
-    setAccountEnabled: ({ cfg, accountId, enabled }) =>
-      setAccountEnabledInConfigSection({
-        cfg,
-        sectionKey: "discord",
-        accountId,
-        enabled,
-        allowTopLevel: true,
-      }),
-    deleteAccount: ({ cfg, accountId }) =>
-      deleteAccountFromConfigSection({
-        cfg,
-        sectionKey: "discord",
-        accountId,
-        clearBaseFields: ["token", "name"],
-      }),
+    ...discordConfigBase,
     isConfigured: (account) => Boolean(account.token?.trim()),
     describeAccount: (account) => ({
       accountId: account.accountId,
@@ -310,7 +305,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     pollMaxOptions: 10,
     resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
     sendText: async ({ cfg, to, text, accountId, deps, replyToId, silent }) => {
-      const send = deps?.sendDiscord ?? getDiscordRuntime().channel.discord.sendMessageDiscord;
+      const send =
+        resolveOutboundSendDep<DiscordSendFn>(deps, "discord") ??
+        getDiscordRuntime().channel.discord.sendMessageDiscord;
       const result = await send(to, text, {
         verbose: false,
         cfg,
@@ -331,7 +328,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       replyToId,
       silent,
     }) => {
-      const send = deps?.sendDiscord ?? getDiscordRuntime().channel.discord.sendMessageDiscord;
+      const send =
+        resolveOutboundSendDep<DiscordSendFn>(deps, "discord") ??
+        getDiscordRuntime().channel.discord.sendMessageDiscord;
       const result = await send(to, text, {
         verbose: false,
         cfg,

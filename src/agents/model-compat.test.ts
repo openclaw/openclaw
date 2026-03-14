@@ -87,12 +87,6 @@ function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model<Api>>): 
   expect(supportsDeveloperRole(normalized)).toBe(false);
 }
 
-function expectSupportsUsageInStreamingForcedOff(overrides?: Partial<Model<Api>>): void {
-  const model = { ...baseModel(), ...overrides };
-  delete (model as { compat?: unknown }).compat;
-  const normalized = normalizeModelCompat(model as Model<Api>);
-  expect(supportsUsageInStreaming(normalized)).toBe(false);
-}
 
 function expectResolvedForwardCompat(
   model: Model<Api> | undefined,
@@ -219,11 +213,16 @@ describe("normalizeModelCompat", () => {
     });
   });
 
-  it("forces supportsUsageInStreaming off for generic custom openai-completions provider", () => {
-    expectSupportsUsageInStreamingForcedOff({
+  it("leaves supportsUsageInStreaming at default for generic custom openai-completions provider", () => {
+    const model = {
+      ...baseModel(),
       provider: "custom-cpa",
       baseUrl: "https://cpa.example.com/v1",
-    });
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model as Model<Api>);
+    // supportsUsageInStreaming is no longer forced off — pi-ai's default (true) applies
+    expect(supportsUsageInStreaming(normalized)).toBeUndefined();
   });
 
   it("forces supportsDeveloperRole off for Qwen proxy via openai-completions", () => {
@@ -251,7 +250,7 @@ describe("normalizeModelCompat", () => {
     });
   });
 
-  it("overrides explicit supportsDeveloperRole true on non-native endpoints", () => {
+  it("respects explicit supportsDeveloperRole true on non-native endpoints", () => {
     const model = {
       ...baseModel(),
       provider: "custom-cpa",
@@ -259,10 +258,10 @@ describe("normalizeModelCompat", () => {
       compat: { supportsDeveloperRole: true },
     };
     const normalized = normalizeModelCompat(model);
-    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsDeveloperRole(normalized)).toBe(true);
   });
 
-  it("overrides explicit supportsUsageInStreaming true on non-native endpoints", () => {
+  it("respects explicit supportsUsageInStreaming true on non-native endpoints", () => {
     const model = {
       ...baseModel(),
       provider: "custom-cpa",
@@ -270,7 +269,20 @@ describe("normalizeModelCompat", () => {
       compat: { supportsUsageInStreaming: true },
     };
     const normalized = normalizeModelCompat(model);
-    expect(supportsUsageInStreaming(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+  });
+
+  it("forces supportsDeveloperRole off but leaves supportsUsageInStreaming unset for non-native endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    // supportsUsageInStreaming is no longer forced off — pi-ai default applies
+    expect(supportsUsageInStreaming(normalized)).toBeUndefined();
   });
 
   it("does not mutate caller model when forcing supportsDeveloperRole off", () => {
@@ -285,7 +297,8 @@ describe("normalizeModelCompat", () => {
     expect(supportsDeveloperRole(model)).toBeUndefined();
     expect(supportsUsageInStreaming(model)).toBeUndefined();
     expect(supportsDeveloperRole(normalized)).toBe(false);
-    expect(supportsUsageInStreaming(normalized)).toBe(false);
+    // supportsUsageInStreaming is not set by normalizeModelCompat — pi-ai default applies
+    expect(supportsUsageInStreaming(normalized)).toBeUndefined();
   });
 
   it("does not override explicit compat false", () => {
@@ -312,6 +325,12 @@ describe("isModernModelRef", () => {
   it("keeps non-minimax opencode modern models", () => {
     expect(isModernModelRef({ provider: "opencode", id: "claude-opus-4-6" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode", id: "gemini-3-pro" })).toBe(true);
+  });
+
+  it("accepts all opencode-go models without zen exclusions", () => {
+    expect(isModernModelRef({ provider: "opencode-go", id: "kimi-k2.5" })).toBe(true);
+    expect(isModernModelRef({ provider: "opencode-go", id: "glm-5" })).toBe(true);
+    expect(isModernModelRef({ provider: "opencode-go", id: "minimax-m2.5" })).toBe(true);
   });
 });
 
@@ -363,7 +382,7 @@ describe("resolveForwardCompatModel", () => {
     expectResolvedForwardCompat(model, { provider: "openai-codex", id: "gpt-5.4" });
     expect(model?.api).toBe("openai-codex-responses");
     expect(model?.baseUrl).toBe("https://chatgpt.com/backend-api");
-    expect(model?.contextWindow).toBe(272_000);
+    expect(model?.contextWindow).toBe(1_050_000);
     expect(model?.maxTokens).toBe(128_000);
   });
 

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
+import { resolveImplicitProviders } from "./models-config.providers.js";
 
 export async function withModelsTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-models-" });
@@ -100,12 +101,15 @@ export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
   "OPENROUTER_API_KEY",
   "PI_CODING_AGENT_DIR",
   "QIANFAN_API_KEY",
+  "MODELSTUDIO_API_KEY",
   "QWEN_OAUTH_TOKEN",
   "QWEN_PORTAL_API_KEY",
   "SYNTHETIC_API_KEY",
   "TOGETHER_API_KEY",
   "VOLCANO_ENGINE_API_KEY",
   "BYTEPLUS_API_KEY",
+  "KILOCODE_API_KEY",
+  "KIMI_API_KEY",
   "KIMICODE_API_KEY",
   "GEMINI_API_KEY",
   "VENICE_API_KEY",
@@ -122,6 +126,29 @@ export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
   "AWS_SECRET_ACCESS_KEY",
   "AWS_SHARED_CREDENTIALS_FILE",
 ];
+
+export function snapshotImplicitProviderEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const source = env ?? process.env;
+  const snapshot: NodeJS.ProcessEnv = {};
+
+  for (const envVar of MODELS_CONFIG_IMPLICIT_ENV_VARS) {
+    const value = source[envVar];
+    if (value !== undefined) {
+      snapshot[envVar] = value;
+    }
+  }
+
+  return snapshot;
+}
+
+export async function resolveImplicitProvidersForTest(
+  params: Parameters<typeof resolveImplicitProviders>[0],
+) {
+  return await resolveImplicitProviders({
+    ...params,
+    env: snapshotImplicitProviderEnv(params.env),
+  });
+}
 
 export const CUSTOM_PROXY_MODELS_CONFIG: OpenClawConfig = {
   models: {

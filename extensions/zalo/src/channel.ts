@@ -1,8 +1,9 @@
 import {
   buildAccountScopedDmSecurityPolicy,
-  collectOpenProviderGroupPolicyWarnings,
   buildOpenGroupPolicyRestrictSendersWarning,
   buildOpenGroupPolicyWarning,
+  collectOpenProviderGroupPolicyWarnings,
+  createAccountStatusSink,
   mapAllowFromEntries,
 } from "openclaw/plugin-sdk/compat";
 import type {
@@ -334,6 +335,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
     startAccount: async (ctx) => {
       const account = ctx.account;
       const token = account.token.trim();
+      const mode = account.config.webhookUrl ? "webhook" : "polling";
       let zaloBotLabel = "";
       const fetcher = resolveZaloProxyFetch(account.config.proxy);
       try {
@@ -342,14 +344,25 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
         if (name) {
           zaloBotLabel = ` (${name})`;
         }
+        if (!probe.ok) {
+          ctx.log?.warn?.(
+            `[${account.accountId}] Zalo probe failed before provider start (${String(probe.elapsedMs)}ms): ${probe.error}`,
+          );
+        }
         ctx.setStatus({
           accountId: account.accountId,
           bot: probe.bot,
         });
-      } catch {
-        // ignore probe errors
+      } catch (err) {
+        ctx.log?.warn?.(
+          `[${account.accountId}] Zalo probe threw before provider start: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`,
+        );
       }
-      ctx.log?.info(`[${account.accountId}] starting provider${zaloBotLabel}`);
+      const statusSink = createAccountStatusSink({
+        accountId: ctx.accountId,
+        setStatus: ctx.setStatus,
+      });
+      ctx.log?.info(`[${account.accountId}] starting provider${zaloBotLabel} mode=${mode}`);
       const { monitorZaloProvider } = await import("./monitor.js");
       return monitorZaloProvider({
         token,
@@ -362,7 +375,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
         webhookSecret: normalizeSecretInputString(account.config.webhookSecret),
         webhookPath: account.config.webhookPath,
         fetcher,
-        statusSink: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),
+        statusSink,
       });
     },
   },
