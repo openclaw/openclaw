@@ -1,6 +1,7 @@
 const PIN_AUTH_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-// In-memory map of senderE164 -> timestamp of last successful PIN auth.
+// In-memory map of "accountId:senderE164" -> timestamp of last successful PIN auth.
+// Keyed by account to prevent cross-account session leakage in multi-account setups.
 const pinAuthSessions = new Map<string, number>();
 
 export type PinAuthResult =
@@ -20,10 +21,14 @@ export function checkPinAuth(params: {
   senderE164: string;
   body: string;
   pin: string;
+  accountId?: string;
   nowMs?: number;
 }): PinAuthResult {
   const now = params.nowMs ?? Date.now();
-  const lastAuth = pinAuthSessions.get(params.senderE164);
+  const sessionKey = params.accountId
+    ? `${params.accountId}:${params.senderE164}`
+    : params.senderE164;
+  const lastAuth = pinAuthSessions.get(sessionKey);
 
   // Already authenticated within TTL
   if (lastAuth && now - lastAuth < PIN_AUTH_TTL_MS) {
@@ -34,13 +39,13 @@ export function checkPinAuth(params: {
 
   // PIN is the entire message
   if (trimmedBody === params.pin) {
-    pinAuthSessions.set(params.senderE164, now);
+    pinAuthSessions.set(sessionKey, now);
     return { ok: true, strippedBody: "" };
   }
 
   // PIN is a prefix followed by a space
   if (trimmedBody.startsWith(params.pin + " ")) {
-    pinAuthSessions.set(params.senderE164, now);
+    pinAuthSessions.set(sessionKey, now);
     return { ok: true, strippedBody: trimmedBody.slice(params.pin.length).trim() };
   }
 

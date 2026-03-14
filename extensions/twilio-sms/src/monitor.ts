@@ -2,7 +2,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { verifyTwilioWebhook, type WebhookContext } from "openclaw/plugin-sdk/twilio-shared";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/twilio-sms";
 import {
-  createWebhookInFlightLimiter,
   normalizeWebhookPath,
   readWebhookBodyOrReject,
   registerWebhookTargetWithPluginRoute,
@@ -29,7 +28,6 @@ export type WebhookTarget = {
 
 const DEFAULT_WEBHOOK_PATH = "/twilio-sms/webhook";
 const webhookTargets = new Map<string, WebhookTarget[]>();
-const _webhookInFlightLimiter = createWebhookInFlightLimiter();
 
 export function resolveWebhookPathFromConfig(config: { webhookPath?: string } | undefined): string {
   return normalizeWebhookPath(config?.webhookPath ?? DEFAULT_WEBHOOK_PATH);
@@ -90,9 +88,19 @@ async function handleTwilioSmsWebhookRequest(
     remoteAddress: req.socket.remoteAddress,
   };
 
-  // Validate Twilio signature
+  // Validate Twilio signature (fail-closed: reject when authToken is missing
+  // unless signature validation is explicitly disabled).
   const authToken = target.account.config.authToken;
-  if (authToken && !target.account.config.skipSignatureValidation) {
+  if (!target.account.config.skipSignatureValidation) {
+    if (!authToken) {
+      target.runtime.error?.(
+        "[twilio-sms] Webhook rejected: authToken not configured (signature verification requires it)",
+      );
+      res.statusCode = 403;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Forbidden");
+      return;
+    }
     const verification = verifyTwilioWebhook(ctx, authToken, {
       publicUrl: target.account.config.webhookUrl,
       skipVerification: false,

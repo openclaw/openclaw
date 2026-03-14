@@ -40,6 +40,7 @@ export async function processTwilioSmsMessage(params: {
       senderE164,
       body: messageBody,
       pin: account.config.pin,
+      accountId: account.accountId,
     });
     if (!pinResult.ok) {
       await sendTwilioSms({
@@ -243,7 +244,7 @@ function splitTextByLimit(text: string, limit: number): string[] {
       splitAt = limit;
     }
     chunks.push(remaining.slice(0, splitAt));
-    remaining = remaining.slice(splitAt).replace(/^\n/, "");
+    remaining = remaining.slice(splitAt).replace(/^[\n ]/, "");
   }
   if (remaining) {
     chunks.push(remaining);
