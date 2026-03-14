@@ -12,6 +12,9 @@ function walk(dir: string): string[] {
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
+      if (entry.name === "node_modules" || entry.name === "dist" || entry.name === ".build") {
+        continue;
+      }
       files.push(...walk(full));
       continue;
     }
