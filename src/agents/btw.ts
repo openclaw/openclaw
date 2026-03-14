@@ -139,6 +139,39 @@ function deferBtwCustomEntryPersist(params: {
   })();
 }
 
+async function persistBtwArtifacts(params: {
+  sessionId: string;
+  sessionFile: string;
+  entry: BtwCustomEntryData;
+}) {
+  try {
+    appendBtwSideResult({
+      sessionFile: params.sessionFile,
+      entry: params.entry,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    diag.warn(`btw side-result persistence skipped: sessionId=${params.sessionId} err=${message}`);
+  }
+
+  try {
+    await appendBtwCustomEntry({
+      sessionFile: params.sessionFile,
+      timeoutMs: BTW_PERSIST_TIMEOUT_MS,
+      entry: params.entry,
+    });
+  } catch (error) {
+    if (!isSessionLockError(error)) {
+      throw error;
+    }
+    deferBtwCustomEntryPersist({
+      sessionId: params.sessionId,
+      sessionFile: params.sessionFile,
+      entry: params.entry,
+    });
+  }
+}
+
 function collectTextContent(content: Array<{ type?: string; text?: string }>): string {
   return content
     .filter((part): part is { type: "text"; text: string } => part.type === "text")
@@ -474,32 +507,11 @@ export async function runBtwSideQuestion(
     usage: finalMessage?.usage,
   } satisfies BtwCustomEntryData;
 
-  try {
-    appendBtwSideResult({
-      sessionFile,
-      entry: customEntry,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    diag.warn(`btw side-result persistence skipped: sessionId=${sessionId} err=${message}`);
-  }
-
-  try {
-    await appendBtwCustomEntry({
-      sessionFile,
-      timeoutMs: BTW_PERSIST_TIMEOUT_MS,
-      entry: customEntry,
-    });
-  } catch (error) {
-    if (!isSessionLockError(error)) {
-      throw error;
-    }
-    deferBtwCustomEntryPersist({
-      sessionId,
-      sessionFile,
-      entry: customEntry,
-    });
-  }
+  await persistBtwArtifacts({
+    sessionId,
+    sessionFile,
+    entry: customEntry,
+  });
 
   if (emittedBlocks > 0) {
     return undefined;

@@ -261,39 +261,11 @@ public final class OpenClawChatViewModel {
 
     private static func decodeHistoryMessages(
         messages rawMessages: [AnyCodable],
-        sideResults: [OpenClawChatSideResult]) -> [OpenClawChatMessage]
+        sideResults _: [OpenClawChatSideResult]) -> [OpenClawChatMessage]
     {
-        let decodedMessages = Self.decodeMessages(rawMessages)
-        let decodedSideResults = sideResults.compactMap(Self.decodeSideResultMessage)
-        return Self.dedupeMessages(decodedMessages + decodedSideResults)
-    }
-
-    private static func decodeSideResultMessage(_ sideResult: OpenClawChatSideResult) -> OpenClawChatMessage? {
-        let text = (sideResult.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return nil }
-        let question = (sideResult.question ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let label = question.isEmpty ? "BTW" : "BTW: \(question)"
-        let body = "\(label)\n\n\(text)"
-        return OpenClawChatMessage(
-            role: "assistant",
-            content: [
-                OpenClawChatMessageContent(
-                    type: "text",
-                    text: body,
-                    thinking: nil,
-                    thinkingSignature: nil,
-                    mimeType: nil,
-                    fileName: nil,
-                    content: nil,
-                    id: nil,
-                    name: nil,
-                    arguments: nil),
-            ],
-            timestamp: sideResult.ts,
-            toolCallId: nil,
-            toolName: nil,
-            usage: nil,
-            stopReason: nil)
+        // BTW side results are live, dismissible UI affordances and should not
+        // be reconstructed as normal assistant history on refresh.
+        Self.decodeMessages(rawMessages)
     }
 
     private static func stripInboundMetadata(from message: OpenClawChatMessage) -> OpenClawChatMessage {

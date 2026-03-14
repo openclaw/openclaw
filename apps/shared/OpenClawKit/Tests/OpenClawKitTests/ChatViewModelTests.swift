@@ -1246,7 +1246,7 @@ extension TestChatTransportState {
         }
     }
 
-    @Test func mergesBTWSideResultsIntoHistoryRefresh() async throws {
+    @Test func ignoresBTWSideResultsDuringHistoryRefresh() async throws {
         let history = historyPayload(
             messages: [chatTextMessage(role: "user", text: "main task", timestamp: 1000)],
             sideResults: [
@@ -1263,9 +1263,9 @@ extension TestChatTransportState {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
         let messages = await MainActor.run { vm.messages }
-        #expect(messages.count == 2)
-        #expect(messages.last?.role == "assistant")
-        #expect(messages.last?.content.first?.text == "BTW: what is 17 * 19?\n\n323")
+        #expect(messages.count == 1)
+        #expect(messages.last?.role == "user")
+        #expect(messages.last?.content.first?.text == "main task")
     }
 
     @Test func staleThinkingPatchCompletionReappliesLatestSelection() async throws {
