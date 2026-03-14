@@ -35,6 +35,10 @@ const VALID_RISK_LEVELS: RiskLevel[] = ["low", "medium", "high", "critical"];
 const TYPE_PATTERN = /^[a-z][a-z0-9_]*$/;
 const MAX_PATTERN_LENGTH = 2000;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
 /**
  * Resolve custom rules path.
  * Relative paths are interpreted from the active config file directory.
@@ -66,9 +70,9 @@ export function loadCustomRules(filePath: string): CustomRulesResult {
     };
   }
 
-  let config: CustomRulesConfig;
+  let parsed: unknown;
   try {
-    config = JSON5.parse(content);
+    parsed = JSON5.parse(content);
   } catch (err) {
     return {
       rules: [...EXTENDED_RULES],
@@ -79,7 +83,17 @@ export function loadCustomRules(filePath: string): CustomRulesResult {
     };
   }
 
-  return processCustomRulesConfig(config);
+  if (!isRecord(parsed)) {
+    return {
+      rules: [...EXTENDED_RULES],
+      errors: [],
+      warnings: [
+        `Custom rules file "${absolutePath}" must parse to an object. Falling back to extended rules.`,
+      ],
+    };
+  }
+
+  return processCustomRulesConfig(parsed as CustomRulesConfig);
 }
 
 /**
@@ -89,9 +103,14 @@ export function loadCustomRules(filePath: string): CustomRulesResult {
 export function processCustomRulesConfig(config: CustomRulesConfig): CustomRulesResult {
   const errors: RuleValidationError[] = [];
   const warnings: string[] = [];
+  const rawConfig: Record<string, unknown> = isRecord(config) ? config : {};
 
   // 1. Resolve base preset.
-  const basePreset = config.extends ?? "extended";
+  const basePresetRaw = rawConfig.extends;
+  const basePreset =
+    basePresetRaw === "none" || basePresetRaw === "basic" || basePresetRaw === "extended"
+      ? basePresetRaw
+      : "extended";
   let baseRules: PrivacyRule[];
   if (basePreset === "none") {
     baseRules = [];
@@ -102,8 +121,8 @@ export function processCustomRulesConfig(config: CustomRulesConfig): CustomRules
   }
 
   // 2. Apply disable list.
-  const disableEntries = Array.isArray(config.disable) ? config.disable : [];
-  if (config.disable !== undefined && !Array.isArray(config.disable)) {
+  const disableEntries = Array.isArray(rawConfig.disable) ? rawConfig.disable : [];
+  if (rawConfig.disable !== undefined && !Array.isArray(rawConfig.disable)) {
     warnings.push("custom privacy rules: disable must be an array of rule type strings; ignoring.");
   }
   const disableSet = new Set(disableEntries);
@@ -112,13 +131,26 @@ export function processCustomRulesConfig(config: CustomRulesConfig): CustomRules
   }
 
   // 3. Validate and convert user rules.
-  const userRules = config.rules ?? [];
+  const rawRules = rawConfig.rules;
+  const userRules = Array.isArray(rawRules) ? rawRules : [];
+  if (rawRules !== undefined && !Array.isArray(rawRules)) {
+    warnings.push("custom privacy rules: rules must be an array; ignoring.");
+  }
   const validUserRules: PrivacyRule[] = [];
   for (let i = 0; i < userRules.length; i++) {
-    const ruleErrors = validateUserRule(userRules[i], i);
+    if (!isRecord(userRules[i])) {
+      errors.push({
+        ruleIndex: i,
+        type: "",
+        field: "rules",
+        message: "rule must be an object",
+      });
+      continue;
+    }
+    const ruleErrors = validateUserRule(userRules[i] as UserDefinedRule, i);
     errors.push(...ruleErrors);
     if (ruleErrors.length === 0) {
-      validUserRules.push(convertToPrivacyRule(userRules[i]));
+      validUserRules.push(convertToPrivacyRule(userRules[i] as UserDefinedRule));
     }
   }
 
