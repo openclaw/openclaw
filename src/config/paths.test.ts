@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   resolveDefaultConfigCandidates,
@@ -164,5 +165,13 @@ describe("resolveStateDir nesting guard (#45765)", () => {
   it("still appends .openclaw when OPENCLAW_HOME is not set", () => {
     const env = { HOME: "/home/user" } as NodeJS.ProcessEnv;
     expect(resolveStateDir(env)).toBe(path.resolve("/home/user/.openclaw"));
+  });
+
+  it("preserves existing nested state dir for backward compat", () => {
+    const env = { OPENCLAW_HOME: "/home/user/.openclaw" } as NodeJS.ProcessEnv;
+    const nestedDir = path.resolve("/home/user/.openclaw/.openclaw");
+    vi.spyOn(fsSync, "existsSync").mockImplementation((p) => String(p) === nestedDir);
+    expect(resolveStateDir(env)).toBe(nestedDir);
+    vi.restoreAllMocks();
   });
 });
