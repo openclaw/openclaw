@@ -17,7 +17,18 @@
     "PS4",
     "GCONV_PATH",
     "IFS",
-    "SSLKEYLOGFILE"
+    "SSLKEYLOGFILE",
+    "JAVA_TOOL_OPTIONS",
+    "JDK_JAVA_OPTIONS",
+    "_JAVA_OPTIONS",
+    "MAVEN_OPTS",
+    "GRADLE_OPTS",
+    "DOTNET_STARTUP_HOOKS",
+    "CORECLR_ENABLE_PROFILING",
+    "CORECLR_PROFILER_PATH",
+    "ANSIBLE_FILTER_PLUGINS",
+    "ANSIBLE_CALLBACK_PLUGINS",
+    "RUSTFLAGS"
   ],
   "blockedOverrideKeys": [
     "HOME",
@@ -47,5 +58,5 @@
     "CURL_HOME"
   ],
   "blockedOverridePrefixes": ["GIT_CONFIG_", "NPM_CONFIG_"],
-  "blockedPrefixes": ["DYLD_", "LD_", "BASH_FUNC_"]
+  "blockedPrefixes": ["DYLD_", "LD_", "BASH_FUNC_", "CORECLR_", "ANSIBLE_"]
 }
