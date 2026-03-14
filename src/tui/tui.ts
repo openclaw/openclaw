@@ -27,11 +27,6 @@ import { formatTokens } from "./tui-formatters.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createSessionActions } from "./tui-session-actions.js";
-import {
-  createEditorSubmitHandler,
-  createSubmitBurstCoalescer,
-  shouldEnableWindowsGitBashPasteFallback,
-} from "./tui-submit.js";
 import type {
   AgentSummary,
   SessionInfo,
@@ -43,11 +38,162 @@ import { buildWaitingStatusMessage, defaultWaitingPhrases } from "./tui-waiting.
 
 export { resolveFinalAssistantText } from "./tui-formatters.js";
 export type { TuiOptions } from "./tui-types.js";
-export {
-  createEditorSubmitHandler,
-  createSubmitBurstCoalescer,
-  shouldEnableWindowsGitBashPasteFallback,
-} from "./tui-submit.js";
+
+export function createEditorSubmitHandler(params: {
+  editor: {
+    setText: (value: string) => void;
+    addToHistory: (value: string) => void;
+  };
+  handleCommand: (value: string) => Promise<void> | void;
+  sendMessage: (value: string) => Promise<void> | void;
+  handleBangLine: (value: string) => Promise<void> | void;
+  /** When provided, blocks non-command submissions while a run is active. */
+  isRunActive?: () => boolean;
+  onSubmitBlocked?: () => void;
+}) {
+  return (text: string) => {
+    const raw = text;
+    const value = raw.trim();
+
+    // Keep previous behavior: ignore empty/whitespace-only submissions.
+    if (!value) {
+      params.editor.setText("");
+      return;
+    }
+
+    // Slash-commands and bang-lines are always allowed — they may abort or
+    // query state even while a run is streaming.
+    if (value.startsWith("/")) {
+      params.editor.setText("");
+      params.editor.addToHistory(value);
+      void params.handleCommand(value);
+      return;
+    }
+
+    if (raw.startsWith("!") && raw !== "!") {
+      params.editor.setText("");
+      params.editor.addToHistory(raw);
+      void params.handleBangLine(raw);
+      return;
+    }
+
+    // Block chat messages while a run is active to prevent the input from
+    // being silently swallowed and then replayed on the next turn (#45326).
+    if (params.isRunActive?.()) {
+      // Keep the typed text in the editor so the user doesn't lose it.
+      params.onSubmitBlocked?.();
+      return;
+    }
+
+    params.editor.setText("");
+    params.editor.addToHistory(value);
+    void params.sendMessage(value);
+  };
+}
+
+export function shouldEnableWindowsGitBashPasteFallback(params?: {
+  platform?: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const platform = params?.platform ?? process.platform;
+  const env = params?.env ?? process.env;
+  const termProgram = (env.TERM_PROGRAM ?? "").toLowerCase();
+
+  // Some macOS terminals emit multiline paste as rapid single-line submits.
+  // Enable burst coalescing so pasted blocks stay as one user message.
+  if (platform === "darwin") {
+    if (termProgram.includes("iterm") || termProgram.includes("apple_terminal")) {
+      return true;
+    }
+    return false;
+  }
+
+  if (platform !== "win32") {
+    return false;
+  }
+
+  const msystem = (env.MSYSTEM ?? "").toUpperCase();
+  const shell = env.SHELL ?? "";
+  if (msystem.startsWith("MINGW") || msystem.startsWith("MSYS")) {
+    return true;
+  }
+  if (shell.toLowerCase().includes("bash")) {
+    return true;
+  }
+  return termProgram.includes("mintty");
+}
+
+export function createSubmitBurstCoalescer(params: {
+  submit: (value: string) => void;
+  enabled: boolean;
+  burstWindowMs?: number;
+  now?: () => number;
+  setTimer?: typeof setTimeout;
+  clearTimer?: typeof clearTimeout;
+}) {
+  const windowMs = Math.max(1, params.burstWindowMs ?? 50);
+  const now = params.now ?? (() => Date.now());
+  const setTimer = params.setTimer ?? setTimeout;
+  const clearTimer = params.clearTimer ?? clearTimeout;
+  let pending: string | null = null;
+  let pendingAt = 0;
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearFlushTimer = () => {
+    if (!flushTimer) {
+      return;
+    }
+    clearTimer(flushTimer);
+    flushTimer = null;
+  };
+
+  const flushPending = () => {
+    if (pending === null) {
+      return;
+    }
+    const value = pending;
+    pending = null;
+    pendingAt = 0;
+    clearFlushTimer();
+    params.submit(value);
+  };
+
+  const scheduleFlush = () => {
+    clearFlushTimer();
+    flushTimer = setTimer(() => {
+      flushPending();
+    }, windowMs);
+  };
+
+  return (value: string) => {
+    if (!params.enabled) {
+      params.submit(value);
+      return;
+    }
+    if (value.includes("\n")) {
+      flushPending();
+      params.submit(value);
+      return;
+    }
+    const ts = now();
+    if (pending === null) {
+      pending = value;
+      pendingAt = ts;
+      scheduleFlush();
+      return;
+    }
+    if (ts - pendingAt <= windowMs) {
+      pending = `${pending}\n${value}`;
+      pendingAt = ts;
+      scheduleFlush();
+      return;
+    }
+    flushPending();
+    pending = value;
+    pendingAt = ts;
+    scheduleFlush();
+  };
+}
 
 export function resolveTuiSessionKey(params: {
   raw?: string;
@@ -767,6 +913,11 @@ export async function runTui(opts: TuiOptions) {
     handleCommand,
     sendMessage,
     handleBangLine: runLocalShellLine,
+    isRunActive: () => state.activeChatRunId !== null,
+    onSubmitBlocked: () => {
+      chatLog.addSystem("waiting for response — press Esc to cancel");
+      tui.requestRender();
+    },
   });
   editor.onSubmit = createSubmitBurstCoalescer({
     submit: submitHandler,
