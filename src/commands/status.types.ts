@@ -1,4 +1,6 @@
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { FormalRuntimeMonitoringSummary } from "../gateway/runtime-monitoring.js";
+import type { QuantdRuntimeSummary } from "../quantd/runtime-summary.js";
 
 export type SessionStatus = {
   agentId?: string;
@@ -48,6 +50,8 @@ export type StatusSummary = {
   };
   channelSummary: string[];
   queuedSystemEvents: string[];
+  quantd?: QuantdRuntimeSummary;
+  monitoring?: FormalRuntimeMonitoringSummary;
   sessions: {
     paths: string[];
     count: number;

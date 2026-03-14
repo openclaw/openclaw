@@ -7,6 +7,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, readBestEffortConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import {
+  buildFormalRuntimeMonitoringSummary,
+  type FormalRuntimeMonitoringSummary,
+} from "../gateway/runtime-monitoring.js";
 import { info } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -14,6 +18,7 @@ import {
   type HeartbeatSummary,
   resolveHeartbeatSummaryForAgent,
 } from "../infra/heartbeat-runner.js";
+import { getQuantdRuntimeSummary, type QuantdRuntimeSummary } from "../quantd/runtime-summary.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -69,6 +74,8 @@ export type HealthSummary = {
       age: number | null;
     }>;
   };
+  quantd?: QuantdRuntimeSummary;
+  monitoring?: FormalRuntimeMonitoringSummary;
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -502,6 +509,7 @@ export async function getHealthSnapshot(params?: {
     }
   }
 
+  const quantd = await getQuantdRuntimeSummary({ timeoutMs: cappedTimeout });
   const summary: HealthSummary = {
     ok: true,
     ts: Date.now(),
@@ -517,7 +525,24 @@ export async function getHealthSnapshot(params?: {
       count: sessions.count,
       recent: sessions.recent,
     },
+    quantd,
   };
+  summary.monitoring = buildFormalRuntimeMonitoringSummary({
+    defaultAgentId,
+    agents: agents.map((agent) => ({
+      agentId: agent.agentId,
+      name: agent.name,
+      isDefault: agent.isDefault,
+      heartbeat: {
+        enabled: agent.heartbeat.enabled,
+        everyMs: agent.heartbeat.everyMs,
+      },
+      sessions: {
+        recent: agent.sessions.recent,
+      },
+    })),
+    quantd,
+  });
 
   return summary;
 }
@@ -715,6 +740,25 @@ export async function healthCommand(
       .filter(Boolean);
     if (heartbeatParts.length > 0) {
       runtime.log(info(`Heartbeat interval: ${heartbeatParts.join(", ")}`));
+    }
+    if (summary.quantd) {
+      const quantdParts = [`status ${summary.quantd.status}`];
+      if (summary.quantd.health?.reasons?.length) {
+        quantdParts.push(`reasons ${summary.quantd.health.reasons.join(",")}`);
+      }
+      if (summary.quantd.metrics) {
+        quantdParts.push(
+          `hb ${summary.quantd.metrics.heartbeats} · market ${summary.quantd.metrics.marketEvents} · order ${summary.quantd.metrics.orderEvents}`,
+        );
+      }
+      runtime.log(info(`Quantd: ${quantdParts.join(" · ")}`));
+    }
+    if (summary.monitoring) {
+      runtime.log(
+        info(
+          `Agent activity: active ${summary.monitoring.agents.active} · quiet ${summary.monitoring.agents.quiet} · idle ${summary.monitoring.agents.idle} · hb on ${summary.monitoring.agents.heartbeatEnabled} / off ${summary.monitoring.agents.heartbeatDisabled}`,
+        ),
+      );
     }
     if (displayAgents.length === 0) {
       runtime.log(

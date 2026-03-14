@@ -81,5 +81,7 @@ describe("getStatusSummary", () => {
     expect(summary.runtimeVersion).toBe("2026.3.8");
     expect(summary.heartbeat.defaultAgentId).toBe("main");
     expect(summary.channelSummary).toEqual(["ok"]);
+    expect(summary.quantd?.status).toBe("disabled");
+    expect(summary.monitoring?.agents.total).toBe(1);
   });
 });

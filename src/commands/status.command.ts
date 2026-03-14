@@ -336,6 +336,29 @@ export async function statusCommand(
       .filter(Boolean);
     return parts.length > 0 ? parts.join(", ") : "disabled";
   })();
+  const quantdValue = (() => {
+    const quantd = summary.quantd;
+    if (!quantd) {
+      return muted("unknown");
+    }
+    const parts = [quantd.status];
+    if (quantd.health?.reasons?.length) {
+      parts.push(`reasons ${quantd.health.reasons.join(",")}`);
+    }
+    if (quantd.metrics) {
+      parts.push(
+        `hb ${quantd.metrics.heartbeats} · market ${quantd.metrics.marketEvents} · order ${quantd.metrics.orderEvents}`,
+      );
+    }
+    return parts.join(" · ");
+  })();
+  const monitoringValue = (() => {
+    const monitoring = summary.monitoring;
+    if (!monitoring) {
+      return muted("unknown");
+    }
+    return `${monitoring.status} · active ${monitoring.agents.active} · quiet ${monitoring.agents.quiet} · idle ${monitoring.agents.idle}`;
+  })();
   const lastHeartbeatValue = (() => {
     if (!opts.deep) {
       return null;
@@ -435,6 +458,8 @@ export async function statusCommand(
     { Item: "Probes", Value: probesValue },
     { Item: "Events", Value: eventsValue },
     { Item: "Heartbeat", Value: heartbeatValue },
+    { Item: "Quantd", Value: quantdValue },
+    { Item: "Runtime", Value: monitoringValue },
     ...(lastHeartbeatValue ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }] : []),
     {
       Item: "Sessions",

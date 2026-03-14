@@ -557,9 +557,14 @@ vi.mock("../agents/pi-embedded.js", async () => {
   };
 });
 
-vi.mock("../commands/health.js", () => ({
-  getHealthSnapshot: vi.fn().mockResolvedValue({ ok: true, stub: true }),
-}));
+vi.mock("../commands/health.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../commands/health.js")>("../commands/health.js");
+  return {
+    ...actual,
+    getHealthSnapshot: vi.fn(actual.getHealthSnapshot),
+  };
+});
 vi.mock("../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));

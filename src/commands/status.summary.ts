@@ -10,6 +10,7 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
+import { buildFormalRuntimeMonitoringSummary } from "../gateway/runtime-monitoring.js";
 import {
   classifySessionKey,
   listAgentsForGateway,
@@ -18,6 +19,7 @@ import {
 import { buildChannelSummary } from "../infra/channel-summary.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-runner.js";
 import { peekSystemEvents } from "../infra/system-events.js";
+import { getQuantdRuntimeSummary } from "../quantd/runtime-summary.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { resolveLinkChannelContext } from "./status.link-channel.js";
@@ -105,6 +107,7 @@ export async function getStatusSummary(
     includeAllowFrom: true,
     sourceConfig: options.sourceConfig,
   });
+  const quantd = await getQuantdRuntimeSummary();
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
 
@@ -230,6 +233,30 @@ export async function getStatusSummary(
     },
     channelSummary,
     queuedSystemEvents,
+    quantd,
+    monitoring: buildFormalRuntimeMonitoringSummary({
+      defaultAgentId: agentList.defaultId,
+      agents: agentList.agents.map((agent) => {
+        const heartbeat = heartbeatAgents.find((entry) => entry.agentId === agent.id);
+        const sessionsForAgent = byAgent.find((entry) => entry.agentId === agent.id);
+        return {
+          agentId: agent.id,
+          name: agent.name,
+          isDefault: agent.id === agentList.defaultId,
+          heartbeat: {
+            enabled: heartbeat?.enabled ?? false,
+            everyMs: heartbeat?.everyMs ?? null,
+          },
+          sessions: {
+            recent:
+              sessionsForAgent?.recent.map((entry) => ({
+                updatedAt: entry.updatedAt,
+              })) ?? [],
+          },
+        };
+      }),
+      quantd,
+    }),
     sessions: {
       paths: Array.from(paths),
       count: totalSessions,

@@ -57,6 +57,13 @@ describe("gateway server health/presence", () => {
       const status = await statusP;
       const presence = await presenceP;
       expect(health.ok).toBe(true);
+      expect((health.payload as { quantd?: { status?: string } } | undefined)?.quantd?.status).toBe(
+        "disabled",
+      );
+      expect(
+        (health.payload as { monitoring?: { agents?: { total?: number } } } | undefined)?.monitoring
+          ?.agents?.total,
+      ).toBeGreaterThan(0);
       expect(status.ok).toBe(true);
       expect(presence.ok).toBe(true);
       expect(Array.isArray(presence.payload)).toBe(true);
