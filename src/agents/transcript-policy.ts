@@ -108,8 +108,7 @@ export function resolveTranscriptPolicy(params: {
 
   return {
     sanitizeMode: isOpenAi ? "images-only" : needsNonImageSanitize ? "full" : "images-only",
-    sanitizeToolCallIds:
-      (!isOpenAi && sanitizeToolCallIds) || requiresOpenAiCompatibleToolIdSanitization,
+    sanitizeToolCallIds,
     toolCallIdMode,
     repairToolUseResultPairing,
     preserveSignatures: isAnthropic && preservesAnthropicThinkingSignatures(provider),

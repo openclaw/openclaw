@@ -164,5 +164,15 @@ export function resolveTranscriptToolCallIdMode(
   if (modelIncludesAnyHint(modelId, capabilities.transcriptToolCallIdModelHints)) {
     return "strict9";
   }
+  // When a model is routed through a different provider (e.g., Mistral via OpenAI),
+  // check model hints from providers that require strict9 mode.
+  for (const caps of Object.values(PROVIDER_CAPABILITIES)) {
+    if (
+      caps.transcriptToolCallIdMode === "strict9" &&
+      modelIncludesAnyHint(modelId, caps.transcriptToolCallIdModelHints ?? [])
+    ) {
+      return "strict9";
+    }
+  }
   return undefined;
 }
