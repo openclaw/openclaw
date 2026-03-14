@@ -123,6 +123,42 @@ describe("createDiscordGatewayPlugin", () => {
     };
   }
 
+  async function registerGatewayClient(plugin: unknown) {
+    await (
+      plugin as {
+        registerClient: (client: { options: { token: string } }) => Promise<void>;
+      }
+    ).registerClient({
+      options: { token: "token-123" },
+    });
+  }
+
+  async function expectGatewayRegisterFetchFailure(response: Response) {
+    const runtime = createRuntime();
+    globalFetchMock.mockResolvedValue(response);
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    });
+
+    await expect(registerGatewayClient(plugin)).rejects.toThrow(
+      "Failed to get gateway information from Discord: fetch failed",
+    );
+    expect(baseRegisterClientSpy).not.toHaveBeenCalled();
+  }
+
+  async function registerGatewayClientWithMetadata(params: {
+    plugin: unknown;
+    fetchMock: typeof globalFetchMock;
+  }) {
+    params.fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ url: "wss://gateway.discord.gg" }),
+    } as Response);
+    await registerGatewayClient(params.plugin);
+  }
+
   beforeEach(() => {
     vi.stubGlobal("fetch", globalFetchMock);
     baseRegisterClientSpy.mockClear();
@@ -137,23 +173,12 @@ describe("createDiscordGatewayPlugin", () => {
 
   it("uses safe gateway metadata lookup without proxy", async () => {
     const runtime = createRuntime();
-    globalFetchMock.mockResolvedValue({
-      ok: true,
-      status: 200,
-      text: async () => JSON.stringify({ url: "wss://gateway.discord.gg" }),
-    } as Response);
     const plugin = createDiscordGatewayPlugin({
       discordConfig: {},
       runtime,
     });
 
-    await (
-      plugin as unknown as {
-        registerClient: (client: { options: { token: string } }) => Promise<void>;
-      }
-    ).registerClient({
-      options: { token: "token-123" },
-    });
+    await registerGatewayClientWithMetadata({ plugin, fetchMock: globalFetchMock });
 
     expect(globalFetchMock).toHaveBeenCalledWith(
       "https://discord.com/api/v10/gateway/bot",
@@ -165,28 +190,12 @@ describe("createDiscordGatewayPlugin", () => {
   });
 
   it("maps plain-text Discord 503 responses to fetch failed", async () => {
-    const runtime = createRuntime();
-    globalFetchMock.mockResolvedValue({
+    await expectGatewayRegisterFetchFailure({
       ok: false,
       status: 503,
       text: async () =>
         "upstream connect error or disconnect/reset before headers. reset reason: overflow",
     } as Response);
-    const plugin = createDiscordGatewayPlugin({
-      discordConfig: {},
-      runtime,
-    });
-
-    await expect(
-      (
-        plugin as unknown as {
-          registerClient: (client: { options: { token: string } }) => Promise<void>;
-        }
-      ).registerClient({
-        options: { token: "token-123" },
-      }),
-    ).rejects.toThrow("Failed to get gateway information from Discord: fetch failed");
-    expect(baseRegisterClientSpy).not.toHaveBeenCalled();
   });
 
   it("uses proxy agent for gateway WebSocket when configured", async () => {
@@ -227,23 +236,12 @@ describe("createDiscordGatewayPlugin", () => {
 
   it("uses proxy fetch for gateway metadata lookup before registering", async () => {
     const runtime = createRuntime();
-    undiciFetchMock.mockResolvedValue({
-      ok: true,
-      status: 200,
-      text: async () => JSON.stringify({ url: "wss://gateway.discord.gg" }),
-    } as Response);
     const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "http://proxy.test:8080" },
       runtime,
     });
 
-    await (
-      plugin as unknown as {
-        registerClient: (client: { options: { token: string } }) => Promise<void>;
-      }
-    ).registerClient({
-      options: { token: "token-123" },
-    });
+    await registerGatewayClientWithMetadata({ plugin, fetchMock: undiciFetchMock });
 
     expect(restProxyAgentSpy).toHaveBeenCalledWith("http://proxy.test:8080");
     expect(undiciFetchMock).toHaveBeenCalledWith(
@@ -257,28 +255,12 @@ describe("createDiscordGatewayPlugin", () => {
   });
 
   it("maps body read failures to fetch failed", async () => {
-    const runtime = createRuntime();
-    globalFetchMock.mockResolvedValue({
+    await expectGatewayRegisterFetchFailure({
       ok: true,
       status: 200,
       text: async () => {
         throw new Error("body stream closed");
       },
     } as unknown as Response);
-    const plugin = createDiscordGatewayPlugin({
-      discordConfig: {},
-      runtime,
-    });
-
-    await expect(
-      (
-        plugin as unknown as {
-          registerClient: (client: { options: { token: string } }) => Promise<void>;
-        }
-      ).registerClient({
-        options: { token: "token-123" },
-      }),
-    ).rejects.toThrow("Failed to get gateway information from Discord: fetch failed");
-    expect(baseRegisterClientSpy).not.toHaveBeenCalled();
   });
 });
