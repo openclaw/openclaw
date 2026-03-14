@@ -17,6 +17,11 @@ export async function getOrLoadBootstrapFiles(params: {
 }
 
 export function clearBootstrapSnapshot(sessionKey: string): void {
+  // Support wildcard to clear all caches (used by file watcher)
+  if (sessionKey === "*") {
+    cache.clear();
+    return;
+  }
   cache.delete(sessionKey);
 }
 
