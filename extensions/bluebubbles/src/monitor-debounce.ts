@@ -14,6 +14,7 @@ type BlueBubblesDebounceEntry = {
 export type BlueBubblesDebouncer = {
   enqueue: (item: BlueBubblesDebounceEntry) => Promise<void>;
   flushKey: (key: string) => Promise<boolean>;
+  flushAll: () => Promise<number>;
 };
 
 export type BlueBubblesDebounceRegistry = {
