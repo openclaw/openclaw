@@ -50,7 +50,7 @@ import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { logWarn } from "../../logger.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
-  buildSafeExternalPrompt,
+  buildSafeExternalPromptAsync,
   detectSuspiciousPatterns,
   getHookType,
   isExternalHookSession,
@@ -463,9 +463,12 @@ export async function runCronIsolatedAgentTurn(params: {
   }
 
   if (shouldWrapExternal) {
-    // Wrap external content with security boundaries
+    // Wrap external content with security boundaries and run ML injection detection.
+    // buildSafeExternalPromptAsync is fail-open for API/network errors; it only
+    // throws when PMTINSP_ON_UNSAFE=block and injection is positively detected,
+    // in which case propagating the error aborts this cron turn intentionally.
     const hookType = getHookType(baseSessionKey);
-    const safeContent = buildSafeExternalPrompt({
+    const { prompt: safeContent } = await buildSafeExternalPromptAsync({
       content: params.message,
       source: hookType,
       jobName: params.job.name,
