@@ -32,12 +32,8 @@ function resolveManagedSessionsSafetyChain(sessionsDir: string): string[] {
   const resolved = path.resolve(sessionsDir);
   const agentDir = path.dirname(resolved);
   const agentsDir = path.dirname(agentDir);
-  const stateDir = path.dirname(agentsDir);
-  if (
-    path.basename(resolved) === "sessions" &&
-    path.basename(agentsDir) === "agents" &&
-    path.basename(stateDir) === ".openclaw"
-  ) {
+  if (path.basename(resolved) === "sessions" && path.basename(agentsDir) === "agents") {
+    const stateDir = path.dirname(agentsDir);
     return [stateDir, agentsDir, agentDir, resolved];
   }
   return [path.dirname(resolved), resolved];

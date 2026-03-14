@@ -35,6 +35,31 @@ describe("ensurePrivateSessionsDir", () => {
     }
   });
 
+  it("rejects symlinked agents parents for custom state roots", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-custom-state-parent-link-"));
+    try {
+      const stateDir = path.join(tempDir, "custom-state");
+      const realAgentsDir = path.join(tempDir, "outside-agents");
+      const linkedAgentsDir = path.join(stateDir, "agents");
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.mkdirSync(realAgentsDir, { recursive: true });
+      fs.symlinkSync(realAgentsDir, linkedAgentsDir, "dir");
+
+      const { ensurePrivateSessionsDir } = await import("./paths.js");
+
+      await expect(
+        ensurePrivateSessionsDir(path.join(linkedAgentsDir, "main", "sessions")),
+      ).rejects.toThrow(/must not traverse a symlink/i);
+      expect(fs.existsSync(path.join(realAgentsDir, "main", "sessions"))).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects when the directory identity changes before chmod", async () => {
     if (process.platform === "win32") {
       return;
