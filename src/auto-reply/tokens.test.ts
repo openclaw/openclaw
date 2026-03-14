@@ -86,6 +86,9 @@ describe("isSilentReplyPrefixText", () => {
     expect(isSilentReplyPrefixText("N")).toBe(false);
     expect(isSilentReplyPrefixText("No")).toBe(false);
     expect(isSilentReplyPrefixText("no")).toBe(false);
+  });
+
+  it("rejects text that is not a prefix of the token", () => {
     expect(isSilentReplyPrefixText("Hello")).toBe(false);
   });
 
