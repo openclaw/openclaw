@@ -45,7 +45,14 @@ const SCANNABLE_EXTENSIONS = new Set([
   ".cts",
   ".jsx",
   ".tsx",
+  ".md",
 ]);
+
+const MARKDOWN_EXTENSIONS = new Set([".md"]);
+
+function isMarkdown(filePath: string): boolean {
+  return MARKDOWN_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
 
 const DEFAULT_MAX_SCAN_FILES = 500;
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
@@ -203,6 +210,74 @@ const SOURCE_RULES: SourceRule[] = [
     requiresContext: /\bfetch\b|\bpost\b|http\.request/i,
   },
 ];
+
+// ---------------------------------------------------------------------------
+// Markdown prompt-injection rules
+// ---------------------------------------------------------------------------
+
+type MarkdownLineRule = {
+  ruleId: string;
+  severity: SkillScanSeverity;
+  message: string;
+  pattern: RegExp;
+};
+
+const MARKDOWN_LINE_RULES: MarkdownLineRule[] = [
+  {
+    ruleId: "prompt-injection-override",
+    severity: "critical",
+    message: "Prompt injection: instruction override attempt detected",
+    pattern: /ignore\s+(all\s+)?(previous|prior|above)\s+(instructions|rules|guidelines)/i,
+  },
+  {
+    ruleId: "prompt-injection-system-tag",
+    severity: "critical",
+    message: "Prompt injection: system/assistant tag detected in skill definition",
+    pattern: /<\s*\/?\s*(system|assistant|human|user)\s*>/i,
+  },
+  {
+    ruleId: "prompt-injection-role-play",
+    severity: "warn",
+    message: "Prompt injection: role reassignment attempt detected",
+    pattern: /you\s+are\s+now\s+(?!an?\s+(expert|helpful|skilled)\b)/i,
+  },
+  {
+    ruleId: "prompt-injection-reveal",
+    severity: "warn",
+    message: "Prompt injection: system prompt reveal attempt detected",
+    pattern: /reveal\s+(your|the)\s+(system|original|initial)\s+(prompt|instructions)/i,
+  },
+];
+
+export function scanMarkdownSource(source: string, filePath: string): SkillScanFinding[] {
+  const findings: SkillScanFinding[] = [];
+  const lines = source.split("\n");
+  const matchedRules = new Set<string>();
+
+  for (const rule of MARKDOWN_LINE_RULES) {
+    if (matchedRules.has(rule.ruleId)) {
+      continue;
+    }
+    for (let i = 0; i < lines.length; i++) {
+      const match = rule.pattern.exec(lines[i]);
+      if (!match) {
+        continue;
+      }
+      findings.push({
+        ruleId: rule.ruleId,
+        severity: rule.severity,
+        file: filePath,
+        line: i + 1,
+        message: rule.message,
+        evidence: truncateEvidence(lines[i].trim()),
+      });
+      matchedRules.add(rule.ruleId);
+      break;
+    }
+  }
+
+  return findings;
+}
 
 // ---------------------------------------------------------------------------
 // Core scanner
@@ -507,7 +582,9 @@ async function scanFileWithCache(params: {
     }
     throw err;
   }
-  const findings = scanSource(source, filePath);
+  const findings = isMarkdown(filePath)
+    ? scanMarkdownSource(source, filePath)
+    : scanSource(source, filePath);
   setCachedFileScanResult(filePath, {
     size: st.size,
     mtimeMs: st.mtimeMs,
