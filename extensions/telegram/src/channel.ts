@@ -43,7 +43,7 @@ import {
 import {
   type OutboundSendDeps,
   resolveOutboundSendDep,
-} from "../../../src/infra/outbound/deliver.js";
+} from "../../../src/infra/outbound/send-deps.js";
 import { getTelegramRuntime } from "./runtime.js";
 
 type TelegramSendFn = ReturnType<
