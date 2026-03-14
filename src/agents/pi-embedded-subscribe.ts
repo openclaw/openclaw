@@ -107,11 +107,20 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!params.onBlockReply) {
       return;
     }
-    void Promise.resolve()
-      .then(() => params.onBlockReply?.(payload))
-      .catch((err) => {
-        log.warn(`block reply callback failed: ${String(err)}`);
-      });
+    // Call synchronously so text is enqueued to the pipeline before any subsequent
+    // onBlockReplyFlush() drains it (e.g. at tool_execution_start). Deferring via
+    // Promise.resolve().then() caused the flush to see an empty pipeline, leaving
+    // pre-tool text stuck until the idle-timeout fired (#46002).
+    try {
+      const result = params.onBlockReply(payload);
+      if (result instanceof Promise) {
+        result.catch((err: unknown) => {
+          log.warn(`block reply callback failed: ${String(err)}`);
+        });
+      }
+    } catch (err) {
+      log.warn(`block reply callback failed: ${String(err)}`);
+    }
   };
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
