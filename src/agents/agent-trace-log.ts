@@ -442,6 +442,7 @@ export function createAgentTraceLogger(params: {
           ts: new Date().toISOString(),
           type: "agent_end",
           phase: "end",
+          error: typeof evt.error === "string" ? evt.error : undefined,
         });
         break;
 
