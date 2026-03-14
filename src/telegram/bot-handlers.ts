@@ -81,6 +81,10 @@ import {
   type ProviderInfo,
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
+import {
+  buildTelegramNativeSkillCommandNames,
+  extractTelegramNativeCommandToken,
+} from "./native-command-routing.js";
 import { wasSentByBot } from "./sent-message-cache.js";
 
 const APPROVE_CALLBACK_DATA_RE =
@@ -132,12 +136,20 @@ export const registerTelegramHandlers = ({
   telegramCfg,
   allowFrom,
   groupAllowFrom,
+  nativeEnabled,
+  nativeSkillsEnabled,
   resolveGroupPolicy,
   resolveTelegramGroupConfig,
   shouldSkipUpdate,
   processMessage,
   logger,
 }: RegisterTelegramHandlerParams) => {
+  const nativeSkillCommandNames = buildTelegramNativeSkillCommandNames({
+    cfg,
+    accountId,
+    nativeEnabled,
+    nativeSkillsEnabled,
+  });
   const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
   const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
@@ -1521,6 +1533,13 @@ export const registerTelegramHandlers = ({
 
   const handleInboundMessageLike = async (event: InboundTelegramEvent) => {
     try {
+      const nativeCommandToken = extractTelegramNativeCommandToken({
+        text: event.msg.text ?? event.msg.caption,
+        botUsername: event.ctx.me?.username,
+      });
+      if (nativeCommandToken && nativeSkillCommandNames.has(nativeCommandToken)) {
+        return;
+      }
       if (shouldSkipUpdate(event.ctxForDedupe)) {
         return;
       }

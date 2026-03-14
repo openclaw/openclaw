@@ -100,6 +100,8 @@ export type RegisterTelegramHandlerParams = {
   telegramCfg: TelegramAccountConfig;
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
+  nativeEnabled: boolean;
+  nativeSkillsEnabled: boolean;
   resolveGroupPolicy: (chatId: string | number) => ChannelGroupPolicy;
   resolveTelegramGroupConfig: (
     chatId: string | number,
