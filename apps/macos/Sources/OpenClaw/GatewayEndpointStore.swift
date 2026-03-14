@@ -164,25 +164,31 @@ actor GatewayEndpointStore {
                     envVar: "OPENCLAW_GATEWAY_TOKEN",
                     configKey: isRemote ? "gateway.remote.token" : "gateway.auth.token")
             }
+            Self.staticLogger.debug("resolveGatewayToken: using env OPENCLAW_GATEWAY_TOKEN")
             return trimmed
         }
 
         if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root),
            !configToken.isEmpty
         {
+            let configKey = isRemote ? "gateway.remote.token" : "gateway.auth.token"
+            Self.staticLogger.debug("resolveGatewayToken: using config \(configKey, privacy: .public)")
             return configToken
         }
 
         if isRemote {
+            Self.staticLogger.debug("resolveGatewayToken: remote mode, no token found")
             return nil
         }
 
         if let token = launchdSnapshot?.token?.trimmingCharacters(in: .whitespacesAndNewlines),
            !token.isEmpty
         {
+            Self.staticLogger.debug("resolveGatewayToken: using launchd plist token")
             return token
         }
 
+        Self.staticLogger.warning("resolveGatewayToken: no token found in any source")
         return nil
     }
 
@@ -195,8 +201,14 @@ actor GatewayEndpointStore {
            let auth = gateway["auth"] as? [String: Any],
            let token = auth["token"] as? String
         {
-            return token.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                Self.staticLogger.debug(
+                    "resolveConfigToken: found gateway.auth.token (length=\(trimmed.count))")
+                return trimmed
+            }
         }
+        Self.staticLogger.debug("resolveConfigToken: no gateway.auth.token in config")
         return nil
     }
 
