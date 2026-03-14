@@ -1670,7 +1670,7 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
-  it("forces thread replies when inbound message contains thread_id", async () => {
+  it("does not force thread replies when only thread_id exists and replyInThread is disabled", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
     const cfg: ClawdbotConfig = {
@@ -1703,8 +1703,85 @@ describe("handleFeishuMessage command authorization", () => {
 
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
+        replyInThread: false,
+        threadReply: true,
+      }),
+    );
+  });
+
+  it("always replies in thread when root_id exists, even if replyInThread is disabled", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group",
+              replyInThread: "disabled",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-root-force" } },
+      message: {
+        message_id: "msg-with-root",
+        chat_id: "oc-group",
+        chat_type: "group",
+        root_id: "om_root_force",
+        message_type: "text",
+        content: JSON.stringify({ text: "thread content with root_id" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenLastCalledWith(
+      expect.objectContaining({
         replyInThread: true,
         threadReply: true,
+      }),
+    );
+  });
+
+  it("falls back to replyInThread config when no root_id", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group",
+              replyInThread: "enabled",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-no-root-fallback" } },
+      message: {
+        message_id: "msg-no-root-fallback",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "top-level message" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        replyInThread: true,
+        threadReply: false,
       }),
     );
   });

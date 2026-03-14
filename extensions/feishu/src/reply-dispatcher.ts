@@ -71,7 +71,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const threadReplyMode = threadReply === true;
-  const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
+  const normalizedRootId = rootId?.trim();
+  // root_id is authoritative for "must reply in thread".
+  // thread_id-only contexts should still honor explicit replyInThread config.
+  const effectiveReplyInThread = Boolean(normalizedRootId) || replyInThread === true;
   const account = resolveFeishuAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
 
@@ -197,7 +200,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         await streaming.start(chatId, resolveReceiveIdType(chatId), {
           replyToMessageId,
           replyInThread: effectiveReplyInThread,
-          rootId,
+          rootId: normalizedRootId,
         });
       } catch (error) {
         params.runtime.error?.(`feishu: streaming start failed: ${String(error)}`);
