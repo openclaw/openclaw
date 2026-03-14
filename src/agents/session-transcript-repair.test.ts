@@ -445,6 +445,105 @@ describe("sanitizeToolCallInputs", () => {
     expect((toolCalls[0] as { id?: unknown }).id).toBe("call_1");
     expect((toolCalls[0] as { arguments?: unknown }).arguments).toEqual({ path: "/tmp/test" });
   });
+
+  it("skips the last assistant message when it contains thinking blocks", () => {
+    // Anthropic requires byte-for-byte fidelity for the latest assistant
+    // message that contains thinking or redacted_thinking blocks. When a
+    // non-owner user triggers sanitization with a restricted allowlist, the
+    // owner-only tool_use blocks in that message must NOT be dropped.
+    const input = castAgentMessages([
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "some reasoning" },
+          { type: "toolUse", id: "call_exec", name: "exec", input: { command: "ls" } },
+          { type: "text", text: "done" },
+        ],
+      },
+    ]);
+
+    // "exec" is NOT in the allowlist — normally it would be dropped.
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["read"],
+      preserveThinkingBlocks: true,
+    });
+
+    // The last assistant message must be preserved unmodified.
+    expect(out).toHaveLength(2);
+    const assistant = out[1] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.role).toBe("assistant");
+    const types = (assistant.content as Array<{ type: string }>).map((b) => b.type);
+    expect(types).toEqual(["thinking", "toolUse", "text"]);
+  });
+
+  it("skips the last assistant message when it contains redacted_thinking blocks", () => {
+    const input = castAgentMessages([
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: [
+          { type: "redacted_thinking", data: "abc" },
+          { type: "toolUse", id: "call_exec", name: "exec", input: { command: "ls" } },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["read"],
+      preserveThinkingBlocks: true,
+    });
+
+    expect(out).toHaveLength(2);
+    const assistant = out[1] as Extract<AgentMessage, { role: "assistant" }>;
+    const types = (assistant.content as Array<{ type: string }>).map((b) => b.type);
+    expect(types).toEqual(["redacted_thinking", "toolUse"]);
+  });
+
+  it("still sanitizes earlier assistant messages even when the last has thinking blocks", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_bad", name: "exec", arguments: {} }],
+      },
+      { role: "user", content: "next" },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "reasoning" },
+          { type: "text", text: "reply" },
+        ],
+      },
+    ]);
+
+    // "exec" is not allowed — earlier assistant message should still be sanitized.
+    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["read"] });
+
+    // The first assistant message had only a disallowed tool call, so it gets dropped entirely.
+    const roles = out.map((m) => m.role);
+    expect(roles).toEqual(["user", "assistant"]);
+  });
+
+  it("sanitizes the last assistant message normally when it has no thinking blocks", () => {
+    const input = castAgentMessages([
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolUse", id: "call_exec", name: "exec", input: { command: "ls" } },
+          { type: "text", text: "done" },
+        ],
+      },
+    ]);
+
+    // No thinking blocks — normal sanitization should drop disallowed tool call.
+    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["read"] });
+
+    expect(out).toHaveLength(2);
+    const assistant = out[1] as Extract<AgentMessage, { role: "assistant" }>;
+    const types = (assistant.content as Array<{ type: string }>).map((b) => b.type);
+    expect(types).toEqual(["text"]);
+  });
 });
 
 describe("stripToolResultDetails", () => {

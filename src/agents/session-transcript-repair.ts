@@ -193,6 +193,8 @@ export type ToolCallInputRepairReport = {
 
 export type ToolCallInputRepairOptions = {
   allowedToolNames?: Iterable<string>;
+  /** When true, preserve thinking blocks in the last assistant message. */
+  preserveThinkingBlocks?: boolean;
 };
 
 export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[] {
@@ -215,6 +217,25 @@ export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[]
   return touched ? out : messages;
 }
 
+/**
+ * Returns `true` when the assistant message contains at least one `thinking` or
+ * `redacted_thinking` content block.  Anthropic requires byte-for-byte fidelity
+ * for the latest assistant message that carries these blocks — any modification
+ * (including dropping sibling tool_use blocks) causes a 400 rejection.
+ */
+function assistantHasThinkingBlocks(msg: AgentMessage): boolean {
+  if (msg.role !== "assistant" || !Array.isArray(msg.content)) {
+    return false;
+  }
+  return msg.content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const type = (block as { type?: unknown }).type;
+    return type === "thinking" || type === "redacted_thinking";
+  });
+}
+
 export function repairToolCallInputs(
   messages: AgentMessage[],
   options?: ToolCallInputRepairOptions,
@@ -225,7 +246,24 @@ export function repairToolCallInputs(
   const out: AgentMessage[] = [];
   const allowedToolNames = normalizeAllowedToolNames(options?.allowedToolNames);
 
-  for (const msg of messages) {
+  // Find the last assistant message index. If it contains thinking or
+  // redacted_thinking blocks, we must skip it entirely — Anthropic requires
+  // the latest assistant message with thinking blocks to be unmodified.
+  let lastAssistantIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m && typeof m === "object" && m.role === "assistant") {
+      lastAssistantIdx = i;
+      break;
+    }
+  }
+  const skipLastAssistant =
+    options?.preserveThinkingBlocks === true &&
+    lastAssistantIdx >= 0 &&
+    assistantHasThinkingBlocks(messages[lastAssistantIdx]);
+
+  for (let idx = 0; idx < messages.length; idx += 1) {
+    const msg = messages[idx];
     if (!msg || typeof msg !== "object") {
       out.push(msg);
       continue;
@@ -236,11 +274,45 @@ export function repairToolCallInputs(
       continue;
     }
 
+    // Anthropic rejects requests when thinking/redacted_thinking blocks in the
+    // latest assistant message are modified. We must not drop blocks or trim
+    // names (which would alter the message structure), but we still need to
+    // redact sessions_spawn attachment content to avoid leaking sensitive data.
+    const isThinkingAssistant = skipLastAssistant && idx === lastAssistantIdx;
+
     const nextContent: typeof msg.content = [];
     let droppedInMessage = 0;
     let messageChanged = false;
 
     for (const block of msg.content) {
+      // Anthropic rejects requests when ANY block in the latest assistant
+      // message with thinking/redacted_thinking is modified (added, removed,
+      // or reordered).  Skip tool-call filtering for this message but still
+      // redact sessions_spawn attachments to avoid leaking sensitive data.
+      if (isThinkingAssistant) {
+        if (
+          isRawToolCallBlock(block) &&
+          ((block as { type?: unknown }).type === "toolCall" ||
+            (block as { type?: unknown }).type === "toolUse" ||
+            (block as { type?: unknown }).type === "functionCall")
+        ) {
+          const blockName =
+            typeof (block as { name?: unknown }).name === "string"
+              ? (block as { name: string }).name.trim()
+              : undefined;
+          if (blockName?.toLowerCase() === "sessions_spawn") {
+            const sanitized = sanitizeToolCallBlock(block);
+            if (sanitized !== block) {
+              changed = true;
+              messageChanged = true;
+            }
+            nextContent.push(sanitized as typeof block);
+            continue;
+          }
+        }
+        nextContent.push(block);
+        continue;
+      }
       if (
         isRawToolCallBlock(block) &&
         (!hasToolCallInput(block) ||
@@ -272,6 +344,9 @@ export function repairToolCallInputs(
               messageChanged = true;
             }
             nextContent.push(sanitized as typeof block);
+          } else if (isThinkingAssistant) {
+            // Preserve block as-is to keep thinking message structure intact
+            nextContent.push(block);
           } else {
             if (typeof (block as { name?: unknown }).name === "string") {
               const rawName = (block as { name: string }).name;
