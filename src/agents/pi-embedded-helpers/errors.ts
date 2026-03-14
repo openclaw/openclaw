@@ -834,6 +834,37 @@ const IMAGE_DIMENSION_ERROR_RE =
 const IMAGE_DIMENSION_PATH_RE = /messages\.(\d+)\.content\.(\d+)\.image/i;
 const IMAGE_SIZE_ERROR_RE = /image exceeds\s*(\d+(?:\.\d+)?)\s*mb/i;
 
+/**
+ * Extract a retry-after delay (in ms) from a rate-limit error message.
+ *
+ * Providers embed retry hints in different formats:
+ *   - Anthropic: "retry after 30 seconds", "try again in 30s"
+ *   - OpenAI:    "Please retry after 30s", "Rate limit ... try again in 30.000s"
+ *   - NIM/Kimi:  "retry after 5 seconds"
+ *
+ * Returns a clamped value between 1_000 ms and 120_000 ms, or `undefined`
+ * if no parseable hint is found.
+ */
+export function extractRetryAfterMs(raw: string | undefined | null): number | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const m = raw.match(
+    /(?:retry[_ ]?after|try again in)[:\s]*(\d+(?:\.\d+)?)\s*(?:s(?:ec(?:ond)?s?)?|ms)?/i,
+  );
+  if (!m) {
+    return undefined;
+  }
+  const value = parseFloat(m[1]);
+  if (!Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  // If the value looks like milliseconds (> 500), use as-is; otherwise treat as seconds
+  const ms = value > 500 ? value : value * 1000;
+  // Clamp between 1s and 120s
+  return Math.min(Math.max(ms, 1_000), 120_000);
+}
+
 export function isMissingToolCallInputError(raw: string): boolean {
   if (!raw) {
     return false;
