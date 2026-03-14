@@ -98,6 +98,7 @@ export async function runGatewayLoop(params: {
   };
 
   const DRAIN_TIMEOUT_MS = 90_000;
+  const FOLLOWUP_DRAIN_TIMEOUT_MS = 5_000;
   const SHUTDOWN_TIMEOUT_MS = 5_000;
 
   const request = (action: GatewayRunSignalAction, signal: string) => {
@@ -110,7 +111,9 @@ export async function runGatewayLoop(params: {
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
 
     // Allow extra time for draining active turns on restart.
-    const forceExitMs = isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS;
+    const forceExitMs = isRestart
+      ? DRAIN_TIMEOUT_MS + FOLLOWUP_DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS
+      : SHUTDOWN_TIMEOUT_MS;
     const forceExitTimer = setTimeout(() => {
       gatewayLog.error("shutdown timed out; exiting without full cleanup");
       // Exit non-zero on restart timeout so launchd/systemd treats it as a
@@ -128,12 +131,13 @@ export async function runGatewayLoop(params: {
           // waiting in per-channel debounce timers (e.g. the 2500ms collect
           // window) into the followup queues immediately, preventing silent
           // message loss when the server reinitializes.
-          const flushedDebouncers = await flushAllInboundDebouncers();
-          if (flushedDebouncers > 0) {
-            gatewayLog.info(`flushed ${flushedDebouncers} inbound debouncer(s) before restart`);
+          const flushedBuffers = await flushAllInboundDebouncers();
+          if (flushedBuffers > 0) {
+            gatewayLog.info(
+              `flushed ${flushedBuffers} pending inbound debounce buffer(s) before restart`,
+            );
             // Give the followup queue drain loops a short window to process
             // the newly flushed items before we mark the gateway as draining.
-            const FOLLOWUP_DRAIN_TIMEOUT_MS = 5_000;
             const followupResult = await waitForFollowupQueueDrain(FOLLOWUP_DRAIN_TIMEOUT_MS);
             if (followupResult.drained) {
               gatewayLog.info("followup queues drained after debounce flush");

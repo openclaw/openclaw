@@ -77,4 +77,13 @@ describe("waitForFollowupQueueDrain", () => {
     expect(result.drained).toBe(false);
     expect(result.remaining).toBeGreaterThanOrEqual(1);
   });
+
+  it("reports each draining queue in the timeout remaining count", async () => {
+    FOLLOWUP_QUEUES.set("queue-1", createMockQueue({ draining: true }));
+    FOLLOWUP_QUEUES.set("queue-2", createMockQueue({ draining: true }));
+    FOLLOWUP_QUEUES.set("queue-3", createMockQueue({ draining: true }));
+
+    const result = await waitForFollowupQueueDrain(1);
+    expect(result).toEqual({ drained: false, remaining: 3 });
+  });
 });
