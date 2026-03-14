@@ -100,7 +100,7 @@ describe("abortChatRunById", () => {
       }),
     );
     expect((payload.message as { timestamp?: unknown }).timestamp).toEqual(expect.any(Number));
-    expect(ops.nodeSendToSession).toHaveBeenCalledWith(sessionKey, "chat", payload);
+    expect(ops.nodeSendToSession).not.toHaveBeenCalled();
   });
 
   it("omits aborted message when buffered text is empty", () => {
