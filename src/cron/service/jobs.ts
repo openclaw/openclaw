@@ -646,7 +646,7 @@ export function applyJobPatch(
     job.state = { ...job.state, ...patch.state };
   }
   if ("metadata" in patch) {
-    job.metadata = (patch as { metadata?: Record<string, unknown> }).metadata;
+    job.metadata = patch.metadata;
   }
   if ("agentId" in patch) {
     job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);
