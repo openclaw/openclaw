@@ -4,7 +4,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { retryAsync } from "../../infra/retry.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
-import type { TelegramTransport } from "../fetch.js";
+import { shouldRetryTelegramIpv4Fallback, type TelegramTransport } from "../fetch.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import { resolveTelegramMediaPlaceholder } from "./helpers.js";
 import type { StickerMetadata, TelegramContext } from "./types.js";
@@ -130,6 +130,8 @@ async function downloadAndSaveTelegramFile(params: {
     url,
     fetchImpl: params.transport.sourceFetch,
     dispatcherPolicy: params.transport.pinnedDispatcherPolicy,
+    fallbackDispatcherPolicy: params.transport.fallbackPinnedDispatcherPolicy,
+    shouldRetryFetchError: shouldRetryTelegramIpv4Fallback,
     filePathHint: params.filePath,
     maxBytes: params.maxBytes,
     readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
