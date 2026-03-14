@@ -442,6 +442,609 @@ describe("Agent-specific tool filtering", () => {
     expect(bobNames).not.toContain("exec");
   });
 
+  it("should apply per-sender tool policies for Feishu groups", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "*": {
+              tools: { allow: ["read"] },
+              toolsBySender: {
+                "id:ou-owner": { allow: ["read", "exec"] },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:group:oc_group_1",
+      messageProvider: "feishu",
+      senderId: "ou-owner",
+      workspaceDir: "/tmp/test-feishu-group-owner",
+      agentDir: "/tmp/agent-feishu-group",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).toContain("exec");
+
+    const memberTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:group:oc_group_1",
+      messageProvider: "feishu",
+      senderId: "ou-member",
+      workspaceDir: "/tmp/test-feishu-group-member",
+      agentDir: "/tmp/agent-feishu-group",
+    });
+    const memberNames = memberTools.map((t) => t.name);
+    expect(memberNames).toContain("read");
+    expect(memberNames).not.toContain("exec");
+  });
+
+  it("should apply direct-message tool policy overrides", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          dms: {
+            "*": {
+              tools: { allow: ["read"] },
+            },
+            "ou-owner": {
+              tools: { allow: ["read", "exec"] },
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:direct:ou-owner",
+      messageProvider: "feishu",
+      senderId: "ou-owner",
+      workspaceDir: "/tmp/test-feishu-direct-owner",
+      agentDir: "/tmp/agent-feishu-direct",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).toContain("exec");
+
+    const memberTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:direct:ou-member",
+      messageProvider: "feishu",
+      senderId: "ou-member",
+      workspaceDir: "/tmp/test-feishu-direct-member",
+      agentDir: "/tmp/agent-feishu-direct",
+    });
+    const memberNames = memberTools.map((t) => t.name);
+    expect(memberNames).toContain("read");
+    expect(memberNames).not.toContain("exec");
+  });
+
+  it("should use session directId for DM policy entry and senderId for sender overrides", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          dms: {
+            "*": {
+              tools: { allow: ["read"] },
+            },
+            "ou-shared": {
+              tools: { allow: ["read"] },
+              toolsBySender: {
+                "id:ou-owner": { allow: ["read", "exec"] },
+              },
+            },
+            "ou-owner": {
+              tools: { allow: ["read"] },
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:direct:ou-shared",
+      messageProvider: "feishu",
+      senderId: "ou-owner",
+      workspaceDir: "/tmp/test-feishu-direct-shared-owner",
+      agentDir: "/tmp/agent-feishu-direct-shared",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).toContain("exec");
+
+    const memberTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:direct:ou-shared",
+      messageProvider: "feishu",
+      senderId: "ou-member",
+      workspaceDir: "/tmp/test-feishu-direct-shared-member",
+      agentDir: "/tmp/agent-feishu-direct-shared",
+    });
+    const memberNames = memberTools.map((t) => t.name);
+    expect(memberNames).toContain("read");
+    expect(memberNames).not.toContain("exec");
+  });
+
+  it("should not treat empty direct tools config as valid and fall through to wildcard DM tools", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          dms: {
+            "*": {
+              tools: { allow: ["read"] },
+            },
+            "ou-owner": {
+              tools: {},
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:direct:ou-owner",
+      messageProvider: "feishu",
+      senderId: "ou-owner",
+      workspaceDir: "/tmp/test-feishu-direct-empty-tools-fallback",
+      agentDir: "/tmp/agent-feishu-direct-empty-tools",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).not.toContain("exec");
+  });
+
+  it("should not treat empty toolsBySender override as valid and fall through to DM tools", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          dms: {
+            "ou-owner": {
+              tools: { allow: ["read"] },
+              toolsBySender: {
+                "id:ou-owner": {},
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:direct:ou-owner",
+      messageProvider: "feishu",
+      senderId: "ou-owner",
+      workspaceDir: "/tmp/test-feishu-direct-empty-sender-override",
+      agentDir: "/tmp/agent-feishu-direct-empty-sender",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).not.toContain("exec");
+  });
+
+  it("should resolve account-scoped Feishu direct session keys without senderId", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          dms: {
+            "ou-owner": {
+              tools: { allow: ["read", "exec"] },
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:default:direct:ou-owner",
+      workspaceDir: "/tmp/test-feishu-direct-account-scoped",
+      agentDir: "/tmp/agent-feishu-direct-account-scoped",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).toContain("exec");
+  });
+
+  it("should parse account-scoped DM keys when accountId equals a kind name (e.g. direct)", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          dms: {
+            "*": {
+              tools: { allow: ["read"] },
+            },
+          },
+          accounts: {
+            direct: {
+              dms: {
+                "ou-owner": {
+                  tools: { allow: ["read", "exec"] },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:direct:direct:ou-owner",
+      workspaceDir: "/tmp/test-feishu-direct-account-named-direct",
+      agentDir: "/tmp/agent-feishu-direct-account-named-direct",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).toContain("exec");
+  });
+
+  it("should use account-scoped DM policy from session key without explicit accountId", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          dms: {
+            "*": {
+              tools: { allow: ["read"] },
+            },
+          },
+          accounts: {
+            ops: {
+              dms: {
+                "ou-owner": {
+                  tools: { allow: ["read", "exec"] },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:ops:direct:ou-owner",
+      workspaceDir: "/tmp/test-feishu-direct-account-from-session",
+      agentDir: "/tmp/agent-feishu-direct-account-from-session",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).toContain("exec");
+  });
+
+  it("should resolve per-peer direct session keys using messageProvider", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          dms: {
+            "ou-owner": {
+              tools: { allow: ["read", "exec"] },
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:direct:ou-owner",
+      messageProvider: "feishu",
+      workspaceDir: "/tmp/test-feishu-direct-per-peer",
+      agentDir: "/tmp/agent-feishu-direct-per-peer",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).toContain("exec");
+  });
+
+  it("should fall back to spawnedBy channel for per-peer direct session keys", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          dms: {
+            "ou-owner": {
+              tools: { allow: ["read", "exec"] },
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:direct:ou-owner",
+      spawnedBy: "agent:main:feishu:direct:ou-owner",
+      workspaceDir: "/tmp/test-feishu-direct-per-peer-spawned-by-channel",
+      agentDir: "/tmp/agent-feishu-direct-per-peer-spawned-by-channel",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).toContain("exec");
+  });
+
+  it("should not misparse DM ids prefixed with group as account-scoped sessions", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          dms: {
+            "group:abc": {
+              tools: { allow: ["read", "exec"] },
+            },
+          },
+          accounts: {
+            direct: {
+              groups: {
+                abc: {
+                  tools: { allow: ["read"] },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:direct:group:abc",
+      workspaceDir: "/tmp/test-feishu-direct-colonized-group-prefix",
+      agentDir: "/tmp/agent-feishu-direct-colonized-group-prefix",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).toContain("exec");
+  });
+
+  it("should not misparse group ids prefixed with direct as account-scoped DM sessions", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "direct:abc": {
+              tools: { allow: ["read", "exec"] },
+            },
+          },
+          accounts: {
+            group: {
+              dms: {
+                abc: {
+                  tools: { allow: ["read"] },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:group:direct:abc",
+      workspaceDir: "/tmp/test-feishu-group-colonized-direct-prefix",
+      agentDir: "/tmp/agent-feishu-group-colonized-direct-prefix",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).toContain("exec");
+  });
+
+  it("should not fall through from direct session parsing to group policy candidates", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          dms: {
+            "*": {
+              tools: { allow: ["read"] },
+            },
+          },
+          accounts: {
+            direct: {
+              groups: {
+                abc: {
+                  tools: { allow: ["read", "exec"] },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:direct:group:abc",
+      workspaceDir: "/tmp/test-feishu-direct-no-cross-scope-fallback",
+      agentDir: "/tmp/agent-feishu-direct-no-cross-scope-fallback",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).not.toContain("exec");
+  });
+
+  it("should not fall through from group session parsing to direct policy candidates", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "*": {
+              tools: { allow: ["read"] },
+            },
+          },
+          accounts: {
+            group: {
+              dms: {
+                abc: {
+                  tools: { allow: ["read", "exec"] },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:group:direct:abc",
+      workspaceDir: "/tmp/test-feishu-group-no-cross-scope-fallback",
+      agentDir: "/tmp/agent-feishu-group-no-cross-scope-fallback",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).not.toContain("exec");
+  });
+
+  it("should fall back to wildcard DM tools when a specific DM entry has no tools", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          dms: {
+            "*": {
+              tools: { allow: ["read"] },
+            },
+            "ou-owner": {
+              historyLimit: 5,
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:direct:ou-owner",
+      messageProvider: "feishu",
+      workspaceDir: "/tmp/test-feishu-direct-wildcard-fallback",
+      agentDir: "/tmp/agent-feishu-direct-wildcard-fallback",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).not.toContain("exec");
+  });
+
+  it("should resolve DM policy from parent when session key has :thread: suffix", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          dms: {
+            "ou-owner": {
+              tools: { allow: ["read"] },
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:direct:ou-owner:thread:th_yyy",
+      messageProvider: "feishu",
+      workspaceDir: "/tmp/test-feishu-direct-thread-suffix",
+      agentDir: "/tmp/agent-feishu-direct-thread-suffix",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).not.toContain("exec");
+  });
+
+  it("should use parent directId for sender-scoped DM policy when thread senderId is omitted", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          dms: {
+            "ou-owner": {
+              tools: { allow: ["read"] },
+              toolsBySender: {
+                "id:ou-owner": {
+                  allow: ["read", "exec"],
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:direct:ou-owner:thread:th_yyy",
+      messageProvider: "feishu",
+      workspaceDir: "/tmp/test-feishu-direct-thread-suffix-sender-fallback",
+      agentDir: "/tmp/agent-feishu-direct-thread-suffix-sender-fallback",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).toContain("exec");
+  });
+
+  it("should treat empty account-scoped dms as an explicit override", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        allow: ["read"],
+      },
+      channels: {
+        feishu: {
+          dms: {
+            "*": {
+              tools: { allow: ["read", "exec"] },
+            },
+          },
+          accounts: {
+            ops: {
+              dms: {},
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:ops:direct:ou-owner",
+      workspaceDir: "/tmp/test-feishu-direct-account-empty-dms",
+      agentDir: "/tmp/agent-feishu-direct-account-empty-dms",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).not.toContain("exec");
+  });
+
+  it("should not treat empty group toolsBySender override as valid and fall through to group tools", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "*": {
+              tools: { allow: ["read"] },
+              toolsBySender: {
+                "id:ou-owner": {},
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:group:general",
+      messageProvider: "feishu",
+      senderId: "ou-owner",
+      workspaceDir: "/tmp/test-feishu-group-empty-sender-override",
+      agentDir: "/tmp/agent-feishu-group-empty-sender",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).not.toContain("exec");
+  });
+
   it("should not let default sender policy override group tools", () => {
     const cfg: OpenClawConfig = {
       channels: {

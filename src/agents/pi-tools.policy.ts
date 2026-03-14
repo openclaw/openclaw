@@ -1,8 +1,10 @@
 import { getChannelDock } from "../channels/dock.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
+import { resolveChannelGroupToolsPolicy, resolveToolsBySender } from "../config/group-policy.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
+import { resolveAccountEntry } from "../routing/account-lookup.js";
+import { normalizeAccountId } from "../routing/session-key.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveThreadParentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
@@ -166,32 +168,243 @@ function normalizeProviderKey(value: string): string {
   return value.trim().toLowerCase();
 }
 
-function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
+type ToolScopeContextVariant = {
   channel?: string;
+  accountId?: string;
   groupId?: string;
+  directId?: string;
+  /** For direct/dm: parent directId when session has :thread:/:topic: suffix. Used as fallback when full directId has no config match. */
+  directIdParent?: string;
+};
+
+function resolveToolScopeContextFromSessionKey(
+  sessionKey?: string | null,
+): ToolScopeContextVariant & {
+  alternate?: ToolScopeContextVariant;
 } {
   const raw = (sessionKey ?? "").trim();
   if (!raw) {
     return {};
   }
-  const base = resolveThreadParentSessionKey(raw) ?? raw;
-  const parts = base.split(":").filter(Boolean);
-  let body = parts[0] === "agent" ? parts.slice(2) : parts;
-  if (body[0] === "subagent") {
-    body = body.slice(1);
-  }
-  if (body.length < 3) {
+  const kinds = new Set(["group", "channel", "direct", "dm"]);
+  // For group/channel: use parent (strip thread/topic) so we resolve group-level policy.
+  // For direct/dm: parse raw first to preserve directIds that contain :thread:/:topic: as part of the ID.
+  const baseForGroup = resolveThreadParentSessionKey(raw) ?? raw;
+  const parseParts = (input: string) => {
+    const parts = input.split(":").filter(Boolean);
+    let body = parts[0] === "agent" ? parts.slice(2) : parts;
+    if (body[0] === "subagent") {
+      body = body.slice(1);
+    }
+    if (body.length < 2) {
+      return [];
+    }
+    const candidates: Array<{
+      channel?: string;
+      accountId?: string;
+      kind: string;
+      scopeId: string;
+    }> = [];
+    const pushCandidate = (candidate: {
+      channel?: string;
+      accountId?: string;
+      kind: string;
+      scopeId: string;
+    }) => {
+      if (!kinds.has(candidate.kind) || !candidate.scopeId) {
+        return;
+      }
+      if (
+        candidates.some(
+          (existing) =>
+            existing.channel === candidate.channel &&
+            existing.accountId === candidate.accountId &&
+            existing.kind === candidate.kind &&
+            existing.scopeId === candidate.scopeId,
+        )
+      ) {
+        return;
+      }
+      candidates.push(candidate);
+    };
+    if (kinds.has(body[0])) {
+      pushCandidate({
+        channel: undefined,
+        kind: body[0],
+        scopeId: body.slice(1).join(":").trim(),
+      });
+      return candidates;
+    }
+    if (kinds.has(body[1])) {
+      pushCandidate({
+        channel: body[0].trim().toLowerCase(),
+        kind: body[1],
+        scopeId: body.slice(2).join(":").trim(),
+      });
+    }
+    if (body.length >= 4 && kinds.has(body[2])) {
+      pushCandidate({
+        channel: body[0].trim().toLowerCase(),
+        accountId: normalizeAccountId(body[1]),
+        kind: body[2],
+        scopeId: body.slice(3).join(":").trim(),
+      });
+    }
+    return candidates;
+  };
+  const parsedRaw = parseParts(raw);
+  const parsedBase = parseParts(baseForGroup);
+  if (parsedRaw.length === 0) {
     return {};
   }
-  const [channel, kind, ...rest] = body;
-  if (kind !== "group" && kind !== "channel") {
+  const toContextVariant = (candidate: {
+    channel?: string;
+    accountId?: string;
+    kind: string;
+    scopeId: string;
+  }): ToolScopeContextVariant => {
+    const baseCandidate = parsedBase.find(
+      (entry) =>
+        entry.channel === candidate.channel &&
+        entry.accountId === candidate.accountId &&
+        entry.kind === candidate.kind,
+    );
+    if (candidate.kind === "group" || candidate.kind === "channel") {
+      return {
+        channel: candidate.channel,
+        accountId: candidate.accountId,
+        groupId: baseCandidate?.scopeId ?? candidate.scopeId,
+      };
+    }
+    return {
+      channel: candidate.channel,
+      accountId: candidate.accountId,
+      directId: candidate.scopeId,
+      directIdParent:
+        baseCandidate && baseCandidate.scopeId !== candidate.scopeId
+          ? baseCandidate.scopeId
+          : undefined,
+    };
+  };
+  const [primary, alternate] = parsedRaw.map(toContextVariant);
+  return alternate ? { ...primary, alternate } : primary;
+}
+
+type DirectToolPolicyConfig = {
+  allow?: string[];
+  alsoAllow?: string[];
+  deny?: string[];
+};
+
+type DirectToolPolicyBySenderConfig = Record<string, DirectToolPolicyConfig>;
+
+type DirectToolPolicyEntry = {
+  tools?: DirectToolPolicyConfig;
+  toolsBySender?: DirectToolPolicyBySenderConfig;
+};
+
+function resolveDirectToolPolicyEntries(
+  entries: Record<string, DirectToolPolicyEntry> | undefined,
+  directId: string,
+): {
+  direct?: DirectToolPolicyEntry;
+  wildcard?: DirectToolPolicyEntry;
+} {
+  if (!entries) {
     return {};
   }
-  const groupId = rest.join(":").trim();
-  if (!groupId) {
-    return {};
+  const direct = entries[directId];
+  if (direct) {
+    return { direct, wildcard: entries["*"] };
   }
-  return { channel: channel.trim().toLowerCase(), groupId };
+  const lowered = directId.toLowerCase();
+  const matchKey = Object.keys(entries).find((key) => key !== "*" && key.toLowerCase() === lowered);
+  if (matchKey) {
+    return { direct: entries[matchKey], wildcard: entries["*"] };
+  }
+  return { wildcard: entries["*"] };
+}
+
+function resolveDirectToolPolicyFromConfig(params: {
+  config: OpenClawConfig;
+  channel: string;
+  directId: string;
+  /** Fallback when full directId has no config match (e.g. session has :thread: suffix). */
+  directIdParent?: string;
+  accountId?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
+}): { policy?: DirectToolPolicyConfig; rank: number } {
+  const channelConfig = params.config.channels?.[params.channel] as
+    | {
+        accounts?: Record<string, { dms?: Record<string, DirectToolPolicyEntry> }>;
+        dms?: Record<string, DirectToolPolicyEntry>;
+      }
+    | undefined;
+  if (!channelConfig) {
+    return { rank: 0 };
+  }
+  const accountEntry = resolveAccountEntry(
+    channelConfig.accounts,
+    normalizeAccountId(params.accountId),
+  ) as { dms?: Record<string, DirectToolPolicyEntry> } | undefined;
+  const hasAccountScopedDms =
+    accountEntry !== undefined && Object.prototype.hasOwnProperty.call(accountEntry, "dms");
+  const entries = hasAccountScopedDms ? accountEntry?.dms : channelConfig.dms;
+  const directIdsToTry = [
+    params.directId,
+    ...(params.directIdParent && params.directIdParent !== params.directId
+      ? [params.directIdParent]
+      : []),
+  ];
+  let directEntry: DirectToolPolicyEntry | undefined;
+  let wildcardEntry: DirectToolPolicyEntry | undefined;
+  for (const did of directIdsToTry) {
+    const scopedEntries = resolveDirectToolPolicyEntries(entries, did);
+    wildcardEntry ??= scopedEntries.wildcard;
+    if (scopedEntries.direct) {
+      directEntry = scopedEntries.direct;
+      wildcardEntry = scopedEntries.wildcard;
+      break;
+    }
+  }
+  if (!directEntry && !wildcardEntry) {
+    return { rank: 0 };
+  }
+  // Precedence is:
+  // 1. sender-specific override on the exact DM entry
+  // 2. exact DM entry tools
+  // 3. sender-specific override on the wildcard DM entry
+  // 4. wildcard DM entry tools
+  const senderPolicy = resolveToolsBySender({
+    toolsBySender: directEntry?.toolsBySender,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
+  if (senderPolicy && pickSandboxToolPolicy(senderPolicy)) {
+    return { policy: senderPolicy, rank: 4 };
+  }
+  if (directEntry?.tools && pickSandboxToolPolicy(directEntry.tools)) {
+    return { policy: directEntry.tools, rank: 3 };
+  }
+  const wildcardSenderPolicy = resolveToolsBySender({
+    toolsBySender: wildcardEntry?.toolsBySender,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
+  if (wildcardSenderPolicy && pickSandboxToolPolicy(wildcardSenderPolicy)) {
+    return { policy: wildcardSenderPolicy, rank: 2 };
+  }
+  if (wildcardEntry?.tools && pickSandboxToolPolicy(wildcardEntry.tools)) {
+    return { policy: wildcardEntry.tools, rank: 1 };
+  }
+  return { rank: 0 };
 }
 
 function resolveProviderToolPolicy(params: {
@@ -339,46 +552,177 @@ export function resolveGroupToolPolicy(params: {
   if (!params.config) {
     return undefined;
   }
-  const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
-  const spawnedContext = resolveGroupContextFromSessionKey(params.spawnedBy);
-  const groupId = params.groupId ?? sessionContext.groupId ?? spawnedContext.groupId;
-  if (!groupId) {
-    return undefined;
-  }
+  const config = params.config;
+  const sessionContext = resolveToolScopeContextFromSessionKey(params.sessionKey);
+  const spawnedContext = resolveToolScopeContextFromSessionKey(params.spawnedBy);
   const channelRaw = params.messageProvider ?? sessionContext.channel ?? spawnedContext.channel;
   const channel = normalizeMessageChannel(channelRaw);
   if (!channel) {
     return undefined;
   }
-  let dock;
-  try {
-    dock = getChannelDock(channel);
-  } catch {
-    dock = undefined;
+  const rawDirectCandidates: Array<{
+    directId?: string;
+    directIdParent?: string;
+    accountId?: string | null;
+  }> = [
+    {
+      directId: sessionContext.directId,
+      directIdParent: sessionContext.directIdParent,
+      accountId: params.accountId ?? sessionContext.accountId ?? spawnedContext.accountId,
+    },
+    {
+      directId: sessionContext.alternate?.directId,
+      directIdParent: sessionContext.alternate?.directIdParent,
+      accountId:
+        params.accountId ?? sessionContext.alternate?.accountId ?? spawnedContext.accountId,
+    },
+    {
+      directId: spawnedContext.directId,
+      directIdParent: spawnedContext.directIdParent,
+      accountId: params.accountId ?? spawnedContext.accountId ?? sessionContext.accountId,
+    },
+    {
+      directId: spawnedContext.alternate?.directId,
+      directIdParent: spawnedContext.alternate?.directIdParent,
+      accountId:
+        params.accountId ?? spawnedContext.alternate?.accountId ?? sessionContext.accountId,
+    },
+  ];
+  const directCandidates = rawDirectCandidates.filter(
+    (
+      candidate,
+    ): candidate is { directId: string; directIdParent?: string; accountId?: string | null } =>
+      typeof candidate.directId === "string" && candidate.directId.length > 0,
+  );
+  const seenDirectCandidates = new Set<string>();
+  const resolveBestDirectPolicy = () => {
+    let best: { policy?: SandboxToolPolicy; rank: number } = { rank: 0 };
+    if (params.groupId) {
+      return best;
+    }
+    for (const candidate of directCandidates) {
+      const key = `${candidate.accountId ?? ""}\n${candidate.directId}\n${candidate.directIdParent ?? ""}`;
+      if (seenDirectCandidates.has(key)) {
+        continue;
+      }
+      seenDirectCandidates.add(key);
+      const resolved = resolveDirectToolPolicyFromConfig({
+        config,
+        channel,
+        directId: candidate.directId,
+        directIdParent: candidate.directIdParent,
+        accountId: candidate.accountId,
+        senderId: params.senderId ?? candidate.directIdParent ?? candidate.directId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+      });
+      if (resolved.rank > best.rank) {
+        best = { policy: pickSandboxToolPolicy(resolved.policy), rank: resolved.rank };
+      }
+    }
+    return best;
+  };
+  const rawGroupCandidates: Array<{ groupId?: string; accountId?: string | null }> = params.groupId
+    ? [
+        {
+          groupId: params.groupId,
+          accountId: params.accountId ?? sessionContext.accountId ?? spawnedContext.accountId,
+        },
+      ]
+    : [
+        {
+          groupId: sessionContext.groupId,
+          accountId: params.accountId ?? sessionContext.accountId ?? spawnedContext.accountId,
+        },
+        {
+          groupId: sessionContext.alternate?.groupId,
+          accountId:
+            params.accountId ?? sessionContext.alternate?.accountId ?? spawnedContext.accountId,
+        },
+        {
+          groupId: spawnedContext.groupId,
+          accountId: params.accountId ?? spawnedContext.accountId ?? sessionContext.accountId,
+        },
+        {
+          groupId: spawnedContext.alternate?.groupId,
+          accountId:
+            params.accountId ?? spawnedContext.alternate?.accountId ?? sessionContext.accountId,
+        },
+      ];
+  const groupCandidates = rawGroupCandidates.filter(
+    (candidate): candidate is { groupId: string; accountId?: string | null } =>
+      typeof candidate.groupId === "string" && candidate.groupId.length > 0,
+  );
+  const resolveFirstGroupPolicy = () => {
+    if (groupCandidates.length === 0) {
+      return undefined;
+    }
+    const seenGroupCandidates = new Set<string>();
+    for (const candidate of groupCandidates) {
+      const key = `${candidate.accountId ?? ""}\n${candidate.groupId}`;
+      if (seenGroupCandidates.has(key)) {
+        continue;
+      }
+      seenGroupCandidates.add(key);
+      let dock;
+      try {
+        dock = getChannelDock(channel);
+      } catch {
+        dock = undefined;
+      }
+      const toolsConfig =
+        dock?.groups?.resolveToolPolicy?.({
+          cfg: config,
+          groupId: candidate.groupId,
+          groupChannel: params.groupChannel,
+          groupSpace: params.groupSpace,
+          accountId: candidate.accountId,
+          senderId: params.senderId,
+          senderName: params.senderName,
+          senderUsername: params.senderUsername,
+          senderE164: params.senderE164,
+        }) ??
+        resolveChannelGroupToolsPolicy({
+          cfg: config,
+          channel,
+          groupId: candidate.groupId,
+          accountId: candidate.accountId,
+          senderId: params.senderId,
+          senderName: params.senderName,
+          senderUsername: params.senderUsername,
+          senderE164: params.senderE164,
+        });
+      const policy = pickSandboxToolPolicy(toolsConfig);
+      if (policy) {
+        return policy;
+      }
+    }
+    return undefined;
+  };
+  const preferredScopeKind = params.groupId
+    ? "group"
+    : sessionContext.directId
+      ? "direct"
+      : sessionContext.groupId
+        ? "group"
+        : spawnedContext.directId
+          ? "direct"
+          : spawnedContext.groupId
+            ? "group"
+            : undefined;
+  const directResolution = resolveBestDirectPolicy();
+  if (preferredScopeKind === "direct") {
+    return directResolution.policy;
   }
-  const toolsConfig =
-    dock?.groups?.resolveToolPolicy?.({
-      cfg: params.config,
-      groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      accountId: params.accountId,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-    }) ??
-    resolveChannelGroupToolsPolicy({
-      cfg: params.config,
-      channel,
-      groupId,
-      accountId: params.accountId,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-    });
-  return pickSandboxToolPolicy(toolsConfig);
+  if (preferredScopeKind === "group") {
+    return resolveFirstGroupPolicy();
+  }
+  const groupPolicy = resolveFirstGroupPolicy();
+  if (groupPolicy) {
+    return groupPolicy;
+  }
+  return directResolution.policy;
 }
 
 export function isToolAllowedByPolicies(

@@ -1,8 +1,10 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/feishu";
 import { describe, expect, it } from "vitest";
 import {
   isFeishuGroupAllowed,
   resolveFeishuAllowlistMatch,
   resolveFeishuGroupConfig,
+  resolveFeishuGroupToolPolicy,
 } from "./policy.js";
 import type { FeishuConfig } from "./types.js";
 
@@ -97,6 +99,54 @@ describe("feishu policy", () => {
           senderName: victimOpenId,
         }),
       ).toEqual({ allowed: false });
+    });
+  });
+
+  describe("resolveFeishuGroupToolPolicy", () => {
+    it("resolves per-sender overrides from wildcard group config", () => {
+      const policy = resolveFeishuGroupToolPolicy({
+        cfg: {
+          channels: {
+            feishu: {
+              groups: {
+                "*": {
+                  tools: { allow: ["read"] },
+                  toolsBySender: {
+                    "id:ou_owner": { allow: ["read", "exec"] },
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        groupId: "oc_group_1",
+        senderId: "ou_owner",
+      });
+
+      expect(policy).toEqual({ allow: ["read", "exec"] });
+    });
+
+    it("keeps case-insensitive matching for explicit group tool policies", () => {
+      const policy = resolveFeishuGroupToolPolicy({
+        cfg: {
+          channels: {
+            feishu: {
+              groups: {
+                "*": {
+                  tools: { allow: ["read"] },
+                },
+                OC_UPPER: {
+                  tools: { allow: ["read", "exec"] },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        groupId: "oc_upper",
+        senderId: "ou_member",
+      });
+
+      expect(policy).toEqual({ allow: ["read", "exec"] });
     });
   });
 
