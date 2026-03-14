@@ -191,7 +191,14 @@ if [ -n "${OPENCLAW_TAILSCALE_AUTH_KEY:-}" ]; then
 
     # Wait for daemon to initialize
     sleep 3
-    tailscale up --authkey="$OPENCLAW_TAILSCALE_AUTH_KEY" --hostname=openclaw-vm || echo "Tailscale startup failed..."
+    tailscale up --authkey="$OPENCLAW_TAILSCALE_AUTH_KEY" --hostname=openclaw-vm || echo "Tailscale auth failed..."
+    
+    # Wait for auth to complete
+    sleep 2
+    
+    # Enable Tailscale Serve
+    echo "Enabling Tailscale Serve..."
+    tailscale serve --bg 18789 || echo "Tailscale serve failed..."
 fi
 
 # Drop privileges to 'openclaw' user and execute the main Node process
