@@ -10,6 +10,7 @@ import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
@@ -94,6 +95,148 @@ const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
+const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
+  "main",
+  "direct",
+  "dm",
+  "group",
+  "channel",
+  "cron",
+  "run",
+  "subagent",
+  "acp",
+  "thread",
+  "topic",
+]);
+const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
+
+type ChatSendDeliveryEntry = {
+  deliveryContext?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
+};
+
+type ChatSendOriginatingRoute = {
+  originatingChannel: string;
+  originatingTo?: string;
+  accountId?: string;
+  messageThreadId?: string | number;
+  explicitDeliverRoute: boolean;
+};
+
+type SideResultPayload = {
+  kind: "btw";
+  runId: string;
+  sessionKey: string;
+  question: string;
+  text: string;
+  isError?: boolean;
+  ts: number;
+};
+
+function resolveChatSendOriginatingRoute(params: {
+  client?: { mode?: string | null; id?: string | null } | null;
+  deliver?: boolean;
+  entry?: ChatSendDeliveryEntry;
+  hasConnectedClient?: boolean;
+  mainKey?: string;
+  sessionKey: string;
+}): ChatSendOriginatingRoute {
+  const shouldDeliverExternally = params.deliver === true;
+  if (!shouldDeliverExternally) {
+    return {
+      originatingChannel: INTERNAL_MESSAGE_CHANNEL,
+      explicitDeliverRoute: false,
+    };
+  }
+
+  const routeChannelCandidate = normalizeMessageChannel(
+    params.entry?.deliveryContext?.channel ?? params.entry?.lastChannel,
+  );
+  const routeToCandidate = params.entry?.deliveryContext?.to ?? params.entry?.lastTo;
+  const routeAccountIdCandidate =
+    params.entry?.deliveryContext?.accountId ?? params.entry?.lastAccountId ?? undefined;
+  const routeThreadIdCandidate =
+    params.entry?.deliveryContext?.threadId ?? params.entry?.lastThreadId;
+  if (params.sessionKey.length > CHAT_SEND_SESSION_KEY_MAX_LENGTH) {
+    return {
+      originatingChannel: INTERNAL_MESSAGE_CHANNEL,
+      explicitDeliverRoute: false,
+    };
+  }
+
+  const parsedSessionKey = parseAgentSessionKey(params.sessionKey);
+  const sessionScopeParts = (parsedSessionKey?.rest ?? params.sessionKey)
+    .split(":", 3)
+    .filter(Boolean);
+  const sessionScopeHead = sessionScopeParts[0];
+  const sessionChannelHint = normalizeMessageChannel(sessionScopeHead);
+  const normalizedSessionScopeHead = (sessionScopeHead ?? "").trim().toLowerCase();
+  const sessionPeerShapeCandidates = [sessionScopeParts[1], sessionScopeParts[2]]
+    .map((part) => (part ?? "").trim().toLowerCase())
+    .filter(Boolean);
+  const isChannelAgnosticSessionScope = CHANNEL_AGNOSTIC_SESSION_SCOPES.has(
+    normalizedSessionScopeHead,
+  );
+  const isChannelScopedSession = sessionPeerShapeCandidates.some((part) =>
+    CHANNEL_SCOPED_SESSION_SHAPES.has(part),
+  );
+  const hasLegacyChannelPeerShape =
+    !isChannelScopedSession &&
+    typeof sessionScopeParts[1] === "string" &&
+    sessionChannelHint === routeChannelCandidate;
+  const isFromWebchatClient = isWebchatClient(params.client);
+  const isFromGatewayCliClient = isGatewayCliClient(params.client);
+  const hasClientMetadata =
+    (typeof params.client?.mode === "string" && params.client.mode.trim().length > 0) ||
+    (typeof params.client?.id === "string" && params.client.id.trim().length > 0);
+  const configuredMainKey = (params.mainKey ?? "main").trim().toLowerCase();
+  const isConfiguredMainSessionScope =
+    normalizedSessionScopeHead.length > 0 && normalizedSessionScopeHead === configuredMainKey;
+  const canInheritConfiguredMainRoute =
+    isConfiguredMainSessionScope &&
+    params.hasConnectedClient &&
+    (isFromGatewayCliClient || !hasClientMetadata);
+
+  // Webchat clients never inherit external delivery routes. Configured-main
+  // sessions are stricter than channel-scoped sessions: only CLI callers, or
+  // legacy callers with no client metadata, may inherit the last external route.
+  const canInheritDeliverableRoute = Boolean(
+    !isFromWebchatClient &&
+    sessionChannelHint &&
+    sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
+    ((!isChannelAgnosticSessionScope && (isChannelScopedSession || hasLegacyChannelPeerShape)) ||
+      canInheritConfiguredMainRoute),
+  );
+  const hasDeliverableRoute =
+    canInheritDeliverableRoute &&
+    routeChannelCandidate &&
+    routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL &&
+    typeof routeToCandidate === "string" &&
+    routeToCandidate.trim().length > 0;
+
+  if (!hasDeliverableRoute) {
+    return {
+      originatingChannel: INTERNAL_MESSAGE_CHANNEL,
+      explicitDeliverRoute: false,
+    };
+  }
+
+  return {
+    originatingChannel: routeChannelCandidate,
+    originatingTo: routeToCandidate,
+    accountId: routeAccountIdCandidate,
+    messageThreadId: routeThreadIdCandidate,
+    explicitDeliverRoute: true,
+  };
+}
 
 function stripDisallowedChatControlChars(message: string): string {
   let output = "";
@@ -768,6 +911,33 @@ function broadcastChatFinal(params: {
   params.context.agentRunSeq.delete(params.runId);
 }
 
+function isBtwReplyPayload(payload: ReplyPayload | undefined): payload is ReplyPayload & {
+  btw: { question: string };
+  text: string;
+} {
+  return (
+    typeof payload?.btw?.question === "string" &&
+    payload.btw.question.trim().length > 0 &&
+    typeof payload.text === "string" &&
+    payload.text.trim().length > 0
+  );
+}
+
+function broadcastSideResult(params: {
+  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq">;
+  payload: SideResultPayload;
+}) {
+  const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.payload.runId);
+  params.context.broadcast("chat.side_result", {
+    ...params.payload,
+    seq,
+  });
+  params.context.nodeSendToSession(params.payload.sessionKey, "chat.side_result", {
+    ...params.payload,
+    seq,
+  });
+}
+
 function broadcastChatError(params: {
   context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq">;
   runId: string;
@@ -1112,24 +1282,20 @@ export const chatHandlers: GatewayRequestHandlers = {
         ? [systemProvenanceReceipt, parsedMessage].filter(Boolean).join("\n\n")
         : parsedMessage;
       const clientInfo = client?.connect?.client;
-      const routeChannelCandidate = normalizeMessageChannel(
-        entry?.deliveryContext?.channel ?? entry?.lastChannel,
-      );
-      const routeToCandidate = entry?.deliveryContext?.to ?? entry?.lastTo;
-      const routeAccountIdCandidate =
-        entry?.deliveryContext?.accountId ?? entry?.lastAccountId ?? undefined;
-      const routeThreadIdCandidate = entry?.deliveryContext?.threadId ?? entry?.lastThreadId;
-      const hasDeliverableRoute =
-        routeChannelCandidate &&
-        routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL &&
-        typeof routeToCandidate === "string" &&
-        routeToCandidate.trim().length > 0;
-      const originatingChannel = hasDeliverableRoute
-        ? routeChannelCandidate
-        : INTERNAL_MESSAGE_CHANNEL;
-      const originatingTo = hasDeliverableRoute ? routeToCandidate : undefined;
-      const accountId = hasDeliverableRoute ? routeAccountIdCandidate : undefined;
-      const messageThreadId = hasDeliverableRoute ? routeThreadIdCandidate : undefined;
+      const {
+        originatingChannel,
+        originatingTo,
+        accountId,
+        messageThreadId,
+        explicitDeliverRoute,
+      } = resolveChatSendOriginatingRoute({
+        client: clientInfo,
+        deliver: p.deliver,
+        entry,
+        hasConnectedClient: client?.connect !== undefined,
+        mainKey: cfg.session?.mainKey,
+        sessionKey,
+      });
       // Inject timestamp so agents know the current date/time.
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
@@ -1159,7 +1325,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         // When the session has a deliveryContext binding to an external channel,
         // mark this as an explicit delivery route so dispatch-from-config
         // routes replies to the bound channel (in addition to webchat).
-        ExplicitDeliverRoute: Boolean(hasDeliverableRoute),
+        ExplicitDeliverRoute: explicitDeliverRoute,
       };
 
       // Write first audio attachment to a temp file for the media understanding pipeline.
@@ -1187,21 +1353,17 @@ export const chatHandlers: GatewayRequestHandlers = {
         agentId,
         channel: INTERNAL_MESSAGE_CHANNEL,
       });
-      const finalReplyParts: string[] = [];
+      const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
       const dispatcher = createReplyDispatcher({
         ...prefixOptions,
         onError: (err) => {
           context.logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
         },
         deliver: async (payload, info) => {
-          if (info.kind !== "final") {
+          if (info.kind !== "block" && info.kind !== "final") {
             return;
           }
-          const text = payload.text?.trim() ?? "";
-          if (!text) {
-            return;
-          }
-          finalReplyParts.push(text);
+          deliveredReplies.push({ payload, kind: info.kind });
         },
       });
 
@@ -1238,48 +1400,78 @@ export const chatHandlers: GatewayRequestHandlers = {
       })
         .then(() => {
           if (!agentRunStarted) {
-            const combinedReply = finalReplyParts
-              .map((part) => part.trim())
+            const btwReplies = deliveredReplies
+              .map((entry) => entry.payload)
+              .filter(isBtwReplyPayload);
+            const btwText = btwReplies
+              .map((payload) => payload.text.trim())
               .filter(Boolean)
               .join("\n\n")
               .trim();
-            let message: Record<string, unknown> | undefined;
-            if (combinedReply) {
-              const { storePath: latestStorePath, entry: latestEntry } =
-                loadSessionEntry(sessionKey);
-              const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
-              const appended = appendAssistantTranscriptMessage({
-                message: combinedReply,
-                sessionId,
-                storePath: latestStorePath,
-                sessionFile: latestEntry?.sessionFile,
-                agentId,
-                createIfMissing: true,
+            if (btwReplies.length > 0 && btwText) {
+              broadcastSideResult({
+                context,
+                payload: {
+                  kind: "btw",
+                  runId: clientRunId,
+                  sessionKey: rawSessionKey,
+                  question: btwReplies[0].btw.question.trim(),
+                  text: btwText,
+                  isError: btwReplies.some((payload) => payload.isError),
+                  ts: Date.now(),
+                },
               });
-              if (appended.ok) {
-                message = appended.message;
-              } else {
-                context.logGateway.warn(
-                  `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
-                );
-                const now = Date.now();
-                message = {
-                  role: "assistant",
-                  content: [{ type: "text", text: combinedReply }],
-                  timestamp: now,
-                  // Keep this compatible with Pi stopReason enums even though this message isn't
-                  // persisted to the transcript due to the append failure.
-                  stopReason: "stop",
-                  usage: { input: 0, output: 0, totalTokens: 0 },
-                };
+              broadcastChatFinal({
+                context,
+                runId: clientRunId,
+                sessionKey: rawSessionKey,
+              });
+            } else {
+              const combinedReply = deliveredReplies
+                .filter((entry) => entry.kind === "final")
+                .map((entry) => entry.payload)
+                .map((part) => part.text?.trim() ?? "")
+                .filter(Boolean)
+                .join("\n\n")
+                .trim();
+              let message: Record<string, unknown> | undefined;
+              if (combinedReply) {
+                const { storePath: latestStorePath, entry: latestEntry } =
+                  loadSessionEntry(sessionKey);
+                const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+                const appended = appendAssistantTranscriptMessage({
+                  message: combinedReply,
+                  sessionId,
+                  storePath: latestStorePath,
+                  sessionFile: latestEntry?.sessionFile,
+                  agentId,
+                  createIfMissing: true,
+                });
+                if (appended.ok) {
+                  message = appended.message;
+                } else {
+                  context.logGateway.warn(
+                    `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
+                  );
+                  const now = Date.now();
+                  message = {
+                    role: "assistant",
+                    content: [{ type: "text", text: combinedReply }],
+                    timestamp: now,
+                    // Keep this compatible with Pi stopReason enums even though this message isn't
+                    // persisted to the transcript due to the append failure.
+                    stopReason: "stop",
+                    usage: { input: 0, output: 0, totalTokens: 0 },
+                  };
+                }
               }
+              broadcastChatFinal({
+                context,
+                runId: clientRunId,
+                sessionKey: rawSessionKey,
+                message,
+              });
             }
-            broadcastChatFinal({
-              context,
-              runId: clientRunId,
-              sessionKey: rawSessionKey,
-              message,
-            });
           }
           context.dedupe.set(`chat:${clientRunId}`, {
             ts: Date.now(),
