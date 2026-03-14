@@ -169,3 +169,19 @@ export function resolveHumanDelayConfig(
     maxMs: overrides?.maxMs ?? defaults?.maxMs,
   };
 }
+
+const DEFAULT_TYPING_STATUS = "is typing...";
+
+/**
+ * Resolve typing status for Slack assistant threads.
+ * If the agent has custom typingStatuses configured, picks one at random.
+ * Otherwise falls back to "is typing...".
+ */
+export function resolveTypingStatus(cfg: OpenClawConfig, agentId: string): string {
+  const identity = resolveAgentIdentity(cfg, agentId);
+  const statuses = identity?.typingStatuses;
+  if (!statuses || statuses.length === 0) {
+    return DEFAULT_TYPING_STATUS;
+  }
+  return statuses[Math.floor(Math.random() * statuses.length)] ?? DEFAULT_TYPING_STATUS;
+}

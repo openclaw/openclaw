@@ -235,4 +235,6 @@ export type IdentityConfig = {
   emoji?: string;
   /** Avatar image: workspace-relative path, http(s) URL, or data URI. */
   avatar?: string;
+  /** Custom typing status messages for Slack (picks random). Defaults to "is typing...". */
+  typingStatuses?: string[];
 };
