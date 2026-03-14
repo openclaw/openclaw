@@ -44,6 +44,24 @@ export function sendUnauthorized(res: ServerResponse) {
   });
 }
 
+export function sendForbidden(res: ServerResponse, message = "Forbidden") {
+  sendJson(res, 403, {
+    error: { message, type: "forbidden" },
+  });
+}
+
+export function sendRequestRateLimited(res: ServerResponse, retryAfterMs?: number) {
+  if (retryAfterMs && retryAfterMs > 0) {
+    res.setHeader("Retry-After", String(Math.ceil(retryAfterMs / 1000)));
+  }
+  sendJson(res, 429, {
+    error: {
+      message: "Too many requests. Please try again later.",
+      type: "rate_limited",
+    },
+  });
+}
+
 export function sendRateLimited(res: ServerResponse, retryAfterMs?: number) {
   if (retryAfterMs && retryAfterMs > 0) {
     res.setHeader("Retry-After", String(Math.ceil(retryAfterMs / 1000)));

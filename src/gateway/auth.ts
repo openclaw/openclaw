@@ -82,6 +82,16 @@ export type AuthorizeGatewayConnectParams = {
   rateLimitScope?: string;
   /** Trust X-Real-IP only when explicitly enabled. */
   allowRealIpFallback?: boolean;
+  /** Optional audit logger for recording auth outcomes. */
+  auditLogger?: {
+    log(entry: {
+      event: string;
+      clientIp?: string;
+      method?: string;
+      reason?: string;
+      user?: string;
+    }): void;
+  };
 };
 
 type TailscaleUser = {
@@ -203,6 +213,59 @@ async function resolveVerifiedTailscaleUser(params: {
       profilePic: tailscaleUser.profilePic,
     },
   };
+}
+
+export type CredentialStrengthResult = {
+  ok: boolean;
+  warnings: string[];
+};
+
+/**
+ * Validate credential strength when the gateway is network-exposed.
+ * Returns warnings rather than hard-blocking so operators can still start.
+ */
+export function validateCredentialStrength(params: {
+  auth: ResolvedGatewayAuth;
+  isNetworkExposed: boolean;
+}): CredentialStrengthResult {
+  const { auth, isNetworkExposed } = params;
+  const warnings: string[] = [];
+
+  if (!isNetworkExposed) {
+    return { ok: true, warnings };
+  }
+
+  if (auth.mode === "token" && auth.token) {
+    if (auth.token.length < 32) {
+      warnings.push(
+        `gateway auth token is only ${auth.token.length} characters; ` +
+          "minimum 32 recommended for network-exposed gateways",
+      );
+    }
+  }
+
+  if (auth.mode === "password" && auth.password) {
+    if (auth.password.length < 12) {
+      warnings.push(
+        `gateway auth password is only ${auth.password.length} characters; ` +
+          "minimum 12 recommended for network-exposed gateways",
+      );
+    }
+    // Reject weak patterns: all digits, all lowercase, all uppercase.
+    if (/^\d+$/.test(auth.password)) {
+      warnings.push("gateway auth password contains only digits — use a mix of character types");
+    } else if (/^[a-z]+$/.test(auth.password)) {
+      warnings.push(
+        "gateway auth password contains only lowercase letters — use a mix of character types",
+      );
+    } else if (/^[A-Z]+$/.test(auth.password)) {
+      warnings.push(
+        "gateway auth password contains only uppercase letters — use a mix of character types",
+      );
+    }
+  }
+
+  return { ok: warnings.length === 0, warnings };
 }
 
 export function resolveGatewayAuth(params: {
@@ -369,7 +432,7 @@ function shouldAllowTailscaleHeaderAuth(authSurface: GatewayAuthSurface): boolea
 export async function authorizeGatewayConnect(
   params: AuthorizeGatewayConnectParams,
 ): Promise<GatewayAuthResult> {
-  const { auth, connectAuth, req, trustedProxies } = params;
+  const { auth, connectAuth, req, trustedProxies, auditLogger } = params;
   const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
   const authSurface = params.authSurface ?? "http";
   const allowTailscaleHeaderAuth = shouldAllowTailscaleHeaderAuth(authSurface);
@@ -394,8 +457,10 @@ export async function authorizeGatewayConnect(
     });
 
     if ("user" in result) {
+      auditLogger?.log({ event: "auth_success", method: "trusted-proxy", user: result.user });
       return { ok: true, method: "trusted-proxy", user: result.user };
     }
+    auditLogger?.log({ event: "auth_failure", reason: result.reason });
     return { ok: false, reason: result.reason };
   }
 
@@ -428,6 +493,12 @@ export async function authorizeGatewayConnect(
     });
     if (tailscaleCheck.ok) {
       limiter?.reset(ip, rateLimitScope);
+      auditLogger?.log({
+        event: "auth_success",
+        clientIp: ip,
+        method: "tailscale",
+        user: tailscaleCheck.user.login,
+      });
       return {
         ok: true,
         method: "tailscale",
@@ -448,9 +519,16 @@ export async function authorizeGatewayConnect(
     }
     if (!safeEqualSecret(connectAuth.token, auth.token)) {
       limiter?.recordFailure(ip, rateLimitScope);
+      auditLogger?.log({
+        event: "auth_failure",
+        clientIp: ip,
+        method: "token",
+        reason: "token_mismatch",
+      });
       return { ok: false, reason: "token_mismatch" };
     }
     limiter?.reset(ip, rateLimitScope);
+    auditLogger?.log({ event: "auth_success", clientIp: ip, method: "token" });
     return { ok: true, method: "token" };
   }
 
@@ -465,13 +543,21 @@ export async function authorizeGatewayConnect(
     }
     if (!safeEqualSecret(password, auth.password)) {
       limiter?.recordFailure(ip, rateLimitScope);
+      auditLogger?.log({
+        event: "auth_failure",
+        clientIp: ip,
+        method: "password",
+        reason: "password_mismatch",
+      });
       return { ok: false, reason: "password_mismatch" };
     }
     limiter?.reset(ip, rateLimitScope);
+    auditLogger?.log({ event: "auth_success", clientIp: ip, method: "password" });
     return { ok: true, method: "password" };
   }
 
   limiter?.recordFailure(ip, rateLimitScope);
+  auditLogger?.log({ event: "auth_failure", clientIp: ip, reason: "unauthorized" });
   return { ok: false, reason: "unauthorized" };
 }
 

@@ -247,11 +247,12 @@ export async function resolveGatewayBindHost(
   const mode = bind ?? "loopback";
 
   if (mode === "loopback") {
-    // 127.0.0.1 rarely fails, but handle gracefully
     if (await canBindToHost("127.0.0.1")) {
       return "127.0.0.1";
     }
-    return "0.0.0.0"; // extreme fallback
+    throw new Error(
+      "gateway bind=loopback failed: cannot bind to 127.0.0.1 — check system network configuration",
+    );
   }
 
   if (mode === "tailnet") {
@@ -262,7 +263,9 @@ export async function resolveGatewayBindHost(
     if (await canBindToHost("127.0.0.1")) {
       return "127.0.0.1";
     }
-    return "0.0.0.0";
+    throw new Error(
+      "gateway bind=tailnet failed: no Tailnet IP available and loopback bind failed",
+    );
   }
 
   if (mode === "lan") {
@@ -272,14 +275,15 @@ export async function resolveGatewayBindHost(
   if (mode === "custom") {
     const host = customHost?.trim();
     if (!host) {
-      return "0.0.0.0";
-    } // invalid config → fall back to all
+      throw new Error("gateway bind=custom requires gateway.customBindHost to be set");
+    }
 
     if (isValidIPv4(host) && (await canBindToHost(host))) {
       return host;
     }
-    // Custom IP failed → fall back to LAN
-    return "0.0.0.0";
+    throw new Error(
+      `gateway bind=custom failed: cannot bind to ${host} — verify the address is available`,
+    );
   }
 
   if (mode === "auto") {
