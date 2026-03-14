@@ -85,12 +85,12 @@ type TelegramSendOptions = NonNullable<Parameters<TelegramSendFn>[2]>;
 
 function buildTelegramSendOptions(params: {
   cfg: OpenClawConfig;
-  mediaUrl?: string;
-  mediaLocalRoots?: readonly string[];
-  accountId?: string;
-  replyToId?: string;
-  threadId?: string;
-  silent?: boolean;
+  mediaUrl?: string | null;
+  mediaLocalRoots?: readonly string[] | null;
+  accountId?: string | null;
+  replyToId?: string | null;
+  threadId?: string | number | null;
+  silent?: boolean | null;
 }): TelegramSendOptions {
   return {
     verbose: false,
@@ -108,13 +108,13 @@ async function sendTelegramOutbound(params: {
   cfg: OpenClawConfig;
   to: string;
   text: string;
-  mediaUrl?: string;
-  mediaLocalRoots?: readonly string[];
-  accountId?: string;
+  mediaUrl?: string | null;
+  mediaLocalRoots?: readonly string[] | null;
+  accountId?: string | null;
   deps?: { sendTelegram?: TelegramSendFn };
-  replyToId?: string;
-  threadId?: string;
-  silent?: boolean;
+  replyToId?: string | null;
+  threadId?: string | number | null;
+  silent?: boolean | null;
 }) {
   const send =
     params.deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
