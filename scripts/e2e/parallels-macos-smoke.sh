@@ -371,6 +371,7 @@ verify_version_contains() {
 
 pack_main_tgz() {
   say "Pack current main tgz"
+  ensure_current_build
   local short_head pkg
   short_head="$(git rev-parse --short HEAD)"
   pkg="$(
@@ -381,6 +382,32 @@ pack_main_tgz() {
   cp "$MAIN_TGZ_DIR/$pkg" "$MAIN_TGZ_PATH"
   say "Packed $MAIN_TGZ_PATH"
   tar -xOf "$MAIN_TGZ_PATH" package/dist/build-info.json
+}
+
+current_build_commit() {
+  python3 - <<'PY'
+import json
+import pathlib
+
+path = pathlib.Path("dist/build-info.json")
+if not path.exists():
+    print("")
+else:
+    print(json.loads(path.read_text()).get("commit", ""))
+PY
+}
+
+ensure_current_build() {
+  local head build_commit
+  head="$(git rev-parse HEAD)"
+  build_commit="$(current_build_commit)"
+  if [[ "$build_commit" == "$head" ]]; then
+    return
+  fi
+  say "Build dist for current head"
+  pnpm build
+  build_commit="$(current_build_commit)"
+  [[ "$build_commit" == "$head" ]] || die "dist/build-info.json still does not match HEAD after build"
 }
 
 start_server() {
