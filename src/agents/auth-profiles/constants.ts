@@ -9,6 +9,18 @@ export const CODEX_CLI_PROFILE_ID = "openai-codex:codex-cli";
 export const QWEN_CLI_PROFILE_ID = "qwen-portal:qwen-cli";
 export const MINIMAX_CLI_PROFILE_ID = "minimax-portal:minimax-cli";
 
+/**
+ * Sync target for Codex CLI credentials.
+ *
+ * We intentionally use `openai-codex:default` — the same slot that
+ * `openclaw models auth login --provider openai-codex` writes to — so that
+ * the two auth paths converge on a single, non-deprecated profile.
+ *
+ * The legacy `CODEX_CLI_PROFILE_ID` (`openai-codex:codex-cli`) is treated as
+ * deprecated by `maybeRemoveDeprecatedCliAuthProfiles` in `doctor-auth.ts`.
+ */
+export const CODEX_CLI_SYNC_PROFILE_ID = "openai-codex:default";
+
 export const AUTH_STORE_LOCK_OPTIONS = {
   retries: {
     retries: 10,
