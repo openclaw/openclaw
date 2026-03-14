@@ -713,13 +713,17 @@ export async function runMessageAction(
   parseButtonsParam(params);
   parseCardParam(params);
   parseComponentsParam(params);
-  // Strip empty/skeleton components that models auto-populate from the schema.
-  // Empty components containers cause Discord rendering issues (e.g. broken
-  // attachment display) and modal validation errors.
-  // See: https://github.com/openclaw/openclaw/issues/43015
-  stripEmptyComponents(params);
 
   const action = input.action;
+
+  if (action === "send") {
+    // Strip empty/skeleton components that models auto-populate from the schema.
+    // Empty components containers cause Discord rendering issues (e.g. broken
+    // attachment display) and modal validation errors.
+    // See: https://github.com/openclaw/openclaw/issues/43015
+    stripEmptyComponents(params);
+  }
+
   if (action === "broadcast") {
     return handleBroadcastAction(input, params);
   }
