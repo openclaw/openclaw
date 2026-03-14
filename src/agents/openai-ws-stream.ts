@@ -57,6 +57,8 @@ interface WsSession {
   manager: OpenAIWebSocketManager;
   /** Number of messages that were in context.messages at the END of the last streamFn call. */
   lastContextLength: number;
+  /** Serialized boundary message at index lastContextLength - 1. */
+  lastContextBoundaryKey: string | null;
   /** True if the connection has been established at least once. */
   everConnected: boolean;
   /** True once a best-effort warm-up attempt has run for this session. */
@@ -150,6 +152,33 @@ function parseAssistantTextSignature(
   } catch {
     return null;
   }
+}
+
+function normalizeOpenAiResponsesCallId(value: unknown): string | null {
+  const callId = toNonEmptyString(value);
+  if (!callId) {
+    return null;
+  }
+  if (!callId.startsWith("call_")) {
+    return callId;
+  }
+  const sep = callId.indexOf("|");
+  return sep === -1 ? callId : callId.slice(0, sep);
+}
+
+function serializeBoundaryMessage(message: Message | null | undefined): string | null {
+  if (!message) {
+    return null;
+  }
+  try {
+    return JSON.stringify(message);
+  } catch {
+    return null;
+  }
+}
+
+function isMissingToolCallOutputErrorMessage(message: string): boolean {
+  return message.includes("No tool call found for function call output with call_id");
 }
 
 function supportsImageInput(modelOverride?: ReplayModelInfo): boolean {
@@ -368,10 +397,13 @@ export function convertMessagesToInputItems(
           pushAssistantText();
           const callIdRaw = toNonEmptyString(block.id);
           const toolName = toNonEmptyString(block.name);
-          if (!callIdRaw || !toolName) {
+          const callId = normalizeOpenAiResponsesCallId(callIdRaw);
+          if (!callId || !toolName) {
             continue;
           }
-          const [callId, itemId] = callIdRaw.split("|", 2);
+          const itemId = callIdRaw?.startsWith(`${callId}|`)
+            ? callIdRaw.slice(callId.length + 1)
+            : undefined;
           items.push({
             type: "function_call",
             ...(itemId ? { id: itemId } : {}),
@@ -405,11 +437,12 @@ export function convertMessagesToInputItems(
       continue;
     }
 
-    const toolCallId = toNonEmptyString(m.toolCallId) ?? toNonEmptyString(m.toolUseId);
+    const toolCallId =
+      normalizeOpenAiResponsesCallId(m.toolCallId) ?? normalizeOpenAiResponsesCallId(m.toolUseId);
     if (!toolCallId) {
       continue;
     }
-    const [callId] = toolCallId.split("|", 2);
+    const callId = toolCallId;
     const parts = Array.isArray(m.content) ? contentToOpenAIParts(m.content, modelOverride) : [];
     const textOutput = contentToText(m.content);
     const imageParts = parts.filter((part) => part.type === "input_image");
@@ -620,6 +653,7 @@ export function createOpenAIWebSocketStreamFn(
         session = {
           manager,
           lastContextLength: 0,
+          lastContextBoundaryKey: null,
           everConnected: false,
           warmUpAttempted: false,
           broken: false,
@@ -717,26 +751,74 @@ export function createOpenAIWebSocketStreamFn(
       }
 
       // ── 3. Compute incremental vs full input ─────────────────────────────
-      const prevResponseId = session.manager.previousResponseId;
+      let prevResponseId = session.manager.previousResponseId;
       let inputItems: InputItem[];
 
       if (prevResponseId && session.lastContextLength > 0) {
-        // Subsequent turn: only send new messages (tool results) since last call
-        const newMessages = context.messages.slice(session.lastContextLength);
-        // Filter to only tool results — the assistant message is already in server context
-        const toolResults = newMessages.filter((m) => (m as AnyMessage).role === "toolResult");
-        if (toolResults.length === 0) {
-          // Shouldn't happen in a well-formed turn, but fall back to full context
-          log.debug(
-            `[ws-stream] session=${sessionId}: no new tool results found; sending full context`,
+        const boundaryIndex = session.lastContextLength - 1;
+        const actualBoundaryKey = serializeBoundaryMessage(context.messages[boundaryIndex]);
+        if (
+          session.lastContextBoundaryKey &&
+          actualBoundaryKey !== session.lastContextBoundaryKey
+        ) {
+          log.warn(
+            `[ws-stream][boundary-drift] session=${sessionId} lastContextLength=${session.lastContextLength} ctxLen=${context.messages.length}; clearing incremental replay state`,
           );
-          inputItems = buildFullInput(context, model);
-        } else {
-          inputItems = convertMessagesToInputItems(toolResults, model);
+          session.manager.clearPreviousResponseId();
+          prevResponseId = null;
+          session.lastContextLength = 0;
+          session.lastContextBoundaryKey = null;
         }
-        log.debug(
-          `[ws-stream] session=${sessionId}: incremental send (${inputItems.length} tool results) previous_response_id=${prevResponseId}`,
-        );
+      }
+
+      if (prevResponseId && session.lastContextLength > 0) {
+        const incrementalMessages = context.messages.slice(session.lastContextLength);
+        if (incrementalMessages.length === 0) {
+          inputItems = buildFullInput(context, model);
+          log.debug(
+            `[ws-stream] session=${sessionId}: empty incremental window; sending full context`,
+          );
+        } else {
+          inputItems = convertMessagesToInputItems(incrementalMessages, model);
+          const known = new Set(
+            inputItems
+              .filter((item) => item.type === "function_call")
+              .map((item) => normalizeOpenAiResponsesCallId((item as { call_id?: string }).call_id))
+              .filter((id): id is string => Boolean(id)),
+          );
+          const outputs = Array.from(
+            new Set(
+              inputItems
+                .filter((item) => item.type === "function_call_output")
+                .map((item) =>
+                  normalizeOpenAiResponsesCallId((item as { call_id?: string }).call_id),
+                )
+                .filter((id): id is string => Boolean(id)),
+            ),
+          );
+          const unknownOutputs = outputs.filter((id) => !known.has(id));
+
+          if (unknownOutputs.length > 0) {
+            log.warn(
+              `[ws-stream][tool-id-mismatch] session=${sessionId} unknown=${unknownOutputs.join(",")} known=${Array.from(known).join(",")} items=${inputItems.length} lastContextLength=${session.lastContextLength} ctxLen=${context.messages.length}; forcing full context`,
+            );
+            session.manager.clearPreviousResponseId();
+            prevResponseId = null;
+            session.lastContextLength = 0;
+            session.lastContextBoundaryKey = null;
+            inputItems = buildFullInput(context, model);
+          }
+        }
+
+        if (prevResponseId) {
+          log.debug(
+            `[ws-stream] session=${sessionId}: incremental send (${inputItems.length} items) previous_response_id=${prevResponseId}`,
+          );
+        } else {
+          log.debug(
+            `[ws-stream] session=${sessionId}: replay state invalidated; sending full context (${inputItems.length} items)`,
+          );
+        }
       } else {
         // First turn: send full context
         inputItems = buildFullInput(context, model);
@@ -866,6 +948,9 @@ export function createOpenAIWebSocketStreamFn(
             cleanup();
             // Update session state
             session.lastContextLength = capturedContextLength;
+            session.lastContextBoundaryKey = serializeBoundaryMessage(
+              capturedContextLength > 0 ? context.messages[capturedContextLength - 1] : null,
+            );
             // Build and emit the assistant message
             const assistantMsg = buildAssistantMessageFromResponse(event.response, {
               api: model.api,
@@ -904,6 +989,15 @@ export function createOpenAIWebSocketStreamFn(
     queueMicrotask(() =>
       run().catch((err) => {
         const errorMessage = err instanceof Error ? err.message : String(err);
+        const session = wsRegistry.get(sessionId);
+        if (session && isMissingToolCallOutputErrorMessage(errorMessage)) {
+          session.manager.clearPreviousResponseId();
+          session.lastContextLength = 0;
+          session.lastContextBoundaryKey = null;
+          log.warn(
+            `[ws-stream] session=${sessionId}: recovered poisoned incremental replay state after missing-tool-call error`,
+          );
+        }
         log.warn(`[ws-stream] session=${sessionId} run error: ${errorMessage}`);
         eventStream.push({
           type: "error",
