@@ -473,6 +473,8 @@ export async function runReplyAgent(params: {
       promptTokens,
       modelUsed,
       providerUsed,
+      persistedModel: selectedModel,
+      persistedProvider: selectedProvider,
       contextTokensUsed,
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,

@@ -1753,6 +1753,31 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].totalTokens).toBe(250_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
+
+  it("can persist selected runtime model while usage came from a fallback model", async () => {
+    const storePath = await createStorePath("openclaw-usage-model-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "s1", updatedAt: Date.now() },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: { input: 1_000, output: 100, total: 1_100 },
+      modelUsed: "gpt-5.4",
+      providerUsed: "openai",
+      persistedModel: "claude-opus-4-6",
+      persistedProvider: "anthropic",
+      contextTokensUsed: 200_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].modelProvider).toBe("anthropic");
+    expect(stored[sessionKey].model).toBe("claude-opus-4-6");
+  });
 });
 
 describe("initSessionState stale threadId fallback", () => {
