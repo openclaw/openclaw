@@ -51,11 +51,16 @@ describe("LangGraphClient", () => {
       expect(body).toEqual({});
     });
 
-    it("throws on non-200", async () => {
-      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-        new Response("Error", { status: 500, statusText: "Internal Server Error" }),
-      );
+    it("throws on non-200 after retries exhausted", async () => {
+      const spy = vi.spyOn(globalThis, "fetch");
+      // createThread retries 2x on 5xx, so mock 3 total failures (1 original + 2 retries)
+      for (let i = 0; i < 3; i++) {
+        spy.mockResolvedValueOnce(
+          new Response("Error", { status: 500, statusText: "Internal Server Error" }),
+        );
+      }
       await expect(client.createThread()).rejects.toThrow("LangGraph createThread failed: 500");
+      expect(spy).toHaveBeenCalledTimes(3);
     });
   });
 

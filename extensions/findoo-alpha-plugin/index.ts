@@ -3,6 +3,7 @@ import { resolveConfig } from "./src/config.js";
 import { ExpertManager } from "./src/expert-manager.js";
 import { LangGraphClient } from "./src/langgraph-client.js";
 import { registerTools } from "./src/register-tools.js";
+import { TaskStore } from "./src/task-store.js";
 
 const findooPlugin = {
   id: "findoo-alpha-plugin",
@@ -30,6 +31,7 @@ const findooPlugin = {
     log.info(`findoo-alpha: async mode (LangGraph native + ACP relay)`);
 
     const client = new LangGraphClient(config.strategyAgentUrl, config.strategyAssistantId);
+    const taskStore = new TaskStore(api.resolvePath("state/findoo-alpha-tasks.sqlite"));
 
     // Resolve SystemEvent + HeartbeatWake APIs
     const enqueueSystemEvent = (api.runtime as Record<string, unknown>)?.system
@@ -58,6 +60,7 @@ const findooPlugin = {
       requestHeartbeatNow: requestHeartbeatNow ?? (() => {}),
       logger: log,
       maxConcurrentTasks: config.maxConcurrentTasks,
+      taskStore,
     });
 
     // Health check (non-blocking)
@@ -77,6 +80,11 @@ const findooPlugin = {
 
     // Register tools
     registerTools(api, expertManager);
+
+    // Recover in-flight tasks from previous session (non-blocking)
+    expertManager.recoverTasks().catch((err) => {
+      log.warn(`findoo-alpha: task recovery failed: ${err instanceof Error ? err.message : err}`);
+    });
 
     // Dynamic prompt injection — pending task status
     if (typeof api.on === "function") {
