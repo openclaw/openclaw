@@ -189,6 +189,30 @@ describe("runReplyAgent execution-task interim retry", () => {
     });
   });
 
+  it("falls back to commandBody when summaryLine is empty during continuation short-circuit", async () => {
+    listSubagentRunsForRequesterMock.mockReset().mockReturnValue([
+      {
+        runId: "child-1",
+        childSessionKey: "agent:main:child",
+        requesterSessionKey: "main",
+        requesterDisplayKey: "main",
+        task: "background task",
+        cleanup: "keep",
+        createdAt: Date.now(),
+      },
+    ]);
+
+    const result = await createRun({
+      summaryLine: "",
+      commandBody: "继续执行",
+    });
+
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      text: "On it. A background run is already in progress and will report back when it is done.",
+    });
+  });
+
   it("still evaluates non-trivial follow-up instructions while a background executor is active", async () => {
     listSubagentRunsForRequesterMock.mockReset().mockReturnValue([
       {

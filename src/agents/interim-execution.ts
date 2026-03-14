@@ -14,10 +14,12 @@ const INTERIM_EXECUTION_HINTS = [
   "我继续执行",
   "我来继续执行",
   "我先处理一下",
-  "处理中",
   "完成后回报",
   "完成后同步",
 ] as const;
+
+const INTERIM_EXECUTION_MAX_WORDS = 45;
+const INTERIM_EXECUTION_MAX_CHARS = 45;
 
 function normalizeInterimExecutionText(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
@@ -29,5 +31,9 @@ export function isLikelyInterimExecutionMessage(value: string): boolean {
     return false;
   }
   const words = normalized.split(" ").filter(Boolean).length;
-  return words <= 45 && INTERIM_EXECUTION_HINTS.some((hint) => normalized.includes(hint));
+  return (
+    words <= INTERIM_EXECUTION_MAX_WORDS &&
+    normalized.length <= INTERIM_EXECUTION_MAX_CHARS &&
+    INTERIM_EXECUTION_HINTS.some((hint) => normalized.includes(hint))
+  );
 }

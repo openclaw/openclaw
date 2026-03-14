@@ -22,6 +22,12 @@ describe("isLikelyInterimExecutionMessage", () => {
     expect(isLikelyInterimExecutionMessage("我已经处理完成，下面是最终结果和后续建议。")).toBe(
       false,
     );
+    expect(
+      isLikelyInterimExecutionMessage(
+        "我继续处理这个页面的标题、按钮、留白和插图比例，等我把三套方案都整理完再统一回报你最终版本。",
+      ),
+    ).toBe(false);
+    expect(isLikelyInterimExecutionMessage("处理中")).toBe(false);
   });
 
   it("rejects empty text", () => {

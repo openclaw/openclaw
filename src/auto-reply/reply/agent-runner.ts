@@ -22,6 +22,7 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
@@ -166,6 +167,48 @@ function buildAutoSpawnAcceptedReply(): ReplyPayload {
   return {
     text: "On it. I started a background run and will report back when it is done.",
   };
+}
+
+function buildBackgroundRunAlreadyActiveReply(): ReplyPayload {
+  return {
+    text: "On it. A background run is already in progress and will report back when it is done.",
+  };
+}
+
+function buildSubagentNoProgressReply(): ReplyPayload {
+  return {
+    text: "The background executor stopped after repeated acknowledgements without concrete progress. Treat this as a blocker and inspect the requester session history before retrying.",
+    isError: true,
+  };
+}
+
+const CONTINUATION_NUDGE_PATTERNS = [
+  "continue",
+  "keep going",
+  "go ahead",
+  "carry on",
+  "继续",
+  "继续执行",
+  "继续吧",
+  "接着做",
+  "接着执行",
+  "你来继续",
+] as const;
+
+function resolveContinuationNudgeCandidate(
+  summaryLine: string | undefined,
+  commandBody: string,
+): string {
+  const summary = summaryLine?.trim();
+  return summary ? summary : commandBody;
+}
+
+function isLikelyContinuationNudge(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!normalized || normalized.length > 24) {
+    return false;
+  }
+  return CONTINUATION_NUDGE_PATTERNS.some((pattern) => normalized === pattern);
 }
 
 export async function runReplyAgent(params: {
@@ -321,6 +364,19 @@ export async function runReplyAgent(params: {
     return undefined;
   }
 
+  const preRunSnapshot = sessionKey
+    ? inspectSubagentRuns(sessionKey, Number.POSITIVE_INFINITY)
+    : undefined;
+  if (
+    !isHeartbeat &&
+    sessionKey &&
+    preRunSnapshot?.hasActiveRuns &&
+    isLikelyContinuationNudge(resolveContinuationNudgeCandidate(followupRun.summaryLine, commandBody))
+  ) {
+    typing.cleanup();
+    return buildBackgroundRunAlreadyActiveReply();
+  }
+
   await typingSignals.signalRunStart();
 
   activeSessionEntry = await runMemoryFlushIfNeeded({
@@ -431,6 +487,7 @@ export async function runReplyAgent(params: {
     });
   try {
     const runStartedAt = Date.now();
+    const isSubagentSession = isSubagentSessionKey(sessionKey);
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
       followupRun,
@@ -525,6 +582,7 @@ export async function runReplyAgent(params: {
         runResult.didSendViaMessagingTool !== true &&
         !payloadsContainStructuredContent(postContinuationPayloads) &&
         !postContinuationPayloads.some((payload) => payload?.isError === true) &&
+        !isSubagentSession &&
         !postContinuationSnapshot.hasActiveRuns &&
         !postContinuationSnapshot.hasStartedSinceRun &&
         isLikelyInterimExecutionMessage(postContinuationText);
@@ -570,6 +628,30 @@ export async function runReplyAgent(params: {
             payloads: [buildAutoSpawnAcceptedReply()],
           };
         }
+      } else if (
+        isSubagentSession &&
+        !runResult.meta.error &&
+        runResult.didSendViaMessagingTool !== true &&
+        !payloadsContainStructuredContent(postContinuationPayloads) &&
+        !postContinuationPayloads.some((payload) => payload?.isError === true) &&
+        isLikelyInterimExecutionMessage(postContinuationText)
+      ) {
+        runResult = {
+          ...runResult,
+          payloads: [buildSubagentNoProgressReply()],
+        };
+      } else if (
+        !runResult.meta.error &&
+        runResult.didSendViaMessagingTool !== true &&
+        !payloadsContainStructuredContent(postContinuationPayloads) &&
+        !postContinuationPayloads.some((payload) => payload?.isError === true) &&
+        (postContinuationSnapshot.hasActiveRuns || postContinuationSnapshot.hasStartedSinceRun) &&
+        isLikelyInterimExecutionMessage(postContinuationText)
+      ) {
+        runResult = {
+          ...runResult,
+          payloads: [buildBackgroundRunAlreadyActiveReply()],
+        };
       }
     }
 
