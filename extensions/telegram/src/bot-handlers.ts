@@ -567,7 +567,7 @@ export const registerTelegramHandlers = ({
       for (const { ctx, msg } of entry.messages) {
         let media;
         try {
-          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramFetchImpl);
+          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramTransport);
         } catch (mediaErr) {
           // Send the same oversize warning the non-batched path sends
           if (isMediaSizeLimitError(mediaErr)) {
