@@ -257,6 +257,34 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).not.toHaveBeenCalled();
   });
 
+  it("resets run tracking on disconnect to avoid stale-run duplication after reconnect", () => {
+    const { state, chatLog, tui, handleChatEvent, handleAgentEvent, resetRunTracking } =
+      createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
+
+    handleChatEvent({
+      runId: "run-stale",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "partial" },
+    });
+    expect(state.activeChatRunId).toBe("run-stale");
+
+    resetRunTracking();
+    expect(state.activeChatRunId).toBeNull();
+    tui.requestRender.mockClear();
+
+    handleAgentEvent({
+      runId: "run-stale",
+      stream: "tool",
+      data: { phase: "start", toolCallId: "tc-stale", name: "exec" },
+    });
+
+    expect(chatLog.startTool).not.toHaveBeenCalledWith("tc-stale", "exec", undefined);
+    expect(tui.requestRender).not.toHaveBeenCalled();
+  });
+
   it("accepts tool events after chat final for the same run", () => {
     const { state, chatLog, tui, handleChatEvent, handleAgentEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
