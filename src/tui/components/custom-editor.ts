@@ -11,8 +11,13 @@ export class CustomEditor extends Editor {
   onCtrlT?: () => void;
   onShiftTab?: () => void;
   onAltEnter?: () => void;
+  onShiftEnter?: () => void;
 
   handleInput(data: string): void {
+    if (matchesKey(data, Key.shift("enter")) && this.onShiftEnter) {
+      this.onShiftEnter();
+      return;
+    }
     if (matchesKey(data, Key.alt("enter")) && this.onAltEnter) {
       this.onAltEnter();
       return;

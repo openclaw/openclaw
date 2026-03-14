@@ -129,8 +129,9 @@
   background: var(--secondary);
   border-radius: var(--radius-md);
   white-space: pre-wrap;
-  overflow: hidden;
-  max-height: 44px;
+  word-break: break-word;
+  overflow-x: auto;
+  max-height: 120px;
   line-height: 1.4;
   border: 1px solid var(--border);
 }
