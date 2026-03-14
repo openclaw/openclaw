@@ -451,7 +451,7 @@ OpenClaw 为 browser、canvas、nodes 和 cron 暴露**一流的智能体工具*
 - 递送/宣告发生在完成后，是尽力而为的；`status: "ok"` 确认智能体运行完成，而不是宣告已递送。
 - `sessions_spawn` 启动子智能体运行并将宣告回复发送回请求者聊天。
 - `sessions_spawn` 是非阻塞的，立即返回 `status: "accepted"`。
-- `sessions_send` 运行回复往返乒乓（回复 `REPLY_SKIP` 以停止；最大轮次通过 `session.agentToAgent.maxPingPongTurns`，0-5）。
+- `sessions_send` 运行回复往返乒乓（回复 `REPLY_SKIP` 以停止；最大轮次通过 `session.agentToAgent.maxPingPongTurns`，0-20）。
 - 乒乓之后，目标智能体运行一个**宣告步骤**；回复 `ANNOUNCE_SKIP` 以抑制宣告。
 
 ### `agents_list`
