@@ -1497,7 +1497,22 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
       maxAgeHours: 0, // default hard max age in hours (`0` disables)
     },
     mainKey: "main", // legacy (runtime always uses "main")
-    agentToAgent: { maxPingPongTurns: 5 },
+    agentToAgent: {
+      maxPingPongTurns: 5,
+      ingressEcho: {
+        enabled: false,
+        requireDelivery: false,
+      },
+      guard: {
+        allowNestedSessionsSend: false,
+      },
+      relay: {
+        enabled: false,
+        mode: "target-only", // or "dual-channel"
+        mirrorTurns: "round1", // or "all"
+        requireDelivery: false,
+      },
+    },
     sendPolicy: {
       rules: [{ action: "deny", match: { channel: "discord", chatType: "group" } }],
       default: "allow",
@@ -1520,6 +1535,15 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - If parent `totalTokens` is above this value, OpenClaw starts a fresh thread session instead of inheriting parent transcript history.
   - Set `0` to disable this guard and always allow parent forking.
 - **`mainKey`**: legacy field. Runtime now always uses `"main"` for the main direct-chat bucket.
+- **`agentToAgent.ingressEcho`**: pre-run echo of the original `sessions_send` payload into the target channel/session before native target execution.
+- **`agentToAgent.guard.allowNestedSessionsSend`**: blocks nested `sessions_send` relay chains by default unless explicitly enabled.
+- **`agentToAgent.relay`**: optional channel mirroring for A2A turns.
+  - `enabled=false`: relay off.
+  - `mode=target-only`: mirror only target-side channel visibility.
+  - `mode=dual-channel`: mirror the A2A transcript to requester + target channels.
+  - `mirrorTurns=round1`: mirror initial request + first reply.
+  - `mirrorTurns=all`: also mirror ping-pong turns.
+  - In `dual-channel` mode, OpenClaw suppresses the extra target-side announce step to reduce duplicate channel posts.
 - **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
 - **`maintenance`**: session-store cleanup + retention controls.
   - `mode`: `warn` emits warnings only; `enforce` applies cleanup.

@@ -1147,9 +1147,29 @@ export const FIELD_HELP: Record<string, string> = {
   "session.sendPolicy.rules[].match.rawKeyPrefix":
     "Matches the raw, unnormalized session-key prefix for exact full-key policy targeting. Use this when normalized keyPrefix is too broad and you need agent-prefixed or transport-specific precision.",
   "session.agentToAgent":
-    "Groups controls for inter-agent session exchanges, including loop prevention limits on reply chaining. Keep defaults unless you run advanced agent-to-agent automation with strict turn caps.",
+    "Groups controls for inter-agent session exchanges, including loop prevention limits on reply chaining and optional pre-run ingress echo to the target channel. Keep defaults unless you run advanced agent-to-agent automation with strict turn caps or need channel-first relay visibility.",
   "session.agentToAgent.maxPingPongTurns":
     "Max reply-back turns between requester and target agents during agent-to-agent exchanges (0-5). Use lower values to hard-limit chatter loops and preserve predictable run completion.",
+  "session.agentToAgent.ingressEcho":
+    "Controls optional pre-run delivery of the original sessions_send payload into the target session's bound channel before the target agent runs natively.",
+  "session.agentToAgent.ingressEcho.enabled":
+    "When true, OpenClaw attempts to echo the original sessions_send message into the target session's deliverable channel before starting the target run. Default: false.",
+  "session.agentToAgent.ingressEcho.requireDelivery":
+    "When true, ingress echo becomes strict: if delivery fails or no target can be resolved, OpenClaw blocks the target run instead of continuing best-effort. Default: false.",
+  "session.agentToAgent.guard":
+    "Loop/cost guardrails for agent-to-agent relays. Use this to block nested sessions_send hops when an agent is already responding to an inter-session sessions_send input.",
+  "session.agentToAgent.guard.allowNestedSessionsSend":
+    "When true, allows an agent handling an inter-session sessions_send input to call sessions_send again. Default: false, which blocks nested relay chains to prevent runaway A↔B cascades.",
+  "session.agentToAgent.relay":
+    "Controls optional human-chat-style channel mirroring for agent-to-agent sessions_send flows. Use this to mirror request/reply turns into the target channel only or both requester and target channels.",
+  "session.agentToAgent.relay.enabled":
+    "When true, OpenClaw mirrors agent-to-agent sessions_send conversation turns to channel targets instead of keeping them only in internal tool results. Default: false.",
+  "session.agentToAgent.relay.mode":
+    "Relay mode: target-only mirrors only the target channel, while dual-channel mirrors both requester and target channels. Default: target-only.",
+  "session.agentToAgent.relay.mirrorTurns":
+    "Controls which turns are mirrored: round1 mirrors the initial request and first reply, while all mirrors ping-pong turns too. Default: round1.",
+  "session.agentToAgent.relay.requireDelivery":
+    "When true, relay delivery becomes strict: required relay delivery failures can block or abort the flow instead of continuing best-effort. Default: false.",
   "session.threadBindings":
     "Shared defaults for thread-bound session routing behavior across providers that support thread focus workflows. Configure global defaults here and override per channel only when behavior differs.",
   "session.threadBindings.enabled":

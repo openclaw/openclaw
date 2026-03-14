@@ -128,6 +128,27 @@ export type SessionConfig = {
   agentToAgent?: {
     /** Max ping-pong turns between requester/target (0–5). Default: 5. */
     maxPingPongTurns?: number;
+    /** Optional pre-run ingress echo to the target session's bound channel/session. */
+    ingressEcho?: {
+      /** Attempt ingress echo before the target agent run. Default: false. */
+      enabled?: boolean;
+      /** Require ingress echo delivery before running the target agent. Default: false. */
+      requireDelivery?: boolean;
+    };
+    guard?: {
+      /** Allow nested sessions_send relays from already inter-session sessions_send inputs. Default: false. */
+      allowNestedSessionsSend?: boolean;
+    };
+    relay?: {
+      /** Enable channel-visible relay mirroring for agent-to-agent sessions_send flows. Default: false. */
+      enabled?: boolean;
+      /** Relay mode. target-only mirrors only target-side visibility; dual-channel mirrors both requester and target channels. Default: target-only. */
+      mode?: "target-only" | "dual-channel";
+      /** Which conversational turns to mirror. Default: round1. */
+      mirrorTurns?: "round1" | "all";
+      /** Require relay delivery before continuing. Default: false. */
+      requireDelivery?: boolean;
+    };
   };
   /** Shared defaults for thread-bound session routing across channels/providers. */
   threadBindings?: SessionThreadBindingsConfig;

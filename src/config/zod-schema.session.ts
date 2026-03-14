@@ -58,6 +58,28 @@ export const SessionSchema = z
     agentToAgent: z
       .object({
         maxPingPongTurns: z.number().int().min(0).max(5).optional(),
+        ingressEcho: z
+          .object({
+            enabled: z.boolean().optional(),
+            requireDelivery: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        guard: z
+          .object({
+            allowNestedSessionsSend: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        relay: z
+          .object({
+            enabled: z.boolean().optional(),
+            mode: z.union([z.literal("target-only"), z.literal("dual-channel")]).optional(),
+            mirrorTurns: z.union([z.literal("round1"), z.literal("all")]).optional(),
+            requireDelivery: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
