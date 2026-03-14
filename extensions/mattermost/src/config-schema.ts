@@ -6,6 +6,7 @@ import {
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/mattermost";
 import { z } from "zod";
+import { requireChannelOpenAllowFrom } from "../../shared/config-schema-helpers.js";
 import { buildSecretInputSchema } from "./secret-input.js";
 
 const MattermostSlashCommandsSchema = z
@@ -61,13 +62,12 @@ const MattermostAccountSchemaBase = z
   .strict();
 
 const MattermostAccountSchema = MattermostAccountSchemaBase.superRefine((value, ctx) => {
-  requireOpenAllowFrom({
+  requireChannelOpenAllowFrom({
+    channel: "mattermost",
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
     ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.mattermost.dmPolicy="open" requires channels.mattermost.allowFrom to include "*"',
+    requireOpenAllowFrom,
   });
 });
 
@@ -75,12 +75,11 @@ export const MattermostConfigSchema = MattermostAccountSchemaBase.extend({
   accounts: z.record(z.string(), MattermostAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
-  requireOpenAllowFrom({
+  requireChannelOpenAllowFrom({
+    channel: "mattermost",
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
     ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.mattermost.dmPolicy="open" requires channels.mattermost.allowFrom to include "*"',
+    requireOpenAllowFrom,
   });
 });
