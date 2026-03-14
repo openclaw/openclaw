@@ -64,11 +64,10 @@ vi.mock("node:net", () => ({
 }));
 
 vi.mock("./proxy-env.js", () => ({
-  hasProxyEnvConfigured: vi.fn(() => false),
   hasEnvHttpProxyConfigured: vi.fn(() => false),
 }));
 
-import { hasEnvHttpProxyConfigured, hasProxyEnvConfigured } from "./proxy-env.js";
+import { hasEnvHttpProxyConfigured } from "./proxy-env.js";
 import {
   DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
   ensureGlobalUndiciEnvProxyDispatcher,
@@ -82,7 +81,6 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     resetGlobalUndiciStreamTimeoutsForTests();
     setCurrentDispatcher(new Agent());
     getDefaultAutoSelectFamily.mockReturnValue(undefined);
-    vi.mocked(hasProxyEnvConfigured).mockReturnValue(false);
     vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(false);
     EnvHttpProxyAgent.shouldThrow = false;
   });
@@ -120,8 +118,8 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     });
   });
 
-  it("upgrades default Agent dispatcher to EnvHttpProxyAgent when proxy env is configured", () => {
-    vi.mocked(hasProxyEnvConfigured).mockReturnValue(true);
+  it("upgrades default Agent dispatcher to EnvHttpProxyAgent when env HTTP proxy is configured", () => {
+    vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(true);
     getDefaultAutoSelectFamily.mockReturnValue(true);
 
     ensureGlobalUndiciStreamTimeouts();
@@ -137,8 +135,24 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     });
   });
 
-  it("falls back to Agent hardening when env-proxy upgrade fails", () => {
-    vi.mocked(hasProxyEnvConfigured).mockReturnValue(true);
+  it("does not upgrade default Agent dispatcher when only non-HTTP proxy env is configured", () => {
+    getDefaultAutoSelectFamily.mockReturnValue(true);
+
+    ensureGlobalUndiciStreamTimeouts();
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    expect(next).toBeInstanceOf(Agent);
+    expect(next.options?.bodyTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
+    expect(next.options?.headersTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
+    expect(next.options?.connect).toEqual({
+      autoSelectFamily: true,
+      autoSelectFamilyAttemptTimeout: 300,
+    });
+  });
+
+  it("falls back to Agent hardening when env HTTP proxy upgrade fails", () => {
+    vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(true);
     getDefaultAutoSelectFamily.mockReturnValue(true);
     EnvHttpProxyAgent.shouldThrow = true;
 

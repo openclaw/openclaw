@@ -1,6 +1,6 @@
 import * as net from "node:net";
 import { Agent, EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
-import { hasProxyEnvConfigured, hasEnvHttpProxyConfigured } from "./proxy-env.js";
+import { hasEnvHttpProxyConfigured } from "./proxy-env.js";
 
 export const DEFAULT_UNDICI_STREAM_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -115,7 +115,7 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
   const autoSelectFamily = resolveAutoSelectFamily();
   const connect = resolveConnectOptions(autoSelectFamily);
   const agentKey = resolveDispatcherKey({ kind: currentKind, timeoutMs, autoSelectFamily });
-  const envProxyRequested = currentKind === "agent" && hasProxyEnvConfigured();
+  const envProxyRequested = currentKind === "agent" && hasEnvHttpProxyConfigured("https");
   const envProxyKey = envProxyRequested
     ? resolveDispatcherKey({ kind: "env-proxy", timeoutMs, autoSelectFamily })
     : null;
