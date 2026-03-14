@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import * as sessionUtils from "../session-utils.js";
 
 vi.mock("../../infra/session-cost-usage.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
@@ -157,5 +158,127 @@ describe("gateway usage helpers", () => {
     expect(a.totals.totalTokens).toBe(1);
     expect(b.totals.totalTokens).toBe(1);
     expect(vi.mocked(loadCostUsageSummary)).toHaveBeenCalledTimes(1);
+  });
+
+  it("aggregates usage.cost across all configured agents", async () => {
+    vi.spyOn(sessionUtils, "listAgentsForGateway").mockReturnValue({
+      agents: [{ id: "main" }, { id: "slack-agent" }],
+    } as ReturnType<typeof sessionUtils.listAgentsForGateway>);
+    vi.mocked(loadCostUsageSummary).mockImplementation(async (params) => {
+      if (params?.agentId === "slack-agent") {
+        return {
+          updatedAt: Date.now(),
+          days: 1,
+          daily: [
+            {
+              date: "2026-02-05",
+              input: 1,
+              output: 2,
+              cacheRead: 3,
+              cacheWrite: 4,
+              totalTokens: 10,
+              totalCost: 1.25,
+              inputCost: 0.2,
+              outputCost: 0.3,
+              cacheReadCost: 0.35,
+              cacheWriteCost: 0.4,
+              missingCostEntries: 0,
+            },
+          ],
+          totals: {
+            input: 1,
+            output: 2,
+            cacheRead: 3,
+            cacheWrite: 4,
+            totalTokens: 10,
+            totalCost: 1.25,
+            inputCost: 0.2,
+            outputCost: 0.3,
+            cacheReadCost: 0.35,
+            cacheWriteCost: 0.4,
+            missingCostEntries: 0,
+          },
+        };
+      }
+      return {
+        updatedAt: Date.now(),
+        days: 1,
+        daily: [
+          {
+            date: "2026-02-05",
+            input: 5,
+            output: 6,
+            cacheRead: 7,
+            cacheWrite: 8,
+            totalTokens: 30,
+            totalCost: 2.75,
+            inputCost: 0.5,
+            outputCost: 0.7,
+            cacheReadCost: 0.75,
+            cacheWriteCost: 0.8,
+            missingCostEntries: 1,
+          },
+        ],
+        totals: {
+          input: 5,
+          output: 6,
+          cacheRead: 7,
+          cacheWrite: 8,
+          totalTokens: 30,
+          totalCost: 2.75,
+          inputCost: 0.5,
+          outputCost: 0.7,
+          cacheReadCost: 0.75,
+          cacheWriteCost: 0.8,
+          missingCostEntries: 1,
+        },
+      };
+    });
+
+    const config = {} as OpenClawConfig;
+    const summary = await __test.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      config,
+    });
+
+    expect(vi.mocked(loadCostUsageSummary)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(loadCostUsageSummary)).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ agentId: "main", startMs: 1, endMs: 2 }),
+    );
+    expect(vi.mocked(loadCostUsageSummary)).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ agentId: "slack-agent", startMs: 1, endMs: 2 }),
+    );
+    expect(summary.totals).toEqual({
+      input: 6,
+      output: 8,
+      cacheRead: 10,
+      cacheWrite: 12,
+      totalTokens: 40,
+      totalCost: 4,
+      inputCost: 0.7,
+      outputCost: 1,
+      cacheReadCost: 1.1,
+      cacheWriteCost: 1.2000000000000002,
+      missingCostEntries: 1,
+    });
+    expect(summary.daily).toEqual([
+      {
+        date: "2026-02-05",
+        input: 6,
+        output: 8,
+        cacheRead: 10,
+        cacheWrite: 12,
+        totalTokens: 40,
+        totalCost: 4,
+        inputCost: 0.7,
+        outputCost: 1,
+        cacheReadCost: 1.1,
+        cacheWriteCost: 1.2000000000000002,
+        missingCostEntries: 1,
+      },
+    ]);
   });
 });

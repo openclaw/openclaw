@@ -59,6 +59,72 @@ type CostUsageCacheEntry = {
 
 const costUsageCache = new Map<string, CostUsageCacheEntry>();
 
+function createEmptyCostUsageTotals(): CostUsageSummary["totals"] {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    totalCost: 0,
+    inputCost: 0,
+    outputCost: 0,
+    cacheReadCost: 0,
+    cacheWriteCost: 0,
+    missingCostEntries: 0,
+  };
+}
+
+function mergeCostUsageTotals(
+  target: CostUsageSummary["totals"],
+  source: Partial<CostUsageSummary["totals"]> | undefined,
+): void {
+  if (!source) {
+    return;
+  }
+  target.input += source.input ?? 0;
+  target.output += source.output ?? 0;
+  target.cacheRead += source.cacheRead ?? 0;
+  target.cacheWrite += source.cacheWrite ?? 0;
+  target.totalTokens += source.totalTokens ?? 0;
+  target.totalCost += source.totalCost ?? 0;
+  target.inputCost += source.inputCost ?? 0;
+  target.outputCost += source.outputCost ?? 0;
+  target.cacheReadCost += source.cacheReadCost ?? 0;
+  target.cacheWriteCost += source.cacheWriteCost ?? 0;
+  target.missingCostEntries += source.missingCostEntries ?? 0;
+}
+
+function mergeCostUsageSummaries(params: {
+  summaries: CostUsageSummary[];
+  startMs: number;
+  endMs: number;
+}): CostUsageSummary {
+  const totals = createEmptyCostUsageTotals();
+  const dailyMap = new Map<string, CostUsageSummary["daily"][number]>();
+
+  for (const summary of params.summaries) {
+    mergeCostUsageTotals(totals, summary.totals);
+    for (const day of summary.daily ?? []) {
+      const existing =
+        dailyMap.get(day.date) ??
+        ({
+          date: day.date,
+          ...createEmptyCostUsageTotals(),
+        } satisfies CostUsageSummary["daily"][number]);
+      mergeCostUsageTotals(existing, day);
+      dailyMap.set(day.date, existing);
+    }
+  }
+
+  return {
+    updatedAt: Date.now(),
+    days: Math.ceil((params.endMs - params.startMs) / DAY_MS) + 1,
+    daily: Array.from(dailyMap.values()).toSorted((a, b) => a.date.localeCompare(b.date)),
+    totals,
+  };
+}
+
 function resolveSessionUsageFileOrRespond(
   key: string,
   respond: RespondFn,
@@ -284,7 +350,11 @@ async function loadCostUsageSummaryCached(params: {
   endMs: number;
   config: ReturnType<typeof loadConfig>;
 }): Promise<CostUsageSummary> {
-  const cacheKey = `${params.startMs}-${params.endMs}`;
+  const agentIds = listAgentsForGateway(params.config)
+    .agents.map((agent) => agent.id)
+    .toSorted();
+  const effectiveAgentIds = agentIds.length ? agentIds : ["main"];
+  const cacheKey = `${params.startMs}-${params.endMs}-${effectiveAgentIds.join(",")}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
   if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {
@@ -299,11 +369,23 @@ async function loadCostUsageSummaryCached(params: {
   }
 
   const entry: CostUsageCacheEntry = cached ?? {};
-  const inFlight = loadCostUsageSummary({
-    startMs: params.startMs,
-    endMs: params.endMs,
-    config: params.config,
-  })
+  const inFlight = Promise.all(
+    effectiveAgentIds.map((agentId) =>
+      loadCostUsageSummary({
+        startMs: params.startMs,
+        endMs: params.endMs,
+        config: params.config,
+        agentId,
+      }),
+    ),
+  )
+    .then((summaries) =>
+      mergeCostUsageSummaries({
+        summaries,
+        startMs: params.startMs,
+        endMs: params.endMs,
+      }),
+    )
     .then((summary) => {
       costUsageCache.set(cacheKey, { summary, updatedAt: Date.now() });
       return summary;
