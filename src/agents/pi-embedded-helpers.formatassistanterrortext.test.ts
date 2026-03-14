@@ -117,6 +117,15 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
   });
+  it("formats FastAPI-style detail error payloads", () => {
+    const msg = makeAssistantError(
+      '{"detail":"The \'gpt-5.3-codex\' model is not supported when using Codex with a ChatGPT account."}',
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toBe(
+      "LLM error: The 'gpt-5.3-codex' model is not supported when using Codex with a ChatGPT account.",
+    );
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {
@@ -138,6 +147,15 @@ describe("formatRawAssistantErrorForUi", () => {
   it("formats plain HTTP status lines", () => {
     expect(formatRawAssistantErrorForUi("500 Internal Server Error")).toBe(
       "HTTP 500: Internal Server Error",
+    );
+  });
+
+  it("formats FastAPI-style detail payloads", () => {
+    const text = formatRawAssistantErrorForUi(
+      '{"detail":"The \'gpt-5.3-codex\' model is not supported when using Codex with a ChatGPT account."}',
+    );
+    expect(text).toBe(
+      "LLM error: The 'gpt-5.3-codex' model is not supported when using Codex with a ChatGPT account.",
     );
   });
 
