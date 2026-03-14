@@ -860,4 +860,11 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("timeout");
   });
+  it("classifies JSON server_error internal server failures as timeout", () => {
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred..."}}',
+      ),
+    ).toBe("timeout");
+  });
 });
