@@ -4,6 +4,27 @@ import { SessionListRow } from "./sessions-helpers.js";
 import type { AnnounceTarget } from "./sessions-send-helpers.js";
 import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
 
+function extractDeliveryTarget(entry: SessionListRow | undefined | null): AnnounceTarget | null {
+  const deliveryContext =
+    entry?.deliveryContext && typeof entry.deliveryContext === "object"
+      ? (entry.deliveryContext as Record<string, unknown>)
+      : undefined;
+  const channel =
+    (typeof deliveryContext?.channel === "string" ? deliveryContext.channel : undefined) ??
+    (typeof entry?.lastChannel === "string" ? entry.lastChannel : undefined);
+  const to =
+    (typeof deliveryContext?.to === "string" ? deliveryContext.to : undefined) ??
+    (typeof entry?.lastTo === "string" ? entry.lastTo : undefined);
+  const accountId =
+    (typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined) ??
+    (typeof entry?.lastAccountId === "string" ? entry.lastAccountId : undefined);
+
+  if (!channel || !to) {
+    return null;
+  }
+  return { channel, to, accountId };
+}
+
 export async function resolveAnnounceTarget(params: {
   sessionKey: string;
   displayKey: string;
@@ -34,21 +55,18 @@ export async function resolveAnnounceTarget(params: {
       sessions.find((entry) => entry?.key === params.sessionKey) ??
       sessions.find((entry) => entry?.key === params.displayKey);
 
-    const deliveryContext =
-      match?.deliveryContext && typeof match.deliveryContext === "object"
-        ? (match.deliveryContext as Record<string, unknown>)
-        : undefined;
-    const channel =
-      (typeof deliveryContext?.channel === "string" ? deliveryContext.channel : undefined) ??
-      (typeof match?.lastChannel === "string" ? match.lastChannel : undefined);
-    const to =
-      (typeof deliveryContext?.to === "string" ? deliveryContext.to : undefined) ??
-      (typeof match?.lastTo === "string" ? match.lastTo : undefined);
-    const accountId =
-      (typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined) ??
-      (typeof match?.lastAccountId === "string" ? match.lastAccountId : undefined);
-    if (channel && to) {
-      return { channel, to, accountId };
+    const directTarget = extractDeliveryTarget(match);
+    if (directTarget) {
+      return directTarget;
+    }
+
+    const spawnedBy = typeof match?.spawnedBy === "string" ? match.spawnedBy.trim() : "";
+    if (spawnedBy) {
+      const parentMatch = sessions.find((entry) => entry?.key === spawnedBy);
+      const parentTarget = extractDeliveryTarget(parentMatch);
+      if (parentTarget) {
+        return parentTarget;
+      }
     }
   } catch {
     // ignore
