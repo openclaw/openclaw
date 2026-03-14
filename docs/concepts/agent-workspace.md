@@ -26,6 +26,10 @@ inside a sandbox workspace under `~/.openclaw/sandboxes`, not your host workspac
 - Default: `~/.openclaw/workspace`
 - If `OPENCLAW_PROFILE` is set and not `"default"`, the default becomes
   `~/.openclaw/workspace-<profile>`.
+- For strict local-media path checks, prefer a stable subdirectory layout such as
+  `~/.openclaw/workspace/<profile>` **with an explicit** `agent.workspace` override
+  (or add your custom workspace path to `tools.media.localRoots` when using
+  profile-suffixed/custom workspaces).
 - Override in `~/.openclaw/openclaw.json`:
 
 ```json5
