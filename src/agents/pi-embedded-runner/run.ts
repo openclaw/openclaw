@@ -1062,7 +1062,7 @@ export async function runEmbeddedPiAgent(
             } else if (tokenUsedRatio > 0.65) {
               const timeoutDiagId = createCompactionDiagId();
               log.warn(
-                `[timeout-compaction] LLM timed out with high context usage (${Math.round(tokenUsedRatio * 100)}%); ` +
+                `[timeout-compaction] LLM timed out with high prompt token usage (${Math.round(tokenUsedRatio * 100)}%); ` +
                   `attempting compaction before retry diagId=${timeoutDiagId}`,
               );
               let timeoutCompactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
@@ -1107,9 +1107,9 @@ export async function runEmbeddedPiAgent(
                 timeoutCompactResult = { ok: false, compacted: false, reason: String(compactErr) };
               }
               await runOwnsCompactionAfterHook("timeout recovery", timeoutCompactResult);
+              timeoutCompactionAttempts += 1;
               if (timeoutCompactResult.compacted) {
                 autoCompactionCount += 1;
-                timeoutCompactionAttempts += 1;
                 log.info(
                   `[timeout-compaction] compaction succeeded for ${provider}/${modelId}; retrying prompt`,
                 );
