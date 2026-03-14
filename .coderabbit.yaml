@@ -1,0 +1,55 @@
+# Authored by: cc (Claude Code) | 2026-03-14
+# CodeRabbit config for Arry8/openclaw fork.
+# Profile "chill" — Oxlint/Oxfmt handle style; CodeRabbit focuses on
+# logic, security, and architecture.
+
+language: en-US
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  collapse_walkthrough: true
+  sequence_diagrams: false
+  auto_review:
+    enabled: true
+    drafts: true
+    auto_incremental_review: false
+  path_filters:
+    - "!dist/**"
+    - "!vendor/**"
+    - "!pnpm-lock.yaml"
+    - "!**/*.snap"
+    - "!docs/repo-map.json"
+  path_instructions:
+    - path: "src/**"
+      instructions: |
+        TypeScript ESM. Strict typing, no `any`. Oxlint/Oxfmt enforced.
+        Keep files under ~700 LOC. Use existing patterns for CLI options
+        and dependency injection via createDefaultDeps.
+    - path: "extensions/**"
+      instructions: |
+        Plugin packages. Runtime deps in dependencies (no workspace:*).
+        openclaw in devDependencies or peerDependencies.
+    - path: "**/*.test.ts"
+      instructions: |
+        Vitest. V8 coverage thresholds (70%). Colocated with source.
+        Prefer per-instance stubs over prototype mutation.
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  learnings:
+    scope: local
+  issues:
+    scope: local
+  jira:
+    project_keys: []
+  linear:
+    team_keys: []
+
+tools:
+  web_search:
+    enabled: false
