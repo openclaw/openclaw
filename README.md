@@ -1,9 +1,9 @@
-# 🦞 OpenClaw — Personal AI Assistant
+# 🦞 GODSClaw — Personal AI Assistant
 
 <p align="center">
     <picture>
         <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.png">
-        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.png" alt="OpenClaw" width="500">
+        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.png" alt="GODSClaw" width="500">
     </picture>
 </p>
 
@@ -18,10 +18,16 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-**OpenClaw** is a _personal AI assistant_ you run on your own devices.
-It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, BlueBubbles, IRC, Microsoft Teams, Matrix, Feishu, LINE, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, Zalo Personal, WebChat). It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
+**GODSClaw** is a _personal AI assistant ecosystem_ you run on your own devices, built on the [OpenClaw](https://github.com/openclaw/openclaw) platform.
+It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, BlueBubbles, IRC, Microsoft Teams, Matrix, Feishu, LINE, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, Zalo Personal, WebChat). It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is the control plane — the product is the assistant.
 
-If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
+GODSClaw extends the OpenClaw foundation with:
+- **Modular node architecture** — compose agents from independent skill modules that can be loaded, updated, or swapped at runtime.
+- **Agent workspaces** — isolated per-agent contexts, sessions, and tool sets that route to the right assistant for the right channel.
+- **AI safety integrations** — built-in support for safety layers, data redaction, and repository scanning via [superagent](https://github.com/mgllc/superagent) SDK modules.
+- **Multi-language runtime** — TypeScript core with Python, Shell, Swift, and Go subsystems, each contributing targeted platform capabilities.
+
+If you want a personal, single-user assistant that feels local, fast, always-on, and extensible, this is it.
 
 [Website](https://openclaw.ai) · [Docs](https://docs.openclaw.ai) · [Vision](VISION.md) · [DeepWiki](https://deepwiki.com/openclaw/openclaw) · [Getting Started](https://docs.openclaw.ai/start/getting-started) · [Updating](https://docs.openclaw.ai/install/updating) · [Showcase](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/help/faq) · [Wizard](https://docs.openclaw.ai/start/wizard) · [Nix](https://github.com/openclaw/nix-openclaw) · [Docker](https://docs.openclaw.ai/install/docker) · [Discord](https://discord.gg/clawd)
 
@@ -94,8 +100,8 @@ Details: [Development channels](https://docs.openclaw.ai/install/development-cha
 Prefer `pnpm` for builds from source. Bun is optional for running TypeScript directly.
 
 ```bash
-git clone https://github.com/openclaw/openclaw.git
-cd openclaw
+git clone https://github.com/mgllc/GODSclaw.git
+cd GODSclaw
 
 pnpm install
 pnpm ui:build # auto-installs UI deps on first run
@@ -133,6 +139,90 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 - **[First-class tools](https://docs.openclaw.ai/tools)** — browser, canvas, nodes, cron, sessions, and Discord/Slack actions.
 - **[Companion apps](https://docs.openclaw.ai/platforms/macos)** — macOS menu bar app + iOS/Android [nodes](https://docs.openclaw.ai/nodes).
 - **[Onboarding](https://docs.openclaw.ai/start/wizard) + [skills](https://docs.openclaw.ai/tools/skills)** — wizard-driven setup with bundled/managed/workspace skills.
+
+## Language Composition
+
+GODSClaw is a multi-language project. Each language fills a specific role:
+
+| Language       | Share | Role |
+| -------------- | ----- | ---- |
+| **TypeScript** | ~90%  | Core gateway, CLI, channel adapters, agent runtime, web UI, extensions, and all plugin-SDK code. The dominant language throughout the codebase. |
+| **Kotlin**     | ~2%   | Android companion node app (chat, voice, canvas, device commands). |
+| **Swift**      | ~9%   | macOS menu-bar app and iOS companion node (Voice Wake, Talk Mode, Canvas). |
+| **Shell**      | ~1%   | Install scripts, CI helpers, macOS packaging, and gateway restart utilities. |
+| **Python**     | <1%   | AI safety tooling hooks, superagent SDK integration scripts, and auxiliary automation. |
+| **Go**         | <1%   | Low-level system utilities and gateway transport helpers. |
+| **CSS / HTML** | <1%   | Control UI and WebChat front-end styling. |
+
+The TypeScript codebase is built with strict ESM, compiled by `tsdown`, and tested with Vitest. Python subsystems are invoked from Node via subprocess or wrapped behind a TypeScript interface so the rest of the codebase stays type-safe. Swift and Kotlin compile separately as the companion app targets.
+
+## Security & Safety Capabilities
+
+GODSClaw ships with layered security features — both in the core gateway and via the optional [superagent](https://github.com/mgllc/superagent) SDK integration.
+
+### Built-in gateway security
+
+- **DM pairing** (`dmPolicy="pairing"`) — unknown senders receive a challenge code; the bot does not process their message until approved.
+  ```bash
+  openclaw pairing approve <channel> <code>
+  ```
+- **Allowlists** (`allowFrom`) — per-channel allowlist of approved sender IDs; wildcard `"*"` requires explicit opt-in.
+- **Doctor** — surface misconfigured DM policies and insecure configurations:
+  ```bash
+  openclaw doctor
+  ```
+- **Transport auth** — Gateway dashboard and WebSocket endpoint protected by token or password auth when exposed remotely.
+
+### superagent SDK integration
+
+[superagent](https://github.com/mgllc/superagent) extends GODSClaw with AI-safety primitives that run as middleware in the agent pipeline:
+
+| Module    | Purpose |
+| --------- | ------- |
+| **Guard** | Runtime policy enforcement — blocks or flags agent outputs that violate configured safety rules before delivery to the channel. |
+| **Redact** | Sensitive-data redaction — strips PII (emails, phone numbers, keys) from messages in transit. |
+| **Scan**  | Repository security analysis — audits skill packages and workspace code for known vulnerabilities. |
+| **Test**  | Red-team scenarios — automated adversarial prompts against your agent configuration to surface weaknesses. |
+
+**TypeScript SDK setup:**
+
+```bash
+# Install from the superagent package
+npm install @mgllc/superagent-sdk
+# or: pnpm add @mgllc/superagent-sdk
+```
+
+Example — redact sensitive data before a message is delivered to a channel:
+
+```typescript
+import { redact } from "@mgllc/superagent-sdk";
+
+const raw = "User email is user@example.com and token is sk-abc123";
+const safe = redact(raw);
+// safe => "User email is [REDACTED] and token is [REDACTED]"
+```
+
+Example — enable Guard as a skill middleware (add to your workspace `skills/` directory):
+
+```typescript
+import { guard } from "@mgllc/superagent-sdk";
+
+export async function beforeReply(reply: string): Promise<string> {
+  const result = await guard(reply, { policy: "default" });
+  if (!result.safe) throw new Error(`Guard blocked reply: ${result.reason}`);
+  return reply;
+}
+```
+
+**Python SDK setup (for auxiliary scripts and Scan CLI):**
+
+```bash
+pip install superagent-sdk
+# Run a repository scan
+superagent scan --path ./skills/my-skill
+```
+
+Full superagent docs: [github.com/mgllc/superagent](https://github.com/mgllc/superagent)
 
 ## Star History
 
