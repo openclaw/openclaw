@@ -6,6 +6,9 @@ import {
   buildImageResizeSideGrid,
   getImageMetadata,
   IMAGE_REDUCE_QUALITY_STEPS,
+  isImageBackendUnavailable,
+  readJpegDimensionsFromHeader,
+  readPngDimensionsFromHeader,
   resizeToJpeg,
 } from "../media/image-ops.js";
 import {
@@ -180,6 +183,62 @@ async function resizeImageBase64IfNeeded(params: {
       width,
       height,
     };
+  }
+
+  // When no image processing backend is available, attempt to pass through images that are
+  // within limits. For PNGs and JPEGs we can read dimensions directly from their headers
+  // without any library. For other formats (WEBP, GIF, etc.) dimensions are unverifiable
+  // and an actionable error is surfaced rather than silently passing through an image that
+  // may exceed the API dimension cap.
+  //
+  // NOTE: On Bun/macOS, /usr/bin/sips is always available so this branch is never reached
+  // in normal operation there; it is only active on Linux/Windows when sharp fails to load.
+  if (!hasDimensions && isImageBackendUnavailable()) {
+    // Try to read dimensions from the image header without any library.
+    const pngDims = params.mimeType === "image/png" ? readPngDimensionsFromHeader(buf) : null;
+    const jpegDims = params.mimeType === "image/jpeg" ? readJpegDimensionsFromHeader(buf) : null;
+    const headerDims = pngDims ?? jpegDims;
+
+    if (headerDims) {
+      if (headerDims.width > params.maxDimensionPx || headerDims.height > params.maxDimensionPx) {
+        // Dimensions verified from header: image is over-cap but backend cannot resize it.
+        throw new Error(
+          `Image exceeds the ${params.maxDimensionPx}px dimension limit (${headerDims.width}x${headerDims.height}px) and cannot be resized: image processing backend (sharp) is unavailable. Reinstall with a compatible CPU or install libvips.`,
+        );
+      }
+      if (overBytes) {
+        // Explicitly surface oversize-bytes errors here rather than relying on resizeToJpeg
+        // to throw SharpUnavailableError, making the failure path more direct and the message
+        // more actionable.
+        throw new Error(
+          `Image (${formatBytesShort(buf.byteLength)}) exceeds the ${formatBytesShort(params.maxBytes)} byte limit and cannot be resized: image processing backend (sharp) is unavailable. Reinstall with a compatible CPU or install libvips.`,
+        );
+      }
+      log.info(
+        "Image passed through without optimization: sharp backend unavailable, dimensions verified from image header",
+        {
+          label: params.label,
+          fileName: params.fileName,
+          sourceBytes: buf.byteLength,
+          width: headerDims.width,
+          height: headerDims.height,
+          mimeType: params.mimeType,
+        },
+      );
+      return { base64: params.base64, mimeType: params.mimeType, resized: false };
+    }
+
+    // Format does not support header-only dimension parsing (e.g. WEBP, GIF, BMP).
+    // We cannot verify dimensions, so passing through risks opaque downstream API errors
+    // for images that exceed the dimension cap. Surface an actionable error instead.
+    if (overBytes) {
+      throw new Error(
+        `Image (${formatBytesShort(buf.byteLength)}) exceeds the ${formatBytesShort(params.maxBytes)} byte limit and cannot be resized: image processing backend (sharp) is unavailable. Reinstall with a compatible CPU or install libvips.`,
+      );
+    }
+    throw new Error(
+      `Image cannot be processed: format ${params.mimeType ?? "unknown"} requires the image processing backend (sharp) to verify dimensions and resize if needed, but sharp is unavailable. Reinstall with a compatible CPU or install libvips.`,
+    );
   }
 
   const maxDim = hasDimensions ? Math.max(width ?? 0, height ?? 0) : params.maxDimensionPx;

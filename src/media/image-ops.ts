@@ -4,6 +4,57 @@ import path from "node:path";
 import { runExec } from "../process/exec.js";
 
 type Sharp = typeof import("sharp");
+type SharpFactory = (buffer: Buffer) => ReturnType<Sharp>;
+
+/**
+ * Thrown when the sharp native module cannot be loaded (e.g. unsupported CPU, missing libvips).
+ * Callers can catch this specifically to decide whether to pass through or fail gracefully.
+ */
+export class SharpUnavailableError extends Error {
+  constructor(cause?: unknown) {
+    const detail = cause instanceof Error ? cause.message : undefined;
+    super(
+      detail
+        ? `Image processing backend (sharp) is unavailable: ${detail}. Reinstall with a compatible CPU or install libvips.`
+        : "Image processing backend (sharp) is unavailable. Reinstall with a compatible CPU or install libvips.",
+      // Preserve the original error's stack trace so debugging is easier.
+      { cause },
+    );
+    this.name = "SharpUnavailableError";
+  }
+}
+
+// Module-level cache: undefined = not yet attempted, null = attempted and failed.
+let sharpFactory: SharpFactory | undefined | null;
+let sharpLoadError: unknown;
+
+/** Returns true only if sharp has been successfully loaded. */
+export function isSharpAvailable(): boolean {
+  return sharpFactory != null;
+}
+
+/**
+ * Returns true only when no image processing backend is available at all.
+ * On Bun/macOS, /usr/bin/sips is always available as the system image backend,
+ * so this returns false even if sharp has not been loaded.
+ * On other platforms, sharp must have been successfully loaded.
+ */
+export function isImageBackendUnavailable(): boolean {
+  // When sips is preferred (Bun/macOS), the backend is always available via /usr/bin/sips.
+  if (prefersSips()) {
+    return false;
+  }
+  return !isSharpAvailable();
+}
+
+/**
+ * Triggers the sharp load attempt (if not already done) and returns the result.
+ * Prefer this over a raw `import('sharp')` to share the module-level cache.
+ */
+export async function ensureSharpLoaded(): Promise<{ available: boolean; error: unknown }> {
+  const factory = await loadSharp();
+  return { available: factory != null, error: sharpLoadError };
+}
 
 export type ImageMetadata = {
   width: number;
@@ -23,17 +74,93 @@ function isBun(): boolean {
   return typeof (process.versions as { bun?: unknown }).bun === "string";
 }
 
-function prefersSips(): boolean {
+export function prefersSips(): boolean {
   return (
     process.env.OPENCLAW_IMAGE_BACKEND === "sips" ||
     (process.env.OPENCLAW_IMAGE_BACKEND !== "sharp" && isBun() && process.platform === "darwin")
   );
 }
 
-async function loadSharp(): Promise<(buffer: Buffer) => ReturnType<Sharp>> {
-  const mod = (await import("sharp")) as unknown as { default?: Sharp };
-  const sharp = mod.default ?? (mod as unknown as Sharp);
-  return (buffer) => sharp(buffer, { failOnError: false });
+/**
+ * Reads PNG image dimensions from the IHDR chunk without any image library.
+ * Returns null if the buffer is not a valid PNG.
+ */
+export function readPngDimensionsFromHeader(buf: Buffer): { width: number; height: number } | null {
+  // PNG signature (8) + IHDR length (4) + "IHDR" (4) + width (4) + height (4) = 24 bytes minimum.
+  if (buf.length < 24) {
+    return null;
+  }
+  if (buf.toString("binary", 0, 8) !== "\x89PNG\r\n\x1a\n") {
+    return null;
+  }
+  if (buf.toString("ascii", 12, 16) !== "IHDR") {
+    return null;
+  }
+  const width = buf.readUInt32BE(16);
+  const height = buf.readUInt32BE(20);
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
+/**
+ * Reads JPEG image dimensions from the SOF marker without any image library.
+ * Returns null if the buffer is not a valid JPEG or dimensions cannot be determined.
+ */
+export function readJpegDimensionsFromHeader(
+  buf: Buffer,
+): { width: number; height: number } | null {
+  if (buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8) {
+    return null;
+  }
+  let offset = 2;
+  while (offset + 3 < buf.length) {
+    if (buf[offset] !== 0xff) {
+      return null;
+    }
+    const marker = buf[offset + 1];
+    if (marker === 0xff) {
+      offset++;
+      continue;
+    }
+    // SOF markers: C0–C3, C5–C7, C9–CB, CD–CF
+    const isSOF =
+      (marker >= 0xc0 && marker <= 0xc3) ||
+      (marker >= 0xc5 && marker <= 0xc7) ||
+      (marker >= 0xc9 && marker <= 0xcb) ||
+      (marker >= 0xcd && marker <= 0xcf);
+    if (isSOF) {
+      if (offset + 8 >= buf.length) {
+        return null;
+      }
+      const height = buf.readUInt16BE(offset + 5);
+      const width = buf.readUInt16BE(offset + 7);
+      return width > 0 && height > 0 ? { width, height } : null;
+    }
+    if (offset + 3 >= buf.length) {
+      return null;
+    }
+    const segLen = buf.readUInt16BE(offset + 2);
+    if (segLen < 2) {
+      return null;
+    }
+    offset += 2 + segLen;
+  }
+  return null;
+}
+
+async function loadSharp(): Promise<SharpFactory | null> {
+  if (sharpFactory !== undefined) {
+    return sharpFactory;
+  }
+  try {
+    const mod = (await import("sharp")) as unknown as { default?: Sharp };
+    const sharp = mod.default ?? (mod as unknown as Sharp);
+    sharpFactory = (buffer) => sharp(buffer, { failOnError: false });
+    return sharpFactory;
+  } catch (err) {
+    sharpLoadError = err;
+    sharpFactory = null;
+    return null;
+  }
 }
 
 /**
@@ -220,8 +347,11 @@ export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | 
   }
 
   try {
-    const sharp = await loadSharp();
-    const meta = await sharp(buffer).metadata();
+    const sharpFn = await loadSharp();
+    if (!sharpFn) {
+      return null;
+    }
+    const meta = await sharpFn(buffer).metadata();
     const width = Number(meta.width ?? 0);
     const height = Number(meta.height ?? 0);
     if (!Number.isFinite(width) || !Number.isFinite(height)) {
@@ -301,9 +431,12 @@ export async function normalizeExifOrientation(buffer: Buffer): Promise<Buffer> 
   }
 
   try {
-    const sharp = await loadSharp();
+    const sharpFn = await loadSharp();
+    if (!sharpFn) {
+      return buffer;
+    }
     // .rotate() with no args auto-rotates based on EXIF orientation
-    return await sharp(buffer).rotate().toBuffer();
+    return await sharpFn(buffer).rotate().toBuffer();
   } catch {
     // Sharp not available or failed - return original buffer
     return buffer;
@@ -341,9 +474,12 @@ export async function resizeToJpeg(params: {
     });
   }
 
-  const sharp = await loadSharp();
+  const sharpFn = await loadSharp();
+  if (!sharpFn) {
+    throw new SharpUnavailableError(sharpLoadError);
+  }
   // Use .rotate() BEFORE .resize() to auto-rotate based on EXIF orientation
-  return await sharp(params.buffer)
+  return await sharpFn(params.buffer)
     .rotate() // Auto-rotate based on EXIF before resizing
     .resize({
       width: params.maxSide,
@@ -359,8 +495,11 @@ export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
   if (prefersSips()) {
     return await sipsConvertToJpeg(buffer);
   }
-  const sharp = await loadSharp();
-  return await sharp(buffer).jpeg({ quality: 90, mozjpeg: true }).toBuffer();
+  const sharpFn = await loadSharp();
+  if (!sharpFn) {
+    throw new SharpUnavailableError(sharpLoadError);
+  }
+  return await sharpFn(buffer).jpeg({ quality: 90, mozjpeg: true }).toBuffer();
 }
 
 /**
@@ -369,8 +508,11 @@ export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
  */
 export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
   try {
-    const sharp = await loadSharp();
-    const meta = await sharp(buffer).metadata();
+    const sharpFn = await loadSharp();
+    if (!sharpFn) {
+      return false;
+    }
+    const meta = await sharpFn(buffer).metadata();
     // Check if the image has an alpha channel
     // PNG color types with alpha: 4 (grayscale+alpha), 6 (RGBA)
     // Sharp reports this via 'channels' (4 = RGBA) or 'hasAlpha'
@@ -390,11 +532,14 @@ export async function resizeToPng(params: {
   compressionLevel?: number;
   withoutEnlargement?: boolean;
 }): Promise<Buffer> {
-  const sharp = await loadSharp();
+  const sharpFn = await loadSharp();
+  if (!sharpFn) {
+    throw new SharpUnavailableError(sharpLoadError);
+  }
   // Compression level 6 is a good balance (0=fastest, 9=smallest)
   const compressionLevel = params.compressionLevel ?? 6;
 
-  return await sharp(params.buffer)
+  return await sharpFn(params.buffer)
     .rotate() // Auto-rotate based on EXIF if present
     .resize({
       width: params.maxSide,
@@ -415,6 +560,11 @@ export async function optimizeImageToPng(
   resizeSide: number;
   compressionLevel: number;
 }> {
+  // Pre-check: if sharp cannot load, throw now rather than silently exhausting all retry combinations.
+  if (!(await loadSharp())) {
+    throw new SharpUnavailableError(sharpLoadError);
+  }
+
   // Try a grid of sizes/compression levels until under the limit.
   // PNG uses compression levels 0-9 (higher = smaller but slower).
   const sides = [2048, 1536, 1280, 1024, 800];

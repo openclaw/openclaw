@@ -7,9 +7,12 @@ import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { type MediaKind, maxBytesForKind } from "../media/constants.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
 import {
+  SharpUnavailableError,
   convertHeicToJpeg,
   hasAlphaChannel,
   optimizeImageToPng,
+  readJpegDimensionsFromHeader,
+  readPngDimensionsFromHeader,
   resizeToJpeg,
 } from "../media/image-ops.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
@@ -303,12 +306,36 @@ async function loadWebMediaInternal(
           fileName: params.fileName,
         };
       }
-      return {
-        ...(await optimizeAndClampImage(params.buffer, cap, {
-          contentType: params.contentType,
-          fileName: params.fileName,
-        })),
-      };
+      try {
+        return {
+          ...(await optimizeAndClampImage(params.buffer, cap, {
+            contentType: params.contentType,
+            fileName: params.fileName,
+          })),
+        };
+      } catch (err) {
+        // If sharp is unavailable and the image already fits within the byte cap, pass it
+        // through without re-encoding. Also verify pixel dimensions for PNG/JPEG so that
+        // small-byte but large-dimension images don't silently slip through.
+        if (err instanceof SharpUnavailableError && params.buffer.length <= cap) {
+          const dims =
+            readPngDimensionsFromHeader(params.buffer) ??
+            readJpegDimensionsFromHeader(params.buffer);
+          if (dims && (dims.width > 4000 || dims.height > 4000)) {
+            throw new Error(
+              `Image dimensions (${dims.width}×${dims.height}px) exceed limits and cannot be resized: image processing backend is unavailable.`,
+              { cause: err },
+            );
+          }
+          return {
+            buffer: params.buffer,
+            contentType: params.contentType,
+            kind: params.kind,
+            fileName: params.fileName,
+          };
+        }
+        throw err;
+      }
     }
     if (params.buffer.length > cap) {
       throw new Error(formatCapLimit("Media", cap, params.buffer.length));
@@ -472,7 +499,11 @@ export async function optimizeImageToJpeg(
             quality,
           };
         }
-      } catch {
+      } catch (err) {
+        // SharpUnavailableError cannot be retried — surface it immediately.
+        if (err instanceof SharpUnavailableError) {
+          throw err;
+        }
         // Continue trying other size/quality combinations
       }
     }

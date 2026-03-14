@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { ensureSharpLoaded, prefersSips, SharpUnavailableError } from "../media/image-ops.js";
 import { note } from "../terminal/note.js";
 
 export function noteSourceInstallIssues(root: string | null) {
@@ -36,5 +37,41 @@ export function noteSourceInstallIssues(root: string | null) {
 
   if (warnings.length > 0) {
     note(warnings.join("\n"), "Install");
+  }
+}
+
+/**
+ * Warns when the sharp native image-processing module cannot be loaded.
+ * This typically happens on Linux hosts with CPUs that lack SSE4.2 (x86-64-v2),
+ * causing all image optimization to fail even for images that are already small.
+ */
+export async function noteSharpAvailability(): Promise<void> {
+  // sips handles image ops on Bun/macOS without sharp; skip the warning only
+  // when sips is actually the active backend, not for all Darwin hosts.
+  if (prefersSips()) {
+    return;
+  }
+
+  // Reuse the module-level cache from image-ops rather than doing a separate import('sharp').
+  const { available, error } = await ensureSharpLoaded();
+  if (!available) {
+    const detail = error instanceof Error ? error.message : String(error);
+    // Use SharpUnavailableError just for its formatted message; don't throw.
+    const friendly = new SharpUnavailableError(error);
+    note(
+      [
+        `- ${friendly.message}`,
+        `  Detail: ${detail}`,
+        "",
+        "  To fix:",
+        "    • Ensure your CPU supports SSE4.2 (x86-64-v2 baseline)",
+        "    • Rebuild: npm rebuild sharp",
+        "    • Or install system vips: apt-get install libvips-dev",
+        "",
+        "  Images already within byte size limits will still pass through.",
+        "  Dimension verification and resize/re-encode operations will fail with an actionable error.",
+      ].join("\n"),
+      "Image backend",
+    );
   }
 }
