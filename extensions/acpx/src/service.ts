@@ -74,6 +74,34 @@ type CreateAcpxRuntimeServiceParams = {
   runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike;
 };
 
+function hasRestrictedBrowserSsrFPolicy(
+  browserConfig: OpenClawPluginServiceContext["config"]["browser"] | undefined,
+): boolean {
+  const ssrfPolicy = browserConfig?.ssrfPolicy;
+  if (!ssrfPolicy) {
+    return false;
+  }
+  const blocksPrivateNetwork =
+    ssrfPolicy.dangerouslyAllowPrivateNetwork === false || ssrfPolicy.allowPrivateNetwork === false;
+  const hasHostnameAllowlist =
+    ssrfPolicy.hostnameAllowlist?.some((pattern) => pattern.trim() !== "") ?? false;
+  return blocksPrivateNetwork || hasHostnameAllowlist;
+}
+
+function removeChromeDevToolsServer(
+  pluginConfig: ResolvedAcpxPluginConfig,
+  logger: PluginLogger | undefined,
+  reason: string,
+): ResolvedAcpxPluginConfig {
+  const { [CHROME_DEVTOOLS_MCP_SERVER_NAME]: _removed, ...remainingMcpServers } =
+    pluginConfig.mcpServers;
+  logger?.info(reason);
+  return {
+    ...pluginConfig,
+    mcpServers: remainingMcpServers,
+  };
+}
+
 function createDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike {
   return new AcpxRuntime(params.pluginConfig, {
     logger: params.logger,
@@ -98,37 +126,37 @@ export function createAcpxRuntimeService(
       const browserEnabled = ctx.config.browser?.enabled !== false;
       const browserMcpEnabled = ctx.config.browser?.mcp?.enabled === true;
       const browserEvaluateEnabled = ctx.config.browser?.evaluateEnabled !== false;
+      const browserSsrFRestricted = hasRestrictedBrowserSsrFPolicy(ctx.config.browser);
       const existingChromeDevToolsServer =
         pluginConfig.mcpServers[CHROME_DEVTOOLS_MCP_SERVER_NAME] !== undefined;
 
       if (existingChromeDevToolsServer && !browserEnabled) {
-        const { [CHROME_DEVTOOLS_MCP_SERVER_NAME]: _removed, ...remainingMcpServers } =
-          pluginConfig.mcpServers;
-        pluginConfig = {
-          ...pluginConfig,
-          mcpServers: remainingMcpServers,
-        };
-        ctx.logger.info(
+        pluginConfig = removeChromeDevToolsServer(
+          pluginConfig,
+          ctx.logger,
           "chrome-devtools MCP server removed: browser.enabled=false disables chrome-devtools access",
         );
       } else if (existingChromeDevToolsServer && !browserEvaluateEnabled) {
-        const { [CHROME_DEVTOOLS_MCP_SERVER_NAME]: _removed, ...remainingMcpServers } =
-          pluginConfig.mcpServers;
-        pluginConfig = {
-          ...pluginConfig,
-          mcpServers: remainingMcpServers,
-        };
-        ctx.logger.info(
+        pluginConfig = removeChromeDevToolsServer(
+          pluginConfig,
+          ctx.logger,
           "chrome-devtools MCP server removed: browser.evaluateEnabled=false disables chrome-devtools access",
+        );
+      } else if (existingChromeDevToolsServer && browserSsrFRestricted) {
+        pluginConfig = removeChromeDevToolsServer(
+          pluginConfig,
+          ctx.logger,
+          "chrome-devtools MCP server removed: browser.ssrfPolicy restrictions disable chrome-devtools access",
         );
       }
 
       // Inject chrome-devtools-mcp preset when browser.mcp is enabled in core config.
       // Use a fresh object to avoid mutating the shared mcpServers reference across restarts.
-      // Chrome DevTools MCP access respects browser.enabled/browser.evaluateEnabled, even for explicit overrides.
+      // Chrome DevTools MCP access respects browser.enabled/browser.evaluateEnabled and
+      // browser.ssrfPolicy restrictions, even for explicit overrides.
       const chromePreset = buildChromeDevToolsMcpPreset({
         browserMcp:
-          browserEnabled && browserMcpEnabled && browserEvaluateEnabled
+          browserEnabled && browserMcpEnabled && browserEvaluateEnabled && !browserSsrFRestricted
             ? ctx.config.browser?.mcp
             : undefined,
         existingMcpServers: pluginConfig.mcpServers,
@@ -153,6 +181,10 @@ export function createAcpxRuntimeService(
       } else if (browserMcpEnabled && !browserEvaluateEnabled) {
         ctx.logger.info(
           "chrome-devtools-mcp preset skipped: browser.evaluateEnabled=false disables chrome-devtools access",
+        );
+      } else if (browserMcpEnabled && browserSsrFRestricted) {
+        ctx.logger.info(
+          "chrome-devtools-mcp preset skipped: browser.ssrfPolicy restrictions disable chrome-devtools access",
         );
       }
 

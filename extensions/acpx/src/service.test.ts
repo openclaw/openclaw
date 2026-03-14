@@ -318,6 +318,28 @@ describe("createAcpxRuntimeService", () => {
     );
   });
 
+  it("skips the preset when browser.ssrfPolicy is restrictive", async () => {
+    const { runtime } = createRuntimeStub(true);
+    const runtimeFactory = createRuntimeFactorySpy(runtime);
+    const service = createAcpxRuntimeService({ runtimeFactory });
+    const context = createServiceContext({
+      config: {
+        browser: {
+          mcp: { enabled: true },
+          ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+        },
+      },
+    });
+
+    await service.start(context);
+
+    const passedConfig = getPassedPluginConfig(runtimeFactory);
+    expect(passedConfig.mcpServers["chrome-devtools"]).toBeUndefined();
+    expect(context.logger.info).toHaveBeenCalledWith(
+      "chrome-devtools-mcp preset skipped: browser.ssrfPolicy restrictions disable chrome-devtools access",
+    );
+  });
+
   it("does not override explicit user-defined chrome-devtools entry", async () => {
     const { runtime } = createRuntimeStub(true);
     const runtimeFactory = createRuntimeFactorySpy(runtime);
@@ -388,6 +410,32 @@ describe("createAcpxRuntimeService", () => {
     expect(passedConfig.mcpServers["canva"]).toBeDefined();
     expect(context.logger.info).toHaveBeenCalledWith(
       "chrome-devtools MCP server removed: browser.evaluateEnabled=false disables chrome-devtools access",
+    );
+  });
+
+  it("removes explicit chrome-devtools entries when browser.ssrfPolicy is restrictive", async () => {
+    const { runtime } = createRuntimeStub(true);
+    const runtimeFactory = createRuntimeFactorySpy(runtime);
+    const service = createAcpxRuntimeService({
+      runtimeFactory,
+      pluginConfig: {
+        mcpServers: {
+          "chrome-devtools": { command: "/tmp/chrome-devtools-mcp", args: ["--custom"] },
+          canva: { command: "npx", args: ["canva-mcp"] },
+        },
+      },
+    });
+    const context = createServiceContext({
+      config: { browser: { ssrfPolicy: { hostnameAllowlist: ["docs.openclaw.ai"] } } },
+    });
+
+    await service.start(context);
+
+    const passedConfig = getPassedPluginConfig(runtimeFactory);
+    expect(passedConfig.mcpServers["chrome-devtools"]).toBeUndefined();
+    expect(passedConfig.mcpServers["canva"]).toBeDefined();
+    expect(context.logger.info).toHaveBeenCalledWith(
+      "chrome-devtools MCP server removed: browser.ssrfPolicy restrictions disable chrome-devtools access",
     );
   });
 

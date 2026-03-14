@@ -36,6 +36,8 @@ export type BrowserMcpConfig = {
    * Requires browser.enabled=true.
    * Chrome DevTools MCP access is disabled when browser.evaluateEnabled=false, including
    * explicit ACPX mcpServers["chrome-devtools"] overrides.
+   * Chrome DevTools MCP access is also disabled when browser.ssrfPolicy blocks private-network
+   * navigation or configures a hostname allowlist, because DevTools MCP cannot enforce those guards.
    */
   enabled?: boolean;
   /**
