@@ -44,8 +44,8 @@ import { checkBrowserOrigin } from "../../origin-check.js";
 import { GATEWAY_CLIENT_IDS } from "../../protocol/client-info.js";
 import {
   ConnectErrorDetailCodes,
-  resolveDeviceAuthConnectErrorDetailCode,
   resolveAuthConnectErrorDetailCode,
+  resolveDeviceAuthConnectErrorDetailCode,
 } from "../../protocol/connect-error-details.js";
 import {
   type ConnectParams,
