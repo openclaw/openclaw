@@ -455,6 +455,43 @@ describe("gateway server misc", () => {
     });
   });
 
+  test("fails fast when configured startup model has no auth and channels are enabled", async () => {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("Missing OPENCLAW_CONFIG_PATH");
+    }
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      JSON.stringify(
+        {
+          agents: {
+            defaults: {
+              model: {
+                primary: "acme/m1",
+              },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await withEnvAsync(
+      {
+        OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+        OPENCLAW_SKIP_CHANNELS: "0",
+        OPENCLAW_SKIP_PROVIDERS: "0",
+      },
+      async () => {
+        const startup = startGatewayServer(await getFreePort());
+        await expect(startup).rejects.toThrow(/Gateway startup blocked/i);
+        await expect(startup).rejects.toThrow(/acme\/m1/i);
+      },
+    );
+  });
   test("refuses to start when port already bound", async () => {
     const { server: blocker, port: blockedPort } = await occupyPort();
     const startup = startGatewayServer(blockedPort);
@@ -478,3 +515,4 @@ describe("gateway server misc", () => {
     );
   });
 });
+
