@@ -43,6 +43,7 @@ import {
   readStoreAllowFromForDmPolicy,
   resolvePinnedMainDmOwnerFromAllowlist,
 } from "../../security/dm-policy-shared.js";
+import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
 import {
   createDiscordFormModal,
@@ -359,6 +360,7 @@ async function ensureAgentComponentInteractionAllowed(params: {
 }): Promise<{ parentId: string | undefined } | null> {
   const guildInfo = resolveDiscordGuildEntry({
     guild: params.interaction.guild ?? undefined,
+    guildId: params.rawGuildId,
     guildEntries: params.ctx.guildEntries,
   });
   const channelCtx = resolveDiscordChannelContext(params.interaction);
@@ -1008,6 +1010,7 @@ async function dispatchDiscordComponentEvent(params: {
       deliver: async (payload) => {
         const replyToId = replyReference.use();
         await deliverDiscordReply({
+          cfg: ctx.cfg,
           replies: [payload],
           target: deliverTarget,
           token,
@@ -1017,7 +1020,11 @@ async function dispatchDiscordComponentEvent(params: {
           replyToId,
           replyToMode,
           textLimit,
-          maxLinesPerMessage: ctx.discordConfig?.maxLinesPerMessage,
+          maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({
+            cfg: ctx.cfg,
+            discordConfig: ctx.discordConfig,
+            accountId,
+          }),
           tableMode,
           chunkMode: resolveChunkMode(ctx.cfg, "discord", accountId),
           mediaLocalRoots,
@@ -1088,6 +1095,7 @@ async function handleDiscordComponentEvent(params: {
   const { channelId, user, replyOpts, rawGuildId, memberRoleIds } = interactionCtx;
   const guildInfo = resolveDiscordGuildEntry({
     guild: params.interaction.guild ?? undefined,
+    guildId: rawGuildId,
     guildEntries: params.ctx.guildEntries,
   });
   const channelCtx = resolveDiscordChannelContext(params.interaction);
@@ -1240,6 +1248,7 @@ async function handleDiscordModalTrigger(params: {
   const { channelId, user, replyOpts, rawGuildId, memberRoleIds } = interactionCtx;
   const guildInfo = resolveDiscordGuildEntry({
     guild: params.interaction.guild ?? undefined,
+    guildId: rawGuildId,
     guildEntries: params.ctx.guildEntries,
   });
   const channelCtx = resolveDiscordChannelContext(params.interaction);
@@ -1690,6 +1699,7 @@ class DiscordComponentModal extends Modal {
     const { channelId, user, replyOpts, rawGuildId, memberRoleIds } = interactionCtx;
     const guildInfo = resolveDiscordGuildEntry({
       guild: interaction.guild ?? undefined,
+      guildId: rawGuildId,
       guildEntries: this.ctx.guildEntries,
     });
     const channelCtx = resolveDiscordChannelContext(interaction);

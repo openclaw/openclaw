@@ -1,17 +1,48 @@
 import { describe, expect, it } from "vitest";
-import { isRecoverableTelegramNetworkError, isSafeToRetrySendError } from "./network-errors.js";
+import {
+  getTelegramNetworkErrorOrigin,
+  isRecoverableTelegramNetworkError,
+  isSafeToRetrySendError,
+  isTelegramClientRejection,
+  isTelegramPollingNetworkError,
+  isTelegramServerError,
+  tagTelegramNetworkError,
+} from "./network-errors.js";
+
+const errorWithCode = (message: string, code: string) =>
+  Object.assign(new Error(message), { code });
+const errorWithTelegramCode = (message: string, error_code: number) =>
+  Object.assign(new Error(message), { error_code });
 
 describe("isRecoverableTelegramNetworkError", () => {
-  it("detects recoverable error codes", () => {
-    const err = Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
-    expect(isRecoverableTelegramNetworkError(err)).toBe(true);
+  it("tracks Telegram polling origin separately from generic network matching", () => {
+    const slackDnsError = Object.assign(
+      new Error("A request error occurred: getaddrinfo ENOTFOUND slack.com"),
+      {
+        code: "ENOTFOUND",
+        hostname: "slack.com",
+      },
+    );
+    expect(isRecoverableTelegramNetworkError(slackDnsError)).toBe(true);
+    expect(isTelegramPollingNetworkError(slackDnsError)).toBe(false);
+
+    tagTelegramNetworkError(slackDnsError, {
+      method: "getUpdates",
+      url: "https://api.telegram.org/bot123456:ABC/getUpdates",
+    });
+    expect(getTelegramNetworkErrorOrigin(slackDnsError)).toEqual({
+      method: "getupdates",
+      url: "https://api.telegram.org/bot123456:ABC/getUpdates",
+    });
+    expect(isTelegramPollingNetworkError(slackDnsError)).toBe(true);
   });
 
-  it("detects additional recoverable error codes", () => {
-    const aborted = Object.assign(new Error("aborted"), { code: "ECONNABORTED" });
-    const network = Object.assign(new Error("network"), { code: "ERR_NETWORK" });
-    expect(isRecoverableTelegramNetworkError(aborted)).toBe(true);
-    expect(isRecoverableTelegramNetworkError(network)).toBe(true);
+  it.each([
+    ["ETIMEDOUT", "timeout"],
+    ["ECONNABORTED", "aborted"],
+    ["ERR_NETWORK", "network"],
+  ])("detects recoverable error code %s", (code, message) => {
+    expect(isRecoverableTelegramNetworkError(errorWithCode(message, code))).toBe(true);
   });
 
   it("detects AbortError names", () => {
@@ -37,6 +68,19 @@ describe("isRecoverableTelegramNetworkError", () => {
       isRecoverableTelegramNetworkError(new Error("TypeError: fetch failed"), { context: "send" }),
     ).toBe(true);
     expect(isRecoverableTelegramNetworkError(err, { context: "polling" })).toBe(true);
+  });
+
+  it("honors allowMessageMatch=false for broad snippet matches", () => {
+    expect(
+      isRecoverableTelegramNetworkError(new Error("Undici: socket failure"), {
+        allowMessageMatch: false,
+      }),
+    ).toBe(false);
+    expect(
+      isRecoverableTelegramNetworkError(new Error("TypeError: fetch failed"), {
+        allowMessageMatch: false,
+      }),
+    ).toBe(true);
   });
 
   it("skips broad message matches for send context", () => {
@@ -65,6 +109,14 @@ describe("isRecoverableTelegramNetworkError", () => {
   it("detects grammY 'timed out' long-poll errors (#7239)", () => {
     const err = new Error("Request to 'getUpdates' timed out after 500 seconds");
     expect(isRecoverableTelegramNetworkError(err)).toBe(true);
+  });
+
+  it("normalizes blank tagged origins to null and finds nested tags", () => {
+    const inner = new Error("inner");
+    tagTelegramNetworkError(inner, { method: " ", url: " " });
+    const outer = Object.assign(new Error("outer"), { cause: inner });
+    expect(getTelegramNetworkErrorOrigin(outer)).toEqual({ method: null, url: null });
+    expect(isTelegramPollingNetworkError(outer)).toBe(false);
   });
 
   // Grammy HttpError tests (issue #3815)
@@ -108,49 +160,18 @@ describe("isRecoverableTelegramNetworkError", () => {
 });
 
 describe("isSafeToRetrySendError", () => {
-  it("allows retry for ECONNREFUSED (pre-connect, message not sent)", () => {
-    const err = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
-    expect(isSafeToRetrySendError(err)).toBe(true);
-  });
-
-  it("allows retry for ENOTFOUND (DNS failure, message not sent)", () => {
-    const err = Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" });
-    expect(isSafeToRetrySendError(err)).toBe(true);
-  });
-
-  it("allows retry for EAI_AGAIN (transient DNS, message not sent)", () => {
-    const err = Object.assign(new Error("getaddrinfo EAI_AGAIN"), { code: "EAI_AGAIN" });
-    expect(isSafeToRetrySendError(err)).toBe(true);
-  });
-
-  it("allows retry for ENETUNREACH (no route to host, message not sent)", () => {
-    const err = Object.assign(new Error("connect ENETUNREACH"), { code: "ENETUNREACH" });
-    expect(isSafeToRetrySendError(err)).toBe(true);
-  });
-
-  it("allows retry for EHOSTUNREACH (host unreachable, message not sent)", () => {
-    const err = Object.assign(new Error("connect EHOSTUNREACH"), { code: "EHOSTUNREACH" });
-    expect(isSafeToRetrySendError(err)).toBe(true);
-  });
-
-  it("does NOT allow retry for ECONNRESET (message may already be delivered)", () => {
-    const err = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
-    expect(isSafeToRetrySendError(err)).toBe(false);
-  });
-
-  it("does NOT allow retry for ETIMEDOUT (message may already be delivered)", () => {
-    const err = Object.assign(new Error("connect ETIMEDOUT"), { code: "ETIMEDOUT" });
-    expect(isSafeToRetrySendError(err)).toBe(false);
-  });
-
-  it("does NOT allow retry for EPIPE (connection broken mid-transfer, message may be delivered)", () => {
-    const err = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
-    expect(isSafeToRetrySendError(err)).toBe(false);
-  });
-
-  it("does NOT allow retry for UND_ERR_CONNECT_TIMEOUT (ambiguous timing)", () => {
-    const err = Object.assign(new Error("connect timeout"), { code: "UND_ERR_CONNECT_TIMEOUT" });
-    expect(isSafeToRetrySendError(err)).toBe(false);
+  it.each([
+    ["ECONNREFUSED", "connect ECONNREFUSED", true],
+    ["ENOTFOUND", "getaddrinfo ENOTFOUND", true],
+    ["EAI_AGAIN", "getaddrinfo EAI_AGAIN", true],
+    ["ENETUNREACH", "connect ENETUNREACH", true],
+    ["EHOSTUNREACH", "connect EHOSTUNREACH", true],
+    ["ECONNRESET", "read ECONNRESET", false],
+    ["ETIMEDOUT", "connect ETIMEDOUT", false],
+    ["EPIPE", "write EPIPE", false],
+    ["UND_ERR_CONNECT_TIMEOUT", "connect timeout", false],
+  ])("returns %s => %s", (code, message, expected) => {
+    expect(isSafeToRetrySendError(errorWithCode(message, code))).toBe(expected);
   });
 
   it("does NOT allow retry for non-network errors", () => {
@@ -162,5 +183,39 @@ describe("isSafeToRetrySendError", () => {
     const root = Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" });
     const wrapped = Object.assign(new Error("fetch failed"), { cause: root });
     expect(isSafeToRetrySendError(wrapped)).toBe(true);
+  });
+});
+
+describe("isTelegramServerError", () => {
+  it.each([
+    ["Internal Server Error", 500, true],
+    ["Bad Gateway", 502, true],
+    ["Forbidden", 403, false],
+  ])("returns %s for error_code %s", (message, errorCode, expected) => {
+    expect(isTelegramServerError(errorWithTelegramCode(message, errorCode))).toBe(expected);
+  });
+
+  it("returns false for plain Error", () => {
+    expect(isTelegramServerError(new Error("500: Internal Server Error"))).toBe(false);
+  });
+});
+
+describe("isTelegramClientRejection", () => {
+  it.each([
+    ["Bad Request", 400, true],
+    ["Forbidden", 403, true],
+    ["Bad Gateway", 502, false],
+  ])("returns %s for error_code %s", (message, errorCode, expected) => {
+    expect(isTelegramClientRejection(errorWithTelegramCode(message, errorCode))).toBe(expected);
+  });
+
+  it("returns false for plain Error", () => {
+    expect(isTelegramClientRejection(new Error("400: Bad Request"))).toBe(false);
+  });
+
+  it("detects error_code in nested cause", () => {
+    const inner = Object.assign(new Error("Forbidden"), { error_code: 403 });
+    const outer = Object.assign(new Error("wrapped"), { cause: inner });
+    expect(isTelegramClientRejection(outer)).toBe(true);
   });
 });

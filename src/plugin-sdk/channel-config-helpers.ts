@@ -2,6 +2,7 @@ import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
+import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 import { normalizeWhatsAppAllowFromEntries } from "../channels/plugins/normalize/whatsapp.js";
 import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -102,6 +103,45 @@ export function createScopedChannelConfigBase<
         clearBaseFields: params.clearBaseFields,
       }),
   };
+}
+
+export function createScopedDmSecurityResolver<
+  ResolvedAccount extends { accountId?: string | null },
+>(params: {
+  channelKey: string;
+  resolvePolicy: (account: ResolvedAccount) => string | null | undefined;
+  resolveAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
+  resolveFallbackAccountId?: (account: ResolvedAccount) => string | null | undefined;
+  defaultPolicy?: string;
+  allowFromPathSuffix?: string;
+  policyPathSuffix?: string;
+  approveChannelId?: string;
+  approveHint?: string;
+  normalizeEntry?: (raw: string) => string;
+}) {
+  return ({
+    cfg,
+    accountId,
+    account,
+  }: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    account: ResolvedAccount;
+  }) =>
+    buildAccountScopedDmSecurityPolicy({
+      cfg,
+      channelKey: params.channelKey,
+      accountId,
+      fallbackAccountId: params.resolveFallbackAccountId?.(account) ?? account.accountId,
+      policy: params.resolvePolicy(account),
+      allowFrom: params.resolveAllowFrom(account) ?? [],
+      defaultPolicy: params.defaultPolicy,
+      allowFromPathSuffix: params.allowFromPathSuffix,
+      policyPathSuffix: params.policyPathSuffix,
+      approveChannelId: params.approveChannelId,
+      approveHint: params.approveHint,
+      normalizeEntry: params.normalizeEntry,
+    });
 }
 
 export function resolveWhatsAppConfigAllowFrom(params: {

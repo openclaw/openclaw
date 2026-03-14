@@ -343,6 +343,35 @@ describe("subagent registry persistence", () => {
     expect(afterSecond.runs["run-3"].cleanupCompletedAt).toBeDefined();
   });
 
+  it("retries cleanup announce after announce flow rejects", async () => {
+    const persisted = createPersistedEndedRun({
+      runId: "run-reject",
+      childSessionKey: "agent:main:subagent:reject",
+      task: "reject announce",
+      cleanup: "keep",
+    });
+    const registryPath = await writePersistedRegistry(persisted);
+
+    announceSpy.mockRejectedValueOnce(new Error("announce boom"));
+    await restartRegistryAndFlush();
+
+    expect(announceSpy).toHaveBeenCalledTimes(1);
+    const afterFirst = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+      runs: Record<string, { cleanupHandled?: boolean; cleanupCompletedAt?: number }>;
+    };
+    expect(afterFirst.runs["run-reject"].cleanupHandled).toBe(false);
+    expect(afterFirst.runs["run-reject"].cleanupCompletedAt).toBeUndefined();
+
+    announceSpy.mockResolvedValueOnce(true);
+    await restartRegistryAndFlush();
+
+    expect(announceSpy).toHaveBeenCalledTimes(2);
+    const afterSecond = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+      runs: Record<string, { cleanupCompletedAt?: number }>;
+    };
+    expect(afterSecond.runs["run-reject"].cleanupCompletedAt).toBeDefined();
+  });
+
   it("keeps delete-mode runs retryable when announce is deferred", async () => {
     const persisted = createPersistedEndedRun({
       runId: "run-4",

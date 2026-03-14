@@ -80,13 +80,13 @@ See [Memory](/concepts/memory).
 `web_search` uses API keys and may incur usage charges depending on your provider:
 
 - **Brave Search API**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
-- **Gemini (Google Search)**: `GEMINI_API_KEY`
-- **Grok (xAI)**: `XAI_API_KEY`
-- **Kimi (Moonshot)**: `KIMI_API_KEY` or `MOONSHOT_API_KEY`
-- **Perplexity Search API**: `PERPLEXITY_API_KEY`
+- **Gemini (Google Search)**: `GEMINI_API_KEY` or `tools.web.search.gemini.apiKey`
+- **Grok (xAI)**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`
+- **Kimi (Moonshot)**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `tools.web.search.kimi.apiKey`
+- **Perplexity Search API**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey`
 
-**Brave Search free credit:** Each Brave plan includes $5/month in renewing
-free credit. The Search plan costs $5 per 1,000 requests, so the credit covers
+**Brave Search free credit:** Each Brave plan includes \$5/month in renewing
+free credit. The Search plan costs \$5 per 1,000 requests, so the credit covers
 1,000 requests/month at no charge. Set your usage limit in the Brave dashboard
 to avoid unexpected charges.
 

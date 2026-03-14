@@ -1,25 +1,25 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/diffs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestPluginApi } from "../../test-utils/plugin-api.js";
 import type { DiffScreenshotter } from "./browser.js";
 import { DEFAULT_DIFFS_TOOL_DEFAULTS } from "./config.js";
 import { DiffArtifactStore } from "./store.js";
+import { createDiffStoreHarness } from "./test-helpers.js";
 import { createDiffsTool } from "./tool.js";
 import type { DiffRenderOptions } from "./types.js";
 
 describe("diffs tool", () => {
-  let rootDir: string;
   let store: DiffArtifactStore;
+  let cleanupRootDir: () => Promise<void>;
 
   beforeEach(async () => {
-    rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-diffs-tool-"));
-    store = new DiffArtifactStore({ rootDir });
+    ({ store, cleanup: cleanupRootDir } = await createDiffStoreHarness("openclaw-diffs-tool-"));
   });
 
   afterEach(async () => {
-    await fs.rm(rootDir, { recursive: true, force: true });
+    await cleanupRootDir();
   });
 
   it("returns a viewer URL in view mode", async () => {
@@ -136,9 +136,7 @@ describe("diffs tool", () => {
       mode: "file",
     });
 
-    expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
-    expect((result?.details as Record<string, unknown>).mode).toBe("file");
-    expect((result?.details as Record<string, unknown>).viewerUrl).toBeUndefined();
+    expectArtifactOnlyFileResult(screenshotter, result);
   });
 
   it("honors ttlSeconds for artifact-only file output", async () => {
@@ -228,9 +226,7 @@ describe("diffs tool", () => {
       after: "two\n",
     });
 
-    expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
-    expect((result?.details as Record<string, unknown>).mode).toBe("file");
-    expect((result?.details as Record<string, unknown>).viewerUrl).toBeUndefined();
+    expectArtifactOnlyFileResult(screenshotter, result);
   });
 
   it("falls back to view output when both mode cannot render an image", async () => {
@@ -388,7 +384,7 @@ describe("diffs tool", () => {
 });
 
 function createApi(): OpenClawPluginApi {
-  return {
+  return createTestPluginApi({
     id: "diffs",
     name: "Diffs",
     description: "Diffs",
@@ -400,26 +396,7 @@ function createApi(): OpenClawPluginApi {
       },
     },
     runtime: {} as OpenClawPluginApi["runtime"],
-    logger: {
-      info() {},
-      warn() {},
-      error() {},
-    },
-    registerTool() {},
-    registerHook() {},
-    registerHttpRoute() {},
-    registerChannel() {},
-    registerGatewayMethod() {},
-    registerCli() {},
-    registerService() {},
-    registerProvider() {},
-    registerCommand() {},
-    registerContextEngine() {},
-    resolvePath(input: string) {
-      return input;
-    },
-    on() {},
-  };
+  }) as OpenClawPluginApi;
 }
 
 function createToolWithScreenshotter(
@@ -433,6 +410,15 @@ function createToolWithScreenshotter(
     defaults,
     screenshotter,
   });
+}
+
+function expectArtifactOnlyFileResult(
+  screenshotter: DiffScreenshotter,
+  result: { details?: unknown } | null | undefined,
+) {
+  expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
+  expect((result?.details as Record<string, unknown>).mode).toBe("file");
+  expect((result?.details as Record<string, unknown>).viewerUrl).toBeUndefined();
 }
 
 function createPngScreenshotter(

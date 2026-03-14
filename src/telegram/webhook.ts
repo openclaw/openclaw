@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { InputFile, webhookCallback } from "grammy";
 import type { OpenClawConfig } from "../config/config.js";
@@ -74,6 +75,28 @@ async function initializeTelegramWebhookBot(params: {
   });
 }
 
+function resolveSingleHeaderValue(header: string | string[] | undefined): string | undefined {
+  if (typeof header === "string") {
+    return header;
+  }
+  if (Array.isArray(header) && header.length === 1) {
+    return header[0];
+  }
+  return undefined;
+}
+
+function hasValidTelegramWebhookSecret(
+  secretHeader: string | undefined,
+  expectedSecret: string,
+): boolean {
+  if (typeof secretHeader !== "string") {
+    return false;
+  }
+  const actual = Buffer.from(secretHeader, "utf-8");
+  const expected = Buffer.from(expectedSecret, "utf-8");
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
 export async function startTelegramWebhook(opts: {
   token: string;
   accountId?: string;
@@ -147,6 +170,13 @@ export async function startTelegramWebhook(opts: {
     if (diagnosticsEnabled) {
       logWebhookReceived({ channel: "telegram", updateType: "telegram-post" });
     }
+    const secretHeader = resolveSingleHeaderValue(req.headers["x-telegram-bot-api-secret-token"]);
+    if (!hasValidTelegramWebhookSecret(secretHeader, secret)) {
+      res.shouldKeepAlive = false;
+      res.setHeader("Connection", "close");
+      respondText(401, "unauthorized");
+      return;
+    }
     void (async () => {
       const body = await readJsonBodyWithLimit(req, {
         maxBytes: TELEGRAM_WEBHOOK_MAX_BODY_BYTES,
@@ -189,8 +219,6 @@ export async function startTelegramWebhook(opts: {
         replied = true;
         respondText(401, "unauthorized");
       };
-      const secretHeaderRaw = req.headers["x-telegram-bot-api-secret-token"];
-      const secretHeader = Array.isArray(secretHeaderRaw) ? secretHeaderRaw[0] : secretHeaderRaw;
 
       await handler(body.value, reply, secretHeader, unauthorized);
       if (!replied) {

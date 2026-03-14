@@ -1,5 +1,5 @@
 import { getChannelDock } from "../../channels/dock.js";
-import { resolveChannelConfigWrites } from "../../channels/plugins/config-writes.js";
+import { resolveExplicitConfigWriteTarget } from "../../channels/plugins/config-writes.js";
 import { listPairingChannels } from "../../channels/plugins/pairing.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import { normalizeChannelId } from "../../channels/registry.js";
@@ -31,6 +31,7 @@ import { resolveTelegramAccount } from "../../telegram/accounts.js";
 import { resolveWhatsAppAccount } from "../../web/accounts.js";
 import { rejectUnauthorizedCommand, requireCommandFlagEnabled } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
+import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
 
 type AllowlistScope = "dm" | "group" | "all";
 type AllowlistAction = "list" | "add" | "remove";
@@ -231,12 +232,22 @@ function resolveAccountTarget(
   const channel = (channels[channelId] ??= {}) as Record<string, unknown>;
   const normalizedAccountId = normalizeAccountId(accountId);
   if (isBlockedObjectKey(normalizedAccountId)) {
-    return { target: channel, pathPrefix: `channels.${channelId}`, accountId: DEFAULT_ACCOUNT_ID };
+    return {
+      target: channel,
+      pathPrefix: `channels.${channelId}`,
+      accountId: DEFAULT_ACCOUNT_ID,
+      writeTarget: resolveExplicitConfigWriteTarget({ channelId }),
+    };
   }
   const hasAccounts = Boolean(channel.accounts && typeof channel.accounts === "object");
   const useAccount = normalizedAccountId !== DEFAULT_ACCOUNT_ID || hasAccounts;
   if (!useAccount) {
-    return { target: channel, pathPrefix: `channels.${channelId}`, accountId: normalizedAccountId };
+    return {
+      target: channel,
+      pathPrefix: `channels.${channelId}`,
+      accountId: normalizedAccountId,
+      writeTarget: resolveExplicitConfigWriteTarget({ channelId }),
+    };
   }
   const accounts = (channel.accounts ??= {}) as Record<string, unknown>;
   const existingAccount = Object.hasOwn(accounts, normalizedAccountId)
@@ -250,6 +261,10 @@ function resolveAccountTarget(
     target: account,
     pathPrefix: `channels.${channelId}.accounts.${normalizedAccountId}`,
     accountId: normalizedAccountId,
+    writeTarget: resolveExplicitConfigWriteTarget({
+      channelId,
+      accountId: normalizedAccountId,
+    }),
   };
 }
 
@@ -585,19 +600,6 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
   const shouldTouchStore = parsed.target !== "config" && listPairingChannels().includes(channelId);
 
   if (shouldUpdateConfig) {
-    const allowWrites = resolveChannelConfigWrites({
-      cfg: params.cfg,
-      channelId,
-      accountId: params.ctx.AccountId,
-    });
-    if (!allowWrites) {
-      const hint = `channels.${channelId}.configWrites=true`;
-      return {
-        shouldContinue: false,
-        reply: { text: `⚠️ Config writes are disabled for ${channelId}. Set ${hint} to enable.` },
-      };
-    }
-
     const allowlistPath = resolveChannelAllowFromPaths(channelId, scope);
     if (!allowlistPath) {
       return {
@@ -620,7 +622,25 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       target,
       pathPrefix,
       accountId: normalizedAccountId,
+      writeTarget,
     } = resolveAccountTarget(parsedConfig, channelId, accountId);
+    const deniedText = resolveConfigWriteDeniedText({
+      cfg: params.cfg,
+      channel: params.command.channel,
+      channelId,
+      accountId: params.ctx.AccountId,
+      gatewayClientScopes: params.ctx.GatewayClientScopes,
+      target: writeTarget,
+    });
+    if (deniedText) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: deniedText,
+        },
+      };
+    }
+
     const existing: string[] = [];
     const existingPaths =
       scope === "dm" && (channelId === "slack" || channelId === "discord")

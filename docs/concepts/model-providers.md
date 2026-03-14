@@ -47,6 +47,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Override per model via `agents.defaults.models["openai/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
 - OpenAI Responses WebSocket warm-up defaults to enabled via `params.openaiWsWarmup` (`true`/`false`)
 - OpenAI priority processing can be enabled via `agents.defaults.models["openai/<model>"].params.serviceTier`
+- OpenAI fast mode can be enabled per model via `agents.defaults.models["<provider>/<model>"].params.fastMode`
+- `openai/gpt-5.3-codex-spark` is intentionally suppressed in OpenClaw because the live OpenAI API rejects it; Spark is treated as Codex-only
 
 ```json5
 {
@@ -61,6 +63,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Optional rotation: `ANTHROPIC_API_KEYS`, `ANTHROPIC_API_KEY_1`, `ANTHROPIC_API_KEY_2`, plus `OPENCLAW_LIVE_ANTHROPIC_KEY` (single override)
 - Example model: `anthropic/claude-opus-4-6`
 - CLI: `openclaw onboard --auth-choice token` (paste setup-token) or `openclaw models auth paste-token --provider anthropic`
+- Direct API-key models support the shared `/fast` toggle and `params.fastMode`; OpenClaw maps that to Anthropic `service_tier` (`auto` vs `standard_only`)
 - Policy note: setup-token support is technical compatibility; Anthropic has blocked some subscription usage outside Claude Code in the past. Verify current Anthropic terms and decide based on your risk tolerance.
 - Recommendation: Anthropic API key auth is the safer, recommended path over subscription setup-token auth.
 
@@ -78,6 +81,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - CLI: `openclaw onboard --auth-choice openai-codex` or `openclaw models auth login --provider openai-codex`
 - Default transport is `auto` (WebSocket-first, SSE fallback)
 - Override per model via `agents.defaults.models["openai-codex/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
+- Shares the same `/fast` toggle and `params.fastMode` config as direct `openai/*`
+- `openai-codex/gpt-5.3-codex-spark` remains available when the Codex OAuth catalog exposes it; entitlement-dependent
 - Policy note: OpenAI Codex OAuth is explicitly supported for external tools/workflows like OpenClaw.
 
 ```json5
@@ -86,12 +91,13 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 }
 ```
 
-### OpenCode Zen
+### OpenCode
 
-- Provider: `opencode`
 - Auth: `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`)
-- Example model: `opencode/claude-opus-4-6`
-- CLI: `openclaw onboard --auth-choice opencode-zen`
+- Zen runtime provider: `opencode`
+- Go runtime provider: `opencode-go`
+- Example models: `opencode/claude-opus-4-6`, `opencode-go/kimi-k2.5`
+- CLI: `openclaw onboard --auth-choice opencode-zen` or `openclaw onboard --auth-choice opencode-go`
 
 ```json5
 {
@@ -104,8 +110,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Provider: `google`
 - Auth: `GEMINI_API_KEY`
 - Optional rotation: `GEMINI_API_KEYS`, `GEMINI_API_KEY_1`, `GEMINI_API_KEY_2`, `GOOGLE_API_KEY` fallback, and `OPENCLAW_LIVE_GEMINI_KEY` (single override)
-- Example models: `google/gemini-3.1-pro-preview`, `google/gemini-3-flash-preview`, `google/gemini-3.1-flash-lite-preview`
-- Compatibility: legacy OpenClaw config using `google/gemini-3.1-flash-preview` is normalized to `google/gemini-3-flash-preview`, and bare `google/gemini-3.1-flash-lite` is normalized to `google/gemini-3.1-flash-lite-preview`
+- Example models: `google/gemini-3.1-pro-preview`, `google/gemini-3-flash-preview`
+- Compatibility: legacy OpenClaw config using `google/gemini-3.1-flash-preview` is normalized to `google/gemini-3-flash-preview`
 - CLI: `openclaw onboard --auth-choice gemini-api-key`
 
 ### Google Vertex, Antigravity, and Gemini CLI
@@ -351,12 +357,12 @@ See [/providers/minimax](/providers/minimax) for setup details, model options, a
 
 ### Ollama
 
-Ollama is a local LLM runtime that provides an OpenAI-compatible API:
+Ollama ships as a bundled provider plugin and uses Ollama's native API:
 
 - Provider: `ollama`
 - Auth: None required (local server)
 - Example model: `ollama/llama3.3`
-- Installation: [https://ollama.ai](https://ollama.ai)
+- Installation: [https://ollama.com/download](https://ollama.com/download)
 
 ```bash
 # Install Ollama, then pull a model:
@@ -371,11 +377,15 @@ ollama pull llama3.3
 }
 ```
 
-Ollama is automatically detected when running locally at `http://127.0.0.1:11434/v1`. See [/providers/ollama](/providers/ollama) for model recommendations and custom configuration.
+Ollama is detected locally at `http://127.0.0.1:11434` when you opt in with
+`OLLAMA_API_KEY`, and the bundled provider plugin adds Ollama directly to
+`openclaw onboard` and the model picker. See [/providers/ollama](/providers/ollama)
+for onboarding, cloud/local mode, and custom configuration.
 
 ### vLLM
 
-vLLM is a local (or self-hosted) OpenAI-compatible server:
+vLLM ships as a bundled provider plugin for local/self-hosted OpenAI-compatible
+servers:
 
 - Provider: `vllm`
 - Auth: Optional (depends on your server)
@@ -398,6 +408,34 @@ Then set a model (replace with one of the IDs returned by `/v1/models`):
 ```
 
 See [/providers/vllm](/providers/vllm) for details.
+
+### SGLang
+
+SGLang ships as a bundled provider plugin for fast self-hosted
+OpenAI-compatible servers:
+
+- Provider: `sglang`
+- Auth: Optional (depends on your server)
+- Default base URL: `http://127.0.0.1:30000/v1`
+
+To opt in to auto-discovery locally (any value works if your server does not
+enforce auth):
+
+```bash
+export SGLANG_API_KEY="sglang-local"
+```
+
+Then set a model (replace with one of the IDs returned by `/v1/models`):
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "sglang/your-model-id" } },
+  },
+}
+```
+
+See [/providers/sglang](/providers/sglang) for details.
 
 ### Local proxies (LM Studio, vLLM, LiteLLM, etc.)
 

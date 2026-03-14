@@ -106,6 +106,36 @@ const BROWSER_TOOL_BOUNDED_RETRY_HINT =
   'Do NOT blindly retry in a loop. Take a fresh browser snapshot (snapshotFormat="ai", refs="aria"), then retry this action once with updated refs. ' +
   "If it still times out, report the browser as unavailable.";
 
+const BROWSER_SERVICE_RATE_LIMIT_MESSAGE =
+  "Browser service rate limit reached. " +
+  "Wait for the current session to complete, or retry later.";
+
+const BROWSERBASE_RATE_LIMIT_MESSAGE =
+  "Browserbase rate limit reached (max concurrent sessions). " +
+  "Wait for the current session to complete, or upgrade your plan.";
+
+function isRateLimitStatus(status: number): boolean {
+  return status === 429;
+}
+
+function isBrowserbaseUrl(url: string): boolean {
+  if (!isAbsoluteHttp(url)) {
+    return false;
+  }
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === "browserbase.com" || host.endsWith(".browserbase.com");
+  } catch {
+    return false;
+  }
+}
+
+export function resolveBrowserRateLimitMessage(url: string): string {
+  return isBrowserbaseUrl(url)
+    ? BROWSERBASE_RATE_LIMIT_MESSAGE
+    : BROWSER_SERVICE_RATE_LIMIT_MESSAGE;
+}
+
 function resolveBrowserFetchOperatorHint(url: string): string {
   const isLocal = !isAbsoluteHttp(url);
   return isLocal
@@ -146,6 +176,14 @@ function appendBrowserToolModelHint(message: string, modelHint = BROWSER_TOOL_MO
     return message;
   }
   return `${message} ${modelHint}`;
+}
+
+async function discardResponseBody(res: Response): Promise<void> {
+  try {
+    await res.body?.cancel();
+  } catch {
+    // Best effort only; we're already returning a stable error message.
+  }
 }
 
 function enhanceDispatcherPathError(url: string, err: unknown): Error {
@@ -215,6 +253,13 @@ async function fetchHttpJson<T>(
   try {
     const res = await fetch(url, { ...init, signal: ctrl.signal });
     if (!res.ok) {
+      if (isRateLimitStatus(res.status)) {
+        // Do not reflect upstream response text into the error surface (log/agent injection risk)
+        await discardResponseBody(res);
+        throw new BrowserServiceError(
+          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_MODEL_HINT}`,
+        );
+      }
       const text = await res.text().catch(() => "");
       throw new BrowserServiceError(text || `HTTP ${res.status}`);
     }
@@ -309,6 +354,12 @@ export async function fetchBrowserJson<T>(
     });
 
     if (result.status >= 400) {
+      if (isRateLimitStatus(result.status)) {
+        // Do not reflect upstream response text into the error surface (log/agent injection risk)
+        throw new BrowserServiceError(
+          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_MODEL_HINT}`,
+        );
+      }
       const message =
         result.body && typeof result.body === "object" && "error" in result.body
           ? String((result.body as { error?: unknown }).error)

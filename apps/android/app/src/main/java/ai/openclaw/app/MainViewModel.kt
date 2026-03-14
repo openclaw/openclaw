@@ -116,6 +116,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.setGatewayToken(value)
   }
 
+  fun setGatewayBootstrapToken(value: String) {
+    runtime.setGatewayBootstrapToken(value)
+  }
+
   fun setGatewayPassword(value: String) {
     runtime.setGatewayPassword(value)
   }

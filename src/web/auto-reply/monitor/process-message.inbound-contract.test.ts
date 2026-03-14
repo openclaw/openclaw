@@ -362,13 +362,14 @@ describe("web processMessage inbound contract", () => {
     expect(updateLastRouteMock).not.toHaveBeenCalled();
   });
 
-  it("does not update main last route for non-owner sender when main DM scope is pinned", async () => {
-    const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
-    updateLastRouteMock.mockClear();
-
+  function makePinnedMainScopeArgs(params: {
+    groupHistoryKey: string;
+    messageId: string;
+    from: string;
+  }) {
     const args = makeProcessMessageArgs({
       routeSessionKey: "agent:main:main",
-      groupHistoryKey: "+3000",
+      groupHistoryKey: params.groupHistoryKey,
       cfg: {
         channels: {
           whatsapp: {
@@ -379,12 +380,12 @@ describe("web processMessage inbound contract", () => {
         session: { store: sessionStorePath, dmScope: "main" },
       } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
       msg: {
-        id: "msg-last-route-3",
-        from: "+3000",
+        id: params.messageId,
+        from: params.from,
         to: "+2000",
         chatType: "direct",
         body: "hello",
-        senderE164: "+3000",
+        senderE164: params.from,
       },
     });
     args.route = {
@@ -392,6 +393,18 @@ describe("web processMessage inbound contract", () => {
       sessionKey: "agent:main:main",
       mainSessionKey: "agent:main:main",
     };
+    return args;
+  }
+
+  it("does not update main last route for non-owner sender when main DM scope is pinned", async () => {
+    const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
+    updateLastRouteMock.mockClear();
+
+    const args = makePinnedMainScopeArgs({
+      groupHistoryKey: "+3000",
+      messageId: "msg-last-route-3",
+      from: "+3000",
+    });
 
     await processMessage(args);
 
@@ -402,32 +415,11 @@ describe("web processMessage inbound contract", () => {
     const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
     updateLastRouteMock.mockClear();
 
-    const args = makeProcessMessageArgs({
-      routeSessionKey: "agent:main:main",
+    const args = makePinnedMainScopeArgs({
       groupHistoryKey: "+1000",
-      cfg: {
-        channels: {
-          whatsapp: {
-            allowFrom: ["+1000"],
-          },
-        },
-        messages: {},
-        session: { store: sessionStorePath, dmScope: "main" },
-      } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
-      msg: {
-        id: "msg-last-route-4",
-        from: "+1000",
-        to: "+2000",
-        chatType: "direct",
-        body: "hello",
-        senderE164: "+1000",
-      },
+      messageId: "msg-last-route-4",
+      from: "+1000",
     });
-    args.route = {
-      ...args.route,
-      sessionKey: "agent:main:main",
-      mainSessionKey: "agent:main:main",
-    };
 
     await processMessage(args);
 

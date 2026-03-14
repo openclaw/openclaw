@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
 import {
@@ -23,6 +24,25 @@ vi.mock("../send.shared.js", () => ({
 
 describe("deliverDiscordReply", () => {
   const runtime = {} as RuntimeEnv;
+  const cfg = {
+    channels: { discord: { token: "test-token" } },
+  } as OpenClawConfig;
+  const expectBotSendRetrySuccess = async (status: number, message: string) => {
+    sendMessageDiscordMock
+      .mockRejectedValueOnce(Object.assign(new Error(message), { status }))
+      .mockResolvedValueOnce({ messageId: "msg-1", channelId: "channel-1" });
+
+    await deliverDiscordReply({
+      replies: [{ text: "retry me" }],
+      target: "channel:123",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
+  };
   const createBoundThreadBindings = async (
     overrides: Partial<{
       threadId: string;
@@ -86,6 +106,7 @@ describe("deliverDiscordReply", () => {
       target: "channel:123",
       token: "token",
       runtime,
+      cfg,
       textLimit: 2000,
       replyToId: "reply-1",
     });
@@ -128,6 +149,7 @@ describe("deliverDiscordReply", () => {
       target: "channel:456",
       token: "token",
       runtime,
+      cfg,
       textLimit: 2000,
     });
 
@@ -147,6 +169,7 @@ describe("deliverDiscordReply", () => {
       target: "channel:654",
       token: "token",
       runtime,
+      cfg,
       textLimit: 2000,
       mediaLocalRoots,
     });
@@ -174,6 +197,19 @@ describe("deliverDiscordReply", () => {
     );
   });
 
+  it("forwards cfg to Discord send helpers", async () => {
+    await deliverDiscordReply({
+      replies: [{ text: "cfg path" }],
+      target: "channel:101",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(sendMessageDiscordMock.mock.calls[0]?.[2]?.cfg).toBe(cfg);
+  });
+
   it("uses replyToId only for the first chunk when replyToMode is first", async () => {
     await deliverDiscordReply({
       replies: [
@@ -184,6 +220,7 @@ describe("deliverDiscordReply", () => {
       target: "channel:789",
       token: "token",
       runtime,
+      cfg,
       textLimit: 5,
       replyToId: "reply-1",
       replyToMode: "first",
@@ -200,6 +237,7 @@ describe("deliverDiscordReply", () => {
       target: "channel:789",
       token: "token",
       runtime,
+      cfg,
       textLimit: 2000,
       replyToId: "reply-1",
       replyToMode: "first",
@@ -219,6 +257,7 @@ describe("deliverDiscordReply", () => {
       target: "channel:789",
       token: "token",
       runtime,
+      cfg,
       textLimit: 2000,
     });
 
@@ -246,6 +285,7 @@ describe("deliverDiscordReply", () => {
       token: "token",
       rest: fakeRest,
       runtime,
+      cfg,
       textLimit: 5,
     });
 
@@ -256,12 +296,37 @@ describe("deliverDiscordReply", () => {
     expect(sendDiscordTextMock.mock.calls[1]?.[1]).toBe("789");
   });
 
+  it("passes maxLinesPerMessage and chunkMode through the fast path", async () => {
+    const fakeRest = {} as import("@buape/carbon").RequestClient;
+
+    await deliverDiscordReply({
+      replies: [{ text: Array.from({ length: 18 }, (_, index) => `line ${index + 1}`).join("\n") }],
+      target: "channel:789",
+      token: "token",
+      rest: fakeRest,
+      runtime,
+      cfg,
+      textLimit: 2000,
+      maxLinesPerMessage: 120,
+      chunkMode: "newline",
+    });
+
+    expect(sendMessageDiscordMock).not.toHaveBeenCalled();
+    expect(sendDiscordTextMock).toHaveBeenCalledTimes(1);
+    const firstSendDiscordTextCall = sendDiscordTextMock.mock.calls[0];
+    const [, , , , , maxLinesPerMessageArg, , , chunkModeArg] = firstSendDiscordTextCall ?? [];
+
+    expect(maxLinesPerMessageArg).toBe(120);
+    expect(chunkModeArg).toBe("newline");
+  });
+
   it("falls back to sendMessageDiscord when rest is not provided", async () => {
     await deliverDiscordReply({
       replies: [{ text: "single chunk" }],
       target: "channel:789",
       token: "token",
       runtime,
+      cfg,
       textLimit: 2000,
     });
 
@@ -270,37 +335,11 @@ describe("deliverDiscordReply", () => {
   });
 
   it("retries bot send on 429 rate limit then succeeds", async () => {
-    const rateLimitErr = Object.assign(new Error("rate limited"), { status: 429 });
-    sendMessageDiscordMock
-      .mockRejectedValueOnce(rateLimitErr)
-      .mockResolvedValueOnce({ messageId: "msg-1", channelId: "channel-1" });
-
-    await deliverDiscordReply({
-      replies: [{ text: "retry me" }],
-      target: "channel:123",
-      token: "token",
-      runtime,
-      textLimit: 2000,
-    });
-
-    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
+    await expectBotSendRetrySuccess(429, "rate limited");
   });
 
   it("retries bot send on 500 server error then succeeds", async () => {
-    const serverErr = Object.assign(new Error("internal"), { status: 500 });
-    sendMessageDiscordMock
-      .mockRejectedValueOnce(serverErr)
-      .mockResolvedValueOnce({ messageId: "msg-1", channelId: "channel-1" });
-
-    await deliverDiscordReply({
-      replies: [{ text: "retry me" }],
-      target: "channel:123",
-      token: "token",
-      runtime,
-      textLimit: 2000,
-    });
-
-    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
+    await expectBotSendRetrySuccess(500, "internal");
   });
 
   it("does not retry on 4xx client errors", async () => {
@@ -313,6 +352,7 @@ describe("deliverDiscordReply", () => {
         target: "channel:123",
         token: "token",
         runtime,
+        cfg,
         textLimit: 2000,
       }),
     ).rejects.toThrow("bad request");
@@ -330,6 +370,7 @@ describe("deliverDiscordReply", () => {
         target: "channel:123",
         token: "token",
         runtime,
+        cfg,
         textLimit: 2000,
       }),
     ).rejects.toThrow("rate limited");
@@ -349,6 +390,7 @@ describe("deliverDiscordReply", () => {
       target: "channel:123",
       token: "token",
       runtime,
+      cfg,
       textLimit: 2,
     });
 
@@ -363,6 +405,7 @@ describe("deliverDiscordReply", () => {
       target: "channel:thread-1",
       token: "token",
       runtime,
+      cfg,
       textLimit: 2000,
       replyToId: "reply-1",
       sessionKey: "agent:main:subagent:child",
@@ -373,6 +416,7 @@ describe("deliverDiscordReply", () => {
     expect(sendWebhookMessageDiscordMock).toHaveBeenCalledWith(
       "Hello from subagent",
       expect.objectContaining({
+        cfg,
         webhookId: "wh_1",
         webhookToken: "tok_1",
         accountId: "default",
@@ -395,6 +439,7 @@ describe("deliverDiscordReply", () => {
         target: "channel:thread-1",
         token: "token",
         runtime,
+        cfg,
         textLimit: 2000,
         sessionKey: "agent:main:subagent:child",
         threadBindings,
@@ -418,12 +463,14 @@ describe("deliverDiscordReply", () => {
       token: "token",
       accountId: "default",
       runtime,
+      cfg,
       textLimit: 2000,
       sessionKey: "agent:main:subagent:child",
       threadBindings,
     });
 
     expect(sendWebhookMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendWebhookMessageDiscordMock.mock.calls[0]?.[1]?.cfg).toBe(cfg);
     expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
     expect(sendMessageDiscordMock).toHaveBeenCalledWith(
       "channel:thread-1",
@@ -441,6 +488,7 @@ describe("deliverDiscordReply", () => {
       token: "token",
       accountId: "default",
       runtime,
+      cfg,
       textLimit: 2000,
       sessionKey: "agent:main:subagent:child",
       threadBindings,

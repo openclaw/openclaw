@@ -9,7 +9,10 @@ export {
 } from "../channels/plugins/config-helpers.js";
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
-export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
+export {
+  formatPairingApproveHint,
+  parseOptionalDelimitedEntries,
+} from "../channels/plugins/helpers.js";
 export type {
   ChannelOnboardingAdapter,
   ChannelOnboardingDmPolicy,
@@ -23,6 +26,7 @@ export {
   setTopLevelChannelDmPolicyWithAllowFrom,
 } from "../channels/plugins/onboarding/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
+export { patchScopedAccountConfig } from "../channels/plugins/setup-helpers.js";
 export type { BaseProbeResult } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { getChatChannelMeta } from "../channels/registry.js";
@@ -60,6 +64,7 @@ export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
 export { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 export type { RuntimeEnv } from "../runtime.js";
+export { createAccountStatusSink, runPassiveAccountLifecycle } from "./channel-lifecycle.js";
 export {
   readStoreAllowFromForDmPolicy,
   resolveEffectiveAllowFromLists,

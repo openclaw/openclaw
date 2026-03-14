@@ -56,6 +56,7 @@ import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { chunkItems } from "../../utils/chunk-items.js";
 import { withTimeout } from "../../utils/with-timeout.js";
 import { loadWebMedia } from "../../web/media.js";
+import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import {
   isDiscordGroupAllowedByPolicy,
@@ -1354,6 +1355,7 @@ async function dispatchDiscordCommandInteraction(params: {
   });
   const guildInfo = resolveDiscordGuildEntry({
     guild: interaction.guild ?? undefined,
+    guildId: interaction.guild?.id ?? undefined,
     guildEntries: discordConfig?.guilds,
   });
   let threadParentId: string | undefined;
@@ -1571,7 +1573,7 @@ async function dispatchDiscordCommandInteraction(params: {
       textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
         fallbackLimit: 2000,
       }),
-      maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+      maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
       preferFollowUp,
       chunkMode: resolveChunkMode(cfg, "discord", accountId),
     });
@@ -1706,7 +1708,7 @@ async function dispatchDiscordCommandInteraction(params: {
             textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
               fallbackLimit: 2000,
             }),
-            maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+            maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
             preferFollowUp: preferFollowUp || didReply,
             chunkMode: resolveChunkMode(cfg, "discord", accountId),
           });

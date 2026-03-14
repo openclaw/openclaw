@@ -85,6 +85,9 @@ export function handleMessageUpdate(
   }
 
   ctx.noteLastAssistant(msg);
+  if (ctx.state.deterministicApprovalPromptSent) {
+    return;
+  }
 
   const assistantEvent = evt.assistantMessageEvent;
   const assistantRecord =
@@ -261,6 +264,9 @@ export function handleMessageEnd(
   const assistantMessage = msg;
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
+  if (ctx.state.deterministicApprovalPromptSent) {
+    return;
+  }
   promoteThinkingTagsToBlocks(assistantMessage);
 
   const rawText = extractAssistantText(assistantMessage);
@@ -330,11 +336,16 @@ export function handleMessageEnd(
     if (!onBlockReply) {
       return;
     }
-    void Promise.resolve()
-      .then(() => onBlockReply(payload))
-      .catch((err) => {
-        ctx.log.warn(`block reply callback failed: ${String(err)}`);
-      });
+    try {
+      const maybePromise = onBlockReply(payload);
+      if (maybePromise && typeof maybePromise.then === "function") {
+        void maybePromise.catch((err: unknown) => {
+          ctx.log.warn(`block reply callback failed: ${String(err)}`);
+        });
+      }
+    } catch (err) {
+      ctx.log.warn(`block reply callback failed: ${String(err)}`);
+    }
   };
   const shouldEmitReasoning = Boolean(
     ctx.state.includeReasoning &&

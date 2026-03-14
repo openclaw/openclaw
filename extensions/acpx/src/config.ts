@@ -8,7 +8,7 @@ export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
 export const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
 export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_POLICIES)[number];
 
-export const ACPX_PINNED_VERSION = "0.1.15";
+export const ACPX_PINNED_VERSION = "0.1.16";
 export const ACPX_VERSION_ANY = "any";
 const ACPX_BIN_NAME = process.platform === "win32" ? "acpx.cmd" : "acpx";
 export const ACPX_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -47,6 +47,7 @@ export type ResolvedAcpxPluginConfig = {
   command: string;
   expectedVersion?: string;
   allowPluginLocalInstall: boolean;
+  stripProviderAuthEnvVars: boolean;
   installCommand: string;
   cwd: string;
   permissionMode: AcpxPermissionMode;
@@ -332,6 +333,7 @@ export function resolveAcpxPluginConfig(params: {
     workspaceDir: params.workspaceDir,
   });
   const allowPluginLocalInstall = command === ACPX_BUNDLED_BIN;
+  const stripProviderAuthEnvVars = command === ACPX_BUNDLED_BIN;
   const configuredExpectedVersion = normalized.expectedVersion;
   const expectedVersion =
     configuredExpectedVersion === ACPX_VERSION_ANY
@@ -343,6 +345,7 @@ export function resolveAcpxPluginConfig(params: {
     command,
     expectedVersion,
     allowPluginLocalInstall,
+    stripProviderAuthEnvVars,
     installCommand,
     cwd,
     permissionMode: normalized.permissionMode ?? DEFAULT_PERMISSION_MODE,

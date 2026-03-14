@@ -78,6 +78,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingMessagingTargets: new Map(),
     successfulCronAdds: 0,
     pendingMessagingMediaUrls: new Map(),
+    deterministicApprovalPromptSent: false,
   };
   const usageTotals = {
     input: 0,
@@ -106,11 +107,16 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!params.onBlockReply) {
       return;
     }
-    void Promise.resolve()
-      .then(() => params.onBlockReply?.(payload))
-      .catch((err) => {
-        log.warn(`block reply callback failed: ${String(err)}`);
-      });
+    try {
+      const maybePromise = params.onBlockReply(payload);
+      if (maybePromise && typeof maybePromise.then === "function") {
+        void maybePromise.catch((err: unknown) => {
+          log.warn(`block reply callback failed: ${String(err)}`);
+        });
+      }
+    } catch (err) {
+      log.warn(`block reply callback failed: ${String(err)}`);
+    }
   };
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
@@ -598,6 +604,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingMessagingTargets.clear();
     state.successfulCronAdds = 0;
     state.pendingMessagingMediaUrls.clear();
+    state.deterministicApprovalPromptSent = false;
     resetAssistantMessageState(0);
   };
 
@@ -688,6 +695,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // Used to suppress agent's confirmation text (e.g., "Respondi no Telegram!")
     // which is generated AFTER the tool sends the actual answer.
     didSendViaMessagingTool: () => messagingToolSentTexts.length > 0,
+    didSendDeterministicApprovalPrompt: () => state.deterministicApprovalPromptSent,
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
     getUsageTotals,
     getCompactionCount: () => compactionCount,
