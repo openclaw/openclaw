@@ -1,7 +1,11 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { drainFormattedSystemEvents } from "../auto-reply/reply/session-updates.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  drainFormattedSystemEvents,
+  peekFormattedSystemEvents,
+} from "../auto-reply/reply/session-updates.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { buildChannelSummary } from "./channel-summary.js";
 import { isCronSystemEvent } from "./heartbeat-runner.js";
 import {
   commitSystemEventReservation,
@@ -17,12 +21,18 @@ import {
   restoreSystemEventReservation,
 } from "./system-events.js";
 
+vi.mock("./channel-summary.js", () => ({
+  buildChannelSummary: vi.fn(async () => []),
+}));
+
 const cfg = {} as unknown as OpenClawConfig;
 const mainKey = resolveMainSessionKey(cfg);
 
 describe("system events (session routing)", () => {
   beforeEach(() => {
     resetSystemEventsForTest();
+    vi.clearAllMocks();
+    vi.mocked(buildChannelSummary).mockResolvedValue([]);
   });
 
   it("does not leak session-scoped events into main", async () => {
@@ -196,6 +206,40 @@ describe("system events (session routing)", () => {
     restoreSystemEventReservation(reservation);
 
     expect(peekSystemEvents(key)).toEqual(["First event", "Second event"]);
+  });
+
+  it("reapplies the max queue cap when restoring reserved events", () => {
+    const key = "agent:main:test-restore-cap";
+    for (let index = 1; index <= 20; index += 1) {
+      enqueueSystemEvent(`event ${index}`, { sessionKey: key });
+    }
+    const reservation = reserveSystemEventEntries(key);
+    for (let index = 21; index <= 25; index += 1) {
+      enqueueSystemEvent(`event ${index}`, { sessionKey: key });
+    }
+
+    restoreSystemEventReservation(reservation);
+
+    expect(peekSystemEvents(key)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `event ${index + 6}`),
+    );
+  });
+
+  it("restores reserved events when formatting throws during peek", async () => {
+    const key = "agent:main:test-peek-restore-on-throw";
+    enqueueSystemEvent("First event", { sessionKey: key });
+    vi.mocked(buildChannelSummary).mockRejectedValueOnce(new Error("summary failed"));
+
+    await expect(
+      peekFormattedSystemEvents({
+        cfg,
+        sessionKey: key,
+        isMainSession: true,
+        isNewSession: true,
+      }),
+    ).rejects.toThrow("summary failed");
+
+    expect(peekSystemEvents(key)).toEqual(["First event"]);
   });
 });
 

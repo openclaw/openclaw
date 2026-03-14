@@ -152,10 +152,15 @@ export async function peekFormattedSystemEvents(
   params: FormattedSystemEventParams,
 ): Promise<{ reservation?: SystemEventReservation; text?: string }> {
   const reservation = reserveSystemEventEntries(params.sessionKey);
-  return {
-    reservation,
-    text: await formatSystemEvents({ ...params, queued: reservation?.entries ?? [] }),
-  };
+  try {
+    return {
+      reservation,
+      text: await formatSystemEvents({ ...params, queued: reservation?.entries ?? [] }),
+    };
+  } catch (error) {
+    restoreSystemEventReservation(reservation);
+    throw error;
+  }
 }
 
 export function commitPeekedSystemEvents(

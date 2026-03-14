@@ -45,6 +45,19 @@ function normalizeContextKey(key?: string | null): string | null {
   return trimmed.toLowerCase();
 }
 
+function refreshQueueTailState(entry: SessionQueue) {
+  const latest = entry.queue.at(-1);
+  entry.lastText = latest?.text ?? null;
+  entry.lastContextKey = latest?.contextKey ?? null;
+}
+
+function enforceQueuedEventLimit(entry: SessionQueue) {
+  if (entry.queue.length > MAX_EVENTS) {
+    entry.queue.splice(0, entry.queue.length - MAX_EVENTS);
+  }
+  refreshQueueTailState(entry);
+}
+
 export function isSystemEventContextChanged(
   sessionKey: string,
   contextKey?: string | null,
@@ -84,9 +97,7 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
     ts: Date.now(),
     contextKey: normalizedContextKey,
   });
-  if (entry.queue.length > MAX_EVENTS) {
-    entry.queue.shift();
-  }
+  enforceQueuedEventLimit(entry);
   return true;
 }
 
@@ -174,9 +185,7 @@ export function restoreSystemEventReservation(
   }
   entry.reservations.delete(reservation.reservationId);
   entry.queue.unshift(...reserved);
-  const latest = entry.queue.at(-1);
-  entry.lastText = latest?.text ?? null;
-  entry.lastContextKey = latest?.contextKey ?? null;
+  enforceQueuedEventLimit(entry);
   return reserved.map((event) => ({ ...event }));
 }
 
@@ -206,10 +215,7 @@ export function consumeSystemEventEntries(
     return [];
   }
   const out = entry.queue.splice(0, count);
-  if (entry.queue.length === 0) {
-    entry.lastText = null;
-    entry.lastContextKey = null;
-  }
+  refreshQueueTailState(entry);
   maybeDeleteSessionQueue(key, entry);
   return out;
 }
