@@ -853,10 +853,25 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("key has been disabled")).toBe("auth_permanent");
     expect(classifyFailoverReason("account has been deactivated")).toBe("auth_permanent");
   });
-  it("classifies JSON api_error internal server failures as timeout", () => {
+  it("classifies retryable JSON server failures as timeout", () => {
     expect(
       classifyFailoverReason(
         '{"type":"error","error":{"type":"api_error","message":"Internal server error"}}',
+      ),
+    ).toBe("timeout");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"API_Error","message":"Internal server error"}}',
+      ),
+    ).toBe("timeout");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","code":"server_error","message":"Internal server error"}}',
+      ),
+    ).toBe("timeout");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID c69ab225-9c66-48c4-87c9-2a46bf07e104 in your message.","param":null},"sequence_number":2}',
       ),
     ).toBe("timeout");
   });

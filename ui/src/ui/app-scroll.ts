@@ -15,6 +15,14 @@ type ScrollHost = {
   topbarObserver: ResizeObserver | null;
 };
 
+function queryHostElement(host: unknown, selectors: string): Element | null {
+  const querySelector = (host as { querySelector?: unknown } | null)?.querySelector;
+  if (typeof querySelector !== "function") {
+    return null;
+  }
+  return querySelector.call(host, selectors) as Element | null;
+}
+
 export function scheduleChatScroll(host: ScrollHost, force = false, smooth = false) {
   if (host.chatScrollFrame) {
     cancelAnimationFrame(host.chatScrollFrame);
@@ -24,7 +32,7 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
     host.chatScrollTimeout = null;
   }
   const pickScrollTarget = () => {
-    const container = host.querySelector(".chat-thread") as HTMLElement | null;
+    const container = queryHostElement(host, ".chat-thread") as HTMLElement | null;
     if (container) {
       const overflowY = getComputedStyle(container).overflowY;
       const canScroll =
@@ -104,7 +112,7 @@ export function scheduleLogsScroll(host: ScrollHost, force = false) {
   void host.updateComplete.then(() => {
     host.logsScrollFrame = requestAnimationFrame(() => {
       host.logsScrollFrame = null;
-      const container = host.querySelector(".log-stream") as HTMLElement | null;
+      const container = queryHostElement(host, ".log-stream") as HTMLElement | null;
       if (!container) {
         return;
       }
@@ -165,7 +173,7 @@ export function observeTopbar(host: ScrollHost) {
   if (typeof ResizeObserver === "undefined") {
     return;
   }
-  const topbar = host.querySelector(".topbar");
+  const topbar = queryHostElement(host, ".topbar");
   if (!topbar) {
     return;
   }
