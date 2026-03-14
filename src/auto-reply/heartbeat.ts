@@ -163,7 +163,20 @@ export function stripHeartbeatToken(
   const rest = picked.text.trim();
   if (mode === "heartbeat") {
     if (rest.length <= maxAckChars) {
-      return { shouldSkip: true, text: "", didStrip: true };
+      // When the remaining text after stripping HEARTBEAT_OK is short,
+      // check whether it looks like a substantive response rather than a
+      // brief status ack.  A steered user message may produce a combined
+      // "HEARTBEAT_OK. <actual answer>" reply where the answer portion is
+      // under maxAckChars but should still be delivered.
+      //
+      // Heuristic: if the text contains sentence-ending punctuation followed
+      // by more content (multi-sentence), or starts with common response
+      // patterns, treat it as a real response and do NOT skip.
+      const hasMultipleSentences = /[.!?]\s+\S/.test(rest);
+      const hasSubstantiveContent = rest.length > 0 && hasMultipleSentences;
+      if (!hasSubstantiveContent) {
+        return { shouldSkip: true, text: "", didStrip: true };
+      }
     }
   }
 

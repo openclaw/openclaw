@@ -163,6 +163,42 @@ describe("stripHeartbeatToken", () => {
       didStrip: true,
     });
   });
+
+  it("preserves multi-sentence response after HEARTBEAT_OK in heartbeat mode (steered user message fix)", () => {
+    // When a steered user message produces "HEARTBEAT_OK. Here is the answer to your question."
+    // the response after stripping HEARTBEAT_OK should NOT be swallowed even if it's short.
+    const response = "Sure! Here is the answer to your question. Let me know if you need more details.";
+    expect(
+      stripHeartbeatToken(`${HEARTBEAT_TOKEN} ${response}`, { mode: "heartbeat" }),
+    ).toEqual({
+      shouldSkip: false,
+      text: response,
+      didStrip: true,
+    });
+  });
+
+  it("still suppresses single-fragment acks in heartbeat mode", () => {
+    // A brief ack like "Nothing to report" should still be suppressed
+    expect(
+      stripHeartbeatToken(`${HEARTBEAT_TOKEN} Nothing to report`, { mode: "heartbeat" }),
+    ).toEqual({
+      shouldSkip: true,
+      text: "",
+      didStrip: true,
+    });
+  });
+
+  it("preserves response with question/answer pattern after HEARTBEAT_OK", () => {
+    // Steered message response that addresses a user question
+    const response = "The server is running fine. Your deployment completed at 3:42 PM with no errors.";
+    expect(
+      stripHeartbeatToken(`${HEARTBEAT_TOKEN} ${response}`, { mode: "heartbeat" }),
+    ).toEqual({
+      shouldSkip: false,
+      text: response,
+      didStrip: true,
+    });
+  });
 });
 
 describe("isHeartbeatContentEffectivelyEmpty", () => {
