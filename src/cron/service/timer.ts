@@ -501,7 +501,7 @@ export function applyJobResult(
     } else if (result.status === "error" && job.enabled) {
       const retryConfig = resolveRetryConfig(state.deps.cronConfig);
       const transient = isTransientCronError(result.error, retryConfig.retryOn);
-      const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
+      const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1, retryConfig.backoffMs);
       let normalNext: number | undefined;
       try {
         normalNext =
@@ -530,6 +530,7 @@ export function applyJobResult(
       state.deps.log.info(
         {
           jobId: job.id,
+          transient,
           consecutiveErrors: job.state.consecutiveErrors,
           backoffMs: backoff,
           nextRunAtMs: job.state.nextRunAtMs,
