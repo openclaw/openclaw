@@ -51,6 +51,8 @@ export type AuthProfileFailureReason =
 export type ProfileUsageStats = {
   lastUsed?: number;
   cooldownUntil?: number;
+  /** The model that caused the transient cooldown (rate_limit, overloaded, etc.). */
+  cooldownModel?: string;
   disabledUntil?: number;
   disabledReason?: AuthProfileFailureReason;
   errorCount?: number;
