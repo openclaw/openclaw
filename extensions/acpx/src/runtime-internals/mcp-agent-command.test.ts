@@ -11,6 +11,23 @@ vi.mock("./process.js", () => ({
 import { __testing, resolveAcpxAgentCommand } from "./mcp-agent-command.js";
 
 describe("resolveAcpxAgentCommand", () => {
+  it("uses Gemini CLI ACP mode for the built-in gemini agent", async () => {
+    spawnAndCollectMock.mockResolvedValueOnce({
+      stdout: "{}",
+      stderr: "",
+      code: 0,
+      error: null,
+    });
+
+    const command = await resolveAcpxAgentCommand({
+      acpxCommand: "definitely-not-a-real-acpx-binary",
+      cwd: "/tmp",
+      agent: "gemini",
+    });
+
+    expect(command).toBe("gemini --experimental-acp");
+  });
+
   it("threads stripProviderAuthEnvVars through the config show probe", async () => {
     spawnAndCollectMock.mockResolvedValueOnce({
       stdout: JSON.stringify({
