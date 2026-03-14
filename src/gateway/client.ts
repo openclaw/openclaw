@@ -237,7 +237,14 @@ export class GatewayClient {
       }
       this.flushPendingErrors(new Error(`gateway closed (${code}): ${reasonText}`));
       if (this.shouldPauseReconnectAfterAuthFailure(connectErrorDetailCode)) {
-        this.opts.onClose?.(code, reasonText);
+        // Enrich the close reason with the auth detail code so the TUI can
+        // suppress the misleading "Auto-reconnecting" hint for paused auth
+        // failures (e.g. "connect failed" from sendConnect() errors).
+        const enrichedReason =
+          connectErrorDetailCode && reasonText === "connect failed"
+            ? `connect failed: ${connectErrorDetailCode}`
+            : reasonText;
+        this.opts.onClose?.(code, enrichedReason);
         return;
       }
       this.scheduleReconnect();

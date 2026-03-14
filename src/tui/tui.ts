@@ -252,6 +252,27 @@ export function resolveGatewayDisconnectState(reason?: string): {
       suppressReconnectHint: true,
     };
   }
+  // sendConnect() auth failures close with "connect failed: <DETAIL_CODE>"; the
+  // gateway client pauses reconnection in these cases, so suppress the hint.
+  if (/^connect failed:\s*PAIRING_REQUIRED/i.test(reasonLabel)) {
+    return {
+      connectionStatus: `gateway disconnected: ${reasonLabel}`,
+      activityStatus: "pairing required: run openclaw devices list",
+      pairingHint:
+        "Pairing required. Run `openclaw devices list`, approve your request ID, then reconnect.",
+    };
+  }
+  if (
+    /^connect failed:\s*(AUTH_TOKEN_MISSING|AUTH_TOKEN_MISMATCH|AUTH_TOKEN_NOT_CONFIGURED|AUTH_PASSWORD_MISSING|AUTH_PASSWORD_MISMATCH|AUTH_PASSWORD_NOT_CONFIGURED|AUTH_RATE_LIMITED|CONTROL_UI_DEVICE_IDENTITY_REQUIRED|DEVICE_IDENTITY_REQUIRED)/i.test(
+      reasonLabel,
+    )
+  ) {
+    return {
+      connectionStatus: `gateway disconnected: ${reasonLabel}`,
+      activityStatus: "check credentials — ctrl+r to retry",
+      suppressReconnectHint: true,
+    };
+  }
   return {
     connectionStatus: `gateway disconnected: ${reasonLabel}`,
     activityStatus: "reconnecting… ctrl+r to retry now",

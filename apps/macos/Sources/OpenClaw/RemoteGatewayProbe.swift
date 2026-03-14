@@ -104,6 +104,13 @@ enum RemoteGatewayAuthIssue: Equatable {
     }
 }
 
+enum RemoteProbeState: Equatable {
+    case idle
+    case checking
+    case ok(RemoteGatewayProbeSuccess)
+    case failed(String)
+}
+
 enum RemoteGatewayProbeResult: Equatable {
     case ready(RemoteGatewayProbeSuccess)
     case authIssue(RemoteGatewayAuthIssue)
