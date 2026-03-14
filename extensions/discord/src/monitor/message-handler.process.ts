@@ -120,7 +120,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   }
 
   const ssrfPolicy = cfg.browser?.ssrfPolicy;
-  const mediaList = await resolveMediaList(message, mediaMaxBytes, discordRestFetch, ssrfPolicy);
+  const mediaList = await resolveMediaList(
+    message,
+    mediaMaxBytes,
+    discordRestFetch,
+    ssrfPolicy,
+    accountId,
+  );
   if (isProcessAborted(abortSignal)) {
     return;
   }
@@ -129,6 +135,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     mediaMaxBytes,
     discordRestFetch,
     ssrfPolicy,
+    accountId,
   );
   if (isProcessAborted(abortSignal)) {
     return;

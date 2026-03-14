@@ -720,6 +720,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             sender: senderRecipient,
             groupId,
             maxBytes: deps.mediaMaxBytes,
+            accountId: deps.accountId,
           });
           if (fetched) {
             mediaPaths.push(fetched.path);

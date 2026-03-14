@@ -245,6 +245,7 @@ async function fetchAttachment(params: {
   sender?: string;
   groupId?: string;
   maxBytes: number;
+  accountId?: string;
 }): Promise<{ path: string; contentType?: string } | null> {
   const { attachment } = params;
   if (!attachment?.id) {
@@ -281,6 +282,8 @@ async function fetchAttachment(params: {
     attachment.contentType ?? undefined,
     "inbound",
     params.maxBytes,
+    undefined,
+    params.accountId,
   );
   return { path: saved.path, contentType: saved.contentType };
 }

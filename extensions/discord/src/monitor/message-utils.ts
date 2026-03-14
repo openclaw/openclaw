@@ -211,6 +211,7 @@ export async function resolveMediaList(
   maxBytes: number,
   fetchImpl?: FetchLike,
   ssrfPolicy?: SsrFPolicy,
+  accountId?: string,
 ): Promise<DiscordMediaInfo[]> {
   const out: DiscordMediaInfo[] = [];
   const resolvedSsrFPolicy = resolveDiscordMediaSsrFPolicy(ssrfPolicy);
@@ -221,6 +222,7 @@ export async function resolveMediaList(
     errorPrefix: "discord: failed to download attachment",
     fetchImpl,
     ssrfPolicy: resolvedSsrFPolicy,
+    accountId,
   });
   await appendResolvedMediaFromStickers({
     stickers: resolveDiscordMessageStickers(message),
@@ -229,6 +231,7 @@ export async function resolveMediaList(
     errorPrefix: "discord: failed to download sticker",
     fetchImpl,
     ssrfPolicy: resolvedSsrFPolicy,
+    accountId,
   });
   return out;
 }
@@ -238,6 +241,7 @@ export async function resolveForwardedMediaList(
   maxBytes: number,
   fetchImpl?: FetchLike,
   ssrfPolicy?: SsrFPolicy,
+  accountId?: string,
 ): Promise<DiscordMediaInfo[]> {
   const snapshots = resolveDiscordMessageSnapshots(message);
   if (snapshots.length === 0) {
@@ -253,6 +257,7 @@ export async function resolveForwardedMediaList(
       errorPrefix: "discord: failed to download forwarded attachment",
       fetchImpl,
       ssrfPolicy: resolvedSsrFPolicy,
+      accountId,
     });
     await appendResolvedMediaFromStickers({
       stickers: snapshot.message ? resolveDiscordSnapshotStickers(snapshot.message) : [],
@@ -261,6 +266,7 @@ export async function resolveForwardedMediaList(
       errorPrefix: "discord: failed to download forwarded sticker",
       fetchImpl,
       ssrfPolicy: resolvedSsrFPolicy,
+      accountId,
     });
   }
   return out;
@@ -273,6 +279,7 @@ async function appendResolvedMediaFromAttachments(params: {
   errorPrefix: string;
   fetchImpl?: FetchLike;
   ssrfPolicy?: SsrFPolicy;
+  accountId?: string;
 }) {
   const attachments = params.attachments;
   if (!attachments || attachments.length === 0) {
@@ -292,6 +299,8 @@ async function appendResolvedMediaFromAttachments(params: {
         fetched.contentType ?? attachment.content_type,
         "inbound",
         params.maxBytes,
+        undefined,
+        params.accountId,
       );
       params.out.push({
         path: saved.path,
@@ -383,6 +392,7 @@ async function appendResolvedMediaFromStickers(params: {
   errorPrefix: string;
   fetchImpl?: FetchLike;
   ssrfPolicy?: SsrFPolicy;
+  accountId?: string;
 }) {
   const stickers = params.stickers;
   if (!stickers || stickers.length === 0) {
@@ -405,6 +415,8 @@ async function appendResolvedMediaFromStickers(params: {
           fetched.contentType,
           "inbound",
           params.maxBytes,
+          undefined,
+          params.accountId,
         );
         params.out.push({
           path: saved.path,

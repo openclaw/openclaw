@@ -389,6 +389,7 @@ describe("resolveMedia original filename preservation", () => {
       "inbound",
       MAX_MEDIA_BYTES,
       "business-plan.pdf",
+      undefined,
     );
     expect(result).toEqual(expect.objectContaining({ path: "/tmp/business-plan---uuid.pdf" }));
   });
@@ -414,6 +415,7 @@ describe("resolveMedia original filename preservation", () => {
       "inbound",
       MAX_MEDIA_BYTES,
       "my-song.mp3",
+      undefined,
     );
     expect(result).not.toBeNull();
   });
@@ -439,6 +441,7 @@ describe("resolveMedia original filename preservation", () => {
       "inbound",
       MAX_MEDIA_BYTES,
       "presentation.mp4",
+      undefined,
     );
     expect(result).not.toBeNull();
   });
@@ -456,6 +459,7 @@ describe("resolveMedia original filename preservation", () => {
       "inbound",
       MAX_MEDIA_BYTES,
       "file_42.pdf",
+      undefined,
     );
     expect(result).not.toBeNull();
   });
@@ -473,6 +477,7 @@ describe("resolveMedia original filename preservation", () => {
       "inbound",
       MAX_MEDIA_BYTES,
       "documents/file_42.pdf",
+      undefined,
     );
     expect(result).not.toBeNull();
   });

@@ -99,6 +99,7 @@ export type SignalEventHandlerDeps = {
     sender?: string;
     groupId?: string;
     maxBytes: number;
+    accountId?: string;
   }) => Promise<{ path: string; contentType?: string } | null>;
   deliverReplies: (params: {
     replies: ReplyPayload[];
