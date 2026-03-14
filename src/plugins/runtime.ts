@@ -29,7 +29,7 @@ const state: RegistryState = (() => {
 export function setActivePluginRegistry(registry: PluginRegistry, cacheKey?: string) {
   const prev = state.registry;
   if (prev && prev !== registry && prev.httpRoutes.length > 0 && registry.httpRoutes.length === 0) {
-    registry.httpRoutes = [...prev.httpRoutes];
+    registry.httpRoutes = prev.httpRoutes;
   }
   state.registry = registry;
   if (!state.httpRouteRegistryPinned) {
