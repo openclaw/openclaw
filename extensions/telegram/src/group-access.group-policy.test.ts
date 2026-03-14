@@ -1,5 +1,5 @@
 import { describe } from "vitest";
-import { installProviderRuntimeGroupPolicyFallbackSuite } from "../test-utils/runtime-group-policy-contract.js";
+import { installProviderRuntimeGroupPolicyFallbackSuite } from "../../../src/test-utils/runtime-group-policy-contract.js";
 import { resolveTelegramRuntimeGroupPolicy } from "./group-access.js";
 
 describe("resolveTelegramRuntimeGroupPolicy", () => {

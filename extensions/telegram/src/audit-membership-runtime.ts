@@ -1,10 +1,11 @@
 import { isRecord } from "../../../src/utils.js";
-import { fetchWithTimeout } from "../../../src/utils/fetch-timeout.js";
+import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import type {
   AuditTelegramGroupMembershipParams,
   TelegramGroupMembershipAudit,
   TelegramGroupMembershipAuditEntry,
 } from "./audit.js";
+import { resolveTelegramFetch } from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
 
 const TELEGRAM_API_BASE = "https://api.telegram.org";
@@ -16,7 +17,8 @@ type TelegramGroupMembershipAuditData = Omit<TelegramGroupMembershipAudit, "elap
 export async function auditTelegramGroupMembershipImpl(
   params: AuditTelegramGroupMembershipParams,
 ): Promise<TelegramGroupMembershipAuditData> {
-  const fetcher = params.proxyUrl ? makeProxyFetch(params.proxyUrl) : fetch;
+  const proxyFetch = params.proxyUrl ? makeProxyFetch(params.proxyUrl) : undefined;
+  const fetcher = resolveTelegramFetch(proxyFetch, { network: params.network });
   const base = `${TELEGRAM_API_BASE}/bot${params.token}`;
   const groups: TelegramGroupMembershipAuditEntry[] = [];
 

@@ -32,9 +32,9 @@ vi.mock("../../../../src/plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => messageHookRunner,
 }));
 
-vi.mock("../../hooks/internal-hooks.js", async () => {
-  const actual = await vi.importActual<typeof import("../../hooks/internal-hooks.js")>(
-    "../../hooks/internal-hooks.js",
+vi.mock("../../../../src/hooks/internal-hooks.js", async () => {
+  const actual = await vi.importActual<typeof import("../../../../src/hooks/internal-hooks.js")>(
+    "../../../../src/hooks/internal-hooks.js",
   );
   return {
     ...actual,

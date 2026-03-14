@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../../src/test-utils/env.js";
 import { useFrozenTime, useRealTime } from "../../../src/test-utils/frozen-time.js";
-import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
+import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
 import {
   answerCallbackQuerySpy,
   botCtorSpy,

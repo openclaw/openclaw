@@ -16,7 +16,7 @@ vi.mock("../../../src/config/config.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../src/cron/store.js", async (importOriginal) => {
+vi.mock("../cron/store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../cron/store.js")>();
   return {
     ...actual,

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { TelegramNetworkConfig } from "../config/types.telegram.js";
+import type { TelegramNetworkConfig } from "../../../src/config/types.telegram.js";
 import {
   resetTelegramNetworkConfigStateForTests,
   resolveTelegramAutoSelectFamilyDecision,

@@ -6,7 +6,7 @@ const DEFAULT_MODEL = "anthropic/claude-opus-4-5";
 const DEFAULT_WORKSPACE = "/tmp/openclaw";
 const DEFAULT_MENTION_PATTERN = "\\bbot\\b";
 
-vi.mock("../../../src/media-understanding/audio-preflight.js", () => ({
+vi.mock("../media-understanding/audio-preflight.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
 }));
 
