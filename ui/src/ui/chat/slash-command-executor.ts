@@ -166,10 +166,17 @@ async function executeThink(
 
   if (!rawLevel) {
     try {
-      const { session, models } = await loadThinkingCommandState(client, sessionKey);
+      const { session, models, catalogAvailable } = await loadThinkingCommandState(
+        client,
+        sessionKey,
+      );
+      const levelLine = `Current thinking level: ${resolveCurrentThinkingLevel(session, models)}.`;
+      const catalogNote = catalogAvailable
+        ? ""
+        : " _(model catalog unavailable — level may be inaccurate)_";
       return {
         content: formatDirectiveOptions(
-          `Current thinking level: ${resolveCurrentThinkingLevel(session, models)}.`,
+          `${levelLine}${catalogNote}`,
           formatThinkingLevels(session?.modelProvider, session?.model),
         ),
       };
@@ -565,8 +572,10 @@ function resolveCurrentSession(
 async function loadThinkingCommandState(client: GatewayBrowserClient, sessionKey: string) {
   // Use allSettled so a transient models.list failure does not prevent session
   // data from being displayed. When models.list is unavailable the thinking
-  // level falls back to the persisted value (or "off" if unset), which is
-  // acceptable degraded behaviour.
+  // level falls back to the persisted value (or "off" if unset).
+  // catalogAvailable is returned so callers that need accurate model-default
+  // resolution (e.g. /think status) can warn the user when the catalog is
+  // degraded rather than silently reporting a potentially wrong level.
   const [sessionsResult, modelsResult] = await Promise.allSettled([
     client.request<SessionsListResult>("sessions.list", {}),
     client.request<{ models: ModelCatalogEntry[] }>("models.list", {}),
@@ -575,11 +584,12 @@ async function loadThinkingCommandState(client: GatewayBrowserClient, sessionKey
     throw sessionsResult.reason;
   }
   const sessions = sessionsResult.value;
-  const models =
-    modelsResult.status === "fulfilled" ? (modelsResult.value?.models ?? []) : [];
+  const catalogAvailable = modelsResult.status === "fulfilled";
+  const models = catalogAvailable ? (modelsResult.value?.models ?? []) : [];
   return {
     session: resolveCurrentSession(sessions, sessionKey),
     models,
+    catalogAvailable,
   };
 }
 
