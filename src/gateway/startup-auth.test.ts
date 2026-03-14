@@ -75,6 +75,22 @@ describe("ensureGatewayStartupAuth", () => {
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   }
 
+  function createMissingGatewayTokenSecretRefConfig(): OpenClawConfig {
+    return {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "MISSING_GW_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    };
+  }
+
   it("generates and persists a token when startup auth is missing", async () => {
     const result = await ensureGatewayStartupAuth({
       cfg: {},
@@ -94,25 +110,18 @@ describe("ensureGatewayStartupAuth", () => {
   });
 
   it("does not generate when token already exists", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        auth: {
-          mode: "token",
-          token: "configured-token",
+    await expectResolvedToken({
+      cfg: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "configured-token",
+          },
         },
       },
-    };
-    const result = await ensureGatewayStartupAuth({
-      cfg,
       env: {} as NodeJS.ProcessEnv,
-      persist: true,
+      expectedToken: "configured-token",
     });
-
-    expect(result.generatedToken).toBeUndefined();
-    expect(result.persistedGeneratedToken).toBe(false);
-    expect(result.auth.mode).toBe("token");
-    expect(result.auth.token).toBe("configured-token");
-    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("does not generate in password mode", async () => {
@@ -206,19 +215,7 @@ describe("ensureGatewayStartupAuth", () => {
 
   it("uses OPENCLAW_GATEWAY_TOKEN without resolving configured token SecretRef", async () => {
     await expectResolvedToken({
-      cfg: {
-        gateway: {
-          auth: {
-            mode: "token",
-            token: { source: "env", provider: "default", id: "MISSING_GW_TOKEN" },
-          },
-        },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-      },
+      cfg: createMissingGatewayTokenSecretRefConfig(),
       env: {
         OPENCLAW_GATEWAY_TOKEN: "token-from-env",
       } as NodeJS.ProcessEnv,
@@ -229,19 +226,7 @@ describe("ensureGatewayStartupAuth", () => {
   it("fails when gateway.auth.token SecretRef is active and unresolved", async () => {
     await expect(
       ensureGatewayStartupAuth({
-        cfg: {
-          gateway: {
-            auth: {
-              mode: "token",
-              token: { source: "env", provider: "default", id: "MISSING_GW_TOKEN" },
-            },
-          },
-          secrets: {
-            providers: {
-              default: { source: "env" },
-            },
-          },
-        },
+        cfg: createMissingGatewayTokenSecretRefConfig(),
         env: {} as NodeJS.ProcessEnv,
         persist: true,
       }),
