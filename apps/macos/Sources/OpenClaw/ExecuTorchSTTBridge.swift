@@ -301,19 +301,41 @@ actor ExecuTorchSTTBridge {
         self.rollingBuffer?.removeAll()
         self.observedTokenCount = 0
         self.observedChunkCount = 0
-        self.offlineFallbackActive = true
+        self.offlineFallbackActive = false
         self.lastOfflineTranscript = ""
         self.offlinePollTask?.cancel()
         self.offlinePollTask = nil
         self.fallbackWatchdogTask?.cancel()
         self.fallbackWatchdogTask = nil
+        self.streamingController?.stop(flush: false)
+        self.streamingController = nil
 
-        // Streaming C API has a callback lifetime bug; use offline poll until runtime is fixed. See README.
         let useStreaming = ProcessInfo.processInfo.environment["OPENCLAW_EXECUTORCH_USE_STREAMING"] == "1"
         if useStreaming {
-            logger.info("executorch.stt: OPENCLAW_EXECUTORCH_USE_STREAMING=1 — streaming not re-enabled yet; using offline poll")
+            guard let runtime = self.runtime, let runner = self.runner else {
+                logger.error("executorch.stt: streaming requested but runtime/runner missing")
+                throw ExecuTorchError.notReady
+            }
+            do {
+                let bridge = self
+                let controller = try runtime.createStreamingController(
+                    runner: runner,
+                    onToken: { piece in
+                        Task { await bridge.handleStreamingToken(piece) }
+                    },
+                    onError: { message in
+                        Task { await bridge.handleStreamingError(message) }
+                    })
+                self.streamingController = controller
+                logger.info("executorch.stt: OPENCLAW_EXECUTORCH_USE_STREAMING=1 — streaming session active")
+            } catch {
+                logger.error(
+                    "executorch.stt: streaming session init failed, will fallback to offline-poll: \(error.localizedDescription, privacy: .public)")
+            }
         }
-        logger.info("executorch.stt: using offline-poll transcription")
+        if !useStreaming {
+            logger.info("executorch.stt: streaming disabled; using offline-poll transcription")
+        }
 
         let bridge = self
         let engine = AVAudioEngine()
@@ -395,18 +417,12 @@ actor ExecuTorchSTTBridge {
         self.lastProbeTime = 0
         self.emissionEnabled = true
 
-        self.offlinePollTask = Task { [weak self] in
-            guard let self else { return }
-            var intervalNs = Self.pollIntervalBootstrapNs
-            while true {
-                try? await Task.sleep(nanoseconds: intervalNs)
-                if Task.isCancelled { return }
-                let hadTranscript = await self.pollOfflineTranscribeOnce()
-                intervalNs = hadTranscript ? Self.pollIntervalActiveNs : Self.pollIntervalIdleNs
-            }
+        if self.streamingController == nil {
+            self.activateOfflineFallback(reason: useStreaming ? "streaming unavailable" : "streaming disabled")
         }
 
-        logger.info("executorch.stt: startListening() complete — state=listening (offline poll active)")
+        logger.info(
+            "executorch.stt: startListening() complete — state=listening (\(self.offlineFallbackActive ? "offline poll active" : "streaming active"))")
     }
 
     func stopListening() {
@@ -460,6 +476,10 @@ actor ExecuTorchSTTBridge {
     }
 
     private func handleStreamingError(_ message: String) {
+        if case .listening = self.state {
+            self.activateOfflineFallback(reason: "streaming error: \(message)")
+            return
+        }
         self.stopListening()
         self.setError(message)
     }
@@ -485,15 +505,21 @@ actor ExecuTorchSTTBridge {
         guard let buf = self.rollingBuffer else { return }
         self.observedChunkCount += 1
         buf.append(samples)
-        if self.minSamplesReadyTime == nil, buf.count >= Self.minOfflineWindowSamples {
-            self.minSamplesReadyTime = CFAbsoluteTimeGetCurrent()
-            Task { await self.pollOfflineTranscribeOnce() }
-        }
         let rms = Self.rms(samples)
         self.rollingRMS = Self.rmsAlpha * rms + (1 - Self.rmsAlpha) * self.rollingRMS
         if self.observedChunkCount == 1 || self.observedChunkCount % 50 == 0 {
             logger.info(
                 "executorch.stt: observe chunkCount=\(self.observedChunkCount) tokenCount=\(self.observedTokenCount) rollingSamples=\(buf.count)")
+        }
+
+        if let streamingController = self.streamingController {
+            streamingController.enqueue(samples: samples)
+        }
+
+        guard self.offlineFallbackActive else { return }
+        if self.minSamplesReadyTime == nil, buf.count >= Self.minOfflineWindowSamples {
+            self.minSamplesReadyTime = CFAbsoluteTimeGetCurrent()
+            Task { await self.pollOfflineTranscribeOnce(force: true) }
         }
     }
 
@@ -512,6 +538,17 @@ actor ExecuTorchSTTBridge {
             recentFinalizeLatencies.removeFirst()
         }
         logLatencyStats()
+    }
+
+    /// Attempt one last offline decode before finalization to capture tail words.
+    /// Returns only newly discovered text since the last successful offline decode.
+    func forceFinalOfflineDecodeDelta() -> String {
+        guard case .listening = self.state else { return "" }
+        guard self.offlineFallbackActive else { return "" }
+        self.offlinePollTask?.cancel()
+        self.offlinePollTask = nil
+        let maxNewTokens: Int32 = self.hasEmittedFirstTokenThisSession ? 24 : 32
+        return self.decodeOfflineDelta(maxNewTokens: maxNewTokens, force: true) ?? ""
     }
 
     private func logLatencyStats() {
@@ -533,23 +570,43 @@ actor ExecuTorchSTTBridge {
     }
 
     /// Returns true if we emitted transcript this poll (for adaptive cadence).
-    private func pollOfflineTranscribeOnce() -> Bool {
-        guard case .listening = self.state else { return false }
-        guard self.offlineFallbackActive else { return false }
-        guard let runtime = self.runtime, let runner = self.runner else { return false }
-        guard let buf = self.rollingBuffer, buf.count >= Self.minOfflineWindowSamples else { return false }
-        guard !self.isPolling else { return false }
+    private func pollOfflineTranscribeOnce(force: Bool = false) -> Bool {
+        let maxNewTokens: Int32 = self.hasEmittedFirstTokenThisSession ? 16 : 24
+        guard let delta = self.decodeOfflineDelta(maxNewTokens: maxNewTokens, force: force) else { return false }
+        if Self.verboseLogging {
+            logger.info("executorch.stt: offline emitted \(delta.count) chars: \"\(delta.prefix(80), privacy: .public)\"")
+        }
+        if self.emissionEnabled {
+            self.transcriptBuffer += delta
+            self.onTranscript?(delta, false)
+            return true
+        }
+        return false
+    }
+
+    private func decodeOfflineDelta(maxNewTokens: Int32, force: Bool) -> String? {
+        guard case .listening = self.state else { return nil }
+        guard self.offlineFallbackActive else { return nil }
+        guard let runtime = self.runtime, let runner = self.runner else { return nil }
+        guard let buf = self.rollingBuffer else { return nil }
+        guard !self.isPolling else { return nil }
+
+        if !force, buf.count < Self.minOfflineWindowSamples {
+            return nil
+        }
 
         let now = CFAbsoluteTimeGetCurrent()
-        let isQuiet = self.rollingRMS < Double(Self.rmsThreshold)
-        if isQuiet {
-            self.quietFrameCount += 1
-            let timeSinceProbe = now - self.lastProbeTime
-            if self.quietFrameCount < Self.maxQuietFramesBeforeProbe, timeSinceProbe < Self.minProbeIntervalSeconds {
-                return false
+        if !force {
+            let isQuiet = self.rollingRMS < Double(Self.rmsThreshold)
+            if isQuiet {
+                self.quietFrameCount += 1
+                let timeSinceProbe = now - self.lastProbeTime
+                if self.quietFrameCount < Self.maxQuietFramesBeforeProbe, timeSinceProbe < Self.minProbeIntervalSeconds {
+                    return nil
+                }
+            } else {
+                self.quietFrameCount = 0
             }
-        } else {
-            self.quietFrameCount = 0
         }
         self.lastProbeTime = now
 
@@ -557,15 +614,14 @@ actor ExecuTorchSTTBridge {
         defer { self.isPolling = false }
 
         let windowSamples = min(buf.count, Self.maxOfflineWindowSamples)
+        guard windowSamples > 0 else { return nil }
         let samples = buf.suffix(windowSamples)
         let prevLen = self.lastOfflineTranscript.count
-        let maxNewTokens: Int32 = self.hasEmittedFirstTokenThisSession ? 16 : 24
         if Self.verboseLogging {
             logger.info("executorch.stt: offline poll begin samples=\(samples.count) previousChars=\(prevLen) maxNewTokens=\(maxNewTokens)")
         }
 
         let t0 = CFAbsoluteTimeGetCurrent()
-        var emitted = false
         do {
             let transcript = Self.cleanModelOutput(
                 try runtime.transcribe(runner: runner, samples: samples, maxNewTokens: maxNewTokens))
@@ -573,11 +629,11 @@ actor ExecuTorchSTTBridge {
             if Self.verboseLogging {
                 logger.info("executorch.stt: offline poll done in \(String(format: "%.0f", elapsed))ms chars=\(transcript.count)")
             }
-            guard !transcript.isEmpty else { return false }
+            guard !transcript.isEmpty else { return nil }
             let delta = Self.cleanModelOutput(
                 Self.deltaSuffix(previous: self.lastOfflineTranscript, current: transcript))
             self.lastOfflineTranscript = transcript
-            guard !delta.isEmpty else { return false }
+            guard !delta.isEmpty else { return nil }
             if !self.hasEmittedFirstTokenThisSession, let start = self.sessionStartTime {
                 self.hasEmittedFirstTokenThisSession = true
                 self.firstTokenEmitTime = CFAbsoluteTimeGetCurrent()
@@ -588,20 +644,64 @@ actor ExecuTorchSTTBridge {
                 }
                 self.logLatencyStats()
             }
-            if Self.verboseLogging {
-                logger.info("executorch.stt: offline emitted \(delta.count) chars: \"\(delta.prefix(80), privacy: .public)\"")
-            }
-            if self.emissionEnabled {
-                self.transcriptBuffer += delta
-                self.onTranscript?(delta, false)
-            }
-            emitted = self.emissionEnabled
+            return delta
         } catch {
             let elapsed = (CFAbsoluteTimeGetCurrent() - t0) * 1000
             logger.error(
                 "executorch.stt: offline transcribe failed after \(String(format: "%.0f", elapsed))ms — \(error.localizedDescription, privacy: .public)")
+            return nil
         }
-        return emitted
+    }
+
+    private func handleStreamingToken(_ piece: String) {
+        guard case .listening = self.state else { return }
+        let cleaned = Self.cleanStreamingPiece(piece)
+        let trimmed = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        self.observedTokenCount += 1
+        if !self.hasEmittedFirstTokenThisSession, let start = self.sessionStartTime {
+            self.hasEmittedFirstTokenThisSession = true
+            self.firstTokenEmitTime = CFAbsoluteTimeGetCurrent()
+            let firstTokenMs = (self.firstTokenEmitTime! - start) * 1000
+            self.recentFirstTokenLatencies.append(firstTokenMs)
+            if self.recentFirstTokenLatencies.count > Self.maxLatencySamples {
+                self.recentFirstTokenLatencies.removeFirst()
+            }
+            self.logLatencyStats()
+        }
+        if self.emissionEnabled {
+            self.transcriptBuffer += cleaned
+            self.onTranscript?(cleaned, false)
+        }
+    }
+
+    private func startOfflinePollTask() {
+        self.offlinePollTask?.cancel()
+        self.offlinePollTask = Task { [weak self] in
+            guard let self else { return }
+            var intervalNs = Self.pollIntervalBootstrapNs
+            while true {
+                try? await Task.sleep(nanoseconds: intervalNs)
+                if Task.isCancelled { return }
+                let hadTranscript = await self.pollOfflineTranscribeOnce()
+                intervalNs = hadTranscript ? Self.pollIntervalActiveNs : Self.pollIntervalIdleNs
+            }
+        }
+    }
+
+    private func activateOfflineFallback(reason: String) {
+        if self.offlineFallbackActive {
+            return
+        }
+        logger.warning("executorch.stt: switching to offline-poll fallback: \(reason, privacy: .public)")
+        self.streamingController?.stop(flush: false)
+        self.streamingController = nil
+        self.offlineFallbackActive = true
+        self.lastOfflineTranscript = ""
+        self.startOfflinePollTask()
+        if let buf = self.rollingBuffer, buf.count >= Self.minOfflineWindowSamples {
+            _ = self.pollOfflineTranscribeOnce(force: true)
+        }
     }
 
     private static func rms(_ samples: [Float]) -> Double {
@@ -619,16 +719,53 @@ actor ExecuTorchSTTBridge {
             .replacingOccurrences(of: "</s>", with: "")
             .replacingOccurrences(of: "<s>", with: "")
             .replacingOccurrences(of: "<unk>", with: "")
+            .replacingOccurrences(of: "[STREAMING_PAD]", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Streaming callback pieces should keep intra-token spaces; trim only after consumption.
+    private static func cleanStreamingPiece(_ raw: String) -> String {
+        raw
+            .replacingOccurrences(of: "</s>", with: "")
+            .replacingOccurrences(of: "<s>", with: "")
+            .replacingOccurrences(of: "<unk>", with: "")
+            .replacingOccurrences(of: "[STREAMING_PAD]", with: "")
+    }
+
     private static func deltaSuffix(previous: String, current: String) -> String {
+        guard !current.isEmpty else { return "" }
+        guard !previous.isEmpty else { return current }
+        if current == previous { return "" }
         if current.hasPrefix(previous) {
             return String(current.dropFirst(previous.count))
+        }
+        if previous.hasPrefix(current) {
+            return ""
+        }
+        let previousChars = Array(previous)
+        let currentChars = Array(current)
+        let maxOverlap = min(previousChars.count, currentChars.count)
+        if maxOverlap > 0 {
+            for overlap in stride(from: maxOverlap, through: 1, by: -1) {
+                if previousChars.suffix(overlap).elementsEqual(currentChars.prefix(overlap)) {
+                    return String(currentChars.dropFirst(overlap))
+                }
+            }
+        }
+        if previous.contains(current) {
+            return ""
         }
         return current
     }
 }
+
+#if DEBUG
+extension ExecuTorchSTTBridge {
+    nonisolated static func _testDeltaSuffix(previous: String, current: String) -> String {
+        deltaSuffix(previous: previous, current: current)
+    }
+}
+#endif
 
 // MARK: - Error Types
 

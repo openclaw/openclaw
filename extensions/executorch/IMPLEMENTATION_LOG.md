@@ -484,3 +484,29 @@ defaults write ai.openclaw.mac openclaw.talkSttBackend executorch
    - Re-enabling streaming path until runtime dylib fixes callback lifetime.
    - Continuous capture without stopping on finalize (always-on listening + finalize-after-silence) and final flush decode to reduce tail-word miss.
    - ExecuTorch-specific longer silence window and two-stage finalize to improve endpointing.
+
+---
+
+## Phase 9: Streaming fallback + finalize tail decode (2026-03)
+
+### Completed work
+
+- **True streaming attempt with automatic fallback**
+  - `ExecuTorchSTTBridge.startListening()` now attempts `createStreamingController` when `OPENCLAW_EXECUTORCH_USE_STREAMING=1`.
+  - Streaming callback tokens are routed through `handleStreamingToken`.
+  - On first streaming error (`onError`), the bridge no longer hard-fails Talk Mode; it switches to offline polling via `activateOfflineFallback(...)`.
+- **Offline transcript delta hardening**
+  - Offline decode logic was split into `decodeOfflineDelta(...)` so delta extraction is shared and consistent.
+  - `deltaSuffix(previous:current:)` now handles overlap cases (not just strict prefix) to avoid replaying duplicate transcript text when model outputs slide windows.
+- **Finalize tail-word recovery**
+  - Added `forceFinalOfflineDecodeDelta()` and wired it from `TalkModeRuntime.finalizeTranscript(...)` before recognition shutdown.
+  - Final transcript now merges tail delta with overlap-aware merge logic (`mergeTranscriptForFinalize`) so endpoint words are less likely to be dropped.
+- **Coverage for text stitching behavior**
+  - Added `apps/macos/Tests/OpenClawIPCTests/ExecuTorchTalkTextDeltaTests.swift` covering overlap delta behavior and finalize merge behavior.
+
+### Verification run and results
+
+- `swift test --package-path apps/macos --filter ExecuTorchTalkTextDeltaTests` -> **BLOCKED in this environment**
+  - Failure reason: SwiftPM binary dependency fetch timeout while downloading Sparkle artifact:
+    `https://github.com/sparkle-project/Sparkle/releases/download/2.9.0/Sparkle-for-Swift-Package-Manager.zip`
+  - Interpretation: external network/artifact availability issue during test bootstrap, not a compile-time error from the code changes above.

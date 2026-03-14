@@ -316,7 +316,7 @@ actor TalkModeRuntime {
         // interrupt → re-send → re-speak infinite loop. Suppress all input during speaking;
         // once TTS finishes the controller transitions to .listening and normal input resumes.
         guard self.phase == .listening else { return }
-        self.lastTranscript += trimmed
+        self.lastTranscript = Self.mergeTranscriptForFinalize(base: self.lastTranscript, tail: trimmed)
         self.lastHeard = Date()
     }
 
@@ -419,6 +419,20 @@ actor TalkModeRuntime {
     }
 
     private func finalizeTranscript(_ text: String) async {
+        var finalTranscript = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if self.useExecuTorch {
+            let tailDelta = await self.etBridge.forceFinalOfflineDecodeDelta()
+            if !tailDelta.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                finalTranscript = Self.mergeTranscriptForFinalize(base: finalTranscript, tail: tailDelta)
+            }
+        }
+
+        guard !finalTranscript.isEmpty else {
+            await self.startListening()
+            await self.startRecognition()
+            return
+        }
+
         self.lastTranscript = ""
         self.lastHeard = nil
         self.phase = .thinking
@@ -427,7 +441,7 @@ actor TalkModeRuntime {
             await self.etBridge.recordFinalizeLatency()
         }
         await self.stopRecognition()
-        await self.sendAndSpeak(text)
+        await self.sendAndSpeak(finalTranscript)
     }
 
     // MARK: - Gateway + TTS
@@ -858,6 +872,37 @@ actor TalkModeRuntime {
         value.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) }
     }
 
+    private static func mergeTranscriptForFinalize(base: String, tail: String) -> String {
+        let baseTrimmed = base.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tailTrimmed = tail.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !tailTrimmed.isEmpty else { return baseTrimmed }
+        guard !baseTrimmed.isEmpty else { return tailTrimmed }
+        if baseTrimmed.hasSuffix(tailTrimmed) {
+            return baseTrimmed
+        }
+        if tailTrimmed.hasPrefix(baseTrimmed) {
+            return tailTrimmed
+        }
+        let overlap = Self.suffixPrefixOverlap(previous: baseTrimmed, current: tailTrimmed)
+        if overlap > 0 {
+            return baseTrimmed + String(tailTrimmed.dropFirst(overlap))
+        }
+        return baseTrimmed + " " + tailTrimmed
+    }
+
+    private static func suffixPrefixOverlap(previous: String, current: String) -> Int {
+        let previousChars = Array(previous)
+        let currentChars = Array(current)
+        let maxOverlap = min(previousChars.count, currentChars.count)
+        guard maxOverlap > 0 else { return 0 }
+        for overlap in stride(from: maxOverlap, through: 1, by: -1) {
+            if previousChars.suffix(overlap).elementsEqual(currentChars.prefix(overlap)) {
+                return overlap
+            }
+        }
+        return 0
+    }
+
     func stopSpeaking(reason: TalkStopReason) async {
         let usePCM = self.lastPlaybackWasPCM
         let interruptedAt = usePCM ? await self.stopPCM() : await self.stopMP3()
@@ -879,6 +924,14 @@ actor TalkModeRuntime {
         await MainActor.run { TalkModeController.shared.updatePhase(.thinking) }
     }
 }
+
+#if DEBUG
+extension TalkModeRuntime {
+    static func _testMergeTranscriptForFinalize(base: String, tail: String) -> String {
+        mergeTranscriptForFinalize(base: base, tail: tail)
+    }
+}
+#endif
 
 extension TalkModeRuntime {
     // MARK: - Audio playback (MainActor helpers)
