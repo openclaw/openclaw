@@ -680,7 +680,7 @@ describe("agent event handler", () => {
     expect(nodePayload.runId).toBe("run-fallback-client");
   });
 
-  it("suppresses chat and node session events for non-control-UI-visible runs", () => {
+  it("still emits chat events for non-control-UI-visible runs so TUI can display external channel sessions", () => {
     const { broadcast, nodeSendToSession, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-hidden",
     });
@@ -699,8 +699,10 @@ describe("agent event handler", () => {
     });
     emitLifecycleEnd(handler, "run-hidden", 2);
 
-    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
-    expect(nodeSendToSession).not.toHaveBeenCalled();
+    // Chat events must still be emitted so TUI clients viewing external-channel
+    // sessions (e.g. Telegram) can render live responses.
+    expect(chatBroadcastCalls(broadcast).length).toBeGreaterThan(0);
+    expect(nodeSendToSession).toHaveBeenCalled();
   });
 
   it("uses agent event sessionKey when run-context lookup cannot resolve", () => {
