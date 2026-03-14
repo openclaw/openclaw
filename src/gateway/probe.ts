@@ -4,7 +4,6 @@ import type { SystemPresence } from "../infra/system-presence.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { READ_SCOPE } from "./method-scopes.js";
-import { isLoopbackHost } from "./net.js";
 
 export type GatewayProbeAuth = {
   token?: string;
@@ -41,13 +40,7 @@ export async function probeGateway(opts: {
   let connectError: string | null = null;
   let close: GatewayProbeClose | null = null;
 
-  const disableDeviceIdentity = (() => {
-    try {
-      return isLoopbackHost(new URL(opts.url).hostname);
-    } catch {
-      return false;
-    }
-  })();
+  const disableDeviceIdentity = false;
 
   return await new Promise<GatewayProbeResult>((resolve) => {
     let settled = false;
