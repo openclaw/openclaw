@@ -89,14 +89,31 @@ ${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : "No snapshot yet."}
   `;
 }
 
+/** Built-in channel IDs shown for discoverability even when not loaded. */
+const BUILTIN_CHANNEL_IDS: ChannelKey[] = [
+  "whatsapp",
+  "telegram",
+  "discord",
+  "irc",
+  "googlechat",
+  "slack",
+  "signal",
+  "imessage",
+  "nostr",
+];
+
 function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKey[] {
-  if (snapshot?.channelMeta?.length) {
-    return snapshot.channelMeta.map((entry) => entry.id);
+  const fromMeta = snapshot?.channelMeta?.map((entry) => entry.id) ?? [];
+  const fromOrder = snapshot?.channelOrder ?? [];
+
+  if (fromMeta.length > 0 || fromOrder.length > 0) {
+    const fromCatalog = fromMeta.length > 0 ? fromMeta : fromOrder;
+    const builtinSet = new Set(BUILTIN_CHANNEL_IDS);
+    const customIds = fromCatalog.filter((id) => !builtinSet.has(id));
+    return [...customIds, ...BUILTIN_CHANNEL_IDS];
   }
-  if (snapshot?.channelOrder?.length) {
-    return snapshot.channelOrder;
-  }
-  return ["whatsapp", "telegram", "discord", "googlechat", "slack", "signal", "imessage", "nostr"];
+
+  return BUILTIN_CHANNEL_IDS;
 }
 
 function renderChannel(key: ChannelKey, props: ChannelsProps, data: ChannelsChannelData) {
