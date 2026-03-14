@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 - Commands/btw: add `/btw` side questions for quick tool-less answers about the current session without changing future session context, with dismissible in-session TUI answers and explicit BTW replies on external channels. (#45444) Thanks @ngutman.
 - Refactor/channels: remove the legacy channel shim directories and point channel-specific imports directly at the extension-owned implementations. (#45967) thanks @scoootscooob.
+- Feishu/streaming: add `onReasoningStream` and `onReasoningEnd` support to streaming cards, so `/reasoning stream` renders thinking tokens as markdown blockquotes in the same card — matching the Telegram channel's reasoning lane behavior.
 
 ### Fixes
 
