@@ -42,8 +42,11 @@ class WearChatController(
   }
 
   private data class PendingRunSnapshot(
+    val sessionKey: String,
+    val baselineMessageCount: Int,
     val baselineAssistantCount: Int,
     val baselineAssistantId: String?,
+    val optimisticMessage: WearChatMessage,
   )
 
   private data class QueuedOutboundMessage(
@@ -184,14 +187,17 @@ class WearChatController(
 
     val runId = UUID.randomUUID().toString()
     val historyBeforeSend = _messages.value
+    val activeSessionKey = _sessionKey.value
+    val optimisticMessage =
+      WearChatMessage(
+        id = UUID.randomUUID().toString(),
+        role = "user",
+        text = trimmed,
+        timestampMs = System.currentTimeMillis(),
+      )
 
     // Optimistic UI update
-    _messages.value = _messages.value + WearChatMessage(
-      id = UUID.randomUUID().toString(),
-      role = "user",
-      text = trimmed,
-      timestampMs = System.currentTimeMillis(),
-    )
+    _messages.value = _messages.value + optimisticMessage
     _streamingText.value = null
     _errorText.value = null
     _isSending.value = true
@@ -202,14 +208,17 @@ class WearChatController(
         lastAnnouncedAssistantId = baseline.latestAssistantId
         synchronized(pendingRuns) {
           pendingRuns[runId] = PendingRunSnapshot(
+            sessionKey = activeSessionKey,
+            baselineMessageCount = historyBeforeSend.size,
             baselineAssistantCount = baseline.assistantCount,
             baselineAssistantId = baseline.latestAssistantId,
+            optimisticMessage = optimisticMessage,
           )
           _isSending.value = pendingRuns.isNotEmpty()
         }
         queueOrDispatchPendingMessage(
           runId = runId,
-          sessionKey = _sessionKey.value,
+          sessionKey = activeSessionKey,
           text = trimmed,
         )
       } catch (e: Throwable) {
@@ -465,11 +474,32 @@ class WearChatController(
       return false
     }
     val resolvedPendingRuns = reconcilePendingRuns(history)
-    _messages.value = history
+    _messages.value = mergePendingOptimisticMessages(requestedSessionKey = requestedSessionKey, history = history)
     if (emitLatestAssistantReply || resolvedPendingRuns) {
       emitLatestAssistantReplyIfNeeded(history)
     }
     return true
+  }
+
+  private fun mergePendingOptimisticMessages(
+    requestedSessionKey: String,
+    history: List<WearChatMessage>,
+  ): List<WearChatMessage> {
+    val pendingOptimisticMessages =
+      synchronized(pendingRuns) {
+        pendingRuns.values
+          .filter { it.sessionKey == requestedSessionKey && history.size <= it.baselineMessageCount }
+          .map { it.optimisticMessage }
+      }
+    if (pendingOptimisticMessages.isEmpty()) return history
+
+    val merged = history.toMutableList()
+    for (message in pendingOptimisticMessages.sortedBy { it.timestampMs ?: Long.MAX_VALUE }) {
+      if (merged.none { it.id == message.id }) {
+        merged += message
+      }
+    }
+    return merged
   }
 
   private fun emitLatestAssistantReplyIfNeeded(history: List<WearChatMessage>) {
