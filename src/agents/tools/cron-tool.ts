@@ -419,6 +419,32 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
                 } satisfies CronDelivery;
               }
             }
+
+            // Snapshot the originating session's delivery context when channel
+            // is "last" (explicit or default). Fresh isolated cron sessions
+            // clear inherited delivery state, so without this snapshot the
+            // "last" fallback resolves to the default channel (e.g. @heartbeat)
+            // instead of the chat where the job was created. (#45806)
+            const currentDelivery = (job as { delivery?: Record<string, unknown> }).delivery;
+            const currentChannel =
+              typeof currentDelivery?.channel === "string"
+                ? currentDelivery.channel.trim().toLowerCase()
+                : "";
+            if (
+              currentDelivery &&
+              (currentChannel === "last" || currentChannel === "") &&
+              !currentDelivery.originChannel
+            ) {
+              const origin = inferDeliveryFromSessionKey(opts.agentSessionKey);
+              if (origin) {
+                if (origin.channel) {
+                  currentDelivery.originChannel = origin.channel;
+                }
+                if (origin.to) {
+                  currentDelivery.originTo = origin.to;
+                }
+              }
+            }
           }
 
           const contextMessages =
