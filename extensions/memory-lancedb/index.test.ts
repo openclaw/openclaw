@@ -240,6 +240,17 @@ describe("memory plugin e2e", () => {
     expect(shouldCapture(customTooLong, { maxChars: 1500 })).toBe(false);
   });
 
+  test("stripInjectedMemoryContext removes recalled memory blocks before capture", async () => {
+    const { stripInjectedMemoryContext, shouldCapture } = await import("./index.js");
+
+    const text =
+      "<relevant-memories>\n1. [preference] User likes tea\n</relevant-memories>\nRemember that my favorite snack is seaweed.";
+
+    const stripped = stripInjectedMemoryContext(text);
+    expect(stripped).toBe("Remember that my favorite snack is seaweed.");
+    expect(shouldCapture(stripped)).toBe(true);
+  });
+
   test("formatRelevantMemoriesContext escapes memory text and marks entries as untrusted", async () => {
     const { formatRelevantMemoriesContext } = await import("./index.js");
 
@@ -273,6 +284,102 @@ describe("memory plugin e2e", () => {
     expect(detectCategory("My email is test@example.com")).toBe("entity");
     expect(detectCategory("The server is running on port 3000")).toBe("fact");
     expect(detectCategory("Random note")).toBe("other");
+  });
+
+  test("auto-capture stores stripped user text when recall context is injected", async () => {
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+    const add = vi.fn(async () => undefined);
+    const deleteFn = vi.fn(async () => undefined);
+    const countRows = vi.fn(async () => 0);
+    const toArray = vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    const limit = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => ({ limit }));
+
+    vi.resetModules();
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        embeddings = { create: embeddingsCreate };
+      },
+    }));
+    vi.doMock("@lancedb/lancedb", () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          vectorSearch,
+          countRows,
+          add,
+          delete: deleteFn,
+        })),
+      })),
+    }));
+
+    try {
+      const { default: memoryPlugin } = await import("./index.js");
+      // oxlint-disable-next-line typescript/no-explicit-any
+      const registeredHooks: Record<string, any[]> = {};
+      const mockApi = {
+        id: "memory-lancedb",
+        name: "Memory (LanceDB)",
+        source: "test",
+        config: {},
+        pluginConfig: {
+          embedding: {
+            apiKey: OPENAI_API_KEY,
+            model: "text-embedding-3-small",
+          },
+          dbPath,
+          autoCapture: true,
+          autoRecall: false,
+        },
+        runtime: {},
+        logger: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        registerTool: vi.fn(),
+        registerCli: vi.fn(),
+        registerService: vi.fn(),
+        // oxlint-disable-next-line typescript/no-explicit-any
+        on: (hookName: string, handler: any) => {
+          if (!registeredHooks[hookName]) {
+            registeredHooks[hookName] = [];
+          }
+          registeredHooks[hookName].push(handler);
+        },
+        resolvePath: (p: string) => p,
+      };
+
+      // oxlint-disable-next-line typescript/no-explicit-any
+      memoryPlugin.register(mockApi as any);
+      expect(registeredHooks.agent_end).toHaveLength(1);
+
+      const agentEnd = registeredHooks.agent_end[0];
+      await agentEnd({
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content:
+              "<relevant-memories>\n1. [preference] User likes tea\n</relevant-memories>\nRemember that my favorite snack is seaweed.",
+          },
+        ],
+      });
+
+      expect(add).toHaveBeenCalledTimes(1);
+      expect(add).toHaveBeenCalledWith([
+        expect.objectContaining({
+          text: "Remember that my favorite snack is seaweed.",
+        }),
+      ]);
+    } finally {
+      vi.doUnmock("openai");
+      vi.doUnmock("@lancedb/lancedb");
+      vi.resetModules();
+    }
   });
 });
 
