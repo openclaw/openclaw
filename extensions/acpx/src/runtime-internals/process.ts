@@ -32,6 +32,34 @@ type SpawnRuntime = {
   execPath: string;
 };
 
+const ACPX_OAUTH_ENV_KEYS = ["ACPX_AUTH_CHATGPT"] as const;
+const ACPX_BLOCKED_OPENAI_ENV_KEYS = [
+  "OPENAI_API_KEY",
+  "OPENAI_API_KEYS",
+  "AZURE_OPENAI_API_KEY",
+] as const;
+
+function buildChildEnv(
+  extraEnv?: Record<string, string>,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const childEnv: NodeJS.ProcessEnv = {
+    ...baseEnv,
+    OPENCLAW_SHELL: "acp",
+    ...(extraEnv ?? {}),
+  };
+  const oauthRequested = ACPX_OAUTH_ENV_KEYS.some((key) => {
+    const value = childEnv[key];
+    return typeof value === "string" && value.trim().length > 0;
+  });
+  if (oauthRequested) {
+    for (const key of ACPX_BLOCKED_OPENAI_ENV_KEYS) {
+      delete childEnv[key];
+    }
+  }
+  return childEnv;
+}
+
 export type SpawnCommandCache = {
   key?: string;
   candidate?: WindowsSpawnProgramCandidate;
@@ -145,14 +173,20 @@ export function spawnWithResolvedCommand(
   );
   childEnv.OPENCLAW_SHELL = "acp";
 
+  const inheritedEnv = Object.fromEntries(
+    Object.entries(childEnv).filter(([, value]) => typeof value === "string"),
+  ) as Record<string, string>;
+
   return spawn(resolved.command, resolved.args, {
     cwd: params.cwd,
-    env: childEnv,
+    env: buildChildEnv(undefined, inheritedEnv),
     stdio: ["pipe", "pipe", "pipe"],
     shell: resolved.shell,
     windowsHide: resolved.windowsHide,
   });
 }
+
+export { buildChildEnv };
 
 export async function waitForExit(child: ChildProcessWithoutNullStreams): Promise<SpawnExit> {
   // Handle callers that start waiting after the child has already exited.

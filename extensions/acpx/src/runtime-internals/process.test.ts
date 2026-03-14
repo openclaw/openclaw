@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createWindowsCmdShimFixture } from "../../../shared/windows-cmd-shim-test-fixtures.js";
 import {
+  buildChildEnv,
   resolveSpawnCommand,
   spawnAndCollect,
   type SpawnCommandCache,
@@ -250,6 +251,63 @@ describe("waitForExit", () => {
     expect(exit.code).toBe(0);
     expect(exit.signal).toBeNull();
     expect(exit.error).toBeNull();
+  });
+});
+
+describe("buildChildEnv", () => {
+  it("drops OpenAI API key env when ACPX OAuth auth is requested", () => {
+    const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
+    const originalOpenAiApiKeys = process.env.OPENAI_API_KEYS;
+    const originalAzureOpenAiApiKey = process.env.AZURE_OPENAI_API_KEY;
+    try {
+      process.env.OPENAI_API_KEY = "openai-fixture-primary";
+      process.env.OPENAI_API_KEYS = "openai-fixture-a,openai-fixture-b";
+      process.env.AZURE_OPENAI_API_KEY = "azure-openai-fixture";
+
+      const childEnv = buildChildEnv({
+        ACPX_AUTH_CHATGPT: "oauth-session",
+      });
+
+      expect(childEnv.ACPX_AUTH_CHATGPT).toBe("oauth-session");
+      expect(childEnv.OPENCLAW_SHELL).toBe("acp");
+      expect(childEnv.OPENAI_API_KEY).toBeUndefined();
+      expect(childEnv.OPENAI_API_KEYS).toBeUndefined();
+      expect(childEnv.AZURE_OPENAI_API_KEY).toBeUndefined();
+    } finally {
+      if (originalOpenAiApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalOpenAiApiKey;
+      }
+      if (originalOpenAiApiKeys === undefined) {
+        delete process.env.OPENAI_API_KEYS;
+      } else {
+        process.env.OPENAI_API_KEYS = originalOpenAiApiKeys;
+      }
+      if (originalAzureOpenAiApiKey === undefined) {
+        delete process.env.AZURE_OPENAI_API_KEY;
+      } else {
+        process.env.AZURE_OPENAI_API_KEY = originalAzureOpenAiApiKey;
+      }
+    }
+  });
+
+  it("preserves OpenAI API key env when ACPX OAuth auth is not requested", () => {
+    const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
+    try {
+      process.env.OPENAI_API_KEY = "openai-fixture-primary";
+
+      const childEnv = buildChildEnv();
+
+      expect(childEnv.OPENAI_API_KEY).toBe("openai-fixture-primary");
+      expect(childEnv.OPENCLAW_SHELL).toBe("acp");
+    } finally {
+      if (originalOpenAiApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalOpenAiApiKey;
+      }
+    }
   });
 });
 
