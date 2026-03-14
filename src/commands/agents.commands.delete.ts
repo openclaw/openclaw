@@ -1,6 +1,8 @@
+import path from "node:path";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
+import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -79,6 +81,19 @@ export async function agentsDeleteCommand(
   await moveToTrash(workspaceDir, quietRuntime);
   await moveToTrash(agentDir, quietRuntime);
   await moveToTrash(sessionsDir, quietRuntime);
+
+  const agentParentDir = path.dirname(agentDir);
+  // Only trash the parent directory when agentDir exactly matches the default layout
+  // for THIS agent: <state>/agents/<normalizedId>/agent.
+  const defaultAgentDir = path.join(
+    resolveStateDir(process.env),
+    "agents",
+    normalizeAgentId(agentId),
+    "agent",
+  );
+  if (agentParentDir !== agentDir && agentDir === defaultAgentDir) {
+    await moveToTrash(agentParentDir, quietRuntime);
+  }
 
   if (opts.json) {
     runtime.log(
