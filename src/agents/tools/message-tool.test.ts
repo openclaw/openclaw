@@ -7,6 +7,8 @@ import { createMessageTool } from "./message-tool.js";
 
 const mocks = vi.hoisted(() => ({
   runMessageAction: vi.fn(),
+  getRuntimeConfigSnapshot: vi.fn(),
+  loadConfig: vi.fn(),
 }));
 
 vi.mock("../../infra/outbound/message-action-runner.js", async () => {
@@ -16,6 +18,23 @@ vi.mock("../../infra/outbound/message-action-runner.js", async () => {
   return {
     ...actual,
     runMessageAction: mocks.runMessageAction,
+  };
+});
+
+vi.mock("../../config/io.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/io.js")>("../../config/io.js");
+  return {
+    ...actual,
+    getRuntimeConfigSnapshot: mocks.getRuntimeConfigSnapshot,
+  };
+});
+
+vi.mock("../../config/config.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
+  return {
+    ...actual,
+    loadConfig: mocks.loadConfig,
   };
 });
 
@@ -466,5 +485,66 @@ describe("message tool sandbox passthrough", () => {
     });
 
     expect(call?.requesterSenderId).toBe("1234567890");
+  });
+});
+
+describe("message tool config resolution (SecretRef fallback)", () => {
+  afterEach(() => {
+    mocks.getRuntimeConfigSnapshot.mockReset();
+    mocks.loadConfig.mockReset();
+  });
+
+  it("uses options.config when provided, skipping runtime snapshot and loadConfig", async () => {
+    const explicitConfig = { channels: { telegram: { token: "explicit" } } } as never;
+    mocks.getRuntimeConfigSnapshot.mockReturnValue({ channels: {} } as never);
+    mocks.loadConfig.mockReturnValue({ channels: {} } as never);
+    mockSendResult();
+
+    await executeSend({
+      toolOptions: { config: explicitConfig },
+      action: {
+        target: "telegram:123",
+        message: "hello",
+      },
+    });
+
+    expect(mocks.getRuntimeConfigSnapshot).not.toHaveBeenCalled();
+    expect(mocks.loadConfig).not.toHaveBeenCalled();
+  });
+
+  it("prefers runtime snapshot over loadConfig when options.config is absent", async () => {
+    const resolvedConfig = { channels: { telegram: { token: "resolved-token" } } } as never;
+    mocks.getRuntimeConfigSnapshot.mockReturnValue(resolvedConfig);
+    mocks.loadConfig.mockReturnValue({ channels: { telegram: { token: { $ref: "secret" } } } });
+    mockSendResult();
+
+    await executeSend({
+      toolOptions: { config: undefined },
+      action: {
+        target: "telegram:123",
+        message: "hello",
+      },
+    });
+
+    expect(mocks.getRuntimeConfigSnapshot).toHaveBeenCalled();
+    expect(mocks.loadConfig).not.toHaveBeenCalled();
+  });
+
+  it("falls back to loadConfig only when runtime snapshot is null", async () => {
+    mocks.getRuntimeConfigSnapshot.mockReturnValue(null);
+    const fallbackConfig = { channels: {} } as never;
+    mocks.loadConfig.mockReturnValue(fallbackConfig);
+    mockSendResult();
+
+    await executeSend({
+      toolOptions: { config: undefined },
+      action: {
+        target: "telegram:123",
+        message: "hello",
+      },
+    });
+
+    expect(mocks.getRuntimeConfigSnapshot).toHaveBeenCalled();
+    expect(mocks.loadConfig).toHaveBeenCalled();
   });
 });
