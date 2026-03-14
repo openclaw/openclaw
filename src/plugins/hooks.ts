@@ -126,6 +126,14 @@ function getHooksForName<K extends PluginHookName>(
     .toSorted((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
 }
 
+function getHooksForNameAndPlugin<K extends PluginHookName>(
+  registry: PluginRegistry,
+  hookName: K,
+  pluginId: string,
+): PluginHookRegistration<K>[] {
+  return getHooksForName(registry, hookName).filter((hook) => hook.pluginId === pluginId);
+}
+
 /**
  * Create a hook runner for a specific registry.
  */
@@ -300,6 +308,40 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     return undefined;
   }
 
+  async function runClaimingHookForPlugin<
+    K extends PluginHookName,
+    TResult extends { handled: boolean },
+  >(
+    hookName: K,
+    pluginId: string,
+    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
+    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+  ): Promise<TResult | undefined> {
+    const hooks = getHooksForNameAndPlugin(registry, hookName, pluginId);
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    logger?.debug?.(
+      `[hooks] running ${hookName} for ${pluginId} (${hooks.length} handlers, targeted)`,
+    );
+
+    for (const hook of hooks) {
+      try {
+        const handlerResult = await (
+          hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>
+        )(event, ctx);
+        if (handlerResult?.handled) {
+          return handlerResult;
+        }
+      } catch (err) {
+        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
+      }
+    }
+
+    return undefined;
+  }
+
   // =========================================================================
   // Agent Hooks
   // =========================================================================
@@ -431,6 +473,19 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   ): Promise<PluginHookInboundClaimResult | undefined> {
     return runClaimingHook<"inbound_claim", PluginHookInboundClaimResult>(
       "inbound_claim",
+      event,
+      ctx,
+    );
+  }
+
+  async function runInboundClaimForPlugin(
+    pluginId: string,
+    event: PluginHookInboundClaimEvent,
+    ctx: PluginHookInboundClaimContext,
+  ): Promise<PluginHookInboundClaimResult | undefined> {
+    return runClaimingHookForPlugin<"inbound_claim", PluginHookInboundClaimResult>(
+      "inbound_claim",
+      pluginId,
       event,
       ctx,
     );
@@ -787,6 +842,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runBeforeReset,
     // Message hooks
     runInboundClaim,
+    runInboundClaimForPlugin,
     runMessageReceived,
     runMessageSending,
     runMessageSent,

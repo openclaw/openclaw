@@ -66,4 +66,35 @@ describe("inbound_claim hook runner", () => {
     );
     expect(succeeding).toHaveBeenCalledTimes(1);
   });
+
+  it("can target a single plugin when core already owns the binding", async () => {
+    const first = vi.fn().mockResolvedValue({ handled: true });
+    const second = vi.fn().mockResolvedValue({ handled: true });
+    const registry = createMockPluginRegistry([
+      { hookName: "inbound_claim", handler: first },
+      { hookName: "inbound_claim", handler: second },
+    ]);
+    registry.typedHooks[1].pluginId = "other-plugin";
+    const runner = createHookRunner(registry);
+
+    const result = await runner.runInboundClaimForPlugin(
+      "test-plugin",
+      {
+        content: "who are you",
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1",
+        isGroup: true,
+      },
+      {
+        channelId: "discord",
+        accountId: "default",
+        conversationId: "channel:1",
+      },
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).not.toHaveBeenCalled();
+  });
 });

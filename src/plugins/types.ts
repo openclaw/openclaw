@@ -270,7 +270,45 @@ export type PluginCommandContext = {
   accountId?: string;
   /** Thread/topic id if available */
   messageThreadId?: number;
+  requestConversationBinding: (
+    params?: PluginConversationBindingRequestParams,
+  ) => Promise<PluginConversationBindingRequestResult>;
+  detachConversationBinding: () => Promise<{ removed: boolean }>;
+  getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
 };
+
+export type PluginConversationBindingRequestParams = {
+  summary?: string;
+};
+
+export type PluginConversationBinding = {
+  bindingId: string;
+  pluginId: string;
+  pluginName?: string;
+  pluginRoot: string;
+  channel: string;
+  accountId: string;
+  conversationId: string;
+  parentConversationId?: string;
+  threadId?: string | number;
+  boundAt: number;
+  summary?: string;
+};
+
+export type PluginConversationBindingRequestResult =
+  | {
+      status: "bound";
+      binding: PluginConversationBinding;
+    }
+  | {
+      status: "pending";
+      approvalId: string;
+      reply: ReplyPayload;
+    }
+  | {
+      status: "error";
+      message: string;
+    };
 
 /**
  * Result returned by a plugin command handler.
@@ -345,6 +383,11 @@ export type PluginInteractiveTelegramHandlerContext = {
     clearButtons: () => Promise<void>;
     deleteMessage: () => Promise<void>;
   };
+  requestConversationBinding: (
+    params?: PluginConversationBindingRequestParams,
+  ) => Promise<PluginConversationBindingRequestResult>;
+  detachConversationBinding: () => Promise<{ removed: boolean }>;
+  getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
 };
 
 export type PluginInteractiveDiscordHandlerResult = {
@@ -379,6 +422,11 @@ export type PluginInteractiveDiscordHandlerContext = {
     editMessage: (params: { text?: string; components?: TopLevelComponents[] }) => Promise<void>;
     clearComponents: (params?: { text?: string }) => Promise<void>;
   };
+  requestConversationBinding: (
+    params?: PluginConversationBindingRequestParams,
+  ) => Promise<PluginConversationBindingRequestResult>;
+  detachConversationBinding: () => Promise<{ removed: boolean }>;
+  getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
 };
 
 export type PluginInteractiveTelegramHandlerRegistration = {
@@ -465,6 +513,7 @@ export type OpenClawPluginApi = {
   version?: string;
   description?: string;
   source: string;
+  rootDir?: string;
   config: OpenClawConfig;
   pluginConfig?: Record<string, unknown>;
   runtime: PluginRuntime;

@@ -1,4 +1,9 @@
 import { createDedupeCache } from "../infra/dedupe.js";
+import {
+  detachPluginConversationBinding,
+  getCurrentPluginConversationBinding,
+  requestPluginConversationBinding,
+} from "./conversation-binding.js";
 import type {
   PluginInteractiveDiscordHandlerContext,
   PluginInteractiveButtons,
@@ -10,6 +15,8 @@ import type {
 
 type RegisteredInteractiveHandler = PluginInteractiveHandlerRegistration & {
   pluginId: string;
+  pluginName?: string;
+  pluginRoot?: string;
 };
 
 type InteractiveRegistrationResult = {
@@ -20,6 +27,37 @@ type InteractiveRegistrationResult = {
 type InteractiveDispatchResult =
   | { matched: false; handled: false; duplicate: false }
   | { matched: true; handled: boolean; duplicate: boolean };
+
+type TelegramInteractiveDispatchContext = Omit<
+  PluginInteractiveTelegramHandlerContext,
+  | "callback"
+  | "respond"
+  | "channel"
+  | "requestConversationBinding"
+  | "detachConversationBinding"
+  | "getCurrentConversationBinding"
+> & {
+  callbackMessage: {
+    messageId: number;
+    chatId: string;
+    messageText?: string;
+  };
+};
+
+type DiscordInteractiveDispatchContext = Omit<
+  PluginInteractiveDiscordHandlerContext,
+  | "interaction"
+  | "respond"
+  | "channel"
+  | "requestConversationBinding"
+  | "detachConversationBinding"
+  | "getCurrentConversationBinding"
+> & {
+  interaction: Omit<
+    PluginInteractiveDiscordHandlerContext["interaction"],
+    "data" | "namespace" | "payload"
+  >;
+};
 
 const interactiveHandlers = new Map<string, RegisteredInteractiveHandler>();
 const callbackDedupe = createDedupeCache({
@@ -72,6 +110,7 @@ function resolveNamespaceMatch(
 export function registerPluginInteractiveHandler(
   pluginId: string,
   registration: PluginInteractiveHandlerRegistration,
+  opts?: { pluginName?: string; pluginRoot?: string },
 ): InteractiveRegistrationResult {
   const namespace = normalizeNamespace(registration.namespace);
   const validationError = validateNamespace(namespace);
@@ -92,6 +131,8 @@ export function registerPluginInteractiveHandler(
       namespace,
       channel: "telegram",
       pluginId,
+      pluginName: opts?.pluginName,
+      pluginRoot: opts?.pluginRoot,
     });
   } else {
     interactiveHandlers.set(key, {
@@ -99,6 +140,8 @@ export function registerPluginInteractiveHandler(
       namespace,
       channel: "discord",
       pluginId,
+      pluginName: opts?.pluginName,
+      pluginRoot: opts?.pluginRoot,
     });
   }
   return { ok: true };
@@ -121,13 +164,7 @@ export async function dispatchPluginInteractiveHandler(params: {
   channel: "telegram";
   data: string;
   callbackId: string;
-  ctx: Omit<PluginInteractiveTelegramHandlerContext, "callback" | "respond" | "channel"> & {
-    callbackMessage: {
-      messageId: number;
-      chatId: string;
-      messageText?: string;
-    };
-  };
+  ctx: TelegramInteractiveDispatchContext;
   respond: {
     reply: (params: { text: string; buttons?: PluginInteractiveButtons }) => Promise<void>;
     editMessage: (params: { text: string; buttons?: PluginInteractiveButtons }) => Promise<void>;
@@ -140,12 +177,7 @@ export async function dispatchPluginInteractiveHandler(params: {
   channel: "discord";
   data: string;
   interactionId: string;
-  ctx: Omit<PluginInteractiveDiscordHandlerContext, "interaction" | "respond" | "channel"> & {
-    interaction: Omit<
-      PluginInteractiveDiscordHandlerContext["interaction"],
-      "data" | "namespace" | "payload"
-    >;
-  };
+  ctx: DiscordInteractiveDispatchContext;
   respond: PluginInteractiveDiscordHandlerContext["respond"];
 }): Promise<InteractiveDispatchResult>;
 export async function dispatchPluginInteractiveHandler(params: {
@@ -153,20 +185,7 @@ export async function dispatchPluginInteractiveHandler(params: {
   data: string;
   callbackId?: string;
   interactionId?: string;
-  ctx:
-    | (Omit<PluginInteractiveTelegramHandlerContext, "callback" | "respond" | "channel"> & {
-        callbackMessage: {
-          messageId: number;
-          chatId: string;
-          messageText?: string;
-        };
-      })
-    | (Omit<PluginInteractiveDiscordHandlerContext, "interaction" | "respond" | "channel"> & {
-        interaction: Omit<
-          PluginInteractiveDiscordHandlerContext["interaction"],
-          "data" | "namespace" | "payload"
-        >;
-      });
+  ctx: TelegramInteractiveDispatchContext | DiscordInteractiveDispatchContext;
   respond:
     | {
         reply: (params: { text: string; buttons?: PluginInteractiveButtons }) => Promise<void>;
@@ -195,16 +214,8 @@ export async function dispatchPluginInteractiveHandler(params: {
     | ReturnType<PluginInteractiveTelegramHandlerRegistration["handler"]>
     | ReturnType<PluginInteractiveDiscordHandlerRegistration["handler"]>;
   if (params.channel === "telegram") {
-    const { callbackMessage, ...handlerContext } = params.ctx as Omit<
-      PluginInteractiveTelegramHandlerContext,
-      "callback" | "respond" | "channel"
-    > & {
-      callbackMessage: {
-        messageId: number;
-        chatId: string;
-        messageText?: string;
-      };
-    };
+    const pluginRoot = match.registration.pluginRoot;
+    const { callbackMessage, ...handlerContext } = params.ctx as TelegramInteractiveDispatchContext;
     result = (
       match.registration as RegisteredInteractiveHandler &
         PluginInteractiveTelegramHandlerRegistration
@@ -220,36 +231,126 @@ export async function dispatchPluginInteractiveHandler(params: {
         messageText: callbackMessage.messageText,
       },
       respond: params.respond as PluginInteractiveTelegramHandlerContext["respond"],
+      requestConversationBinding: async (bindingParams) => {
+        if (!pluginRoot) {
+          return {
+            status: "error",
+            message: "This interaction cannot bind the current conversation.",
+          };
+        }
+        return requestPluginConversationBinding({
+          pluginId: match.registration.pluginId,
+          pluginName: match.registration.pluginName,
+          pluginRoot,
+          requestedBySenderId: handlerContext.senderId,
+          conversation: {
+            channel: "telegram",
+            accountId: handlerContext.accountId,
+            conversationId: handlerContext.conversationId,
+            parentConversationId: handlerContext.parentConversationId,
+            threadId: handlerContext.threadId,
+          },
+          binding: bindingParams,
+        });
+      },
+      detachConversationBinding: async () => {
+        if (!pluginRoot) {
+          return { removed: false };
+        }
+        return detachPluginConversationBinding({
+          pluginRoot,
+          conversation: {
+            channel: "telegram",
+            accountId: handlerContext.accountId,
+            conversationId: handlerContext.conversationId,
+            parentConversationId: handlerContext.parentConversationId,
+            threadId: handlerContext.threadId,
+          },
+        });
+      },
+      getCurrentConversationBinding: async () => {
+        if (!pluginRoot) {
+          return null;
+        }
+        return getCurrentPluginConversationBinding({
+          pluginRoot,
+          conversation: {
+            channel: "telegram",
+            accountId: handlerContext.accountId,
+            conversationId: handlerContext.conversationId,
+            parentConversationId: handlerContext.parentConversationId,
+            threadId: handlerContext.threadId,
+          },
+        });
+      },
     });
   } else {
+    const pluginRoot = match.registration.pluginRoot;
     result = (
       match.registration as RegisteredInteractiveHandler &
         PluginInteractiveDiscordHandlerRegistration
     ).handler({
-      ...(params.ctx as Omit<
-        PluginInteractiveDiscordHandlerContext,
-        "interaction" | "respond" | "channel"
-      > & {
-        interaction: Omit<
-          PluginInteractiveDiscordHandlerContext["interaction"],
-          "data" | "namespace" | "payload"
-        >;
-      }),
+      ...(params.ctx as DiscordInteractiveDispatchContext),
       channel: "discord",
       interaction: {
-        ...(
-          params.ctx as {
-            interaction: Omit<
-              PluginInteractiveDiscordHandlerContext["interaction"],
-              "data" | "namespace" | "payload"
-            >;
-          }
-        ).interaction,
+        ...(params.ctx as DiscordInteractiveDispatchContext).interaction,
         data: params.data,
         namespace: match.namespace,
         payload: match.payload,
       },
       respond: params.respond as PluginInteractiveDiscordHandlerContext["respond"],
+      requestConversationBinding: async (bindingParams) => {
+        if (!pluginRoot) {
+          return {
+            status: "error",
+            message: "This interaction cannot bind the current conversation.",
+          };
+        }
+        const handlerContext = params.ctx as DiscordInteractiveDispatchContext;
+        return requestPluginConversationBinding({
+          pluginId: match.registration.pluginId,
+          pluginName: match.registration.pluginName,
+          pluginRoot,
+          requestedBySenderId: handlerContext.senderId,
+          conversation: {
+            channel: "discord",
+            accountId: handlerContext.accountId,
+            conversationId: handlerContext.conversationId,
+            parentConversationId: handlerContext.parentConversationId,
+          },
+          binding: bindingParams,
+        });
+      },
+      detachConversationBinding: async () => {
+        if (!pluginRoot) {
+          return { removed: false };
+        }
+        const handlerContext = params.ctx as DiscordInteractiveDispatchContext;
+        return detachPluginConversationBinding({
+          pluginRoot,
+          conversation: {
+            channel: "discord",
+            accountId: handlerContext.accountId,
+            conversationId: handlerContext.conversationId,
+            parentConversationId: handlerContext.parentConversationId,
+          },
+        });
+      },
+      getCurrentConversationBinding: async () => {
+        if (!pluginRoot) {
+          return null;
+        }
+        const handlerContext = params.ctx as DiscordInteractiveDispatchContext;
+        return getCurrentPluginConversationBinding({
+          pluginRoot,
+          conversation: {
+            channel: "discord",
+            accountId: handlerContext.accountId,
+            conversationId: handlerContext.conversationId,
+            parentConversationId: handlerContext.parentConversationId,
+          },
+        });
+      },
     });
   }
   const resolved = await result;

@@ -19,11 +19,16 @@ import {
   toPluginMessageReceivedEvent,
 } from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import {
   logMessageProcessed,
   logMessageQueued,
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
+import {
+  isPluginOwnedSessionBindingRecord,
+  toPluginConversationBinding,
+} from "../../plugins/conversation-binding.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "../../tts/tts.js";
@@ -185,6 +190,41 @@ export async function dispatchReplyFromConfig(params: {
     ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   const hookContext = deriveInboundMessageHookContext(ctx, { messageId: messageIdForHook });
   const { isGroup, groupId } = hookContext;
+  const inboundClaimContext = toPluginInboundClaimContext(hookContext);
+
+  const pluginOwnedBindingRecord =
+    inboundClaimContext.conversationId && inboundClaimContext.channelId
+      ? getSessionBindingService().resolveByConversation({
+          channel: inboundClaimContext.channelId,
+          accountId: inboundClaimContext.accountId ?? "default",
+          conversationId: inboundClaimContext.conversationId,
+          parentConversationId: inboundClaimContext.parentConversationId,
+        })
+      : null;
+  const pluginOwnedBinding = isPluginOwnedSessionBindingRecord(pluginOwnedBindingRecord)
+    ? toPluginConversationBinding(pluginOwnedBindingRecord)
+    : null;
+
+  if (pluginOwnedBinding) {
+    getSessionBindingService().touch(pluginOwnedBinding.bindingId);
+    logVerbose(
+      `plugin-bound inbound routed to ${pluginOwnedBinding.pluginId} conversation=${pluginOwnedBinding.conversationId}`,
+    );
+    if (hookRunner?.hasHooks("inbound_claim")) {
+      await hookRunner.runInboundClaimForPlugin(
+        pluginOwnedBinding.pluginId,
+        toPluginInboundClaimEvent(hookContext, {
+          commandAuthorized:
+            typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
+          wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
+        }),
+        inboundClaimContext,
+      );
+    }
+    markIdle("plugin_binding_dispatch");
+    recordProcessed("completed", { reason: "plugin-bound" });
+    return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+  }
 
   let pluginClaimedInbound = false;
   if (hookRunner?.hasHooks("inbound_claim")) {
@@ -194,7 +234,7 @@ export async function dispatchReplyFromConfig(params: {
           typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
         wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
       }),
-      toPluginInboundClaimContext(hookContext),
+      inboundClaimContext,
     );
     pluginClaimedInbound = inboundClaim?.handled === true;
   }

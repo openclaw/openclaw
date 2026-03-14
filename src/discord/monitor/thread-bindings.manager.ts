@@ -155,6 +155,7 @@ function toSessionBindingRecord(
         record,
         defaultMaxAgeMs: defaults.maxAgeMs,
       }),
+      ...record.metadata,
     },
   };
 }
@@ -338,6 +339,10 @@ export function createThreadBindingManager(
         lastActivityAt: now,
         idleTimeoutMs,
         maxAgeMs,
+        metadata:
+          bindParams.metadata && typeof bindParams.metadata === "object"
+            ? { ...bindParams.metadata }
+            : undefined,
       };
 
       setBindingRecord(record);
@@ -601,6 +606,7 @@ export function createThreadBindingManager(
         label,
         boundBy,
         introText,
+        metadata,
       });
       return bound
         ? toSessionBindingRecord(bound, {

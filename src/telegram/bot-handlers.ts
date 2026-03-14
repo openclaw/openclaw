@@ -33,6 +33,11 @@ import { danger, logVerbose, warn } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { MediaFetchError } from "../media/fetch.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
+import {
+  buildPluginBindingResolvedText,
+  parsePluginBindingApprovalCustomId,
+  resolvePluginConversationBindingApproval,
+} from "../plugins/conversation-binding.js";
 import { dispatchPluginInteractiveHandler } from "../plugins/interactive.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
@@ -1222,6 +1227,17 @@ export const registerTelegramHandlers = ({
 
       const callbackConversationId =
         messageThreadId != null ? `${chatId}:topic:${messageThreadId}` : String(chatId);
+      const pluginBindingApproval = parsePluginBindingApprovalCustomId(data);
+      if (pluginBindingApproval) {
+        const resolved = await resolvePluginConversationBindingApproval({
+          approvalId: pluginBindingApproval.approvalId,
+          decision: pluginBindingApproval.decision,
+          senderId: senderId || undefined,
+        });
+        await clearCallbackButtons();
+        await replyToCallbackChat(buildPluginBindingResolvedText(resolved));
+        return;
+      }
       const pluginCallback = await dispatchPluginInteractiveHandler({
         channel: "telegram",
         data,
