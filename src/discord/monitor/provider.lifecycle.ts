@@ -32,7 +32,9 @@ export async function runDiscordGatewayLifecycle(params: {
   const HELLO_TIMEOUT_MS = 30000;
   const HELLO_CONNECTED_POLL_MS = 250;
   const MAX_CONSECUTIVE_HELLO_STALLS = 3;
-  const RECONNECT_STALL_TIMEOUT_MS = 5 * 60_000;
+  // Discord gateways may take longer than 5 minutes to recover from network issues or server-side problems
+  // Timeout was updated to 10 minutes after an issue was mentioned.
+  const RECONNECT_STALL_TIMEOUT_MS = 10 * 60_000;
   const gateway = params.client.getPlugin<GatewayPlugin>("gateway");
   if (gateway) {
     registerGateway(params.accountId, gateway);
