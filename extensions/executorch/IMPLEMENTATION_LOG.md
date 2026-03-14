@@ -510,3 +510,30 @@ defaults write ai.openclaw.mac openclaw.talkSttBackend executorch
   - Failure reason: SwiftPM binary dependency fetch timeout while downloading Sparkle artifact:
     `https://github.com/sparkle-project/Sparkle/releases/download/2.9.0/Sparkle-for-Swift-Package-Manager.zip`
   - Interpretation: external network/artifact availability issue during test bootstrap, not a compile-time error from the code changes above.
+
+---
+
+## Phase 10: Tail-word endpointing hardening (2026-03)
+
+### Completed work
+
+- **ExecuTorch endpoint window safety floor**
+  - Added ExecuTorch-specific effective silence window floor (`1.2s`) even if configured window is lower.
+  - `checkSilence()` now uses `effectiveSilenceWindow(configured:useExecuTorch:)` instead of raw `silenceWindow`.
+- **Finalize two-stage tail decode**
+  - `TalkModeRuntime.finalizeTranscript(...)` now waits a short drain window (`250ms`), runs forced final decode once, then runs a second pass (`120ms` later).
+  - Both passes are merged with overlap-safe merge (`mergeTranscriptForFinalize`) to avoid duplicate replay.
+- **Finalize decode works even when streaming is active**
+  - `ExecuTorchSTTBridge.forceFinalOfflineDecodeDelta()` no longer requires offline fallback mode.
+  - Final forced decode can run during active streaming sessions to recover the last word when callback timing lags.
+- **Tail-fragment filter relaxed**
+  - Removed `trimmed.count >= 2` in `handleExecuTorchToken` so one-character token pieces are not dropped pre-merge.
+- **Regression tests expanded**
+  - Added tests for phrase promotion (`"open the"` + `"open the finder"`) and ExecuTorch minimum silence window behavior in `ExecuTorchTalkTextDeltaTests.swift`.
+
+### Verification run and results
+
+- `swift test --package-path apps/macos --filter ExecuTorchTalkTextDeltaTests` -> **BLOCKED in this environment**
+  - Failure reason: SwiftPM binary dependency fetch timeout while downloading Sparkle artifact:
+    `https://github.com/sparkle-project/Sparkle/releases/download/2.9.0/Sparkle-for-Swift-Package-Manager.zip`
+  - Interpretation: external dependency download timeout during test bootstrap; functional changes above are confined to Talk Mode endpointing and bridge decode paths.

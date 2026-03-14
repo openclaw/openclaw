@@ -544,11 +544,13 @@ actor ExecuTorchSTTBridge {
     /// Returns only newly discovered text since the last successful offline decode.
     func forceFinalOfflineDecodeDelta() -> String {
         guard case .listening = self.state else { return "" }
-        guard self.offlineFallbackActive else { return "" }
         self.offlinePollTask?.cancel()
         self.offlinePollTask = nil
         let maxNewTokens: Int32 = self.hasEmittedFirstTokenThisSession ? 24 : 32
-        return self.decodeOfflineDelta(maxNewTokens: maxNewTokens, force: true) ?? ""
+        return self.decodeOfflineDelta(
+            maxNewTokens: maxNewTokens,
+            force: true,
+            allowWhenStreaming: true) ?? ""
     }
 
     private func logLatencyStats() {
@@ -584,9 +586,15 @@ actor ExecuTorchSTTBridge {
         return false
     }
 
-    private func decodeOfflineDelta(maxNewTokens: Int32, force: Bool) -> String? {
+    private func decodeOfflineDelta(
+        maxNewTokens: Int32,
+        force: Bool,
+        allowWhenStreaming: Bool = false
+    ) -> String? {
         guard case .listening = self.state else { return nil }
-        guard self.offlineFallbackActive else { return nil }
+        if !allowWhenStreaming, !self.offlineFallbackActive {
+            return nil
+        }
         guard let runtime = self.runtime, let runner = self.runner else { return nil }
         guard let buf = self.rollingBuffer else { return nil }
         guard !self.isPolling else { return nil }

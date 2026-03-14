@@ -18,6 +18,9 @@ actor TalkModeRuntime {
     private static let defaultModelIdFallback = "eleven_v3"
     private static let defaultTalkProvider = "elevenlabs"
     private static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
+    private static let execuTorchMinSilenceWindowSeconds: TimeInterval = 1.2
+    private static let execuTorchFinalizeDrainNs: UInt64 = 250_000_000
+    private static let execuTorchFinalizeSecondPassNs: UInt64 = 120_000_000
 
     private final class RMSMeter: @unchecked Sendable {
         private let lock = NSLock()
@@ -309,7 +312,6 @@ actor TalkModeRuntime {
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard Self.containsLetterOrDigit(trimmed) else { return }
-        guard trimmed.count >= 2 else { return }
 
         // ExecuTorch has no echo cancellation — during TTS playback the mic picks up
         // the speaker audio and the model transcribes it as garbage, causing an
@@ -404,7 +406,10 @@ actor TalkModeRuntime {
         guard !transcript.isEmpty else { return }
         guard let lastHeard else { return }
         let elapsed = Date().timeIntervalSince(lastHeard)
-        guard elapsed >= self.silenceWindow else { return }
+        let requiredSilenceWindow = Self.effectiveSilenceWindow(
+            configured: self.silenceWindow,
+            useExecuTorch: self.useExecuTorch)
+        guard elapsed >= requiredSilenceWindow else { return }
         await self.finalizeTranscript(transcript)
     }
 
@@ -421,9 +426,18 @@ actor TalkModeRuntime {
     private func finalizeTranscript(_ text: String) async {
         var finalTranscript = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if self.useExecuTorch {
-            let tailDelta = await self.etBridge.forceFinalOfflineDecodeDelta()
-            if !tailDelta.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                finalTranscript = Self.mergeTranscriptForFinalize(base: finalTranscript, tail: tailDelta)
+            // Give the converter/tap pipeline a short drain window so the last spoken
+            // word lands in the rolling buffer before the forced finalize decode.
+            try? await Task.sleep(nanoseconds: Self.execuTorchFinalizeDrainNs)
+            let firstTailDelta = await self.etBridge.forceFinalOfflineDecodeDelta()
+            if !firstTailDelta.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                finalTranscript = Self.mergeTranscriptForFinalize(base: finalTranscript, tail: firstTailDelta)
+            }
+            // A second short decode pass catches tail pieces that arrive one poll later.
+            try? await Task.sleep(nanoseconds: Self.execuTorchFinalizeSecondPassNs)
+            let secondTailDelta = await self.etBridge.forceFinalOfflineDecodeDelta()
+            if !secondTailDelta.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                finalTranscript = Self.mergeTranscriptForFinalize(base: finalTranscript, tail: secondTailDelta)
             }
         }
 
@@ -872,6 +886,13 @@ actor TalkModeRuntime {
         value.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) }
     }
 
+    private static func effectiveSilenceWindow(configured: TimeInterval, useExecuTorch: Bool) -> TimeInterval {
+        if useExecuTorch {
+            return max(configured, Self.execuTorchMinSilenceWindowSeconds)
+        }
+        return configured
+    }
+
     private static func mergeTranscriptForFinalize(base: String, tail: String) -> String {
         let baseTrimmed = base.trimmingCharacters(in: .whitespacesAndNewlines)
         let tailTrimmed = tail.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -929,6 +950,10 @@ actor TalkModeRuntime {
 extension TalkModeRuntime {
     static func _testMergeTranscriptForFinalize(base: String, tail: String) -> String {
         mergeTranscriptForFinalize(base: base, tail: tail)
+    }
+
+    static func _testEffectiveSilenceWindow(configured: TimeInterval, useExecuTorch: Bool) -> TimeInterval {
+        effectiveSilenceWindow(configured: configured, useExecuTorch: useExecuTorch)
     }
 }
 #endif

@@ -36,4 +36,25 @@ struct ExecuTorchTalkTextDeltaTests {
             tail: "greetings")
         #expect(merged == "hello greetings")
     }
+
+    @Test func `merge promotes complete phrase when tail includes base`() {
+        let merged = TalkModeRuntime._testMergeTranscriptForFinalize(
+            base: "open the",
+            tail: "open the finder")
+        #expect(merged == "open the finder")
+    }
+
+    @Test func `execuTorch silence window enforces safer minimum`() {
+        let effective = TalkModeRuntime._testEffectiveSilenceWindow(
+            configured: 0.7,
+            useExecuTorch: true)
+        #expect(effective == 1.2)
+    }
+
+    @Test func `non executorch silence window keeps configured value`() {
+        let effective = TalkModeRuntime._testEffectiveSilenceWindow(
+            configured: 0.7,
+            useExecuTorch: false)
+        #expect(effective == 0.7)
+    }
 }
