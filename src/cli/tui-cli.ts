@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { loadConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -13,7 +14,8 @@ export function registerTuiCli(program: Command) {
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (if required)")
     .option("--session <key>", 'Session key (default: "main", or "global" when scope is global)')
-    .option("--deliver", "Deliver assistant replies", false)
+    .option("--deliver", "Deliver assistant replies (default: config tui.deliver or false)")
+    .option("--no-deliver", "Disable delivering assistant replies")
     .option("--thinking <level>", "Thinking level override")
     .option("--message <text>", "Send an initial message after connecting")
     .option("--timeout-ms <ms>", "Agent timeout in ms (defaults to agents.defaults.timeoutSeconds)")
@@ -24,6 +26,11 @@ export function registerTuiCli(program: Command) {
     )
     .action(async (opts) => {
       try {
+        const config = loadConfig();
+        const configDeliver = config.tui?.deliver ?? false;
+        // CLI flag overrides config: --deliver sets true, --no-deliver sets false, no flag uses config
+        const deliver = opts.deliver !== undefined ? Boolean(opts.deliver) : configDeliver;
+
         const timeoutMs = parseTimeoutMs(opts.timeoutMs);
         if (opts.timeoutMs !== undefined && timeoutMs === undefined) {
           defaultRuntime.error(
@@ -36,7 +43,7 @@ export function registerTuiCli(program: Command) {
           token: opts.token as string | undefined,
           password: opts.password as string | undefined,
           session: opts.session as string | undefined,
-          deliver: Boolean(opts.deliver),
+          deliver,
           thinking: opts.thinking as string | undefined,
           message: opts.message as string | undefined,
           timeoutMs,
