@@ -1,0 +1,912 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "OpenClaw Mobile Entry Module"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "OpenClaw Mobile Application"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "OpenClaw"
+    },
+    {
+      "name": "internet_permission_reason",
+      "value": "Required for network communication with gateway"
+    },
+    {
+      "name": "network_state_permission_reason",
+      "value": "Required to check network connectivity status"
+    },
+    {
+      "name": "camera_permission_reason",
+      "value": "Required for camera capture functionality"
+    },
+    {
+      "name": "microphone_permission_reason",
+      "value": "Required for voice input and audio recording"
+    },
+    {
+      "name": "location_permission_reason",
+      "value": "Required for location-based features"
+    },
+    {
+      "name": "approximate_location_permission_reason",
+      "value": "Required for approximate location features"
+    },
+    {
+      "name": "precise_location_permission_reason",
+      "value": "Required for precise location features"
+    },
+    {
+      "name": "read_media_permission_reason",
+      "value": "Required to access photos and media"
+    },
+    {
+      "name": "write_media_permission_reason",
+      "value": "Required to save photos and media"
+    },
+    {
+      "name": "read_contacts_permission_reason",
+      "value": "Required to access contacts"
+    },
+    {
+      "name": "write_contacts_permission_reason",
+      "value": "Required to modify contacts"
+    },
+    {
+      "name": "read_calendar_permission_reason",
+      "value": "Required to access calendar events"
+    },
+    {
+      "name": "write_calendar_permission_reason",
+      "value": "Required to modify calendar events"
+    },
+    {
+      "name": "activity_motion_permission_reason",
+      "value": "Required for motion and activity detection"
+    },
+    {
+      "name": "send_messages_permission_reason",
+      "value": "Required to send SMS messages"
+    },
+    {
+      "name": "notification_controller_permission_reason",
+      "value": "Required to listen to system notifications"
+    },
+    {
+      "name": "keep_background_running_permission_reason",
+      "value": "Required to keep the app running in background for gateway connection"
+    },
+    {
+      "name": "chat_session",
+      "value": "SESSION"
+    },
+    {
+      "name": "chat_sessions",
+      "value": "Sessions"
+    },
+    {
+      "name": "chat_connected",
+      "value": "Connected"
+    },
+    {
+      "name": "chat_offline",
+      "value": "Offline"
+    },
+    {
+      "name": "chat_error_title",
+      "value": "CHAT ERROR"
+    },
+    {
+      "name": "chat_empty_title",
+      "value": "Start a conversation"
+    },
+    {
+      "name": "chat_empty_description",
+      "value": "Send a message to begin chatting with OpenClaw."
+    },
+    {
+      "name": "chat_tools_running",
+      "value": "Tools running"
+    },
+    {
+      "name": "chat_thinking_prefix",
+      "value": "Thinking"
+    },
+    {
+      "name": "chat_refresh",
+      "value": "Refresh"
+    },
+    {
+      "name": "chat_input_placeholder",
+      "value": "Type a message..."
+    },
+    {
+      "name": "chat_connect_placeholder",
+      "value": "Connect to a gateway to chat"
+    },
+    {
+      "name": "chat_thinking_level",
+      "value": "Thinking Level"
+    },
+    {
+      "name": "chat_close",
+      "value": "Close"
+    },
+    {
+      "name": "common_main",
+      "value": "Main"
+    },
+    {
+      "name": "common_not_set",
+      "value": "Not set"
+    },
+    {
+      "name": "chat_user_avatar_text",
+      "value": "Me"
+    },
+    {
+      "name": "chat_assistant_avatar_text",
+      "value": "OC"
+    },
+    {
+      "name": "chat_updated_just_now",
+      "value": "Updated just now"
+    },
+    {
+      "name": "chat_updated_minutes_ago",
+      "value": "m ago"
+    },
+    {
+      "name": "chat_updated_hours_ago",
+      "value": "h ago"
+    },
+    {
+      "name": "connect_control_eyebrow",
+      "value": "Connection Control"
+    },
+    {
+      "name": "connect_title",
+      "value": "Gateway Connection"
+    },
+    {
+      "name": "connect_subtitle",
+      "value": "One primary action. Open advanced controls only when needed."
+    },
+    {
+      "name": "connect_active_endpoint",
+      "value": "Active endpoint"
+    },
+    {
+      "name": "connect_gateway_state",
+      "value": "Gateway state"
+    },
+    {
+      "name": "connect_advanced_controls",
+      "value": "Advanced controls"
+    },
+    {
+      "name": "connect_advanced_controls_desc",
+      "value": "Setup code, endpoint, TLS, token, password, onboarding."
+    },
+    {
+      "name": "connect_connection_method",
+      "value": "Connection method"
+    },
+    {
+      "name": "connect_setup_code",
+      "value": "Setup Code"
+    },
+    {
+      "name": "connect_manual",
+      "value": "Manual"
+    },
+    {
+      "name": "connect_run_on_gateway_host",
+      "value": "Run these on the gateway host:"
+    },
+    {
+      "name": "connect_paste_setup_code",
+      "value": "Paste setup code"
+    },
+    {
+      "name": "connect_host",
+      "value": "Host"
+    },
+    {
+      "name": "connect_port",
+      "value": "Port"
+    },
+    {
+      "name": "connect_use_tls",
+      "value": "Use TLS"
+    },
+    {
+      "name": "connect_use_tls_desc",
+      "value": "Switch to secure websocket (wss)."
+    },
+    {
+      "name": "connect_token_optional",
+      "value": "Token (optional)"
+    },
+    {
+      "name": "connect_password_optional",
+      "value": "Password (optional)"
+    },
+    {
+      "name": "connect_resolved_endpoint",
+      "value": "Resolved endpoint"
+    },
+    {
+      "name": "connect_run_onboarding_again",
+      "value": "Run onboarding again"
+    },
+    {
+      "name": "connect_connect_gateway",
+      "value": "Connect Gateway"
+    },
+    {
+      "name": "connect_disconnect_gateway",
+      "value": "Disconnect Gateway"
+    },
+    {
+      "name": "connect_reconnect_gateway",
+      "value": "Reconnect Gateway"
+    },
+    {
+      "name": "connect_quick_fill_localhost",
+      "value": "Localhost"
+    },
+    {
+      "name": "connect_discovered_gateways",
+      "value": "Discovered Gateways"
+    },
+    {
+      "name": "connect_no_gateways",
+      "value": "No gateways discovered"
+    },
+    {
+      "name": "connect_saved_gateway",
+      "value": "Saved Gateway"
+    },
+    {
+      "name": "connect_discovery_ready",
+      "value": "Discovery ready"
+    },
+    {
+      "name": "connect_action_connect",
+      "value": "Connect"
+    },
+    {
+      "name": "connect_validation_setup_code",
+      "value": "Paste a valid setup code to connect."
+    },
+    {
+      "name": "connect_validation_setup_code_fail",
+      "value": "Unable to connect with this setup code."
+    },
+    {
+      "name": "connect_validation_connection_error",
+      "value": "Connection error. Please try again."
+    },
+    {
+      "name": "connect_validation_manual_host_port",
+      "value": "Enter a valid manual host and port to connect."
+    },
+    {
+      "name": "connect_validation_connect_failed",
+      "value": "Connection failed. Check your endpoint and try again."
+    },
+    {
+      "name": "connect_token_placeholder",
+      "value": "token"
+    },
+    {
+      "name": "connect_password_placeholder",
+      "value": "password"
+    },
+    {
+      "name": "chat_error_seq_gap",
+      "value": "Event stream interrupted, please refresh and try again."
+    },
+    {
+      "name": "chat_error_request_failed",
+      "value": "Chat request failed."
+    },
+    {
+      "name": "chat_error_not_connected_send",
+      "value": "Connect to a gateway before sending messages."
+    },
+    {
+      "name": "chat_error_send_failed",
+      "value": "Failed to send chat message."
+    },
+    {
+      "name": "chat_error_session_not_ready",
+      "value": "Gateway session not ready."
+    },
+    {
+      "name": "chat_error_not_connected_chat",
+      "value": "Connect to a gateway before chatting."
+    },
+    {
+      "name": "chat_error_load_failed",
+      "value": "Unable to load chat."
+    },
+    {
+      "name": "chat_error_history_load_failed",
+      "value": "Unable to load chat history."
+    },
+    {
+      "name": "chat_error_sessions_load_failed",
+      "value": "Unable to load chat sessions."
+    },
+    {
+      "name": "chat_error_pending_timeout",
+      "value": "Reply timed out, please retry or refresh."
+    },
+    {
+      "name": "chat_thinking_level_off",
+      "value": "Off"
+    },
+    {
+      "name": "chat_thinking_level_low",
+      "value": "Low"
+    },
+    {
+      "name": "chat_thinking_level_medium",
+      "value": "Medium"
+    },
+    {
+      "name": "chat_thinking_level_high",
+      "value": "High"
+    },
+    {
+      "name": "tab_connect",
+      "value": "Connect"
+    },
+    {
+      "name": "tab_chat",
+      "value": "Chat"
+    },
+    {
+      "name": "tab_settings",
+      "value": "Settings"
+    },
+    {
+      "name": "settings_header_eyebrow",
+      "value": "SETTINGS"
+    },
+    {
+      "name": "settings_header_title",
+      "value": "Device Configuration"
+    },
+    {
+      "name": "settings_header_subtitle",
+      "value": "Manage capabilities, permissions, diagnostics, and gateway defaults."
+    },
+    {
+      "name": "settings_section_node",
+      "value": "NODE"
+    },
+    {
+      "name": "settings_display_name",
+      "value": "Display name"
+    },
+    {
+      "name": "settings_display_name_placeholder",
+      "value": "Device Name"
+    },
+    {
+      "name": "settings_instance_id",
+      "value": "Instance ID"
+    },
+    {
+      "name": "settings_status",
+      "value": "Status"
+    },
+    {
+      "name": "settings_section_voice",
+      "value": "VOICE"
+    },
+    {
+      "name": "settings_enable_microphone",
+      "value": "Enable microphone"
+    },
+    {
+      "name": "settings_enable_microphone_desc",
+      "value": "Allow voice capture and transcripts."
+    },
+    {
+      "name": "settings_enable_speaker",
+      "value": "Enable speaker"
+    },
+    {
+      "name": "settings_enable_speaker_desc",
+      "value": "Allow spoken responses and audio output."
+    },
+    {
+      "name": "settings_mic_status",
+      "value": "Mic status"
+    },
+    {
+      "name": "settings_off",
+      "value": "Off"
+    },
+    {
+      "name": "settings_ready",
+      "value": "Ready"
+    },
+    {
+      "name": "settings_section_camera",
+      "value": "CAMERA"
+    },
+    {
+      "name": "settings_enable_camera",
+      "value": "Enable camera"
+    },
+    {
+      "name": "settings_enable_camera_desc",
+      "value": "Allow camera access for photos and video tools."
+    },
+    {
+      "name": "settings_prevent_sleep",
+      "value": "Prevent sleep"
+    },
+    {
+      "name": "settings_prevent_sleep_desc",
+      "value": "Keep the screen awake during active sessions."
+    },
+    {
+      "name": "settings_section_location",
+      "value": "LOCATION"
+    },
+    {
+      "name": "settings_location_mode",
+      "value": "Location mode"
+    },
+    {
+      "name": "settings_location_mode_desc",
+      "value": "Choose the default location detail available to the gateway."
+    },
+    {
+      "name": "settings_location_mode_off",
+      "value": "Off"
+    },
+    {
+      "name": "settings_location_mode_approx",
+      "value": "Approx"
+    },
+    {
+      "name": "settings_location_mode_approximate",
+      "value": "Approximate"
+    },
+    {
+      "name": "settings_location_mode_precise",
+      "value": "Precise"
+    },
+    {
+      "name": "settings_precise_location_switch",
+      "value": "Precise location switch"
+    },
+    {
+      "name": "settings_precise_location_switch_desc",
+      "value": "Enable the precise location preference flag."
+    },
+    {
+      "name": "settings_section_gateway",
+      "value": "GATEWAY"
+    },
+    {
+      "name": "settings_manual_mode",
+      "value": "Manual mode"
+    },
+    {
+      "name": "settings_manual_mode_desc",
+      "value": "Use saved host, port, and TLS defaults for connections."
+    },
+    {
+      "name": "settings_use_tls_desc",
+      "value": "Prefer secure websocket (wss) for the manual endpoint."
+    },
+    {
+      "name": "settings_section_advanced",
+      "value": "ADVANCED"
+    },
+    {
+      "name": "settings_canvas_debug_status",
+      "value": "Canvas debug status"
+    },
+    {
+      "name": "settings_canvas_debug_status_desc",
+      "value": "Show debug status for canvas restore and hydration."
+    },
+    {
+      "name": "settings_section_about",
+      "value": "ABOUT"
+    },
+    {
+      "name": "settings_version",
+      "value": "Version"
+    },
+    {
+      "name": "settings_product",
+      "value": "Product"
+    },
+    {
+      "name": "settings_product_name",
+      "value": "OpenClaw Mobile for HarmonyOS"
+    },
+    {
+      "name": "settings_connection",
+      "value": "Connection"
+    },
+    {
+      "name": "settings_unavailable",
+      "value": "Unavailable"
+    },
+    {
+      "name": "common_status_gateway_session_not_ready",
+      "value": "Gateway session not ready"
+    },
+    {
+      "name": "common_status_connecting",
+      "value": "Connecting…"
+    },
+    {
+      "name": "common_status_connection_failed",
+      "value": "Connection failed"
+    },
+    {
+      "name": "common_status_invalid_manual_config",
+      "value": "Invalid manual gateway configuration"
+    },
+    {
+      "name": "common_status_missing_setup_code",
+      "value": "Missing setup code"
+    },
+    {
+      "name": "common_status_unsupported_setup_code",
+      "value": "Unsupported setup code format. Use a gateway URL or host:port for now."
+    },
+    {
+      "name": "common_status_disconnected",
+      "value": "Disconnected"
+    },
+    {
+      "name": "common_status_initialization_failed",
+      "value": "Initialization failed"
+    },
+    {
+      "name": "common_status_tls_trust_required",
+      "value": "TLS trust required"
+    },
+    {
+      "name": "common_status_tls_trust_declined",
+      "value": "TLS trust declined"
+    },
+    {
+      "name": "common_error_unable_to_reach_gateway",
+      "value": "Unable to reach gateway."
+    },
+    {
+      "name": "index_loading_state",
+      "value": "Loading device state…"
+    },
+    {
+      "name": "chat_see_attached",
+      "value": "See attached."
+    },
+    {
+      "name": "onboarding_first_run",
+      "value": "FIRST RUN"
+    },
+    {
+      "name": "onboarding_title",
+      "value": "OpenClaw\nMobile Setup"
+    },
+    {
+      "name": "onboarding_step_counter",
+      "value": "Step {current} of {total}"
+    },
+    {
+      "name": "onboarding_step_welcome",
+      "value": "Welcome"
+    },
+    {
+      "name": "onboarding_step_gateway",
+      "value": "Gateway"
+    },
+    {
+      "name": "onboarding_step_permissions",
+      "value": "Permissions"
+    },
+    {
+      "name": "onboarding_step_connect",
+      "value": "Connect"
+    },
+    {
+      "name": "onboarding_welcome_header",
+      "value": "What You Get"
+    },
+    {
+      "name": "onboarding_welcome_bullet_1",
+      "value": "Control the gateway and operator chat from one mobile surface."
+    },
+    {
+      "name": "onboarding_welcome_bullet_2",
+      "value": "Connect with setup code or manual endpoint details."
+    },
+    {
+      "name": "onboarding_welcome_bullet_3",
+      "value": "Enable only the capabilities you want available later."
+    },
+    {
+      "name": "onboarding_welcome_bullet_4",
+      "value": "Finish with a live connection check before entering the app."
+    },
+    {
+      "name": "onboarding_gateway_header",
+      "value": "Gateway Connection"
+    },
+    {
+      "name": "onboarding_setup_instructions",
+      "value": "Setup instructions"
+    },
+    {
+      "name": "onboarding_run_on_gateway_host",
+      "value": "Run these on the gateway host:"
+    },
+    {
+      "name": "onboarding_mode_setup_code",
+      "value": "Setup Code"
+    },
+    {
+      "name": "onboarding_mode_manual",
+      "value": "Manual"
+    },
+    {
+      "name": "onboarding_setup_code_label",
+      "value": "SETUP CODE"
+    },
+    {
+      "name": "onboarding_setup_code_placeholder",
+      "value": "Paste code from openclaw qr --setup-code-only"
+    },
+    {
+      "name": "onboarding_quickfill_emulator",
+      "value": "HarmonyOS Emulator"
+    },
+    {
+      "name": "onboarding_quickfill_localhost",
+      "value": "Localhost"
+    },
+    {
+      "name": "onboarding_host_label",
+      "value": "HOST"
+    },
+    {
+      "name": "onboarding_port_label",
+      "value": "PORT"
+    },
+    {
+      "name": "onboarding_use_tls",
+      "value": "Use TLS"
+    },
+    {
+      "name": "onboarding_use_tls_desc",
+      "value": "Switch to secure websocket (wss)."
+    },
+    {
+      "name": "onboarding_advanced_options",
+      "value": "Advanced Options"
+    },
+    {
+      "name": "onboarding_token_optional",
+      "value": "TOKEN (OPTIONAL)"
+    },
+    {
+      "name": "onboarding_token_placeholder",
+      "value": "token"
+    },
+    {
+      "name": "onboarding_password_optional",
+      "value": "PASSWORD (OPTIONAL)"
+    },
+    {
+      "name": "onboarding_password_placeholder",
+      "value": "password"
+    },
+    {
+      "name": "onboarding_permissions_header",
+      "value": "Permissions"
+    },
+    {
+      "name": "onboarding_permissions_intro",
+      "value": "Enable only what you need now. You can change everything later in Settings."
+    },
+    {
+      "name": "onboarding_perm_gateway_discovery_title",
+      "value": "Gateway Discovery"
+    },
+    {
+      "name": "onboarding_perm_gateway_discovery_desc",
+      "value": "Find gateways on your local network"
+    },
+    {
+      "name": "onboarding_perm_location_title",
+      "value": "Location"
+    },
+    {
+      "name": "onboarding_perm_location_desc",
+      "value": "location.get while the app is open"
+    },
+    {
+      "name": "onboarding_perm_notifications_title",
+      "value": "Notifications"
+    },
+    {
+      "name": "onboarding_perm_notifications_desc",
+      "value": "system notifications and foreground alerts"
+    },
+    {
+      "name": "onboarding_perm_microphone_title",
+      "value": "Microphone"
+    },
+    {
+      "name": "onboarding_perm_microphone_desc",
+      "value": "Voice tab transcription"
+    },
+    {
+      "name": "onboarding_perm_camera_title",
+      "value": "Camera"
+    },
+    {
+      "name": "onboarding_perm_camera_desc",
+      "value": "camera.snap and camera.clip"
+    },
+    {
+      "name": "onboarding_perm_photos_title",
+      "value": "Photos"
+    },
+    {
+      "name": "onboarding_perm_photos_desc",
+      "value": "photos.latest"
+    },
+    {
+      "name": "onboarding_perm_contacts_title",
+      "value": "Contacts"
+    },
+    {
+      "name": "onboarding_perm_contacts_desc",
+      "value": "contacts.search and contacts.add"
+    },
+    {
+      "name": "onboarding_perm_calendar_title",
+      "value": "Calendar"
+    },
+    {
+      "name": "onboarding_perm_calendar_desc",
+      "value": "calendar.events and calendar.add"
+    },
+    {
+      "name": "onboarding_perm_motion_title",
+      "value": "Motion"
+    },
+    {
+      "name": "onboarding_perm_motion_desc",
+      "value": "motion.activity and motion.pedometer"
+    },
+    {
+      "name": "onboarding_perm_sms_title",
+      "value": "SMS"
+    },
+    {
+      "name": "onboarding_perm_sms_desc",
+      "value": "Allow gateway-triggered SMS sending"
+    },
+    {
+      "name": "onboarding_permissions_footer",
+      "value": "All settings can be changed later in Settings."
+    },
+    {
+      "name": "onboarding_review_header",
+      "value": "Review"
+    },
+    {
+      "name": "onboarding_summary_method",
+      "value": "Method"
+    },
+    {
+      "name": "onboarding_summary_gateway",
+      "value": "Gateway"
+    },
+    {
+      "name": "onboarding_summary_permissions",
+      "value": "Enabled Permissions"
+    },
+    {
+      "name": "onboarding_not_set",
+      "value": "(not set)"
+    },
+    {
+      "name": "onboarding_none_selected",
+      "value": "None selected"
+    },
+    {
+      "name": "onboarding_press_connect",
+      "value": "Press Connect to verify gateway reachability and auth."
+    },
+    {
+      "name": "onboarding_status_value",
+      "value": "Status: {value}"
+    },
+    {
+      "name": "onboarding_connected_to",
+      "value": "Connected to {target}"
+    },
+    {
+      "name": "onboarding_gateway_fallback",
+      "value": "gateway"
+    },
+    {
+      "name": "onboarding_pairing_required",
+      "value": "Pairing Required"
+    },
+    {
+      "name": "onboarding_tap_connect_again",
+      "value": "Then tap Connect again."
+    },
+    {
+      "name": "onboarding_next",
+      "value": "Next"
+    },
+    {
+      "name": "onboarding_finish",
+      "value": "Finish"
+    },
+    {
+      "name": "onboarding_connect",
+      "value": "Connect"
+    },
+    {
+      "name": "onboarding_connecting",
+      "value": "Connecting…"
+    },
+    {
+      "name": "onboarding_resolved_endpoint",
+      "value": "RESOLVED ENDPOINT"
+    },
+    {
+      "name": "onboarding_error_setup_code_first",
+      "value": "Paste a setup code first, or switch to Manual setup."
+    },
+    {
+      "name": "onboarding_error_valid_host_port",
+      "value": "Please enter a valid host and port."
+    },
+    {
+      "name": "onboarding_error_paste_valid_setup_code",
+      "value": "Paste a valid setup code to connect."
+    },
+    {
+      "name": "onboarding_error_connect_setup_code_failed",
+      "value": "Unable to connect with this setup code."
+    },
+    {
+      "name": "onboarding_error_connection_retry",
+      "value": "Connection error. Please try again."
+    },
+    {
+      "name": "onboarding_error_enter_valid_manual_host_port",
+      "value": "Enter a valid manual host and port."
+    },
+    {
+      "name": "onboarding_error_connection_failed_check_settings",
+      "value": "Connection failed. Check your settings and try again."
+    }
+  ]
+}

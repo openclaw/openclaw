@@ -1,0 +1,5 @@
+{
+  "src": [
+    "pages/Index"
+  ]
+}

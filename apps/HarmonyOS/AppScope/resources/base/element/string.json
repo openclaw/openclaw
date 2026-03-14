@@ -1,0 +1,12 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "OpenClaw"
+    },
+    {
+      "name": "app_description",
+      "value": "OpenClaw Mobile - HarmonyOS Client"
+    }
+  ]
+}

@@ -1,0 +1,88 @@
+{
+  "color": [
+    {
+      "name": "start_window_background",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "primary_color",
+      "value": "#1D5DD8"
+    },
+    {
+      "name": "primary_soft",
+      "value": "#ECF3FF"
+    },
+    {
+      "name": "success_color",
+      "value": "#2F8C5A"
+    },
+    {
+      "name": "success_soft",
+      "value": "#CFEBD8"
+    },
+    {
+      "name": "warning_color",
+      "value": "#C8841A"
+    },
+    {
+      "name": "warning_soft",
+      "value": "#EED8B8"
+    },
+    {
+      "name": "danger_color",
+      "value": "#DC2626"
+    },
+    {
+      "name": "danger_soft",
+      "value": "#F3C8C8"
+    },
+    {
+      "name": "text_primary",
+      "value": "#17181C"
+    },
+    {
+      "name": "text_secondary",
+      "value": "#4D5563"
+    },
+    {
+      "name": "text_tertiary",
+      "value": "#8A92A2"
+    },
+    {
+      "name": "background_primary",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "background_secondary",
+      "value": "#F7F8FA"
+    },
+    {
+      "name": "surface_color",
+      "value": "#F6F7FA"
+    },
+    {
+      "name": "border_color",
+      "value": "#E5E7EC"
+    },
+    {
+      "name": "border_strong",
+      "value": "#D6DAE2"
+    },
+    {
+      "name": "command_bg",
+      "value": "#15171B"
+    },
+    {
+      "name": "command_border",
+      "value": "#2B2E35"
+    },
+    {
+      "name": "command_accent",
+      "value": "#3FC97A"
+    },
+    {
+      "name": "command_text",
+      "value": "#E8EAEE"
+    }
+  ]
+}

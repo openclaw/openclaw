@@ -1,0 +1,33 @@
+# Ignore files produced by hvigor build
+**/build/**
+**/.preview/**
+**/.hvigor/**
+**/outputs/**
+
+# Ignore local configuration
+**/local.properties
+**/*.local
+
+# Ignore IDE files
+**/.idea/**
+**/*.iml
+**/.DS_Store
+
+# Ignore node modules
+**/node_modules/**
+
+# Ignore log files
+**/*.log
+
+# Ignore temporary files
+**/*.tmp
+**/*.bak
+
+oh-package-lock.json5
+**/*-lock.json5
+oh_modules
+
+.codegenie
+
+entry/build
+hvigorw.jar
