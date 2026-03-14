@@ -460,7 +460,7 @@ async function canonicalizeMutationLockKey(targetPath: string): Promise<string> 
       if (parent === cursor) {
         return resolved;
       }
-      suffix.push(path.basename(cursor).toLowerCase());
+      suffix.push(path.basename(cursor));
       cursor = parent;
     }
   }

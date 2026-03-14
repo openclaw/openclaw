@@ -339,53 +339,107 @@ describe("wrapToolMutationLock", () => {
 
   it("canonicalizes symlink aliases for missing-file mutation lock keys", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mutation-lock-"));
-    const workspaceRoot = path.join(tempRoot, "workspace");
-    const realDir = path.join(workspaceRoot, "real");
-    const aliasDir = path.join(workspaceRoot, "alias");
-    await fs.mkdir(realDir, { recursive: true });
-    await fs.symlink(realDir, aliasDir, "dir");
+    try {
+      const workspaceRoot = path.join(tempRoot, "workspace");
+      const realDir = path.join(workspaceRoot, "real");
+      const aliasDir = path.join(workspaceRoot, "alias");
+      await fs.mkdir(realDir, { recursive: true });
+      await fs.symlink(realDir, aliasDir, "dir");
 
-    const firstPath = path.join(realDir, "Missing.TXT");
-    const secondPath = path.join(aliasDir, "missing.txt");
+      const firstPath = path.join(realDir, "Missing.TXT");
+      const secondPath = path.join(aliasDir, "missing.txt");
 
-    const gate = deferred();
-    const events: string[] = [];
+      const gate = deferred();
+      const events: string[] = [];
 
-    const base: AnyAgentTool = {
-      name: "write",
-      label: "write",
-      description: "test write",
-      parameters: {},
-      execute: async (_toolCallId, params) => {
-        const record = params as Record<string, unknown>;
-        const filePath = typeof record.path === "string" ? record.path : "";
-        events.push(`start:${filePath}`);
-        if (filePath === firstPath) {
-          await gate.promise;
-        }
-        events.push(`end:${filePath}`);
-        return textResult(filePath);
-      },
-    };
+      const base: AnyAgentTool = {
+        name: "write",
+        label: "write",
+        description: "test write",
+        parameters: {},
+        execute: async (_toolCallId, params) => {
+          const record = params as Record<string, unknown>;
+          const filePath = typeof record.path === "string" ? record.path : "";
+          events.push(`start:${filePath}`);
+          if (filePath === firstPath) {
+            await gate.promise;
+          }
+          events.push(`end:${filePath}`);
+          return textResult(filePath);
+        },
+      };
 
-    const wrapped = wrapToolMutationLock(base, workspaceRoot);
-    const p1 = wrapped.execute("call-1", { path: firstPath, content: "one" });
-    const p2 = wrapped.execute("call-2", { path: secondPath, content: "two" });
+      const wrapped = wrapToolMutationLock(base, workspaceRoot);
+      const p1 = wrapped.execute("call-1", { path: firstPath, content: "one" });
+      const p2 = wrapped.execute("call-2", { path: secondPath, content: "two" });
 
-    await waitUntil(() => {
-      expect(events).toEqual([`start:${firstPath}`]);
-    });
+      await waitUntil(() => {
+        expect(events).toEqual([`start:${firstPath}`]);
+      });
 
-    gate.resolve();
-    await Promise.all([p1, p2]);
+      gate.resolve();
+      await Promise.all([p1, p2]);
 
-    expect(events).toEqual([
-      `start:${firstPath}`,
-      `end:${firstPath}`,
-      `start:${secondPath}`,
-      `end:${secondPath}`,
-    ]);
+      expect(events).toEqual([
+        `start:${firstPath}`,
+        `end:${firstPath}`,
+        `start:${secondPath}`,
+        `end:${secondPath}`,
+      ]);
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
 
-    await fs.rm(tempRoot, { recursive: true, force: true });
+  it("keeps mixed-case lock identity stable after file materialization", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mutation-lock-case-"));
+    try {
+      const workspaceRoot = path.join(tempRoot, "workspace");
+      const mixedCasePath = path.join(workspaceRoot, "New", "State.JSON");
+      const gate = deferred();
+      const events: string[] = [];
+
+      const base: AnyAgentTool = {
+        name: "write",
+        label: "write",
+        description: "test write",
+        parameters: {},
+        execute: async (_toolCallId, params) => {
+          const record = params as Record<string, unknown>;
+          const filePath = typeof record.path === "string" ? record.path : "";
+          events.push(`start:${filePath}`);
+          if (filePath === mixedCasePath) {
+            await fs.mkdir(path.dirname(mixedCasePath), { recursive: true });
+            await fs.writeFile(mixedCasePath, "materialized", "utf8");
+            await gate.promise;
+          }
+          events.push(`end:${filePath}`);
+          return textResult(filePath);
+        },
+      };
+
+      const wrapped = wrapToolMutationLock(base, workspaceRoot);
+      const p1 = wrapped.execute("call-1", { path: mixedCasePath, content: "one" });
+
+      await waitUntil(() => {
+        expect(events).toEqual([`start:${mixedCasePath}`]);
+      });
+
+      const p2 = wrapped.execute("call-2", { path: mixedCasePath, content: "two" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(events).toEqual([`start:${mixedCasePath}`]);
+
+      gate.resolve();
+      await Promise.all([p1, p2]);
+
+      expect(events).toEqual([
+        `start:${mixedCasePath}`,
+        `end:${mixedCasePath}`,
+        `start:${mixedCasePath}`,
+        `end:${mixedCasePath}`,
+      ]);
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 });
