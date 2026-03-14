@@ -359,7 +359,8 @@ export async function runExecProcess(opts: {
     // checkAccessPolicy matches against a path-like token instead of a multi-word
     // string that never matches any absolute-path rule (and would pass unconditionally
     // under a permissive default).
-    const argv0 = resolveArgv0(baseCommand, opts.workdir) ?? baseCommand.trim().split(/\s+/)[0] ?? baseCommand;
+    const argv0 =
+      resolveArgv0(baseCommand, opts.workdir) ?? baseCommand.trim().split(/\s+/)[0] ?? baseCommand;
     const {
       policy: effectivePermissions,
       overrideRules,
@@ -377,7 +378,15 @@ export async function runExecProcess(opts: {
     // itself. A script in both deny[] and scripts{} is a config error; the deny wins.
     // For scripts{} entries not in deny[], we skip the broader rules/default check
     // so a sha256-matched script doesn't also need an explicit exec rule in the base policy.
-    const hasScriptOverride = argv0 in (opts.permissions.scripts ?? {});
+    // Mirror the tilde-expansion logic in applyScriptPolicyOverride so that
+    // scripts keys written as "~/bin/deploy.sh" are matched even though argv0
+    // is always an absolute path after resolveArgv0.
+    const _scripts = opts.permissions.scripts ?? {};
+    const hasScriptOverride =
+      argv0 in _scripts ||
+      Object.keys(_scripts).some(
+        (k) => k.startsWith("~") && k.replace(/^~(?=$|[/\\])/, os.homedir()) === argv0,
+      );
     const denyVerdict = checkAccessPolicy(argv0, "exec", {
       deny: opts.permissions.deny,
     });
