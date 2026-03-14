@@ -46,24 +46,40 @@ import type {
 } from "./types.ts";
 
 // Debounced chat history reload for chat.inbound events.
-// Two-phase refresh: first at 500ms (optimistic), second at 2500ms (guaranteed).
+// Two-phase refresh: first at 500ms (optimistic), second at 3500ms (guaranteed).
 // The inbound message may not be persisted to session history yet when the
 // WebSocket event arrives, so the second refresh ensures we catch it.
-// Note: module-level timer is fine — Control UI maintains a single gateway connection.
-let _chatInboundTimer: ReturnType<typeof setTimeout> | null = null;
-function debouncedLoadChatHistory(host: GatewayHost): void {
-  if (_chatInboundTimer) {
-    clearTimeout(_chatInboundTimer);
+// Note: module-level timers are fine — Control UI maintains a single gateway connection.
+let _chatInboundTimerFast: ReturnType<typeof setTimeout> | null = null;
+let _chatInboundTimerSlow: ReturnType<typeof setTimeout> | null = null;
+
+function clearChatInboundTimers(): void {
+  if (_chatInboundTimerFast) {
+    clearTimeout(_chatInboundTimerFast);
+    _chatInboundTimerFast = null;
   }
-  _chatInboundTimer = setTimeout(() => {
-    _chatInboundTimer = null;
+  if (_chatInboundTimerSlow) {
+    clearTimeout(_chatInboundTimerSlow);
+    _chatInboundTimerSlow = null;
+  }
+}
+
+function debouncedLoadChatHistory(host: GatewayHost, triggerSessionKey: string): void {
+  clearChatInboundTimers();
+  _chatInboundTimerFast = setTimeout(() => {
+    _chatInboundTimerFast = null;
+    // Skip if user has switched to a different session since the event
+    if (host.sessionKey !== triggerSessionKey) {
+      return;
+    }
     void loadChatHistory(host as unknown as OpenClawApp);
     // Second refresh: wait for message persistence to complete.
-    // Skip if a new inbound event arrives in the meantime (its own debounce handles it).
-    setTimeout(() => {
-      if (!_chatInboundTimer) {
-        void loadChatHistory(host as unknown as OpenClawApp);
+    _chatInboundTimerSlow = setTimeout(() => {
+      _chatInboundTimerSlow = null;
+      if (host.sessionKey !== triggerSessionKey) {
+        return;
       }
+      void loadChatHistory(host as unknown as OpenClawApp);
     }, 3000);
   }, 500);
 }
@@ -364,8 +380,19 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     // and assistant reply appear in the UI (channel messages only emit
     // agent events, not chat events).
     const agentPayload = evt.payload as AgentEventPayload | undefined;
-    if (agentPayload?.stream === "lifecycle" && agentPayload.data?.phase === "end") {
-      void loadChatHistory(host as unknown as OpenClawApp);
+    if (
+      agentPayload?.stream === "lifecycle" &&
+      agentPayload.data?.phase === "end" &&
+      host.tab === "chat" &&
+      agentPayload.sessionKey === host.sessionKey
+    ) {
+      // Clear streaming state only after history loads successfully to avoid
+      // a blank UI if the reload races ahead of durable writes or fails.
+      // On failure, chatStream is preserved as a graceful degradation.
+      void loadChatHistory(host as unknown as OpenClawApp).then(() => {
+        host.chatStream = null;
+        host.chatStreamStartedAt = null;
+      });
     }
     return;
   }
@@ -403,8 +430,8 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "chat.inbound") {
     const payload = evt.payload as { sessionKey?: string } | undefined;
-    if (host.tab === "chat" && payload?.sessionKey === host.sessionKey) {
-      debouncedLoadChatHistory(host);
+    if (host.tab === "chat" && payload?.sessionKey && payload.sessionKey === host.sessionKey) {
+      debouncedLoadChatHistory(host, payload.sessionKey);
     }
     return;
   }
