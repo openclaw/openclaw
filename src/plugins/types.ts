@@ -617,6 +617,8 @@ export type PluginHookLlmOutputEvent = {
     cacheWrite?: number;
     total?: number;
   };
+  /** Raw rate limit headers from the LLM provider, if available. */
+  rateLimits?: Record<string, string>;
 };
 
 // agent_end hook
