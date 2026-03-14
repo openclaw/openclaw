@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/instagram",
+  "version": "2026.3.3",
+  "private": true,
+  "description": "OpenClaw Instagram channel plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
