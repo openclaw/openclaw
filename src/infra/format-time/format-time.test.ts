@@ -8,6 +8,12 @@ import {
 } from "./format-duration.js";
 import { formatTimeAgo, formatRelativeTimestamp } from "./format-relative.js";
 
+const invalidDurationInputs = [null, undefined, -100] as const;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("format-duration", () => {
   describe("formatDurationCompact", () => {
     it("returns undefined for null/undefined/non-positive", () => {
@@ -55,7 +61,7 @@ describe("format-duration", () => {
 
   describe("formatDurationHuman", () => {
     it("returns fallback for invalid duration input", () => {
-      for (const value of [null, undefined, -100]) {
+      for (const value of invalidDurationInputs) {
         expect(formatDurationHuman(value)).toBe("n/a");
       }
       expect(formatDurationHuman(null, "unknown")).toBe("unknown");
@@ -84,6 +90,12 @@ describe("format-duration", () => {
       expect(formatDurationPrecise(999)).toBe("999ms");
     });
 
+    it("clamps negative and fractional sub-second values to non-negative milliseconds", () => {
+      expect(formatDurationPrecise(-1)).toBe("0ms");
+      expect(formatDurationPrecise(-500)).toBe("0ms");
+      expect(formatDurationPrecise(999.6)).toBe("1000ms");
+    });
+
     it("shows decimal seconds for >=1s", () => {
       expect(formatDurationPrecise(1000)).toBe("1s");
       expect(formatDurationPrecise(1500)).toBe("1.5s");
@@ -105,6 +117,12 @@ describe("format-duration", () => {
 
     it("supports seconds unit", () => {
       expect(formatDurationSeconds(2000, { unit: "seconds" })).toBe("2 seconds");
+    });
+
+    it("clamps negative values and rejects non-finite input", () => {
+      expect(formatDurationSeconds(-1500, { decimals: 1 })).toBe("0s");
+      expect(formatDurationSeconds(NaN)).toBe("unknown");
+      expect(formatDurationSeconds(Infinity)).toBe("unknown");
     });
   });
 });
@@ -152,13 +170,52 @@ describe("format-datetime", () => {
       const result = formatZonedTimestamp(date, options);
       expect(result).toMatch(expected);
     });
+
+    it("returns undefined when required Intl parts are missing", () => {
+      function MissingPartsDateTimeFormat() {
+        return {
+          formatToParts: () => [
+            { type: "month", value: "01" },
+            { type: "day", value: "15" },
+            { type: "hour", value: "14" },
+            { type: "minute", value: "30" },
+          ],
+        } as Intl.DateTimeFormat;
+      }
+
+      vi.spyOn(Intl, "DateTimeFormat").mockImplementation(
+        MissingPartsDateTimeFormat as unknown as typeof Intl.DateTimeFormat,
+      );
+
+      expect(formatZonedTimestamp(new Date("2024-01-15T14:30:00.000Z"), { timeZone: "UTC" })).toBe(
+        undefined,
+      );
+    });
+
+    it("returns undefined when Intl formatting throws", () => {
+      function ThrowingDateTimeFormat() {
+        return {
+          formatToParts: () => {
+            throw new Error("boom");
+          },
+        } as unknown as Intl.DateTimeFormat;
+      }
+
+      vi.spyOn(Intl, "DateTimeFormat").mockImplementation(
+        ThrowingDateTimeFormat as unknown as typeof Intl.DateTimeFormat,
+      );
+
+      expect(formatZonedTimestamp(new Date("2024-01-15T14:30:00.000Z"), { timeZone: "UTC" })).toBe(
+        undefined,
+      );
+    });
   });
 });
 
 describe("format-relative", () => {
   describe("formatTimeAgo", () => {
     it("returns fallback for invalid elapsed input", () => {
-      for (const value of [null, undefined, -100]) {
+      for (const value of invalidDurationInputs) {
         expect(formatTimeAgo(value)).toBe("unknown");
       }
       expect(formatTimeAgo(null, { fallback: "n/a" })).toBe("n/a");
@@ -239,6 +296,15 @@ describe("format-relative", () => {
       },
     ])("$name", ({ offsetMs, options, expected }) => {
       expect(formatRelativeTimestamp(Date.now() + offsetMs, options)).toBe(expected);
+    });
+
+    it("falls back to relative days when date formatting throws", () => {
+      expect(
+        formatRelativeTimestamp(Date.now() - 8 * 24 * 3600000, {
+          dateFallback: true,
+          timezone: "Invalid/Timezone",
+        }),
+      ).toBe("8d ago");
     });
   });
 });

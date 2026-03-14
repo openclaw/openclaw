@@ -69,6 +69,13 @@ import { suppressDeprecations } from "./suppress-deprecations.js";
 
 const CLI_NAME = resolveCliName();
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
+const SERVICE_REFRESH_PATH_ENV_KEYS = [
+  "OPENCLAW_HOME",
+  "OPENCLAW_STATE_DIR",
+  "CLAWDBOT_STATE_DIR",
+  "OPENCLAW_CONFIG_PATH",
+  "CLAWDBOT_CONFIG_PATH",
+] as const;
 
 const UPDATE_QUIPS = [
   "Leveled up! New skills unlocked. You're welcome.",
@@ -115,6 +122,37 @@ function formatCommandFailure(stdout: string, stderr: string): string {
     return "command returned a non-zero exit code";
   }
   return detail.split("\n").slice(-3).join("\n");
+}
+
+function tryResolveInvocationCwd(): string | undefined {
+  try {
+    return process.cwd();
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveServiceRefreshEnv(
+  env: NodeJS.ProcessEnv,
+  invocationCwd?: string,
+): NodeJS.ProcessEnv {
+  const resolvedEnv: NodeJS.ProcessEnv = { ...env };
+  for (const key of SERVICE_REFRESH_PATH_ENV_KEYS) {
+    const rawValue = resolvedEnv[key]?.trim();
+    if (!rawValue) {
+      continue;
+    }
+    if (rawValue.startsWith("~") || path.isAbsolute(rawValue) || path.win32.isAbsolute(rawValue)) {
+      resolvedEnv[key] = rawValue;
+      continue;
+    }
+    if (!invocationCwd) {
+      resolvedEnv[key] = rawValue;
+      continue;
+    }
+    resolvedEnv[key] = path.resolve(invocationCwd, rawValue);
+  }
+  return resolvedEnv;
 }
 
 type UpdateDryRunPreview = {
@@ -179,6 +217,7 @@ function printDryRunPreview(preview: UpdateDryRunPreview, jsonMode: boolean): vo
 async function refreshGatewayServiceEnv(params: {
   result: UpdateRunResult;
   jsonMode: boolean;
+  invocationCwd?: string;
 }): Promise<void> {
   const args = ["gateway", "install", "--force"];
   if (params.jsonMode) {
@@ -190,6 +229,8 @@ async function refreshGatewayServiceEnv(params: {
       continue;
     }
     const res = await runCommandWithTimeout([resolveNodeRunner(), candidate, ...args], {
+      cwd: params.result.root,
+      env: resolveServiceRefreshEnv(process.env, params.invocationCwd),
       timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
     });
     if (res.code === 0) {
@@ -519,6 +560,7 @@ async function maybeRestartService(params: {
   refreshServiceEnv: boolean;
   gatewayPort: number;
   restartScriptPath?: string | null;
+  invocationCwd?: string;
 }): Promise<void> {
   if (params.shouldRestart) {
     if (!params.opts.json) {
@@ -534,6 +576,7 @@ async function maybeRestartService(params: {
           await refreshGatewayServiceEnv({
             result: params.result,
             jsonMode: Boolean(params.opts.json),
+            invocationCwd: params.invocationCwd,
           });
         } catch (err) {
           if (!params.opts.json) {
@@ -639,6 +682,7 @@ async function maybeRestartService(params: {
 
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   suppressDeprecations();
+  const invocationCwd = tryResolveInvocationCwd();
 
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   const shouldRestart = opts.restart !== false;
@@ -921,6 +965,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     refreshServiceEnv: refreshGatewayServiceEnv,
     gatewayPort,
     restartScriptPath,
+    invocationCwd,
   });
 
   if (!opts.json) {
