@@ -415,6 +415,15 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   ) {
     const text = typeof payload.data?.text === "string" ? payload.data.text : null;
     if (text) {
+      // Detect new paragraph: if accumulated text is shorter than current
+      // chatStream, the agent started a new thinking/reply segment. Commit
+      // the previous segment so it renders above the new streaming text.
+      if (host.chatStream && text.length < host.chatStream.length) {
+        host.chatStreamSegments = [
+          ...host.chatStreamSegments,
+          { text: host.chatStream, ts: Date.now() },
+        ];
+      }
       host.chatStream = text;
       if (!host.chatStreamStartedAt) {
         host.chatStreamStartedAt = Date.now();
