@@ -10,6 +10,8 @@ type SupportedSubtype = "message_changed" | "message_deleted" | "thread_broadcas
 export type SlackMessageSubtypeHandler = {
   subtype: SupportedSubtype;
   eventKind: SupportedSubtype;
+  /** When true, the message is forwarded to handleSlackMessage after authorization. */
+  processAsMessage?: boolean;
   describe: (channelLabel: string) => string;
   contextKey: (event: SlackMessageEvent) => string;
   resolveSenderId: (event: SlackMessageEvent) => string | undefined;
@@ -62,6 +64,7 @@ const deletedHandler: SlackMessageSubtypeHandler = {
 const threadBroadcastHandler: SlackMessageSubtypeHandler = {
   subtype: "thread_broadcast",
   eventKind: "thread_broadcast",
+  processAsMessage: true,
   describe: (channelLabel) => `Slack thread reply broadcast in ${channelLabel}.`,
   contextKey: (event) => {
     const thread = event as SlackThreadBroadcastEvent;
