@@ -11,9 +11,12 @@ describe("mergeStreamingText", () => {
     expect(mergeStreamingText("hello world", "hello")).toBe("hello world");
   });
 
-  it("appends fragmented chunks without injecting newlines", () => {
-    expect(mergeStreamingText("hello wor", "ld")).toBe("hello world");
-    expect(mergeStreamingText("line1", "line2")).toBe("line1line2");
+  it("returns next when texts have no overlap (independent replies)", () => {
+    // When two texts share no overlap they are independent replies;
+    // returning `next` avoids duplicating content across cards (#43704).
+    expect(mergeStreamingText("hello wor", "ld")).toBe("ld");
+    expect(mergeStreamingText("line1", "line2")).toBe("line2");
+    expect(mergeStreamingText("让我先读取一下日历工具的使用说明", "会议已创建")).toBe("会议已创建");
   });
 
   it("merges overlap between adjacent partial snapshots", () => {
