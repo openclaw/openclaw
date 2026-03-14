@@ -220,13 +220,10 @@ export async function buildReplyPayloads(params: {
         sentMediaUrls: messagingToolSentMediaUrls,
       })
     : dedupedPayloads;
-  const mediaFilteredPayloadEntries = dedupedPayloadEntries.flatMap((entry, index) => {
-    const payload = mediaFilteredPayloads[index];
-    if (!payload || !isRenderablePayload(payload)) {
-      return [];
-    }
-    return [{ ...entry, payload }];
-  });
+  const mediaFilteredPayloadSet = new Set(mediaFilteredPayloads);
+  const mediaFilteredPayloadEntries = dedupedPayloadEntries.filter((entry) =>
+    mediaFilteredPayloadSet.has(entry.payload),
+  );
   // Filter out payloads already sent via pipeline or directly during tool flush.
   const filteredPayloadEntries = shouldDropFinalPayloads
     ? []
