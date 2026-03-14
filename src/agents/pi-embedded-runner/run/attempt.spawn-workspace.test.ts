@@ -290,7 +290,9 @@ async function cleanupTempPaths(tempPaths: string[]) {
   }
 }
 
-function createDefaultEmbeddedSession(): MutableSession {
+function createDefaultEmbeddedSession(params?: {
+  prompt?: (session: MutableSession) => Promise<void>;
+}): MutableSession {
   const session: MutableSession = {
     sessionId: "embedded-session",
     messages: [],
@@ -302,6 +304,10 @@ function createDefaultEmbeddedSession(): MutableSession {
       },
     },
     prompt: async () => {
+      if (params?.prompt) {
+        await params.prompt(session);
+        return;
+      }
       session.messages = [
         ...session.messages,
         { role: "assistant", content: "done", timestamp: 2 },
@@ -313,6 +319,24 @@ function createDefaultEmbeddedSession(): MutableSession {
   };
 
   return session;
+}
+
+function createContextEngineBootstrapAndAssemble() {
+  return {
+    bootstrap: vi.fn(async (_params: { sessionKey?: string }) => ({ bootstrapped: true })),
+    assemble: vi.fn(async ({ messages }: { messages: AgentMessage[]; sessionKey?: string }) => ({
+      messages,
+      estimatedTokens: 1,
+    })),
+  };
+}
+
+function expectCalledWithSessionKey(mock: ReturnType<typeof vi.fn>, sessionKey: string) {
+  expect(mock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      sessionKey,
+    }),
+  );
 }
 
 const testModel = {
@@ -366,16 +390,7 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
 
     hoisted.createAgentSessionMock.mockImplementation(
       async (params: { customTools: ToolDefinition[] }) => {
-        const session: MutableSession = {
-          sessionId: "embedded-session",
-          messages: [],
-          isCompacting: false,
-          isStreaming: false,
-          agent: {
-            replaceMessages: (messages: unknown[]) => {
-              session.messages = [...messages];
-            },
-          },
+        const session = createDefaultEmbeddedSession({
           prompt: async () => {
             const spawnTool = params.customTools.find((tool) => tool.name === "sessions_spawn");
             expect(spawnTool).toBeDefined();
@@ -390,10 +405,7 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
               {} as unknown as ExtensionContext,
             );
           },
-          abort: async () => {},
-          dispose: () => {},
-          steer: async () => {},
-        };
+        });
 
         return { session };
       },
@@ -650,13 +662,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   }
 
   it("forwards sessionKey to bootstrap, assemble, and afterTurn", async () => {
-    const bootstrap = vi.fn(async (_params: { sessionKey?: string }) => ({ bootstrapped: true }));
-    const assemble = vi.fn(
-      async ({ messages }: { messages: AgentMessage[]; sessionKey?: string }) => ({
-        messages,
-        estimatedTokens: 1,
-      }),
-    );
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const afterTurn = vi.fn(async (_params: { sessionKey?: string }) => {});
 
     const result = await runAttemptWithContextEngine({
@@ -666,31 +672,13 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(result.promptError).toBeNull();
-    expect(bootstrap).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-      }),
-    );
-    expect(assemble).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-      }),
-    );
-    expect(afterTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-      }),
-    );
+    expectCalledWithSessionKey(bootstrap, sessionKey);
+    expectCalledWithSessionKey(assemble, sessionKey);
+    expectCalledWithSessionKey(afterTurn, sessionKey);
   });
 
   it("forwards sessionKey to ingestBatch when afterTurn is absent", async () => {
-    const bootstrap = vi.fn(async (_params: { sessionKey?: string }) => ({ bootstrapped: true }));
-    const assemble = vi.fn(
-      async ({ messages }: { messages: AgentMessage[]; sessionKey?: string }) => ({
-        messages,
-        estimatedTokens: 1,
-      }),
-    );
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const ingestBatch = vi.fn(
       async (_params: { sessionKey?: string; messages: AgentMessage[] }) => ({ ingestedCount: 1 }),
     );
@@ -702,21 +690,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(result.promptError).toBeNull();
-    expect(ingestBatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-      }),
-    );
+    expectCalledWithSessionKey(ingestBatch, sessionKey);
   });
 
   it("forwards sessionKey to per-message ingest when ingestBatch is absent", async () => {
-    const bootstrap = vi.fn(async (_params: { sessionKey?: string }) => ({ bootstrapped: true }));
-    const assemble = vi.fn(
-      async ({ messages }: { messages: AgentMessage[]; sessionKey?: string }) => ({
-        messages,
-        estimatedTokens: 1,
-      }),
-    );
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const ingest = vi.fn(async (_params: { sessionKey?: string; message: AgentMessage }) => ({
       ingested: true,
     }));
