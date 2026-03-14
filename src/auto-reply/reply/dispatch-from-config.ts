@@ -371,6 +371,7 @@ export async function dispatchReplyFromConfig(params: {
     // TTS audio separately from the accumulated block content.
     let accumulatedBlockText = "";
     let blockCount = 0;
+    let toolDeliveryCount = 0;
 
     const resolveToolDeliveryPayload = (payload: ReplyPayload): ReplyPayload | null => {
       if (
@@ -435,6 +436,7 @@ export async function dispatchReplyFromConfig(params: {
             } else {
               dispatcher.sendToolResult(deliveryPayload);
             }
+            toolDeliveryCount++;
           };
           return run();
         },
@@ -601,6 +603,41 @@ export async function dispatchReplyFromConfig(params: {
         logVerbose(
           `dispatch-from-config: accumulated block TTS failed: ${err instanceof Error ? err.message : String(err)}`,
         );
+      }
+    }
+
+    // Silent completion — agent ran but produced no output and no blocks were
+    // streamed.  Send a fallback so the user is not left without any response.
+    if (!queuedFinal && replies.length === 0 && blockCount === 0 && toolDeliveryCount === 0) {
+      logVerbose(
+        "dispatch-from-config: agent path completed with 0 replies and 0 blocks — sending fallback",
+      );
+      const fallbackPayload: ReplyPayload = {
+        text: "I processed your message but wasn't able to generate a response. Please try again.",
+      };
+      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+        const result = await routeReply({
+          payload: fallbackPayload,
+          channel: originatingChannel,
+          to: originatingTo,
+          sessionKey: ctx.SessionKey,
+          accountId: ctx.AccountId,
+          threadId: routeThreadId,
+          cfg,
+          isGroup,
+          groupId,
+        });
+        queuedFinal = result.ok || queuedFinal;
+        if (result.ok) {
+          routedFinalCount += 1;
+        }
+        if (!result.ok) {
+          logVerbose(
+            `dispatch-from-config: route-reply (fallback) failed: ${result.error ?? "unknown error"}`,
+          );
+        }
+      } else {
+        queuedFinal = dispatcher.sendFinalReply(fallbackPayload) || queuedFinal;
       }
     }
 
