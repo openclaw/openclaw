@@ -682,7 +682,7 @@ describe("Feishu inbound debounce regressions", () => {
             params.onError?.(new Error("dispatch failed"), [item]);
           },
           flushKey: async () => {},
-          flushAll: async () => {},
+          flushAll: async () => 0,
         }),
       }),
     );

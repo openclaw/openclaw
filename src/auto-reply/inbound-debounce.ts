@@ -8,8 +8,7 @@ import { resolveGlobalMap } from "../shared/global-singleton.js";
  * itself on creation and deregisters after the next global flush sweep.
  */
 type DebouncerFlushHandle = {
-  getPendingBufferCount: () => number;
-  flushAll: () => Promise<void>;
+  flushAll: () => Promise<number>;
 };
 const INBOUND_DEBOUNCERS_KEY = Symbol.for("openclaw.inboundDebouncers");
 const INBOUND_DEBOUNCERS = resolveGlobalMap<symbol, DebouncerFlushHandle>(INBOUND_DEBOUNCERS_KEY);
@@ -21,35 +20,27 @@ export function clearInboundDebouncerRegistry(): void {
   INBOUND_DEBOUNCERS.clear();
 }
 
-export function getPendingInboundDebounceBufferCount(): number {
-  return [...INBOUND_DEBOUNCERS.values()].reduce(
-    (count, handle) => count + handle.getPendingBufferCount(),
-    0,
-  );
-}
-
 /**
  * Flush all registered inbound debouncers immediately. Called during SIGUSR1
  * restart to push buffered messages into the session before reinitializing.
- * Returns the number of pending debounce buffers that existed when the flush
- * started so restart logic can skip followup draining when there was no work.
+ * Returns the number of debounce buffers actually flushed so restart logic can
+ * skip followup draining when there was no buffered work.
  */
 export async function flushAllInboundDebouncers(): Promise<number> {
   const entries = [...INBOUND_DEBOUNCERS.entries()];
   if (entries.length === 0) {
     return 0;
   }
-  const pendingBufferCount = getPendingInboundDebounceBufferCount();
-  await Promise.all(
+  const flushedCounts = await Promise.all(
     entries.map(async ([key, handle]) => {
       try {
-        await handle.flushAll();
+        return await handle.flushAll();
       } finally {
         INBOUND_DEBOUNCERS.delete(key);
       }
     }),
   );
-  return pendingBufferCount;
+  return flushedCounts.reduce((total, count) => total + count, 0);
 }
 
 const resolveMs = (value: unknown): number | undefined => {
@@ -284,16 +275,28 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   };
 
   const flushAll = async () => {
-    const keys = [...buffers.keys()];
-    for (const key of keys) {
-      await flushKey(key);
+    let flushedBufferCount = 0;
+
+    // Keep sweeping until no debounced keys remain. A flush callback can race
+    // with late in-flight ingress and create another buffered key before the
+    // global registry deregisters this debouncer during restart.
+    while (buffers.size > 0) {
+      const keys = [...buffers.keys()];
+      for (const key of keys) {
+        if (!buffers.has(key)) {
+          continue;
+        }
+        await flushKey(key);
+        flushedBufferCount += 1;
+      }
     }
+
+    return flushedBufferCount;
   };
 
   // Register in global registry for SIGUSR1 flush.
   const registryKey = Symbol();
   INBOUND_DEBOUNCERS.set(registryKey, {
-    getPendingBufferCount: () => buffers.size,
     flushAll,
   });
 

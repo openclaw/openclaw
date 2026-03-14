@@ -796,6 +796,34 @@ describe("flushAllInboundDebouncers", () => {
     vi.useRealTimers();
   });
 
+  it("keeps flushing until no buffered keys remain", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+    let enqueuedDuringFlush = false;
+
+    let debouncer: ReturnType<typeof createInboundDebouncer<{ key: string; id: string }>>;
+    debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 5000,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+        if (!enqueuedDuringFlush) {
+          enqueuedDuringFlush = true;
+          await debouncer.enqueue({ key: "session-2", id: "msg-2" });
+        }
+      },
+    });
+
+    await debouncer.enqueue({ key: "session-1", id: "msg-1" });
+
+    const flushed = await flushAllInboundDebouncers();
+    expect(flushed).toBe(2);
+    expect(calls).toEqual([["msg-1"], ["msg-2"]]);
+    await expect(flushAllInboundDebouncers()).resolves.toBe(0);
+
+    vi.useRealTimers();
+  });
+
   it("returns 0 when no debouncers are registered", async () => {
     const flushed = await flushAllInboundDebouncers();
     expect(flushed).toBe(0);
