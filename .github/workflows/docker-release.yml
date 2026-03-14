@@ -106,6 +106,8 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
+          build-args: |
+            OPENCLAW_DOCKER_APT_PACKAGES=python3 wget ffmpeg
           tags: ${{ steps.tags.outputs.value }}
           labels: ${{ steps.labels.outputs.value }}
           provenance: false
@@ -119,6 +121,7 @@ jobs:
           platforms: linux/amd64
           build-args: |
             OPENCLAW_VARIANT=slim
+            OPENCLAW_DOCKER_APT_PACKAGES=python3 wget ffmpeg
           tags: ${{ steps.tags.outputs.slim }}
           labels: ${{ steps.labels.outputs.value }}
           provenance: false
@@ -207,6 +210,8 @@ jobs:
         with:
           context: .
           platforms: linux/arm64
+          build-args: |
+            OPENCLAW_DOCKER_APT_PACKAGES=python3 wget ffmpeg
           tags: ${{ steps.tags.outputs.value }}
           labels: ${{ steps.labels.outputs.value }}
           provenance: false
@@ -220,6 +225,7 @@ jobs:
           platforms: linux/arm64
           build-args: |
             OPENCLAW_VARIANT=slim
+            OPENCLAW_DOCKER_APT_PACKAGES=python3 wget ffmpeg
           tags: ${{ steps.tags.outputs.slim }}
           labels: ${{ steps.labels.outputs.value }}
           provenance: false
