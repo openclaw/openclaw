@@ -1,16 +1,16 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { isLikelyInterimExecutionMessage } from "../../agents/interim-execution.js";
-import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
 import type { TypingMode } from "../../config/types.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { TypingController } from "./typing.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { isLikelyInterimExecutionMessage } from "../../agents/interim-execution.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
+import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -72,7 +72,9 @@ function payloadsContainStructuredContent(payloads: ReplyPayload[]): boolean {
 }
 
 function hasActiveSubagentRuns(sessionKey: string): boolean {
-  return listSubagentRunsForRequester(sessionKey).some((entry) => typeof entry.endedAt !== "number");
+  return listSubagentRunsForRequester(sessionKey).some(
+    (entry) => typeof entry.endedAt !== "number",
+  );
 }
 
 function hasSubagentsStartedSinceRun(sessionKey: string, runStartedAt: number): boolean {
