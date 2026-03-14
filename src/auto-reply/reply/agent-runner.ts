@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { isLikelyInterimExecutionMessage } from "../../agents/interim-execution.js";
+import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
 import type { TypingMode } from "../../config/types.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -43,6 +45,50 @@ import { persistSessionUsageUpdate } from "./session-usage.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+const EXECUTION_TASK_CONTINUATION_PROMPT = [
+  "Your previous response was only an acknowledgement and did not complete the user's task.",
+  "Complete the user's task now.",
+  "Do not promise future work without spawning a background run first.",
+  "If you need ongoing work, use sessions_spawn and rely on completion updates; otherwise continue with tools now and return a real result or a concrete blocker.",
+].join(" ");
+
+function pickLastNonEmptyTextFromPayloads(payloads: ReplyPayload[]): string | undefined {
+  for (let index = payloads.length - 1; index >= 0; index -= 1) {
+    const text = payloads[index]?.text?.trim();
+    if (text) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
+function payloadsContainStructuredContent(payloads: ReplyPayload[]): boolean {
+  return payloads.some(
+    (payload) =>
+      Boolean(payload?.mediaUrl) ||
+      (payload?.mediaUrls?.length ?? 0) > 0 ||
+      Object.keys(payload?.channelData ?? {}).length > 0,
+  );
+}
+
+function hasActiveSubagentRuns(sessionKey: string): boolean {
+  return listSubagentRunsForRequester(sessionKey).some((entry) => typeof entry.endedAt !== "number");
+}
+
+function hasSubagentsStartedSinceRun(sessionKey: string, runStartedAt: number): boolean {
+  return listSubagentRunsForRequester(sessionKey).some((entry) => {
+    const startedAt = typeof entry.startedAt === "number" ? entry.startedAt : entry.createdAt;
+    return typeof startedAt === "number" && startedAt >= runStartedAt;
+  });
+}
+
+function mergeDirectlySentBlockKeys(
+  first?: Set<string>,
+  second?: Set<string>,
+): Set<string> | undefined {
+  const merged = new Set<string>([...(first ?? []), ...(second ?? [])]);
+  return merged.size > 0 ? merged : undefined;
+}
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -335,8 +381,61 @@ export async function runReplyAgent(params: {
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
-    const { runResult, fallbackProvider, fallbackModel, directlySentBlockKeys } = runOutcome;
+    let { runResult, fallbackProvider, fallbackModel, directlySentBlockKeys } = runOutcome;
     let { didLogHeartbeatStrip, autoCompactionCompleted } = runOutcome;
+
+    if (!isHeartbeat && sessionKey) {
+      const interimPayloads = runResult.payloads ?? [];
+      const interimText = pickLastNonEmptyTextFromPayloads(interimPayloads)?.trim() ?? "";
+      const shouldRetryInterimAck =
+        !runResult.meta.error &&
+        runResult.didSendViaMessagingTool !== true &&
+        !payloadsContainStructuredContent(interimPayloads) &&
+        !interimPayloads.some((payload) => payload?.isError === true) &&
+        !hasActiveSubagentRuns(sessionKey) &&
+        !hasSubagentsStartedSinceRun(sessionKey, runStartedAt) &&
+        isLikelyInterimExecutionMessage(interimText);
+
+      if (shouldRetryInterimAck) {
+        const continuationOutcome = await runAgentTurnWithFallback({
+          commandBody: EXECUTION_TASK_CONTINUATION_PROMPT,
+          followupRun,
+          sessionCtx,
+          opts,
+          typingSignals,
+          blockReplyPipeline,
+          blockStreamingEnabled,
+          blockReplyChunking,
+          resolvedBlockStreamingBreak,
+          applyReplyToMode,
+          shouldEmitToolResult,
+          shouldEmitToolOutput,
+          pendingToolTasks,
+          resetSessionAfterCompactionFailure,
+          resetSessionAfterRoleOrderingConflict,
+          isHeartbeat,
+          sessionKey,
+          getActiveSessionEntry: () => activeSessionEntry,
+          activeSessionStore,
+          storePath,
+          resolvedVerboseLevel,
+        });
+
+        if (continuationOutcome.kind === "final") {
+          return finalizeWithFollowup(continuationOutcome.payload, queueKey, runFollowupTurn);
+        }
+
+        runResult = continuationOutcome.runResult;
+        fallbackProvider = continuationOutcome.fallbackProvider;
+        fallbackModel = continuationOutcome.fallbackModel;
+        directlySentBlockKeys = mergeDirectlySentBlockKeys(
+          directlySentBlockKeys,
+          continuationOutcome.directlySentBlockKeys,
+        );
+        didLogHeartbeatStrip ||= continuationOutcome.didLogHeartbeatStrip;
+        autoCompactionCompleted ||= continuationOutcome.autoCompactionCompleted;
+      }
+    }
 
     if (
       shouldInjectGroupIntro &&
