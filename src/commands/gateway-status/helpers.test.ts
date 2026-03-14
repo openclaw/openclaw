@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { extractConfigSummary, resolveAuthForTarget } from "./helpers.js";
+import {
+  extractConfigSummary,
+  isProbeReachable,
+  isScopeLimitedProbeFailure,
+  renderProbeSummaryLine,
+  resolveAuthForTarget,
+} from "./helpers.js";
 
 describe("extractConfigSummary", () => {
   it("marks SecretRef-backed gateway auth credentials as configured", () => {
@@ -227,5 +233,43 @@ describe("resolveAuthForTarget", () => {
         expect(auth.diagnostics?.join("\n")).not.toContain("missing or empty");
       },
     );
+  });
+});
+
+describe("probe reachability classification", () => {
+  it("treats missing-scope RPC failures as scope-limited and reachable", () => {
+    const probe = {
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: 51,
+      error: "missing scope: operator.read",
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    };
+
+    expect(isScopeLimitedProbeFailure(probe)).toBe(true);
+    expect(isProbeReachable(probe)).toBe(true);
+    expect(renderProbeSummaryLine(probe, false)).toContain("RPC: limited");
+  });
+
+  it("keeps non-scope RPC failures as unreachable", () => {
+    const probe = {
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: 43,
+      error: "unknown method: status",
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    };
+
+    expect(isScopeLimitedProbeFailure(probe)).toBe(false);
+    expect(isProbeReachable(probe)).toBe(false);
+    expect(renderProbeSummaryLine(probe, false)).toContain("RPC: failed");
   });
 });
