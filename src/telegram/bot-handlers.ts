@@ -1444,7 +1444,10 @@ export const registerTelegramHandlers = ({
       });
       await processMessage(buildSyntheticContext(ctx, syntheticMessage), [], storeAllowFrom, {
         forceWasMentioned: true,
-        messageIdOverride: callback.id,
+        // Use the originating message's ID, not the callback query UUID.
+        // callback.id is a short-lived opaque token for answerCallbackQuery only;
+        // messageIdOverride feeds MessageSid which must be a numeric Telegram message ID.
+        messageIdOverride: String(callbackMessage.message_id),
       });
     } catch (err) {
       runtime.error?.(danger(`callback handler failed: ${String(err)}`));
