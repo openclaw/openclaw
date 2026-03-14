@@ -356,6 +356,48 @@ describe("connectGateway", () => {
     expect(host.lastErrorCode).toBe("AUTH_TOKEN_MISMATCH");
   });
 
+  it("surfaces shutdown restart reasons before the socket closes", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitEvent({
+      event: "shutdown",
+      payload: {
+        reason: "config change requires gateway restart (plugins.installs)",
+        restartExpectedMs: 1500,
+      },
+    });
+    client.emitClose({ code: 1006 });
+
+    expect(host.lastError).toBe(
+      "Restarting: config change requires gateway restart (plugins.installs)",
+    );
+    expect(host.lastErrorCode).toBeNull();
+  });
+
+  it("keeps shutdown restart reasons on service restart closes", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitEvent({
+      event: "shutdown",
+      payload: {
+        reason: "gateway restarting",
+        restartExpectedMs: 1500,
+      },
+    });
+    client.emitClose({ code: 1012, reason: "service restart" });
+
+    expect(host.lastError).toBe("Restarting: gateway restarting");
+    expect(host.lastErrorCode).toBeNull();
+  });
+
   it("does not reload chat history for each live tool result event", () => {
     const host = createHost();
 
