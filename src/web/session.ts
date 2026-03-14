@@ -7,6 +7,7 @@ import {
   makeWASocket,
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import qrcode from "qrcode-terminal";
 import { formatCliCommand } from "../cli/command-format.js";
 import { danger, success } from "../globals.js";
@@ -32,6 +33,63 @@ export {
 } from "./auth-store.js";
 
 let credsSaveQueue: Promise<void> = Promise.resolve();
+
+const WA_PROXY_TARGET_HOST = "web.whatsapp.com";
+
+function resolveWaProxyUrlFromEnv(): string | undefined {
+  return (
+    process.env.OPENCLAW_WHATSAPP_PROXY ??
+    process.env.HTTPS_PROXY ??
+    process.env.HTTP_PROXY ??
+    process.env.ALL_PROXY ??
+    process.env.https_proxy ??
+    process.env.http_proxy ??
+    process.env.all_proxy
+  );
+}
+
+function resolveNoProxyFromEnv(): string | undefined {
+  return process.env.NO_PROXY ?? process.env.no_proxy;
+}
+
+function noProxyTokenMatchesHost(token: string, host: string): boolean {
+  const normalizedHost = host.toLowerCase();
+  let normalizedToken = token.trim().toLowerCase();
+  if (!normalizedToken) {
+    return false;
+  }
+  if (normalizedToken === "*") {
+    return true;
+  }
+  if (normalizedToken.includes("/")) {
+    return false;
+  }
+  if (normalizedToken.startsWith("*.")) {
+    normalizedToken = normalizedToken.slice(2);
+  }
+  if (normalizedToken.startsWith(".")) {
+    normalizedToken = normalizedToken.slice(1);
+  }
+  const colonIdx = normalizedToken.lastIndexOf(":");
+  if (colonIdx > 0 && !normalizedToken.includes("]")) {
+    normalizedToken = normalizedToken.slice(0, colonIdx);
+  }
+  if (!normalizedToken) {
+    return false;
+  }
+  return normalizedHost === normalizedToken || normalizedHost.endsWith(`.${normalizedToken}`);
+}
+
+function shouldBypassWaProxy(noProxyRaw: string | undefined): boolean {
+  if (!noProxyRaw) {
+    return false;
+  }
+  return noProxyRaw
+    .split(",")
+    .map((token) => token.trim())
+    .some((token) => noProxyTokenMatchesHost(token, WA_PROXY_TARGET_HOST));
+}
+
 function enqueueSaveCreds(
   authDir: string,
   saveCreds: () => Promise<void> | void,
@@ -105,12 +163,27 @@ export async function createWaSocket(
   maybeRestoreCredsFromBackup(authDir);
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
   const { version } = await fetchLatestBaileysVersion();
+  const proxyUrl = resolveWaProxyUrlFromEnv();
+  const noProxyRaw = resolveNoProxyFromEnv();
+  const bypassProxy = shouldBypassWaProxy(noProxyRaw);
+  let proxyAgent: HttpsProxyAgent<string> | undefined;
+  if (proxyUrl && !bypassProxy) {
+    try {
+      proxyAgent = new HttpsProxyAgent(proxyUrl);
+    } catch (err) {
+      sessionLogger.warn(
+        { error: String(err) },
+        "invalid WhatsApp proxy URL; continuing without proxy",
+      );
+    }
+  }
   const sock = makeWASocket({
     auth: {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys, logger),
     },
     version,
+    ...(proxyAgent ? { agent: proxyAgent } : {}),
     logger,
     printQRInTerminal: false,
     browser: ["openclaw", "cli", VERSION],
