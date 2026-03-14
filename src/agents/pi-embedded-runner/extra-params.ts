@@ -3,6 +3,8 @@ import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ModelProviderConfig } from "../../config/types.models.js";
+import { findNormalizedProviderValue } from "../model-selection.js";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
@@ -40,6 +42,7 @@ import {
 /**
  * Resolve provider-specific extra params from model config.
  * Used to pass through stream params like temperature/maxTokens.
+ * Merge order (later overrides): provider model params → agents.defaults.models[modelKey].params → agents.list[].params.
  *
  * @internal Exported for testing only
  */
@@ -50,6 +53,13 @@ export function resolveExtraParams(params: {
   agentId?: string;
 }): Record<string, unknown> | undefined {
   const modelKey = `${params.provider}/${params.modelId}`;
+  const configuredProviders = params.cfg?.models?.providers;
+  const providerConfig: ModelProviderConfig | undefined = configuredProviders
+    ? (configuredProviders[params.provider] ??
+      findNormalizedProviderValue(configuredProviders, params.provider))
+    : undefined;
+  const providerModel = providerConfig?.models?.find((m) => m.id === params.modelId);
+  const providerParams = providerModel?.params ? { ...providerModel.params } : undefined;
   const modelConfig = params.cfg?.agents?.defaults?.models?.[modelKey];
   const globalParams = modelConfig?.params ? { ...modelConfig.params } : undefined;
   const agentParams =
@@ -57,13 +67,13 @@ export function resolveExtraParams(params: {
       ? params.cfg.agents.list.find((agent) => agent.id === params.agentId)?.params
       : undefined;
 
-  if (!globalParams && !agentParams) {
+  if (!providerParams && !globalParams && !agentParams) {
     return undefined;
   }
 
-  const merged = Object.assign({}, globalParams, agentParams);
+  const merged = Object.assign({}, providerParams, globalParams, agentParams);
   const resolvedParallelToolCalls = resolveAliasedParamValue(
-    [globalParams, agentParams],
+    [providerParams, globalParams, agentParams],
     "parallel_tool_calls",
     "parallelToolCalls",
   );

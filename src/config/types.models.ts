@@ -47,6 +47,8 @@ export type ModelDefinitionConfig = {
   maxTokens: number;
   headers?: Record<string, string>;
   compat?: ModelCompatConfig;
+  /** Optional provider-specific params (e.g. temperature) merged when resolving runtime model config. */
+  params?: Record<string, unknown>;
 };
 
 export type ModelProviderConfig = {

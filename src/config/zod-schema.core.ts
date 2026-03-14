@@ -221,6 +221,8 @@ export const ModelDefinitionSchema = z
     maxTokens: z.number().positive().optional(),
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
+    /** Optional provider-specific params (e.g. temperature) merged when resolving runtime model config. */
+    params: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
 
