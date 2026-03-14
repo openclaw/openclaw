@@ -486,14 +486,23 @@ export function buildAssistantMessageFromResponse(
   const hasToolCalls = content.some((c) => c.type === "toolCall");
   const stopReason: StopReason = hasToolCalls ? "toolUse" : "stop";
 
+  // Support both OpenAI-style (input_tokens/output_tokens) and
+  // dashscope/Bailian-style (prompt_tokens/completion_tokens) field names.
+  const usage = response.usage;
+  const inputTokens =
+    usage?.input_tokens ?? usage?.prompt_tokens ?? usage?.prompt_completion_tokens?.[0] ?? 0;
+  const outputTokens =
+    usage?.output_tokens ?? usage?.completion_tokens ?? usage?.prompt_completion_tokens?.[1] ?? 0;
+  const totalTokens = usage?.total_tokens ?? inputTokens + outputTokens;
+
   const message = buildAssistantMessage({
     model: modelInfo,
     content,
     stopReason,
     usage: buildUsageWithNoCost({
-      input: response.usage?.input_tokens ?? 0,
-      output: response.usage?.output_tokens ?? 0,
-      totalTokens: response.usage?.total_tokens ?? 0,
+      input: inputTokens,
+      output: outputTokens,
+      totalTokens: totalTokens,
     }),
   });
 
