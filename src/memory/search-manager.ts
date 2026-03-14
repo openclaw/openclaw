@@ -11,6 +11,12 @@ import type {
 
 const log = createSubsystemLogger("memory");
 const QMD_MANAGER_CACHE = new Map<string, MemorySearchManager>();
+let managerRuntimePromise: Promise<typeof import("./manager.js")> | null = null;
+
+function loadManagerRuntime() {
+  managerRuntimePromise ??= import("./manager.js");
+  return managerRuntimePromise;
+}
 
 export type MemorySearchManagerResult = {
   manager: MemorySearchManager | null;
@@ -60,7 +66,7 @@ export async function getMemorySearchManager(params: {
             {
               primary,
               fallbackFactory: async () => {
-                const { MemoryIndexManager } = await import("./manager.js");
+                const { MemoryIndexManager } = await loadManagerRuntime();
                 return await MemoryIndexManager.get(params);
               },
             },
@@ -77,7 +83,7 @@ export async function getMemorySearchManager(params: {
   }
 
   try {
-    const { MemoryIndexManager } = await import("./manager.js");
+    const { MemoryIndexManager } = await loadManagerRuntime();
     const manager = await MemoryIndexManager.get(params);
     return { manager };
   } catch (err) {
@@ -87,15 +93,28 @@ export async function getMemorySearchManager(params: {
 }
 
 export async function closeAllMemorySearchManagers(): Promise<void> {
+<<<<<<< HEAD
   const managers = Array.from(QMD_MANAGER_CACHE.values());
   QMD_MANAGER_CACHE.clear();
   for (const manager of managers) {
     try {
       await manager.close?.();
+=======
+  // Close all cached QMD managers
+  for (const [key, manager] of QMD_MANAGER_CACHE.entries()) {
+    try {
+      await manager.close();
+>>>>>>> 162da4cf6 (fix: address review comments - restore loadManagerRuntime, use workspace dir, singleton aliases)
     } catch (err) {
       log.warn(`failed to close qmd memory manager: ${String(err)}`);
     }
   }
+<<<<<<< HEAD
+=======
+  QMD_MANAGER_CACHE.clear();
+
+  // Close all builtin memory index managers if runtime was loaded
+>>>>>>> 162da4cf6 (fix: address review comments - restore loadManagerRuntime, use workspace dir, singleton aliases)
   if (managerRuntimePromise !== null) {
     const { closeAllMemoryIndexManagers } = await loadManagerRuntime();
     await closeAllMemoryIndexManagers();

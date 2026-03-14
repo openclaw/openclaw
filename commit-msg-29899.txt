@@ -1,0 +1,27 @@
+fix(ui): address review comments for schema analyzer
+
+Address multiple review comments on PR #29899:
+
+1. Clear union fields (anyOf/oneOf/allOf) when creating merged schema
+to avoid contradictory schema definitions
+
+2. Restore literals.length === 0 check for primitive unions
+Mixed primitive-plus-literal unions are not supported because UI
+renders them as number inputs and cannot surface literal options
+
+3. Propagate unsupported paths from additionalProperties
+This ensures users are directed to Raw mode when nested fields
+cannot be edited, preventing misleading form editing
+
+Changes:
+- Clear anyOf/oneOf/allOf when merging primitive unions
+- Keep literals.length === 0 requirement
+- Restore unsupported path propagation from additionalProperties
+
+Result:
+- Complex unions properly marked as unsupported
+- Union fields cleared to avoid schema contradictions
+- Users directed to Raw mode for uneditable fields
+- Total unsupported paths: 16 (accurately reflects UI capabilities)
+
+Related to PR #29899

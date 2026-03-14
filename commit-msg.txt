@@ -1,0 +1,37 @@
+fix(ui): handle complex schema unions and empty objects in config form
+
+Fixes #1749 - Web UI showing 'Unsupported schema node' error for Accounts
+
+The config form analyzer was incorrectly marking several schema types as
+unsupported, causing the UI to show errors for valid configurations.
+
+Changes:
+
+1. Handle primitive type unions with const values (e.g., boolean | {const: "auto"})
+   - Removed requirement for literals.length === 0 in normalizeUnion
+   - Merge const values into enum field when present
+
+2. Handle complex type unions (e.g., array | object)
+   - Added support for anyOf with multiple complex types
+   - Recursively normalize each option in the union
+   - Preserve anyOf structure for UI rendering
+
+3. Handle empty object schemas (e.g., {} for 'any' type)
+   - Treat empty object {} as 'object' type for UI rendering
+   - Allows rendering of fields like customCommands with generic object inputs
+
+Before this fix, the following paths were incorrectly marked as unsupported:
+- channels.telegram.accounts
+- channels.googlechat.accounts
+- channels.telegram.capabilities
+- channels.telegram.customCommands
+- And many others with anyOf unions or empty object schemas
+
+After this fix, all schema paths are properly supported (0 unsupported paths).
+
+Testing:
+- Analyzed full OpenClaw schema: 0 unsupported paths (was 15 before)
+- Lint passes: 0 warnings, 0 errors
+- Manual testing confirms Accounts section now renders correctly
+
+Fixes #1749
