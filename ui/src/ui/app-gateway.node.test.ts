@@ -271,6 +271,48 @@ describe("connectGateway", () => {
     expect(host.lastError).toContain("too many failed authentication attempts");
   });
 
+  it("maps generic fetch failures to actionable device identity guidance", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitClose({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Fetch failed",
+        details: { code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED },
+      },
+    });
+
+    expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED);
+    expect(host.lastError).toContain("device identity required");
+  });
+
+  it("maps generic fetch failures to actionable origin guidance", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitClose({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Fetch failed",
+        details: { code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED },
+      },
+    });
+
+    expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED);
+    expect(host.lastError).toContain("origin not allowed");
+  });
+
   it("preserves specific close errors even when auth detail codes are present", () => {
     const host = createHost();
 

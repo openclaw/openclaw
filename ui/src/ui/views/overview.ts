@@ -18,8 +18,7 @@ import { renderOverviewAttention } from "./overview-attention.ts";
 import { renderOverviewCards } from "./overview-cards.ts";
 import { renderOverviewEventLog } from "./overview-event-log.ts";
 import {
-  shouldShowAuthHint,
-  shouldShowAuthRequiredHint,
+  resolveAuthHintKind,
   shouldShowInsecureContextHint,
   shouldShowPairingHint,
 } from "./overview-hints.ts";
@@ -103,15 +102,17 @@ export function renderOverview(props: OverviewProps) {
   })();
 
   const authHint = (() => {
-    if (props.connected || !props.lastError) {
+    const authHintKind = resolveAuthHintKind({
+      connected: props.connected,
+      lastError: props.lastError,
+      lastErrorCode: props.lastErrorCode,
+      hasToken: Boolean(props.settings.token.trim()),
+      hasPassword: Boolean(props.password.trim()),
+    });
+    if (authHintKind == null) {
       return null;
     }
-    if (!shouldShowAuthHint(props.connected, props.lastError, props.lastErrorCode)) {
-      return null;
-    }
-    const hasToken = Boolean(props.settings.token.trim());
-    const hasPassword = Boolean(props.password.trim());
-    if (shouldShowAuthRequiredHint(hasToken, hasPassword, props.lastErrorCode)) {
+    if (authHintKind === "required") {
       return html`
         <div class="muted" style="margin-top: 8px">
           ${t("overview.auth.required")}
