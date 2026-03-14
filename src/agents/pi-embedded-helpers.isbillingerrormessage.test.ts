@@ -1014,6 +1014,12 @@ describe("classifyFailoverReason", () => {
         "402 You've used up your points! Visit https://poe.com/api/keys to get more.",
       ),
     ).toBe("billing");
+    // Third-party proxy 402 with non-standard wording (#45774)
+    expect(
+      classifyFailoverReason(
+        "402 No available asset for API access, please purchase a subscription",
+      ),
+    ).toBe("billing");
     expect(classifyFailoverReason(INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");
