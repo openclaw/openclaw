@@ -511,4 +511,46 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     const result = validateAnthropicTurns(msgs);
     expect(result).toHaveLength(3);
   });
+
+  it("strips dangling tool_use blocks when assistant message is the last in the array", () => {
+    // Regression test for the edge case where the assistant message with orphaned
+    // tool_use blocks is the final message (no following user message).
+    // Previously the early-exit `nextMsgRole !== "user"` guard left these untouched,
+    // causing the Anthropic API to reject the conversation with a tool_use/tool_result
+    // mismatch error.
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use a tool" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolUse", id: "orphan-1", name: "exec", input: {} },
+          { type: "text", text: "Running..." },
+        ],
+      },
+      // No following user message — assistant is the last message
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(2);
+    const assistantContent = (result[1] as { content?: unknown[] }).content;
+    // Dangling tool_use must be stripped; text content preserved
+    expect(assistantContent).toEqual([{ type: "text", text: "Running..." }]);
+  });
+
+  it("replaces with fallback text when last assistant message has only tool_use blocks", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use a tool" }] },
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "orphan-1", name: "exec", input: {} }],
+      },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(2);
+    const assistantContent = (result[1] as { content?: unknown[] }).content;
+    expect(assistantContent).toEqual([{ type: "text", text: "[tool calls omitted]" }]);
+  });
 });

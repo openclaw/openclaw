@@ -25,6 +25,7 @@ import {
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { sanitizeForPromptLiteral, wrapUntrustedPromptDataBlock } from "./sanitize-for-prompt.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 export {
@@ -46,6 +47,39 @@ const MAX_ADAPTIVE_READ_MAX_BYTES = 512 * 1024;
 const ADAPTIVE_READ_CONTEXT_SHARE = 0.2;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 const MAX_ADAPTIVE_READ_PAGES = 8;
+
+/**
+ * Path segment that identifies user-sent inbound media files staged into the sandbox.
+ * Files under this directory are untrusted external content and must be wrapped
+ * with prompt-injection guards before being returned to the LLM.
+ */
+const INBOUND_MEDIA_PATH_SEGMENT = "media/inbound";
+
+/**
+ * Returns true if the given file path is inside the inbound media staging directory.
+ * These files originate from external senders (WhatsApp, Telegram, Slack, etc.)
+ * and must be treated as untrusted data.
+ *
+ * path.posix.normalize is applied after backslash conversion so that non-canonical
+ * forms such as "media//inbound/file.txt" or "media/./inbound/file.txt" are
+ * collapsed before the trust check, preventing bypass via redundant separators or
+ * dot segments.
+ *
+ * The comparison is case-insensitive so that paths like "MEDIA/INBOUND/file.txt"
+ * are correctly classified on case-insensitive filesystems (macOS, Windows).
+ */
+export function isInboundMediaPath(filePath: string): boolean {
+  const posix = filePath.replace(/\\/g, "/");
+  // Normalise then lower-case so that case-insensitive filesystems (macOS/Windows)
+  // cannot bypass the guard with upper-cased path segments.
+  const normalized = path.posix.normalize(posix).toLowerCase();
+  return (
+    normalized.includes(`/${INBOUND_MEDIA_PATH_SEGMENT}/`) ||
+    normalized.startsWith(`${INBOUND_MEDIA_PATH_SEGMENT}/`) ||
+    normalized === INBOUND_MEDIA_PATH_SEGMENT ||
+    normalized.endsWith(`/${INBOUND_MEDIA_PATH_SEGMENT}`)
+  );
+}
 
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
@@ -659,12 +693,56 @@ export function createOpenClawReadTool(
       const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
       const strippedDetailsResult = stripReadTruncationContentDetails(result);
       const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
-      return sanitizeToolResultImages(
+      const sanitizedResult = await sanitizeToolResultImages(
         normalizedResult,
         `read:${filePath}`,
         options?.imageSanitization,
       );
+      // Wrap inbound media file content to prevent prompt injection.
+      // Files staged under media/inbound/ originate from external senders and
+      // must be treated as untrusted data, not as agent instructions.
+      if (isInboundMediaPath(filePath)) {
+        return wrapInboundFileResult(sanitizedResult, filePath);
+      }
+      return sanitizedResult;
     },
+  };
+}
+
+/**
+ * Wraps the text content of a tool result with untrusted-data markers to
+ * prevent prompt injection from inbound media files.
+ */
+function wrapInboundFileResult(
+  result: AgentToolResult<unknown>,
+  filePath: string,
+): AgentToolResult<unknown> {
+  const content = Array.isArray(result.content) ? result.content : [];
+  const wrappedContent = content.map((block) => {
+    if (
+      block &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "text" &&
+      typeof (block as { text?: unknown }).text === "string"
+    ) {
+      const text = (block as { text: string }).text;
+      // sanitizeForPromptLiteral strips control/newline characters; additionally
+      // escape < and > so that an attacker-controlled filename cannot inject
+      // markup into the label line that sits outside the <untrusted-text> block.
+      const safeLabel = sanitizeForPromptLiteral(filePath)
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+      const wrapped = wrapUntrustedPromptDataBlock({
+        label: `File: ${safeLabel}`,
+        text,
+      });
+      return { ...(block as object), text: wrapped || text };
+    }
+    return block;
+  });
+  return {
+    ...result,
+    content: wrappedContent as unknown as AgentToolResult<unknown>["content"],
   };
 }
 
