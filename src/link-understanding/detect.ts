@@ -16,6 +16,21 @@ function resolveMaxLinks(value?: number): number {
   return DEFAULT_MAX_LINKS;
 }
 
+function containsShellMetacharacters(url: string): boolean {
+  // Reject URLs containing shell metacharacters that could be interpreted
+  // by shell wrappers or argument injection patterns (CWE-78)
+  const dangerousPatterns = [
+    /\$\(/, // Command substitution $(...)
+    /`/, // Backtick command substitution
+    /\${/, // Variable expansion ${...}
+    /(?<![?&=])\$[a-zA-Z_0-9]/, // Bare variable expansion $VAR (allow OData query params like ?$filter)
+    /&&/, // Shell command chaining
+    /[;|><]/, // Shell operators (single & excluded: legitimate query separator)
+  ];
+
+  return dangerousPatterns.some((pattern) => pattern.test(url));
+}
+
 function isAllowedUrl(raw: string): boolean {
   try {
     const parsed = new URL(raw);
@@ -23,6 +38,9 @@ function isAllowedUrl(raw: string): boolean {
       return false;
     }
     if (isBlockedHostnameOrIp(parsed.hostname)) {
+      return false;
+    }
+    if (containsShellMetacharacters(raw)) {
       return false;
     }
     return true;
