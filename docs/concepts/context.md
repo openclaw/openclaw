@@ -157,7 +157,8 @@ By default, OpenClaw uses the built-in `legacy` context engine for assembly and
 compaction. If you install a plugin that provides `kind: "context-engine"` and
 select it with `plugins.slots.contextEngine`, OpenClaw delegates context
 assembly, `/compact`, and related subagent context lifecycle hooks to that
-engine instead.
+engine instead. See [Context Engine](/concepts/context-engine) for the full
+pluggable interface, lifecycle hooks, and configuration.
 
 ## What `/context` actually reports
 
