@@ -237,6 +237,16 @@ export function resolveHeartbeatIntervalMs(
   if (ms <= 0) {
     return null;
   }
+  // Node.js setTimeout uses a 32-bit signed integer for the delay.
+  // Values above 2^31-1 overflow, causing the timer to fire immediately.
+  const MAX_TIMEOUT_MS = 2_147_483_647;
+  if (ms > MAX_TIMEOUT_MS) {
+    log.warn("heartbeat: intervalMs exceeds Node.js 32-bit timer limit, clamping", {
+      originalMs: ms,
+      clampedMs: MAX_TIMEOUT_MS,
+    });
+    ms = MAX_TIMEOUT_MS;
+  }
   return ms;
 }
 
@@ -1060,7 +1070,7 @@ export function startHeartbeatRunner(opts: {
     if (!Number.isFinite(nextDue)) {
       return;
     }
-    const delay = Math.max(0, nextDue - now);
+    const delay = Math.min(Math.max(0, nextDue - now), 2_147_483_647);
     state.timer = setTimeout(() => {
       state.timer = null;
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
