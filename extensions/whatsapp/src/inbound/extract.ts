@@ -64,18 +64,26 @@ export function extractMentionedJids(rawMessage: proto.IMessage | undefined): st
     return undefined;
   }
 
-  const candidates: Array<string[] | null | undefined> = [
-    message.extendedTextMessage?.contextInfo?.mentionedJid,
-    message.extendedTextMessage?.contextInfo?.quotedMessage?.extendedTextMessage?.contextInfo
-      ?.mentionedJid,
-    message.imageMessage?.contextInfo?.mentionedJid,
-    message.videoMessage?.contextInfo?.mentionedJid,
-    message.documentMessage?.contextInfo?.mentionedJid,
-    message.audioMessage?.contextInfo?.mentionedJid,
-    message.stickerMessage?.contextInfo?.mentionedJid,
-    message.buttonsResponseMessage?.contextInfo?.mentionedJid,
-    message.listResponseMessage?.contextInfo?.mentionedJid,
-  ];
+  // Use extractMessageContent to handle wrapped messages (e.g., viewOnceMessageV2Extension)
+  const extracted = extractMessageContent(message);
+  const candidatesToCheck = [message, extracted && extracted !== message ? extracted : undefined];
+
+  const candidates: Array<string[] | null | undefined> = [];
+  for (const msg of candidatesToCheck) {
+    if (!msg) continue;
+    candidates.push(
+      msg.extendedTextMessage?.contextInfo?.mentionedJid,
+      msg.extendedTextMessage?.contextInfo?.quotedMessage?.extendedTextMessage?.contextInfo
+        ?.mentionedJid,
+      msg.imageMessage?.contextInfo?.mentionedJid,
+      msg.videoMessage?.contextInfo?.mentionedJid,
+      msg.documentMessage?.contextInfo?.mentionedJid,
+      msg.audioMessage?.contextInfo?.mentionedJid,
+      msg.stickerMessage?.contextInfo?.mentionedJid,
+      msg.buttonsResponseMessage?.contextInfo?.mentionedJid,
+      msg.listResponseMessage?.contextInfo?.mentionedJid,
+    );
+  }
 
   const flattened = candidates.flatMap((arr) => arr ?? []).filter(Boolean);
   if (flattened.length === 0) {
