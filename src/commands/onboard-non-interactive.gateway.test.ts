@@ -7,10 +7,6 @@ import { captureEnv } from "../test-utils/env.js";
 import { createThrowingRuntime, readJsonFile } from "./onboard-non-interactive.test-helpers.js";
 import type { installGatewayDaemonNonInteractive } from "./onboard-non-interactive/local/daemon-install.js";
 
-type InstallGatewayDaemonResult =
-  | { installed: true }
-  | { installed: false; skippedReason?: "systemd-user-unavailable" };
-
 const gatewayClientCalls: Array<{
   url?: string;
   token?: string;
