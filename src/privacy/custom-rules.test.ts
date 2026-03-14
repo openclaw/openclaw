@@ -91,6 +91,19 @@ describe("custom-rules", () => {
         rmSync(root, { recursive: true, force: true });
       }
     });
+
+    it("falls back safely when parsed root is not an object", () => {
+      const dir = mkdtempSync(join(tmpdir(), "privacy-custom-rules-badroot-"));
+      const filePath = join(dir, "rules.json5");
+      try {
+        writeFileSync(filePath, "null\n");
+        const loaded = loadCustomRules(filePath);
+        expect(loaded.rules.some((r) => r.type === "email")).toBe(true);
+        expect(loaded.warnings.some((w) => w.includes("must parse to an object"))).toBe(true);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("validateUserRule", () => {
@@ -378,6 +391,17 @@ describe("custom-rules", () => {
       expect(result.rules[0].type).toBe("valid_rule");
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].ruleIndex).toBe(1);
+    });
+
+    it("reports non-object entries in rules array instead of throwing", () => {
+      const config = {
+        extends: "none",
+        rules: [null, { type: "ok", description: "ok", riskLevel: "low", pattern: "ok" }],
+      } as unknown as CustomRulesConfig;
+      const result = processCustomRulesConfig(config);
+      expect(result.rules).toHaveLength(1);
+      expect(result.rules[0].type).toBe("ok");
+      expect(result.errors.some((e) => e.field === "rules")).toBe(true);
     });
 
     it("resolves validateFn to actual functions", () => {
