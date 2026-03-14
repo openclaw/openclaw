@@ -281,6 +281,14 @@ export class CallManager {
       return;
     }
 
+    // When streaming is enabled for non-notify modes, the media stream's
+    // onConnect handler speaks the initial message after the stream is
+    // established. Speaking here would overwrite the <Stream> TwiML.
+    const mode = call.metadata?.mode as string | undefined;
+    if (this.config.streaming?.enabled && mode !== "notify") {
+      return;
+    }
+
     void this.speakInitialMessage(call.providerCallId);
   }
 
