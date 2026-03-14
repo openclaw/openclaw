@@ -7,7 +7,8 @@ export type ToolFsPolicy = {
 
 export function createToolFsPolicy(params: { workspaceOnly?: boolean }): ToolFsPolicy {
   return {
-    workspaceOnly: params.workspaceOnly === true,
+    // Default to true: restrict file tools to the workspace directory unless explicitly disabled.
+    workspaceOnly: params.workspaceOnly !== false,
   };
 }
 
@@ -27,5 +28,6 @@ export function resolveEffectiveToolFsWorkspaceOnly(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
 }): boolean {
-  return resolveToolFsConfig(params).workspaceOnly === true;
+  // Default to true when unset — secure by default.
+  return resolveToolFsConfig(params).workspaceOnly !== false;
 }

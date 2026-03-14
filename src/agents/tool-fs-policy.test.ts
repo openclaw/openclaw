@@ -3,8 +3,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
 
 describe("resolveEffectiveToolFsWorkspaceOnly", () => {
-  it("returns false by default when tools.fs.workspaceOnly is unset", () => {
-    expect(resolveEffectiveToolFsWorkspaceOnly({ cfg: {}, agentId: "main" })).toBe(false);
+  it("returns true by default when tools.fs.workspaceOnly is unset (secure default)", () => {
+    expect(resolveEffectiveToolFsWorkspaceOnly({ cfg: {}, agentId: "main" })).toBe(true);
   });
 
   it("uses global tools.fs.workspaceOnly when no agent override exists", () => {
