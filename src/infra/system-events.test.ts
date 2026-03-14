@@ -56,6 +56,38 @@ describe("system events (session routing)", () => {
     expect(() => enqueueSystemEvent("Node: Mac Studio", { sessionKey: " " })).toThrow("sessionKey");
   });
 
+  it("normalizes session key case so channel sessions match", () => {
+    // Plugins may pass mixed-case keys (Slack channel IDs are uppercase),
+    // but the heartbeat runner normalizes to lowercase via parseAgentSessionKey.
+    // Without case normalization, events enqueued with mixed case are invisible
+    // to peek/drain calls using the canonical lowercase key. (#34338)
+    enqueueSystemEvent("CI passed on PR #365", {
+      sessionKey: "agent:main:slack:channel:C0AKA9RBSAU",
+    });
+
+    // Lookup with lowercase (as the heartbeat runner does) must find the event
+    expect(peekSystemEvents("agent:main:slack:channel:c0aka9rbsau")).toEqual([
+      "CI passed on PR #365",
+    ]);
+
+    // Lookup with original mixed case must also find the event
+    expect(peekSystemEvents("agent:main:slack:channel:C0AKA9RBSAU")).toEqual([
+      "CI passed on PR #365",
+    ]);
+  });
+
+  it("deduplicates across case variants of the same session key", () => {
+    enqueueSystemEvent("event one", {
+      sessionKey: "agent:main:slack:channel:C0XX",
+    });
+    enqueueSystemEvent("event two", {
+      sessionKey: "agent:main:slack:channel:c0xx",
+    });
+
+    // Both events should be in the same queue
+    expect(peekSystemEvents("agent:main:slack:channel:c0xx")).toEqual(["event one", "event two"]);
+  });
+
   it("returns false for consecutive duplicate events", () => {
     const first = enqueueSystemEvent("Node connected", { sessionKey: "agent:main:main" });
     const second = enqueueSystemEvent("Node connected", { sessionKey: "agent:main:main" });
