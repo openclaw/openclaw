@@ -31,11 +31,25 @@ function resolveBootstrapPath(baseDir?: string): string {
 
 async function loadState(baseDir?: string): Promise<DeviceBootstrapStateFile> {
   const bootstrapPath = resolveBootstrapPath(baseDir);
-  const state = (await readJsonFile<DeviceBootstrapStateFile>(bootstrapPath)) ?? {};
-  for (const entry of Object.values(state)) {
-    if (typeof entry.ts !== "number") {
-      entry.ts = entry.issuedAtMs;
+  const rawState = (await readJsonFile<DeviceBootstrapStateFile>(bootstrapPath)) ?? {};
+  const state: DeviceBootstrapStateFile = {};
+  if (!rawState || typeof rawState !== "object" || Array.isArray(rawState)) {
+    return state;
+  }
+  for (const [tokenKey, entry] of Object.entries(rawState)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
     }
+    const record = entry as Partial<DeviceBootstrapTokenRecord>;
+    const token =
+      typeof record.token === "string" && record.token.trim().length > 0 ? record.token : tokenKey;
+    const issuedAtMs = typeof record.issuedAtMs === "number" ? record.issuedAtMs : 0;
+    state[tokenKey] = {
+      ...record,
+      token,
+      issuedAtMs,
+      ts: typeof record.ts === "number" ? record.ts : issuedAtMs,
+    };
   }
   pruneExpiredPending(state, Date.now(), DEVICE_BOOTSTRAP_TOKEN_TTL_MS);
   return state;
