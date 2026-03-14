@@ -51,6 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.ui.mobileCardSurface
 
 private enum class ConnectInputMode {
   SetupCode,
@@ -144,7 +145,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
     Surface(
       modifier = Modifier.fillMaxWidth(),
       shape = RoundedCornerShape(14.dp),
-      color = Color.White,
+      color = mobileCardSurface,
       border = BorderStroke(1.dp, mobileBorder),
     ) {
       Column {
@@ -205,7 +206,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
         shape = RoundedCornerShape(14.dp),
         colors =
           ButtonDefaults.buttonColors(
-            containerColor = Color.White,
+            containerColor = mobileCardSurface,
             contentColor = mobileDanger,
           ),
         border = BorderStroke(1.dp, mobileDanger.copy(alpha = 0.4f)),

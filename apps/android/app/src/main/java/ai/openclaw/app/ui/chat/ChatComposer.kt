@@ -113,7 +113,7 @@ fun ChatComposer(
         Surface(
           onClick = { showThinkingMenu = true },
           shape = RoundedCornerShape(14.dp),
-          color = Color.White,
+          color = mobileCardSurface,
           border = BorderStroke(1.dp, mobileBorderStrong),
         ) {
           Row(
