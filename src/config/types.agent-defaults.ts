@@ -281,6 +281,18 @@ export type AgentDefaultsConfig = {
     runTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 90000). */
     announceTimeoutMs?: number;
+    /**
+     * External worker backend identifier (e.g. "loa").
+     * When set, sessions_spawn delegates to an external launcher instead of
+     * running in-process via callGateway. Requires workerLauncher to be set.
+     */
+    workerBackend?: string;
+    /**
+     * Path to external worker launcher executable.
+     * The launcher receives a JSON spawn request on stdin and must return
+     * a JSON response on stdout. Required when workerBackend is set.
+     */
+    workerLauncher?: string;
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;

@@ -13,6 +13,11 @@ import {
 } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveAgentConfig } from "./agent-scope.js";
+import {
+  resolveExternalWorkerBackend,
+  spawnExternalWorker,
+  type ExternalSpawnRequest,
+} from "./external-worker-backend.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
@@ -603,94 +608,135 @@ export async function spawnSubagentDirect(
 
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
-  try {
-    const {
-      spawnedBy: _spawnedBy,
-      workspaceDir: _workspaceDir,
-      ...publicSpawnedMetadata
-    } = spawnedMetadata;
-    const response = await callGateway<{ runId: string }>({
-      method: "agent",
-      params: {
-        message: childTaskMessage,
-        sessionKey: childSessionKey,
-        channel: requesterOrigin?.channel,
-        to: requesterOrigin?.to ?? undefined,
-        accountId: requesterOrigin?.accountId ?? undefined,
-        threadId: requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
-        idempotencyKey: childIdem,
-        deliver: false,
-        lane: AGENT_LANE_SUBAGENT,
-        extraSystemPrompt: childSystemPrompt,
-        thinking: thinkingOverride,
-        timeout: runTimeoutSeconds,
-        label: label || undefined,
-        ...publicSpawnedMetadata,
-      },
-      timeoutMs: 10_000,
-    });
-    if (typeof response?.runId === "string" && response.runId) {
-      childRunId = response.runId;
+
+  // External worker backend: delegate spawn to an external launcher (e.g. LOA)
+  // instead of running in-process via callGateway.
+  const externalBackend = resolveExternalWorkerBackend(cfg);
+  if (externalBackend) {
+    const externalRequest: ExternalSpawnRequest = {
+      version: "openclaw.worker.v1",
+      requestId: childIdem,
+      agentId: targetAgentId,
+      childSessionKey,
+      requesterSessionKey: requesterInternalKey,
+      depth: childDepth,
+      task: childTaskMessage,
+      systemPrompt: childSystemPrompt,
+      runTimeoutSeconds,
+      mode: spawnMode,
+      model: resolvedModel,
+      thinking: thinkingOverride,
+      label: label || undefined,
+      workspaceDir: spawnedMetadata.workspaceDir,
+    };
+    const externalResult = await spawnExternalWorker(externalBackend, externalRequest);
+    if (externalResult.status !== "accepted") {
+      await cleanupFailedSpawnBeforeAgentStart({
+        childSessionKey,
+        attachmentAbsDir,
+        emitLifecycleHooks: threadBindingReady,
+        deleteTranscript: true,
+      });
+      return {
+        status: externalResult.status === "denied" ? "forbidden" : "error",
+        error: externalResult.error || `External backend ${externalBackend.backend} rejected spawn`,
+        childSessionKey,
+        runId: childIdem,
+      };
     }
-  } catch (err) {
-    if (attachmentAbsDir) {
-      try {
-        await fs.rm(attachmentAbsDir, { recursive: true, force: true });
-      } catch {
-        // Best-effort cleanup only.
+    childRunId = externalResult.workerId || childIdem;
+  } else {
+    // Default: in-process spawn via gateway.
+    try {
+      const {
+        spawnedBy: _spawnedBy,
+        workspaceDir: _workspaceDir,
+        ...publicSpawnedMetadata
+      } = spawnedMetadata;
+      const response = await callGateway<{ runId: string }>({
+        method: "agent",
+        params: {
+          message: childTaskMessage,
+          sessionKey: childSessionKey,
+          channel: requesterOrigin?.channel,
+          to: requesterOrigin?.to ?? undefined,
+          accountId: requesterOrigin?.accountId ?? undefined,
+          threadId:
+            requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
+          idempotencyKey: childIdem,
+          deliver: false,
+          lane: AGENT_LANE_SUBAGENT,
+          extraSystemPrompt: childSystemPrompt,
+          thinking: thinkingOverride,
+          timeout: runTimeoutSeconds,
+          label: label || undefined,
+          ...publicSpawnedMetadata,
+        },
+        timeoutMs: 10_000,
+      });
+      if (typeof response?.runId === "string" && response.runId) {
+        childRunId = response.runId;
       }
-    }
-    if (threadBindingReady) {
-      const hasEndedHook = hookRunner?.hasHooks("subagent_ended") === true;
-      let endedHookEmitted = false;
-      if (hasEndedHook) {
+    } catch (err) {
+      if (attachmentAbsDir) {
         try {
-          await hookRunner?.runSubagentEnded(
-            {
-              targetSessionKey: childSessionKey,
-              targetKind: "subagent",
-              reason: "spawn-failed",
-              sendFarewell: true,
-              accountId: requesterOrigin?.accountId,
-              runId: childRunId,
-              outcome: "error",
-              error: "Session failed to start",
-            },
-            {
-              runId: childRunId,
-              childSessionKey,
-              requesterSessionKey: requesterInternalKey,
-            },
-          );
-          endedHookEmitted = true;
+          await fs.rm(attachmentAbsDir, { recursive: true, force: true });
         } catch {
-          // Spawn should still return an actionable error even if cleanup hooks fail.
+          // Best-effort cleanup only.
         }
       }
-      // Always delete the provisional child session after a failed spawn attempt.
-      // If we already emitted subagent_ended above, suppress a duplicate lifecycle hook.
-      try {
-        await callGateway({
-          method: "sessions.delete",
-          params: {
-            key: childSessionKey,
-            deleteTranscript: true,
-            emitLifecycleHooks: !endedHookEmitted,
-          },
-          timeoutMs: 10_000,
-        });
-      } catch {
-        // Best-effort only.
+      if (threadBindingReady) {
+        const hasEndedHook = hookRunner?.hasHooks("subagent_ended") === true;
+        let endedHookEmitted = false;
+        if (hasEndedHook) {
+          try {
+            await hookRunner?.runSubagentEnded(
+              {
+                targetSessionKey: childSessionKey,
+                targetKind: "subagent",
+                reason: "spawn-failed",
+                sendFarewell: true,
+                accountId: requesterOrigin?.accountId,
+                runId: childRunId,
+                outcome: "error",
+                error: "Session failed to start",
+              },
+              {
+                runId: childRunId,
+                childSessionKey,
+                requesterSessionKey: requesterInternalKey,
+              },
+            );
+            endedHookEmitted = true;
+          } catch {
+            // Spawn should still return an actionable error even if cleanup hooks fail.
+          }
+        }
+        // Always delete the provisional child session after a failed spawn attempt.
+        // If we already emitted subagent_ended above, suppress a duplicate lifecycle hook.
+        try {
+          await callGateway({
+            method: "sessions.delete",
+            params: {
+              key: childSessionKey,
+              deleteTranscript: true,
+              emitLifecycleHooks: !endedHookEmitted,
+            },
+            timeoutMs: 10_000,
+          });
+        } catch {
+          // Best-effort only.
+        }
       }
+      const messageText = summarizeError(err);
+      return {
+        status: "error",
+        error: messageText,
+        childSessionKey,
+        runId: childRunId,
+      };
     }
-    const messageText = summarizeError(err);
-    return {
-      status: "error",
-      error: messageText,
-      childSessionKey,
-      runId: childRunId,
-    };
-  }
+  } // end else (in-process gateway spawn)
 
   try {
     registerSubagentRun({

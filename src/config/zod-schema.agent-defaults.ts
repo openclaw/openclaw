@@ -188,6 +188,18 @@ export const AgentDefaultsSchema = z
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
+        workerBackend: z
+          .string()
+          .optional()
+          .describe(
+            'External worker backend identifier (e.g. "loa"). When set, sessions_spawn delegates to an external launcher.',
+          ),
+        workerLauncher: z
+          .string()
+          .optional()
+          .describe(
+            "Path to external worker launcher executable. Receives JSON on stdin, returns JSON on stdout.",
+          ),
       })
       .strict()
       .optional(),

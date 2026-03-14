@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# loa-worker-launcher — Bridge between OpenClaw sessions_spawn and LOA control plane.
+#
+# OpenClaw calls this script with a JSON spawn request on stdin.
+# It translates the request into a GAP control.v1 spawn and calls
+# the LOA control socket, then returns the result as JSON on stdout.
+#
+# Configuration (environment variables):
+#   LOA_CONTROL_SOCKET  — path to LOA control socket (default: $LOA_KIT/run/control.sock)
+#   LOA_KIT             — LOA kit directory (default: /srv/loa/kit)
+#   LOA_BIN             — path to loa binary (default: loa)
+#
+# Install:
+#   chmod +x contrib/loa-worker-launcher
+#   cp contrib/loa-worker-launcher /usr/local/bin/
+#
+# OpenClaw config (openclaw.yaml):
+#   agents:
+#     defaults:
+#       subagents:
+#         workerBackend: loa
+#         workerLauncher: /usr/local/bin/loa-worker-launcher
+
+set -euo pipefail
+
+LOA_BIN="${LOA_BIN:-loa}"
+LOA_KIT="${LOA_KIT:-/srv/loa/kit}"
+
+# Read spawn request from stdin.
+REQUEST=$(cat)
+
+# Extract fields from OpenClaw's JSON request.
+AGENT_ID=$(echo "$REQUEST" | jq -r '.agentId // empty')
+REQUEST_ID=$(echo "$REQUEST" | jq -r '.requestId // empty')
+SESSION_KEY=$(echo "$REQUEST" | jq -r '.childSessionKey // empty')
+TASK=$(echo "$REQUEST" | jq -r '.task // empty')
+MODE=$(echo "$REQUEST" | jq -r '.mode // "run"')
+MODEL=$(echo "$REQUEST" | jq -r '.model // empty')
+WORKSPACE=$(echo "$REQUEST" | jq -r '.workspaceDir // empty')
+DEPTH=$(echo "$REQUEST" | jq -r '.depth // 1')
+
+if [ -z "$AGENT_ID" ] || [ -z "$REQUEST_ID" ]; then
+  echo '{"status":"error","error":"Missing agentId or requestId in spawn request"}'
+  exit 0
+fi
+
+# Build GAP control.v1 spawn request.
+GAP_REQUEST=$(jq -n \
+  --arg version "gap.control.v1" \
+  --arg request_id "$REQUEST_ID" \
+  --arg agent_id "$AGENT_ID" \
+  --arg session_id "$SESSION_KEY" \
+  --arg workload_id "$REQUEST_ID" \
+  --arg issued_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg nonce "$REQUEST_ID" \
+  --arg label "source=openclaw-gateway" \
+  '{
+    version: $version,
+    request_id: $request_id,
+    agent_id: $agent_id,
+    session_id: $session_id,
+    workload_id: $workload_id,
+    issued_at: $issued_at,
+    nonce: $nonce
+  }')
+
+# Write request to temp file.
+TMPFILE=$(mktemp /tmp/loa-spawn-XXXXXX.json)
+trap 'rm -f "$TMPFILE"' EXIT
+echo "$GAP_REQUEST" > "$TMPFILE"
+
+# Call LOA control spawn.
+RESULT=$(LOA_KIT="$LOA_KIT" "$LOA_BIN" control spawn --request-json "$TMPFILE" 2>&1) || true
+
+# Parse LOA response.
+DECISION=$(echo "$RESULT" | jq -r '.decision // empty' 2>/dev/null) || DECISION=""
+WORKER_ID=$(echo "$RESULT" | jq -r '.worker_id // empty' 2>/dev/null) || WORKER_ID=""
+REASON=$(echo "$RESULT" | jq -r '.reason // empty' 2>/dev/null) || REASON=""
+
+if [ "$DECISION" = "permit" ] && [ -n "$WORKER_ID" ]; then
+  jq -n --arg wid "$WORKER_ID" '{"status":"accepted","workerId":$wid}'
+elif [ "$DECISION" = "deny" ]; then
+  MSG="${REASON:-LOA denied the spawn request}"
+  jq -n --arg err "$MSG" '{"status":"denied","error":$err}'
+else
+  # Unexpected response — return raw output as error context.
+  jq -n --arg err "LOA control spawn failed: $RESULT" '{"status":"error","error":$err}'
+fi
