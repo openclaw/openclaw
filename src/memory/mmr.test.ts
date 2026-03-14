@@ -36,6 +36,35 @@ describe("tokenize", () => {
       expect(tokenize(testCase.input), testCase.name).toEqual(new Set(testCase.expected));
     }
   });
+
+  it("extracts individual CJK characters as tokens", () => {
+    const cases = [
+      {
+        name: "CJK Chinese",
+        input: "\u673a\u5668\u5b66\u4e60",
+        expected: ["\u673a", "\u5668", "\u5b66", "\u4e60"],
+      },
+      {
+        name: "CJK Japanese hiragana",
+        input: "\u306b\u307b\u3093\u3054",
+        expected: ["\u306b", "\u307b", "\u3093", "\u3054"],
+      },
+      {
+        name: "CJK Katakana",
+        input: "\u30b3\u30f3\u30d4\u30e5\u30fc\u30bf",
+        expected: ["\u30b3", "\u30f3", "\u30d4", "\u30e5", "\u30bf"],
+      },
+      {
+        name: "mixed CJK and ASCII",
+        input: "hello \u673a\u5668",
+        expected: ["hello", "\u673a", "\u5668"],
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      expect(tokenize(testCase.input), testCase.name).toEqual(new Set(testCase.expected));
+    }
+  });
 });
 
 describe("jaccardSimilarity", () => {
