@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import SlackBolt from "@slack/bolt";
+import SlackBolt, * as SlackBoltNamespace from "@slack/bolt";
 import { resolveTextChunkLimit } from "../../../../src/auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../../../src/auto-reply/reply/history.js";
 import {
@@ -46,14 +46,104 @@ import {
 import { registerSlackMonitorSlashCommands } from "./slash.js";
 import type { MonitorSlackOpts } from "./types.js";
 
-const slackBoltModule = SlackBolt as typeof import("@slack/bolt") & {
-  default?: typeof import("@slack/bolt");
+type SlackAppConstructor = typeof import("@slack/bolt").App;
+type SlackHttpReceiverConstructor = typeof import("@slack/bolt").HTTPReceiver;
+type SlackBoltResolvedExports = {
+  App: SlackAppConstructor;
+  HTTPReceiver: SlackHttpReceiverConstructor;
 };
-// Bun allows named imports from CJS; Node ESM doesn't. Use default+fallback for compatibility.
-// Fix: Check if module has App property directly (Node 25.x ESM/CJS compat issue)
-const slackBolt =
-  (slackBoltModule.App ? slackBoltModule : slackBoltModule.default) ?? slackBoltModule;
-const { App, HTTPReceiver } = slackBolt;
+type SlackBoltModuleLike = {
+  App?: unknown;
+  HTTPReceiver?: unknown;
+  default?: unknown;
+};
+
+function isSlackAppConstructor(value: unknown): value is SlackAppConstructor {
+  return typeof value === "function";
+}
+
+function isSlackHttpReceiverConstructor(value: unknown): value is SlackHttpReceiverConstructor {
+  return typeof value === "function";
+}
+
+function isSlackBoltModule(value: unknown): value is SlackBoltResolvedExports {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as SlackBoltModuleLike;
+  return (
+    isSlackAppConstructor(candidate.App) && isSlackHttpReceiverConstructor(candidate.HTTPReceiver)
+  );
+}
+
+function describeSlackBoltShape(value: unknown): string {
+  if (!value) {
+    return "nullish";
+  }
+  if (typeof value === "function") {
+    return "function";
+  }
+  if (typeof value !== "object") {
+    return typeof value;
+  }
+  const keys = Object.keys(value as Record<string, unknown>).slice(0, 8);
+  return `object(${keys.join(",") || "no-keys"})`;
+}
+
+function resolveSlackBoltInterop(params: {
+  defaultImport: unknown;
+  namespaceImport: unknown;
+}): SlackBoltResolvedExports {
+  const { defaultImport, namespaceImport } = params;
+  const namespaceModule = (namespaceImport ?? {}) as SlackBoltModuleLike;
+  const nestedDefault =
+    defaultImport && typeof defaultImport === "object"
+      ? (defaultImport as { default?: unknown }).default
+      : undefined;
+
+  if (isSlackBoltModule(defaultImport)) {
+    return {
+      App: defaultImport.App,
+      HTTPReceiver: defaultImport.HTTPReceiver,
+    };
+  }
+  if (isSlackBoltModule(nestedDefault)) {
+    return {
+      App: nestedDefault.App,
+      HTTPReceiver: nestedDefault.HTTPReceiver,
+    };
+  }
+  if (
+    isSlackAppConstructor(defaultImport) &&
+    isSlackHttpReceiverConstructor(namespaceModule.HTTPReceiver)
+  ) {
+    return {
+      App: defaultImport,
+      HTTPReceiver: namespaceModule.HTTPReceiver,
+    };
+  }
+  if (isSlackBoltModule(namespaceModule.default)) {
+    return {
+      App: namespaceModule.default.App,
+      HTTPReceiver: namespaceModule.default.HTTPReceiver,
+    };
+  }
+  if (isSlackBoltModule(namespaceModule)) {
+    return {
+      App: namespaceModule.App,
+      HTTPReceiver: namespaceModule.HTTPReceiver,
+    };
+  }
+
+  throw new TypeError(
+    `Unable to resolve @slack/bolt exports (default=${describeSlackBoltShape(defaultImport)}, namespace=${describeSlackBoltShape(namespaceImport)}, namespace.default=${describeSlackBoltShape(namespaceModule.default)})`,
+  );
+}
+
+const { App, HTTPReceiver } = resolveSlackBoltInterop({
+  defaultImport: SlackBolt,
+  namespaceImport: SlackBoltNamespace,
+});
 
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
@@ -515,6 +605,7 @@ export const __testing = {
   publishSlackDisconnectedStatus,
   resolveSlackRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
+  resolveSlackBoltInterop,
   getSocketEmitter,
   waitForSlackSocketDisconnect,
 };
