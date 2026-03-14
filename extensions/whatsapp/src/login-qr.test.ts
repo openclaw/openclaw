@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { startWebLoginWithQr, waitForWebLogin } from "./login-qr.js";
-import { createWaSocket, logoutWeb, waitForWaConnection } from "./session.js";
+import {
+  createWaSocket,
+  logoutWeb,
+  waitForCredsSaveQueue,
+  waitForWaConnection,
+} from "./session.js";
 
 vi.mock("./session.js", () => {
   const createWaSocket = vi.fn(
@@ -42,6 +47,7 @@ vi.mock("./qr-image.js", () => ({
 
 const createWaSocketMock = vi.mocked(createWaSocket);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
+const waitForCredsSaveQueueMock = vi.mocked(waitForCredsSaveQueue);
 const logoutWebMock = vi.mocked(logoutWeb);
 
 describe("login-qr", () => {
@@ -62,6 +68,8 @@ describe("login-qr", () => {
 
     expect(result.connected).toBe(true);
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
+    expect(waitForCredsSaveQueueMock).toHaveBeenCalledOnce();
+    expect(waitForCredsSaveQueueMock).toHaveBeenCalledWith(expect.any(String));
     expect(logoutWebMock).not.toHaveBeenCalled();
   });
 });

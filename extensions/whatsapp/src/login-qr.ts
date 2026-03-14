@@ -90,10 +90,13 @@ async function restartLoginSocket(login: ActiveLogin, runtime: RuntimeEnv) {
   );
   closeSocket(login.sock);
   // Flush pending creds writes before reopening; bound to avoid hanging on stalled I/O.
+  let flushTimeout: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([
     waitForCredsSaveQueue(login.authDir),
-    new Promise<void>((resolve) => setTimeout(resolve, 15_000)),
-  ]);
+    new Promise<void>((resolve) => {
+      flushTimeout = setTimeout(resolve, 15_000);
+    }),
+  ]).finally(() => clearTimeout(flushTimeout));
   try {
     const sock = await createWaSocket(false, login.verbose, {
       authDir: login.authDir,
