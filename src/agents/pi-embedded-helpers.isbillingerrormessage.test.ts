@@ -860,4 +860,12 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("timeout");
   });
+
+  it("classifies OpenAI/Codex server_error JSON payloads as timeout", () => {
+    expect(
+      classifyFailoverReason(
+        '{"type":"server_error","code":"server_error","message":"The server had an error processing your request.","param":null}',
+      ),
+    ).toBe("timeout");
+  });
 });
