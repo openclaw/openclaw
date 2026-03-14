@@ -20,12 +20,27 @@ import {
 } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
+/**
+ * Callback to push partial connection-lifecycle status to the gateway health
+ * monitor.  Fields mirror ChannelAccountSnapshot but are narrowed to the
+ * subset relevant for health-check liveness.
+ */
+export type ChannelStatusCallback = (patch: {
+  accountId: string;
+  connected?: boolean;
+  lastConnectedAt?: number | null;
+  lastEventAt?: number | null;
+  mode?: string;
+}) => void;
+
 export type MonitorTransportParams = {
   account: ResolvedFeishuAccount;
   accountId: string;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   eventDispatcher: Lark.EventDispatcher;
+  /** Optional callback to push connection lifecycle status to the gateway health monitor. */
+  setStatus?: ChannelStatusCallback;
 };
 
 function isFeishuWebhookPayload(value: unknown): value is Record<string, unknown> {
@@ -78,6 +93,7 @@ export async function monitorWebSocket({
   runtime,
   abortSignal,
   eventDispatcher,
+  setStatus,
 }: MonitorTransportParams): Promise<void> {
   const log = runtime?.log ?? console.log;
   log(`feishu[${accountId}]: starting WebSocket connection...`);
@@ -94,6 +110,7 @@ export async function monitorWebSocket({
 
     const handleAbort = () => {
       log(`feishu[${accountId}]: abort signal received, stopping`);
+      setStatus?.({ accountId, connected: false });
       cleanup();
       resolve();
     };
@@ -109,6 +126,17 @@ export async function monitorWebSocket({
     try {
       wsClient.start({ eventDispatcher });
       log(`feishu[${accountId}]: WebSocket client started`);
+
+      // Report connection lifecycle status so the gateway health monitor
+      // can detect stale/half-dead WebSocket connections.
+      const now = Date.now();
+      setStatus?.({
+        accountId,
+        connected: true,
+        lastConnectedAt: now,
+        lastEventAt: now,
+        mode: "websocket",
+      });
     } catch (err) {
       cleanup();
       abortSignal?.removeEventListener("abort", handleAbort);
@@ -123,6 +151,7 @@ export async function monitorWebhook({
   runtime,
   abortSignal,
   eventDispatcher,
+  setStatus,
 }: MonitorTransportParams): Promise<void> {
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
@@ -239,6 +268,7 @@ export async function monitorWebhook({
 
     const handleAbort = () => {
       log(`feishu[${accountId}]: abort signal received, stopping Webhook server`);
+      setStatus?.({ accountId, connected: false });
       cleanup();
       resolve();
     };
@@ -253,6 +283,14 @@ export async function monitorWebhook({
 
     server.listen(port, host, () => {
       log(`feishu[${accountId}]: Webhook server listening on ${host}:${port}`);
+      const now = Date.now();
+      setStatus?.({
+        accountId,
+        connected: true,
+        lastConnectedAt: now,
+        lastEventAt: now,
+        mode: "webhook",
+      });
     });
 
     server.on("error", (err) => {
