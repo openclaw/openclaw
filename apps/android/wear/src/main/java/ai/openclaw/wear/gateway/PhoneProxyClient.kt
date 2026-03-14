@@ -186,12 +186,10 @@ class PhoneProxyClient(private val context: Context) : GatewayClientInterface, M
       val nodes = nodeClient.connectedNodes.await()
       val phone = nodes.firstOrNull { it.isNearby } ?: nodes.firstOrNull()
       if (phone == null) {
+        _connected.value = false
+        phoneNodeId = null
         _statusText.value = context.getString(R.string.wear_status_no_phone_found)
-        // Retry after 5s
-        scope.launch {
-          delay(5000)
-          if (!_connected.value) findPhoneAndPing()
-        }
+        scheduleReconnect(delayMs = 5_000)
         return
       }
       phoneNodeId = phone.id

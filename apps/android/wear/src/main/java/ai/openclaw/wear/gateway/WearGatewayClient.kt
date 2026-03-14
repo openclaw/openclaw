@@ -109,6 +109,12 @@ class WearGatewayClient(private val context: Context) : GatewayClientInterface {
     pendingRequests.clear()
   }
 
+  fun shutdown() {
+    disconnect()
+    httpClient.dispatcher.executorService.shutdown()
+    httpClient.connectionPool.evictAll()
+  }
+
   override suspend fun request(method: String, paramsJson: String?, timeoutMs: Long): String {
     val socket = ws ?: throw Exception("Not connected")
     val id = UUID.randomUUID().toString()

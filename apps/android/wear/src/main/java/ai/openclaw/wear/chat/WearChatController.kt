@@ -109,7 +109,9 @@ class WearChatController(
     _isSending.value = false
     clearPendingRuns()
     clearQueuedOutboundMessages()
-    completedRunIds.clear()
+    synchronized(completedRunIds) {
+      completedRunIds.clear()
+    }
     startEventsCollection()
   }
 
@@ -305,7 +307,7 @@ class WearChatController(
           }
         } catch (e: Throwable) {
           if (e.isCancelledRequest() && isPendingRun(runId)) {
-            pendingRunTimeoutJobs.remove(runId)?.cancel()
+            cancelPendingRunTimeout(runId)
             synchronized(queuedOutboundMessages) {
               queuedOutboundMessages[runId] = QueuedOutboundMessage(sessionKey = sessionKey, text = text)
             }
@@ -313,7 +315,7 @@ class WearChatController(
           }
           val shouldRetry = e.message?.contains("not connected", ignoreCase = true) == true
           if (shouldRetry && isPendingRun(runId)) {
-            pendingRunTimeoutJobs.remove(runId)?.cancel()
+            cancelPendingRunTimeout(runId)
             synchronized(queuedOutboundMessages) {
               queuedOutboundMessages[runId] = QueuedOutboundMessage(sessionKey = sessionKey, text = text)
             }
@@ -594,7 +596,7 @@ class WearChatController(
           val snapshot = pendingRuns.remove(existingRunId)
           if (snapshot != null) {
             pendingRuns[runId] = snapshot
-            pendingRunTimeoutJobs.remove(existingRunId)?.cancel()
+            cancelPendingRunTimeout(existingRunId)
             armPendingRunTimeout(runId)
             consumeCompletedRunId(runId)
             true
@@ -684,21 +686,21 @@ class WearChatController(
           pendingRuns[to] = it
           _isSending.value = pendingRuns.isNotEmpty()
         }
-      }
+    }
     if (snapshot == null) return
-    pendingRunTimeoutJobs.remove(from)?.cancel()
+    cancelPendingRunTimeout(from)
     armPendingRunTimeout(to)
   }
 
   private fun armPendingRunTimeout(runId: String) {
-    pendingRunTimeoutJobs.remove(runId)?.cancel()
-    pendingRunTimeoutJobs[runId] = scope.launch {
+    val timeoutJob = scope.launch {
       delay(PENDING_RUN_TIMEOUT_MS)
       if (!isPendingRun(runId)) return@launch
       clearPendingRun(runId)
       _errorText.value = stringResolver(R.string.wear_chat_error_timed_out)
       refreshHistoryImmediately(emitLatestAssistantReply = false)
     }
+    replacePendingRunTimeout(runId, timeoutJob)
   }
 
   private fun clearPendingRun(runId: String) {
@@ -708,7 +710,7 @@ class WearChatController(
     synchronized(dispatchJobs) {
       dispatchJobs.remove(runId)
     }
-    pendingRunTimeoutJobs.remove(runId)?.cancel()
+    cancelPendingRunTimeout(runId)
     synchronized(pendingRuns) {
       pendingRuns.remove(runId)
       _isSending.value = pendingRuns.isNotEmpty()
@@ -723,8 +725,7 @@ class WearChatController(
       dispatchJobs.values.forEach { it.cancel() }
       dispatchJobs.clear()
     }
-    pendingRunTimeoutJobs.values.forEach { it.cancel() }
-    pendingRunTimeoutJobs.clear()
+    clearPendingRunTimeouts()
     synchronized(pendingRuns) {
       pendingRuns.clear()
       _isSending.value = false
@@ -735,6 +736,32 @@ class WearChatController(
     synchronized(queuedOutboundMessages) {
       queuedOutboundMessages.clear()
     }
+  }
+
+  private fun cancelPendingRunTimeout(runId: String) {
+    val job =
+      synchronized(pendingRunTimeoutJobs) {
+        pendingRunTimeoutJobs.remove(runId)
+      }
+    job?.cancel()
+  }
+
+  private fun replacePendingRunTimeout(runId: String, job: Job) {
+    val previousJob =
+      synchronized(pendingRunTimeoutJobs) {
+        pendingRunTimeoutJobs.put(runId, job)
+      }
+    previousJob?.cancel()
+  }
+
+  private fun clearPendingRunTimeouts() {
+    val jobs =
+      synchronized(pendingRunTimeoutJobs) {
+        val activeJobs = pendingRunTimeoutJobs.values.toList()
+        pendingRunTimeoutJobs.clear()
+        activeJobs
+      }
+    jobs.forEach { it.cancel() }
   }
 
   private fun stableMessageId(role: String, text: String, timestampMs: Long?, index: Int): String {
