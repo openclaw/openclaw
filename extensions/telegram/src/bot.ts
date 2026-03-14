@@ -430,7 +430,15 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     if (!groups) {
       return { groupConfig: undefined, topicConfig: undefined };
     }
-    const groupConfig = groups[chatIdStr] ?? groups["*"];
+    const specificGroup = groups[chatIdStr];
+    const wildcardGroup = groups["*"];
+    // Merge wildcard systemPrompt into specific group when it overrides other
+    // settings but does not define its own prompt.
+    const groupConfig = specificGroup
+      ? specificGroup.systemPrompt
+        ? specificGroup
+        : { ...specificGroup, systemPrompt: wildcardGroup?.systemPrompt }
+      : wildcardGroup;
     const topicConfig =
       messageThreadId != null ? groupConfig?.topics?.[String(messageThreadId)] : undefined;
     return { groupConfig, topicConfig };

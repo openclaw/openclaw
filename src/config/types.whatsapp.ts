@@ -18,6 +18,8 @@ export type WhatsAppGroupConfig = {
   requireMention?: boolean;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
+  /** Per-group system prompt appended after any account/top-level prompt. */
+  systemPrompt?: string;
 };
 
 export type WhatsAppAckReactionConfig = {
@@ -78,6 +80,8 @@ type WhatsAppSharedConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** System prompt injected into agent context for this channel/account. */
+  systemPrompt?: string;
 };
 
 type WhatsAppConfigCore = {
