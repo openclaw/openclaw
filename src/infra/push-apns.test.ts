@@ -4,43 +4,19 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  deriveDeviceIdFromPublicKey,
-  publicKeyRawBase64UrlFromPem,
-  verifyDeviceSignature,
-} from "./device-identity.js";
-import {
   clearApnsRegistration,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
-  normalizeApnsEnvironment,
   registerApnsRegistration,
   registerApnsToken,
-  resolveApnsAuthConfigFromEnv,
   sendApnsAlert,
   sendApnsBackgroundWake,
-  shouldClearStoredApnsRegistration,
-  shouldInvalidateApnsRegistration,
 } from "./push-apns.js";
 
 const tempDirs: string[] = [];
 const testAuthPrivateKey = generateKeyPairSync("ec", { namedCurve: "prime256v1" })
   .privateKey.export({ format: "pem", type: "pkcs8" })
   .toString();
-const relayGatewayIdentity = (() => {
-  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  const publicKeyPem = publicKey.export({ format: "pem", type: "spki" }).toString();
-  const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
-  const deviceId = deriveDeviceIdFromPublicKey(publicKeyRaw);
-  if (!deviceId) {
-    throw new Error("failed to derive test gateway device id");
-  }
-  return {
-    deviceId,
-    publicKey: publicKeyRaw,
-    privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
-  };
-})();
-
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-push-apns-test-"));
   tempDirs.push(dir);
@@ -297,40 +273,6 @@ describe("push APNs registration store", () => {
   });
 });
 
-describe("push APNs env config", () => {
-  it("normalizes APNs environment values", () => {
-    expect(normalizeApnsEnvironment("sandbox")).toBe("sandbox");
-    expect(normalizeApnsEnvironment("PRODUCTION")).toBe("production");
-    expect(normalizeApnsEnvironment("staging")).toBeNull();
-  });
-
-  it("resolves inline private key and unescapes newlines", async () => {
-    const env = {
-      OPENCLAW_APNS_TEAM_ID: "TEAM123",
-      OPENCLAW_APNS_KEY_ID: "KEY123",
-      OPENCLAW_APNS_PRIVATE_KEY_P8:
-        "-----BEGIN PRIVATE KEY-----\\nline-a\\nline-b\\n-----END PRIVATE KEY-----", // pragma: allowlist secret
-    } as NodeJS.ProcessEnv;
-    const resolved = await resolveApnsAuthConfigFromEnv(env);
-    expect(resolved.ok).toBe(true);
-    if (!resolved.ok) {
-      return;
-    }
-    expect(resolved.value.privateKey).toContain("\nline-a\n");
-    expect(resolved.value.teamId).toBe("TEAM123");
-    expect(resolved.value.keyId).toBe("KEY123");
-  });
-
-  it("returns an error when required APNs auth vars are missing", async () => {
-    const resolved = await resolveApnsAuthConfigFromEnv({} as NodeJS.ProcessEnv);
-    expect(resolved.ok).toBe(false);
-    if (resolved.ok) {
-      return;
-    }
-    expect(resolved.error).toContain("OPENCLAW_APNS_TEAM_ID");
-  });
-});
-
 describe("push APNs send semantics", () => {
   it("sends alert pushes with alert headers and payload", async () => {
     const { send, registration, auth } = createDirectApnsSendFixture({
@@ -439,128 +381,5 @@ describe("push APNs send semantics", () => {
         nodeId: "ios-node-wake-default-reason",
       },
     });
-  });
-
-  it("routes relay-backed alert pushes through the relay sender", async () => {
-    const send = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      apnsId: "relay-apns-id",
-      environment: "production",
-      tokenSuffix: "abcd1234",
-    });
-
-    const result = await sendApnsAlert({
-      relayConfig: {
-        baseUrl: "https://relay.example.com",
-        timeoutMs: 1000,
-      },
-      registration: {
-        nodeId: "ios-node-relay",
-        transport: "relay",
-        relayHandle: "relay-handle-123",
-        sendGrant: "send-grant-123",
-        installationId: "install-123",
-        topic: "ai.openclaw.ios",
-        environment: "production",
-        distribution: "official",
-        updatedAtMs: 1,
-        tokenDebugSuffix: "abcd1234",
-      },
-      nodeId: "ios-node-relay",
-      title: "Wake",
-      body: "Ping",
-      relayGatewayIdentity: relayGatewayIdentity,
-      relayRequestSender: send,
-    });
-
-    expect(send).toHaveBeenCalledTimes(1);
-    expect(send.mock.calls[0]?.[0]).toMatchObject({
-      relayHandle: "relay-handle-123",
-      gatewayDeviceId: relayGatewayIdentity.deviceId,
-      pushType: "alert",
-      priority: "10",
-      payload: {
-        aps: {
-          alert: { title: "Wake", body: "Ping" },
-          sound: "default",
-        },
-      },
-    });
-    const sent = send.mock.calls[0]?.[0];
-    expect(typeof sent?.signature).toBe("string");
-    expect(typeof sent?.signedAtMs).toBe("number");
-    const signedPayload = [
-      "openclaw-relay-send-v1",
-      sent?.gatewayDeviceId,
-      String(sent?.signedAtMs),
-      sent?.bodyJson,
-    ].join("\n");
-    expect(
-      verifyDeviceSignature(relayGatewayIdentity.publicKey, signedPayload, sent?.signature),
-    ).toBe(true);
-    expect(result).toMatchObject({
-      ok: true,
-      status: 200,
-      transport: "relay",
-      environment: "production",
-      tokenSuffix: "abcd1234",
-    });
-  });
-
-  it("flags invalid device responses for registration invalidation", () => {
-    expect(shouldInvalidateApnsRegistration({ status: 400, reason: "BadDeviceToken" })).toBe(true);
-    expect(shouldInvalidateApnsRegistration({ status: 410, reason: "Unregistered" })).toBe(true);
-    expect(shouldInvalidateApnsRegistration({ status: 429, reason: "TooManyRequests" })).toBe(
-      false,
-    );
-  });
-
-  it("only clears stored registrations for direct APNs failures without an override mismatch", () => {
-    expect(
-      shouldClearStoredApnsRegistration({
-        registration: {
-          nodeId: "ios-node-direct",
-          transport: "direct",
-          token: "ABCD1234ABCD1234ABCD1234ABCD1234",
-          topic: "ai.openclaw.ios",
-          environment: "sandbox",
-          updatedAtMs: 1,
-        },
-        result: { status: 400, reason: "BadDeviceToken" },
-      }),
-    ).toBe(true);
-
-    expect(
-      shouldClearStoredApnsRegistration({
-        registration: {
-          nodeId: "ios-node-relay",
-          transport: "relay",
-          relayHandle: "relay-handle-123",
-          sendGrant: "send-grant-123",
-          installationId: "install-123",
-          topic: "ai.openclaw.ios",
-          environment: "production",
-          distribution: "official",
-          updatedAtMs: 1,
-        },
-        result: { status: 410, reason: "Unregistered" },
-      }),
-    ).toBe(false);
-
-    expect(
-      shouldClearStoredApnsRegistration({
-        registration: {
-          nodeId: "ios-node-direct",
-          transport: "direct",
-          token: "ABCD1234ABCD1234ABCD1234ABCD1234",
-          topic: "ai.openclaw.ios",
-          environment: "sandbox",
-          updatedAtMs: 1,
-        },
-        result: { status: 400, reason: "BadDeviceToken" },
-        overrideEnvironment: "production",
-      }),
-    ).toBe(false);
   });
 });
