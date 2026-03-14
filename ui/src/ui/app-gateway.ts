@@ -384,15 +384,13 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       agentPayload?.stream === "lifecycle" &&
       agentPayload.data?.phase === "end" &&
       host.tab === "chat" &&
-      agentPayload.sessionKey === host.sessionKey
+      agentPayload.sessionKey === host.sessionKey &&
+      (!host.chatRunId || host.chatRunId === agentPayload.runId)
     ) {
       // Clear streaming state only after history loads successfully to avoid
       // a blank UI if the reload races ahead of durable writes or fails.
       // On failure, chatStream is preserved as a graceful degradation.
-      void loadChatHistory(host as unknown as OpenClawApp).then(() => {
-        host.chatStream = null;
-        host.chatStreamStartedAt = null;
-      });
+      void loadChatHistory(host as unknown as OpenClawApp);
     }
     return;
   }

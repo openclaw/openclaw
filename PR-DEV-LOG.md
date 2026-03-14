@@ -1,8 +1,8 @@
 # PR 开发日志：Control UI 实时消息同步
 
 **分支**: `feat/chat-inbound-polling`
-**开发时间**: 2026-03-14 09:00 - 16:15 (7+ 小时)
-**开发者**: 诺亚(AI) + 奥克主人 + Claude Code(交叉验证)
+**开发时间**: 2026-03-14 09:00 - 23:45 (14+ 小时)
+**开发者**: Openclaw 诺亚(AI) + 奥克主人@aoke_quant + Claude Code Opus4.6(交叉验证)
 
 ---
 
@@ -132,7 +132,29 @@ Gateway 侧注册 `message:received` internal hook → 广播 `chat.inbound` Web
 
 ---
 
-### 🔧 额外修复: `openclaw-dev.sh` 脚本问题
+### 🔥 PR Review 阶段（20:17-23:45）
+
+**提交 PR 后，review bot（Greptile、ChatGPT Codex）快速发现了 8 个问题：**
+
+**CI 类型错误（已修）：**
+
+- `chat-inbound-ui.test.ts`：`type: "message"` 应为 `type: "event"`（字面量类型）→ 加 `as const`
+
+**5 个 UI 逻辑 bug（已修）：**
+
+1. **debounce sessionKey 捕获** — 用户 500ms 内切换 session 会刷错 history → 新增 `triggerSessionKey` 参数
+2. **内层 timer 不可取消** — 3000ms 二次刷新 timer 无法在新事件时取消 → 拆成 `_chatInboundTimerFast` + `_chatInboundTimerSlow`
+3. **lifecycle.end 不检查 sessionKey** — 其他 session 结束也触发当前 session 刷新 → 加 `agentPayload.sessionKey === host.sessionKey`
+4. **lifecycle.end 不检查 tab** — 不在 chat tab 也刷新 → 加 `host.tab === "chat"`
+5. **chatStream 未清理** — lifecycle.end 后 chatStream 残留，history 加载后重复显示 → 移到 `.then()` 里清理
+
+**chatStream 清理时机争议（已修）：**
+
+- Bot A：先清 chatStream 再 loadHistory，历史加载失败会白屏
+- Bot B：chatStream 不清，history 加载后重复显示
+- 折中方案：`loadChatHistory().then(() => { chatStream = null })` — 成功才清，失败时保留流式文本作降级
+
+**教训**：早提 PR > 晚提 PR。CI + review bot 比人工 review 更快发现类型问题和边缘场景。
 
 - `gateway_pids()` 匹配模式 `node.*openclaw.*gateway run` 过于严格，实际进程名是 `openclaw-gateway` → status 误报 Gateway 未运行
 - `nohup openclaw gateway run` fallback 应改用 `launchctl kickstart`（系统用 LaunchAgent 管理 Gateway）
@@ -159,16 +181,19 @@ Gateway 侧注册 `message:received` internal hook → 广播 `chat.inbound` Web
 
 ## 当前状态
 
-| 功能                             | 状态                                                                         |
-| -------------------------------- | ---------------------------------------------------------------------------- |
-| Gateway `chat.inbound` broadcast | ✅ 工作正常                                                                  |
-| UI 接收 `chat.inbound` 事件      | ✅ WS 确认                                                                   |
-| 用户消息实时显示                 | ✅ ~3.5s 内出现                                                              |
-| Agent 回复实时显示               | ✅ lifecycle.end 触发刷新                                                    |
-| 流式打字效果                     | ✅ assistant + thinking 实时渲染                                             |
-| 单元测试                         | ✅ 10/10 通过                                                                |
-| debug 日志清理                   | ✅ 已清理（server.impl.ts log.info + dispatch-from-config.ts console.error） |
-| 端到端验证                       | ✅ 19:01 Telegram → Control UI 实时同步 + 流式打字确认                       |
+| 功能                             | 状态                                                                                 |
+| -------------------------------- | ------------------------------------------------------------------------------------ |
+| Gateway `chat.inbound` broadcast | ✅ 工作正常                                                                          |
+| UI 接收 `chat.inbound` 事件      | ✅ WS 确认                                                                           |
+| 用户消息实时显示                 | ✅ ~3.5s 内出现                                                                      |
+| Agent 回复实时显示               | ✅ lifecycle.end 触发刷新                                                            |
+| 流式打字效果                     | ✅ assistant + thinking 实时渲染                                                     |
+| 单元测试                         | ✅ 10/10 通过                                                                        |
+| debug 日志清理                   | ✅ 已清理                                                                            |
+| PR 提交                          | ✅ #46093 提交，CI check 通过                                                        |
+| Review bot 发现的 bug            | ✅ 全部修复（sessionKey 捕获、双 timer 可取消、lifecycle 三重过滤、chatStream 清理） |
+| chatStream 清理时机              | ✅ 由 loadChatHistory 内部负责清理，失败时保留流式文本不白屏                         |
+| 端到端验证                       | ✅ 19:01 Telegram → Control UI 实时同步 + 流式打字确认                               |
 
 ---
 
@@ -194,3 +219,13 @@ Gateway 侧注册 `message:received` internal hook → 广播 `chat.inbound` Web
 | 16:15 | agent lifecycle.end 刷新方案验证通过                    |
 | 17:10 | 提出流式显示需求，分析 assistant + thinking stream 格式 |
 | 19:01 | 流式打字效果验证通过，全部功能完成 🎉                   |
+| 20:17 | PR #46093 提交到 openclaw/openclaw                      |
+| 20:21 | CI check 首次通过，进入 review 阶段                     |
+| 20:35 | Review bot (Greptile/ChatGPT) 发现 5 个 bug             |
+| 20:45 | 确认 5 个问题均为真实 bug，批量修复                     |
+| 21:31 | CI 类型错误修复（`type: "event" as const`）             |
+| 22:35 | 5 个 review bug 修复完成并 push                         |
+| 22:48 | CI check 再次通过，仅剩 test:extensions（上游问题）     |
+| 23:19 | chatStream 清理时机 bug — .then() 无法区分成败          |
+| 23:42 | 修复：删掉 .then()，由 loadChatHistory 内部清理         |
+| 23:44 | lifecycle.end 加 runId 过滤，防止 sub-agent 误刷        |
