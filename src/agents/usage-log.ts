@@ -61,8 +61,8 @@ async function readJsonArray(file: string): Promise<TokenUsageRecord[]> {
 // O_EXCL (create-exclusive), which is atomic on POSIX filesystems.
 //
 // Lock acquisition retries with a fixed interval up to LOCK_TIMEOUT_MS.
-// If the holding process crashes the stale lock is removed after the
-// timeout so subsequent callers are not permanently blocked.
+// On timeout ERR_LOCK_TIMEOUT is thrown; the lock file is intentionally left
+// untouched so that an active holder's mutual exclusion is never broken.
 // ---------------------------------------------------------------------------
 const LOCK_RETRY_MS = 50;
 const LOCK_TIMEOUT_MS = 5_000;
@@ -92,32 +92,13 @@ async function withFileLock<T>(lockPath: string, fn: () => Promise<T>): Promise<
     }
   }
 
-  // Timed out waiting for the lock. Remove a potentially stale lock file
-  // (left behind by a crashed process) and make one final attempt to acquire
-  // it through the normal O_EXCL path. This ensures the write is always
-  // serialised: if the stale file is gone another waiter that also timed out
-  // concurrently will race on O_EXCL and only one of them will win.
-  await fs.unlink(lockPath).catch(() => {});
-
-  // Re-enter the acquisition loop for a single attempt (deadline already
-  // passed so the while condition is false; open directly instead).
-  let fh: fs.FileHandle | undefined;
-  try {
-    fh = await fs.open(lockPath, "wx");
-    await fh.close();
-    fh = undefined;
-    try {
-      return await fn();
-    } finally {
-      await fs.unlink(lockPath).catch(() => {});
-    }
-  } catch (err) {
-    await fh?.close().catch(() => {});
-    throw Object.assign(
-      new Error(`Could not acquire lock ${lockPath} within ${LOCK_TIMEOUT_MS}ms`),
-      { code: "ERR_LOCK_TIMEOUT", cause: err },
-    );
-  }
+  // Timed out without acquiring the lock. We deliberately do NOT delete the
+  // lock file here: the holder may still be active (slow disk, large file),
+  // and removing a live lock would break mutual exclusion and allow concurrent
+  // read-modify-write cycles to overwrite each other's entries.
+  throw Object.assign(new Error(`Could not acquire lock ${lockPath} within ${LOCK_TIMEOUT_MS}ms`), {
+    code: "ERR_LOCK_TIMEOUT",
+  });
 }
 
 async function appendRecord(file: string, entry: TokenUsageRecord): Promise<void> {
