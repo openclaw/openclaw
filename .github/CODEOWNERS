@@ -1,19 +1,30 @@
 # Protect the ownership rules themselves.
 /.github/CODEOWNERS @steipete
 
+# WARNING: GitHub CODEOWNERS uses last-match-wins semantics.
+# If you add overlapping rules below the secops block, include @openclaw/secops
+# on those entries too or you can silently remove required secops review.
 # Security-sensitive code, config, and docs require secops review.
 /SECURITY.md @openclaw/secops
+/.github/actions/ @openclaw/secops
 /.github/dependabot.yml @openclaw/secops
 /.github/codeql/ @openclaw/secops
-/.github/workflows/codeql.yml @openclaw/secops
-/.github/workflows/sandbox-common-smoke.yml @openclaw/secops
+/.github/workflows/ @openclaw/secops
 /src/security/ @openclaw/secops
 /src/secrets/ @openclaw/secops
-/src/gateway/auth*.ts @openclaw/secops
+/src/config/*secret*.ts @openclaw/secops
+/src/config/**/*secret*.ts @openclaw/secops
+/src/gateway/*auth*.ts @openclaw/secops
+/src/gateway/**/*auth*.ts @openclaw/secops
+/src/gateway/*secret*.ts @openclaw/secops
+/src/gateway/**/*secret*.ts @openclaw/secops
 /src/gateway/security-path*.ts @openclaw/secops
+/src/gateway/resolve-configured-secret-input-string*.ts @openclaw/secops
+/src/gateway/protocol/**/*secret*.ts @openclaw/secops
 /src/gateway/server-methods/secrets*.ts @openclaw/secops
-/src/gateway/protocol/schema/secrets.ts @openclaw/secops
-/src/agents/auth-profiles.ts @openclaw/secops
+/src/agents/*auth*.ts @openclaw/secops
+/src/agents/**/*auth*.ts @openclaw/secops
+/src/agents/auth-profiles*.ts @openclaw/secops
 /src/agents/auth-health*.ts @openclaw/secops
 /src/agents/auth-profiles/ @openclaw/secops
 /src/agents/sandbox.ts @openclaw/secops
@@ -37,7 +48,7 @@
 /docs/reference/secretref-user-supplied-credentials-matrix.json @openclaw/secops
 
 # Release workflow and its supporting release-path checks.
-/.github/workflows/openclaw-npm-release.yml @openclaw/openclaw-release-managers
+/.github/workflows/openclaw-npm-release.yml @openclaw/secops @openclaw/openclaw-release-managers
 /docs/reference/RELEASING.md @openclaw/openclaw-release-managers
 /scripts/openclaw-npm-publish.sh @openclaw/openclaw-release-managers
 /scripts/openclaw-npm-release-check.ts @openclaw/openclaw-release-managers
