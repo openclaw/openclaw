@@ -13,6 +13,7 @@ type FetchBotOpenIdOptions = {
 export type FeishuMonitorBotIdentity = {
   botOpenId?: string;
   botName?: string;
+  botUnionId?: string;
 };
 
 function isTimeoutErrorMessage(message: string | undefined): boolean {
@@ -39,7 +40,7 @@ export async function fetchBotIdentityForMonitor(
     abortSignal: options.abortSignal,
   });
   if (result.ok) {
-    return { botOpenId: result.botOpenId, botName: result.botName };
+    return { botOpenId: result.botOpenId, botName: result.botName, botUnionId: result.botUnionId };
   }
 
   if (options.abortSignal?.aborted || isAbortErrorMessage(result.error)) {

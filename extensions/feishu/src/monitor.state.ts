@@ -12,6 +12,7 @@ export const wsClients = new Map<string, Lark.WSClient>();
 export const httpServers = new Map<string, http.Server>();
 export const botOpenIds = new Map<string, string>();
 export const botNames = new Map<string, string>();
+export const botUnionIds = new Map<string, string>();
 
 export const FEISHU_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 export const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
@@ -142,6 +143,7 @@ export function stopFeishuMonitorState(accountId?: string): void {
     }
     botOpenIds.delete(accountId);
     botNames.delete(accountId);
+    botUnionIds.delete(accountId);
     return;
   }
 
@@ -152,4 +154,5 @@ export function stopFeishuMonitorState(accountId?: string): void {
   httpServers.clear();
   botOpenIds.clear();
   botNames.clear();
+  botUnionIds.clear();
 }

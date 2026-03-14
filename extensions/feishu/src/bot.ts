@@ -451,15 +451,27 @@ function formatSubMessageContent(content: string, contentType: string): string {
   }
 }
 
-function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boolean {
-  if (!botOpenId) return false;
+function checkBotMentioned(
+  event: FeishuMessageEvent,
+  botOpenId?: string,
+  botUnionId?: string,
+): boolean {
+  if (!botOpenId && !botUnionId) return false;
   // Check for @all (@_all in Feishu) — treat as mentioning every bot
   const rawContent = event.message.content ?? "";
   if (rawContent.includes("@_all")) return true;
   const mentions = event.message.mentions ?? [];
   if (mentions.length > 0) {
-    // Rely on Feishu mention IDs; display names can vary by alias/context.
-    return mentions.some((m) => m.id.open_id === botOpenId);
+    // Feishu open_id is app-scoped: the same bot has different open_ids in different apps.
+    // WebSocket push events may deliver mention open_ids scoped to a different app context,
+    // causing open_id matching to fail when multiple bots share the same group.
+    // union_id is globally unique across apps for the same entity, so we use it as a
+    // fallback to ensure correct @mention detection in multi-bot group scenarios.
+    return mentions.some(
+      (m) =>
+        (botOpenId && m.id.open_id === botOpenId) ||
+        (botUnionId && m.id.union_id === botUnionId),
+    );
   }
   // Post (rich text) messages may have empty message.mentions when they contain docs/paste
   if (event.message.message_type === "post") {
@@ -772,9 +784,10 @@ export function parseFeishuMessageEvent(
   event: FeishuMessageEvent,
   botOpenId?: string,
   _botName?: string,
+  botUnionId?: string,
 ): FeishuMessageContext {
   const rawContent = parseMessageContent(event.message.content, event.message.message_type);
-  const mentionedBot = checkBotMentioned(event, botOpenId);
+  const mentionedBot = checkBotMentioned(event, botOpenId, botUnionId);
   const hasAnyMention = (event.message.mentions?.length ?? 0) > 0;
   // Strip the bot's own mention so slash commands like @Bot /help retain
   // the leading /. This applies in both p2p *and* group contexts — the
@@ -864,11 +877,12 @@ export async function handleFeishuMessage(params: {
   event: FeishuMessageEvent;
   botOpenId?: string;
   botName?: string;
+  botUnionId?: string;
   runtime?: RuntimeEnv;
   chatHistories?: Map<string, HistoryEntry[]>;
   accountId?: string;
 }): Promise<void> {
-  const { cfg, event, botOpenId, botName, runtime, chatHistories, accountId } = params;
+  const { cfg, event, botOpenId, botName, botUnionId, runtime, chatHistories, accountId } = params;
 
   // Resolve account with merged config
   const account = resolveFeishuAccount({ cfg, accountId });
@@ -891,7 +905,7 @@ export async function handleFeishuMessage(params: {
     return;
   }
 
-  let ctx = parseFeishuMessageEvent(event, botOpenId, botName);
+  let ctx = parseFeishuMessageEvent(event, botOpenId, botName, botUnionId);
   const isGroup = ctx.chatType === "group";
   const isDirect = !isGroup;
   const senderUserId = event.sender.sender_id.user_id?.trim() || undefined;
