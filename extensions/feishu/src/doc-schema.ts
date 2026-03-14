@@ -35,9 +35,17 @@ export const FeishuDocSchema = Type.Union([
     action: Type.Literal("insert"),
     doc_token: Type.String({ description: "Document token" }),
     content: Type.String({ description: "Markdown content to insert" }),
-    after_block_id: Type.String({
-      description: "Insert content after this block ID. Use list_blocks to find block IDs.",
-    }),
+    after_block_id: Type.Optional(
+      Type.String({
+        description: "Insert content after this block ID. Use list_blocks to find block IDs.",
+      }),
+    ),
+    index: Type.Optional(
+      Type.Number({
+        description:
+          "Insert position (0-based index among document root children). 0 = beginning. Used when after_block_id is not provided.",
+      }),
+    ),
   }),
   Type.Object({
     action: Type.Literal("create"),
