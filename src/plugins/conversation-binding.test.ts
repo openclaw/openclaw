@@ -443,4 +443,61 @@ describe("plugin conversation binding approvals", () => {
       }),
     );
   });
+
+  it("migrates a legacy codex thread binding session key through the new approval flow", async () => {
+    sessionBindingState.setRecord({
+      bindingId: "binding-legacy-codex-thread",
+      targetSessionKey: "openclaw-app-server:thread:019ce411-6322-7db2-a821-1a61c530e7d9",
+      targetKind: "session",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "8460800771",
+      },
+      status: "active",
+      boundAt: Date.now(),
+      metadata: {
+        label: "legacy codex thread bind",
+      },
+    });
+
+    const request = await requestPluginConversationBinding({
+      pluginId: "openclaw-codex-app-server",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/codex-a",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "8460800771",
+      },
+      binding: {
+        summary: "Bind this conversation to Codex thread 019ce411-6322-7db2-a821-1a61c530e7d9.",
+      },
+    });
+
+    expect(["pending", "bound"]).toContain(request.status);
+    const binding =
+      request.status === "pending"
+        ? await resolvePluginConversationBindingApproval({
+            approvalId: request.approvalId,
+            decision: "allow-once",
+            senderId: "user-1",
+          }).then((approved) => {
+            expect(approved.status).toBe("approved");
+            if (approved.status !== "approved") {
+              throw new Error("expected approved bind result");
+            }
+            return approved.binding;
+          })
+        : request.binding;
+
+    expect(binding).toEqual(
+      expect.objectContaining({
+        pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/plugins/codex-a",
+        conversationId: "8460800771",
+      }),
+    );
+  });
 });
