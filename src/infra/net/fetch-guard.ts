@@ -142,6 +142,31 @@ function buildAbortSignal(params: { timeoutMs?: number; signal?: AbortSignal }):
   return { signal: controller.signal, cleanup };
 }
 
+function sanitizeHeaders(headers: HeadersInit | undefined): Record<string, string> | undefined {
+  if (!headers) {
+    return undefined;
+  }
+  const out: Record<string, string> = {};
+  if (Array.isArray(headers)) {
+    for (const [key, value] of headers) {
+      if (value !== undefined && value !== null) {
+        out[key] = String(value);
+      }
+    }
+  } else if (headers instanceof Headers) {
+    headers.forEach((value, key) => {
+      out[key] = value;
+    });
+  } else {
+    for (const [key, value] of Object.entries(headers)) {
+      if (value !== undefined && value !== null) {
+        out[key] = String(value);
+      }
+    }
+  }
+  return out;
+}
+
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
   const fetcher: FetchLike | undefined = params.fetchImpl ?? globalThis.fetch;
   if (!fetcher) {
@@ -203,6 +228,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
 
       const init: RequestInit & { dispatcher?: Dispatcher } = {
         ...(currentInit ? { ...currentInit } : {}),
+        headers: sanitizeHeaders(currentInit?.headers),
         redirect: "manual",
         ...(dispatcher ? { dispatcher } : {}),
         ...(signal ? { signal } : {}),

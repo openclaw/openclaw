@@ -99,7 +99,14 @@ function normalizeErrorMessage(error: unknown): string {
 
 function shouldUseLocalPairingFallback(opts: DevicesRpcOpts, error: unknown): boolean {
   const message = normalizeErrorMessage(error).toLowerCase();
-  if (!message.includes("pairing required")) {
+  const isPairingRequired = message.includes("pairing required");
+  const isConnectionError =
+    message.includes("closed") ||
+    message.includes("timeout") ||
+    message.includes("fetch failed") ||
+    message.includes("econnrefused");
+
+  if (!isPairingRequired && !isConnectionError) {
     return false;
   }
   if (typeof opts.url === "string" && opts.url.trim().length > 0) {
@@ -108,9 +115,8 @@ function shouldUseLocalPairingFallback(opts: DevicesRpcOpts, error: unknown): bo
     return false;
   }
   const connection = buildGatewayConnectionDetails();
-  if (connection.urlSource !== "local loopback") {
-    return false;
-  }
+  // We allow fallback for any loopback target, regardless of how it was configured
+  // (default, env, or config), as long as it wasn't an explicit CLI --url override.
   try {
     return isLoopbackHost(new URL(connection.url).hostname);
   } catch {
