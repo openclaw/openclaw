@@ -161,7 +161,6 @@ export async function preflightDiscordMessage(
     // Always ignore own messages to prevent self-reply loops
     return null;
   }
-
   const pluralkitConfig = params.discordConfig?.pluralkit;
   const webhookId = resolveDiscordWebhookId(message);
   const shouldCheckPluralKit = Boolean(pluralkitConfig?.enabled) && !webhookId;

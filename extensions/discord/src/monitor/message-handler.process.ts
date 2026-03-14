@@ -390,6 +390,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     // Originating channel for reply routing.
     OriginatingChannel: "discord" as const,
     OriginatingTo: autoThreadContext?.OriginatingTo ?? replyTarget,
+    BotUserId: ctx.botUserId,
   });
   const persistedSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
 

@@ -231,6 +231,22 @@ export async function runPreparedReply(
   } = params;
   let currentSystemSent = systemSent;
 
+  // Defense-in-depth: filter self-authored messages as early as possible so
+  // that no side-effectful work (event draining, skill snapshots, …) is done
+  // for messages that will be dropped anyway.
+  const botUserId = ctx.BotUserId;
+  if (sessionCtx.SenderId && botUserId) {
+    if (sessionCtx.SenderId === botUserId) {
+      logVerbose(
+        "get-reply-run: drop self-authored message before replay (senderId matches botUserId)",
+      );
+      typing.cleanup();
+      return undefined;
+    }
+  } else if (sessionCtx.SenderId && !botUserId) {
+    logVerbose("get-reply-run: bot identity unknown — cannot self-filter replay messages");
+  }
+
   const isFirstTurnInSession = isNewSession || !currentSystemSent;
   const isGroupChat = sessionCtx.ChatType === "group";
   const wasMentioned = ctx.WasMentioned === true;
