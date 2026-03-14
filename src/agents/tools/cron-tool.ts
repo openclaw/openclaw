@@ -252,9 +252,10 @@ SCHEDULE TYPES (schedule.kind):
 - "every": Recurring interval
   { "kind": "every", "everyMs": <interval-ms>, "anchorMs": <optional-start-ms> }
 - "cron": Cron expression
-  { "kind": "cron", "expr": "<cron-expression>", "tz": "<optional-timezone>" }
+  { "kind": "cron", "expr": "<cron-expression>", "tz": "<optional-IANA-timezone>" }
+  When tz is omitted, cron expressions are evaluated in the Gateway's local system timezone (NOT UTC).
 
-ISO timestamps without an explicit timezone are treated as UTC.
+ISO timestamps (schedule.kind="at") without an explicit timezone offset are treated as UTC.
 
 PAYLOAD TYPES (payload.kind):
 - "systemEvent": Injects text as system event into session
