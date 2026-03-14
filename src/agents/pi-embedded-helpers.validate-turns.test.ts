@@ -482,25 +482,6 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     expect(assistantContent).toEqual([{ type: "toolUse", id: "tool-1", name: "test", input: {} }]);
   });
 
-  it("should strip trailing tool_use blocks from the final assistant turn", () => {
-    const msgs = asMessages([
-      { role: "user", content: [{ type: "text", text: "Use tool" }] },
-      {
-        role: "assistant",
-        content: [
-          { type: "toolUse", id: "tool-1", name: "test", input: {} },
-          { type: "text", text: "I'll check that" },
-        ],
-      },
-    ]);
-
-    const result = validateAnthropicTurns(msgs);
-
-    expect(result).toHaveLength(2);
-    const assistantContent = (result[1] as { content?: unknown[] }).content;
-    expect(assistantContent).toEqual([{ type: "text", text: "I'll check that" }]);
-  });
-
   it("is replay-safe across repeated validation passes", () => {
     const msgs = makeDualToolAnthropicTurns([
       {

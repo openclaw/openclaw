@@ -40,15 +40,14 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
         ? ((nextMsg as { role?: unknown }).role as string | undefined)
         : undefined;
 
-    // If the next message is another explicit non-user turn, keep the assistant message as-is.
-    // A missing next turn means trailing tool_use blocks are definitely orphaned.
-    if (nextMsgRole !== undefined && nextMsgRole !== "user") {
+    // If next message is not user, keep the assistant message as-is
+    if (nextMsgRole !== "user") {
       result.push(msg);
       continue;
     }
 
     // Collect tool_use_ids from the next user message's tool_result blocks
-    const nextUserMsg = (nextMsg ?? {}) as {
+    const nextUserMsg = nextMsg as {
       content?: AnthropicContentBlock[];
     };
     const validToolUseIds = new Set<string>();
