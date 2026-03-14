@@ -4,12 +4,19 @@
  * When an OpenRouter model is not in the built-in static list, we look up its
  * actual capabilities from a cached copy of the OpenRouter model catalog.
  *
- * The cache is populated lazily on first lookup (fire-and-forget) and refreshed
- * periodically.  All public APIs are synchronous — the first lookup for an
- * unknown model may return `undefined` (cache miss), but subsequent calls will
- * hit the populated cache.
+ * Cache layers (checked in order):
+ * 1. In-memory Map (instant, cleared on process restart)
+ * 2. On-disk JSON file (~/.openclaw/cache/openrouter-models.json)
+ * 3. OpenRouter API fetch (fire-and-forget, populates both layers)
+ *
+ * All public APIs are synchronous. The first lookup for an unknown model may
+ * return `undefined` (cache miss while fetch is in-flight), but subsequent
+ * calls will hit the populated cache.
  */
 
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { resolveProxyFetchFromEnv } from "../../infra/net/proxy-fetch.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
@@ -56,8 +63,61 @@ export interface OpenRouterModelCapabilities {
   };
 }
 
+interface DiskCachePayload {
+  timestamp: number;
+  models: Record<string, OpenRouterModelCapabilities>;
+}
+
 // ---------------------------------------------------------------------------
-// Cache state
+// Disk cache
+// ---------------------------------------------------------------------------
+
+function resolveDiskCachePath(): string {
+  return join(homedir(), ".openclaw", "cache", "openrouter-models.json");
+}
+
+function writeDiskCache(map: Map<string, OpenRouterModelCapabilities>): void {
+  try {
+    const cachePath = resolveDiskCachePath();
+    const cacheDir = join(cachePath, "..");
+    if (!existsSync(cacheDir)) {
+      mkdirSync(cacheDir, { recursive: true });
+    }
+    const payload: DiskCachePayload = {
+      timestamp: Date.now(),
+      models: Object.fromEntries(map),
+    };
+    writeFileSync(cachePath, JSON.stringify(payload));
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.debug(`Failed to write OpenRouter disk cache: ${message}`);
+  }
+}
+
+function readDiskCache():
+  | { map: Map<string, OpenRouterModelCapabilities>; timestamp: number }
+  | undefined {
+  try {
+    const cachePath = resolveDiskCachePath();
+    if (!existsSync(cachePath)) {
+      return undefined;
+    }
+    const raw = readFileSync(cachePath, "utf-8");
+    const payload = JSON.parse(raw) as DiskCachePayload;
+    if (!payload.models || typeof payload.timestamp !== "number") {
+      return undefined;
+    }
+    return {
+      map: new Map(Object.entries(payload.models)),
+      timestamp: payload.timestamp,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// In-memory cache state
 // ---------------------------------------------------------------------------
 
 let cache: Map<string, OpenRouterModelCapabilities> | undefined;
@@ -89,6 +149,10 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
   };
 }
 
+// ---------------------------------------------------------------------------
+// API fetch
+// ---------------------------------------------------------------------------
+
 async function doFetch(): Promise<void> {
   try {
     const controller = new AbortController();
@@ -118,6 +182,7 @@ async function doFetch(): Promise<void> {
 
     cache = map;
     cacheTimestamp = Date.now();
+    writeDiskCache(map);
     log.debug(`Cached ${map.size} OpenRouter models from API`);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
@@ -125,17 +190,43 @@ async function doFetch(): Promise<void> {
   }
 }
 
-/**
- * Trigger a background fetch if the cache is stale or empty.
- * Does not block — returns immediately.
- */
-export function ensureOpenRouterModelCache(): void {
-  if (isCacheValid() || fetchInFlight) {
+function triggerFetch(): void {
+  if (fetchInFlight) {
     return;
   }
   fetchInFlight = doFetch().finally(() => {
     fetchInFlight = undefined;
   });
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/**
+ * Trigger a background fetch if the cache is stale or empty.
+ * Does not block — returns immediately.
+ */
+export function ensureOpenRouterModelCache(): void {
+  if (isCacheValid()) {
+    return;
+  }
+
+  // Try loading from disk before hitting the network.
+  if (!cache) {
+    const disk = readDiskCache();
+    if (disk) {
+      cache = disk.map;
+      cacheTimestamp = disk.timestamp;
+      log.debug(`Loaded ${disk.map.size} OpenRouter models from disk cache`);
+      if (isCacheValid()) {
+        return;
+      }
+      // Disk cache is stale — keep it in memory as fallback, but refresh.
+    }
+  }
+
+  triggerFetch();
 }
 
 /**
@@ -144,10 +235,21 @@ export function ensureOpenRouterModelCache(): void {
  * If the cache has not been populated yet, this kicks off a background fetch
  * and returns `undefined` for the current call.  The next call (after the
  * fetch completes) will return the cached data.
+ *
+ * If a model is not found but the cache exists, a background refresh is
+ * triggered in case it's a newly added model not yet in the cache.
  */
 export function getOpenRouterModelCapabilities(
   modelId: string,
 ): OpenRouterModelCapabilities | undefined {
   ensureOpenRouterModelCache();
-  return cache?.get(modelId);
+  const result = cache?.get(modelId);
+
+  // Model not found but cache exists — may be a newly added model.
+  // Trigger a refresh so the next call picks it up.
+  if (!result && cache && !fetchInFlight) {
+    triggerFetch();
+  }
+
+  return result;
 }
