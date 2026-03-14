@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { loadAgentIdentityFromWorkspace } from "./identity-file.js";
@@ -78,12 +77,8 @@ function resolveLocalAvatarPath(params: {
     return { ok: false, reason: "unsupported_extension" };
   }
   try {
-    const stat = fs.statSync(realPath);
-    if (!stat.isFile()) {
+    if (!fs.statSync(realPath).isFile()) {
       return { ok: false, reason: "missing" };
-    }
-    if (stat.size > AVATAR_MAX_BYTES) {
-      return { ok: false, reason: "too_large" };
     }
   } catch {
     return { ok: false, reason: "missing" };
