@@ -14,6 +14,8 @@ const {
   resolveMemorySearchConfigMock,
   resolveSessionAgentIdMock,
   estimateTokensMock,
+  settingsManagerGetCompactionKeepRecentTokens,
+  settingsManagerApplyOverrides,
 } = vi.hoisted(() => {
   const contextEngineCompactMock = vi.fn(async () => ({
     ok: true as boolean,
@@ -65,6 +67,8 @@ const {
     })),
     resolveSessionAgentIdMock: vi.fn(() => "main"),
     estimateTokensMock: vi.fn((_message?: unknown) => 10),
+    settingsManagerGetCompactionKeepRecentTokens: vi.fn(() => 10),
+    settingsManagerApplyOverrides: vi.fn(),
   };
 });
 
@@ -92,7 +96,11 @@ vi.mock("@mariozechner/pi-ai/oauth", () => ({
 }));
 
 vi.mock("@mariozechner/pi-coding-agent", () => {
+  class AuthStorage {}
+  class ModelRegistry {}
   return {
+    AuthStorage,
+    ModelRegistry,
     createAgentSession: vi.fn(async () => {
       const session = {
         sessionId: "session-1",
@@ -115,9 +123,10 @@ vi.mock("@mariozechner/pi-coding-agent", () => {
           streamFn: vi.fn(),
         },
         compact: vi.fn(async () => {
+          const result = await sessionCompactImpl();
           // simulate compaction trimming to a single message
           session.messages.splice(1);
-          return await sessionCompactImpl();
+          return result;
         }),
         dispose: vi.fn(),
       };
@@ -291,6 +300,8 @@ vi.mock("../pi-embedded-helpers.js", () => ({
 vi.mock("../pi-project-settings.js", () => ({
   createPreparedEmbeddedPiSettingsManager: vi.fn(() => ({
     getGlobalSettings: vi.fn(() => ({})),
+    getCompactionKeepRecentTokens: settingsManagerGetCompactionKeepRecentTokens,
+    applyOverrides: settingsManagerApplyOverrides,
   })),
 }));
 
@@ -373,6 +384,9 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     resolveSessionAgentIdMock.mockReturnValue("main");
     estimateTokensMock.mockReset();
     estimateTokensMock.mockReturnValue(10);
+    settingsManagerGetCompactionKeepRecentTokens.mockReset();
+    settingsManagerGetCompactionKeepRecentTokens.mockReturnValue(10);
+    settingsManagerApplyOverrides.mockReset();
     unregisterApiProviders(getCustomApiRegistrySourceId("ollama"));
   });
 
@@ -544,6 +558,42 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       },
     });
     expect(sessionHook("compact:after")?.context?.tokenCount).toBe(30);
+  });
+
+  it("retries manual compaction when token estimation fails but history text is present", async () => {
+    estimateTokensMock.mockImplementation((message: unknown) => {
+      const role = (message as { role?: string }).role;
+      if (role === "assistant") {
+        throw new Error("legacy message");
+      }
+      return 10;
+    });
+    sessionCompactImpl
+      .mockRejectedValueOnce(new Error("Compaction cancelled"))
+      .mockResolvedValueOnce({
+        summary: "summary",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 120,
+        details: { ok: true },
+      });
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions: "focus on decisions",
+      trigger: "manual",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      compacted: true,
+    });
+    expect(sessionCompactImpl).toHaveBeenCalledTimes(2);
+    expect(settingsManagerApplyOverrides).toHaveBeenCalledWith({
+      compaction: { keepRecentTokens: 1 },
+    });
   });
 
   it("treats pre-compaction token estimation failures as a no-op sanity check", async () => {
