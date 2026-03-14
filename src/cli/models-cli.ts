@@ -6,6 +6,7 @@ import {
   modelsAliasesRemoveCommand,
   modelsAuthAddCommand,
   modelsAuthLoginCommand,
+  modelsAuthProfileUseCommand,
   modelsAuthOrderClearCommand,
   modelsAuthOrderGetCommand,
   modelsAuthOrderSetCommand,
@@ -308,6 +309,7 @@ export function registerModelsCli(program: Command) {
     .description("Run a provider plugin auth flow (OAuth/API key)")
     .option("--provider <id>", "Provider id registered by a plugin")
     .option("--method <id>", "Provider auth method id")
+    .option("--profile-id <id>", "Auth profile id override (supports openai-codex)")
     .option("--set-default", "Apply the provider's default model recommendation", false)
     .action(async (opts) => {
       await runModelsCommand(async () => {
@@ -315,6 +317,7 @@ export function registerModelsCli(program: Command) {
           {
             provider: opts.provider as string | undefined,
             method: opts.method as string | undefined,
+            profileId: opts.profileId as string | undefined,
             setDefault: Boolean(opts.setDefault),
           },
           defaultRuntime,
@@ -435,6 +438,27 @@ export function registerModelsCli(program: Command) {
           {
             provider: opts.provider as string,
             agent,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  const profile = auth
+    .command("profile")
+    .description("Switch preferred auth profile while keeping fallback accounts");
+
+  profile
+    .command("use")
+    .description("Set preferred auth profile in global config auth.order")
+    .argument("<profileId>", "Auth profile id (e.g. openai-codex:user@example.com)")
+    .option("--provider <name>", "Provider id (default: openai-codex)", "openai-codex")
+    .action(async (profileId: string, opts) => {
+      await runModelsCommand(async () => {
+        await modelsAuthProfileUseCommand(
+          {
+            profileId,
+            provider: opts.provider as string | undefined,
           },
           defaultRuntime,
         );

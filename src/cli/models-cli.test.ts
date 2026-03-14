@@ -4,6 +4,8 @@ import { runRegisteredCli } from "../test-utils/command-runner.js";
 
 const githubCopilotLoginCommand = vi.fn();
 const modelsStatusCommand = vi.fn().mockResolvedValue(undefined);
+const modelsAuthLoginCommand = vi.fn().mockResolvedValue(undefined);
+const modelsAuthProfileUseCommand = vi.fn().mockResolvedValue(undefined);
 const noopAsync = vi.fn(async () => undefined);
 
 vi.mock("../commands/models.js", () => ({
@@ -13,7 +15,8 @@ vi.mock("../commands/models.js", () => ({
   modelsAliasesListCommand: noopAsync,
   modelsAliasesRemoveCommand: noopAsync,
   modelsAuthAddCommand: noopAsync,
-  modelsAuthLoginCommand: noopAsync,
+  modelsAuthLoginCommand,
+  modelsAuthProfileUseCommand,
   modelsAuthOrderClearCommand: noopAsync,
   modelsAuthOrderGetCommand: noopAsync,
   modelsAuthOrderSetCommand: noopAsync,
@@ -44,6 +47,8 @@ describe("models cli", () => {
   beforeEach(() => {
     githubCopilotLoginCommand.mockClear();
     modelsStatusCommand.mockClear();
+    modelsAuthLoginCommand.mockClear();
+    modelsAuthProfileUseCommand.mockClear();
   });
 
   function createProgram() {
@@ -108,5 +113,45 @@ describe("models cli", () => {
       const error = err as { exitCode?: number };
       expect(error.exitCode).toBe(0);
     }
+  });
+
+  it("wires models auth profile use command", async () => {
+    await runModelsCommand([
+      "models",
+      "auth",
+      "profile",
+      "use",
+      "openai-codex:user@example.com",
+      "--provider",
+      "openai-codex",
+    ]);
+
+    expect(modelsAuthProfileUseCommand).toHaveBeenCalledWith(
+      {
+        profileId: "openai-codex:user@example.com",
+        provider: "openai-codex",
+      },
+      expect.any(Object),
+    );
+  });
+
+  it("passes --profile-id to models auth login", async () => {
+    await runModelsCommand([
+      "models",
+      "auth",
+      "login",
+      "--provider",
+      "openai-codex",
+      "--profile-id",
+      "work",
+    ]);
+
+    expect(modelsAuthLoginCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai-codex",
+        profileId: "work",
+      }),
+      expect.any(Object),
+    );
   });
 });
